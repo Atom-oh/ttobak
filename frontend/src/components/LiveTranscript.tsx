@@ -16,7 +16,8 @@ interface TranslationEntry {
 
 interface LiveTranscriptProps {
   transcripts: TranscriptEntry[];
-  translations: TranslationEntry[];
+  translations?: TranslationEntry[];
+  wordCount?: number;
 }
 
 function formatTime(timestamp: string): string {
@@ -41,7 +42,7 @@ function getLanguageLabel(lang: string): string {
   return labels[lang] || lang.toUpperCase();
 }
 
-export function LiveTranscript({ transcripts, translations }: LiveTranscriptProps) {
+export function LiveTranscript({ transcripts, translations = [], wordCount }: LiveTranscriptProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -73,9 +74,16 @@ export function LiveTranscript({ transcripts, translations }: LiveTranscriptProp
       <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-100 dark:border-slate-800">
         <span className="material-symbols-outlined text-primary">subtitles</span>
         <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Live Transcript</h3>
-        <div className="ml-auto flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-xs text-slate-500">Live</span>
+        <div className="ml-auto flex items-center gap-3">
+          {wordCount !== undefined && wordCount > 0 && (
+            <span className="text-xs font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full">
+              {wordCount.toLocaleString()} words
+            </span>
+          )}
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            <span className="text-xs text-slate-500">Live</span>
+          </div>
         </div>
       </div>
 

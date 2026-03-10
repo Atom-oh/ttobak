@@ -1,13 +1,14 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { RecordButton } from '@/components/RecordButton';
 import { FileUploader } from '@/components/FileUploader';
 import { LiveTranscript } from '@/components/LiveTranscript';
-import { meetingsApi, uploadsApi } from '@/lib/api';
+import { meetingsApi } from '@/lib/api';
+import { BrowserSpeechRecognition, countWords } from '@/lib/speechRecognition';
 
 interface TranscriptEntry {
   text: string;
@@ -15,32 +16,31 @@ interface TranscriptEntry {
   timestamp: string;
 }
 
-interface TranslationEntry {
-  text: string;
-  targetLang: string;
-  timestamp: string;
-}
-
-const langNames: Record<string, string> = {
-  en: 'English',
-  ko: '한국어',
-  ja: '日本語',
-};
+type PostRecordingStep = 'uploading' | 'creating' | 'processing' | 'redirecting' | 'error';
 
 export default function RecordPage() {
   const router = useRouter();
   const { isAuthenticated, isLoading } = useAuth();
   const [meetingTitle, setMeetingTitle] = useState('');
   const [capturedImages, setCapturedImages] = useState<{ name: string; url: string }[]>([]);
-  const [isRecording, setIsRecording] = useState(false);
 
-  // New state for API integration
-  const [serverMeetingId, setServerMeetingId] = useState<string | null>(null);
-  const [recordMode, setRecordMode] = useState<'offline' | 'online'>('offline');
-  const [targetLangs, setTargetLangs] = useState<string[]>([]);
+  // Recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+
+  // Speech recognition state
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
-  const [translations, setTranslations] = useState<TranslationEntry[]>([]);
-  const wsRef = useRef<WebSocket | null>(null);
+  const [currentInterim, setCurrentInterim] = useState<string>('');
+  const [totalWordCount, setTotalWordCount] = useState(0);
+  const lastSummaryWordCountRef = useRef(0);
+  const speechRef = useRef<BrowserSpeechRecognition | null>(null);
+
+  // Post-recording state
+  const [postRecordingStep, setPostRecordingStep] = useState<PostRecordingStep | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Server meeting ID
+  const [serverMeetingId, setServerMeetingId] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -55,38 +55,103 @@ export default function RecordPage() {
     return null;
   }
 
-  const toggleLang = (lang: string) => {
-    setTargetLangs((prev) =>
-      prev.includes(lang) ? prev.filter((l) => l !== lang) : [...prev, lang]
-    );
+  const startSpeechRecognition = () => {
+    if (!BrowserSpeechRecognition.isSupported()) return;
+
+    const speech = new BrowserSpeechRecognition('ko-KR');
+    speechRef.current = speech;
+
+    speech.start((result) => {
+      if (result.isFinal) {
+        setTranscripts((prev) => [...prev, result]);
+        setCurrentInterim('');
+
+        // Track word count
+        const words = countWords(result.text);
+        setTotalWordCount((prev) => {
+          const newTotal = prev + words;
+          // Log when crossing 1000-word threshold (future: trigger interim summary)
+          if (newTotal - lastSummaryWordCountRef.current >= 1000) {
+            console.log(`Word count threshold reached: ${newTotal} words`);
+            lastSummaryWordCountRef.current = newTotal;
+          }
+          return newTotal;
+        });
+      } else {
+        setCurrentInterim(result.text);
+      }
+    });
+  };
+
+  const handleRecordingStart = () => {
+    setIsRecording(true);
+    setIsPaused(false);
+    setTranscripts([]);
+    setCurrentInterim('');
+    setTotalWordCount(0);
+    lastSummaryWordCountRef.current = 0;
+    startSpeechRecognition();
+  };
+
+  const handleRecordingPause = () => {
+    setIsPaused(true);
+    speechRef.current?.pause();
+  };
+
+  const handleRecordingResume = () => {
+    setIsPaused(false);
+    speechRef.current?.resume();
+  };
+
+  const handleRecordingStop = () => {
+    setIsRecording(false);
+    setIsPaused(false);
+    speechRef.current?.stop();
+    speechRef.current = null;
   };
 
   const handleRecordingComplete = async (audioUrl: string) => {
-    // Create meeting on server first
+    setPostRecordingStep('uploading');
+
     try {
+      setPostRecordingStep('creating');
       const result = await meetingsApi.create({
         title: meetingTitle || 'Untitled Meeting',
       });
       const newMeetingId = result.meetingId;
       setServerMeetingId(newMeetingId);
 
-      // The RecordButton already uploads the audio via uploadAudioBlob
-      // and returns the URL. We just need to notify the backend.
-      // Extract the S3 key from the URL if needed, or the upload lib handles it.
       console.log('Recording uploaded to:', audioUrl);
 
-      // Navigate to meeting detail
+      setPostRecordingStep('processing');
+      // Brief delay to show processing state before redirect
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      setPostRecordingStep('redirecting');
       router.push(`/meeting/${newMeetingId}`);
     } catch (err) {
       console.error('Failed to create meeting:', err);
-      // Fallback to home
-      router.push('/');
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to create meeting');
+      setPostRecordingStep('error');
     }
+  };
+
+  const handleRetry = () => {
+    setPostRecordingStep(null);
+    setErrorMessage(null);
   };
 
   const handleUploadComplete = (files: { name: string; url: string }[]) => {
     setCapturedImages((prev) => [...prev, ...files]);
   };
+
+  // Combine final transcripts + current interim for display
+  const displayTranscripts: TranscriptEntry[] = [
+    ...transcripts,
+    ...(currentInterim
+      ? [{ text: currentInterim, isFinal: false, timestamp: new Date().toISOString() }]
+      : []),
+  ];
 
   // Use client-side meetingId for RecordButton until server creates one
   const clientMeetingId = serverMeetingId || `meeting_${Date.now()}`;
@@ -115,127 +180,165 @@ export default function RecordPage() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col px-6 pt-8 pb-32 max-w-2xl mx-auto">
-        {/* Recording Mode Toggle */}
-        <div className="flex items-center gap-4 mb-6">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="radio"
-              name="recordMode"
-              checked={recordMode === 'offline'}
-              onChange={() => setRecordMode('offline')}
-              className="text-primary focus:ring-primary"
-            />
-            <span className="text-sm font-medium">Offline</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="radio"
-              name="recordMode"
-              checked={recordMode === 'online'}
-              onChange={() => setRecordMode('online')}
-              className="text-primary focus:ring-primary"
-            />
-            <span className="text-sm font-medium flex items-center gap-1">
-              <span className="material-symbols-outlined text-sm">stream</span>
-              Realtime
-            </span>
-          </label>
-        </div>
-
-        {/* Translation Language Selector (shown in online mode) */}
-        {recordMode === 'online' && (
-          <div className="flex flex-wrap gap-2 mb-4">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Translate to:</span>
-            {['en', 'ko', 'ja'].map((lang) => (
-              <label key={lang} className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={targetLangs.includes(lang)}
-                  onChange={() => toggleLang(lang)}
-                  className="rounded text-primary focus:ring-primary h-3.5 w-3.5"
-                />
-                <span className="text-xs font-medium">{langNames[lang]}</span>
-              </label>
-            ))}
-          </div>
-        )}
-
         {/* Recording Section */}
-        <div className="flex flex-col items-center justify-center mb-12">
+        <div className="flex flex-col items-center justify-center mb-8">
           <RecordButton
             meetingId={clientMeetingId}
             meetingTitle={meetingTitle || 'Untitled Meeting'}
             onRecordingComplete={handleRecordingComplete}
-            onError={(error) => console.error(error)}
+            onError={(error) => {
+              setErrorMessage(error);
+              setPostRecordingStep('error');
+            }}
+            onRecordingStart={handleRecordingStart}
+            onRecordingPause={handleRecordingPause}
+            onRecordingResume={handleRecordingResume}
+            onRecordingStop={handleRecordingStop}
           />
         </div>
 
-        {/* Live Transcript (shown in online mode while recording) */}
-        {recordMode === 'online' && isRecording && (
-          <LiveTranscript transcripts={transcripts} translations={translations} />
+        {/* Live Transcript — always shown when recording */}
+        {isRecording && (
+          <LiveTranscript
+            transcripts={displayTranscripts}
+            wordCount={totalWordCount}
+          />
         )}
 
         {/* Captured Images Section */}
-        <section className="mt-8">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-base font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider text-xs">
-              Captured Images
-            </h2>
-            {capturedImages.length > 0 && (
-              <button className="text-primary text-sm font-semibold">
-                View All ({capturedImages.length})
-              </button>
-            )}
-          </div>
+        {!isRecording && !postRecordingStep && (
+          <section className="mt-8">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider text-xs">
+                Captured Images
+              </h2>
+              {capturedImages.length > 0 && (
+                <button className="text-primary text-sm font-semibold">
+                  View All ({capturedImages.length})
+                </button>
+              )}
+            </div>
 
-          <div className="grid grid-cols-3 gap-3">
-            {capturedImages.slice(0, 2).map((img, index) => (
-              <div key={index} className="relative group cursor-pointer">
-                <div className="aspect-square bg-slate-200 dark:bg-slate-800 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
-                  <img
-                    src={img.url}
-                    alt={img.name}
-                    className="w-full h-full object-cover"
-                  />
+            <div className="grid grid-cols-3 gap-3">
+              {capturedImages.slice(0, 2).map((img, index) => (
+                <div key={index} className="relative group cursor-pointer">
+                  <div className="aspect-square bg-slate-200 dark:bg-slate-800 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+                    <img
+                      src={img.url}
+                      alt={img.name}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
 
-            {/* Add File Button */}
-            <label className="relative cursor-pointer">
-              <div className="aspect-square bg-slate-200 dark:bg-slate-800 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 flex flex-col items-center justify-center bg-primary/5 border-dashed hover:bg-primary/10 transition-colors">
-                <span className="material-symbols-outlined text-primary/40 text-3xl">upload_file</span>
-                <span className="text-[10px] font-medium text-primary/60 mt-1">Add File</span>
-              </div>
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files) {
-                    // In production, upload to S3
-                    const files = Array.from(e.target.files).map((f) => ({
-                      name: f.name,
-                      url: URL.createObjectURL(f),
-                    }));
-                    setCapturedImages((prev) => [...prev, ...files]);
-                  }
-                }}
-              />
-            </label>
-          </div>
-        </section>
+              {/* Add File Button */}
+              <label className="relative cursor-pointer">
+                <div className="aspect-square bg-slate-200 dark:bg-slate-800 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 flex flex-col items-center justify-center bg-primary/5 border-dashed hover:bg-primary/10 transition-colors">
+                  <span className="material-symbols-outlined text-primary/40 text-3xl">upload_file</span>
+                  <span className="text-[10px] font-medium text-primary/60 mt-1">Add File</span>
+                </div>
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      const files = Array.from(e.target.files).map((f) => ({
+                        name: f.name,
+                        url: URL.createObjectURL(f),
+                      }));
+                      setCapturedImages((prev) => [...prev, ...files]);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+          </section>
+        )}
 
         {/* Drag and Drop Uploader (Desktop) */}
-        <section className="hidden lg:block mt-8">
-          <FileUploader
-            meetingId={clientMeetingId}
-            onUploadComplete={handleUploadComplete}
-            accept="image/*"
-          />
-        </section>
+        {!isRecording && !postRecordingStep && (
+          <section className="hidden lg:block mt-8">
+            <FileUploader
+              meetingId={clientMeetingId}
+              onUploadComplete={handleUploadComplete}
+              accept="image/*"
+            />
+          </section>
+        )}
       </main>
+
+      {/* Post-Recording Processing Overlay */}
+      {postRecordingStep && (
+        <div className="fixed inset-0 z-50 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm flex items-center justify-center">
+          <div className="flex flex-col items-center text-center px-8 max-w-sm">
+            {postRecordingStep === 'error' ? (
+              <>
+                <div className="w-16 h-16 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center mb-4">
+                  <span className="material-symbols-outlined text-red-500 text-3xl">error</span>
+                </div>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">
+                  Something went wrong
+                </h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
+                  {errorMessage || 'An unexpected error occurred.'}
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleRetry}
+                    className="px-6 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                  >
+                    Try Again
+                  </button>
+                  <button
+                    onClick={() => router.push('/')}
+                    className="px-6 py-2.5 rounded-lg bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-colors"
+                  >
+                    Go to Home
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
+                </div>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">
+                  {postRecordingStep === 'uploading' && 'Uploading audio...'}
+                  {postRecordingStep === 'creating' && 'Creating meeting...'}
+                  {postRecordingStep === 'processing' && 'Processing recording...'}
+                  {postRecordingStep === 'redirecting' && 'Opening meeting...'}
+                </h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  {postRecordingStep === 'uploading' && 'Sending your recording to the server.'}
+                  {postRecordingStep === 'creating' && 'Setting up your meeting notes.'}
+                  {postRecordingStep === 'processing' && 'AI transcription and summary will be ready shortly.'}
+                  {postRecordingStep === 'redirecting' && 'Taking you to your meeting...'}
+                </p>
+                {/* Progress dots */}
+                <div className="flex gap-2 mt-6">
+                  {(['uploading', 'creating', 'processing', 'redirecting'] as const).map((step, i) => {
+                    const currentIdx = ['uploading', 'creating', 'processing', 'redirecting'].indexOf(postRecordingStep);
+                    const stepIdx = i;
+                    return (
+                      <div
+                        key={step}
+                        className={`w-2 h-2 rounded-full transition-all duration-300 ${
+                          stepIdx <= currentIdx
+                            ? 'bg-primary'
+                            : 'bg-slate-200 dark:bg-slate-700'
+                        } ${stepIdx === currentIdx ? 'scale-125' : ''}`}
+                      />
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Bottom Navigation - Mobile */}
       <nav className="lg:hidden fixed bottom-0 w-full bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 px-6 pb-6 pt-3 flex justify-between items-center z-20">

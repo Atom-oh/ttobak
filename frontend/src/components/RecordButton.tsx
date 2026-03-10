@@ -9,6 +9,10 @@ interface RecordButtonProps {
   meetingTitle?: string;
   onRecordingComplete?: (audioUrl: string) => void;
   onError?: (error: string) => void;
+  onRecordingStart?: () => void;
+  onRecordingPause?: () => void;
+  onRecordingResume?: () => void;
+  onRecordingStop?: () => void;
 }
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'uploading';
@@ -24,10 +28,14 @@ export function RecordButton({
   meetingTitle = 'Meeting',
   onRecordingComplete,
   onError,
+  onRecordingStart,
+  onRecordingPause,
+  onRecordingResume,
+  onRecordingStop,
 }: RecordButtonProps) {
   const [state, setState] = useState<RecordingState>('idle');
   const [elapsedTime, setElapsedTime] = useState(0);
-  const [waveformHeights, setWaveformHeights] = useState<number[]>(Array(10).fill(4));
+  const [waveformHeights, setWaveformHeights] = useState<number[]>(Array(24).fill(4));
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -55,12 +63,16 @@ export function RecordButton({
     const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
     analyserRef.current.getByteFrequencyData(dataArray);
 
-    // Sample 10 frequencies for waveform bars
-    const bars = 10;
-    const step = Math.floor(dataArray.length / bars);
+    // 24 bars with logarithmic frequency distribution (more bars for bass)
+    const bars = 24;
+    const binCount = dataArray.length;
     const heights = Array(bars).fill(0).map((_, i) => {
-      const value = dataArray[i * step];
-      return Math.max(4, Math.min(48, (value / 255) * 48));
+      // Log scale: index maps to exponential bin position
+      const logMin = Math.log(1);
+      const logMax = Math.log(binCount);
+      const binIndex = Math.floor(Math.exp(logMin + (logMax - logMin) * (i / bars)));
+      const value = dataArray[Math.min(binIndex, binCount - 1)];
+      return Math.max(4, Math.min(56, (value / 255) * 56));
     });
 
     setWaveformHeights(heights);
@@ -77,7 +89,7 @@ export function RecordButton({
       const audioContext = new AudioContext();
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
+      analyser.fftSize = 512;
       source.connect(analyser);
       analyserRef.current = analyser;
 
@@ -102,6 +114,7 @@ export function RecordButton({
 
       setState('recording');
       setElapsedTime(0);
+      onRecordingStart?.();
 
       timerRef.current = setInterval(() => {
         setElapsedTime((prev) => prev + 1);
@@ -119,6 +132,7 @@ export function RecordButton({
       setState('paused');
       if (timerRef.current) clearInterval(timerRef.current);
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
+      onRecordingPause?.();
     }
   };
 
@@ -130,6 +144,7 @@ export function RecordButton({
         setElapsedTime((prev) => prev + 1);
       }, 1000);
       updateWaveform();
+      onRecordingResume?.();
     }
   };
 
@@ -138,6 +153,7 @@ export function RecordButton({
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
+    onRecordingStop?.();
   };
 
   const handleUpload = async (blob: Blob) => {
@@ -148,7 +164,7 @@ export function RecordButton({
       onRecordingComplete?.(result.url);
       setState('idle');
       setElapsedTime(0);
-      setWaveformHeights(Array(10).fill(4));
+      setWaveformHeights(Array(24).fill(4));
     } catch (err) {
       onError?.(err instanceof Error ? err.message : 'Upload failed');
       setState('idle');
@@ -212,16 +228,33 @@ export function RecordButton({
         </div>
       )}
 
-      {/* Waveform */}
+      {/* FFT Equalizer */}
       {(state === 'recording' || state === 'paused') && (
-        <div className="flex gap-1 h-12 items-center mb-4">
-          {waveformHeights.map((height, i) => (
-            <div
-              key={i}
-              className="w-1 bg-primary rounded-full transition-all duration-100"
-              style={{ height: `${height}px` }}
-            />
-          ))}
+        <div className="flex flex-col items-center mb-4">
+          {/* Main bars */}
+          <div className="flex gap-[3px] h-14 items-end">
+            {waveformHeights.map((height, i) => (
+              <div
+                key={i}
+                className={`w-[6px] waveform-bar transition-all duration-75 ${
+                  state === 'paused' ? 'opacity-40' : ''
+                }`}
+                style={{ height: `${height}px` }}
+              />
+            ))}
+          </div>
+          {/* Mirror reflection */}
+          <div className="flex gap-[3px] h-6 items-start opacity-30 blur-[1px]" style={{ transform: 'scaleY(-1)' }}>
+            {waveformHeights.map((height, i) => (
+              <div
+                key={i}
+                className={`w-[6px] waveform-bar transition-all duration-75 ${
+                  state === 'paused' ? 'opacity-40' : ''
+                }`}
+                style={{ height: `${height * 0.4}px` }}
+              />
+            ))}
+          </div>
         </div>
       )}
 
