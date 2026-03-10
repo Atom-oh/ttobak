@@ -93,7 +93,14 @@ body {
 }
 
 .waveform-bar {
-  background: linear-gradient(to top, #3211d4 20%, #7c3aed 80%);
+  background: linear-gradient(to top, #3211d4 0%, #5b21b6 33%, #7c3aed 66%, #a78bfa 100%);
+  box-shadow: 0 0 6px rgba(50, 17, 212, 0.3);
+  border-radius: 9999px;
+}
+
+.dark .waveform-bar {
+  background: linear-gradient(to top, #6366f1 0%, #818cf8 40%, #a78bfa 75%, #c4b5fd 100%);
+  box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
 }
 
 /* Focus styles */
