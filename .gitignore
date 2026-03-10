@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+frontend/out/
+frontend/.next/
+backend/cmd/*/bootstrap
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CDK
+infra/cdk.out/
+
+# OMC / Playwright
+.omc/
+.playwright-mcp/

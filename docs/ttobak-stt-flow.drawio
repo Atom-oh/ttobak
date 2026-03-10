@@ -1,0 +1,185 @@
+<mxfile host="draw.io" modified="2026-03-05T00:00:00.000Z" agent="Claude" version="21.0.0" type="device">
+  <diagram id="ttobak-stt-flow" name="STT A/B Pipeline Flow">
+    <mxGraphModel dx="1422" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0" background="none">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="Ttobak - STT A/B Pipeline Detail Flow" style="text;html=1;fontSize=20;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="400" y="15" width="500" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Status Flow (top bar) -->
+        <mxCell id="statusBar" value="" style="rounded=1;whiteSpace=wrap;fillColor=#F0F0F0;strokeColor=#CCCCCC;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="60" width="1200" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="statusLabel" value="&lt;b&gt;Status Flow:&lt;/b&gt;  recording → &lt;font color=&quot;#FF6600&quot;&gt;&lt;b&gt;transcribing&lt;/b&gt;&lt;/font&gt; → &lt;font color=&quot;#9673A6&quot;&gt;&lt;b&gt;summarizing&lt;/b&gt;&lt;/font&gt; → &lt;font color=&quot;#82B366&quot;&gt;&lt;b&gt;done&lt;/b&gt;&lt;/font&gt;" style="text;html=1;fontSize=13;align=center;verticalAlign=middle;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="100" y="60" width="1200" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 1: Upload -->
+        <mxCell id="phase1box" value="" style="rounded=1;whiteSpace=wrap;dashed=1;dashPattern=5 5;strokeColor=#999999;fillColor=none;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="120" width="250" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="phase1label" value="Phase 1: Upload" style="text;html=1;fontSize=12;fontStyle=1;fillColor=none;strokeColor=none;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="50" y="125" width="120" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- S3 Audio Upload -->
+        <mxCell id="s3upload" value="S3 Upload&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;audio/{userId}/{meetingId}/&lt;br&gt;recording.webm&lt;/font&gt;" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="130" y="165" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- EventBridge -->
+        <mxCell id="eb" value="EventBridge&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;prefix: audio/&lt;/font&gt;" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="350" y="165" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 2: Transcription -->
+        <mxCell id="phase2box" value="" style="rounded=1;whiteSpace=wrap;dashed=1;dashPattern=5 5;strokeColor=#FF6600;fillColor=none;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="460" y="120" width="540" height="350" as="geometry" />
+        </mxCell>
+        <mxCell id="phase2label" value="Phase 2: Transcription (A/B Parallel)" style="text;html=1;fontSize=12;fontStyle=1;fillColor=none;strokeColor=none;fontColor=#FF6600;" vertex="1" parent="1">
+          <mxGeometry x="470" y="125" width="280" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- Transcribe Lambda -->
+        <mxCell id="tLambda" value="Lambda&lt;br&gt;(Transcribe)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Timeout: 300s&lt;/font&gt;" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;fillColor=#FFF3D9;" vertex="1" parent="1">
+          <mxGeometry x="520" y="200" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Branch A: Amazon Transcribe -->
+        <mxCell id="branchAbox" value="" style="rounded=1;whiteSpace=wrap;fillColor=#D5E8D4;strokeColor=#82B366;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="680" y="150" width="300" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="branchAlabel" value="&lt;b&gt;Branch A: Amazon Transcribe&lt;/b&gt;" style="text;html=1;fontSize=11;fillColor=none;strokeColor=none;fontColor=#2D6A2E;" vertex="1" parent="1">
+          <mxGeometry x="710" y="155" width="240" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="transcribeJob" value="StartTranscription&lt;br&gt;Job (한/영)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.transcribe;labelBackgroundColor=none;sketch=0;html=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="700" y="185" width="50" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="s3transcript" value="S3&lt;br&gt;transcripts/" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=none;sketch=0;html=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="800" y="185" width="50" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ddbA" value="DynamoDB&lt;br&gt;transcriptA" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;labelBackgroundColor=none;sketch=0;html=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="905" y="185" width="50" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Branch B: Nova 2 Sonic -->
+        <mxCell id="branchBbox" value="" style="rounded=1;whiteSpace=wrap;fillColor=#FFE6CC;strokeColor=#D6A461;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="680" y="300" width="300" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="branchBlabel" value="&lt;b&gt;Branch B: Amazon Nova 2 Sonic&lt;/b&gt;" style="text;html=1;fontSize=11;fillColor=none;strokeColor=none;fontColor=#B45F06;" vertex="1" parent="1">
+          <mxGeometry x="710" y="305" width="240" height="20" as="geometry" />
+        </mxCell>
+
+        <mxCell id="novaSonic" value="Bedrock&lt;br&gt;Nova 2 Sonic&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;Bidirectional&lt;br&gt;Streaming (한/영)&lt;/font&gt;" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="700" y="345" width="50" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ddbB" value="DynamoDB&lt;br&gt;transcriptB" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;labelBackgroundColor=none;sketch=0;html=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="905" y="345" width="50" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Phase 3: Summarization -->
+        <mxCell id="phase3box" value="" style="rounded=1;whiteSpace=wrap;dashed=1;dashPattern=5 5;strokeColor=#9673A6;fillColor=none;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="530" width="960" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="phase3label" value="Phase 3: Summarization" style="text;html=1;fontSize=12;fontStyle=1;fillColor=none;strokeColor=none;fontColor=#9673A6;" vertex="1" parent="1">
+          <mxGeometry x="50" y="535" width="200" height="20" as="geometry" />
+        </mxCell>
+
+        <!-- DDB Stream trigger -->
+        <mxCell id="ddbStream" value="DynamoDB Stream&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;status = &quot;summarizing&quot;&lt;/font&gt;" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="120" y="590" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Summarize Lambda -->
+        <mxCell id="sumLambda" value="Lambda&lt;br&gt;(Summarize)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Timeout: 120s&lt;/font&gt;" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;fillColor=#E6D5F5;" vertex="1" parent="1">
+          <mxGeometry x="330" y="590" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Bedrock Claude -->
+        <mxCell id="bedrock" value="Bedrock&lt;br&gt;Claude Opus 4.6&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;구조화된 회의록 생성&lt;/font&gt;" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="560" y="590" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- DynamoDB (result) -->
+        <mxCell id="ddbResult" value="DynamoDB&lt;br&gt;content (Markdown)&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;status → &quot;done&quot;&lt;/font&gt;" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#D5E8D4;" vertex="1" parent="1">
+          <mxGeometry x="800" y="590" width="60" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <!-- S3 -> EventBridge -->
+        <mxCell id="f1" value="S3 Event" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;" edge="1" source="s3upload" target="eb" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- EventBridge -> Transcribe Lambda -->
+        <mxCell id="f2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#FF6600;" edge="1" source="eb" target="tLambda" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Transcribe Lambda -> Branch A -->
+        <mxCell id="f3" value="parallel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#82B366;fontSize=10;" edge="1" source="tLambda" target="transcribeJob" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Transcribe Lambda -> Branch B -->
+        <mxCell id="f4" value="parallel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#D6A461;fontSize=10;" edge="1" source="tLambda" target="novaSonic" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- TranscribeJob -> S3 transcript -->
+        <mxCell id="f5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#82B366;" edge="1" source="transcribeJob" target="s3transcript" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- S3 transcript -> DDB A -->
+        <mxCell id="f6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#82B366;" edge="1" source="s3transcript" target="ddbA" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Nova 2 Sonic -> DDB B -->
+        <mxCell id="f7" value="direct write" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;strokeColor=#D6A461;fontSize=9;" edge="1" source="novaSonic" target="ddbB" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- DDB -> DDB Stream (summarize trigger) -->
+        <mxCell id="f8" value="Stream" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#9673A6;fontSize=10;" edge="1" source="ddbA" target="ddbStream" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="930" y="500" />
+              <mxPoint x="150" y="500" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- DDB Stream -> Summarize Lambda -->
+        <mxCell id="f9" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#9673A6;" edge="1" source="ddbStream" target="sumLambda" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Summarize Lambda -> Bedrock -->
+        <mxCell id="f10" value="InvokeModel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#9673A6;fontSize=10;" edge="1" source="sumLambda" target="bedrock" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Bedrock -> DDB result -->
+        <mxCell id="f11" value="회의록 저장" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#9673A6;fontSize=10;" edge="1" source="bedrock" target="ddbResult" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- A/B note -->
+        <mxCell id="abnote" value="&lt;b&gt;A/B 비교&lt;/b&gt;&lt;br&gt;• 모든 회의에 언어 무관 실행&lt;br&gt;• 사용자가 A 또는 B 선택 가능&lt;br&gt;• 선택된 결과로 요약 실행" style="text;html=1;fontSize=10;align=left;verticalAlign=top;rounded=1;whiteSpace=wrap;fillColor=#FFFFCC;strokeColor=#E6DB00;spacingLeft=6;spacingTop=4;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="270" width="200" height="80" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

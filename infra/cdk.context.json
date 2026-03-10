@@ -1,0 +1,14 @@
+{
+  "availability-zones:account=180294183052:region=ap-northeast-2": [
+    "ap-northeast-2a",
+    "ap-northeast-2b",
+    "ap-northeast-2c",
+    "ap-northeast-2d"
+  ],
+  "cc-api-provider:account=180294183052:expectedMatchCount=exactly-one:propertiesToReturn.0=PrefixListId:propertyMatch.PrefixListName=com.amazonaws.global.cloudfront.origin-facing:region=ap-northeast-2:typeName=AWS$:$:EC2$:$:PrefixList": [
+    {
+      "PrefixListId": "pl-22a6434b",
+      "Identifier": "pl-22a6434b"
+    }
+  ]
+}

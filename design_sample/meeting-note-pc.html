@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Meeting Detail - Mac Browser</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#3211d4",
+                        "background-light": "#f6f6f8",
+                        "background-dark": "#131022",
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"]
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .sidebar-item-active {
+            background-color: rgba(50, 17, 212, 0.1);
+            color: #3211d4;
+        }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark text-slate-900 dark:text-slate-100 font-display">
+<div class="flex min-h-screen">
+<!-- Sidebar Navigation -->
+<aside class="w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 flex flex-col fixed h-full">
+<div class="p-6 flex flex-col gap-8 h-full">
+<!-- Workspace Header -->
+<div class="flex items-center gap-3">
+<div class="size-10 rounded-lg bg-primary flex items-center justify-center text-white">
+<span class="material-symbols-outlined">browser_updated</span>
+</div>
+<div class="flex flex-col">
+<h1 class="text-sm font-bold truncate">Mac Browser Team</h1>
+<p class="text-xs text-slate-500">Pro Workspace</p>
+</div>
+</div>
+<!-- Nav Links -->
+<nav class="flex flex-col gap-1 flex-1">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors" href="#">
+<span class="material-symbols-outlined text-slate-500">home</span>
+<span class="text-sm font-medium">Home</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg sidebar-item-active" href="#">
+<span class="material-symbols-outlined">video_library</span>
+<span class="text-sm font-medium">Meetings</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors" href="#">
+<span class="material-symbols-outlined text-slate-500">description</span>
+<span class="text-sm font-medium">Notes</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors" href="#">
+<span class="material-symbols-outlined text-slate-500">calendar_today</span>
+<span class="text-sm font-medium">Calendar</span>
+</a>
+<div class="my-4 border-t border-slate-100 dark:border-slate-900"></div>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors" href="#">
+<span class="material-symbols-outlined text-slate-500">settings</span>
+<span class="text-sm font-medium">Settings</span>
+</a>
+</nav>
+<button class="w-full bg-primary hover:bg-primary/90 text-white font-semibold py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all">
+<span class="material-symbols-outlined text-sm">add</span>
+<span class="text-sm">New Meeting</span>
+</button>
+</div>
+</aside>
+<!-- Main Content -->
+<main class="flex-1 ml-64 p-8 max-w-5xl mx-auto">
+<!-- Breadcrumbs -->
+<div class="flex items-center gap-2 text-sm text-slate-500 mb-6">
+<a class="hover:text-primary transition-colors" href="#">Meetings</a>
+<span class="material-symbols-outlined text-xs">chevron_right</span>
+<span class="text-slate-900 dark:text-slate-200 font-medium">Mac Browser Sync</span>
+</div>
+<!-- Header Section -->
+<header class="mb-10">
+<h1 class="text-4xl font-black tracking-tight mb-4">Mac Browser: Meeting Detail (Improved)</h1>
+<div class="flex flex-wrap items-center gap-6">
+<div class="flex items-center gap-2 text-slate-600 dark:text-slate-400">
+<span class="material-symbols-outlined text-lg">calendar_month</span>
+<span class="text-sm font-medium">Oct 24, 2023 • 10:00 AM</span>
+</div>
+<div class="flex items-center gap-2 text-slate-600 dark:text-slate-400">
+<span class="material-symbols-outlined text-lg">folder_open</span>
+<span class="text-sm font-medium">Browser Performance UI/UX Refresh</span>
+</div>
+</div>
+<!-- Participants Stack -->
+<div class="mt-6 flex items-center gap-3">
+<div class="flex -space-x-2">
+<div class="size-8 rounded-full border-2 border-white dark:border-slate-950 bg-slate-200 overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="Portrait of a male team member" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCEDEVza5U71cpFWlreEnErwdaTofXRZETiHzl6Odnl_KpYRdjfiUwsWeNy6N-viVUb9iYLbRHoHjURe1r6Hy5srvYFqeNNud43x6WJqgRbHm79C2_8o6p-Zajz2F7NYvJDBOilvoX5jG-Ea9I3LpYQ_v-RFjH3tj4iomf4YaWqK09a4AfYGQZLmb_49pYPVHvb1f7wrIsftdtzCK-0jw1PQ2IEPWPPTqI1ADFNzCkcsQ7LeRL1iNnMdiFZM7ynPvMzlOp3kscuByo"/>
+</div>
+<div class="size-8 rounded-full border-2 border-white dark:border-slate-950 bg-slate-200 overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="Portrait of a female team member" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCi5Ympehuj4Qouudy2OTgmFGGSz0DPJopWdoAYWiBWPX0AhZqLuvqXkFcfcOWBqLqZM_WtQaK-UTHOSUvibdteKZQkKHUFxPGtGcjlPr5mLYkd0sqPWllirZvdVNiGavn8zxl4YWmfLiVvFhpKXj7rxR34nA4ax9qLoZbmKgWoWyuX0HyPd0h6CwQyvuGAXEnrHO4R7aAHR3_lKQSyjKtfG6sFpF9_8es56qzf90RjupPrQeHEDJaG7RhKol3u-7p1GZvTUMFFbcE"/>
+</div>
+<div class="size-8 rounded-full border-2 border-white dark:border-slate-950 bg-slate-200 overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="Portrait of a diverse team member" src="https://lh3.googleusercontent.com/aida-public/AB6AXuANlTP_kkLaNbjEZC4L-vqpWTGSsdh2AyYQw3uqcvaHh7XClC53XKxbs_aGIHbTUpUgxGaUY39ajh8-vAw5nEDzgE6zJngU9KAcskStcULcCNlV7L1kaB0xk37DB9uW_TT9kE0xR7WNCs2F6qYhg1qHJ-I_7nQAqoLpKHsIqxL5KGhFkuJMX4b8Y_BRwG1zigvVY5a6_NxtzO5_XK_SN0sN84hw2hj0EKaWFEWg40FV-Pz8zWKZHDdAkHczgAsStdkAcVq3Q2dBF0k"/>
+</div>
+<div class="size-8 rounded-full border-2 border-white dark:border-slate-950 bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">
+                            +2
+                        </div>
+</div>
+<p class="text-xs text-slate-500 font-medium">Alex, Sarah, Jordan, and 2 others joined</p>
+</div>
+</header>
+<!-- Core Content Grid -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-12">
+<!-- AI Summary Box -->
+<div class="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm">
+<div class="flex items-center gap-2 mb-4 text-primary">
+<span class="material-symbols-outlined">auto_awesome</span>
+<h3 class="font-bold">AI Summary</h3>
+</div>
+<p class="text-slate-600 dark:text-slate-300 leading-relaxed mb-4">
+                        The team discussed the performance bottlenecks in the current Mac Browser build. Alex highlighted that memory leaks in the tab management system are causing significant UI lag for power users.
+                    </p>
+<ul class="space-y-3 text-slate-600 dark:text-slate-300">
+<li class="flex gap-2">
+<span class="text-primary font-bold">•</span>
+<span>Critical focus on reducing tab-switch latency by 40% in the next sprint.</span>
+</li>
+<li class="flex gap-2">
+<span class="text-primary font-bold">•</span>
+<span>Agreement to adopt the new Indigo theme for the internal settings dashboard.</span>
+</li>
+</ul>
+</div>
+<!-- Action Items List -->
+<div class="lg:col-span-5 bg-primary/5 dark:bg-primary/10 border border-primary/20 rounded-xl p-6">
+<div class="flex items-center gap-2 mb-4 text-primary">
+<span class="material-symbols-outlined">check_circle</span>
+<h3 class="font-bold">Action Items</h3>
+</div>
+<div class="space-y-4">
+<div class="flex items-start gap-3">
+<input class="mt-1 rounded border-primary/30 text-primary focus:ring-primary h-4 w-4" type="checkbox"/>
+<div class="flex flex-col">
+<span class="text-sm font-medium">Profile memory usage in Chromium core</span>
+<span class="text-[10px] text-slate-500">Assigned to: @Alex • Due tomorrow</span>
+</div>
+</div>
+<div class="flex items-start gap-3">
+<input class="mt-1 rounded border-primary/30 text-primary focus:ring-primary h-4 w-4" type="checkbox"/>
+<div class="flex flex-col">
+<span class="text-sm font-medium">Draft Indigo theme specification</span>
+<span class="text-[10px] text-slate-500">Assigned to: @Sarah • Due Oct 28</span>
+</div>
+</div>
+<div class="flex items-start gap-3">
+<input class="mt-1 rounded border-primary/30 text-primary focus:ring-primary h-4 w-4" type="checkbox"/>
+<div class="flex flex-col">
+<span class="text-sm font-medium">Schedule user testing for sync feature</span>
+<span class="text-[10px] text-slate-500">Assigned to: @Jordan • Due Oct 30</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Attachments Gallery -->
+<section class="mb-12">
+<div class="flex items-center justify-between mb-6">
+<h2 class="text-xl font-bold flex items-center gap-2">
+<span class="material-symbols-outlined">attachment</span>
+                        Attachments
+                    </h2>
+<button class="text-sm font-semibold text-primary hover:underline">View All (4)</button>
+</div>
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+<div class="group relative aspect-video rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800 cursor-pointer">
+<img class="w-full h-full object-cover transition-transform group-hover:scale-105" data-alt="Data visualization dashboard showing metrics" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD7-16PfhFQoVa7-ogNgb_cMkGSdpH7-mjlFwf7oPvAUq2Osp2BoiPJXSqI-9Ldk45DnZc1zWpMdBE7EUAT8DUJzKCsZV76_5qiW6WJ7znUc4jDd-fHKyWVM-rFdf57G6uWJbNYUK6x5cnGICbjq0ucbbxEsanSHl1iIaY5SpGyrbZNQIB3u5KgL9mxEBbU-PyMV9kEtxeIQ8jYp3Ta2LlRmuCbth9B6RER3XWPevg3cVkxm9yfnKd5THke-YYIGK9QFuYmgSw_E0k"/>
+<div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex flex-col justify-end p-3 opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="text-white text-xs font-medium">Performance_Metrics.png</span>
+</div>
+</div>
+<div class="group relative aspect-video rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800 cursor-pointer">
+<img class="w-full h-full object-cover transition-transform group-hover:scale-105" data-alt="UI design concepts for browser tabs" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCN3cF1UG5AW6Bm-7qywP5DvbMN7BV7NORAI-Z0S-lyODeVRtoDA0OhaV7KvAuFwntC9vsfU5a6KKJJb4KruHau5MtzrkCLme8lbYH7u3Q__OV1n-IeM2mFKyyzzHUXBNEpzrRVc46qOqprK-1Jb5k39WYFQG2P1R4AAOnDQ5nBR5UjMGLTEOg3Q2cTcYJZWNpMKXIJhQwJMigPP2wMVJ3LoTLAIG5znwP8nnlhh3JK2NDVEXwobHgo2GTgmnfDLXX9hQu0-Ck-HfQ"/>
+<div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex flex-col justify-end p-3 opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="text-white text-xs font-medium">New_Tab_Design_V2.jpg</span>
+</div>
+</div>
+<div class="flex flex-col items-center justify-center aspect-video rounded-lg border-2 border-dashed border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 hover:bg-slate-50 transition-colors cursor-pointer group">
+<span class="material-symbols-outlined text-slate-400 group-hover:text-primary mb-1">description</span>
+<span class="text-[10px] font-bold text-slate-500 group-hover:text-primary">User_Survey.pdf</span>
+</div>
+<div class="flex flex-col items-center justify-center aspect-video rounded-lg border-2 border-dashed border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 hover:bg-slate-50 transition-colors cursor-pointer group">
+<span class="material-symbols-outlined text-slate-400 group-hover:text-primary mb-1">add_circle</span>
+<span class="text-[10px] font-bold text-slate-500 group-hover:text-primary">Upload New</span>
+</div>
+</div>
+</section>
+<!-- Full Transcription -->
+<section class="border-t border-slate-200 dark:border-slate-800 pt-12">
+<div class="flex items-center justify-between mb-8">
+<h2 class="text-xl font-bold flex items-center gap-2">
+<span class="material-symbols-outlined">notes</span>
+                        Full Transcription
+                    </h2>
+<div class="flex gap-2">
+<button class="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-semibold flex items-center gap-2 bg-white dark:bg-slate-900">
+<span class="material-symbols-outlined text-sm">search</span>
+                            Search transcript
+                        </button>
+<button class="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-semibold flex items-center gap-2 bg-white dark:bg-slate-900">
+<span class="material-symbols-outlined text-sm">download</span>
+                            Export
+                        </button>
+</div>
+</div>
+<div class="space-y-8">
+<!-- Transcript Row 1 -->
+<div class="flex gap-6">
+<div class="w-16 pt-1">
+<span class="text-xs font-bold text-primary px-2 py-1 bg-primary/10 rounded">0:00</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center gap-2 mb-2">
+<span class="text-sm font-black">Alex Rivera</span>
+<span class="text-[10px] text-slate-400 font-medium">10:01 AM</span>
+</div>
+<p class="text-slate-600 dark:text-slate-400 text-sm leading-relaxed">
+                                Good morning everyone. Let's dive straight into the browser sync performance issues. We've seen a spike in crash reports related to the Mac build specifically. Sarah, do you have the latest metrics from the dashboard?
+                            </p>
+</div>
+</div>
+<!-- Transcript Row 2 -->
+<div class="flex gap-6">
+<div class="w-16 pt-1">
+<span class="text-xs font-bold text-primary px-2 py-1 bg-primary/10 rounded">0:45</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center gap-2 mb-2">
+<span class="text-sm font-black">Sarah Chen</span>
+<span class="text-[10px] text-slate-400 font-medium">10:02 AM</span>
+</div>
+<p class="text-slate-600 dark:text-slate-400 text-sm leading-relaxed italic">
+                                [Screen sharing started]
+                            </p>
+<p class="text-slate-600 dark:text-slate-400 text-sm leading-relaxed mt-2">
+                                Yes, Alex. If you look at the attachment titled "Performance Metrics," you'll see the memory overhead spikes when syncing more than 50 tabs. It's hitting about 2GB of RAM just for the sync worker process.
+                            </p>
+</div>
+</div>
+<!-- Transcript Row 3 -->
+<div class="flex gap-6">
+<div class="w-16 pt-1">
+<span class="text-xs font-bold text-primary px-2 py-1 bg-primary/10 rounded">2:15</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center gap-2 mb-2">
+<span class="text-sm font-black">Jordan Smith</span>
+<span class="text-[10px] text-slate-400 font-medium">10:04 AM</span>
+</div>
+<p class="text-slate-600 dark:text-slate-400 text-sm leading-relaxed">
+                                That explains the UI lag. I think we need to implement a lazy-loading strategy for the sync worker. We don't need to pull the full metadata for every tab on startup.
+                            </p>
+</div>
+</div>
+<!-- Transcript Row 4 -->
+<div class="flex gap-6">
+<div class="w-16 pt-1">
+<span class="text-xs font-bold text-primary px-2 py-1 bg-primary/10 rounded">5:30</span>
+</div>
+<div class="flex-1">
+<div class="flex items-center gap-2 mb-2">
+<span class="text-sm font-black">Alex Rivera</span>
+<span class="text-[10px] text-slate-400 font-medium">10:08 AM</span>
+</div>
+<p class="text-slate-600 dark:text-slate-400 text-sm leading-relaxed">
+                                Exactly. Jordan, can you take point on investigating how Chromium handles these lazy loads in the core? We should aim for a fix by the end of this sprint.
+                            </p>
+</div>
+</div>
+</div>
+</section>
+<!-- Bottom Floating Player (Mockup) -->
+<div class="sticky bottom-6 mt-12 w-full max-w-2xl mx-auto">
+<div class="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border border-slate-200 dark:border-slate-800 shadow-xl rounded-full px-6 py-3 flex items-center gap-4">
+<button class="size-10 rounded-full bg-primary flex items-center justify-center text-white shadow-lg shadow-primary/20">
+<span class="material-symbols-outlined">play_arrow</span>
+</button>
+<div class="flex-1">
+<div class="flex justify-between text-[10px] font-bold text-slate-400 mb-1">
+<span>04:12</span>
+<span>45:00</span>
+</div>
+<div class="h-1 w-full bg-slate-200 dark:bg-slate-800 rounded-full overflow-hidden">
+<div class="h-full bg-primary w-1/4"></div>
+</div>
+</div>
+<div class="flex items-center gap-3 text-slate-500">
+<button class="material-symbols-outlined hover:text-primary transition-colors">fast_rewind</button>
+<button class="material-symbols-outlined hover:text-primary transition-colors">fast_forward</button>
+<button class="material-symbols-outlined hover:text-primary transition-colors">volume_up</button>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

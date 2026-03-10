@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Meeting Report - Product Sync</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#1a1a1a",
+                        "accent": "#3211d4",
+                        "background-light": "#f8f9fa",
+                        "background-dark": "#0f1115",
+                        "workspace-bg": "#1e1e1e",
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+                },
+            },
+        }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+<style>
+        body {
+            min-height: max(884px, 100dvh);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background-light dark:bg-background-dark font-display text-slate-900 dark:text-slate-100">
+<div class="relative mx-auto min-h-screen max-w-md bg-white dark:bg-background-dark shadow-2xl flex flex-col">
+<header class="sticky top-0 z-10 flex items-center bg-white/90 dark:bg-background-dark/90 backdrop-blur-md p-4 border-b border-slate-200 dark:border-slate-800 justify-between">
+<div class="text-slate-700 dark:text-slate-300 flex size-10 shrink-0 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer">
+<span class="material-symbols-outlined">arrow_back</span>
+</div>
+<h2 class="text-slate-900 dark:text-slate-100 text-sm font-bold leading-tight tracking-tight flex-1 text-center">Meeting Report</h2>
+<div class="flex w-10 items-center justify-end">
+<button class="flex size-10 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+<span class="material-symbols-outlined text-slate-700 dark:text-slate-300">more_horiz</span>
+</button>
+</div>
+</header>
+<main class="flex-1 overflow-y-auto no-scrollbar pb-24">
+<div class="px-6 pt-8 pb-4">
+<div class="flex items-center gap-2 mb-3">
+<span class="bg-slate-900 text-white text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded">Strategy</span>
+<span class="text-slate-400 dark:text-slate-500 text-xs">•</span>
+<p class="text-slate-500 dark:text-slate-400 text-xs font-medium">October 24, 2023 • 10:00 AM</p>
+</div>
+<h1 class="text-slate-900 dark:text-slate-100 tracking-tight text-3xl font-bold leading-tight">Product Sync: Q4 Roadmap</h1>
+</div>
+<section class="mb-8">
+<div class="px-6 flex items-center justify-between mb-4">
+<h3 class="text-slate-900 dark:text-slate-100 text-xs font-bold uppercase tracking-[0.2em]">Visual Comparison Workspace</h3>
+<span class="material-symbols-outlined text-slate-400 text-lg">compare</span>
+</div>
+<div class="bg-workspace-bg mx-4 rounded-xl p-4 shadow-xl border border-slate-800">
+<div class="flex flex-row gap-3 aspect-[4/3]">
+<div class="flex-1 flex flex-col gap-2">
+<div class="flex-1 rounded-lg overflow-hidden border border-white/10 bg-black/40 relative group">
+<img alt="Chart 1" class="size-full object-contain" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDOwURY7BJeNuk0Z5stgeWNmgDySMrzsTihzmjt4u3u0TyrsSUBHOfR3EN0tt4358dDVI7nbUg_hkYJyhMIP4Zrof9QCXJjkACefLjIIg1lEHNrAhIm6pTVpkQJmKjAW41OsIwfDCuS9rdeecS0EqONBMKPiXCbuE1W8PVWhgcZLgfHThdh_vcSODM9zL_m2KXZycpY7LGkMGzNoMxDZ8UdOgfM89cacM6zepzmYksU2s78FgGBQ39ex_zagQ78Ux3F6-hvzncwNQA"/>
+<div class="absolute top-2 left-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded border border-white/20">
+<span class="text-[9px] text-white font-bold tracking-tighter">A</span>
+</div>
+</div>
+<p class="text-[10px] text-slate-400 font-medium truncate px-1">Analytics_Q3.png</p>
+</div>
+<div class="w-px bg-white/10 my-4 self-stretch"></div>
+<div class="flex-1 flex flex-col gap-2">
+<div class="flex-1 rounded-lg overflow-hidden border border-white/10 bg-black/40 relative group">
+<img alt="Design 1" class="size-full object-contain" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDPvEirx_MZ3zLwRIug4BhMUNYsc1tm_234F71V8J1ESGIQaxP_4BX9Gq8rJh38nk-voSIfOQZb45uWorxJDD-ItpB2QgjKR86h3jrSdi6f1xgtk7OuBjdVgSiGm3CQAFdK3GTfBm_Sm7B3ASnrqhm4QkMvavsTy7hHERe6E4fNgxbGYVw3rmSgnrerhDYDbs0s_I7R9pUoF75pclGGYMFqypFRj0arZzUoh01vJ-9rfiX5Tv0MJH3TAaRU4e-AsCmdJX4HDiXbNZo"/>
+<div class="absolute top-2 left-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded border border-white/20">
+<span class="text-[9px] text-white font-bold tracking-tighter">B</span>
+</div>
+</div>
+<p class="text-[10px] text-slate-400 font-medium truncate px-1">Mobile_v2_Draft.jpg</p>
+</div>
+</div>
+<div class="mt-4 flex justify-center gap-6 border-t border-white/5 pt-4">
+<button class="flex items-center gap-1.5 text-white/60 hover:text-white text-[11px] font-semibold tracking-wide">
+<span class="material-symbols-outlined text-sm">zoom_in</span> ENLARGE
+                    </button>
+<button class="flex items-center gap-1.5 text-white/60 hover:text-white text-[11px] font-semibold tracking-wide">
+<span class="material-symbols-outlined text-sm">sync_alt</span> SWAP
+                    </button>
+</div>
+</div>
+</section>
+<section class="px-6 mb-8">
+<div class="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
+<div class="flex items-center gap-2 mb-3">
+<span class="material-symbols-outlined text-slate-900 dark:text-white text-xl">auto_awesome</span>
+<h4 class="text-slate-900 dark:text-white font-bold text-sm tracking-tight uppercase">AI Summary</h4>
+</div>
+<p class="text-slate-600 dark:text-slate-400 text-[14px] leading-relaxed">
+                    The team reviewed the final milestones for the Q4 product roadmap. Key focus remains on the mobile app redesign and API integration for enterprise partners. Risks were identified regarding the legacy database migration, scheduled for mid-November.
+                </p>
+</div>
+</section>
+<section class="px-6 mb-8">
+<h3 class="text-slate-900 dark:text-slate-100 text-xs font-bold uppercase tracking-[0.2em] mb-4">Action Items</h3>
+<div class="space-y-4">
+<div class="flex items-start gap-3">
+<input checked="" class="mt-1 size-5 rounded border-slate-300 dark:border-slate-700 text-slate-900 focus:ring-slate-400 bg-transparent" type="checkbox"/>
+<span class="text-slate-400 dark:text-slate-500 line-through text-[15px]">Draft project timeline for Mobile 2.0</span>
+</div>
+<div class="flex items-start gap-3">
+<input class="mt-1 size-5 rounded border-slate-300 dark:border-slate-700 text-slate-900 focus:ring-slate-400 bg-transparent" type="checkbox"/>
+<span class="text-slate-700 dark:text-slate-300 text-[15px]">Review API documentation with Alex</span>
+</div>
+<div class="flex items-start gap-3">
+<input class="mt-1 size-5 rounded border-slate-300 dark:border-slate-700 text-slate-900 focus:ring-slate-400 bg-transparent" type="checkbox"/>
+<span class="text-slate-700 dark:text-slate-300 text-[15px]">Coordinate with DevOps for migration script test</span>
+</div>
+</div>
+</section>
+<section class="px-6 mb-8">
+<h3 class="text-slate-900 dark:text-slate-100 text-xs font-bold uppercase tracking-[0.2em] mb-4">Participants</h3>
+<div class="flex -space-x-2">
+<img alt="Avatar 1" class="size-9 rounded-full border-2 border-white dark:border-background-dark object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDg0O2p6a2O6acA4pI2c4REjQQunr5Elq9_bj752cGoyol_KZxXpwf_PFSo8-dpPU8V5jpNl9UcDI9zOO_ZvnEfRbNnWhWwbOjwkpePcr54cCqo94ye46O8UaZI3vYBpN_ArqtFUgW-loTIbGbnEjWKlWC4NXOJDGSnZe_GqN-GjtUVBb0iyC4edbguK3kjTE_JeAqcJb8yPrfCUMTAy_U7vc4D3Yg8G0Vqxmxa23FJ87UTPmDB3fprJ0B3h2Q4knUyWZPuxgFoP6g"/>
+<img alt="Avatar 2" class="size-9 rounded-full border-2 border-white dark:border-background-dark object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDnNq2vWn00owr6Wc8dud56bwHA8fB1w2o4zQc8QndpkcwlvHV7yPxCNTxZ1URnlaUPanTsn6Qltnprx-OmUrZuYGDJCwPU7d_fxPw9ynRtRZnndDEFlMT52f7t2tzrzCnHHhmfBxS2PVK43W1wIdqOsgaOv5H-2klSW-fSzQTzV1lYrLOvaXXOjQQhgr6tnr1PB-mQt6VwjCYKLeojwLSOyAS62x21f7wSGBepIe7N7m6Y3AryK9oB55fILcYl4ie3ANgasZpY1o4"/>
+<img alt="Avatar 3" class="size-9 rounded-full border-2 border-white dark:border-background-dark object-cover" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB3e47LV9RZurYyPNKbT-3sn9B3Wba4rC9z5dWbSydBIWcm54cIP8VvABuJsNVtn8Iw2JB3pZGtwzLVdxBmrLjRXRE9uArzBeMJz1CH87Ibggc-EGybd9w82Fqy_JRsYsRF04smHfO6BDe-fqGjTUzADU5-OqBWJv2S7nP_mU6COZOwAAc68QqT--GXvoLOkv1BkPK5enYdx4JgWbj3-6mr179A_8uTGD4RHF9I1NPJ8cukGjDngHeQC-ULC1efaCoMinAzn9NEzQM"/>
+<div class="size-9 rounded-full border-2 border-white dark:border-background-dark bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-500">+2</div>
+</div>
+</section>
+<section class="px-6 pb-12">
+<h3 class="text-slate-900 dark:text-slate-100 text-xs font-bold uppercase tracking-[0.2em] mb-4">Transcription</h3>
+<div class="space-y-4 border-l-2 border-slate-100 dark:border-slate-800 pl-4">
+<div>
+<p class="text-[11px] font-bold text-slate-900 dark:text-white mb-1">Sarah (Project Lead) <span class="text-slate-400 font-normal ml-1">02:14</span></p>
+<p class="text-slate-600 dark:text-slate-400 text-sm italic leading-relaxed">"We need to ensure the enterprise sync is stable before we move to Phase 2. Alex, where are we with the auth flow?"</p>
+</div>
+<div>
+<p class="text-[11px] font-bold text-slate-900 dark:text-white mb-1">Alex (Engineer) <span class="text-slate-400 font-normal ml-1">02:30</span></p>
+<p class="text-slate-600 dark:text-slate-400 text-sm italic leading-relaxed">"Initial testing is complete. I'll have the full report by EOD."</p>
+</div>
+</div>
+<button class="mt-6 text-slate-900 dark:text-white text-xs font-bold flex items-center gap-1 hover:underline tracking-widest uppercase">
+                VIEW FULL TRANSCRIPT
+                <span class="material-symbols-outlined text-sm">arrow_forward</span>
+</button>
+</section>
+</main>
+<nav class="absolute bottom-0 left-0 right-0 bg-white/95 dark:bg-background-dark/95 backdrop-blur-lg border-t border-slate-200 dark:border-slate-800 px-6 py-4 flex justify-between items-center">
+<a class="flex flex-col items-center gap-1 text-slate-900 dark:text-white" href="#">
+<span class="material-symbols-outlined fill-1">home</span>
+<span class="text-[10px] font-bold uppercase tracking-tight">Home</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-slate-400 dark:text-slate-500" href="#">
+<span class="material-symbols-outlined">search</span>
+<span class="text-[10px] font-bold uppercase tracking-tight">Search</span>
+</a>
+<div class="relative -top-8">
+<button class="bg-slate-900 dark:bg-white size-14 rounded-full shadow-2xl flex items-center justify-center text-white dark:text-slate-900 ring-4 ring-white dark:ring-background-dark">
+<span class="material-symbols-outlined text-3xl">add</span>
+</button>
+</div>
+<a class="flex flex-col items-center gap-1 text-slate-400 dark:text-slate-500" href="#">
+<span class="material-symbols-outlined">notifications</span>
+<span class="text-[10px] font-bold uppercase tracking-tight">Alerts</span>
+</a>
+<a class="flex flex-col items-center gap-1 text-slate-400 dark:text-slate-500" href="#">
+<span class="material-symbols-outlined">person</span>
+<span class="text-[10px] font-bold uppercase tracking-tight">Profile</span>
+</a>
+</nav>
+</div>
+
+</body></html>

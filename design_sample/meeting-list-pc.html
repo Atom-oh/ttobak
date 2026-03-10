@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Desktop Meeting Notes</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              colors: {
+                "primary": "#3211d4",
+                "background-light": "#f6f6f8",
+                "background-dark": "#131022",
+              },
+              fontFamily: {
+                "display": ["Inter", "sans-serif"]
+              },
+              borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+            },
+          },
+        }
+    </script>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-display text-slate-900 dark:text-slate-100">
+<div class="flex h-screen overflow-hidden">
+<!-- Sidebar Navigation -->
+<aside class="w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col justify-between p-4 shrink-0">
+<div class="flex flex-col gap-6">
+<!-- Workspace Identity -->
+<div class="flex items-center gap-3 px-2">
+<div class="bg-primary/10 rounded-lg p-2 flex items-center justify-center">
+<span class="material-symbols-outlined text-primary">auto_awesome_motion</span>
+</div>
+<div class="flex flex-col">
+<h1 class="text-sm font-semibold leading-none">Main Workspace</h1>
+<p class="text-xs text-slate-500 mt-1">Free Tier</p>
+</div>
+</div>
+<!-- Navigation Links -->
+<nav class="flex flex-col gap-1">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg bg-primary/10 text-primary font-medium transition-colors" href="#">
+<span class="material-symbols-outlined text-xl">video_camera_front</span>
+<span class="text-sm">Meetings</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium transition-colors" href="#">
+<span class="material-symbols-outlined text-xl">description</span>
+<span class="text-sm">Files</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium transition-colors" href="#">
+<span class="material-symbols-outlined text-xl">insights</span>
+<span class="text-sm">Insights</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium transition-colors" href="#">
+<span class="material-symbols-outlined text-xl">group</span>
+<span class="text-sm">Team</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium transition-colors" href="#">
+<span class="material-symbols-outlined text-xl">settings</span>
+<span class="text-sm">Settings</span>
+</a>
+</nav>
+</div>
+<!-- Action Area -->
+<div class="flex flex-col gap-4">
+<button class="w-full bg-primary hover:bg-primary/90 text-white rounded-lg h-10 px-4 font-semibold text-sm flex items-center justify-center gap-2 transition-all">
+<span class="material-symbols-outlined text-lg">add</span>
+<span>New Meeting</span>
+</button>
+<div class="flex items-center gap-3 px-2 pt-4 border-t border-slate-200 dark:border-slate-800">
+<img alt="User" class="w-8 h-8 rounded-full border border-slate-200" data-alt="Profile picture of a professional user" src="https://lh3.googleusercontent.com/aida-public/AB6AXuADaZy8OhOHcx6KRl33T93TZpSkKabXGpy1wQjOSH8CP9Wz_03cepMiQ6otNgre6VRJghwmCPOiwXpITf61muLCKL-UpEgd-4CDNQuNYTwgyaSBLJAMFVfqtvsIYwhv3Eai2yw2GcYjPokIwER17GjUa5GXJZO0fpcVStuRrUgC3hKYoBoL3qGkPvn_sZj8KtoHlQ27k0iubTikpSBhrmNeIRbQ5tP_xBA0WtDXzTelxH58bPpFpG-RHTtmvzIZjr5idowvk2AdIZQ"/>
+<div class="flex flex-col">
+<p class="text-xs font-semibold">Alex Chen</p>
+<p class="text-[10px] text-slate-500">alex@workspace.io</p>
+</div>
+</div>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col overflow-hidden">
+<!-- Top Header -->
+<header class="h-16 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md flex items-center justify-between px-8 shrink-0">
+<div class="flex items-center gap-2 text-slate-500 text-sm">
+<span>Workspace</span>
+<span class="material-symbols-outlined text-xs">chevron_right</span>
+<span class="text-slate-900 dark:text-slate-100 font-semibold">Meetings</span>
+</div>
+<div class="flex items-center gap-4">
+<div class="relative w-64">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xl">search</span>
+<input class="w-full pl-10 pr-4 py-1.5 text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg focus:ring-2 focus:ring-primary/20 placeholder:text-slate-500" placeholder="Search notes..." type="text"/>
+</div>
+<button class="p-2 text-slate-500 hover:text-primary transition-colors">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="p-2 text-slate-500 hover:text-primary transition-colors">
+<span class="material-symbols-outlined">help_outline</span>
+</button>
+</div>
+</header>
+<!-- Dashboard Content -->
+<section class="flex-1 overflow-y-auto p-8 max-w-7xl mx-auto w-full">
+<div class="mb-8">
+<div class="flex justify-between items-end mb-6">
+<div>
+<h2 class="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">Desktop Meeting Notes</h2>
+<p class="text-slate-500 mt-1">Review your automated transcriptions and summaries.</p>
+</div>
+<div class="flex gap-2">
+<button class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm font-medium hover:bg-slate-50">
+<span class="material-symbols-outlined text-sm">filter_list</span>
+                                Filter
+                            </button>
+<button class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm font-medium hover:bg-slate-50">
+<span class="material-symbols-outlined text-sm">sort</span>
+                                Sort
+                            </button>
+</div>
+</div>
+<!-- Category Tabs -->
+<div class="flex gap-4 border-b border-slate-200 dark:border-slate-800 mb-6">
+<button class="pb-3 border-b-2 border-primary text-primary text-sm font-semibold">All Meetings</button>
+<button class="pb-3 border-b-2 border-transparent text-slate-500 text-sm font-medium hover:text-slate-700">Internal</button>
+<button class="pb-3 border-b-2 border-transparent text-slate-500 text-sm font-medium hover:text-slate-700">Client Syncs</button>
+<button class="pb-3 border-b-2 border-transparent text-slate-500 text-sm font-medium hover:text-slate-700">Archived</button>
+</div>
+</div>
+<!-- Notes Grid -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+<!-- Note Card 1 -->
+<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 hover:shadow-xl hover:shadow-primary/5 transition-all group cursor-pointer">
+<div class="flex justify-between items-start mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-2 py-0.5 rounded">Client Sync</span>
+<span class="text-xs text-slate-400">Oct 12, 2023</span>
+</div>
+<h3 class="text-lg font-bold mb-2 group-hover:text-primary transition-colors">Product Design Review Q4</h3>
+<p class="text-sm text-slate-600 dark:text-slate-400 line-clamp-3 mb-4 leading-relaxed">
+                            AI Summary: We discussed the new mobile onboarding flow. Key decisions include moving the "skip" button to the top-right and simplifying the email verification step. Sarah will lead the final asset exports by Friday.
+                        </p>
+<div class="flex flex-wrap gap-2 mb-4">
+<span class="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded text-slate-600 dark:text-slate-300">#ux-design</span>
+<span class="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded text-slate-600 dark:text-slate-300">#q4-goals</span>
+</div>
+<div class="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-800">
+<div class="flex -space-x-2">
+<img class="w-7 h-7 rounded-full border-2 border-white dark:border-slate-900" data-alt="Avatar of Sarah designer" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD05cwUA8oOMzcYMVpOu6wJpZRpgomzdcroapxS1VxNZ-PgV3i22p36zkSwckuvyKhGcinwtznnNXDyKxRDjt7MtzaTTAFhsU8G2j__3dBzxHrz2pII8QIBRXKbMfM72PmKnRJ-MPl-64oFXVwhR9aTACnJESNH6gEKF3m6vYBr3YXzImcsdJKaQb8zuofc3MvwVTB-VM7LKunH-Wi-HBGLC8K2mK3au19hSpg8fZLWptwseM7HYnsg0Vot3kR-_zgcdGGrZHZ8PV4"/>
+<img class="w-7 h-7 rounded-full border-2 border-white dark:border-slate-900" data-alt="Avatar of Mike manager" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAC28Y3ewviCcCI-1bgT4ZWrQW2es432v-gOSoXoq2n7KOwDPxSRQzhqhzNVPic4KZLbpwcSDPiy_GYL-7gsU009d_JtHGO1xYBNFeKAb7oIT8abzsnQvP1g_ggrdt-fNrQzY_Fc6jwDPEJWQqRfj0v6YKXYz2C5x-B2YDwtIoYKo21O0ZECQzehdy0-zIKwROs5PT76HdDGFiC6hxEHTXy6d1nJKzDSvPzbAkOKy8Opv-1M1hqHbAtb3EulKkARJEp2B6w3Ps91AU"/>
+<div class="w-7 h-7 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold border-2 border-white dark:border-slate-900">+3</div>
+</div>
+<button class="text-slate-400 hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-xl">more_horiz</span>
+</button>
+</div>
+</div>
+<!-- Note Card 2 -->
+<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 hover:shadow-xl hover:shadow-primary/5 transition-all group cursor-pointer">
+<div class="flex justify-between items-start mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">Engineering</span>
+<span class="text-xs text-slate-400">Oct 10, 2023</span>
+</div>
+<h3 class="text-lg font-bold mb-2 group-hover:text-primary transition-colors">System Architecture Sync</h3>
+<p class="text-sm text-slate-600 dark:text-slate-400 line-clamp-3 mb-4 leading-relaxed">
+                            AI Summary: Technical discussion regarding the migration from REST to GraphQL. David raised concerns about caching complexity. Agreed to run a lighthouse pilot project on the Notifications service next week.
+                        </p>
+<div class="flex flex-wrap gap-2 mb-4">
+<span class="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded text-slate-600 dark:text-slate-300">#backend</span>
+<span class="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded text-slate-600 dark:text-slate-300">#migration</span>
+</div>
+<div class="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-800">
+<div class="flex -space-x-2">
+<img class="w-7 h-7 rounded-full border-2 border-white dark:border-slate-900" data-alt="Avatar of David engineer" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB1-3NqbYdmSrC9ACIqdx42PURSCFpuXb6UwK77Gayt1X1QMU-xa2tKxnXwCmiTEJEGMzN8IN2yH_IyI8gUG6NAm-MhOIIrspVDsNcISQisf2wq-72tllcZg4TE4Wd_nnf_tJpTom27IuE9q4GSWr5inqavqaqTIz1Ma1sVwgUHovjA3zwVv0sGAJb1ebyMLSVT8w0_Ymde2pOI4H7iWYIWOBudWFR8XOd0yUC1CQqkAE6XhfFZA-0m-lOYQsSncuV5zh5xxeNOJ4c"/>
+<img class="w-7 h-7 rounded-full border-2 border-white dark:border-slate-900" data-alt="Avatar of Chris developer" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA0z9m6s2Qy6OxMUCk01DkXGXNIwQtljRJTFjKCaZCITmNtu9cQkovp8arJLNY8xURqgVJQ1PXFIo6Dz1SsgxRoPX85j7V0PZ7qyPvfVaXtrPlSgK-BBIe_OiC5rqA2C0ny8ct_22rqa5cCmz1qVfilGf80PDLJlrcS2CMiw_sTTe6BWnR4y-o6T0FbDJNQrIQhViElNxmEiVDUDOwds0Y6uRKb6phZ-C2NhGXoD0vGZRmpSRUUNNcnySn8xrwAnTzrsOW-ubMecm0"/>
+</div>
+<button class="text-slate-400 hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-xl">more_horiz</span>
+</button>
+</div>
+</div>
+<!-- Note Card 3 -->
+<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 hover:shadow-xl hover:shadow-primary/5 transition-all group cursor-pointer">
+<div class="flex justify-between items-start mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest text-amber-600 bg-amber-50 px-2 py-0.5 rounded">Marketing</span>
+<span class="text-xs text-slate-400">Oct 08, 2023</span>
+</div>
+<h3 class="text-lg font-bold mb-2 group-hover:text-primary transition-colors">Holiday Campaign Kickoff</h3>
+<p class="text-sm text-slate-600 dark:text-slate-400 line-clamp-3 mb-4 leading-relaxed">
+                            AI Summary: Creative brainstorming for the Winter Sale. Budget is fixed at $20k for paid social. Need to approve the 'Northern Lights' visual concept by EOD tomorrow. Influencer list is being finalized.
+                        </p>
+<div class="flex flex-wrap gap-2 mb-4">
+<span class="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded text-slate-600 dark:text-slate-300">#holiday-24</span>
+<span class="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded text-slate-600 dark:text-slate-300">#creative</span>
+</div>
+<div class="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-800">
+<div class="flex -space-x-2">
+<img class="w-7 h-7 rounded-full border-2 border-white dark:border-slate-900" data-alt="Avatar of Emily creative lead" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB6KrRnAZA11OnecCKJ8r_0nh6KvBUPSHDimw5P5FXcIb4pJAPJjcHh2G1ltPlylP4fS6I6BXK8PM5hy1V-rkOTDISrOoIjFKzA7t2n4Fw0hULN2Gqq4iePv86Svx20YF0ezqC3uGib6E7nbIhOvO4vNj7jcHXKZc1kHt2Ms3nVIUd7xH2uEnoFZzXhpQyFpPgeJt7iatDEa6pe92jS-8gKfhlKmlm78tAla1AmtAthmMWhS6IsfJmogzIzmYdM0eCJJm8_kw3L4hg"/>
+<img class="w-7 h-7 rounded-full border-2 border-white dark:border-slate-900" data-alt="Avatar of Chloe designer" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCNAP9kGlTedKQvh5vH3XlZdiCpm2fNoasmvrQ0cP0u95GmfeTLtH8LRxKnRiarKNkufLSJvGbalE3tdt12e2Vn_7LQ6k16hiswQty-WSzY5hiSHQBdThIxzl59J_uuXIGCCEaJ_zoTGASUSy5kTbf4RkTPgxFc_4ghLFHNFqW8sySXzMmILwR01e1zh_TyiKqnlBg4D5BmHhj-R_r57xwDLOSBdN-qCJ1AZoI3P-0YKTeaXPO97Is4LuhRUOno6O7YSkWxa9Fpn2w"/>
+</div>
+<button class="text-slate-400 hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-xl">more_horiz</span>
+</button>
+</div>
+</div>
+<!-- Note Card 4 -->
+<div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 hover:shadow-xl hover:shadow-primary/5 transition-all group cursor-pointer">
+<div class="flex justify-between items-start mb-4">
+<span class="text-[10px] font-bold uppercase tracking-widest text-primary bg-primary/10 px-2 py-0.5 rounded">Strategy</span>
+<span class="text-xs text-slate-400">Oct 05, 2023</span>
+</div>
+<h3 class="text-lg font-bold mb-2 group-hover:text-primary transition-colors">Monthly Leadership Update</h3>
+<p class="text-sm text-slate-600 dark:text-slate-400 line-clamp-3 mb-4 leading-relaxed">
+                            AI Summary: High-level overview of revenue growth (up 12% MoM). Churn remains stable but needs attention in the enterprise sector. Focus for next month is streamlining the sales-to-success handoff process.
+                        </p>
+<div class="flex flex-wrap gap-2 mb-4">
+<span class="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded text-slate-600 dark:text-slate-300">#revenue</span>
+<span class="text-xs px-2 py-1 bg-slate-100 dark:bg-slate-800 rounded text-slate-600 dark:text-slate-300">#leadership</span>
+</div>
+<div class="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-slate-800">
+<div class="flex -space-x-2">
+<img class="w-7 h-7 rounded-full border-2 border-white dark:border-slate-900" data-alt="Avatar of Alex CEO" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBJ5LsvSDiIL2zF-DLUfhK2KBC4CbO_UuS9U326sNONOdOLfcJWC337zwetrtXWiE5Il2kaKI4awtOxq5D81mzKp4Z2sF-PRhxW33Mj-kFrR_WE9PEMcDFR5Emhiw6I1kYV03GF72KwUdNc4qGDwacI4lqEU6VQaMVO_rVHidcd2aD40FH7B232lmU9ZmAIslEKtP0fnQ0_DXCyyYTCMPtc36rTYkSwDDeOW1umpznYkk_cC3jzYQKbAREHKPHakHsm6dK75ha-cwA"/>
+</div>
+<button class="text-slate-400 hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-xl">more_horiz</span>
+</button>
+</div>
+</div>
+<!-- New Note Placeholder -->
+<div class="border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl flex flex-col items-center justify-center p-6 text-slate-400 hover:border-primary hover:text-primary transition-all cursor-pointer bg-slate-50/50 dark:bg-slate-900/30">
+<span class="material-symbols-outlined text-4xl mb-2">add_circle</span>
+<p class="font-medium">Record New Meeting</p>
+</div>
+</div>
+</section>
+</main>
+</div>
+</body></html>

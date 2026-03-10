@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Meeting Recorder Pro</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#3211d4",
+                        "background-light": "#f6f6f8",
+                        "background-dark": "#131022",
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"]
+                    },
+                    borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+                },
+            },
+        }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; }
+        .waveform-bar {
+            animation: none; /* Requested no animations, but styling for "high-fidelity" look */
+            background: linear-gradient(to top, #3211d4 20%, #7c3aed 80%);
+        }
+    </style>
+</head>
+<body class="bg-background-light text-slate-900 font-display antialiased">
+<div class="flex h-screen overflow-hidden">
+<!-- Sidebar Navigation -->
+<aside class="w-64 flex-shrink-0 bg-white border-r border-slate-200 flex flex-col">
+<div class="p-6 flex items-center gap-3">
+<div class="w-8 h-8 bg-primary rounded-lg flex items-center justify-center text-white">
+<span class="material-symbols-outlined text-xl">record_voice_over</span>
+</div>
+<div>
+<h1 class="font-bold text-slate-900 leading-none">RecSync</h1>
+<p class="text-[10px] text-slate-500 font-medium uppercase tracking-wider">v2.4.0 Professional</p>
+</div>
+</div>
+<nav class="flex-1 px-4 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg bg-primary/10 text-primary font-semibold" href="#">
+<span class="material-symbols-outlined">videocam</span>
+<span class="text-sm">Meetings</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors font-medium" href="#">
+<span class="material-symbols-outlined text-slate-400">folder_open</span>
+<span class="text-sm">Files</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors font-medium" href="#">
+<span class="material-symbols-outlined text-slate-400">analytics</span>
+<span class="text-sm">Insights</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors font-medium" href="#">
+<span class="material-symbols-outlined text-slate-400">group</span>
+<span class="text-sm">Team</span>
+</a>
+<div class="pt-4 pb-2 px-3 text-[11px] font-bold text-slate-400 uppercase tracking-widest">System</div>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-slate-600 hover:bg-slate-50 transition-colors font-medium" href="#">
+<span class="material-symbols-outlined text-slate-400">settings</span>
+<span class="text-sm">Settings</span>
+</a>
+</nav>
+<div class="p-4 border-t border-slate-100">
+<button class="w-full bg-primary text-white py-2.5 rounded-lg font-bold text-sm shadow-lg shadow-primary/20 flex items-center justify-center gap-2 hover:bg-primary/90 transition-all">
+<span class="material-symbols-outlined text-lg">add_circle</span>
+                New Meeting
+            </button>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col overflow-hidden">
+<!-- Header -->
+<header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8">
+<div class="flex items-center gap-4 flex-1">
+<div class="flex items-center gap-2 text-slate-400">
+<span class="material-symbols-outlined">arrow_back_ios</span>
+<span class="material-symbols-outlined">arrow_forward_ios</span>
+</div>
+<div class="h-8 w-px bg-slate-200 mx-2"></div>
+<h2 class="text-slate-800 font-bold tracking-tight">Q3 Project Alpha - Product Sync</h2>
+<div class="bg-red-50 text-red-600 px-2 py-0.5 rounded text-[10px] font-black flex items-center gap-1 border border-red-100">
+<span class="w-1.5 h-1.5 rounded-full bg-red-600"></span>
+                    RECORDING LIVE
+                </div>
+</div>
+<div class="flex items-center gap-4">
+<div class="relative">
+<input class="bg-slate-100 border-none rounded-lg pl-10 pr-4 py-1.5 text-sm w-64 focus:ring-2 focus:ring-primary/20" placeholder="Search transcripts..." type="text"/>
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg">search</span>
+</div>
+<button class="p-2 text-slate-500 hover:bg-slate-100 rounded-full">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<div class="w-8 h-8 rounded-full bg-primary/20 border-2 border-white shadow-sm overflow-hidden">
+<img alt="Profile" data-alt="User profile photo avatar" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCjfASH_80t0Be0fVpnnGED5JsFP9Ni6V2d8MgK5mvpg24qGBgdkSRfWNa3gGtdLUIZYsiKOyTmz5fa0Mc7dQQi3Z38joRpfGGdVhZqjWynzps5g6gNjttX69OhNHDeH3U462blPEcw9E2D_mv_In62DuGhBWqJB6BdKH0Mf76HG9i_oUmsvjkW2-VLvLgleTzqeBbGrjYQjg_2N9aHcjRexpPuQt9AGLY1bUSYJUTs-QfOmoEUWBnOYwr8j4LxsjYEYLYb2YNoiPU"/>
+</div>
+</div>
+</header>
+<!-- Dashboard Content Split -->
+<div class="flex-1 flex overflow-hidden">
+<!-- Central Recording Dashboard -->
+<div class="flex-1 overflow-y-auto p-8 space-y-6 bg-background-light">
+<!-- Main Status Card -->
+<div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 flex flex-col items-center text-center">
+<div class="w-full flex justify-between items-start mb-8">
+<div class="flex items-center gap-2 bg-slate-50 px-3 py-1.5 rounded-full border border-slate-100">
+<span class="material-symbols-outlined text-primary text-sm">mic</span>
+<span class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Studio Audio Input</span>
+</div>
+<div class="flex gap-2">
+<button class="p-2 bg-slate-50 text-slate-600 rounded-lg border border-slate-200 hover:bg-slate-100">
+<span class="material-symbols-outlined">pause</span>
+</button>
+<button class="px-4 py-2 bg-red-600 text-white rounded-lg font-bold text-sm hover:bg-red-700">
+                                Stop Recording
+                            </button>
+</div>
+</div>
+<div class="text-6xl font-black text-slate-900 mb-8 tracking-tighter">
+                        00:42:15
+                    </div>
+<!-- Waveform Visualizer Mock -->
+<div class="w-full h-32 flex items-center justify-center gap-1 mb-12">
+<div class="waveform-bar w-1.5 h-12 rounded-full opacity-30"></div>
+<div class="waveform-bar w-1.5 h-16 rounded-full opacity-40"></div>
+<div class="waveform-bar w-1.5 h-24 rounded-full opacity-60"></div>
+<div class="waveform-bar w-1.5 h-32 rounded-full"></div>
+<div class="waveform-bar w-1.5 h-28 rounded-full"></div>
+<div class="waveform-bar w-1.5 h-20 rounded-full opacity-70"></div>
+<div class="waveform-bar w-1.5 h-24 rounded-full opacity-80"></div>
+<div class="waveform-bar w-1.5 h-14 rounded-full opacity-50"></div>
+<div class="waveform-bar w-1.5 h-10 rounded-full opacity-30"></div>
+<div class="waveform-bar w-1.5 h-22 rounded-full opacity-60"></div>
+<div class="waveform-bar w-1.5 h-28 rounded-full"></div>
+<div class="waveform-bar w-1.5 h-32 rounded-full"></div>
+<div class="waveform-bar w-1.5 h-16 rounded-full opacity-40"></div>
+<div class="waveform-bar w-1.5 h-24 rounded-full opacity-60"></div>
+<div class="waveform-bar w-1.5 h-18 rounded-full opacity-50"></div>
+<div class="waveform-bar w-1.5 h-12 rounded-full opacity-30"></div>
+<div class="waveform-bar w-1.5 h-16 rounded-full opacity-40"></div>
+<div class="waveform-bar w-1.5 h-24 rounded-full opacity-60"></div>
+<div class="waveform-bar w-1.5 h-32 rounded-full"></div>
+<div class="waveform-bar w-1.5 h-28 rounded-full"></div>
+<div class="waveform-bar w-1.5 h-20 rounded-full opacity-70"></div>
+<div class="waveform-bar w-1.5 h-24 rounded-full opacity-80"></div>
+<div class="waveform-bar w-1.5 h-14 rounded-full opacity-50"></div>
+<div class="waveform-bar w-1.5 h-10 rounded-full opacity-30"></div>
+<div class="waveform-bar w-1.5 h-22 rounded-full opacity-60"></div>
+<div class="waveform-bar w-1.5 h-28 rounded-full"></div>
+<div class="waveform-bar w-1.5 h-32 rounded-full"></div>
+<div class="waveform-bar w-1.5 h-16 rounded-full opacity-40"></div>
+</div>
+<div class="flex gap-12 text-slate-400">
+<div class="flex flex-col">
+<span class="text-2xl font-bold text-slate-800 tracking-tight">12.4 GB</span>
+<span class="text-xs font-bold uppercase tracking-widest">Storage</span>
+</div>
+<div class="flex flex-col">
+<span class="text-2xl font-bold text-slate-800 tracking-tight">4k UHD</span>
+<span class="text-xs font-bold uppercase tracking-widest">Quality</span>
+</div>
+<div class="flex flex-col">
+<span class="text-2xl font-bold text-slate-800 tracking-tight">64 kbps</span>
+<span class="text-xs font-bold uppercase tracking-widest">Bitrate</span>
+</div>
+</div>
+</div>
+<!-- Captured Assets Grid -->
+<div>
+<div class="flex items-center justify-between mb-4 px-1">
+<h3 class="font-bold text-slate-800">Captured Assets</h3>
+<button class="text-primary text-sm font-bold flex items-center gap-1">
+                            View All <span class="material-symbols-outlined text-sm">arrow_forward</span>
+</button>
+</div>
+<div class="grid grid-cols-4 gap-4">
+<div class="group relative rounded-xl overflow-hidden aspect-video shadow-sm border border-slate-200">
+<img class="w-full h-full object-cover" data-alt="Photo of a whiteboard with brainstorming diagrams" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC-9fCTqFAvtDD-I2C-s2i6YTD1nWR0t1EJA1S4b2jdwwVzRfnATOgXrf8Q7BFjrU8iu90CW0SQaD6hnDmv4cN4SbaSe4nKZRIJcWYEhAg1kZ_Dsxf9TuSeX8liFODSaNh_RHcV7hb1COmOQN-Bm3mpd_5fBdaZjJ2CLKjgn5r3S6oJVhXreiRa3kD8NK4BSRmZMT6bhFnQrfOAdpwQcTpsRAJpj9eLOZIarXp29mdj9mU2EH71kgFhnfJQHIXuwzIwINojHWC50Ao"/>
+<div class="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+<button class="p-2 bg-white rounded-full text-slate-900"><span class="material-symbols-outlined text-lg">visibility</span></button>
+<button class="p-2 bg-white rounded-full text-slate-900"><span class="material-symbols-outlined text-lg">download</span></button>
+</div>
+<div class="absolute bottom-2 left-2 px-2 py-0.5 bg-white/90 rounded text-[10px] font-bold text-slate-800">10:14 AM</div>
+</div>
+<div class="group relative rounded-xl overflow-hidden aspect-video shadow-sm border border-slate-200">
+<img class="w-full h-full object-cover" data-alt="Screenshot of desktop screen during video call" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBLRqYh4NS_s-BDc3y7A5takuijSOIuEOiU9Bv_Ow2O4GFzLZ9UpHhxivYfGao7FhQQJjUqoWnQ6927cW7-2KIsi8ujhizLnoredegd_0yxgV8PhA-alXAmhq3cfKhX2d5f3r-og9MLd0ppVEAdcowCztdSB5viOsn0S45lR7MTJKz7qscwy-m8UYc9NDbk0tfFl68hNpgSxL5WjbzZgHU62NINXckc729gOOgQ5oAvV6-WuZZIl29XNiZB14l586m_0JA7Ktjks-E"/>
+<div class="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+<button class="p-2 bg-white rounded-full text-slate-900"><span class="material-symbols-outlined text-lg">visibility</span></button>
+</div>
+<div class="absolute bottom-2 left-2 px-2 py-0.5 bg-white/90 rounded text-[10px] font-bold text-slate-800">10:25 AM</div>
+</div>
+<div class="group relative rounded-xl overflow-hidden aspect-video shadow-sm border border-slate-200">
+<img class="w-full h-full object-cover" data-alt="Digital document or PDF thumbnail preview" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBJoRiCJxKO4A2cC911otCrxK2M25lCc7NRzr5i2SZEpuPtXs_JZrbIooCjqijiXYEJbHp8KGSeaNXfUbJ40jRNmWu92mR5jYSgccCjKmKia2JtVrbWdB5J7rL3Z4ka5bJs2fUFoa0cBHQ4TXakhpqtzwZ7sFQ75ZBWhD-Apn73luiEAe5QKRTWtSrc3MbH79OOkwtinEn-o4PrIcyoCAOnSxLD-qwzgDOpcMKu0TMplBmjICKIK4J0GeY3TIIwF5UYUIcU6EWRvio"/>
+<div class="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+<button class="p-2 bg-white rounded-full text-slate-900"><span class="material-symbols-outlined text-lg">download</span></button>
+</div>
+<div class="absolute bottom-2 left-2 px-2 py-0.5 bg-white/90 rounded text-[10px] font-bold text-slate-800">10:32 AM</div>
+</div>
+<div class="bg-white border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center text-slate-400 hover:border-primary/40 hover:text-primary transition-all cursor-pointer">
+<span class="material-symbols-outlined text-2xl mb-1">add_a_photo</span>
+<span class="text-[10px] font-bold uppercase tracking-wider">Manual Capture</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Panel: Live Transcription -->
+<aside class="w-80 flex-shrink-0 bg-white border-l border-slate-200 flex flex-col">
+<div class="p-4 border-b border-slate-200 flex items-center justify-between">
+<h3 class="font-bold text-slate-800 flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">translate</span>
+                        Live Transcription
+                    </h3>
+<div class="flex gap-1">
+<div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-primary/40"></div>
+<div class="w-1.5 h-1.5 rounded-full bg-primary/20"></div>
+</div>
+</div>
+<div class="flex-1 overflow-y-auto p-4 space-y-6">
+<!-- Transcription Item -->
+<div class="space-y-2">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-600 flex items-center justify-center">JD</div>
+<span class="text-[11px] font-bold text-slate-500 uppercase">James Doe • 10:41:02</span>
+</div>
+<p class="text-sm text-slate-700 leading-relaxed bg-slate-50 p-3 rounded-lg border border-slate-100 italic">
+                            "The primary objective for this sprint should be the integration of the new AI module. We need to ensure that the latency remains under 200ms for live users."
+                        </p>
+</div>
+<div class="space-y-2">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded-full bg-teal-100 text-[10px] font-bold text-teal-600 flex items-center justify-center">SK</div>
+<span class="text-[11px] font-bold text-slate-500 uppercase">Sarah Kim • 10:41:25</span>
+</div>
+<p class="text-sm text-slate-700 leading-relaxed">
+                            "I agree. I've already drafted the technical specifications for the API bridge. Most of the heavy lifting will be done on the server-side to save mobile battery life."
+                        </p>
+</div>
+<div class="space-y-2">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded-full bg-orange-100 text-[10px] font-bold text-orange-600 flex items-center justify-center">MW</div>
+<span class="text-[11px] font-bold text-slate-500 uppercase">Marcus Wright • 10:41:48</span>
+</div>
+<p class="text-sm text-slate-700 leading-relaxed">
+                            "Let's look at the resource allocation. If we pull Sarah onto this full-time, who is managing the legacy maintenance?"
+                        </p>
+</div>
+<div class="space-y-2 relative">
+<div class="flex items-center gap-2">
+<div class="w-6 h-6 rounded-full bg-indigo-100 text-[10px] font-bold text-indigo-600 flex items-center justify-center">JD</div>
+<span class="text-[11px] font-bold text-slate-500 uppercase tracking-tighter">James Doe • Just Now</span>
+</div>
+<p class="text-sm text-slate-900 font-medium leading-relaxed">
+                            "That's a valid concern. I think we can delegate the legacy tickets to the junior team in London for this rotation..."
+                        </p>
+<div class="absolute -bottom-2 right-0 flex gap-1">
+<span class="block w-1.5 h-1.5 bg-primary rounded-full animate-bounce"></span>
+<span class="block w-1.5 h-1.5 bg-primary/60 rounded-full animate-bounce delay-100"></span>
+<span class="block w-1.5 h-1.5 bg-primary/30 rounded-full animate-bounce delay-200"></span>
+</div>
+</div>
+</div>
+<div class="p-4 border-t border-slate-200 bg-slate-50">
+<button class="w-full flex items-center justify-between text-xs font-bold text-slate-500 hover:text-primary">
+<span>EXPORT TRANSCRIPT</span>
+<span class="material-symbols-outlined text-lg">download</span>
+</button>
+</div>
+</aside>
+</div>
+</main>
+</div>
+</body></html>
