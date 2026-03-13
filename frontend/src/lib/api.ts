@@ -8,10 +8,26 @@ interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
 }
 
+function isTokenExpired(token: string): boolean {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    // Expired if within 60s of expiry
+    return payload.exp * 1000 < Date.now() + 60_000;
+  } catch {
+    return true;
+  }
+}
+
+function redirectToLogin(): void {
+  if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+    window.location.href = '/';
+  }
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   let token = getIdToken();
 
-  if (!token) {
+  if (!token || isTokenExpired(token)) {
     token = await refreshSession();
   }
 
@@ -32,18 +48,45 @@ export async function apiFetch<T>(
 
   const authHeaders = skipAuth ? {} : await getAuthHeaders();
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...rest,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders,
-      ...headers,
-    },
-  });
+  const url = `${API_BASE_URL}${endpoint}`;
+  const mergedHeaders = {
+    'Content-Type': 'application/json',
+    ...authHeaders,
+    ...headers,
+  };
+
+  let response = await fetch(url, { ...rest, headers: mergedHeaders });
+
+  // On 401, refresh token once and retry
+  if (response.status === 401 && !skipAuth) {
+    const freshToken = await refreshSession();
+    if (!freshToken) {
+      redirectToLogin();
+      throw new Error('Authentication required');
+    }
+    response = await fetch(url, {
+      ...rest,
+      headers: { ...mergedHeaders, Authorization: `Bearer ${freshToken}` },
+    });
+    // If still 401 after retry, redirect to login
+    if (response.status === 401) {
+      redirectToLogin();
+      throw new Error('Authentication required');
+    }
+  }
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: { code: 'UNKNOWN', message: 'Request failed' } }));
     throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+  }
+
+  if (response.status === 204 || response.headers.get('content-length') === '0') {
+    return undefined as T;
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(`Unexpected response type: ${contentType || 'unknown'}`);
   }
 
   return response.json();
@@ -93,7 +136,7 @@ export const meetingsApi = {
 
   get: (id: string) => api.get<import('@/types/meeting').Meeting>(`/api/meetings/${id}`),
 
-  create: (data: { title: string; date?: string; participants?: string[] }) =>
+  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic' }) =>
     api.post<import('@/types/meeting').Meeting>('/api/meetings', data),
 
   update: (id: string, data: { title?: string; content?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }) =>
@@ -140,11 +183,31 @@ export const kbApi = {
 };
 
 // Q&A API
+interface QAResponse {
+  answer: string;
+  sources?: string[];
+  usedKB?: boolean;
+  usedDocs?: boolean;
+  toolsUsed?: string[];
+}
+
 export const qaApi = {
-  ask: (meetingId: string, question: string) =>
-    api.post<{ answer: string; sources?: { title: string; snippet: string }[] }>(
-      `/api/meetings/${meetingId}/ask`,
-      { question }
+  ask: (question: string, context?: string, sessionId?: string) =>
+    api.post<QAResponse>(
+      '/api/qa/ask',
+      { question, context, sessionId }
+    ),
+
+  askMeeting: (meetingId: string, question: string, sessionId?: string) =>
+    api.post<QAResponse>(
+      `/api/qa/meeting/${meetingId}`,
+      { question, sessionId }
+    ),
+
+  detectQuestions: (transcript: string, previousQuestions?: string[]) =>
+    api.post<{ questions: string[] }>(
+      '/api/qa/detect-questions',
+      { transcript, previousQuestions }
     ),
 };
 
@@ -171,4 +234,22 @@ export const settingsApi = {
     api.put<{ status: string }>('/api/settings/integrations/notion', { apiKey }),
 
   deleteNotionKey: () => api.delete('/api/settings/integrations/notion'),
+};
+
+// Translation API
+export const translateApi = {
+  translate: (text: string, sourceLang: string, targetLang: string) =>
+    api.post<{ translatedText: string; sourceLang: string; targetLang: string }>(
+      '/api/translate',
+      { text, sourceLang, targetLang }
+    ),
+};
+
+// Live Summary API
+export const summaryApi = {
+  summarizeLive: (meetingId: string, transcript: string, previousSummary?: string) =>
+    api.post<{ summary: string }>(
+      `/api/meetings/${meetingId}/summarize`,
+      { transcript, previousSummary }
+    ),
 };
