@@ -20,27 +20,36 @@ TtobakApp (bin/ttobak.ts)
 ### Cognito User Pool
 - **Self-signup**: enabled
 - **Sign-in aliases**: email
-- **Password policy**: min 8 chars, require uppercase, lowercase, numbers
+- **Password policy**: min 8 chars, require lowercase, require digits (uppercase/symbols 불필요)
 - **Email verification**: required (Cognito default email)
 - **Standard attributes**: email (required, mutable)
 - **Auto-verify**: email
 
-### App Client
+### App Client (Backend OAuth용)
+- **Name**: `ttobak-app-client`
 - **Auth flows**: USER_PASSWORD_AUTH, USER_SRP_AUTH
 - **OAuth**: Authorization Code Grant
-- **Callback URLs**: `https://{cloudfront-domain}/auth/callback` (배포 후 업데이트)
-- **Logout URLs**: `https://{cloudfront-domain}`
+- **Callback URLs**: `https://{cloudfront-domain}/auth/callback`, `http://localhost:3000/api/auth/callback`
+- **Logout URLs**: `https://{cloudfront-domain}`, `http://localhost:3000`
 - **Scopes**: openid, email, profile
-- **Generate secret**: false (SPA 클라이언트용)
+- **Generate secret**: true (서버 사이드용)
+
+### SPA Client (Frontend 브라우저 인증용)
+- **Name**: `ttobak-spa-client`
+- **Auth flows**: USER_PASSWORD_AUTH, USER_SRP_AUTH
+- **Generate secret**: false (브라우저에서 사용하므로 secret 없음)
+- **OAuth**: 미설정 (직접 Cognito SDK 인증)
+- **용도**: Frontend에서 `amazon-cognito-identity-js`로 직접 인증, Lambda@Edge JWT 검증 대상
 
 ### User Pool Domain
-- Cognito 호스팅 도메인: `ttobak-auth` (또는 가용한 prefix)
+- Cognito 호스팅 도메인: `ttobak-auth-{accountId}`
 
 ### Outputs
 - `UserPoolId`
-- `UserPoolClientId`
-- `UserPoolDomain`
-- `UserPoolArn`
+- `UserPoolClientId` (App Client)
+- `SpaClientId` (SPA Client)
+- `UserPoolDomainUrl`
+- `UserPoolDomainName`
 
 ## 3. StorageStack
 
@@ -104,13 +113,15 @@ TtobakApp (bin/ttobak.ts)
 - **Handler**: index.handler
 - **Memory**: 128MB (Lambda@Edge 제한)
 - **Timeout**: 5s (Viewer Request 제한)
-- **역할**: CloudFront Viewer Request에서 JWT 검증
+- **역할**: CloudFront `/api/*` Viewer Request에서 JWT 검증
+- **Client ID**: SPA Client ID 사용 (프론트엔드에서 발급한 JWT의 `aud` 클레임과 일치해야 함)
 - **처리 로직**:
-  1. `Authorization: Bearer {token}` 헤더 추출
-  2. Cognito JWKS 캐시에서 공개키 조회
-  3. JWT 서명 및 만료 검증
-  4. 유효: `x-user-id` 헤더 추가 후 요청 통과
-  5. 무효: 401 Unauthorized 응답
+  1. OPTIONS 메서드는 검증 없이 통과 (CORS preflight)
+  2. `Authorization: Bearer {token}` 헤더 추출
+  3. Cognito JWKS 캐시에서 공개키 조회 (1시간 TTL)
+  4. JWT 서명, 만료, issuer, audience(aud/client_id) 검증
+  5. 유효: 요청 그대로 통과 (백엔드에서 JWT 재파싱으로 userId 추출)
+  6. 무효: 401 Unauthorized JSON 응답
 
 ### IAM Role
 - **Trust**: edgelambda.amazonaws.com, lambda.amazonaws.com
@@ -263,7 +274,7 @@ TtobakApp (bin/ttobak.ts)
   - Response headers: SecurityHeaders
   - Default root object: index.html
   - Error pages: 403/404 → /index.html (SPA routing)
-  - **Lambda@Edge**: Viewer Request → EdgeAuthStack.function (JWT 검증)
+  - Lambda@Edge: 없음 (정적 파일은 인증 불필요)
 
 - **API behavior** (`/api/*`):
   - Origin: API Gateway HTTP API endpoint
@@ -272,6 +283,7 @@ TtobakApp (bin/ttobak.ts)
   - Origin request policy: AllViewerExceptHostHeader
   - Viewer protocol: https-only
   - Allowed methods: ALL (GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE)
+  - **Lambda@Edge**: Viewer Request → EdgeAuthStack.function (JWT 검증)
 
 - **WebSocket behavior** (`/realtime`):
   - Origin: API Gateway WebSocket API endpoint
@@ -287,7 +299,7 @@ TtobakApp (bin/ttobak.ts)
 
 ```
 AuthStack.userPool → GatewayStack (WebSocket Authorizer)
-AuthStack.userPoolId → EdgeAuthStack (JWT 검증)
+AuthStack.spaClient.userPoolClientId → EdgeAuthStack (JWT 검증, SPA Client ID)
 StorageStack.table → GatewayStack (Lambda env vars)
 StorageStack.connectionsTable → GatewayStack (Realtime Lambda)
 StorageStack.bucket → GatewayStack (Lambda env vars, S3 events)

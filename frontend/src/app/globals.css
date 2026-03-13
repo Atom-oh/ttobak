@@ -6,6 +6,17 @@
   --background-dark: #131022;
   --background: #ffffff;
   --foreground: #0f172a;
+  /* Surface */
+  --surface: #ffffff;
+  --surface-secondary: #f1f5f9;
+  --surface-elevated: #ffffff;
+  /* Text */
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  /* Border */
+  --border-default: #e2e8f0;
+  --border-light: #f1f5f9;
 }
 
 @theme inline {
@@ -14,12 +25,28 @@
   --color-background-light: var(--background-light);
   --color-background-dark: var(--background-dark);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-secondary: var(--surface-secondary);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-border-default: var(--border-default);
+  --color-border-light: var(--border-light);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0f172a;
     --foreground: #f1f5f9;
+    --surface: #1e293b;
+    --surface-secondary: #334155;
+    --surface-elevated: #1e293b;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --border-default: #334155;
+    --border-light: #1e293b;
   }
 }
 
@@ -106,6 +133,32 @@ body {
 /* Focus styles */
 input:focus, button:focus, textarea:focus, select:focus {
   outline: none;
+}
+
+/* Card hover lift */
+.card-interactive {
+  transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.card-interactive:hover {
+  transform: translateY(-1px);
+}
+
+/* Page content fade-in */
+@keyframes animate-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-in {
+  animation: animate-in 0.2s ease-out;
+}
+
+/* Bottom sheet slide-up */
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+.animate-slide-up {
+  animation: slide-up 0.25s ease-out;
 }
 
 /* Safe area for mobile */

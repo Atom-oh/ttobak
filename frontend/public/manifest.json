@@ -1,0 +1,12 @@
+{
+  "name": "Ttobak - AI Meeting Assistant",
+  "short_name": "Ttobak",
+  "description": "Record, transcribe, and summarize your meetings with AI",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f6f6f8",
+  "theme_color": "#3211d4",
+  "icons": [
+    { "src": "/favicon.ico", "sizes": "48x48", "type": "image/x-icon" }
+  ]
+}

@@ -16,6 +16,7 @@ type Meeting struct {
 	TranscriptB        string    `dynamodbav:"transcriptB,omitempty"`        // Nova Sonic result
 	SelectedTranscript string    `dynamodbav:"selectedTranscript,omitempty"` // "A" or "B"
 	AudioKey           string    `dynamodbav:"audioKey,omitempty"`           // S3 key for audio file
+	SttProvider        string    `dynamodbav:"sttProvider,omitempty"`        // "transcribe" or "nova-sonic"
 	Participants       []string  `dynamodbav:"participants,omitempty"`
 	Tags               []string  `dynamodbav:"tags,omitempty"`
 	Status             string    `dynamodbav:"status"` // recording, transcribing, summarizing, done, error

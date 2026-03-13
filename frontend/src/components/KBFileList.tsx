@@ -20,7 +20,8 @@ function formatDate(dateString: string): string {
   });
 }
 
-function getFileIcon(fileType: string): string {
+function getFileIcon(fileType?: string): string {
+  if (!fileType) return 'insert_drive_file';
   if (fileType.includes('pdf')) return 'picture_as_pdf';
   if (fileType.includes('presentation') || fileType.includes('ppt')) return 'slideshow';
   if (fileType.includes('markdown') || fileType.includes('md')) return 'description';
@@ -224,7 +225,7 @@ export function KBFileList() {
                     {file.fileName}
                   </p>
                   <p className="text-xs text-slate-400">
-                    {formatFileSize(file.size)} &bull; {formatDate(file.uploadedAt)}
+                    {formatFileSize(file.size)} &bull; {formatDate(file.lastModified)}
                   </p>
                 </div>
               </div>

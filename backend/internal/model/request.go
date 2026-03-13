@@ -5,8 +5,9 @@ import "time"
 // CreateMeetingRequest represents the request body for creating a meeting
 type CreateMeetingRequest struct {
 	Title        string   `json:"title"`
-	Date         string   `json:"date"` // ISO 8601 format
+	Date         string   `json:"date"`                   // ISO 8601 format
 	Participants []string `json:"participants,omitempty"`
+	SttProvider  string   `json:"sttProvider,omitempty"`  // "transcribe" or "nova-sonic"
 }
 
 // UpdateMeetingRequest represents the request body for updating a meeting
@@ -179,6 +180,12 @@ type AskQuestionRequest struct {
 	Question string `json:"question"`
 }
 
+// AskLiveRequest represents the request body for live Q&A (no meetingId required)
+type AskLiveRequest struct {
+	Question string `json:"question"`
+	Context  string `json:"context"`
+}
+
 // AskQuestionResponse represents the response for asking a question
 type AskQuestionResponse struct {
 	Answer  string   `json:"answer"`
@@ -231,6 +238,7 @@ type KBUploadResponse struct {
 type KBFileResponse struct {
 	FileID       string `json:"fileId"`
 	FileName     string `json:"fileName"`
+	FileType     string `json:"fileType"`
 	Size         int64  `json:"size"`
 	LastModified string `json:"lastModified"`
 }

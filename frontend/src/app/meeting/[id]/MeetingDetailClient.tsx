@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { AppLayout } from '@/components/layout/AppLayout';
 import { MeetingEditor } from '@/components/MeetingEditor';
 import { ShareButton } from '@/components/ShareButton';
 import { AttachmentGallery } from '@/components/AttachmentGallery';
@@ -37,77 +38,117 @@ function formatTimestamp(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-function Sidebar() {
+function DesktopDeleteButton({ meetingId }: { meetingId: string }) {
+  const router = useRouter();
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (!confirm('이 미팅을 삭제하시겠습니까?')) return;
+    setIsDeleting(true);
+    try {
+      await meetingsApi.delete(meetingId);
+      router.push('/');
+    } catch (err) {
+      console.error('Failed to delete meeting:', err);
+      alert('미팅 삭제에 실패했습니다.');
+      setIsDeleting(false);
+    }
+  };
+
   return (
-    <aside className="w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 flex flex-col fixed h-full">
-      <div className="p-6 flex flex-col gap-8 h-full">
-        <div className="flex items-center gap-3">
-          <div className="size-10 rounded-lg bg-primary flex items-center justify-center text-white">
-            <span className="material-symbols-outlined">record_voice_over</span>
-          </div>
-          <div className="flex flex-col">
-            <h1 className="text-sm font-bold truncate">또박</h1>
-            <p className="text-xs text-slate-500">AI Meeting Assistant</p>
-          </div>
+    <button
+      onClick={handleDelete}
+      disabled={isDeleting}
+      className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-red-600 hover:border-red-200 dark:hover:text-red-400 dark:hover:border-red-800 transition-colors disabled:opacity-50"
+    >
+      <span className="material-symbols-outlined text-lg">delete</span>
+      {isDeleting ? '삭제 중...' : '삭제'}
+    </button>
+  );
+}
+
+function MobileMoreMenu({ meetingId }: { meetingId: string }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  const handleDelete = async () => {
+    setOpen(false);
+    if (!confirm('이 미팅을 삭제하시겠습니까?')) return;
+    setIsDeleting(true);
+    try {
+      await meetingsApi.delete(meetingId);
+      router.push('/');
+    } catch (err) {
+      console.error('Failed to delete meeting:', err);
+      alert('미팅 삭제에 실패했습니다.');
+      setIsDeleting(false);
+    }
+  };
+
+  return (
+    <div className="relative" ref={menuRef}>
+      <button
+        onClick={() => setOpen(!open)}
+        disabled={isDeleting}
+        className="flex size-10 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-800"
+      >
+        {isDeleting ? (
+          <div className="animate-spin rounded-full h-5 w-5 border-2 border-red-500 border-t-transparent" />
+        ) : (
+          <span className="material-symbols-outlined text-slate-700 dark:text-slate-300">more_horiz</span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-20 min-w-[120px]">
+          <button
+            onClick={handleDelete}
+            className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+          >
+            <span className="material-symbols-outlined text-lg">delete</span>
+            삭제
+          </button>
         </div>
-
-        <nav className="flex flex-col gap-1 flex-1">
-          <Link
-            href="/"
-            className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors"
-          >
-            <span className="material-symbols-outlined text-slate-500">home</span>
-            <span className="text-sm font-medium">Home</span>
-          </Link>
-          <Link
-            href="/"
-            className="flex items-center gap-3 px-3 py-2 rounded-lg bg-primary/10 text-primary"
-          >
-            <span className="material-symbols-outlined">video_library</span>
-            <span className="text-sm font-medium">Meetings</span>
-          </Link>
-          <Link
-            href="/files"
-            className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors"
-          >
-            <span className="material-symbols-outlined text-slate-500">description</span>
-            <span className="text-sm font-medium">Notes</span>
-          </Link>
-          <Link
-            href="/settings"
-            className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors"
-          >
-            <span className="material-symbols-outlined text-slate-500">settings</span>
-            <span className="text-sm font-medium">Settings</span>
-          </Link>
-        </nav>
-
-        <Link
-          href="/record"
-          className="w-full bg-primary hover:bg-primary/90 text-white font-semibold py-2.5 rounded-lg flex items-center justify-center gap-2 transition-all"
-        >
-          <span className="material-symbols-outlined text-sm">add</span>
-          <span className="text-sm">New Meeting</span>
-        </Link>
-      </div>
-    </aside>
+      )}
+    </div>
   );
 }
 
 export default function MeetingDetailPage() {
-  const params = useParams();
   const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
   const [meeting, setMeeting] = useState<Meeting | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showUploader, setShowUploader] = useState(false);
 
+  // Extract meeting ID from URL after mount to avoid hydration mismatch.
+  // CloudFront rewrites /meeting/{id} → /meeting/_ for static export,
+  // so useParams() returns "_" instead of the actual ID.
+  const [meetingId, setMeetingId] = useState('');
+
   useEffect(() => {
-    if (!isAuthenticated || !params.id) return;
+    const id = window.location.pathname.split('/meeting/')[1]?.split('/')[0] || '';
+    setMeetingId(id);
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated || !meetingId) return;
 
     const fetchMeeting = async () => {
       try {
-        const data = await meetingsApi.get(params.id as string);
+        const data = await meetingsApi.get(meetingId);
         setMeeting(data as Meeting);
       } catch (err) {
         console.error('Failed to fetch meeting:', err);
@@ -116,7 +157,7 @@ export default function MeetingDetailPage() {
       }
     };
     fetchMeeting();
-  }, [isAuthenticated, params.id]);
+  }, [isAuthenticated, meetingId]);
 
   // Polling for in-progress meetings
   useEffect(() => {
@@ -185,27 +226,18 @@ export default function MeetingDetailPage() {
   }
 
   return (
-    <div className="flex min-h-screen">
-      {/* Desktop Sidebar */}
-      <div className="hidden lg:block">
-        <Sidebar />
-      </div>
+    <AppLayout activePath="/">
+      {/* Mobile Header */}
+      <header className="lg:hidden sticky top-0 z-10 flex items-center bg-white/90 dark:bg-slate-900/90 backdrop-blur-md p-4 border-b border-slate-200 dark:border-slate-800 justify-between">
+        <button onClick={() => router.back()} className="text-slate-700 dark:text-slate-300 flex size-10 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-800">
+          <span className="material-symbols-outlined">arrow_back</span>
+        </button>
+        <h2 className="text-slate-900 dark:text-slate-100 text-sm font-bold flex-1 text-center">Meeting Report</h2>
+        <MobileMoreMenu meetingId={meetingId} />
+      </header>
 
-      {/* Main Content */}
-      <main className="flex-1 lg:ml-64 flex flex-col">
-        {/* Mobile Header */}
-        <header className="lg:hidden sticky top-0 z-10 flex items-center bg-white/90 dark:bg-slate-900/90 backdrop-blur-md p-4 border-b border-slate-200 dark:border-slate-800 justify-between">
-          <button onClick={() => router.back()} className="text-slate-700 dark:text-slate-300 flex size-10 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-800">
-            <span className="material-symbols-outlined">arrow_back</span>
-          </button>
-          <h2 className="text-slate-900 dark:text-slate-100 text-sm font-bold flex-1 text-center">Meeting Report</h2>
-          <button className="flex size-10 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-800">
-            <span className="material-symbols-outlined text-slate-700 dark:text-slate-300">more_horiz</span>
-          </button>
-        </header>
-
-        {/* Content */}
-        <div className="flex-1 p-4 lg:p-8 max-w-5xl mx-auto w-full">
+      {/* Content */}
+      <div className="flex-1 p-4 lg:p-8 max-w-5xl mx-auto w-full">
           {/* Breadcrumbs - Desktop */}
           <div className="hidden lg:flex items-center gap-2 text-sm text-slate-500 mb-6">
             <Link href="/" className="hover:text-primary transition-colors">Meetings</Link>
@@ -259,6 +291,7 @@ export default function MeetingDetailPage() {
               </div>
 
               <div className="flex items-center gap-2">
+                <DesktopDeleteButton meetingId={meeting.meetingId} />
                 <ExportMenu meetingId={meeting.meetingId} />
                 <ShareButton
                   meetingId={meeting.meetingId}
@@ -272,13 +305,20 @@ export default function MeetingDetailPage() {
 
           {/* Processing Status Indicator */}
           {meeting.status !== 'done' && (
-            <div className="flex items-center gap-3 p-4 bg-primary/5 border border-primary/20 rounded-xl mb-6">
-              <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent" />
-              <span className="text-sm font-medium text-primary">
-                {meeting.status === 'transcribing' ? 'Transcribing audio...' :
-                 meeting.status === 'summarizing' ? 'Generating summary...' :
-                 meeting.status === 'recording' ? 'Recording in progress...' : 'Processing...'}
-              </span>
+            <div className="mb-6">
+              <div className="flex items-center gap-3 p-4 bg-primary/5 border border-primary/20 rounded-xl">
+                <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent shrink-0" />
+                <span className="text-sm font-medium text-primary flex-1">
+                  {meeting.status === 'transcribing' ? 'Transcribing audio...' :
+                   meeting.status === 'summarizing' ? 'Generating summary...' :
+                   meeting.status === 'recording' ? 'Uploading & preparing...' : 'Processing...'}
+                </span>
+              </div>
+              <div className="mt-2 h-1 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                <div className="h-full bg-primary rounded-full animate-pulse" style={{
+                  width: meeting.status === 'recording' ? '25%' : meeting.status === 'transcribing' ? '50%' : meeting.status === 'summarizing' ? '75%' : '90%'
+                }} />
+              </div>
             </div>
           )}
 
@@ -311,7 +351,7 @@ export default function MeetingDetailPage() {
                       className="mt-1 rounded border-primary/30 text-primary focus:ring-primary h-4 w-4"
                     />
                     <div className="flex flex-col">
-                      <span className={`text-sm font-medium ${item.completed ? 'line-through text-slate-400' : 'text-slate-900 dark:text-white'}`}>
+                      <span className={`text-sm font-medium transition-all duration-200 ${item.completed ? 'line-through text-slate-400 dark:text-slate-500' : 'text-slate-900 dark:text-white'}`}>
                         {item.text}
                       </span>
                       {item.assignee && (
@@ -348,9 +388,15 @@ export default function MeetingDetailPage() {
                 </div>
                 <FileUploader
                   meetingId={meeting.meetingId}
-                  onUploadComplete={(files) => {
-                    console.log('Uploaded:', files);
+                  onUploadComplete={async (files) => {
                     setShowUploader(false);
+                    // Refetch meeting to get updated attachments
+                    try {
+                      const data = await meetingsApi.get(meeting.meetingId);
+                      setMeeting(data as Meeting);
+                    } catch (err) {
+                      console.error('Failed to refresh meeting:', err);
+                    }
                   }}
                 />
               </div>
@@ -387,6 +433,10 @@ export default function MeetingDetailPage() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-2">
+                        <div
+                          className="w-2 h-2 rounded-full shrink-0"
+                          style={{ backgroundColor: `hsl(${segment.speaker.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 360}, 70%, 55%)` }}
+                        />
                         <span className="text-sm font-black text-slate-900 dark:text-white">{segment.speaker}</span>
                         <span className="text-[10px] text-slate-400 font-medium">{segment.timestamp}</span>
                       </div>
@@ -409,35 +459,6 @@ export default function MeetingDetailPage() {
             <QAPanel meetingId={meeting.meetingId} />
           </section>
         </div>
-
-        {/* Mobile Bottom Nav */}
-        <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-lg border-t border-slate-200 dark:border-slate-800 px-6 py-4 flex justify-between items-center">
-          <Link href="/" className="flex flex-col items-center gap-1 text-slate-400">
-            <span className="material-symbols-outlined">home</span>
-            <span className="text-[10px] font-bold uppercase tracking-tight">Home</span>
-          </Link>
-          <Link href="/search" className="flex flex-col items-center gap-1 text-slate-400">
-            <span className="material-symbols-outlined">search</span>
-            <span className="text-[10px] font-bold uppercase tracking-tight">Search</span>
-          </Link>
-          <div className="relative -top-6">
-            <Link
-              href="/record"
-              className="bg-slate-900 dark:bg-white size-14 rounded-full shadow-2xl flex items-center justify-center text-white dark:text-slate-900 ring-4 ring-white dark:ring-slate-900"
-            >
-              <span className="material-symbols-outlined text-3xl">add</span>
-            </Link>
-          </div>
-          <Link href="/notifications" className="flex flex-col items-center gap-1 text-slate-400">
-            <span className="material-symbols-outlined">notifications</span>
-            <span className="text-[10px] font-bold uppercase tracking-tight">Alerts</span>
-          </Link>
-          <Link href="/profile" className="flex flex-col items-center gap-1 text-slate-400">
-            <span className="material-symbols-outlined">person</span>
-            <span className="text-[10px] font-bold uppercase tracking-tight">Profile</span>
-          </Link>
-        </nav>
-      </main>
-    </div>
+    </AppLayout>
   );
 }

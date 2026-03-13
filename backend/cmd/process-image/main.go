@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 
@@ -62,8 +63,10 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	bucket := event.Detail.Bucket.Name
 	key := event.Detail.Object.Key
 
-	// URL decode the key
-	key = strings.ReplaceAll(key, "+", " ")
+	// URL decode the key (handles both + and %XX encoding)
+	if decoded, err := url.QueryUnescape(key); err == nil {
+		key = decoded
+	}
 
 	log.Printf("Processing image: bucket=%s, key=%s", bucket, key)
 

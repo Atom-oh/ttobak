@@ -68,11 +68,73 @@ export class BrowserSpeechRecognition {
   private isListening = false;
   private shouldRestart = false;
   private onResult: SpeechCallback | null = null;
+  private onError: ((error: string) => void) | null = null;
   private lang: string;
+  private lastInterimText = '';
+  private lastInterimTimestamp = '';
+  private lastFinalText = '';
+  private lastResultTime = 0;
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(lang = 'ko-KR') {
     this.lang = lang;
   }
+
+  /**
+   * Check if two strings are duplicates (>= 80% character overlap).
+   * Used to prevent interim→final promotion from duplicating the last final result.
+   */
+  private isDuplicate(a: string, b: string): boolean {
+    if (!a || !b) return false;
+    const na = a.trim();
+    const nb = b.trim();
+    if (na === nb) return true;
+    const longer = na.length >= nb.length ? na : nb;
+    const shorter = na.length < nb.length ? na : nb;
+    if (longer.includes(shorter)) return true;
+    // Character-level overlap ratio
+    let matches = 0;
+    const bChars = [...nb];
+    for (const ch of na) {
+      const idx = bChars.indexOf(ch);
+      if (idx !== -1) {
+        matches++;
+        bChars.splice(idx, 1);
+      }
+    }
+    const ratio = matches / Math.max(na.length, nb.length);
+    return ratio >= 0.8;
+  }
+
+  private restartRecognition(): void {
+    try {
+      this.recognition?.abort();
+    } catch {
+      // ignore
+    }
+    const fresh = this.setupRecognition();
+    if (fresh) {
+      this.recognition = fresh;
+      try {
+        fresh.start();
+      } catch {
+        this.onError?.('recognition-stalled');
+      }
+    } else {
+      this.onError?.('recognition-stalled');
+    }
+  }
+
+  private handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible' && this.isListening && this.shouldRestart) {
+      // Tab regained focus — force restart to recover from Chrome throttling
+      setTimeout(() => {
+        if (this.isListening && this.shouldRestart) {
+          this.restartRecognition();
+        }
+      }, 300);
+    }
+  };
 
   static isSupported(): boolean {
     return !!(
@@ -81,50 +143,109 @@ export class BrowserSpeechRecognition {
     );
   }
 
-  start(onResult: SpeechCallback): boolean {
-    if (!BrowserSpeechRecognition.isSupported()) return false;
-
+  /** Create a fresh SpeechRecognition instance with all handlers wired up. */
+  private setupRecognition(): SpeechRecognitionInstance | null {
     const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!Ctor) return false;
+    if (!Ctor) return null;
 
-    this.recognition = new Ctor();
-    this.recognition.continuous = true;
-    this.recognition.interimResults = true;
-    this.recognition.lang = this.lang;
+    const recognition = new Ctor();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = this.lang;
 
-    this.onResult = onResult;
-    this.shouldRestart = true;
-    this.isListening = true;
-
-    this.recognition.onresult = (event: SpeechRecognitionEvent) => {
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      this.lastResultTime = Date.now();
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
+        const transcript = result[0].transcript;
+        if (result.isFinal) {
+          this.lastFinalText = transcript;
+          this.lastInterimText = '';
+          this.lastInterimTimestamp = '';
+        } else {
+          this.lastInterimText = transcript;
+          this.lastInterimTimestamp = new Date().toISOString();
+        }
         this.onResult?.({
-          text: result[0].transcript,
+          text: transcript,
           isFinal: result.isFinal,
           timestamp: new Date().toISOString(),
         });
       }
     };
 
-    this.recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
       // no-speech is normal during pauses — ignore it
       if (event.error === 'no-speech') return;
       // aborted happens when we call stop() — ignore it
       if (event.error === 'aborted') return;
+
+      // Fatal errors: stop auto-restart and notify the caller
+      const fatalErrors = ['not-allowed', 'network', 'service-not-allowed', 'language-not-supported'];
+      if (fatalErrors.includes(event.error)) {
+        this.shouldRestart = false;
+        this.isListening = false;
+        this.onError?.(event.error);
+      }
       console.warn('Speech recognition error:', event.error);
     };
 
-    this.recognition.onend = () => {
-      // Auto-restart if still supposed to be listening
+    recognition.onend = () => {
+      // Promote any remaining interim text to final before restarting,
+      // but skip if it duplicates the last final result (prevents
+      // double-text when Chrome restarts recognition).
+      if (this.lastInterimText && !this.isDuplicate(this.lastInterimText, this.lastFinalText)) {
+        this.lastFinalText = this.lastInterimText;
+        this.onResult?.({
+          text: this.lastInterimText,
+          isFinal: true,
+          timestamp: this.lastInterimTimestamp || new Date().toISOString(),
+        });
+      }
+      this.lastInterimText = '';
+      this.lastInterimTimestamp = '';
+
+      // Auto-restart with a fresh instance if still supposed to be listening.
       if (this.shouldRestart && this.isListening) {
-        try {
-          this.recognition?.start();
-        } catch {
-          // Already started — ignore
-        }
+        setTimeout(() => {
+          if (this.shouldRestart && this.isListening) {
+            this.restartRecognition();
+          }
+        }, 100);
       }
     };
+
+    return recognition;
+  }
+
+  start(onResult: SpeechCallback, onError?: (error: string) => void): boolean {
+    if (!BrowserSpeechRecognition.isSupported()) return false;
+
+    this.onResult = onResult;
+    this.onError = onError ?? null;
+    this.shouldRestart = true;
+    this.isListening = true;
+    this.lastInterimText = '';
+    this.lastInterimTimestamp = '';
+    this.lastFinalText = '';
+    this.lastResultTime = Date.now();
+
+    const recognition = this.setupRecognition();
+    if (!recognition) return false;
+    this.recognition = recognition;
+
+    // Watchdog: if no onresult for 30s while listening, force restart
+    this.clearWatchdog();
+    this.watchdogTimer = setInterval(() => {
+      if (this.isListening && this.shouldRestart && Date.now() - this.lastResultTime > 30_000) {
+        console.warn('Speech recognition watchdog: no results for 30s, restarting...');
+        this.restartRecognition();
+        this.lastResultTime = Date.now(); // reset to avoid rapid retries
+      }
+    }, 10_000);
+
+    // Visibility change: restart when tab regains focus
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
 
     try {
       this.recognition.start();
@@ -134,9 +255,17 @@ export class BrowserSpeechRecognition {
     }
   }
 
+  private clearWatchdog(): void {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+  }
+
   pause(): void {
     this.isListening = false;
     this.shouldRestart = false;
+    this.clearWatchdog();
     try {
       this.recognition?.stop();
     } catch {
@@ -145,19 +274,37 @@ export class BrowserSpeechRecognition {
   }
 
   resume(): void {
-    if (!this.recognition || !this.onResult) return;
+    if (!this.onResult) return;
     this.isListening = true;
     this.shouldRestart = true;
-    try {
-      this.recognition.start();
-    } catch {
-      // Already running — ignore
+    this.lastResultTime = Date.now();
+
+    // Restart watchdog
+    this.clearWatchdog();
+    this.watchdogTimer = setInterval(() => {
+      if (this.isListening && this.shouldRestart && Date.now() - this.lastResultTime > 30_000) {
+        console.warn('Speech recognition watchdog: no results for 30s, restarting...');
+        this.restartRecognition();
+        this.lastResultTime = Date.now();
+      }
+    }, 10_000);
+
+    const fresh = this.setupRecognition();
+    if (fresh) {
+      this.recognition = fresh;
+      try {
+        fresh.start();
+      } catch {
+        // Already running — ignore
+      }
     }
   }
 
   stop(): void {
     this.isListening = false;
     this.shouldRestart = false;
+    this.clearWatchdog();
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     try {
       this.recognition?.stop();
     } catch {

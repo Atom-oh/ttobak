@@ -1,4 +1,4 @@
-# Ttobak (또박) - Product Requirements Document
+# TTOBAK (또박) - Product Requirements Document
 
 > AI 회의 비서 웹앱 - 녹음, 전사, 요약, 이미지 정리를 하나로
 
@@ -26,9 +26,9 @@
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| AUTH-01 | Email/Password 기반 로그인 (Cognito User Pool) | P0 | 구현 중 |
-| AUTH-02 | 회원가입 (이메일 인증 포함) | P0 | 구현 중 |
-| AUTH-03 | 로그인 없이는 모든 페이지/API 접근 차단 | P0 | 구현 중 |
+| AUTH-01 | Email/Password 기반 로그인 (Cognito User Pool) | P0 | 완료 |
+| AUTH-02 | 회원가입 (이메일 인증 포함) | P0 | 완료 |
+| AUTH-03 | 로그인 없이는 모든 페이지/API 접근 차단 | P0 | 완료 |
 | AUTH-04 | 비밀번호 재설정 | P1 | 미착수 |
 | AUTH-05 | 세션 만료 시 자동 로그아웃 + 리다이렉트 | P1 | 미착수 |
 
@@ -36,117 +36,117 @@
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| REC-01 | iPhone Safari: `<input capture>` 네이티브 레코더 사용 | P0 | 구현 중 |
-| REC-02 | MacBook Chrome: MediaRecorder API 브라우저 내 녹음 | P0 | 구현 중 |
-| REC-03 | 녹음 중 타이머 표시 (mm:ss 형식) | P0 | 구현 중 |
-| REC-04 | 일시정지/재개 기능 | P1 | 미착수 |
-| REC-05 | 녹음 중 사진 캡처 (카메라 버튼) | P0 | 구현 중 |
-| REC-06 | 녹음 완료 시 자동 S3 업로드 (presigned URL) | P0 | 구현 중 |
-| REC-07 | 오디오 포맷: WebM (Chrome), M4A (Safari) | P0 | 구현 중 |
-| REC-08 | 녹음 중 웨이브폼 시각화 | P1 | 구현 중 |
-| REC-09 | 오프라인/온라인 모드 토글 체크박스 | P0 | 미착수 |
-| REC-10 | 온라인 모드 — Nova Sonic v2 WebSocket 실시간 스트리밍 | P0 | 미착수 |
-| REC-11 | 온라인 모드 — 실시간 전사 결과 화면 표시 | P0 | 미착수 |
-| REC-12 | 번역 언어 선택 체크박스 (한→영, 영→한, 일→한 등) | P1 | 미착수 |
+| REC-01 | iPhone Safari: `<input capture>` 네이티브 레코더 사용 | P0 | 완료 |
+| REC-02 | MacBook Chrome: MediaRecorder API 브라우저 내 녹음 | P0 | 완료 |
+| REC-03 | 녹음 중 타이머 표시 (mm:ss 형식) | P0 | 완료 |
+| REC-04 | 일시정지/재개 기능 | P1 | 완료 |
+| REC-05 | 녹음 중 사진 캡처 (카메라 버튼) | P0 | 완료 |
+| REC-06 | 녹음 완료 시 자동 S3 업로드 (presigned URL) | P0 | 완료 |
+| REC-07 | 오디오 포맷: WebM (Chrome), M4A (Safari) | P0 | 완료 |
+| REC-08 | 녹음 중 웨이브폼 시각화 | P1 | 완료 (FFT 이퀄라이저) |
+| REC-09 | 오프라인/온라인 모드 토글 체크박스 | P0 | 완료 (Browser Speech API 방식) |
+| REC-10 | 온라인 모드 — Nova Sonic v2 WebSocket 실시간 스트리밍 | P0 | 미구현 (Browser Speech API로 대체) |
+| REC-11 | 온라인 모드 — 실시간 전사 결과 화면 표시 | P0 | 완료 (Browser Speech API 기반) |
+| REC-12 | 번역 언어 선택 체크박스 (한→영, 영→한, 일→한 등) | P1 | 완료 |
 
 ### 2.3 STT (Speech-to-Text)
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| STT-01 | S3 오디오 업로드 → 자동 STT 파이프라인 트리거 | P0 | 구현 중 |
-| STT-02 | Amazon Transcribe 사용 (A 결과, Primary) | P0 | 구현 중 |
-| STT-03 | Amazon Nova 2 Sonic 사용 (B 결과) - A/B 비교 목적 | P1 | 미착수 |
-| STT-04 | 두 STT 결과를 나란히 비교하는 UI | P1 | 구현 중 |
-| STT-05 | 사용자가 A 또는 B 선택 가능 | P1 | 구현 중 |
-| STT-06 | 한국어 + 영어 지원 (Transcribe: 한/영, Nova 2 Sonic: 한/영 A/B) | P0 | 미착수 |
-| STT-07 | 언어 무관 A/B 비교 실행 (모든 회의에 Transcribe + Nova 2 Sonic 병렬 수행) | P0 | 미착수 |
+| STT-01 | S3 오디오 업로드 → 자동 STT 파이프라인 트리거 | P0 | 완료 |
+| STT-02 | Amazon Transcribe 사용 (A 결과, Primary) | P0 | 완료 |
+| STT-03 | Amazon Nova 2 Sonic 사용 (B 결과) - A/B 비교 목적 | P1 | 미구현 (stub만 존재) |
+| STT-04 | 두 STT 결과를 나란히 비교하는 UI | P1 | 완료 |
+| STT-05 | 사용자가 A 또는 B 선택 가능 | P1 | 완료 |
+| STT-06 | 한국어 + 영어 지원 (Transcribe: 한/영, Nova 2 Sonic: 한/영 A/B) | P0 | 미구현 (Transcribe만 지원) |
+| STT-07 | 언어 무관 A/B 비교 실행 (모든 회의에 Transcribe + Nova 2 Sonic 병렬 수행) | P0 | 미구현 (Transcribe만 동작) |
 
 ### 2.4 AI 요약 (Summarization)
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| SUM-01 | STT 완료 후 자동으로 Bedrock Claude Opus 4.6 호출 | P0 | 구현 중 |
-| SUM-02 | 구조화된 회의록 생성: 참석자, 안건, 결정사항, 액션아이템 | P0 | 구현 중 |
-| SUM-03 | 마크다운 형식으로 저장 | P0 | 구현 중 |
-| SUM-04 | 요약 결과를 에디터에서 수정 가능 | P0 | 구현 중 |
+| SUM-01 | STT 완료 후 자동으로 Bedrock Claude Opus 4.6 호출 | P0 | 완료 |
+| SUM-02 | 구조화된 회의록 생성: 참석자, 안건, 결정사항, 액션아이템 | P0 | 완료 |
+| SUM-03 | 마크다운 형식으로 저장 | P0 | 완료 |
+| SUM-04 | 요약 결과를 에디터에서 수정 가능 | P0 | 완료 |
 
 ### 2.5 이미지 처리 (Image Processing)
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| IMG-01 | 다건 이미지 드래그앤드롭 업로드 | P0 | 구현 중 |
-| IMG-02 | Bedrock Claude Vision으로 이미지 분류 (아키텍처/표/화이트보드/일반) | P0 | 구현 중 |
-| IMG-03 | 아키텍처 다이어그램 → Mermaid 코드 재생성 | P0 | 구현 중 |
-| IMG-04 | 표/도표 → 마크다운 테이블 변환 | P0 | 구현 중 |
-| IMG-05 | 화이트보드 → 텍스트 추출 + 구조화 | P1 | 구현 중 |
-| IMG-06 | 원본 vs AI 처리 결과 비교 뷰 | P0 | 구현 중 |
+| IMG-01 | 다건 이미지 드래그앤드롭 업로드 | P0 | 완료 |
+| IMG-02 | Bedrock Claude Vision으로 이미지 분류 (아키텍처/표/화이트보드/일반) | P0 | 완료 |
+| IMG-03 | 아키텍처 다이어그램 → Mermaid 코드 재생성 | P0 | 완료 |
+| IMG-04 | 표/도표 → 마크다운 테이블 변환 | P0 | 완료 |
+| IMG-05 | 화이트보드 → 텍스트 추출 + 구조화 | P1 | 완료 |
+| IMG-06 | 원본 vs AI 처리 결과 비교 뷰 | P0 | 완료 |
 
 ### 2.6 에디터 (Meeting Editor)
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| EDT-01 | Tiptap 기반 블록 에디터 | P0 | 구현 중 |
-| EDT-02 | 마크다운 지원 (헤딩, 리스트, 볼드, 코드블록 등) | P0 | 구현 중 |
-| EDT-03 | 이미지 인라인 삽입 | P0 | 구현 중 |
-| EDT-04 | 자동 저장 (3초 디바운스) | P0 | 구현 중 |
+| EDT-01 | Tiptap 기반 블록 에디터 | P0 | 완료 |
+| EDT-02 | 마크다운 지원 (헤딩, 리스트, 볼드, 코드블록 등) | P0 | 완료 |
+| EDT-03 | 이미지 인라인 삽입 | P0 | 완료 |
+| EDT-04 | 자동 저장 (3초 디바운스) | P0 | 완료 |
 | EDT-05 | 체크리스트 (액션아이템용) | P1 | 미착수 |
 
 ### 2.7 공유 (Sharing)
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| SHR-01 | 기본적으로 본인만 접근 가능 | P0 | 구현 중 |
-| SHR-02 | 사용자 이메일 검색으로 공유 대상 찾기 | P0 | 구현 중 |
-| SHR-03 | read / edit 권한 분리 | P0 | 구현 중 |
-| SHR-04 | 공유 취소 가능 | P0 | 구현 중 |
-| SHR-05 | 공유받은 회의 목록에 표시 (Shared 탭) | P0 | 구현 중 |
+| SHR-01 | 기본적으로 본인만 접근 가능 | P0 | 완료 |
+| SHR-02 | 사용자 이메일 검색으로 공유 대상 찾기 | P0 | 완료 |
+| SHR-03 | read / edit 권한 분리 | P0 | 완료 |
+| SHR-04 | 공유 취소 가능 | P0 | 완료 |
+| SHR-05 | 공유받은 회의 목록에 표시 (Shared 탭) | P0 | 완료 |
 
 ### 2.8 회의 목록 (Meeting List)
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| LST-01 | 본인 회의 + 공유받은 회의 통합 목록 | P0 | 구현 중 |
-| LST-02 | 날짜순 정렬 (최신 우선) | P0 | 구현 중 |
-| LST-03 | 검색 (제목, 내용) | P1 | 구현 중 |
-| LST-04 | 카테고리 탭 (All / Recent / Shared) | P1 | 구현 중 |
-| LST-05 | 회의 상태 표시 (recording/transcribing/summarizing/done) | P0 | 구현 중 |
+| LST-01 | 본인 회의 + 공유받은 회의 통합 목록 | P0 | 완료 |
+| LST-02 | 날짜순 정렬 (최신 우선) | P0 | 완료 |
+| LST-03 | 검색 (제목, 내용) | P1 | 완료 |
+| LST-04 | 카테고리 탭 (All / Recent / Shared) | P1 | 완료 |
+| LST-05 | 회의 상태 표시 (recording/transcribing/summarizing/done) | P0 | 완료 |
 
 ### 2.9 실시간 번역 (Real-time Translation)
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| TRN-01 | Nova Sonic 전사를 Bedrock Claude로 실시간 번역 | P0 | 미착수 |
-| TRN-02 | 번역 대상 언어 선택 UI | P0 | 미착수 |
-| TRN-03 | 원문 + 번역문 동시 표시 | P0 | 미착수 |
+| TRN-01 | Nova Sonic 전사를 Bedrock Claude로 실시간 번역 | P0 | 완료 (REST API 방식, Browser Speech 기반) |
+| TRN-02 | 번역 대상 언어 선택 UI | P0 | 완료 |
+| TRN-03 | 원문 + 번역문 동시 표시 | P0 | 완료 |
 
 ### 2.10 미팅 Q&A (Meeting Q&A)
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| QNA-01 | 미팅 중 질문 입력 패널 | P0 | 미착수 |
-| QNA-02 | Bedrock KB RAG 검색 답변 | P0 | 미착수 |
-| QNA-03 | Q&A 히스토리, 소스 표시 | P0 | 미착수 |
+| QNA-01 | 미팅 중 질문 입력 패널 | P0 | 완료 |
+| QNA-02 | Bedrock KB RAG 검색 답변 | P0 | 완료 |
+| QNA-03 | Q&A 히스토리, 소스 표시 | P0 | 완료 |
 
 ### 2.11 Knowledge Base
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| KB-01 | 사용자별 글로벌 KB (md/pdf/ppt) | P0 | 미착수 |
-| KB-02 | 자동 인덱싱, 파일 목록 관리 UI | P0 | 미착수 |
+| KB-01 | 사용자별 글로벌 KB (md/pdf/ppt) | P0 | 완료 |
+| KB-02 | 자동 인덱싱, 파일 목록 관리 UI | P0 | 완료 |
 
 ### 2.12 내보내기 + 외부 연동 (Export & Integration)
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| EXP-01 | 회의 상세 Export 버튼 (PDF, Markdown, Notion, Obsidian) | P0 | 미착수 |
-| EXP-02 | PDF 내보내기 — 서버에서 생성 | P1 | 미착수 |
-| EXP-03 | Markdown 내보내기 — content 필드 다운로드 | P0 | 미착수 |
-| EXP-04 | Notion 내보내기 — Notion API로 페이지 생성 | P1 | 미착수 |
-| EXP-05 | Obsidian 내보내기 — YAML frontmatter + [[wikilinks]] 형식 .md 다운로드 | P0 | 미착수 |
-| EXP-06 | API 키 없으면 Settings로 이동하여 입력 유도 | P0 | 미착수 |
-| INT-01 | Settings 페이지에 외부 연동(Integrations) 섹션 | P0 | 미착수 |
-| INT-02 | Notion API Key 입력/수정/삭제 UI | P0 | 미착수 |
-| INT-03 | API 키는 DynamoDB에 암호화 저장 | P0 | 미착수 |
+| EXP-01 | 회의 상세 Export 버튼 (PDF, Markdown, Notion, Obsidian) | P0 | 완료 |
+| EXP-02 | PDF 내보내기 — 서버에서 생성 | P1 | 완료 |
+| EXP-03 | Markdown 내보내기 — content 필드 다운로드 | P0 | 완료 |
+| EXP-04 | Notion 내보내기 — Notion API로 페이지 생성 | P1 | 완료 |
+| EXP-05 | Obsidian 내보내기 — YAML frontmatter + [[wikilinks]] 형식 .md 다운로드 | P0 | 완료 |
+| EXP-06 | API 키 없으면 Settings로 이동하여 입력 유도 | P0 | 완료 |
+| INT-01 | Settings 페이지에 외부 연동(Integrations) 섹션 | P0 | 완료 |
+| INT-02 | Notion API Key 입력/수정/삭제 UI | P0 | 완료 |
+| INT-03 | API 키는 DynamoDB에 암호화 저장 | P0 | 완료 |
 
 ## 3. 비기능 요구사항
 

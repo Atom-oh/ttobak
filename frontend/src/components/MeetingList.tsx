@@ -1,13 +1,16 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
+import { meetingsApi } from '@/lib/api';
 import type { Meeting, MeetingListFilter } from '@/types/meeting';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 
 interface MeetingListProps {
   meetings: Meeting[];
   isLoading?: boolean;
   onTabChange?: (tab: string) => void;
+  onDeleteMeeting?: (meetingId: string) => void;
 }
 
 const tabs: { key: MeetingListFilter['tab']; label: string }[] = [
@@ -46,12 +49,43 @@ function getTagColor(tag: string): string {
   return colors[tag.toLowerCase()] || 'bg-slate-100 text-slate-600';
 }
 
-function MeetingCard({ meeting }: { meeting: Meeting }) {
+function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meetingId: string) => void }) {
   const tag = meeting.tags?.[0];
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpen]);
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenuOpen(false);
+    if (!confirm('이 미팅을 삭제하시겠습니까?')) return;
+    setIsDeleting(true);
+    try {
+      await meetingsApi.delete(meeting.meetingId);
+      onDelete?.(meeting.meetingId);
+    } catch (err) {
+      console.error('Failed to delete meeting:', err);
+      alert('미팅 삭제에 실패했습니다.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   return (
     <Link href={`/meeting/${meeting.meetingId}`}>
-      <div className="bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 p-4 lg:p-6 rounded-xl shadow-sm hover:border-primary/30 hover:shadow-xl hover:shadow-primary/5 transition-all cursor-pointer group">
+      <div className={`bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 p-4 lg:p-6 rounded-xl shadow-sm hover:border-primary/30 hover:shadow-xl hover:shadow-primary/5 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer group ${isDeleting ? 'opacity-50 pointer-events-none' : ''}`}>
         <div className="flex justify-between items-start mb-2 lg:mb-4">
           <h4 className="text-slate-900 dark:text-slate-100 font-bold text-base leading-tight group-hover:text-primary transition-colors">
             {meeting.title}
@@ -108,16 +142,32 @@ function MeetingCard({ meeting }: { meeting: Meeting }) {
           ) : (
             <div />
           )}
-          <button className="text-slate-400 hover:text-primary transition-colors lg:block hidden">
-            <span className="material-symbols-outlined text-xl">more_horiz</span>
-          </button>
+          <div className="relative" ref={menuRef}>
+            <button
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); setMenuOpen(!menuOpen); }}
+              className="text-slate-400 hover:text-primary transition-colors"
+            >
+              <span className="material-symbols-outlined text-xl">more_horiz</span>
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 bottom-full mb-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-20 min-w-[120px]">
+                <button
+                  onClick={handleDelete}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                >
+                  <span className="material-symbols-outlined text-lg">delete</span>
+                  삭제
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </Link>
   );
 }
 
-export function MeetingList({ meetings, isLoading, onTabChange }: MeetingListProps) {
+export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting }: MeetingListProps) {
   const [activeTab, setActiveTab] = useState<MeetingListFilter['tab']>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -125,7 +175,7 @@ export function MeetingList({ meetings, isLoading, onTabChange }: MeetingListPro
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       return (
-        meeting.title.toLowerCase().includes(query) ||
+        meeting.title?.toLowerCase().includes(query) ||
         meeting.summary?.toLowerCase().includes(query) ||
         meeting.tags?.some((t) => t.toLowerCase().includes(query))
       );
@@ -153,8 +203,10 @@ export function MeetingList({ meetings, isLoading, onTabChange }: MeetingListPro
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
+      <div className="px-4 lg:px-0 space-y-4 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-6 lg:space-y-0">
+        {[0, 1, 2].map((i) => (
+          <SkeletonCard key={i} />
+        ))}
       </div>
     );
   }
@@ -209,16 +261,42 @@ export function MeetingList({ meetings, isLoading, onTabChange }: MeetingListPro
             </h3>
             <div className="space-y-4 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-6 lg:space-y-0">
               {groupMeetings.map((meeting) => (
-                <MeetingCard key={meeting.meetingId} meeting={meeting} />
+                <MeetingCard key={meeting.meetingId} meeting={meeting} onDelete={onDeleteMeeting} />
               ))}
             </div>
           </div>
         ))}
 
         {filteredMeetings.length === 0 && (
-          <div className="text-center py-12">
-            <span className="material-symbols-outlined text-4xl text-slate-300 mb-2">description</span>
-            <p className="text-slate-500">No meetings found</p>
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            {searchQuery ? (
+              <>
+                <span className="material-symbols-outlined text-5xl text-slate-300 dark:text-slate-600 mb-3">search_off</span>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">
+                  No results for &lsquo;{searchQuery}&rsquo;
+                </h3>
+                <p className="text-sm text-slate-500 max-w-xs">
+                  Try adjusting your search terms or browse all meetings.
+                </p>
+              </>
+            ) : (
+              <>
+                <span className="material-symbols-outlined text-5xl text-slate-300 dark:text-slate-600 mb-3">video_camera_front</span>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">
+                  No meetings yet
+                </h3>
+                <p className="text-sm text-slate-500 max-w-xs mb-4">
+                  Record your first meeting to get started with AI transcription and summaries.
+                </p>
+                <a
+                  href="/record"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-semibold hover:bg-primary/90 transition-colors active:scale-[0.97]"
+                >
+                  <span className="material-symbols-outlined text-lg">mic</span>
+                  Start Recording
+                </a>
+              </>
+            )}
           </div>
         )}
       </div>

@@ -129,6 +129,60 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 	return &meeting, nil
 }
 
+// BatchGetMeetings retrieves multiple meetings by their meetingIDs using a single scan.
+// This avoids N+1 queries when loading shared meetings.
+func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, meetingIDs []string) ([]*model.Meeting, error) {
+	if len(meetingIDs) == 0 {
+		return nil, nil
+	}
+
+	// For a single meetingID, use the existing method
+	if len(meetingIDs) == 1 {
+		meeting, err := r.GetMeetingByID(ctx, meetingIDs[0])
+		if err != nil {
+			return nil, err
+		}
+		if meeting != nil {
+			return []*model.Meeting{meeting}, nil
+		}
+		return nil, nil
+	}
+
+	// Build filter: entityType = MEETING AND meetingId IN (id1, id2, ...)
+	values := make([]expression.OperandBuilder, len(meetingIDs))
+	for i, id := range meetingIDs {
+		values[i] = expression.Value(id)
+	}
+
+	filterEx := expression.Name("entityType").Equal(expression.Value("MEETING")).
+		And(expression.Name("meetingId").In(values[0], values[1:]...))
+	expr, err := expression.NewBuilder().WithFilter(filterEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build expression: %w", err)
+	}
+
+	result, err := r.client.Scan(ctx, &dynamodb.ScanInput{
+		TableName:                 aws.String(r.tableName),
+		FilterExpression:          expr.Filter(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan for meetings: %w", err)
+	}
+
+	var meetings []*model.Meeting
+	for _, item := range result.Items {
+		var meeting model.Meeting
+		if err := attributevalue.UnmarshalMap(item, &meeting); err != nil {
+			continue
+		}
+		meetings = append(meetings, &meeting)
+	}
+
+	return meetings, nil
+}
+
 // UpdateMeeting updates a meeting record
 func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.Meeting) error {
 	meeting.UpdatedAt = time.Now().UTC()

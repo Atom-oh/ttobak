@@ -150,6 +150,12 @@ const audioContext = new AudioContext();
 - **문제**: 녹음 종료 시 `audioContext.close()` 호출 없음. 메모리 누수 가능
 - **권장**: `mediaRecorder.onstop`에서 `audioContext.close()` 추가
 
+### [RESOLVED] components/RecordButton.tsx - 마이크 선택 불가 + "Requested device not found"
+- **문제**: `getUserMedia({ audio: { deviceId: { exact: deviceId } } })`에서 stale deviceId가 있으면 `OverconstrainedError` 발생. fallback 로직에서 잘못된 localStorage 키(`selectedAudioDeviceId`)를 삭제하여, 실제 키(`ttobak-mic-deviceId`)는 그대로 남아 반복 에러 발생
+- **원인**: (1) `exact` 제약이 기기 없으면 즉시 에러 (2) localStorage 키 불일치로 stale 값 미삭제
+- **해결**: `{ deviceId: { ideal: deviceId } }`로 변경. `ideal`은 해당 기기가 있으면 사용, 없으면 브라우저가 자동 폴백하므로 try/catch 폴백 로직 자체가 불필요해짐
+- **교훈**: `getUserMedia` 제약은 `exact` 대신 `ideal`을 기본으로 사용할 것. localStorage 키는 상수로 관리하고 여러 곳에서 하드코딩하지 말 것
+
 ---
 
 ## 4. Cross-Cutting Issues
