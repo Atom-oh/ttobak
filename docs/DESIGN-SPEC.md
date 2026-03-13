@@ -229,7 +229,7 @@ Sidebar nav items: Meetings (videocam), Files (folder_open), Insights (analytics
 
 ```
 Layout:
-  header: 뒤로가기 + 타이틀 + 설정
+  header: 뒤로가기 + 타이틀(input) + 번역언어(select) + 로그아웃(logout icon)
   main:
     - 원형 타이머 (bg-primary/10 pulse, bg-primary/20, white circle with border-4 border-primary)
     - 웨이브폼 바 (w-1 bg-primary rounded-full, heights varying)

@@ -102,16 +102,17 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID stri
 		return "", fmt.Errorf("no transcript available for meeting: %s", meetingID)
 	}
 
-	systemPrompt := `You are an expert meeting assistant that creates comprehensive, well-structured meeting notes in Markdown format.
+	systemPrompt := `You are an expert meeting assistant that creates concise, well-structured meeting notes in Markdown format.
+전체 요약은 반드시 200단어 이내로 간결하게 작성하세요. 불필요한 반복이나 장황한 설명을 피하세요.
 
 Your output should include the following sections:
 # 회의록
 
 ## 개요
-- 간단한 회의 요약 (2-3문장)
+- 회의 핵심 요약 (2-3문장)
 
 ## 주요 논의 사항
-- 논의된 주요 토픽들
+- 핵심 토픽만 간결하게
 
 ## 결정 사항
 - 합의된 결정들
@@ -119,17 +120,14 @@ Your output should include the following sections:
 ## 액션 아이템
 - [ ] 담당자: 할 일 내용
 
-## 다음 단계
-- 후속 조치 사항들
-
 Format in Korean unless the transcript is entirely in English.
-Be concise but thorough. Use bullet points and checkboxes for clarity.`
+Use bullet points and checkboxes. Keep each bullet to one line.`
 
 	userPrompt := fmt.Sprintf("다음 회의 녹취록을 바탕으로 회의록을 작성해주세요:\n\n%s", transcript)
 
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
-		MaxTokens:        4096,
+		MaxTokens:        1024,
 		System:           systemPrompt,
 		Messages: []ClaudeMessage{
 			{

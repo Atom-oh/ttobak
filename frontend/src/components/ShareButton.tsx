@@ -170,6 +170,13 @@ export function ShareButton({
             </div>
           </div>
 
+          {/* Search Hint */}
+          {searchQuery.length > 0 && searchQuery.length < 2 && (
+            <div className="px-4 py-3 text-center text-slate-400 text-sm">
+              2글자 이상 입력해주세요
+            </div>
+          )}
+
           {/* Search Results */}
           {searchQuery.length >= 2 && (
             <div className="max-h-48 overflow-y-auto">

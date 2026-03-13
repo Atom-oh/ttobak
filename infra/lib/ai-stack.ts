@@ -7,6 +7,7 @@ import { Construct } from 'constructs';
 export interface AiStackProps extends cdk.StackProps {
   bucket: s3.IBucket;
   table: dynamodb.ITable;
+  kbBucket: s3.IBucket;
 }
 
 export class AiStack extends cdk.Stack {
@@ -58,6 +59,16 @@ export class AiStack extends cdk.Stack {
           `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/anthropic.claude-*`,
           `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/amazon.nova-sonic-v2:0`,
         ],
+      })
+    );
+
+    // Amazon Translate permissions (for live translation)
+    this.lambdaRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'TranslateAccess',
+        effect: iam.Effect.ALLOW,
+        actions: ['translate:TranslateText'],
+        resources: ['*'],
       })
     );
 
@@ -126,6 +137,9 @@ export class AiStack extends cdk.Stack {
 
     // S3 bucket access
     props.bucket.grantReadWrite(this.lambdaRole);
+
+    // KB bucket access (List, Get, Put for KB file management)
+    props.kbBucket.grantReadWrite(this.lambdaRole);
 
     // DynamoDB table access
     props.table.grantReadWriteData(this.lambdaRole);

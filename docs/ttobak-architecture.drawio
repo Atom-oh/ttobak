@@ -1,291 +1,192 @@
-<mxfile host="draw.io" modified="2026-03-09T00:00:00.000Z" agent="Claude" version="21.0.0" type="device">
-  <diagram id="ttobak-architecture" name="Ttobak Architecture v2">
-    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1100" math="0" shadow="0" background="none">
-      <root>
-        <mxCell id="0" />
-        <mxCell id="1" parent="0" />
-
-        <!-- Title -->
-        <mxCell id="title" value="Ttobak (&#xB610;&#xBC15;) - AWS Architecture v2" style="text;html=1;fontSize=20;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
-          <mxGeometry x="600" y="20" width="600" height="40" as="geometry" />
-        </mxCell>
-
-        <!-- User -->
-        <mxCell id="user" value="User&lt;br&gt;(iPhone / MacBook)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.users;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="60" y="350" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- CloudFront -->
-        <mxCell id="cloudfront" value="Amazon&lt;br&gt;CloudFront" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="220" y="350" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Lambda@Edge -->
-        <mxCell id="lambdaEdge" value="Lambda@Edge&lt;br&gt;(JWT Auth)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#DCEDC8;" vertex="1" parent="1">
-          <mxGeometry x="220" y="220" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- S3 Frontend -->
-        <mxCell id="s3frontend" value="S3&lt;br&gt;(Frontend SPA)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="420" y="180" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Cognito -->
-        <mxCell id="cognito" value="Cognito&lt;br&gt;User Pool" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cognito;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="220" y="500" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- API Gateway HTTP -->
-        <mxCell id="apigwHttp" value="API Gateway&lt;br&gt;(HTTP API)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.api_gateway;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="420" y="350" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- API Gateway WebSocket -->
-        <mxCell id="apigwWs" value="API Gateway&lt;br&gt;(WebSocket)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.api_gateway;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#E1F5FE;" vertex="1" parent="1">
-          <mxGeometry x="420" y="500" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- API Lambda -->
-        <mxCell id="apiLambda" value="Lambda&lt;br&gt;(API - Go)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;fillColor=#D9E8FB;" vertex="1" parent="1">
-          <mxGeometry x="630" y="350" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Realtime Lambda -->
-        <mxCell id="realtimeLambda" value="Lambda&lt;br&gt;(Realtime - Go)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#E1F5FE;" vertex="1" parent="1">
-          <mxGeometry x="630" y="500" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- S3 Storage -->
-        <mxCell id="s3storage" value="S3&lt;br&gt;(Audio / Images)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="840" y="180" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- DynamoDB -->
-        <mxCell id="dynamodb" value="DynamoDB&lt;br&gt;(ttobak-main)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="840" y="350" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- EventBridge -->
-        <mxCell id="eventbridge" value="EventBridge" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="1040" y="180" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Transcribe Lambda -->
-        <mxCell id="transcribeLambda" value="Lambda&lt;br&gt;(Transcribe)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;fillColor=#FFF3D9;" vertex="1" parent="1">
-          <mxGeometry x="1220" y="180" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- STT A/B Box -->
-        <mxCell id="sttBox" value="" style="rounded=1;whiteSpace=wrap;dashed=1;dashPattern=5 5;strokeColor=#6666FF;fillColor=none;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="1340" y="80" width="230" height="280" as="geometry" />
-        </mxCell>
-        <mxCell id="sttBoxLabel" value="STT A/B Pipeline" style="text;html=1;fontSize=13;fontStyle=1;align=center;fillColor=none;strokeColor=none;fontColor=#6666FF;" vertex="1" parent="1">
-          <mxGeometry x="1380" y="85" width="150" height="25" as="geometry" />
-        </mxCell>
-
-        <!-- Transcribe (A) -->
-        <mxCell id="transcribeA" value="Amazon&lt;br&gt;Transcribe&lt;br&gt;(&#xACB0;&#xACFC; A)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.transcribe;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#D5E8D4;" vertex="1" parent="1">
-          <mxGeometry x="1420" y="120" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Nova 2 Sonic (B) -->
-        <mxCell id="novaSonicB" value="Bedrock&lt;br&gt;Nova 2 Sonic&lt;br&gt;(&#xACB0;&#xACFC; B)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#FFE6CC;" vertex="1" parent="1">
-          <mxGeometry x="1420" y="250" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Summarize Lambda -->
-        <mxCell id="summarizeLambda" value="Lambda&lt;br&gt;(Summarize)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;fillColor=#E6D5F5;" vertex="1" parent="1">
-          <mxGeometry x="1220" y="480" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Bedrock Claude -->
-        <mxCell id="bedrockClaude" value="Bedrock&lt;br&gt;Claude Opus 4.6" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="1420" y="480" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Process Image Lambda -->
-        <mxCell id="processImageLambda" value="Lambda&lt;br&gt;(Process Image)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#FCE4EC;" vertex="1" parent="1">
-          <mxGeometry x="1220" y="660" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Bedrock Vision -->
-        <mxCell id="bedrockVision" value="Bedrock&lt;br&gt;Claude Vision" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="1420" y="660" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Knowledge Base Box -->
-        <mxCell id="kbBox" value="" style="rounded=1;whiteSpace=wrap;dashed=1;dashPattern=5 5;strokeColor=#00897B;fillColor=none;strokeWidth=2;" vertex="1" parent="1">
-          <mxGeometry x="1040" y="780" width="440" height="160" as="geometry" />
-        </mxCell>
-        <mxCell id="kbBoxLabel" value="Knowledge Base (RAG)" style="text;html=1;fontSize=13;fontStyle=1;align=center;fillColor=none;strokeColor=none;fontColor=#00897B;" vertex="1" parent="1">
-          <mxGeometry x="1180" y="785" width="180" height="25" as="geometry" />
-        </mxCell>
-
-        <!-- S3 KB -->
-        <mxCell id="s3kb" value="S3&lt;br&gt;(KB Docs)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="1070" y="840" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Bedrock KB -->
-        <mxCell id="bedrockKB" value="Bedrock&lt;br&gt;Knowledge Base" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="1230" y="840" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- OpenSearch Serverless -->
-        <mxCell id="opensearch" value="OpenSearch&lt;br&gt;Serverless" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.opensearch_service;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" vertex="1" parent="1">
-          <mxGeometry x="1390" y="840" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Nova Sonic Realtime -->
-        <mxCell id="novaSonicRt" value="Bedrock&lt;br&gt;Nova Sonic&lt;br&gt;(Realtime STT)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=9;fillColor=#E1F5FE;" vertex="1" parent="1">
-          <mxGeometry x="840" y="500" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Bedrock Translate -->
-        <mxCell id="bedrockTranslate" value="Bedrock&lt;br&gt;Claude Haiku&lt;br&gt;(Translation)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=9;fillColor=#E1F5FE;" vertex="1" parent="1">
-          <mxGeometry x="840" y="630" width="60" height="60" as="geometry" />
-        </mxCell>
-
-        <!-- Edges -->
-        <!-- User -> CloudFront -->
-        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;" edge="1" source="user" target="cloudfront" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- CloudFront -> Lambda@Edge -->
-        <mxCell id="e1b" value="Viewer Request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;dashed=1;fontSize=9;" edge="1" source="cloudfront" target="lambdaEdge" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- Lambda@Edge -> Cognito -->
-        <mxCell id="e1c" value="JWT verify" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;dashed=1;fontSize=9;" edge="1" source="lambdaEdge" target="cognito" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- CloudFront -> S3 Frontend (OAC) -->
-        <mxCell id="e2" value="OAC" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontStyle=1;fontSize=10;" edge="1" source="cloudfront" target="s3frontend" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- CloudFront -> API Gateway HTTP -->
-        <mxCell id="e3" value="/api/*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontStyle=1;fontSize=10;" edge="1" source="cloudfront" target="apigwHttp" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- CloudFront -> API Gateway WebSocket -->
-        <mxCell id="e3b" value="/realtime" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontStyle=1;fontSize=10;strokeColor=#0288D1;" edge="1" source="cloudfront" target="apigwWs" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- API GW HTTP -> API Lambda -->
-        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;" edge="1" source="apigwHttp" target="apiLambda" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- API GW WS -> Realtime Lambda -->
-        <mxCell id="e6b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#0288D1;" edge="1" source="apigwWs" target="realtimeLambda" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- API Lambda -> S3 Storage -->
-        <mxCell id="e7" value="presigned URL" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;fontSize=10;" edge="1" source="apiLambda" target="s3storage" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- API Lambda -> DynamoDB -->
-        <mxCell id="e8" value="CRUD" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;" edge="1" source="apiLambda" target="dynamodb" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- Realtime Lambda -> Nova Sonic Realtime -->
-        <mxCell id="e6c" value="Bidirectional&lt;br&gt;Streaming" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;strokeWidth=2;fontSize=9;strokeColor=#0288D1;" edge="1" source="realtimeLambda" target="novaSonicRt" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- Realtime Lambda -> Bedrock Translate -->
-        <mxCell id="e6d" value="Translation" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;strokeWidth=1;fontSize=9;strokeColor=#0288D1;dashed=1;" edge="1" source="realtimeLambda" target="bedrockTranslate" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- S3 Storage -> EventBridge -->
-        <mxCell id="e9" value="S3 Event" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#FF6600;" edge="1" source="s3storage" target="eventbridge" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- EventBridge -> Transcribe Lambda -->
-        <mxCell id="e10" value="audio/*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#FF6600;" edge="1" source="eventbridge" target="transcribeLambda" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- Transcribe Lambda -> Transcribe A -->
-        <mxCell id="e11" value="Branch A" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#82B366;" edge="1" source="transcribeLambda" target="transcribeA" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- Transcribe Lambda -> Nova 2 Sonic B -->
-        <mxCell id="e12" value="Branch B" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#D6A461;" edge="1" source="transcribeLambda" target="novaSonicB" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- Transcribe Lambda -> DynamoDB -->
-        <mxCell id="e13" value="&#xACB0;&#xACFC; &#xC800;&#xC7A5;" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;strokeWidth=1;fontSize=10;dashed=1;" edge="1" source="transcribeLambda" target="dynamodb" parent="1">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="1250" y="400" />
-              <mxPoint x="870" y="400" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-
-        <!-- DynamoDB -> Summarize Lambda (Stream) -->
-        <mxCell id="e14" value="DDB Stream&lt;br&gt;(status=summarizing)" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;strokeWidth=2;fontSize=9;strokeColor=#9673A6;" edge="1" source="dynamodb" target="summarizeLambda" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- Summarize Lambda -> Bedrock Claude -->
-        <mxCell id="e15" value="InvokeModel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#9673A6;" edge="1" source="summarizeLambda" target="bedrockClaude" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- EventBridge -> Process Image Lambda -->
-        <mxCell id="e16" value="images/*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#E91E63;" edge="1" source="eventbridge" target="processImageLambda" parent="1">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="1070" y="690" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-
-        <!-- Process Image Lambda -> Bedrock Vision -->
-        <mxCell id="e17" value="Vision" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#E91E63;" edge="1" source="processImageLambda" target="bedrockVision" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- API Lambda -> Bedrock KB (RAG) -->
-        <mxCell id="e18" value="RAG Query" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#00897B;" edge="1" source="apiLambda" target="bedrockKB" parent="1">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="660" y="870" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-
-        <!-- S3 KB -> Bedrock KB -->
-        <mxCell id="e19" value="Data Source" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;fontSize=9;strokeColor=#00897B;" edge="1" source="s3kb" target="bedrockKB" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- Bedrock KB -> OpenSearch -->
-        <mxCell id="e20" value="Vector Store" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;fontSize=9;strokeColor=#00897B;" edge="1" source="bedrockKB" target="opensearch" parent="1">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-
-        <!-- Legend -->
-        <mxCell id="legend" value="&lt;b&gt;Legend&lt;/b&gt;&lt;br&gt;&#x2500;&#x2500; Data flow&lt;br&gt;- - Security/Auth&lt;br&gt;&lt;font color=&quot;#FF6600&quot;&gt;&#x2500;&#x2500; STT trigger&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#9673A6&quot;&gt;&#x2500;&#x2500; Summarize flow&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#E91E63&quot;&gt;&#x2500;&#x2500; Image flow&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#0288D1&quot;&gt;&#x2500;&#x2500; Realtime (WebSocket)&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#00897B&quot;&gt;&#x2500;&#x2500; Knowledge Base (RAG)&lt;/font&gt;" style="text;html=1;fontSize=11;align=left;verticalAlign=top;rounded=1;whiteSpace=wrap;fillColor=#F5F5F5;strokeColor=#CCCCCC;spacingLeft=8;spacingTop=4;" vertex="1" parent="1">
-          <mxGeometry x="60" y="720" width="200" height="160" as="geometry" />
-        </mxCell>
-
-      </root>
-    </mxGraphModel>
-  </diagram>
+<mxfile host="65bd71144e">
+    <diagram id="ttobak-architecture" name="Ttobak Architecture v2">
+        <mxGraphModel dx="1019" dy="466" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1100" background="none" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="Ttobak (또박) - AWS Architecture v2" style="text;html=1;fontSize=20;fontStyle=1;align=center;verticalAlign=middle;" parent="1" vertex="1">
+                    <mxGeometry x="600" y="20" width="600" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="user" value="User&lt;br&gt;(iPhone / MacBook)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.users;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=12;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="350" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="cloudfront" value="Amazon&lt;br&gt;CloudFront" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cloudfront;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="220" y="350" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="lambdaEdge" value="Lambda@Edge&lt;br&gt;(JWT Auth)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#DCEDC8;" parent="1" vertex="1">
+                    <mxGeometry x="220" y="220" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="s3frontend" value="S3&lt;br&gt;(Frontend SPA)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="180" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="cognito" value="Cognito&lt;br&gt;User Pool" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.cognito;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="220" y="500" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="apigwHttp" value="API Gateway&lt;br&gt;(HTTP API)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.api_gateway;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="350" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="apigwWs" value="API Gateway&lt;br&gt;(WebSocket)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.api_gateway;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#E1F5FE;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="500" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="apiLambda" value="Lambda&lt;br&gt;(API - Go)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;fillColor=#D9E8FB;" parent="1" vertex="1">
+                    <mxGeometry x="630" y="350" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="realtimeLambda" value="Lambda&lt;br&gt;(Realtime - Go)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#E1F5FE;" parent="1" vertex="1">
+                    <mxGeometry x="630" y="500" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="s3storage" value="S3&lt;br&gt;(Audio / Images)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="180" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="dynamodb" value="DynamoDB&lt;br&gt;(ttobak-main)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="350" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="eventbridge" value="EventBridge" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.eventbridge;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+                    <mxGeometry x="1040" y="180" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcribeLambda" value="Lambda&lt;br&gt;(Transcribe)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;fillColor=#FFF3D9;" parent="1" vertex="1">
+                    <mxGeometry x="1220" y="180" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="sttBox" value="" style="rounded=1;whiteSpace=wrap;dashed=1;dashPattern=5 5;strokeColor=#6666FF;fillColor=none;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="1340" y="80" width="230" height="280" as="geometry"/>
+                </mxCell>
+                <mxCell id="sttBoxLabel" value="STT A/B Pipeline" style="text;html=1;fontSize=13;fontStyle=1;align=center;fillColor=none;strokeColor=none;fontColor=#6666FF;" parent="1" vertex="1">
+                    <mxGeometry x="1380" y="85" width="150" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcribeA" value="Amazon&lt;br&gt;Transcribe&lt;br&gt;(결과 A)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.transcribe;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#D5E8D4;" parent="1" vertex="1">
+                    <mxGeometry x="1420" y="120" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="novaSonicB" value="Bedrock&lt;br&gt;Nova 2 Sonic&lt;br&gt;(결과 B)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#FFE6CC;" parent="1" vertex="1">
+                    <mxGeometry x="1420" y="250" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="summarizeLambda" value="Lambda&lt;br&gt;(Summarize)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=11;fillColor=#E6D5F5;" parent="1" vertex="1">
+                    <mxGeometry x="1220" y="480" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="bedrockClaude" value="Bedrock&lt;br&gt;Claude Opus 4.6" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1420" y="480" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="processImageLambda" value="Lambda&lt;br&gt;(Process Image)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.lambda;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;fillColor=#FCE4EC;" parent="1" vertex="1">
+                    <mxGeometry x="1220" y="660" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="bedrockVision" value="Bedrock&lt;br&gt;Claude Vision" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1420" y="660" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="kbBox" value="" style="rounded=1;whiteSpace=wrap;dashed=1;dashPattern=5 5;strokeColor=#00897B;fillColor=none;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="1040" y="780" width="440" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="kbBoxLabel" value="Knowledge Base (RAG)" style="text;html=1;fontSize=13;fontStyle=1;align=center;fillColor=none;strokeColor=none;fontColor=#00897B;" parent="1" vertex="1">
+                    <mxGeometry x="1180" y="785" width="180" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="s3kb" value="S3&lt;br&gt;(KB Docs)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.s3;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1070" y="840" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="bedrockKB" value="Bedrock&lt;br&gt;Knowledge Base" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1230" y="840" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="opensearch" value="OpenSearch&lt;br&gt;Serverless" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.opensearch_service;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="1390" y="840" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="novaSonicRt" value="Bedrock&lt;br&gt;Nova Sonic&lt;br&gt;(Realtime STT)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=9;fillColor=#E1F5FE;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="500" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="bedrockTranslate" value="Bedrock&lt;br&gt;Claude Haiku&lt;br&gt;(Translation)" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.bedrock;labelBackgroundColor=none;sketch=0;html=1;fontStyle=1;fontSize=9;fillColor=#E1F5FE;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="630" width="60" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;" parent="1" source="user" target="cloudfront" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e1b" value="Viewer Request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;dashed=1;fontSize=9;" parent="1" source="cloudfront" target="lambdaEdge" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e1c" value="JWT verify" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;dashed=1;fontSize=9;" parent="1" source="lambdaEdge" target="cognito" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e2" value="OAC" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontStyle=1;fontSize=10;" parent="1" source="cloudfront" target="s3frontend" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e3" value="/api/*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontStyle=1;fontSize=10;" parent="1" source="cloudfront" target="apigwHttp" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e3b" value="/realtime" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontStyle=1;fontSize=10;strokeColor=#0288D1;" parent="1" source="cloudfront" target="apigwWs" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;" parent="1" source="apigwHttp" target="apiLambda" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e6b" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;strokeColor=#0288D1;" parent="1" source="apigwWs" target="realtimeLambda" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e7" value="presigned URL" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;fontSize=10;" parent="1" source="apiLambda" target="s3storage" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e8" value="CRUD" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;" parent="1" source="apiLambda" target="dynamodb" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e6c" value="Bidirectional&lt;br&gt;Streaming" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;strokeWidth=2;fontSize=9;strokeColor=#0288D1;" parent="1" source="realtimeLambda" target="novaSonicRt" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e6d" value="Translation" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;strokeWidth=1;fontSize=9;strokeColor=#0288D1;dashed=1;" parent="1" source="realtimeLambda" target="bedrockTranslate" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e9" value="S3 Event" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#FF6600;" parent="1" source="s3storage" target="eventbridge" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e10" value="audio/*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#FF6600;" parent="1" source="eventbridge" target="transcribeLambda" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e11" value="Branch A" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#82B366;" parent="1" source="transcribeLambda" target="transcribeA" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e12" value="Branch B" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#D6A461;" parent="1" source="transcribeLambda" target="novaSonicB" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e13" value="결과 저장" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;strokeWidth=1;fontSize=10;dashed=1;" parent="1" source="transcribeLambda" target="dynamodb" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1250" y="400"/>
+                            <mxPoint x="870" y="400"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e14" value="DDB Stream&lt;br&gt;(status=summarizing)" style="edgeStyle=orthogonalEdgeStyle;html=1;rounded=1;strokeWidth=2;fontSize=9;strokeColor=#9673A6;" parent="1" source="dynamodb" target="summarizeLambda" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e15" value="InvokeModel" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#9673A6;" parent="1" source="summarizeLambda" target="bedrockClaude" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e16" value="images/*" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#E91E63;" parent="1" source="eventbridge" target="processImageLambda" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1070" y="690"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e17" value="Vision" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#E91E63;" parent="1" source="processImageLambda" target="bedrockVision" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e18" value="RAG Query" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=2;fontSize=10;strokeColor=#00897B;" parent="1" source="apiLambda" target="bedrockKB" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="660" y="870"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="e19" value="Data Source" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;fontSize=9;strokeColor=#00897B;" parent="1" source="s3kb" target="bedrockKB" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e20" value="Vector Store" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeWidth=1;fontSize=9;strokeColor=#00897B;" parent="1" source="bedrockKB" target="opensearch" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend" value="&lt;b&gt;Legend&lt;/b&gt;&lt;br&gt;── Data flow&lt;br&gt;- - Security/Auth&lt;br&gt;&lt;font color=&quot;#FF6600&quot;&gt;── STT trigger&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#9673A6&quot;&gt;── Summarize flow&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#E91E63&quot;&gt;── Image flow&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#0288D1&quot;&gt;── Realtime (WebSocket)&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#00897B&quot;&gt;── Knowledge Base (RAG)&lt;/font&gt;" style="text;html=1;fontSize=11;align=left;verticalAlign=top;rounded=1;whiteSpace=wrap;fillColor=#F5F5F5;strokeColor=#CCCCCC;spacingLeft=8;spacingTop=4;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="720" width="200" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="2" value="" style="edgeStyle=none;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1">
+                    <mxGeometry width="80" relative="1" as="geometry">
+                        <mxPoint x="520" y="240" as="sourcePoint"/>
+                        <mxPoint x="600" y="240" as="targetPoint"/>
+                        <Array as="points"/>
+                    </mxGeometry>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
 </mxfile>

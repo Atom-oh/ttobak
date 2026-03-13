@@ -87,14 +87,22 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
         </div>
       </div>
 
-      <div className="space-y-4">
+      <div className="space-y-1">
         {transcripts.map((entry, index) => {
           const relatedTranslations = getTranslationForTimestamp(entry.timestamp);
+          const isLastInterim = !entry.isFinal && index === transcripts.length - 1;
 
           return (
-            <div key={index} className="group">
+            <div
+              key={index}
+              className={`group ${
+                entry.isFinal
+                  ? 'pb-2 mb-1 border-b border-slate-100 dark:border-slate-800/50 last:border-b-0'
+                  : ''
+              }`}
+            >
               <div className="flex items-start gap-3">
-                <span className="text-[10px] text-slate-400 font-mono mt-0.5 shrink-0">
+                <span className="text-[10px] text-slate-400 font-mono mt-0.5 shrink-0 tabular-nums">
                   {formatTime(entry.timestamp)}
                 </span>
                 <div className="flex-1">
@@ -106,6 +114,9 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
                     }`}
                   >
                     {entry.text}
+                    {isLastInterim && (
+                      <span className="inline-block w-1.5 h-4 ml-0.5 bg-primary/50 rounded-sm animate-pulse align-text-bottom" />
+                    )}
                   </p>
 
                   {relatedTranslations.length > 0 && (

@@ -136,9 +136,24 @@ func (s *KBService) ListFiles(ctx context.Context, userID string) (*model.KBFile
 			lastModified = obj.LastModified.Format(time.RFC3339)
 		}
 
+		// Infer file type from extension
+		fileType := "application/octet-stream"
+		ext := strings.ToLower(filepath.Ext(fileName))
+		switch ext {
+		case ".pdf":
+			fileType = "application/pdf"
+		case ".md":
+			fileType = "text/markdown"
+		case ".ppt", ".pptx":
+			fileType = "application/vnd.ms-powerpoint"
+		case ".doc", ".docx":
+			fileType = "application/msword"
+		}
+
 		files = append(files, model.KBFileResponse{
 			FileID:       fileID,
 			FileName:     fileName,
+			FileType:     fileType,
 			Size:         size,
 			LastModified: lastModified,
 		})

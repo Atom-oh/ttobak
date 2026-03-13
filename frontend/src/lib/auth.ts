@@ -6,6 +6,7 @@ import {
   AuthenticationDetails,
   CognitoUserAttribute,
   CognitoUserSession,
+  CognitoRefreshToken,
 } from 'amazon-cognito-identity-js';
 
 const poolData = {
@@ -172,7 +173,14 @@ export async function refreshSession(): Promise<string | null> {
       return;
     }
 
-    cognitoUser.getSession((err: Error | null, session: CognitoUserSession | null) => {
+    const refreshTokenStr = localStorage.getItem('refreshToken');
+    if (!refreshTokenStr) {
+      resolve(null);
+      return;
+    }
+
+    const refreshToken = new CognitoRefreshToken({ RefreshToken: refreshTokenStr });
+    cognitoUser.refreshSession(refreshToken, (err: Error | null, session: CognitoUserSession | null) => {
       if (err || !session) {
         resolve(null);
         return;
@@ -180,6 +188,7 @@ export async function refreshSession(): Promise<string | null> {
 
       const idToken = session.getIdToken().getJwtToken();
       localStorage.setItem('idToken', idToken);
+      localStorage.setItem('accessToken', session.getAccessToken().getJwtToken());
       resolve(idToken);
     });
   });

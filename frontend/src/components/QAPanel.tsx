@@ -1,12 +1,19 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { qaApi } from '@/lib/api';
 import type { QAEntry } from '@/types/meeting';
 
 interface QAPanelProps {
   meetingId: string;
 }
+
+const TOOL_LABELS: Record<string, { label: string; color: string }> = {
+  search_knowledge_base: { label: 'KB 검색', color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' },
+  search_aws_docs: { label: 'AWS Docs', color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
+  search_transcript: { label: '회의록 검색', color: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400' },
+  get_aws_recommendation: { label: 'AWS 추천', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
+};
 
 export function QAPanel({ meetingId }: QAPanelProps) {
   const [question, setQuestion] = useState('');
@@ -15,6 +22,11 @@ export function QAPanel({ meetingId }: QAPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const sessionId = useMemo(
+    () => `qa-${meetingId}-${Date.now()}`,
+    [meetingId]
+  );
 
   useEffect(() => {
     if (containerRef.current) {
@@ -42,11 +54,18 @@ export function QAPanel({ meetingId }: QAPanelProps) {
     setQaHistory((prev) => [...prev, newEntry]);
 
     try {
-      const response = await qaApi.ask(meetingId, currentQuestion);
+      const response = await qaApi.askMeeting(meetingId, currentQuestion, sessionId);
       setQaHistory((prev) =>
         prev.map((entry) =>
           entry.id === entryId
-            ? { ...entry, answer: response.answer, sources: response.sources }
+            ? {
+                ...entry,
+                answer: response.answer,
+                sources: response.sources,
+                usedKB: response.usedKB,
+                usedDocs: response.usedDocs,
+                toolsUsed: response.toolsUsed,
+              }
             : entry
         )
       );
@@ -102,6 +121,38 @@ export function QAPanel({ meetingId }: QAPanelProps) {
                       <p className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
                         {entry.answer}
                       </p>
+                      {/* Tool badges */}
+                      {entry.toolsUsed && entry.toolsUsed.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {entry.toolsUsed.map((tool) => {
+                            const info = TOOL_LABELS[tool];
+                            if (!info) return null;
+                            return (
+                              <span
+                                key={tool}
+                                className={`inline-block text-[10px] px-1.5 py-0.5 rounded ${info.color}`}
+                              >
+                                {info.label}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {/* Fallback: legacy badges when toolsUsed is empty */}
+                      {(!entry.toolsUsed || entry.toolsUsed.length === 0) && (
+                        <div className="flex gap-1 mt-1.5">
+                          {entry.usedKB && (
+                            <span className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                              KB 참조
+                            </span>
+                          )}
+                          {entry.usedDocs && (
+                            <span className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                              AWS Docs
+                            </span>
+                          )}
+                        </div>
+                      )}
                       {entry.sources && entry.sources.length > 0 && (
                         <div className="mt-3 pt-2 border-t border-slate-100 dark:border-slate-700">
                           <p className="text-[10px] font-semibold text-slate-400 uppercase mb-1.5">
@@ -109,13 +160,24 @@ export function QAPanel({ meetingId }: QAPanelProps) {
                           </p>
                           <div className="flex flex-wrap gap-1.5">
                             {entry.sources.map((source, index) => (
-                              <span
-                                key={index}
-                                className="text-[10px] px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded text-slate-600 dark:text-slate-300"
-                                title={source.snippet}
-                              >
-                                {source.title}
-                              </span>
+                              source.startsWith('http') ? (
+                                <a
+                                  key={index}
+                                  href={source}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[10px] px-2 py-1 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded hover:underline"
+                                >
+                                  {new URL(source).hostname}
+                                </a>
+                              ) : (
+                                <span
+                                  key={index}
+                                  className="text-[10px] px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded text-slate-600 dark:text-slate-300"
+                                >
+                                  {source}
+                                </span>
+                              )
                             ))}
                           </div>
                         </div>

@@ -33,21 +33,23 @@ const storageStack = new StorageStack(app, 'TtobakStorageStack', {
   description: 'Ttobak AI Meeting Assistant - Storage (DynamoDB + S3)',
 });
 
-// Stack 3: AI (IAM roles) - depends on Storage for bucket/table references
-const aiStack = new AiStack(app, 'TtobakAiStack', {
-  env,
-  description: 'Ttobak AI Meeting Assistant - AI Services (IAM roles)',
-  bucket: storageStack.bucket,
-  table: storageStack.table,
-});
-aiStack.addDependency(storageStack);
-
-// Stack 4: Knowledge Base (OpenSearch Serverless + Bedrock KB)
+// Stack 3: Knowledge Base (OpenSearch Serverless + Bedrock KB)
 const knowledgeStack = new KnowledgeStack(app, 'TtobakKnowledgeStack', {
   env,
   description: 'Ttobak AI Meeting Assistant - Knowledge Base (OpenSearch + Bedrock)',
 });
 knowledgeStack.addDependency(storageStack);
+
+// Stack 4: AI (IAM roles) - depends on Storage + Knowledge for bucket/table references
+const aiStack = new AiStack(app, 'TtobakAiStack', {
+  env,
+  description: 'Ttobak AI Meeting Assistant - AI Services (IAM roles)',
+  bucket: storageStack.bucket,
+  table: storageStack.table,
+  kbBucket: knowledgeStack.kbBucket,
+});
+aiStack.addDependency(storageStack);
+aiStack.addDependency(knowledgeStack);
 
 // Stack 5: Edge Auth (Lambda@Edge in us-east-1 for CloudFront)
 const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
@@ -55,7 +57,7 @@ const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
   crossRegionReferences: true,
   description: 'Ttobak AI Meeting Assistant - Edge Auth (Lambda@Edge)',
   userPoolId: authStack.userPool.userPoolId,
-  userPoolClientId: authStack.userPoolClient.userPoolClientId,
+  userPoolClientId: authStack.spaClient.userPoolClientId,
   cognitoRegion: env.region as string,
 });
 edgeAuthStack.addDependency(authStack);

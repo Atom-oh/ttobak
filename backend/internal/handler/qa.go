@@ -56,3 +56,32 @@ func (h *QAHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, result)
 }
+
+// AskLive handles POST /api/kb/ask — live Q&A with client-provided context
+func (h *QAHandler) AskLive(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req model.AskLiveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.Question == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "question is required")
+		return
+	}
+
+	if req.Context == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "context is required")
+		return
+	}
+
+	result, err := h.knowledgeService.AskLive(ctx, req.Question, req.Context)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}

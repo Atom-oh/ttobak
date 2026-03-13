@@ -17,6 +17,7 @@ export interface Meeting {
   sharedWith?: SharedUser[];
   createdAt: string;
   updatedAt: string;
+  sttProvider?: 'transcribe' | 'nova-sonic';
 }
 
 export interface Participant {
@@ -111,16 +112,19 @@ export interface MeetingDetail extends Meeting {
 export interface KBFile {
   fileId: string;
   fileName: string;
-  fileType: string;
+  fileType?: string;
   size?: number;
-  uploadedAt: string;
+  lastModified: string;
 }
 
 export interface QAEntry {
   id: string;
   question: string;
   answer: string;
-  sources?: { title: string; snippet: string }[];
+  sources?: string[];
+  usedKB?: boolean;
+  usedDocs?: boolean;
+  toolsUsed?: string[];
   timestamp: string;
 }
 

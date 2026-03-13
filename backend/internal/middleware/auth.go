@@ -2,10 +2,19 @@ package middleware
 
 import (
 	"context"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
+	"math/big"
 	"net/http"
+	"os"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // ContextKey is a custom type for context keys
@@ -19,6 +28,39 @@ const (
 	// UserNameKey is the context key for user name
 	UserNameKey ContextKey = "userName"
 )
+
+// JWKS types for Cognito public key fetching
+type jwksResponse struct {
+	Keys []jwkKey `json:"keys"`
+}
+
+type jwkKey struct {
+	Kid string `json:"kid"`
+	Kty string `json:"kty"`
+	Alg string `json:"alg"`
+	N   string `json:"n"`
+	E   string `json:"e"`
+	Use string `json:"use"`
+}
+
+// jwksCache holds cached JWKS keys with TTL
+var jwksCache struct {
+	sync.RWMutex
+	keys      map[string]*rsa.PublicKey
+	fetchedAt time.Time
+}
+
+var (
+	cognitoRegion     = getEnvOrDefault("COGNITO_REGION", "ap-northeast-2")
+	cognitoUserPoolID = os.Getenv("COGNITO_USER_POOL_ID")
+)
+
+func getEnvOrDefault(key, defaultVal string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return defaultVal
+}
 
 // ALBOIDCClaims represents the claims in the ALB OIDC JWT
 type ALBOIDCClaims struct {
@@ -92,17 +134,87 @@ func parseALBJWT(token string) (*ALBOIDCClaims, error) {
 	return parseJWT(token)
 }
 
-// parseJWT parses a standard JWT and extracts claims
-// JWT format: header.payload.signature (base64url encoded)
-// Works with both ALB OIDC JWTs and Cognito JWTs
+// parseJWT parses and verifies a JWT token.
+// If COGNITO_USER_POOL_ID is set, performs full signature verification.
+// Otherwise falls back to unverified decode (backward compatibility).
 func parseJWT(token string) (*ALBOIDCClaims, error) {
-	// Split JWT into parts
+	if cognitoUserPoolID != "" {
+		return parseVerifiedJWT(token)
+	}
+	return parseUnverifiedJWT(token)
+}
+
+// parseVerifiedJWT verifies JWT signature using Cognito JWKS
+func parseVerifiedJWT(tokenStr string) (*ALBOIDCClaims, error) {
+	expectedIssuer := fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", cognitoRegion, cognitoUserPoolID)
+
+	parsed, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+		// Verify signing method
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+
+		kid, ok := token.Header["kid"].(string)
+		if !ok {
+			return nil, fmt.Errorf("kid not found in token header")
+		}
+
+		keys, err := getJWKSKeys()
+		if err != nil {
+			return nil, err
+		}
+
+		key, ok := keys[kid]
+		if !ok {
+			return nil, fmt.Errorf("key %s not found in JWKS", kid)
+		}
+
+		return key, nil
+	}, jwt.WithValidMethods([]string{"RS256"}),
+		jwt.WithIssuer(expectedIssuer),
+		jwt.WithExpirationRequired(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("token verification failed: %w", err)
+	}
+
+	mapClaims, ok := parsed.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("failed to extract claims")
+	}
+
+	claims := &ALBOIDCClaims{
+		Sub:        getStringClaim(mapClaims, "sub"),
+		Email:      getStringClaim(mapClaims, "email"),
+		Name:       getStringClaim(mapClaims, "name"),
+		GivenName:  getStringClaim(mapClaims, "given_name"),
+		FamilyName: getStringClaim(mapClaims, "family_name"),
+		Iss:        getStringClaim(mapClaims, "iss"),
+	}
+	if v, ok := mapClaims["email_verified"].(bool); ok {
+		claims.EmailVerified = v
+	}
+	if v, ok := mapClaims["exp"].(float64); ok {
+		claims.Exp = int64(v)
+	}
+
+	return claims, nil
+}
+
+func getStringClaim(claims jwt.MapClaims, key string) string {
+	if v, ok := claims[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// parseUnverifiedJWT decodes JWT payload without signature verification (fallback)
+func parseUnverifiedJWT(token string) (*ALBOIDCClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, ErrInvalidToken
 	}
 
-	// Decode payload (second part)
 	payload, err := base64URLDecode(parts[1])
 	if err != nil {
 		return nil, err
@@ -114,6 +226,79 @@ func parseJWT(token string) (*ALBOIDCClaims, error) {
 	}
 
 	return &claims, nil
+}
+
+// getJWKSKeys fetches and caches JWKS keys from Cognito
+func getJWKSKeys() (map[string]*rsa.PublicKey, error) {
+	jwksCache.RLock()
+	if jwksCache.keys != nil && time.Since(jwksCache.fetchedAt) < time.Hour {
+		keys := jwksCache.keys
+		jwksCache.RUnlock()
+		return keys, nil
+	}
+	jwksCache.RUnlock()
+
+	jwksCache.Lock()
+	defer jwksCache.Unlock()
+
+	// Double-check after acquiring write lock
+	if jwksCache.keys != nil && time.Since(jwksCache.fetchedAt) < time.Hour {
+		return jwksCache.keys, nil
+	}
+
+	jwksURL := fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s/.well-known/jwks.json", cognitoRegion, cognitoUserPoolID)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(jwksURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read JWKS response: %w", err)
+	}
+
+	var jwks jwksResponse
+	if err := json.Unmarshal(body, &jwks); err != nil {
+		return nil, fmt.Errorf("failed to parse JWKS: %w", err)
+	}
+
+	keys := make(map[string]*rsa.PublicKey)
+	for _, k := range jwks.Keys {
+		if k.Kty != "RSA" || k.Use != "sig" {
+			continue
+		}
+		pubKey, err := parseRSAPublicKey(k.N, k.E)
+		if err != nil {
+			continue
+		}
+		keys[k.Kid] = pubKey
+	}
+
+	jwksCache.keys = keys
+	jwksCache.fetchedAt = time.Now()
+	return keys, nil
+}
+
+func parseRSAPublicKey(nStr, eStr string) (*rsa.PublicKey, error) {
+	nBytes, err := base64.RawURLEncoding.DecodeString(nStr)
+	if err != nil {
+		return nil, err
+	}
+	eBytes, err := base64.RawURLEncoding.DecodeString(eStr)
+	if err != nil {
+		return nil, err
+	}
+
+	n := new(big.Int).SetBytes(nBytes)
+	e := new(big.Int).SetBytes(eBytes)
+
+	return &rsa.PublicKey{
+		N: n,
+		E: int(e.Int64()),
+	}, nil
 }
 
 // base64URLDecode decodes a base64url encoded string

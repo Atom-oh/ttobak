@@ -253,6 +253,48 @@ Response: 200 OK
 
 ---
 
+### Real-time Translation (REST)
+
+> 현재 구현: WebSocket 대신 Browser Speech API + REST 호출 방식으로 실시간 전사/번역 구현
+
+#### Translate Text
+
+```
+POST /api/translate
+Request:
+{
+  "text": "번역할 텍스트",
+  "sourceLang": "ko",
+  "targetLang": "en"
+}
+
+Response: 200 OK
+{
+  "translatedText": "Text to translate",
+  "sourceLang": "ko",
+  "targetLang": "en"
+}
+```
+
+#### Live Summary (200단어마다 호출)
+
+```
+POST /api/summarize-live
+Request:
+{
+  "meetingId": "client-meeting-id",
+  "text": "전체 전사 텍스트...",
+  "previousSummary": "이전 요약 (optional)"
+}
+
+Response: 200 OK
+{
+  "summary": "현재까지 요약된 내용..."
+}
+```
+
+---
+
 ### STT Results
 
 #### Select Transcript
@@ -269,7 +311,9 @@ Response: 200 OK
 
 ---
 
-### WebSocket (API Gateway)
+### WebSocket (API Gateway) — 미구현
+
+> **현재 상태**: 실시간 전사는 Browser Web Speech API (`BrowserSpeechRecognition`)로 클라이언트에서 처리하고, 번역/요약은 REST API 호출. WebSocket 기반 Nova Sonic 스트리밍은 v2 목표.
 
 실시간 전사 및 번역을 위한 WebSocket API입니다.
 

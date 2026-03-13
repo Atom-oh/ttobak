@@ -80,15 +80,28 @@ func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor s
 		response.Meetings = append(response.Meetings, item)
 	}
 
-	// Add shared meetings
-	for _, share := range result.Shares {
-		meeting, err := s.repo.GetMeetingByID(ctx, share.MeetingID)
-		if err != nil || meeting == nil {
-			continue
+	// Add shared meetings (batch query to avoid N+1)
+	if len(result.Shares) > 0 {
+		meetingIDs := make([]string, len(result.Shares))
+		for i, share := range result.Shares {
+			meetingIDs[i] = share.MeetingID
 		}
-		perm := share.Permission
-		item := model.ToMeetingListItem(meeting, true, &share.OwnerEmail, &perm)
-		response.Meetings = append(response.Meetings, item)
+
+		meetings, err := s.repo.BatchGetMeetings(ctx, meetingIDs)
+		if err == nil {
+			// Build lookup map
+			meetingMap := make(map[string]*model.Meeting, len(meetings))
+			for _, m := range meetings {
+				meetingMap[m.MeetingID] = m
+			}
+			for _, share := range result.Shares {
+				if meeting, ok := meetingMap[share.MeetingID]; ok {
+					perm := share.Permission
+					item := model.ToMeetingListItem(meeting, true, &share.OwnerEmail, &perm)
+					response.Meetings = append(response.Meetings, item)
+				}
+			}
+		}
 	}
 
 	return response, nil

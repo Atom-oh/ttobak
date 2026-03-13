@@ -28,6 +28,7 @@ export class GatewayStack extends cdk.Stack {
   public readonly processImageFunction: lambda.Function;
   public readonly websocketFunction: lambda.Function;
   public readonly kbFunction: lambda.Function;
+  public readonly qaFunction: lambda.Function;
 
   constructor(scope: Construct, id: string, props: GatewayStackProps) {
     super(scope, id, props);
@@ -145,6 +146,24 @@ export class GatewayStack extends cdk.Stack {
       memorySize: 256,
     });
 
+    // Q&A Lambda function (Python runtime for flexible prompt engineering)
+    this.qaFunction = new lambda.Function(this, 'QAFunction', {
+      functionName: 'ttobak-qa',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'handler.lambda_handler',
+      code: lambda.Code.fromAsset('../backend/python/qa'),
+      role: props.lambdaRole as iam.Role,
+      environment: {
+        TABLE_NAME: props.table.tableName,
+        KB_ID: 'XGFBOMVSS8',
+        BEDROCK_MODEL_ID: 'anthropic.claude-opus-4-6-v1',
+        DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
+      },
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 512,
+    });
+
     // HTTP API (ttobak-api)
     this.httpApi = new apigatewayv2.HttpApi(this, 'TtobakHttpApi', {
       apiName: 'ttobak-api',
@@ -172,6 +191,32 @@ export class GatewayStack extends cdk.Stack {
         payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_1_0,
       }
     );
+
+    // Q&A Lambda integration (v2 payload for Python handler)
+    const qaIntegration = new apigatewayv2Integrations.HttpLambdaIntegration(
+      'QAIntegration',
+      this.qaFunction,
+      {
+        payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0,
+      }
+    );
+
+    // Q&A routes → Python Lambda (specific paths override {proxy+})
+    this.httpApi.addRoutes({
+      path: '/api/qa/ask',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: qaIntegration,
+    });
+    this.httpApi.addRoutes({
+      path: '/api/qa/meeting/{meetingId}',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: qaIntegration,
+    });
+    this.httpApi.addRoutes({
+      path: '/api/qa/detect-questions',
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: qaIntegration,
+    });
 
     // Add route: ANY /api/{proxy+}
     this.httpApi.addRoutes({

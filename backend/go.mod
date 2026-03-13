@@ -15,8 +15,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.56.1
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.3
 	github.com/aws/aws-sdk-go-v2/service/transcribe v1.54.2
+	github.com/aws/aws-sdk-go-v2/service/translate v1.33.19
 	github.com/awslabs/aws-lambda-go-api-proxy v0.16.2
 	github.com/go-chi/chi/v5 v5.2.5
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 )
 

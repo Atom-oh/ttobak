@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 
@@ -56,8 +57,10 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	bucket := event.Detail.Bucket.Name
 	key := event.Detail.Object.Key
 
-	// URL decode the key
-	key = strings.ReplaceAll(key, "+", " ")
+	// URL decode the key (handles both + and %XX encoding)
+	if decoded, err := url.QueryUnescape(key); err == nil {
+		key = decoded
+	}
 
 	log.Printf("Processing S3 event: bucket=%s, key=%s", bucket, key)
 
@@ -91,13 +94,9 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	log.Printf("Started transcription job: %s for meeting: %s", jobName, meetingID)
 
-	// Start Nova Sonic transcription as well (A/B test)
-	novaJobName, err := transcribeService.StartNovaSonicTranscription(ctx, meetingID, bucket, key)
-	if err != nil {
-		log.Printf("Failed to start Nova Sonic transcription (falling back to standard only): %v", err)
-	} else {
-		log.Printf("Started Nova Sonic transcription job: %s for meeting: %s", novaJobName, meetingID)
-	}
+	// NOTE: Nova Sonic provider selection is stored in DynamoDB meeting record.
+	// Currently all transcriptions use standard AWS Transcribe.
+	// Nova Sonic integration will be added when the service supports it.
 
 	return nil
 }

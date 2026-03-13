@@ -8,9 +8,10 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/translate"
 	"github.com/awslabs/aws-lambda-go-api-proxy/chi"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
@@ -33,7 +34,8 @@ func init() {
 	dynamoClient := dynamodb.NewFromConfig(cfg)
 	s3Client := s3.NewFromConfig(cfg)
 	bedrockAgentClient := bedrockagent.NewFromConfig(cfg)
-	bedrockRuntimeClient := bedrockagentruntime.NewFromConfig(cfg)
+	translateClient := translate.NewFromConfig(cfg)
+	bedrockRuntimeClient2 := bedrockruntime.NewFromConfig(cfg)
 
 	// Get environment variables (per API spec: TABLE_NAME, BUCKET_NAME)
 	tableName := os.Getenv("TABLE_NAME")
@@ -50,10 +52,6 @@ func init() {
 	}
 	kbID := os.Getenv("KB_ID")                     // Bedrock Knowledge Base ID
 	kbDataSourceID := os.Getenv("KB_DATASOURCE_ID") // Bedrock Data Source ID
-	kbModelARN := os.Getenv("KB_MODEL_ARN")         // Model ARN for RAG generation
-	if kbModelARN == "" {
-		kbModelARN = "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0"
-	}
 
 	// Initialize repository
 	repo := repository.NewDynamoDBRepository(dynamoClient, tableName)
@@ -62,8 +60,8 @@ func init() {
 	meetingService := service.NewMeetingService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName)
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)
-	knowledgeService := service.NewKnowledgeService(bedrockRuntimeClient, repo, kbID, kbModelARN)
 	notionService := service.NewNotionService()
+	translateService := service.NewTranslateService(translateClient)
 
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler()
@@ -71,9 +69,10 @@ func init() {
 	shareHandler := handler.NewShareHandler(meetingService)
 	uploadHandler := handler.NewUploadHandler(uploadService)
 	kbHandler := handler.NewKBHandler(kbService)
-	qaHandler := handler.NewQAHandler(knowledgeService)
 	exportHandler := handler.NewExportHandler(meetingService, notionService, repo)
 	settingsHandler := handler.NewSettingsHandler(repo)
+	translateHandler := handler.NewTranslateHandler(translateService)
+	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2)
 
 	// Setup router
 	r := chi.NewRouter()
@@ -120,8 +119,7 @@ func init() {
 		r.Get("/api/kb/files", kbHandler.ListFiles)
 		r.Delete("/api/kb/files/{fileId}", kbHandler.DeleteFile)
 
-		// Q&A route
-		r.Post("/api/meetings/{meetingId}/ask", qaHandler.AskQuestion)
+		// Q&A routes — migrated to Python Lambda (ttobak-qa)
 
 		// Export routes
 		r.Post("/api/meetings/{meetingId}/export", exportHandler.ExportMeeting)
@@ -131,6 +129,12 @@ func init() {
 		r.Get("/api/settings/integrations", settingsHandler.GetIntegrations)
 		r.Put("/api/settings/integrations/notion", settingsHandler.SaveNotionKey)
 		r.Delete("/api/settings/integrations/notion", settingsHandler.DeleteNotionKey)
+
+		// Translation route
+		r.Post("/api/translate", translateHandler.Translate)
+
+		// Live summarize route
+		r.Post("/api/meetings/{meetingId}/summarize", summarizeLiveHandler.SummarizeLive)
 	})
 
 	chiLambda = chiadapter.New(r)

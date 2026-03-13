@@ -79,10 +79,20 @@ func (s *KnowledgeService) Ask(ctx context.Context, userID, meetingID, question 
 		meetingContext += fmt.Sprintf("\nTranscript:\n%s\n", transcript)
 	}
 
-	// Build the full prompt
-	fullQuestion := fmt.Sprintf("Based on the following meeting context, answer the question.\n\n%s\n\nQuestion: %s", meetingContext, question)
+	return s.askWithContext(ctx, question, meetingContext)
+}
 
-	// If KB is not configured, return a simple response based on meeting content
+// AskLive queries the knowledge base with client-provided context (for live recording)
+func (s *KnowledgeService) AskLive(ctx context.Context, question, contextText string) (*model.AskQuestionResponse, error) {
+	return s.askWithContext(ctx, question, contextText)
+}
+
+// askWithContext is the shared implementation for KB Q&A with arbitrary context
+func (s *KnowledgeService) askWithContext(ctx context.Context, question, contextText string) (*model.AskQuestionResponse, error) {
+	// Build the full prompt
+	fullQuestion := fmt.Sprintf("Based on the following meeting context, answer the question.\n\n%s\n\nQuestion: %s", contextText, question)
+
+	// If KB is not configured, return a simple response
 	if s.bedrockRuntimeClient == nil || s.kbID == "" {
 		return &model.AskQuestionResponse{
 			Answer:  "Knowledge Base is not configured. Please configure it to enable Q&A functionality.",

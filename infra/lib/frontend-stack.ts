@@ -42,6 +42,43 @@ export class FrontendStack extends cdk.Stack {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
     });
 
+    // CloudFront Function to rewrite dynamic routes for Next.js static export
+    // When Next.js client-side navigates to /meeting/abc123, it fetches /meeting/abc123.txt
+    // (RSC payload). Only /meeting/_.txt exists on S3, so we rewrite dynamic segments to '_'.
+    const spaRouterFunction = new cloudfront.Function(this, 'SpaRouterFunction', {
+      functionName: `ttobak-spa-router-${cdk.Aws.REGION}`,
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+
+  // Skip _next assets and api routes
+  if (uri.startsWith('/_next/') || uri.startsWith('/api/')) {
+    return request;
+  }
+
+  // Dynamic route: /meeting/{id} → rewrite to /meeting/_ (preserve extension and subpaths)
+  // [^\\/\\.]+ stops before '.' or '/' so .txt and /subpath are preserved
+  if (uri.match(/^\\/meeting\\//) && !uri.match(/^\\/meeting\\/_([\\/.])/) && uri !== '/meeting/_') {
+    uri = uri.replace(/^\\/meeting\\/[^\\/\\.]+/, '/meeting/_');
+    request.uri = uri;
+  }
+
+  // Known static pages → append .html; unknown paths → SPA fallback
+  var knownPages = ['/files', '/kb', '/settings', '/record', '/profile', '/meeting/_'];
+  if (uri !== '/' && !uri.includes('.') && !uri.endsWith('/')) {
+    if (knownPages.indexOf(uri) >= 0) {
+      request.uri = uri + '.html';
+    } else {
+      request.uri = '/index.html';
+    }
+  }
+
+  return request;
+}
+      `),
+    });
+
     // CloudFront distribution
     this.distribution = new cloudfront.Distribution(this, 'TtobakDistribution', {
       comment: 'Ttobak AI Meeting Assistant',
@@ -53,6 +90,12 @@ export class FrontendStack extends cdk.Stack {
         cachedMethods: cloudfront.CachedMethods.CACHE_GET_HEAD_OPTIONS,
         cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
         compress: true,
+        functionAssociations: [
+          {
+            function: spaRouterFunction,
+            eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+          },
+        ],
       },
       additionalBehaviors: {
         '/api/*': {
@@ -69,20 +112,6 @@ export class FrontendStack extends cdk.Stack {
           ],
         },
       },
-      errorResponses: [
-        {
-          httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-          ttl: cdk.Duration.seconds(0),
-        },
-        {
-          httpStatus: 404,
-          responseHttpStatus: 200,
-          responsePagePath: '/index.html',
-          ttl: cdk.Duration.seconds(0),
-        },
-      ],
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
     });
 

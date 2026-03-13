@@ -5,6 +5,10 @@ node_modules/
 frontend/out/
 frontend/.next/
 backend/cmd/*/bootstrap
+backend/api
+backend/transcribe
+__pycache__/
+*.pyc
 
 # Environment
 .env
@@ -22,7 +26,11 @@ Thumbs.db
 
 # CDK
 infra/cdk.out/
+infra/cdk.out.deploy/
 
 # OMC / Playwright
 .omc/
 .playwright-mcp/
+
+# Review screenshots
+review/*.png
