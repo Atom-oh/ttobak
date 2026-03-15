@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/translate"
 	"github.com/awslabs/aws-lambda-go-api-proxy/chi"
@@ -36,6 +37,7 @@ func init() {
 	bedrockAgentClient := bedrockagent.NewFromConfig(cfg)
 	translateClient := translate.NewFromConfig(cfg)
 	bedrockRuntimeClient2 := bedrockruntime.NewFromConfig(cfg)
+	ecsClient := ecs.NewFromConfig(cfg)
 
 	// Get environment variables (per API spec: TABLE_NAME, BUCKET_NAME)
 	tableName := os.Getenv("TABLE_NAME")
@@ -53,6 +55,20 @@ func init() {
 	kbID := os.Getenv("KB_ID")                     // Bedrock Knowledge Base ID
 	kbDataSourceID := os.Getenv("KB_DATASOURCE_ID") // Bedrock Data Source ID
 
+	// Realtime ECS environment variables
+	ecsClusterName := os.Getenv("ECS_CLUSTER_NAME")
+	if ecsClusterName == "" {
+		ecsClusterName = "ttobak-realtime"
+	}
+	ecsServiceName := os.Getenv("ECS_SERVICE_NAME")
+	if ecsServiceName == "" {
+		ecsServiceName = "ttobak-realtime"
+	}
+	albDnsName := os.Getenv("ALB_DNS_NAME")
+	if albDnsName == "" {
+		albDnsName = "ttobak-realtime"
+	}
+
 	// Initialize repository
 	repo := repository.NewDynamoDBRepository(dynamoClient, tableName)
 
@@ -62,6 +78,7 @@ func init() {
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)
 	notionService := service.NewNotionService()
 	translateService := service.NewTranslateService(translateClient)
+	realtimeService := service.NewRealtimeService(ecsClient, ecsClusterName, ecsServiceName, albDnsName)
 
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler()
@@ -73,6 +90,7 @@ func init() {
 	settingsHandler := handler.NewSettingsHandler(repo)
 	translateHandler := handler.NewTranslateHandler(translateService)
 	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2)
+	realtimeHandler := handler.NewRealtimeHandler(realtimeService)
 
 	// Setup router
 	r := chi.NewRouter()
@@ -135,6 +153,10 @@ func init() {
 
 		// Live summarize route
 		r.Post("/api/meetings/{meetingId}/summarize", summarizeLiveHandler.SummarizeLive)
+
+		// Realtime STT routes
+		r.Post("/api/realtime/start", realtimeHandler.StartRealtime)
+		r.Post("/api/realtime/stop", realtimeHandler.StopRealtime)
 	})
 
 	chiLambda = chiadapter.New(r)
