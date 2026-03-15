@@ -9,6 +9,7 @@ interface RecordButtonProps {
   meetingTitle?: string;
   deviceId?: string;
   onRecordingComplete?: (audioUrl: string) => void;
+  onBlobReady?: (blob: Blob, mimeType: string) => void;
   onError?: (error: string) => void;
   onRecordingStart?: (stream: MediaStream) => void;
   onRecordingPause?: () => void;
@@ -32,6 +33,7 @@ export function RecordButton({
   meetingTitle = 'Meeting',
   deviceId,
   onRecordingComplete,
+  onBlobReady,
   onError,
   onRecordingStart,
   onRecordingPause,
@@ -97,7 +99,7 @@ export function RecordButton({
     let stream: MediaStream | null = null;
     try {
       const audioConstraints: MediaTrackConstraints | boolean = deviceId
-        ? { deviceId: { ideal: deviceId } }
+        ? { deviceId: { exact: deviceId } }
         : true;
       stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
 
@@ -128,7 +130,11 @@ export function RecordButton({
       mediaRecorder.onstop = async () => {
         cleanupAudioResources();
         const blob = new Blob(chunksRef.current, { type: mimeType });
-        await handleUpload(blob);
+        if (onBlobReady) {
+          onBlobReady(blob, mimeType);
+        } else {
+          await handleUpload(blob);
+        }
       };
 
       mediaRecorder.start(1000);

@@ -94,30 +94,6 @@ export default function HomePage() {
 
   return (
     <AppLayout activePath="/">
-      {/* Desktop Header */}
-      <header className="hidden lg:flex h-16 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md items-center justify-between px-8 shrink-0">
-        <div className="flex items-center gap-2 text-slate-500 text-sm">
-          <span>Workspace</span>
-          <span className="material-symbols-outlined text-xs">chevron_right</span>
-          <span className="text-slate-900 dark:text-slate-100 font-semibold">Meetings</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="relative w-64">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xl">
-              search
-            </span>
-            <input
-              className="w-full pl-10 pr-4 py-1.5 text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg focus:ring-2 focus:ring-primary/20 placeholder:text-slate-500"
-              placeholder="Search notes..."
-              type="text"
-            />
-          </div>
-          <button className="p-2 text-slate-500 hover:text-primary transition-colors">
-            <span className="material-symbols-outlined">notifications</span>
-          </button>
-        </div>
-      </header>
-
       {/* Mobile Header */}
       <header className="lg:hidden flex items-center bg-white dark:bg-slate-900 px-4 py-4 justify-between border-b border-slate-100 dark:border-slate-800 sticky top-0 z-10">
         <div className="flex items-center gap-3">
@@ -139,31 +115,17 @@ export default function HomePage() {
       {/* Content Area */}
       <div className="flex-1 overflow-y-auto pb-24 lg:pb-8">
         {/* Desktop Title */}
-        <div className="hidden lg:block p-8 max-w-7xl mx-auto w-full">
-          <div className="flex justify-between items-end mb-6">
-            <div>
-              <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
-                Meeting Notes
-              </h2>
-              <p className="text-slate-500 mt-1">
-                Review your automated transcriptions and summaries.
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <button className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm font-medium hover:bg-slate-50">
-                <span className="material-symbols-outlined text-sm">filter_list</span>
-                Filter
-              </button>
-              <button className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm font-medium hover:bg-slate-50">
-                <span className="material-symbols-outlined text-sm">sort</span>
-                Sort
-              </button>
-            </div>
-          </div>
+        <div className="hidden lg:block lg:px-24 lg:pt-20 lg:pb-8">
+          <h2 className="notion-title">
+            Meeting Notes
+          </h2>
+          <p className="text-text-secondary mt-2">
+            Review your automated transcriptions and summaries.
+          </p>
         </div>
 
         {/* Meeting List */}
-        <div className="lg:px-8 lg:max-w-7xl lg:mx-auto lg:w-full">
+        <div className="lg:px-24">
           <MeetingList meetings={meetings} isLoading={isFetching} onTabChange={handleTabChange} onDeleteMeeting={handleDeleteMeeting} />
 
           {/* Load More Button */}

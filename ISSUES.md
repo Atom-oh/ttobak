@@ -137,3 +137,43 @@
 ### ISSUE-007: JWT 서명 미검증 (Resolved)
 - **문제**: Backend에서 JWT payload만 decode하고 서명을 검증하지 않음
 - **해결**: `golang-jwt/jwt/v5` 라이브러리 도입. Cognito JWKS 공개키 fetch + 1시간 TTL 메모리 캐시. `parseJWT()`에서 RSA 서명, `exp`, `iss` 클레임 검증. `COGNITO_USER_POOL_ID` 미설정 시 기존 방식 fallback.
+
+### ISSUE-014: 녹음 후 Uploading & preparing 블로킹 + 오래된 미팅 영구 업로딩 상태 (Resolved)
+- **Category**: recording / frontend
+- **Severity**: critical
+- **Affected**: `frontend/src/app/record/page.tsx`, `frontend/src/components/RecordButton.tsx`, `backend/internal/service/upload.go`
+- **Description**: (1) 녹음 종료 후 "Uploading & preparing..." 중 아무 동작 불가. (2) 오래된 미팅이 영구적으로 업로딩 상태.
+- **Root Cause**: presigned URL 생성 시 random UUID를 meetingId로 사용하여 실제 미팅 ID와 불일치. S3 경로의 meetingId가 서버 meetingId와 달라 transcribe Lambda가 올바른 미팅을 업데이트하지 못함.
+- **Fix**: (1) RecordButton에 `onBlobReady` 콜백 추가하여 부모가 업로드 흐름 제어. (2) record/page.tsx에서 녹음 종료 후: 미팅 생성 → 서버 meetingId로 presigned URL 요청 → S3 업로드 → notifyComplete 호출 → 미팅 상세로 리다이렉트. (3) upload.go에서 `req.MeetingID`가 있으면 그대로 사용.
+
+### ISSUE-015: Live QA 항상 500 에러 (Resolved)
+- **Category**: qa / infra
+- **Severity**: critical
+- **Affected**: `backend/python/qa/handler.py`, `infra/lib/gateway-stack.ts`, `infra/lib/ai-stack.ts`
+- **Description**: QA Lambda 호출 시 Bedrock Converse API에서 항상 에러 발생
+- **Root Cause**: (1) `anthropic.claude-opus-4-6-v1` 모델 ID를 직접 호출 불가 — inference profile 필요. (2) `qwen.qwen3-32b-v1:0` 모델이 ap-northeast-2에 존재하지 않음. (3) IAM 정책에 inference profile 리소스 ARN 미포함. (4) Global inference profile 사용 시 foundation-model ARN에 리전이 비어있어 리전 지정 IAM 정책 매칭 실패.
+- **Fix**: (1) 모델 ID를 `global.anthropic.claude-opus-4-6-v1` inference profile로 변경. (2) 질문 감지 모델을 `global.anthropic.claude-haiku-4-5-20251001-v1:0`로 변경. (3) IAM 정책에 `inference-profile/*` 리소스 추가. (4) foundation-model ARN 리전을 `*` 와일드카드로 변경.
+
+### ISSUE-016: 외부 마이크 동작 안함 (Resolved)
+- **Category**: recording
+- **Severity**: major
+- **Affected**: `frontend/src/components/RecordButton.tsx`
+- **Description**: 외부 마이크 선택해도 내장 마이크로 녹음됨
+- **Root Cause**: `getUserMedia` 호출 시 `deviceId: { ideal: deviceId }` 사용 — ideal은 해당 장치가 없으면 다른 장치로 fallback.
+- **Fix**: `deviceId: { exact: deviceId }`로 변경하여 선택한 장치만 사용.
+
+### ISSUE-017: Uploading 블로킹 제거 — 실시간 STT를 primary transcript로 사용 (Resolved)
+- **Category**: recording / frontend
+- **Severity**: critical
+- **Affected**: `frontend/src/app/record/page.tsx`
+- **Description**: 녹음 종료 후 "Uploading & preparing..." 단계가 S3 업로드 + 재전사(AWS Transcribe)를 기다리며 사용자를 블로킹. 실시간 STT로 이미 transcript가 있는데 중복 전사.
+- **Root Cause**: 실시간 STT(Web Speech API/ECS faster-whisper)와 후처리 STT(S3 → Transcribe Lambda)가 이중으로 동작. S3 업로드가 메인 흐름을 블로킹.
+- **Fix**: `handleBlobReady` 재구성 — 미팅 생성 → 라이브 transcript/summary를 바로 저장 → 즉시 리다이렉트. 오디오는 백그라운드에서 비동기 업로드(아카이브용). "Uploading" 단계 제거, "Saving transcript..." 으로 교체.
+
+### ISSUE-018: ECS 자동 스케일링 실패 — Lambda 타임아웃 (Resolved)
+- **Category**: infra / backend
+- **Severity**: major
+- **Affected**: `backend/internal/handler/realtime.go`, `backend/internal/service/realtime.go`, `frontend/src/lib/sttOrchestrator.ts`
+- **Description**: `/api/realtime/start` 호출 시 ECS task가 뜨지 않음. ECS Fargate 콜드 스타트(30-90초) 중 API Lambda(30초 타임아웃)가 먼저 타임아웃.
+- **Root Cause**: `StartRealtime()`이 120초 폴링하지만 Lambda 타임아웃 30초에 걸림. 동기 블로킹 API 설계.
+- **Fix**: 비동기 패턴으로 분리 — (1) `StartRealtimeAsync()` 메서드: desiredCount=1만 설정 후 즉시 반환. (2) `GET /api/realtime/status` 엔드포인트 신규 추가. (3) 프론트엔드 `SttOrchestrator`에서 start 후 5초 간격 status 폴링 (최대 120초). ECS 준비 시 WebSocket 연결, 미준비 시 Web Speech API fallback 유지.

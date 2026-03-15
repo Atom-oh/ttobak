@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -15,10 +16,14 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
-const (
-	// ClaudeOpusModelID is the Bedrock model ID for Claude Opus 4.6
-	ClaudeOpusModelID = "anthropic.claude-opus-4-6-v1"
-)
+var ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-4-6-v1")
+
+func getEnvOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
 
 // BedrockService handles AI operations using Amazon Bedrock
 type BedrockService struct {

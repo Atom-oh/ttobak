@@ -156,7 +156,7 @@ export const meetingsApi = {
 
 // Presigned URL for uploads
 export const uploadsApi = {
-  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image' }) =>
+  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image'; meetingId?: string }) =>
     api.post<{ uploadUrl: string; key: string; expiresIn: number }>('/api/upload/presigned', data),
 
   notifyComplete: (data: { meetingId: string; key: string; category: 'audio' | 'image' }) =>
@@ -257,7 +257,9 @@ export const summaryApi = {
 // Realtime STT API (ECS faster-whisper)
 export const realtimeApi = {
   start: () =>
-    api.post<{ websocketUrl: string; status: string }>('/api/realtime/start'),
+    api.post<{ websocketUrl?: string; status: string }>('/api/realtime/start'),
+  status: () =>
+    api.get<{ websocketUrl?: string; status: string }>('/api/realtime/status'),
   stop: () =>
     api.post<{ status: string }>('/api/realtime/stop'),
 };

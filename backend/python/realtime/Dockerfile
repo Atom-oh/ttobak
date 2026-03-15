@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 
 RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
 
@@ -6,8 +6,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Pre-download faster-whisper large-v3 model into the image
-RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cuda', compute_type='float16')"
+# Pre-download faster-whisper large-v3 model into the image (cpu mode for build, cuda at runtime)
+RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cpu', compute_type='int8')"
 
 COPY . .
 

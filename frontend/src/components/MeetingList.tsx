@@ -85,7 +85,7 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
 
   return (
     <Link href={`/meeting/${meeting.meetingId}`}>
-      <div className={`bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 p-4 lg:p-6 rounded-xl shadow-sm hover:border-primary/30 hover:shadow-xl hover:shadow-primary/5 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer group ${isDeleting ? 'opacity-50 pointer-events-none' : ''}`}>
+      <div className={`bg-white dark:bg-slate-800 border border-border-default p-4 rounded-lg notion-hover transition-colors duration-150 cursor-pointer group ${isDeleting ? 'opacity-50 pointer-events-none' : ''}`}>
         <div className="flex justify-between items-start mb-2 lg:mb-4">
           <h4 className="text-slate-900 dark:text-slate-100 font-bold text-base leading-tight group-hover:text-primary transition-colors">
             {meeting.title}
@@ -215,15 +215,15 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
     <div className="space-y-4">
       {/* Search Bar */}
       <div className="px-4 lg:px-0">
-        <label className="flex flex-col min-w-40 h-11 w-full">
-          <div className="flex w-full flex-1 items-stretch rounded-xl h-full shadow-sm">
-            <div className="text-slate-400 flex bg-slate-100 dark:bg-slate-800 items-center justify-center pl-4 rounded-l-xl">
-              <span className="material-symbols-outlined text-[20px]">search</span>
+        <label className="flex flex-col min-w-40 h-9 w-full">
+          <div className="flex w-full flex-1 items-stretch rounded-md h-full border border-border-default">
+            <div className="text-text-muted flex items-center justify-center pl-3">
+              <span className="material-symbols-outlined text-[18px]">search</span>
             </div>
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-r-xl text-slate-900 dark:text-slate-100 focus:outline-0 focus:ring-0 border-none bg-slate-100 dark:bg-slate-800 placeholder:text-slate-400 px-3 text-sm font-medium leading-normal"
+              className="flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-r-md text-text-primary focus:outline-0 focus:ring-0 border-none bg-transparent placeholder:text-text-muted px-3 text-sm leading-normal"
               placeholder="Search meetings, notes, or tags"
             />
           </div>
@@ -231,8 +231,8 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
       </div>
 
       {/* Tabs */}
-      <div className="bg-white dark:bg-slate-900">
-        <div className="flex border-b border-slate-100 dark:border-slate-800 px-4 lg:px-0 gap-4 lg:gap-6">
+      <div className="px-4 lg:px-0">
+        <div className="flex gap-1">
           {tabs.map((tab) => (
             <button
               key={tab.key}
@@ -240,13 +240,13 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
                 setActiveTab(tab.key);
                 onTabChange?.(tab.key);
               }}
-              className={`flex flex-col items-center justify-center border-b-2 pb-3 pt-2 transition-colors ${
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                 activeTab === tab.key
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700'
+                  ? 'bg-[var(--notion-hover)] text-text-primary'
+                  : 'text-text-secondary hover:bg-[var(--notion-hover)] hover:text-text-primary'
               }`}
             >
-              <p className="text-sm font-semibold">{tab.label}</p>
+              {tab.label}
             </button>
           ))}
         </div>
@@ -256,7 +256,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
       <div className="px-4 lg:px-0 space-y-6">
         {Object.entries(groupedMeetings).map(([group, groupMeetings]) => (
           <div key={group}>
-            <h3 className="text-slate-500 dark:text-slate-400 text-xs font-bold uppercase tracking-widest pb-3">
+            <h3 className="text-text-muted text-xs font-medium pb-3">
               {group}
             </h3>
             <div className="space-y-4 lg:grid lg:grid-cols-2 xl:grid-cols-3 lg:gap-6 lg:space-y-0">

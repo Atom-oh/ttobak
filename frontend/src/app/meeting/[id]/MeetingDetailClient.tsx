@@ -237,12 +237,15 @@ export default function MeetingDetailPage() {
       </header>
 
       {/* Content */}
-      <div className="flex-1 p-4 lg:p-8 max-w-5xl mx-auto w-full">
+      <div className="flex flex-1 min-h-0">
+        {/* Main Content */}
+        <div className="flex-1 p-4 lg:px-16 lg:py-12 overflow-y-auto">
+          <div className="lg:max-w-3xl">
           {/* Breadcrumbs - Desktop */}
-          <div className="hidden lg:flex items-center gap-2 text-sm text-slate-500 mb-6">
-            <Link href="/" className="hover:text-primary transition-colors">Meetings</Link>
-            <span className="material-symbols-outlined text-xs">chevron_right</span>
-            <span className="text-slate-900 dark:text-slate-200 font-medium">{meeting.title}</span>
+          <div className="hidden lg:flex items-center gap-1.5 text-sm text-text-muted mb-8">
+            <Link href="/" className="hover:text-text-primary transition-colors">Meetings</Link>
+            <span>/</span>
+            <span className="text-text-primary font-medium">{meeting.title}</span>
           </div>
 
           {/* Header Section */}
@@ -253,12 +256,11 @@ export default function MeetingDetailPage() {
                   {meeting.tags[0]}
                 </span>
               )}
-              <span className="text-slate-400 dark:text-slate-500 text-xs">•</span>
-              <p className="text-slate-500 dark:text-slate-400 text-xs font-medium">
-                {formatDate(meeting.date)} • {formatTime(meeting.date)}
-              </p>
+              <span className="text-text-muted text-xs">
+                {formatDate(meeting.date)} · {formatTime(meeting.date)}
+              </span>
             </div>
-            <h1 className="text-2xl lg:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">
+            <h1 className="notion-title mb-4">
               {meeting.title}
             </h1>
 
@@ -284,7 +286,7 @@ export default function MeetingDetailPage() {
                     </div>
                   )}
                 </div>
-                <p className="text-xs text-slate-500 font-medium hidden lg:block">
+                <p className="text-xs text-text-muted font-medium hidden lg:block">
                   {meeting.participants?.map((p) => p.name?.split(' ')[0]).slice(0, 3).join(', ')}
                   {(meeting.participants?.length || 0) > 3 && ` and ${meeting.participants!.length - 3} others`}
                 </p>
@@ -305,8 +307,8 @@ export default function MeetingDetailPage() {
 
           {/* Processing Status Indicator */}
           {meeting.status !== 'done' && (
-            <div className="mb-6">
-              <div className="flex items-center gap-3 p-4 bg-primary/5 border border-primary/20 rounded-xl">
+            <div className="mb-8">
+              <div className="flex items-center gap-3 p-4 bg-primary/5 border border-primary/20 rounded-lg">
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent shrink-0" />
                 <span className="text-sm font-medium text-primary flex-1">
                   {meeting.status === 'transcribing' ? 'Transcribing audio...' :
@@ -322,53 +324,54 @@ export default function MeetingDetailPage() {
             </div>
           )}
 
-          {/* Core Content Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 mb-8 lg:mb-12">
-            {/* AI Summary Box */}
-            <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 lg:p-6 shadow-sm">
-              <div className="flex items-center gap-2 mb-4 text-primary">
-                <span className="material-symbols-outlined">auto_awesome</span>
-                <h3 className="font-bold">AI Summary</h3>
-              </div>
-              <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-                {meeting.summary}
-              </p>
-            </div>
+          {/* AI Summary Section */}
+          <section className="mb-12">
+            <h3 className="notion-subheading flex items-center gap-2 mb-4">
+              <span className="material-symbols-outlined text-text-muted">auto_awesome</span>
+              AI Summary
+            </h3>
+            <p className="text-text-secondary leading-relaxed">
+              {meeting.summary}
+            </p>
+          </section>
 
-            {/* Action Items List */}
-            <div className="lg:col-span-5 bg-primary/5 dark:bg-primary/10 border border-primary/20 rounded-xl p-5 lg:p-6">
-              <div className="flex items-center gap-2 mb-4 text-primary">
-                <span className="material-symbols-outlined">check_circle</span>
-                <h3 className="font-bold">Action Items</h3>
-              </div>
-              <div className="space-y-4">
-                {meeting.actionItems?.map((item) => (
-                  <div key={item.id} className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={item.completed}
-                      onChange={() => handleActionItemToggle(item.id)}
-                      className="mt-1 rounded border-primary/30 text-primary focus:ring-primary h-4 w-4"
-                    />
-                    <div className="flex flex-col">
-                      <span className={`text-sm font-medium transition-all duration-200 ${item.completed ? 'line-through text-slate-400 dark:text-slate-500' : 'text-slate-900 dark:text-white'}`}>
-                        {item.text}
+          <div className="notion-divider mb-12" />
+
+          {/* Action Items Section */}
+          <section className="mb-12">
+            <h3 className="notion-subheading flex items-center gap-2 mb-4">
+              <span className="material-symbols-outlined text-text-muted">check_circle</span>
+              Action Items
+            </h3>
+            <div className="space-y-3">
+              {meeting.actionItems?.map((item) => (
+                <div key={item.id} className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={item.completed}
+                    onChange={() => handleActionItemToggle(item.id)}
+                    className="mt-1 rounded border-border-default text-primary focus:ring-primary h-4 w-4"
+                  />
+                  <div className="flex flex-col">
+                    <span className={`text-sm font-medium transition-all duration-200 ${item.completed ? 'line-through text-text-muted' : 'text-text-primary'}`}>
+                      {item.text}
+                    </span>
+                    {item.assignee && (
+                      <span className="text-[10px] text-text-muted mt-0.5">
+                        Assigned to: @{item.assignee}
                       </span>
-                      {item.assignee && (
-                        <span className="text-[10px] text-slate-500">
-                          Assigned to: @{item.assignee}
-                        </span>
-                      )}
-                    </div>
+                    )}
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </div>
-          </div>
+          </section>
+
+          <div className="notion-divider mb-12" />
 
           {/* Attachments Gallery */}
           {meeting.attachments && meeting.attachments.length > 0 && (
-            <section className="mb-8 lg:mb-12">
+            <section className="mb-12">
               <AttachmentGallery
                 attachments={meeting.attachments}
                 onUploadClick={() => setShowUploader(true)}
@@ -381,8 +384,8 @@ export default function MeetingDetailPage() {
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
               <div className="bg-white dark:bg-slate-900 rounded-xl p-6 max-w-lg w-full">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-slate-900 dark:text-white">Upload Files</h3>
-                  <button onClick={() => setShowUploader(false)} className="text-slate-400 hover:text-slate-600">
+                  <h3 className="font-bold text-text-primary">Upload Files</h3>
+                  <button onClick={() => setShowUploader(false)} className="text-text-muted hover:text-text-secondary">
                     <span className="material-symbols-outlined">close</span>
                   </button>
                 </div>
@@ -390,7 +393,6 @@ export default function MeetingDetailPage() {
                   meetingId={meeting.meetingId}
                   onUploadComplete={async (files) => {
                     setShowUploader(false);
-                    // Refetch meeting to get updated attachments
                     try {
                       const data = await meetingsApi.get(meeting.meetingId);
                       setMeeting(data as Meeting);
@@ -405,42 +407,42 @@ export default function MeetingDetailPage() {
 
           {/* Full Transcription */}
           {meeting.transcription && meeting.transcription.length > 0 && (
-            <section className="border-t border-slate-200 dark:border-slate-800 pt-8 lg:pt-12">
-              <div className="flex items-center justify-between mb-6 lg:mb-8">
-                <h2 className="text-lg lg:text-xl font-bold flex items-center gap-2 text-slate-900 dark:text-white">
-                  <span className="material-symbols-outlined">notes</span>
+            <section className="mb-12">
+              <div className="flex items-center justify-between mb-6">
+                <h3 className="notion-subheading flex items-center gap-2">
+                  <span className="material-symbols-outlined text-text-muted">notes</span>
                   Full Transcription
-                </h2>
+                </h3>
                 <div className="flex gap-2">
-                  <button className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-semibold flex items-center gap-2 bg-white dark:bg-slate-900">
+                  <button className="px-3 py-1.5 rounded-md border border-border-default text-xs font-medium flex items-center gap-2 notion-hover">
                     <span className="material-symbols-outlined text-sm">search</span>
                     <span className="hidden sm:inline">Search</span>
                   </button>
-                  <button className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-semibold flex items-center gap-2 bg-white dark:bg-slate-900">
+                  <button className="px-3 py-1.5 rounded-md border border-border-default text-xs font-medium flex items-center gap-2 notion-hover">
                     <span className="material-symbols-outlined text-sm">download</span>
                     <span className="hidden sm:inline">Export</span>
                   </button>
                 </div>
               </div>
 
-              <div className="space-y-6 lg:space-y-8">
+              <div className="space-y-6">
                 {meeting.transcription.map((segment) => (
                   <div key={segment.id} className="flex gap-4 lg:gap-6">
-                    <div className="w-12 lg:w-16 pt-1 flex-shrink-0">
-                      <span className="text-xs font-bold text-primary px-2 py-1 bg-primary/10 rounded">
+                    <div className="w-12 lg:w-14 pt-1 flex-shrink-0">
+                      <span className="text-xs text-text-muted tabular-nums">
                         {formatTimestamp(segment.startTime)}
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-2">
+                      <div className="flex items-center gap-2 mb-1.5">
                         <div
                           className="w-2 h-2 rounded-full shrink-0"
                           style={{ backgroundColor: `hsl(${segment.speaker.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 360}, 70%, 55%)` }}
                         />
-                        <span className="text-sm font-black text-slate-900 dark:text-white">{segment.speaker}</span>
-                        <span className="text-[10px] text-slate-400 font-medium">{segment.timestamp}</span>
+                        <span className="text-sm font-semibold text-text-primary">{segment.speaker}</span>
+                        <span className="text-[10px] text-text-muted">{segment.timestamp}</span>
                       </div>
-                      <p className="text-slate-600 dark:text-slate-400 text-sm leading-relaxed">
+                      <p className="text-text-secondary text-sm leading-relaxed">
                         {segment.text}
                       </p>
                     </div>
@@ -450,15 +452,22 @@ export default function MeetingDetailPage() {
             </section>
           )}
 
-          {/* Q&A Panel */}
-          <section className="border-t border-slate-200 dark:border-slate-800 pt-8 lg:pt-12">
-            <h2 className="text-lg lg:text-xl font-bold flex items-center gap-2 text-slate-900 dark:text-white mb-6">
+          {/* Inline Q&A - mobile only */}
+          <section className="lg:hidden border-t border-border-default pt-8">
+            <h2 className="text-lg font-bold flex items-center gap-2 text-text-primary mb-6">
               <span className="material-symbols-outlined">question_answer</span>
               Meeting Q&A
             </h2>
             <QAPanel meetingId={meeting.meetingId} />
           </section>
+          </div>
         </div>
+
+        {/* Q&A Side Panel - Desktop only */}
+        <aside className="hidden xl:flex w-96 border-l border-border-default flex-col sticky top-0 h-screen">
+          <QAPanel meetingId={meeting.meetingId} />
+        </aside>
+      </div>
     </AppLayout>
   );
 }

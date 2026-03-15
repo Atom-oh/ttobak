@@ -3,79 +3,113 @@
 import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
 
-const navItems = [
-  { href: '/', icon: 'video_camera_front', label: 'Meetings' },
+const mainNav = [
+  { href: '/', icon: 'video_camera_front', label: 'All Meetings' },
+];
+
+const libraryNav = [
   { href: '/files', icon: 'description', label: 'Files' },
   { href: '/kb', icon: 'library_books', label: 'Knowledge Base' },
+];
+
+const settingsNav = [
   { href: '/settings', icon: 'settings', label: 'Settings' },
 ];
+
+function NavItem({ href, icon, label, isActive }: { href: string; icon: string; label: string; isActive: boolean }) {
+  return (
+    <Link
+      href={href}
+      className={`flex items-center gap-2.5 px-2 py-1.5 rounded-md text-sm transition-colors notion-hover ${
+        isActive
+          ? 'bg-[var(--notion-hover)] text-text-primary font-medium'
+          : 'text-text-secondary hover:text-text-primary'
+      }`}
+    >
+      <span className="material-symbols-outlined text-lg">{icon}</span>
+      <span>{label}</span>
+    </Link>
+  );
+}
+
+function SectionHeader({ label }: { label: string }) {
+  return (
+    <p className="text-[11px] font-semibold uppercase tracking-wider text-text-muted px-2 pt-4 pb-1.5">
+      {label}
+    </p>
+  );
+}
 
 export function Sidebar({ activePath }: { activePath: string }) {
   const { user, logout } = useAuth();
 
   return (
-    <aside className="w-64 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col justify-between p-4 shrink-0 h-screen sticky top-0">
-      <div className="flex flex-col gap-6">
+    <aside className="w-60 bg-[var(--notion-sidebar-bg)] dark:bg-[var(--notion-sidebar-bg)] border-r border-border-default flex flex-col justify-between shrink-0 h-screen sticky top-0">
+      <div className="flex flex-col px-2 pt-3">
         {/* Workspace Identity */}
-        <div className="flex items-center gap-3 px-2">
-          <div className="bg-primary/10 rounded-lg p-2 flex items-center justify-center">
-            <span className="material-symbols-outlined text-primary">record_voice_over</span>
-          </div>
+        <div className="flex items-center gap-2.5 px-2 py-2 rounded-md notion-hover cursor-default mb-1">
+          <span className="material-symbols-outlined text-lg text-text-secondary">record_voice_over</span>
           <div className="flex flex-col">
-            <h1 className="text-sm font-bold leading-none text-slate-900 dark:text-white">또박</h1>
-            <p className="text-xs text-slate-500 mt-1">AI Meeting Assistant</p>
+            <h1 className="text-sm font-semibold leading-none text-text-primary">또박</h1>
+            <p className="text-[11px] text-text-muted mt-0.5">AI Meeting Assistant</p>
           </div>
         </div>
 
-        {/* Navigation Links */}
-        <nav className="flex flex-col gap-1">
-          {navItems.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg font-medium transition-colors ${
-                activePath === item.href
-                  ? 'bg-primary/10 text-primary'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-              }`}
-            >
-              <span className="material-symbols-outlined text-xl">{item.icon}</span>
-              <span className="text-sm">{item.label}</span>
-            </Link>
-          ))}
-        </nav>
-      </div>
-
-      {/* Action Area */}
-      <div className="flex flex-col gap-4">
+        {/* New Meeting Action */}
         <Link
           href="/record"
-          className="w-full bg-primary hover:bg-primary/90 text-white rounded-lg h-10 px-4 font-semibold text-sm flex items-center justify-center gap-2 transition-all active:scale-[0.97]"
+          className="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-sm text-text-secondary hover:text-text-primary notion-hover"
         >
           <span className="material-symbols-outlined text-lg">add</span>
           <span>New Meeting</span>
         </Link>
-        {user && (
-          <div className="flex items-center gap-3 px-2 pt-4 border-t border-slate-200 dark:border-slate-800">
-            <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-bold">
-              {user.name?.charAt(0) || user.email.charAt(0).toUpperCase()}
-            </div>
-            <div className="flex flex-col flex-1 min-w-0">
-              <p className="text-xs font-semibold truncate text-slate-900 dark:text-white">
-                {user.name || 'User'}
-              </p>
-              <p className="text-[10px] text-slate-500 truncate">{user.email}</p>
-            </div>
-            <button
-              onClick={logout}
-              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
-              title="Sign out"
-            >
-              <span className="material-symbols-outlined text-lg">logout</span>
-            </button>
-          </div>
-        )}
+
+        <div className="notion-divider my-2 mx-2" />
+
+        {/* Main Nav */}
+        <nav className="flex flex-col gap-0.5">
+          {mainNav.map((item) => (
+            <NavItem key={item.href} {...item} isActive={activePath === item.href} />
+          ))}
+        </nav>
+
+        {/* Library Section */}
+        <SectionHeader label="Library" />
+        <nav className="flex flex-col gap-0.5">
+          {libraryNav.map((item) => (
+            <NavItem key={item.href} {...item} isActive={activePath === item.href} />
+          ))}
+        </nav>
+
+        {/* Settings Section */}
+        <SectionHeader label="Settings" />
+        <nav className="flex flex-col gap-0.5">
+          {settingsNav.map((item) => (
+            <NavItem key={item.href} {...item} isActive={activePath === item.href} />
+          ))}
+        </nav>
       </div>
+
+      {/* Profile Area */}
+      {user && (
+        <div className="flex items-center gap-2.5 px-4 py-3 border-t border-border-default">
+          <div className="w-6 h-6 rounded-full bg-surface-secondary flex items-center justify-center text-text-secondary text-[10px] font-semibold">
+            {user.name?.charAt(0) || user.email.charAt(0).toUpperCase()}
+          </div>
+          <div className="flex flex-col flex-1 min-w-0">
+            <p className="text-xs font-medium truncate text-text-primary">
+              {user.name || 'User'}
+            </p>
+          </div>
+          <button
+            onClick={logout}
+            className="text-text-muted hover:text-text-secondary transition-colors"
+            title="Sign out"
+          >
+            <span className="material-symbols-outlined text-base">logout</span>
+          </button>
+        </div>
+      )}
     </aside>
   );
 }

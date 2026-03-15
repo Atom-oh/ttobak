@@ -54,10 +54,10 @@ export class AiStack extends cdk.Stack {
           'bedrock:InvokeModelWithBidirectionalStream',
         ],
         resources: [
-          `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/anthropic.claude-opus-4-6-*`,
-          `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/anthropic.claude-sonnet-4-6-*`,
-          `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/anthropic.claude-*`,
-          `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/amazon.nova-sonic-v2:0`,
+          `arn:aws:bedrock:*::foundation-model/anthropic.claude-*`,
+          `arn:aws:bedrock:*::foundation-model/amazon.nova-sonic-v2:0`,
+          `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.anthropic.claude-*`,
+          `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/apac.anthropic.claude-*`,
         ],
       })
     );

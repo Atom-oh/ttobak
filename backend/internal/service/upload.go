@@ -46,7 +46,10 @@ func (s *UploadService) GeneratePresignedUploadURL(
 	var s3Key string
 	switch req.Category {
 	case "audio":
-		meetingID := uuid.New().String()
+		meetingID := req.MeetingID
+		if meetingID == "" {
+			meetingID = uuid.New().String()
+		}
 		s3Key = fmt.Sprintf("audio/%s/%s/%s", userID, meetingID, s.sanitizeFileName(req.FileName))
 	case "image":
 		if req.MeetingID == "" {

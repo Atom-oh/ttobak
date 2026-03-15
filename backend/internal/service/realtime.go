@@ -84,6 +84,19 @@ func (s *RealtimeService) StopRealtime(ctx context.Context) error {
 	return nil
 }
 
+// StartRealtimeAsync sets ECS desiredCount=1 without waiting. Returns immediately.
+func (s *RealtimeService) StartRealtimeAsync(ctx context.Context) error {
+	_, err := s.ecsClient.UpdateService(ctx, &ecs.UpdateServiceInput{
+		Cluster:      aws.String(s.clusterName),
+		Service:      aws.String(s.serviceName),
+		DesiredCount: aws.Int32(1),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to update ECS service: %w", err)
+	}
+	return nil
+}
+
 // GetStatus returns whether the ECS service has running tasks.
 func (s *RealtimeService) GetStatus(ctx context.Context) (bool, string, error) {
 	tasks, err := s.ecsClient.ListTasks(ctx, &ecs.ListTasksInput{
