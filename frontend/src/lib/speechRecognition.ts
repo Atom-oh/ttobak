@@ -63,6 +63,23 @@ export interface SpeechResult {
 
 type SpeechCallback = (result: SpeechResult) => void;
 
+/**
+ * Detect Korean sentence endings in text.
+ * Matches common verb/adjective endings: 다, 요, 까, 죠, 네, 지, 고, 며 etc.
+ * Also matches period/question mark/exclamation.
+ */
+function hasKoreanSentenceEnding(text: string): boolean {
+  const trimmed = text.trimEnd();
+  if (!trimmed) return false;
+  // Punctuation endings
+  if (/[.?!。？！]$/.test(trimmed)) return true;
+  // Korean sentence-final endings (common verb/adjective suffixes)
+  if (/(?:니다|에요|세요|해요|어요|아요|거든|잖아|네요|는데|ㅂ니다|습니다|었다|겠다|한다|된다|인데|할까|일까|볼까|는걸|다고|라고|라며|하며|면서)[.?!]?$/.test(trimmed)) return true;
+  // Single-char endings after Korean syllable block
+  if (/[\uAC00-\uD7AF][다요까죠네지고며서]$/.test(trimmed)) return true;
+  return false;
+}
+
 export class BrowserSpeechRecognition {
   private recognition: SpeechRecognitionInstance | null = null;
   private isListening = false;
@@ -75,6 +92,8 @@ export class BrowserSpeechRecognition {
   private lastFinalText = '';
   private lastResultTime = 0;
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private interimStartTime = 0; // Track when interim accumulation started
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(lang = 'ko-KR') {
     this.lang = lang;
@@ -162,9 +181,29 @@ export class BrowserSpeechRecognition {
           this.lastFinalText = transcript;
           this.lastInterimText = '';
           this.lastInterimTimestamp = '';
+          this.interimStartTime = 0;
+          this.clearFlushTimer();
         } else {
           this.lastInterimText = transcript;
           this.lastInterimTimestamp = new Date().toISOString();
+          // Track when interim accumulation started
+          if (this.interimStartTime === 0) {
+            this.interimStartTime = Date.now();
+          }
+          // Force-flush: restart recognition to promote interim→final when
+          // a Korean sentence ending is detected or interim exceeds 5 seconds
+          const sentenceEnded = hasKoreanSentenceEnding(transcript);
+          const interimTooLong = Date.now() - this.interimStartTime > 5000;
+          if (sentenceEnded || interimTooLong) {
+            this.clearFlushTimer();
+            // Small delay to let the API settle before restarting
+            this.flushTimer = setTimeout(() => {
+              if (this.isListening && this.shouldRestart) {
+                this.interimStartTime = 0;
+                this.restartRecognition();
+              }
+            }, 300);
+          }
         }
         this.onResult?.({
           text: transcript,
@@ -262,6 +301,13 @@ export class BrowserSpeechRecognition {
     }
   }
 
+  private clearFlushTimer(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+  }
+
   pause(): void {
     this.isListening = false;
     this.shouldRestart = false;
@@ -304,6 +350,7 @@ export class BrowserSpeechRecognition {
     this.isListening = false;
     this.shouldRestart = false;
     this.clearWatchdog();
+    this.clearFlushTimer();
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     try {
       this.recognition?.stop();
