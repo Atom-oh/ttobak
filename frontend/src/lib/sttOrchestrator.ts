@@ -11,7 +11,7 @@ export type SttSource = 'fallback' | 'whisper' | 'idle';
 
 export interface SttCallbacks {
   onTranscript: (text: string, isFinal: boolean) => void;
-  onTranslation: (original: string, translated: string, targetLang: string) => void;
+  onTranslation: (original: string, translated: string, targetLang: string, isFinal: boolean) => void;
   onQuestion: (questions: string[]) => void;
   onSourceChange: (source: SttSource) => void;
   onError: (error: string) => void;
@@ -45,9 +45,9 @@ export class SttOrchestrator {
             this.callbacks.onTranscript(text, isFinal);
           }
         },
-        onTranslation: (original, translated, targetLang) => {
+        onTranslation: (original, translated, targetLang, isFinal) => {
           if (this.activeSource === 'fallback') {
-            this.callbacks.onTranslation(original, translated, targetLang);
+            this.callbacks.onTranslation(original, translated, targetLang, isFinal);
           }
         },
         onError: (error) => {
@@ -67,11 +67,33 @@ export class SttOrchestrator {
 
   private async startEcsPolling(): Promise<void> {
     try {
-      const result = await realtimeApi.start();
+      // Trigger ECS scale-up (returns immediately with status: "starting" or "ready")
+      const startResult = await realtimeApi.start();
       if (this.stopped) return;
 
-      // ECS is ready - switch to whisper
-      await this.switchToWhisper(result.websocketUrl);
+      // If already ready, switch immediately
+      if (startResult.status === 'ready' && startResult.websocketUrl) {
+        await this.switchToWhisper(startResult.websocketUrl);
+        return;
+      }
+
+      // Poll for readiness (max 24 polls = 120s)
+      for (let i = 0; i < 24; i++) {
+        if (this.stopped) return;
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        if (this.stopped) return;
+
+        try {
+          const result = await realtimeApi.status();
+          if (result.status === 'ready' && result.websocketUrl) {
+            await this.switchToWhisper(result.websocketUrl);
+            return;
+          }
+        } catch {
+          // Continue polling on error
+        }
+      }
+      console.warn('ECS did not become ready within 120s, staying on fallback');
     } catch (err) {
       console.error('ECS start failed:', err);
       // Stay on fallback - it's still working
@@ -87,9 +109,9 @@ export class SttOrchestrator {
           this.callbacks.onTranscript(text, isFinal);
         }
       },
-      onTranslation: (original, translated, targetLang) => {
+      onTranslation: (original, translated, targetLang, isFinal) => {
         if (this.activeSource === 'whisper') {
-          this.callbacks.onTranslation(original, translated, targetLang);
+          this.callbacks.onTranslation(original, translated, targetLang, isFinal);
         }
       },
       onQuestion: (questions) => {

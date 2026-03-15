@@ -16,7 +16,7 @@ export class RealtimeStack extends cdk.Stack {
   public readonly cluster: ecs.ICluster;
   public readonly service: ecs.Ec2Service;
   public readonly alb: elbv2.ApplicationLoadBalancer;
-  public readonly ecrRepo: ecr.Repository;
+  public readonly ecrRepo: ecr.IRepository;
 
   constructor(scope: Construct, id: string, props: RealtimeStackProps) {
     super(scope, id, props);
@@ -27,11 +27,8 @@ export class RealtimeStack extends cdk.Stack {
       natGateways: 1, // Cost optimization: only 1 NAT for GPU tasks
     });
 
-    // ECR Repository for the Docker image
-    this.ecrRepo = new ecr.Repository(this, 'RealtimeRepo', {
-      repositoryName: 'ttobak-realtime',
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
-    });
+    // ECR Repository — import existing (RETAIN policy survived previous stack deletion)
+    this.ecrRepo = ecr.Repository.fromRepositoryName(this, 'RealtimeRepo', 'ttobak-realtime');
 
     // ECS Cluster
     this.cluster = new ecs.Cluster(this, 'RealtimeCluster', {
@@ -106,14 +103,13 @@ export class RealtimeStack extends cdk.Stack {
       securityGroups: [ecsSecurityGroup],
     });
 
-    // ALB for WebSocket routing
+    // ALB for WebSocket routing (internet-facing for direct client access)
     this.alb = new elbv2.ApplicationLoadBalancer(this, 'RealtimeAlb', {
       vpc,
       internetFacing: true,
-      loadBalancerName: 'ttobak-realtime',
     });
 
-    // HTTP listener on port 80 (HTTPS needs certificate)
+    // HTTP listener on port 80 (internal only, CloudFront terminates TLS)
     const listener = this.alb.addListener('WebSocketListener', {
       port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,

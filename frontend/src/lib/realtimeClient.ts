@@ -5,7 +5,7 @@
 
 export interface RealtimeCallbacks {
   onTranscript: (text: string, isFinal: boolean) => void;
-  onTranslation: (original: string, translated: string, targetLang: string) => void;
+  onTranslation: (original: string, translated: string, targetLang: string, isFinal: boolean) => void;
   onQuestion: (questions: string[]) => void;
   onError: (error: string) => void;
   onDisconnect: () => void;
@@ -46,7 +46,7 @@ export class RealtimeClient {
             this.callbacks.onTranscript(msg.text, msg.isFinal ?? true);
             break;
           case 'translation':
-            this.callbacks.onTranslation(msg.original, msg.translated, msg.targetLang);
+            this.callbacks.onTranslation(msg.original, msg.translated, msg.targetLang, msg.isFinal ?? true);
             break;
           case 'question':
             this.callbacks.onQuestion(msg.questions);

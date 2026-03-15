@@ -82,6 +82,34 @@ async def process_audio(
             await process_audio_chunk(websocket, state, audio_to_process)
 
 
+async def _translate_and_send(
+    websocket: WebSocket,
+    state: ConnectionState,
+    text: str,
+) -> None:
+    """Translate text and send result via WebSocket (background task)."""
+    try:
+        loop = asyncio.get_event_loop()
+        translated = await loop.run_in_executor(
+            None,
+            lambda: translator_service.translate(
+                text, state.source_lang, state.target_lang
+            ),
+        )
+        if translated:
+            await websocket.send_json(
+                {
+                    "type": "translation",
+                    "original": text,
+                    "translated": translated,
+                    "targetLang": state.target_lang,
+                    "isFinal": True,
+                }
+            )
+    except Exception as e:
+        print(f"Translation error: {e}")
+
+
 async def process_audio_chunk(
     websocket: WebSocket,
     state: ConnectionState,
@@ -116,23 +144,10 @@ async def process_audio_chunk(
             if len(state.sentence_buffer) > 10:
                 state.sentence_buffer = state.sentence_buffer[-10:]
 
-        # Translate and send
-        translated = await loop.run_in_executor(
-            None,
-            lambda: translator_service.translate(
-                text, state.source_lang, state.target_lang
-            ),
+        # Translate in background (non-blocking)
+        asyncio.create_task(
+            _translate_and_send(websocket, state, text)
         )
-
-        if translated:
-            await websocket.send_json(
-                {
-                    "type": "translation",
-                    "original": text,
-                    "translated": translated,
-                    "targetLang": state.target_lang,
-                }
-            )
 
         # Count words (Korean: roughly 1 word per 2 characters)
         sentences_to_check: list[str] = []

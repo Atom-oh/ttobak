@@ -71,7 +71,7 @@ const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
 });
 edgeAuthStack.addDependency(authStack);
 
-// Stack 7: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge
+// Stack 7: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge, Realtime
 const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   env,
   description: 'Ttobak AI Meeting Assistant - Gateway (API Gateway + Lambda)',
@@ -81,11 +81,15 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   bucket: storageStack.bucket,
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
+  ecsClusterName: realtimeStack.cluster.clusterName,
+  ecsServiceName: realtimeStack.service.serviceName,
+  albDnsName: realtimeStack.alb.loadBalancerDnsName,
 });
 gatewayStack.addDependency(authStack);
 gatewayStack.addDependency(storageStack);
 gatewayStack.addDependency(aiStack);
 gatewayStack.addDependency(knowledgeStack);
+gatewayStack.addDependency(realtimeStack);
 
 // Stack 8: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth, Realtime
 const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {

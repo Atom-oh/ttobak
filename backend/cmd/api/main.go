@@ -55,19 +55,10 @@ func init() {
 	kbID := os.Getenv("KB_ID")                     // Bedrock Knowledge Base ID
 	kbDataSourceID := os.Getenv("KB_DATASOURCE_ID") // Bedrock Data Source ID
 
-	// Realtime ECS environment variables
+	// Realtime ECS environment variables (injected by CDK, empty = realtime disabled)
 	ecsClusterName := os.Getenv("ECS_CLUSTER_NAME")
-	if ecsClusterName == "" {
-		ecsClusterName = "ttobak-realtime"
-	}
 	ecsServiceName := os.Getenv("ECS_SERVICE_NAME")
-	if ecsServiceName == "" {
-		ecsServiceName = "ttobak-realtime"
-	}
 	albDnsName := os.Getenv("ALB_DNS_NAME")
-	if albDnsName == "" {
-		albDnsName = "ttobak-realtime"
-	}
 
 	// Initialize repository
 	repo := repository.NewDynamoDBRepository(dynamoClient, tableName)
@@ -156,6 +147,7 @@ func init() {
 
 		// Realtime STT routes
 		r.Post("/api/realtime/start", realtimeHandler.StartRealtime)
+		r.Get("/api/realtime/status", realtimeHandler.StatusRealtime)
 		r.Post("/api/realtime/stop", realtimeHandler.StopRealtime)
 	})
 

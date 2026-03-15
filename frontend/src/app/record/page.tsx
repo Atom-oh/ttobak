@@ -23,7 +23,7 @@ interface TranscriptEntry {
   timestamp: string;
 }
 
-type PostRecordingStep = 'uploading' | 'creating' | 'redirecting' | 'error';
+type PostRecordingStep = 'creating' | 'saving' | 'redirecting' | 'error';
 
 function formatDefaultTitle(date: Date): string {
   const month = date.getMonth() + 1;
@@ -68,6 +68,7 @@ export default function RecordPage() {
   // Translation state
   const [targetLang, setTargetLang] = useState('en');
   const [translations, setTranslations] = useState<{ original: string; translated: string; targetLang: string; timestamp: string }[]>([]);
+  const [currentInterimTranslation, setCurrentInterimTranslation] = useState<{ original: string; translated: string; targetLang: string } | null>(null);
 
   // Summary state
   const [liveSummary, setLiveSummary] = useState('');
@@ -234,13 +235,18 @@ export default function RecordPage() {
           setCurrentInterim(text);
         }
       },
-      onTranslation: (original, translated, lang) => {
-        setTranslations((prev) => [...prev, {
-          original,
-          translated,
-          targetLang: lang,
-          timestamp: new Date().toISOString(),
-        }]);
+      onTranslation: (original, translated, lang, isFinal) => {
+        if (isFinal) {
+          setTranslations((prev) => [...prev, {
+            original,
+            translated,
+            targetLang: lang,
+            timestamp: new Date().toISOString(),
+          }]);
+          setCurrentInterimTranslation(null);
+        } else {
+          setCurrentInterimTranslation({ original, translated, targetLang: lang });
+        }
       },
       onQuestion: (questions) => {
         setDetectedQuestions(questions);
@@ -274,10 +280,9 @@ export default function RecordPage() {
     orchestratorRef.current = null;
   };
 
-  const handleRecordingComplete = async (audioUrl: string) => {
-    setPostRecordingStep('uploading');
-
+  const handleBlobReady = async (blob: Blob, mimeType: string) => {
     try {
+      // Step 1: Create meeting
       setPostRecordingStep('creating');
       const result = await meetingsApi.create({
         title: meetingTitle || formatDefaultTitle(new Date()),
@@ -285,10 +290,54 @@ export default function RecordPage() {
       const newMeetingId = result.meetingId;
       setServerMeetingId(newMeetingId);
 
-      console.log('Recording uploaded to:', audioUrl);
+      // Step 2: Save transcript and summary directly
+      setPostRecordingStep('saving');
+      const transcriptText = transcriptsRef.current.map(t => t.text).join('\n');
+      await meetingsApi.update(newMeetingId, {
+        content: liveSummaryRef.current || transcriptText.slice(0, 500),
+        status: 'completed',
+      });
 
+      // Step 3: Redirect immediately
       setPostRecordingStep('redirecting');
       router.push(`/meeting/${newMeetingId}`);
+
+      // Step 4: Background audio upload (non-blocking, for archival)
+      (async () => {
+        try {
+          const fileName = `recording_${Date.now()}.webm`;
+          const { uploadUrl } = await uploadsApi.getPresignedUrl({
+            fileName,
+            fileType: mimeType || 'audio/webm',
+            category: 'audio',
+            meetingId: newMeetingId,
+          });
+          await fetch(uploadUrl, {
+            method: 'PUT',
+            body: blob,
+            headers: { 'Content-Type': mimeType || 'audio/webm' },
+          });
+        } catch (err) {
+          console.warn('Background audio upload failed:', err);
+        }
+      })();
+    } catch (err) {
+      console.error('Failed to process recording:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to process recording');
+      setPostRecordingStep('error');
+    }
+  };
+
+  // Legacy callback (kept for iOS native capture fallback)
+  const handleRecordingComplete = async (audioUrl: string) => {
+    // For native capture, audio is already uploaded; just create meeting and redirect
+    try {
+      setPostRecordingStep('creating');
+      const result = await meetingsApi.create({
+        title: meetingTitle || formatDefaultTitle(new Date()),
+      });
+      setPostRecordingStep('redirecting');
+      router.push(`/meeting/${result.meetingId}`);
     } catch (err) {
       console.error('Failed to create meeting:', err);
       setErrorMessage(err instanceof Error ? err.message : 'Failed to create meeting');
@@ -415,6 +464,7 @@ export default function RecordPage() {
             meetingTitle={meetingTitle || 'Untitled Meeting'}
             deviceId={selectedDeviceId || undefined}
             onRecordingComplete={handleRecordingComplete}
+            onBlobReady={handleBlobReady}
             onError={(error) => {
               if (isRecording) {
                 // Error during/after recording — show blocking overlay
@@ -469,6 +519,7 @@ export default function RecordPage() {
                 targetLang={targetLang}
                 onTargetLangChange={setTargetLang}
                 isActive={true}
+                interimTranslation={currentInterimTranslation}
               />
             }
             summaryContent={
@@ -588,13 +639,13 @@ export default function RecordPage() {
               <>
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent shrink-0" />
                 <p className="flex-1 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  {postRecordingStep === 'uploading' && 'Uploading audio...'}
                   {postRecordingStep === 'creating' && 'Creating meeting...'}
+                  {postRecordingStep === 'saving' && 'Saving transcript...'}
                   {postRecordingStep === 'redirecting' && 'Opening meeting...'}
                 </p>
                 <div className="flex gap-1.5 shrink-0">
-                  {(['uploading', 'creating', 'redirecting'] as const).map((step, i) => {
-                    const currentIdx = ['uploading', 'creating', 'redirecting'].indexOf(postRecordingStep);
+                  {(['creating', 'saving', 'redirecting'] as const).map((step, i) => {
+                    const currentIdx = ['creating', 'saving', 'redirecting'].indexOf(postRecordingStep);
                     return (
                       <div
                         key={step}

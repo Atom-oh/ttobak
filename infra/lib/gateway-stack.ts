@@ -17,6 +17,9 @@ export interface GatewayStackProps extends cdk.StackProps {
   userPool: cognito.IUserPool;
   userPoolClient: cognito.IUserPoolClient;
   kbBucket?: s3.IBucket;
+  ecsClusterName?: string;
+  ecsServiceName?: string;
+  albDnsName?: string;
 }
 
 export class GatewayStack extends cdk.Stack {
@@ -46,6 +49,9 @@ export class GatewayStack extends cdk.Stack {
         COGNITO_CLIENT_ID: props.userPoolClient.userPoolClientId,
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         AWS_REGION_NAME: cdk.Aws.REGION,
+        ECS_CLUSTER_NAME: props.ecsClusterName || '',
+        ECS_SERVICE_NAME: props.ecsServiceName || '',
+        ALB_DNS_NAME: props.albDnsName || '',
       },
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
@@ -79,7 +85,7 @@ export class GatewayStack extends cdk.Stack {
       role: props.lambdaRole as iam.Role,
       environment: {
         TABLE_NAME: props.table.tableName,
-        BEDROCK_MODEL_ID: 'anthropic.claude-opus-4-6-v1',
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-4-6-v1',
         AWS_REGION_NAME: cdk.Aws.REGION,
       },
       timeout: cdk.Duration.minutes(2),
@@ -97,7 +103,7 @@ export class GatewayStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
-        BEDROCK_MODEL_ID: 'anthropic.claude-opus-4-6-v1',
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-4-6-v1',
         AWS_REGION_NAME: cdk.Aws.REGION,
       },
       timeout: cdk.Duration.minutes(2),
@@ -133,8 +139,8 @@ export class GatewayStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.table.tableName,
         KB_ID: 'XGFBOMVSS8',
-        BEDROCK_MODEL_ID: 'anthropic.claude-opus-4-6-v1',
-        DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-4-6-v1',
+        DETECT_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
       },
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,

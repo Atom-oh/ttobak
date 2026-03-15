@@ -9,7 +9,7 @@ import { translateApi } from './api';
 
 export interface TranscribeCallbacks {
   onTranscript: (text: string, isFinal: boolean) => void;
-  onTranslation: (original: string, translated: string, targetLang: string) => void;
+  onTranslation: (original: string, translated: string, targetLang: string, isFinal: boolean) => void;
   onError: (error: string) => void;
 }
 
@@ -18,6 +18,7 @@ export class TranscribeFallbackClient {
   private callbacks: TranscribeCallbacks;
   private targetLang: string;
   private translateTimer: ReturnType<typeof setTimeout> | undefined;
+  private interimTranslateTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingTexts: string[] = [];
 
   constructor(callbacks: TranscribeCallbacks, targetLang = 'en') {
@@ -49,11 +50,22 @@ export class TranscribeFallbackClient {
               .then((res) => {
                 const parts = res.translatedText.split('\n');
                 batch.forEach((original, i) => {
-                  this.callbacks.onTranslation(original, parts[i] || '', this.targetLang);
+                  this.callbacks.onTranslation(original, parts[i] || '', this.targetLang, true);
                 });
               })
               .catch((err) => console.error('Translation failed:', err));
           }, 300);
+        } else {
+          // Interim: debounce translate at 500ms
+          if (this.interimTranslateTimer) clearTimeout(this.interimTranslateTimer);
+          this.interimTranslateTimer = setTimeout(() => {
+            translateApi
+              .translate(result.text, 'ko', this.targetLang)
+              .then((res) => {
+                this.callbacks.onTranslation(result.text, res.translatedText, this.targetLang, false);
+              })
+              .catch((err) => console.error('Interim translation failed:', err));
+          }, 500);
         }
       },
       (error) => {
@@ -70,5 +82,6 @@ export class TranscribeFallbackClient {
     this.speech?.stop();
     this.speech = null;
     if (this.translateTimer) clearTimeout(this.translateTimer);
+    if (this.interimTranslateTimer) clearTimeout(this.interimTranslateTimer);
   }
 }
