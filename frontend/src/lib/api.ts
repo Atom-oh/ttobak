@@ -253,3 +253,11 @@ export const summaryApi = {
       { transcript, previousSummary }
     ),
 };
+
+// Realtime STT API (ECS faster-whisper)
+export const realtimeApi = {
+  start: () =>
+    api.post<{ websocketUrl: string; status: string }>('/api/realtime/start'),
+  stop: () =>
+    api.post<{ status: string }>('/api/realtime/stop'),
+};
