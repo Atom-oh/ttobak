@@ -7,6 +7,7 @@ import { GatewayStack } from '../lib/gateway-stack';
 import { EdgeAuthStack } from '../lib/edge-auth-stack';
 import { KnowledgeStack } from '../lib/knowledge-stack';
 import { FrontendStack } from '../lib/frontend-stack';
+import { RealtimeStack } from '../lib/realtime-stack';
 
 const app = new cdk.App();
 
@@ -51,7 +52,15 @@ const aiStack = new AiStack(app, 'TtobakAiStack', {
 aiStack.addDependency(storageStack);
 aiStack.addDependency(knowledgeStack);
 
-// Stack 5: Edge Auth (Lambda@Edge in us-east-1 for CloudFront)
+// Stack 5: Realtime (ECS GPU + ALB) - depends on AI for lambdaRole
+const realtimeStack = new RealtimeStack(app, 'TtobakRealtimeStack', {
+  env,
+  description: 'Ttobak AI Meeting Assistant - Realtime STT (ECS GPU + ALB)',
+  lambdaRole: aiStack.lambdaRole,
+});
+realtimeStack.addDependency(aiStack);
+
+// Stack 6: Edge Auth (Lambda@Edge in us-east-1 for CloudFront)
 const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
   env: usEast1Env,
   crossRegionReferences: true,
@@ -62,7 +71,7 @@ const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
 });
 edgeAuthStack.addDependency(authStack);
 
-// Stack 6: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge
+// Stack 7: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge
 const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   env,
   description: 'Ttobak AI Meeting Assistant - Gateway (API Gateway + Lambda)',
@@ -78,7 +87,7 @@ gatewayStack.addDependency(storageStack);
 gatewayStack.addDependency(aiStack);
 gatewayStack.addDependency(knowledgeStack);
 
-// Stack 7: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth
+// Stack 8: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth
 const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   env,
   crossRegionReferences: true,
