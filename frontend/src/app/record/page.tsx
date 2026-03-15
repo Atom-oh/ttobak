@@ -13,8 +13,9 @@ import { TranslationView } from '@/components/TranslationView';
 import { LiveSummary } from '@/components/LiveSummary';
 import { LiveQAPanel } from '@/components/LiveQAPanel';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
-import { meetingsApi, translateApi, summaryApi, uploadsApi } from '@/lib/api';
-import { BrowserSpeechRecognition, countWords } from '@/lib/speechRecognition';
+import { meetingsApi, summaryApi, uploadsApi } from '@/lib/api';
+import { SttOrchestrator, SttSource } from '@/lib/sttOrchestrator';
+import { countWords } from '@/lib/speechRecognition';
 
 interface TranscriptEntry {
   text: string;
@@ -49,19 +50,20 @@ export default function RecordPage() {
   const previewStreamRef = useRef<MediaStream | null>(null);
   const previewCtxRef = useRef<AudioContext | null>(null);
 
-  // STT provider selection
-  const [sttProvider, setSttProvider] = useState<'transcribe' | 'nova-sonic'>('transcribe');
-
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+
+  // STT Orchestrator
+  const orchestratorRef = useRef<SttOrchestrator | null>(null);
+  const [sttSource, setSttSource] = useState<SttSource>('idle');
 
   // Speech recognition state
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
   const [currentInterim, setCurrentInterim] = useState<string>('');
   const [totalWordCount, setTotalWordCount] = useState(0);
-  const lastSummaryWordCountRef = useRef(0);
-  const speechRef = useRef<BrowserSpeechRecognition | null>(null);
+  const [lastSummaryWordCount, setLastSummaryWordCount] = useState(0);
+  const lastSummaryWordCountRef = useRef(0); // Internal tracking for callback closures
 
   // Translation state
   const [targetLang, setTargetLang] = useState('en');
@@ -71,11 +73,10 @@ export default function RecordPage() {
   const [liveSummary, setLiveSummary] = useState('');
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false);
 
-  // Translation debounce refs
-  const pendingTranslationsRef = useRef<{ text: string; timestamp: string }[]>([]);
-  const translateTimerRef = useRef<NodeJS.Timeout>(undefined);
+  // Server-pushed detected questions
+  const [detectedQuestions, setDetectedQuestions] = useState<string[]>([]);
 
-  // Refs for closures in speech callback
+  // Refs for closures in callbacks
   const targetLangRef = useRef(targetLang);
   const liveSummaryRef = useRef(liveSummary);
   const transcriptsRef = useRef(transcripts);
@@ -90,6 +91,9 @@ export default function RecordPage() {
   // Server meeting ID
   const [serverMeetingId, setServerMeetingId] = useState<string | null>(null);
 
+  // Client-side meeting ID (stable across re-renders)
+  const [clientMeetingIdBase] = useState(() => `meeting_${Date.now()}`);
+
   // Mobile Q&A bottom sheet state
   const [isQAOpen, setIsQAOpen] = useState(false);
   const [detectedCount, setDetectedCount] = useState(0);
@@ -98,6 +102,11 @@ export default function RecordPage() {
   useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
   useEffect(() => { liveSummaryRef.current = liveSummary; }, [liveSummary]);
   useEffect(() => { transcriptsRef.current = transcripts; }, [transcripts]);
+
+  // Update orchestrator when target language changes
+  useEffect(() => {
+    orchestratorRef.current?.updateTargetLang(targetLang);
+  }, [targetLang]);
 
   // Mic preview: create AudioContext + AnalyserNode when device changes (not recording)
   useEffect(() => {
@@ -148,13 +157,6 @@ export default function RecordPage() {
     };
   }, [selectedDeviceId, isRecording]);
 
-  // Cleanup translation debounce timer on unmount
-  useEffect(() => {
-    return () => {
-      if (translateTimerRef.current) clearTimeout(translateTimerRef.current);
-    };
-  }, []);
-
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -176,72 +178,10 @@ export default function RecordPage() {
     'recognition-stalled': '음성 인식이 중단되었습니다. 자동으로 재시작합니다...',
   };
 
-  const startSpeechRecognition = () => {
-    if (!BrowserSpeechRecognition.isSupported()) {
-      setSpeechError('Speech recognition is not supported in this browser. Recording will continue without live captions.');
-      return;
-    }
+  // Use client-side meetingId for RecordButton until server creates one
+  const clientMeetingId = serverMeetingId || clientMeetingIdBase;
 
-    const speech = new BrowserSpeechRecognition('ko-KR');
-    speechRef.current = speech;
-
-    const started = speech.start((result) => {
-      if (result.isFinal) {
-        setTranscripts((prev) => [...prev, result]);
-        setCurrentInterim('');
-
-        // Queue translation with 300ms debounce for batching
-        pendingTranslationsRef.current.push({ text: result.text, timestamp: result.timestamp });
-        if (translateTimerRef.current) clearTimeout(translateTimerRef.current);
-        translateTimerRef.current = setTimeout(() => {
-          const batch = pendingTranslationsRef.current.splice(0);
-          if (batch.length === 0) return;
-          const combined = batch.map(b => b.text).join('\n');
-          const lang = targetLangRef.current;
-          translateApi.translate(combined, 'ko', lang)
-            .then((res) => {
-              const parts = res.translatedText.split('\n');
-              setTranslations((prev) => [...prev, ...batch.map((b, i) => ({
-                original: b.text,
-                translated: parts[i] || '',
-                targetLang: lang,
-                timestamp: b.timestamp,
-              }))]);
-            })
-            .catch((err) => console.error('Translation failed:', err));
-        }, 300);
-
-        // Track word count
-        const words = countWords(result.text);
-        setTotalWordCount((prev) => {
-          const newTotal = prev + words;
-          // Trigger live summary when crossing 200-word threshold
-          if (newTotal - lastSummaryWordCountRef.current >= 200) {
-            lastSummaryWordCountRef.current = newTotal;
-            const allText = [...transcriptsRef.current, result].map(t => t.text).join('\n');
-            setIsGeneratingSummary(true);
-            summaryApi.summarizeLive(clientMeetingId, allText, liveSummaryRef.current || undefined)
-              .then((res) => {
-                setLiveSummary(res.summary);
-              })
-              .catch((err) => console.error('Summary failed:', err))
-              .finally(() => setIsGeneratingSummary(false));
-          }
-          return newTotal;
-        });
-      } else {
-        setCurrentInterim(result.text);
-      }
-    }, (error) => {
-      setSpeechError(speechErrorMessages[error] || `Speech recognition error: ${error}`);
-    });
-
-    if (!started) {
-      setSpeechError('Failed to start speech recognition. Recording will continue without live captions.');
-    }
-  };
-
-  const handleRecordingStart = () => {
+  const handleRecordingStart = (stream: MediaStream) => {
     // Stop mic preview (recording will use its own stream)
     previewStreamRef.current?.getTracks().forEach((t) => t.stop());
     previewStreamRef.current = null;
@@ -249,34 +189,89 @@ export default function RecordPage() {
     previewCtxRef.current = null;
     setPreviewAnalyser(null);
 
+    // Reset state
     setIsRecording(true);
     setIsPaused(false);
     setTranscripts([]);
     setCurrentInterim('');
     setTotalWordCount(0);
+    setLastSummaryWordCount(0);
     lastSummaryWordCountRef.current = 0;
     setTranslations([]);
     setLiveSummary('');
     setIsGeneratingSummary(false);
     setSpeechError(null);
-    startSpeechRecognition();
+    setDetectedQuestions([]);
+
+    // Create orchestrator with callbacks
+    const orchestrator = new SttOrchestrator({
+      onTranscript: (text, isFinal) => {
+        if (isFinal) {
+          const entry: TranscriptEntry = { text, isFinal: true, timestamp: new Date().toISOString() };
+          setTranscripts((prev) => [...prev, entry]);
+          setCurrentInterim('');
+
+          // Track word count and trigger summary
+          const words = countWords(text);
+          setTotalWordCount((prev) => {
+            const newTotal = prev + words;
+            // Trigger live summary when crossing 200-word threshold
+            if (newTotal - lastSummaryWordCountRef.current >= 200) {
+              lastSummaryWordCountRef.current = newTotal;
+              setLastSummaryWordCount(newTotal);
+              const allText = [...transcriptsRef.current, entry].map(t => t.text).join('\n');
+              setIsGeneratingSummary(true);
+              summaryApi.summarizeLive(clientMeetingId, allText, liveSummaryRef.current || undefined)
+                .then((res) => {
+                  setLiveSummary(res.summary);
+                })
+                .catch((err) => console.error('Summary failed:', err))
+                .finally(() => setIsGeneratingSummary(false));
+            }
+            return newTotal;
+          });
+        } else {
+          setCurrentInterim(text);
+        }
+      },
+      onTranslation: (original, translated, lang) => {
+        setTranslations((prev) => [...prev, {
+          original,
+          translated,
+          targetLang: lang,
+          timestamp: new Date().toISOString(),
+        }]);
+      },
+      onQuestion: (questions) => {
+        setDetectedQuestions(questions);
+      },
+      onSourceChange: (source) => {
+        setSttSource(source);
+      },
+      onError: (error) => {
+        setSpeechError(speechErrorMessages[error] || error);
+      },
+    }, 'ko', targetLangRef.current);
+
+    orchestratorRef.current = orchestrator;
+    orchestrator.start(stream);
   };
 
   const handleRecordingPause = () => {
     setIsPaused(true);
-    speechRef.current?.pause();
+    // Note: orchestrator continues running in background during pause
+    // This is intentional — STT will keep processing audio
   };
 
   const handleRecordingResume = () => {
     setIsPaused(false);
-    speechRef.current?.resume();
   };
 
-  const handleRecordingStop = () => {
+  const handleRecordingStop = async () => {
     setIsRecording(false);
     setIsPaused(false);
-    speechRef.current?.stop();
-    speechRef.current = null;
+    await orchestratorRef.current?.stop();
+    orchestratorRef.current = null;
   };
 
   const handleRecordingComplete = async (audioUrl: string) => {
@@ -286,7 +281,6 @@ export default function RecordPage() {
       setPostRecordingStep('creating');
       const result = await meetingsApi.create({
         title: meetingTitle || formatDefaultTitle(new Date()),
-        sttProvider,
       });
       const newMeetingId = result.meetingId;
       setServerMeetingId(newMeetingId);
@@ -351,30 +345,27 @@ export default function RecordPage() {
     ...(currentInterim ? [currentInterim] : []),
   ].join('\n');
 
-  // Use client-side meetingId for RecordButton until server creates one
-  const clientMeetingId = serverMeetingId || `meeting_${Date.now()}`;
-
   return (
     <AppLayout activePath="/record" showMobileNav={true}>
       {/* Header */}
-      <header className="flex items-center justify-between px-6 py-4 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md sticky top-0 z-10">
+      <header className="flex items-center justify-between px-6 lg:px-16 py-4 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md sticky top-0 z-10">
         <button
           onClick={() => router.back()}
-          className="p-2 hover:bg-primary/10 rounded-full transition-colors"
+          className="p-2 hover:bg-[var(--notion-hover)] rounded-md transition-colors"
         >
-          <span className="material-symbols-outlined text-slate-700 dark:text-slate-300">arrow_back</span>
+          <span className="material-symbols-outlined text-text-secondary">arrow_back</span>
         </button>
         <input
           type="text"
           value={meetingTitle}
           onChange={(e) => setMeetingTitle(e.target.value)}
           placeholder="Meeting Title"
-          className="text-lg font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-slate-900 dark:text-white placeholder:text-slate-400 flex-1 mx-4"
+          className="text-lg font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-text-primary placeholder:text-text-muted flex-1 mx-4"
         />
         <select
           value={targetLang}
           onChange={(e) => setTargetLang(e.target.value)}
-          className="text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-3 py-1.5 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          className="text-sm bg-surface-secondary border-none rounded-md px-3 py-1.5 text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
         >
           <option value="en">EN</option>
           <option value="ja">JA</option>
@@ -383,16 +374,6 @@ export default function RecordPage() {
           <option value="fr">FR</option>
           <option value="de">DE</option>
         </select>
-        <button
-          onClick={async () => {
-            await logout();
-            router.push('/');
-          }}
-          className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors"
-          title="Logout"
-        >
-          <span className="material-symbols-outlined text-slate-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-red-400">logout</span>
-        </button>
       </header>
 
       {/* Speech Recognition Error Banner */}
@@ -402,18 +383,6 @@ export default function RecordPage() {
           <div className="flex-1">
             <p className="text-sm text-amber-800 dark:text-amber-200">{speechError}</p>
           </div>
-          {isRecording && (
-            <button
-              onClick={() => {
-                setSpeechError(null);
-                speechRef.current?.stop();
-                startSpeechRecognition();
-              }}
-              className="px-3 py-1 rounded-lg text-xs font-medium bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900/60 transition-colors shrink-0"
-            >
-              Restart
-            </button>
-          )}
           <button
             onClick={() => setSpeechError(null)}
             className="p-1 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded transition-colors"
@@ -425,7 +394,7 @@ export default function RecordPage() {
 
       {/* Main Content */}
       <div className="flex flex-1">
-      <main className="flex-1 flex flex-col px-6 pt-8 pb-32 max-w-2xl mx-auto">
+      <main className="flex-1 flex flex-col px-6 lg:px-16 pt-8 lg:pt-12 pb-32 max-w-4xl mx-auto">
         {/* Mic Selector — always visible, disabled during recording */}
         {!postRecordingStep && (
           <div className="flex justify-center">
@@ -436,43 +405,6 @@ export default function RecordPage() {
               disabled={isRecording}
               analyser={isRecording ? analyserNode : previewAnalyser}
             />
-          </div>
-        )}
-
-        {/* STT Provider Selector */}
-        {!postRecordingStep && (
-          <div className="flex items-center justify-center gap-2 mt-4 mb-2">
-            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">STT 엔진:</span>
-            <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
-              <button
-                onClick={() => setSttProvider('transcribe')}
-                disabled={isRecording}
-                className={`px-3 py-1.5 text-xs font-medium transition-all ${
-                  sttProvider === 'transcribe'
-                    ? 'bg-primary text-white'
-                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
-                } disabled:opacity-50`}
-              >
-                <span className="flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-xs">subtitles</span>
-                  Transcribe
-                </span>
-              </button>
-              <button
-                onClick={() => setSttProvider('nova-sonic')}
-                disabled={isRecording}
-                className={`px-3 py-1.5 text-xs font-medium transition-all ${
-                  sttProvider === 'nova-sonic'
-                    ? 'bg-primary text-white'
-                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
-                } disabled:opacity-50`}
-              >
-                <span className="flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-xs">graphic_eq</span>
-                  Nova Sonic V2
-                </span>
-              </button>
-            </div>
           </div>
         )}
 
@@ -501,6 +433,20 @@ export default function RecordPage() {
             onCaptureImage={handleCaptureImage}
             onAnalyserReady={setAnalyserNode}
           />
+
+          {/* STT Source Indicator */}
+          {isRecording && (
+            <div className="flex items-center gap-1.5 justify-center mt-2">
+              <span className={`w-2 h-2 rounded-full ${
+                sttSource === 'whisper' ? 'bg-green-500' :
+                sttSource === 'fallback' ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'
+              }`} />
+              <span className="text-xs text-slate-500">
+                {sttSource === 'whisper' ? 'AI Engine' :
+                 sttSource === 'fallback' ? 'AI Engine 준비 중...' : 'Idle'}
+              </span>
+            </div>
+          )}
         </div>
         {!isRecording && !postRecordingStep && (
           <p className="text-center text-sm text-slate-400 dark:text-slate-500 -mt-4 mb-4">
@@ -530,7 +476,7 @@ export default function RecordPage() {
                 summary={liveSummary}
                 isGenerating={isGeneratingSummary}
                 wordCount={totalWordCount}
-                lastSummaryWordCount={lastSummaryWordCountRef.current}
+                lastSummaryWordCount={lastSummaryWordCount}
               />
             }
           />
@@ -601,12 +547,14 @@ export default function RecordPage() {
         )}
       </main>
 
-      {/* Desktop Q&A Side Panel — visible only during recording */}
-      {isRecording && (
-        <aside className="hidden lg:flex w-80 shrink-0 h-[calc(100vh-64px)] sticky top-[64px] pr-4 pt-8 pb-32">
-          <LiveQAPanel transcriptContext={transcriptContext} onDetectedQuestionsChange={setDetectedCount} />
-        </aside>
-      )}
+      {/* Desktop Q&A Side Panel — always visible on PC */}
+      <aside className="hidden lg:flex w-80 shrink-0 h-[calc(100vh-56px)] sticky top-[56px] border-l border-border-default">
+        <LiveQAPanel
+          transcriptContext={transcriptContext}
+          onDetectedQuestionsChange={setDetectedCount}
+          serverDetectedQuestions={detectedQuestions}
+        />
+      </aside>
       </div>
 
       {/* Post-Recording Toast Banner */}
@@ -697,7 +645,11 @@ export default function RecordPage() {
             </button>
             {/* Q&A Panel */}
             <div className="flex-1 min-h-0">
-              <LiveQAPanel transcriptContext={transcriptContext} onDetectedQuestionsChange={setDetectedCount} />
+              <LiveQAPanel
+                transcriptContext={transcriptContext}
+                onDetectedQuestionsChange={setDetectedCount}
+                serverDetectedQuestions={detectedQuestions}
+              />
             </div>
           </div>
         </div>

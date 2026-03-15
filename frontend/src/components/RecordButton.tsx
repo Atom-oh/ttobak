@@ -10,7 +10,7 @@ interface RecordButtonProps {
   deviceId?: string;
   onRecordingComplete?: (audioUrl: string) => void;
   onError?: (error: string) => void;
-  onRecordingStart?: () => void;
+  onRecordingStart?: (stream: MediaStream) => void;
   onRecordingPause?: () => void;
   onRecordingResume?: () => void;
   onRecordingStop?: () => void;
@@ -136,7 +136,7 @@ export function RecordButton({
 
       setRecordingState('recording');
       setElapsedTime(0);
-      onRecordingStart?.();
+      onRecordingStart?.(stream);
 
       timerRef.current = setInterval(() => {
         setElapsedTime((prev) => prev + 1);

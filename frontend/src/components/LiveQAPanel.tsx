@@ -7,6 +7,7 @@ interface LiveQAPanelProps {
   transcriptContext?: string;
   meetingId?: string;
   onDetectedQuestionsChange?: (count: number) => void;
+  serverDetectedQuestions?: string[];
 }
 
 interface QAEntry {
@@ -32,7 +33,7 @@ const suggestedQuestions = [
   '핵심 키워드 정리해줘',
 ];
 
-export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange }: LiveQAPanelProps) {
+export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions }: LiveQAPanelProps) {
   const [question, setQuestion] = useState('');
   const [qaHistory, setQaHistory] = useState<QAEntry[]>([]);
   const [isAsking, setIsAsking] = useState(false);
@@ -55,6 +56,18 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
   }, [qaHistory]);
+
+  // Merge server-detected questions when they arrive (prefer server over client detection)
+  useEffect(() => {
+    if (serverDetectedQuestions && serverDetectedQuestions.length > 0) {
+      // Filter out already-asked questions
+      const newQuestions = serverDetectedQuestions.filter(q => !askedQuestions.includes(q));
+      if (newQuestions.length > 0) {
+        setDetectedQuestions(newQuestions);
+        onDetectedQuestionsChange?.(newQuestions.length);
+      }
+    }
+  }, [serverDetectedQuestions, askedQuestions, onDetectedQuestionsChange]);
 
   useEffect(() => {
     if (!transcriptContext || transcriptContext.length < 100) return;
