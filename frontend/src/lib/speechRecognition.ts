@@ -101,7 +101,8 @@ export class BrowserSpeechRecognition {
   }
 
   /**
-   * Check if two strings are duplicates (>= 80% character overlap).
+   * Check if two strings are duplicates.
+   * Only considers them duplicate if they are similar in length AND content.
    * Used to prevent interim→final promotion from duplicating the last final result.
    */
   private isDuplicate(a: string, b: string): boolean {
@@ -109,10 +110,14 @@ export class BrowserSpeechRecognition {
     const na = a.trim();
     const nb = b.trim();
     if (na === nb) return true;
+    // Only check containment if lengths are within 30% of each other
+    // (prevents dropping "안녕하세요 오늘 회의를" because it contains "안녕하세요")
     const longer = na.length >= nb.length ? na : nb;
     const shorter = na.length < nb.length ? na : nb;
-    if (longer.includes(shorter)) return true;
-    // Character-level overlap ratio
+    const lengthRatio = shorter.length / longer.length;
+    if (lengthRatio >= 0.7 && longer.includes(shorter)) return true;
+    // Character-level overlap — only if lengths are similar
+    if (lengthRatio < 0.7) return false;
     let matches = 0;
     const bChars = [...nb];
     for (const ch of na) {
@@ -123,7 +128,7 @@ export class BrowserSpeechRecognition {
       }
     }
     const ratio = matches / Math.max(na.length, nb.length);
-    return ratio >= 0.8;
+    return ratio >= 0.85;
   }
 
   private restartRecognition(): void {
