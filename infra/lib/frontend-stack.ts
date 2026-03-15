@@ -7,7 +7,7 @@ import { Construct } from 'constructs';
 
 export interface FrontendStackProps extends cdk.StackProps {
   httpApiUrl: string;
-  websocketApiUrl: string;
+  realtimeAlbDns: string;
   edgeFunctionVersion: lambda.IVersion;
 }
 
@@ -136,9 +136,9 @@ function handler(event) {
       exportName: 'TtobakCloudFrontUrl',
     });
 
-    new cdk.CfnOutput(this, 'WebsocketUrl', {
-      value: props.websocketApiUrl,
-      exportName: 'TtobakWebsocketUrl',
+    new cdk.CfnOutput(this, 'RealtimeAlbDns', {
+      value: props.realtimeAlbDns,
+      exportName: 'TtobakRealtimeAlbDns',
     });
   }
 }

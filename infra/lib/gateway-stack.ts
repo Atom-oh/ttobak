@@ -21,12 +21,10 @@ export interface GatewayStackProps extends cdk.StackProps {
 
 export class GatewayStack extends cdk.Stack {
   public readonly httpApi: apigatewayv2.HttpApi;
-  public readonly websocketApi: apigatewayv2.WebSocketApi;
   public readonly apiFunction: lambda.Function;
   public readonly transcribeFunction: lambda.Function;
   public readonly summarizeFunction: lambda.Function;
   public readonly processImageFunction: lambda.Function;
-  public readonly websocketFunction: lambda.Function;
   public readonly kbFunction: lambda.Function;
   public readonly qaFunction: lambda.Function;
 
@@ -106,29 +104,7 @@ export class GatewayStack extends cdk.Stack {
       memorySize: 1024,
     });
 
-    // WebSocket API stage reference for connection management endpoint
-    const websocketStageName = 'production';
-
-    // WebSocket Lambda function (NEW)
-    this.websocketFunction = new lambda.Function(this, 'WebsocketFunction', {
-      functionName: 'ttobak-websocket',
-      runtime: lambda.Runtime.PROVIDED_AL2023,
-      architecture: lambda.Architecture.ARM_64,
-      handler: 'bootstrap',
-      code: lambda.Code.fromAsset('../backend/cmd/websocket'),
-      role: props.lambdaRole as iam.Role,
-      environment: {
-        TABLE_NAME: props.table.tableName,
-        BUCKET_NAME: props.bucket.bucketName,
-        // Will be updated after WebSocket API is created
-        WEBSOCKET_API_ENDPOINT: '',
-        AWS_REGION_NAME: cdk.Aws.REGION,
-      },
-      timeout: cdk.Duration.minutes(5),
-      memorySize: 512,
-    });
-
-    // KB Lambda function (NEW - for Knowledge Base sync operations)
+    // KB Lambda function (for Knowledge Base sync operations)
     this.kbFunction = new lambda.Function(this, 'KbFunction', {
       functionName: 'ttobak-kb',
       runtime: lambda.Runtime.PROVIDED_AL2023,
@@ -225,43 +201,6 @@ export class GatewayStack extends cdk.Stack {
       integration: apiIntegration,
     });
 
-    // WebSocket API (ttobak-realtime)
-    this.websocketApi = new apigatewayv2.WebSocketApi(this, 'TtobakWebsocketApi', {
-      apiName: 'ttobak-realtime',
-      description: 'Ttobak WebSocket API for real-time features',
-      connectRouteOptions: {
-        integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
-          'ConnectIntegration',
-          this.websocketFunction
-        ),
-      },
-      disconnectRouteOptions: {
-        integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
-          'DisconnectIntegration',
-          this.websocketFunction
-        ),
-      },
-      defaultRouteOptions: {
-        integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
-          'DefaultIntegration',
-          this.websocketFunction
-        ),
-      },
-    });
-
-    // WebSocket API Stage
-    const websocketStage = new apigatewayv2.WebSocketStage(this, 'WebsocketStage', {
-      webSocketApi: this.websocketApi,
-      stageName: websocketStageName,
-      autoDeploy: true,
-    });
-
-    // Update WebSocket function environment with the actual endpoint
-    const cfnWebsocketFunction = this.websocketFunction.node.defaultChild as lambda.CfnFunction;
-    cfnWebsocketFunction.addPropertyOverride('Environment.Variables.WEBSOCKET_API_ENDPOINT',
-      `https://${this.websocketApi.apiId}.execute-api.${cdk.Aws.REGION}.amazonaws.com/${websocketStageName}`
-    );
-
     // EventBridge rule for audio uploads -> Transcribe Lambda
     const audioUploadRule = new events.Rule(this, 'AudioUploadRule', {
       ruleName: 'ttobak-audio-upload',
@@ -328,16 +267,6 @@ export class GatewayStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'HttpApiUrl', {
       value: this.httpApi.apiEndpoint,
       exportName: 'TtobakHttpApiUrl',
-    });
-
-    new cdk.CfnOutput(this, 'WebsocketApiId', {
-      value: this.websocketApi.apiId,
-      exportName: 'TtobakWebsocketApiId',
-    });
-
-    new cdk.CfnOutput(this, 'WebsocketApiUrl', {
-      value: websocketStage.url,
-      exportName: 'TtobakWebsocketApiUrl',
     });
 
     new cdk.CfnOutput(this, 'ApiFunctionArn', {

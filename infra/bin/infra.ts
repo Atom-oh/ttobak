@@ -87,17 +87,18 @@ gatewayStack.addDependency(storageStack);
 gatewayStack.addDependency(aiStack);
 gatewayStack.addDependency(knowledgeStack);
 
-// Stack 8: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth
+// Stack 8: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth, Realtime
 const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   env,
   crossRegionReferences: true,
   description: 'Ttobak AI Meeting Assistant - Frontend (S3 + CloudFront)',
   httpApiUrl: gatewayStack.httpApi.apiEndpoint,
-  websocketApiUrl: `wss://${gatewayStack.websocketApi.apiId}.execute-api.${env.region}.amazonaws.com/production`,
+  realtimeAlbDns: realtimeStack.alb.loadBalancerDnsName,
   edgeFunctionVersion: edgeAuthStack.edgeFunction,
 });
 frontendStack.addDependency(gatewayStack);
 frontendStack.addDependency(edgeAuthStack);
+frontendStack.addDependency(realtimeStack);
 
 // Tags for all resources
 cdk.Tags.of(app).add('Project', 'Ttobak');
