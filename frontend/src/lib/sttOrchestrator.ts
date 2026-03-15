@@ -100,6 +100,33 @@ export class SttOrchestrator {
     }
   }
 
+  /** Restart browser Speech API fallback (e.g. after Spot reclaim disconnects Whisper) */
+  private restartFallback(): void {
+    this.activeSource = 'fallback';
+    this.callbacks.onSourceChange('fallback');
+
+    // Re-create fallback client since stop() was called when whisper took over
+    this.fallbackClient = new TranscribeFallbackClient(
+      {
+        onTranscript: (text, isFinal) => {
+          if (this.activeSource === 'fallback') {
+            this.callbacks.onTranscript(text, isFinal);
+          }
+        },
+        onTranslation: (original, translated, targetLang, isFinal) => {
+          if (this.activeSource === 'fallback') {
+            this.callbacks.onTranslation(original, translated, targetLang, isFinal);
+          }
+        },
+        onError: (error) => {
+          this.callbacks.onError(error);
+        },
+      },
+      this.targetLang
+    );
+    this.fallbackClient.start(this.sourceLang === 'ko' ? 'ko-KR' : this.sourceLang);
+  }
+
   private async switchToWhisper(websocketUrl: string): Promise<void> {
     if (this.stopped || !this.stream) return;
 
@@ -121,17 +148,15 @@ export class SttOrchestrator {
       },
       onError: (error) => {
         this.callbacks.onError(error);
-        // Fall back to speech recognition if whisper fails
-        if (this.activeSource === 'whisper' && this.fallbackClient) {
-          this.activeSource = 'fallback';
-          this.callbacks.onSourceChange('fallback');
+        // Fall back to speech recognition if whisper fails (e.g. Spot reclaim)
+        if (this.activeSource === 'whisper' && !this.stopped) {
+          this.restartFallback();
         }
       },
       onDisconnect: () => {
         if (this.activeSource === 'whisper' && !this.stopped) {
-          // Reconnect fallback
-          this.activeSource = 'fallback';
-          this.callbacks.onSourceChange('fallback');
+          // Spot reclaimed or connection lost — restart browser STT fallback
+          this.restartFallback();
         }
       },
     });

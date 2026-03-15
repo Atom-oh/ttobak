@@ -36,16 +36,36 @@ export class RealtimeStack extends cdk.Stack {
       vpc,
     });
 
-    // Auto Scaling Group with GPU instance
+    // Auto Scaling Group with GPU instance (mixed types for Spot diversification)
     const asg = new autoscaling.AutoScalingGroup(this, 'GpuAsg', {
       vpc,
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.G4DN, ec2.InstanceSize.XLARGE),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2(ecs.AmiHardwareType.GPU),
-      spotPrice: '0.25',
+      // spotPrice removed — handled by MixedInstancesPolicy below
       minCapacity: 0,
       maxCapacity: 1,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
     });
+
+    // Escape hatch: convert to MixedInstancesPolicy for Spot diversification
+    // across g4dn/g5/g6 GPU types (capacity-optimized picks the most available pool)
+    const cfnAsg = asg.node.defaultChild as autoscaling.CfnAutoScalingGroup;
+    const existingLtSpec = cfnAsg.launchTemplate;
+    cfnAsg.addPropertyOverride('MixedInstancesPolicy', {
+      InstancesDistribution: {
+        OnDemandPercentageAboveBaseCapacity: 0,
+        SpotAllocationStrategy: 'capacity-optimized',
+      },
+      LaunchTemplate: {
+        LaunchTemplateSpecification: existingLtSpec,
+        Overrides: [
+          { InstanceType: 'g4dn.xlarge' },
+          { InstanceType: 'g5.xlarge' },
+          { InstanceType: 'g6.xlarge' },
+        ],
+      },
+    });
+    cfnAsg.addDeletionOverride('Properties.LaunchTemplate');
 
     // AsgCapacityProvider
     const capacityProvider = new ecs.AsgCapacityProvider(this, 'GpuCapacityProvider', {

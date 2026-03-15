@@ -177,3 +177,19 @@
 - **Description**: `/api/realtime/start` 호출 시 ECS task가 뜨지 않음. ECS Fargate 콜드 스타트(30-90초) 중 API Lambda(30초 타임아웃)가 먼저 타임아웃.
 - **Root Cause**: `StartRealtime()`이 120초 폴링하지만 Lambda 타임아웃 30초에 걸림. 동기 블로킹 API 설계.
 - **Fix**: 비동기 패턴으로 분리 — (1) `StartRealtimeAsync()` 메서드: desiredCount=1만 설정 후 즉시 반환. (2) `GET /api/realtime/status` 엔드포인트 신규 추가. (3) 프론트엔드 `SttOrchestrator`에서 start 후 5초 간격 status 폴링 (최대 120초). ECS 준비 시 WebSocket 연결, 미준비 시 Web Speech API fallback 유지.
+
+### ISSUE-019: 녹음 3초 후 음성 인식 멈춤 — restart 연쇄 충돌 (Resolved)
+- **Category**: transcript
+- **Severity**: critical
+- **Affected**: `frontend/src/lib/speechRecognition.ts`
+- **Description**: 미팅 시작 후 마이크 녹음이 3초 정도만 진행되고 transcribe가 멈춤. 입력 레벨 그래프는 동작하지만 텍스트 생성 안 됨.
+- **Root Cause**: `hasKoreanSentenceEnding()` 감지 → `flushTimer`(300ms) → `restartRecognition()` 호출 시 old recognition abort → `onend` 100ms 후 또 `restartRecognition()` 호출 → 방금 생성된 fresh recognition이 abort됨 → 연쇄 재시작 → Chrome 쓰로틀링 → 인식 완전 중단.
+- **Fix**: `isRestarting` guard 플래그 추가. `restartRecognition()`이 이미 진행 중이면 early return. `onend` 핸들러에서 `!this.isRestarting` 조건 추가. 500ms 후 guard 해제로 정상 재시작 허용.
+
+### ISSUE-020: 미팅 종료 후 Processing 화면 영구 표시 (Resolved)
+- **Category**: frontend
+- **Severity**: major
+- **Affected**: `frontend/src/app/record/page.tsx`
+- **Description**: 미팅 종료 후 "Creating meeting..." / "Saving transcript..." 토스트가 지속 표시되어 다른 화면으로 이동 불가.
+- **Root Cause**: `handleBlobReady`의 API 호출(`meetingsApi.create`, `meetingsApi.update`)이 hang되거나 응답 지연 시 `postRecordingStep`이 영원히 'creating'/'saving' 상태. dismiss 버튼 없음.
+- **Fix**: (1) API 호출에 15초 `withTimeout` 래퍼 추가 — 타임아웃 시 에러 상태로 전환. (2) 진행 중 토스트에 X(dismiss) 버튼 추가 — 클릭 시 홈으로 이동하여 언제든 탈출 가능.

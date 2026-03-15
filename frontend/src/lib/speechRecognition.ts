@@ -94,6 +94,7 @@ export class BrowserSpeechRecognition {
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
   private interimStartTime = 0; // Track when interim accumulation started
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private isRestarting = false; // Guard against onend → restartRecognition cascade
 
   constructor(lang = 'ko-KR') {
     this.lang = lang;
@@ -126,6 +127,8 @@ export class BrowserSpeechRecognition {
   }
 
   private restartRecognition(): void {
+    if (this.isRestarting) return; // Prevent onend → restart cascade
+    this.isRestarting = true;
     try {
       this.recognition?.abort();
     } catch {
@@ -142,6 +145,8 @@ export class BrowserSpeechRecognition {
     } else {
       this.onError?.('recognition-stalled');
     }
+    // Release guard after old onend has had time to fire and be skipped
+    setTimeout(() => { this.isRestarting = false; }, 500);
   }
 
   private handleVisibilityChange = () => {
@@ -245,9 +250,10 @@ export class BrowserSpeechRecognition {
       this.lastInterimTimestamp = '';
 
       // Auto-restart with a fresh instance if still supposed to be listening.
-      if (this.shouldRestart && this.isListening) {
+      // Skip if restartRecognition() already handled the restart (prevents cascade).
+      if (this.shouldRestart && this.isListening && !this.isRestarting) {
         setTimeout(() => {
-          if (this.shouldRestart && this.isListening) {
+          if (this.shouldRestart && this.isListening && !this.isRestarting) {
             this.restartRecognition();
           }
         }, 100);

@@ -281,22 +281,33 @@ export default function RecordPage() {
   };
 
   const handleBlobReady = async (blob: Blob, mimeType: string) => {
+    // Helper: race a promise against a timeout
+    const withTimeout = <T,>(promise: Promise<T>, ms: number, label: string): Promise<T> =>
+      Promise.race([
+        promise,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out (${ms / 1000}s)`)), ms)),
+      ]);
+
     try {
-      // Step 1: Create meeting
+      // Step 1: Create meeting (15s timeout)
       setPostRecordingStep('creating');
-      const result = await meetingsApi.create({
-        title: meetingTitle || formatDefaultTitle(new Date()),
-      });
+      const result = await withTimeout(
+        meetingsApi.create({ title: meetingTitle || formatDefaultTitle(new Date()) }),
+        15000, 'Create meeting'
+      );
       const newMeetingId = result.meetingId;
       setServerMeetingId(newMeetingId);
 
-      // Step 2: Save transcript and summary directly
+      // Step 2: Save transcript and summary (15s timeout)
       setPostRecordingStep('saving');
       const transcriptText = transcriptsRef.current.map(t => t.text).join('\n');
-      await meetingsApi.update(newMeetingId, {
-        content: liveSummaryRef.current || transcriptText.slice(0, 500),
-        status: 'completed',
-      });
+      await withTimeout(
+        meetingsApi.update(newMeetingId, {
+          content: liveSummaryRef.current || transcriptText.slice(0, 500),
+          status: 'completed',
+        }),
+        15000, 'Save transcript'
+      );
 
       // Step 3: Redirect immediately
       setPostRecordingStep('redirecting');
@@ -643,19 +654,13 @@ export default function RecordPage() {
                   {postRecordingStep === 'saving' && 'Saving transcript...'}
                   {postRecordingStep === 'redirecting' && 'Opening meeting...'}
                 </p>
-                <div className="flex gap-1.5 shrink-0">
-                  {(['creating', 'saving', 'redirecting'] as const).map((step, i) => {
-                    const currentIdx = ['creating', 'saving', 'redirecting'].indexOf(postRecordingStep);
-                    return (
-                      <div
-                        key={step}
-                        className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${
-                          i <= currentIdx ? 'bg-primary' : 'bg-slate-300 dark:bg-slate-600'
-                        }`}
-                      />
-                    );
-                  })}
-                </div>
+                <button
+                  onClick={() => { setPostRecordingStep(null); router.push('/'); }}
+                  className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-md transition-colors shrink-0"
+                  title="Dismiss"
+                >
+                  <span className="material-symbols-outlined text-slate-400 text-lg">close</span>
+                </button>
               </>
             )}
           </div>
