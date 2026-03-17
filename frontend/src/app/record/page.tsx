@@ -13,7 +13,7 @@ import { TranslationView } from '@/components/TranslationView';
 import { LiveSummary } from '@/components/LiveSummary';
 import { LiveQAPanel } from '@/components/LiveQAPanel';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
-import { meetingsApi, summaryApi, uploadsApi } from '@/lib/api';
+import { meetingsApi, summaryApi, uploadsApi, qaApi } from '@/lib/api';
 import { SttOrchestrator, SttSource } from '@/lib/sttOrchestrator';
 import { countWords } from '@/lib/speechRecognition';
 
@@ -40,6 +40,9 @@ export default function RecordPage() {
   const { isAuthenticated, isLoading, logout } = useAuth();
   const { devices, selectedDeviceId, selectDevice, refreshDevices } = useAudioDevices();
   const [meetingTitle, setMeetingTitle] = useState('');
+  const [sttProvider, setSttProvider] = useState<'transcribe' | 'nova-sonic'>('transcribe');
+  const [summaryInterval, setSummaryInterval] = useState(200);
+  const summaryIntervalRef = useRef(200);
   const [capturedImages, setCapturedImages] = useState<{ name: string; url: string }[]>([]);
 
   // Analyser node for MicSelector level meter
@@ -76,6 +79,11 @@ export default function RecordPage() {
 
   // Server-pushed detected questions
   const [detectedQuestions, setDetectedQuestions] = useState<string[]>([]);
+
+  // Sentence-based question detection refs
+  const detectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const accumulatedForDetectRef = useRef<string[]>([]);
+  const askedQuestionsRef = useRef<string[]>([]);
 
   // Refs for closures in callbacks
   const targetLangRef = useRef(targetLang);
@@ -203,6 +211,9 @@ export default function RecordPage() {
     setIsGeneratingSummary(false);
     setSpeechError(null);
     setDetectedQuestions([]);
+    accumulatedForDetectRef.current = [];
+    askedQuestionsRef.current = [];
+    if (detectTimerRef.current) { clearTimeout(detectTimerRef.current); detectTimerRef.current = null; }
 
     // Create orchestrator with callbacks
     const orchestrator = new SttOrchestrator({
@@ -217,7 +228,7 @@ export default function RecordPage() {
           setTotalWordCount((prev) => {
             const newTotal = prev + words;
             // Trigger live summary when crossing 200-word threshold
-            if (newTotal - lastSummaryWordCountRef.current >= 200) {
+            if (newTotal - lastSummaryWordCountRef.current >= summaryIntervalRef.current) {
               lastSummaryWordCountRef.current = newTotal;
               setLastSummaryWordCount(newTotal);
               const allText = [...transcriptsRef.current, entry].map(t => t.text).join('\n');
@@ -231,6 +242,24 @@ export default function RecordPage() {
             }
             return newTotal;
           });
+
+          // Sentence-based question detection (debounced)
+          accumulatedForDetectRef.current.push(text);
+          if (detectTimerRef.current) clearTimeout(detectTimerRef.current);
+          detectTimerRef.current = setTimeout(async () => {
+            const accumulated = accumulatedForDetectRef.current.join('\n');
+            if (accumulated.length < 50) return;
+            accumulatedForDetectRef.current = [];
+            try {
+              const fullContext = transcriptsRef.current.map(t => t.text).join('\n');
+              const result = await qaApi.detectQuestions(fullContext, askedQuestionsRef.current);
+              if (result.questions.length > 0) {
+                setDetectedQuestions(result.questions);
+              }
+            } catch {
+              // silent fail — don't block recording flow
+            }
+          }, 1000);
         } else {
           setCurrentInterim(text);
         }
@@ -276,7 +305,9 @@ export default function RecordPage() {
   const handleRecordingStop = async () => {
     setIsRecording(false);
     setIsPaused(false);
-    await orchestratorRef.current?.stop();
+    if (detectTimerRef.current) { clearTimeout(detectTimerRef.current); detectTimerRef.current = null; }
+    // Fire-and-forget: don't block UI while ECS scales down
+    orchestratorRef.current?.stop().catch(() => {});
     orchestratorRef.current = null;
   };
 
@@ -292,7 +323,7 @@ export default function RecordPage() {
       // Step 1: Create meeting (15s timeout)
       setPostRecordingStep('creating');
       const result = await withTimeout(
-        meetingsApi.create({ title: meetingTitle || formatDefaultTitle(new Date()) }),
+        meetingsApi.create({ title: meetingTitle || formatDefaultTitle(new Date()), sttProvider }),
         15000, 'Create meeting'
       );
       const newMeetingId = result.meetingId;
@@ -304,7 +335,8 @@ export default function RecordPage() {
       await withTimeout(
         meetingsApi.update(newMeetingId, {
           content: liveSummaryRef.current || transcriptText.slice(0, 500),
-          status: 'completed',
+          transcriptA: transcriptText,
+          status: 'done',
         }),
         15000, 'Save transcript'
       );
@@ -423,6 +455,20 @@ export default function RecordPage() {
           className="text-lg font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-text-primary placeholder:text-text-muted flex-1 mx-4"
         />
         <select
+          value={summaryInterval}
+          onChange={(e) => {
+            const val = Number(e.target.value);
+            setSummaryInterval(val);
+            summaryIntervalRef.current = val;
+          }}
+          className="text-sm bg-surface-secondary border-none rounded-md px-3 py-1.5 text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
+        >
+          <option value={100}>100w</option>
+          <option value={200}>200w</option>
+          <option value={500}>500w</option>
+          <option value={1000}>1000w</option>
+        </select>
+        <select
           value={targetLang}
           onChange={(e) => setTargetLang(e.target.value)}
           className="text-sm bg-surface-secondary border-none rounded-md px-3 py-1.5 text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
@@ -457,7 +503,7 @@ export default function RecordPage() {
       <main className="flex-1 flex flex-col px-6 lg:px-16 pt-8 lg:pt-12 pb-32 max-w-4xl mx-auto">
         {/* Mic Selector — always visible, disabled during recording */}
         {!postRecordingStep && (
-          <div className="flex justify-center">
+          <div className="flex flex-col items-center gap-3">
             <MicSelector
               devices={devices}
               selectedDeviceId={selectedDeviceId}
@@ -465,6 +511,31 @@ export default function RecordPage() {
               disabled={isRecording}
               analyser={isRecording ? analyserNode : previewAnalyser}
             />
+            {/* STT Engine Selector (for batch transcription after recording) */}
+            <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+              <button
+                onClick={() => setSttProvider('transcribe')}
+                disabled={isRecording}
+                className={`px-4 py-1.5 text-xs font-medium transition-colors ${
+                  sttProvider === 'transcribe'
+                    ? 'bg-[#3211d4] text-white'
+                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                Transcribe
+              </button>
+              <button
+                onClick={() => setSttProvider('nova-sonic')}
+                disabled={isRecording}
+                className={`px-4 py-1.5 text-xs font-medium transition-colors border-l border-slate-200 dark:border-slate-700 ${
+                  sttProvider === 'nova-sonic'
+                    ? 'bg-[#3211d4] text-white'
+                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                Nova Sonic V2
+              </button>
+            </div>
           </div>
         )}
 
@@ -539,6 +610,7 @@ export default function RecordPage() {
                 isGenerating={isGeneratingSummary}
                 wordCount={totalWordCount}
                 lastSummaryWordCount={lastSummaryWordCount}
+                summaryInterval={summaryInterval}
               />
             }
           />
@@ -615,6 +687,7 @@ export default function RecordPage() {
           transcriptContext={transcriptContext}
           onDetectedQuestionsChange={setDetectedCount}
           serverDetectedQuestions={detectedQuestions}
+          onAskedQuestion={(q) => { askedQuestionsRef.current.push(q); }}
         />
       </aside>
       </div>
@@ -705,6 +778,7 @@ export default function RecordPage() {
                 transcriptContext={transcriptContext}
                 onDetectedQuestionsChange={setDetectedCount}
                 serverDetectedQuestions={detectedQuestions}
+                onAskedQuestion={(q) => { askedQuestionsRef.current.push(q); }}
               />
             </div>
           </div>

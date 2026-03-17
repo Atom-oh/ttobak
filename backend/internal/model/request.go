@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // CreateMeetingRequest represents the request body for creating a meeting
 type CreateMeetingRequest struct {
@@ -14,6 +17,7 @@ type CreateMeetingRequest struct {
 type UpdateMeetingRequest struct {
 	Title              string   `json:"title,omitempty"`
 	Content            string   `json:"content,omitempty"`
+	TranscriptA        string   `json:"transcriptA,omitempty"`
 	SelectedTranscript string   `json:"selectedTranscript,omitempty"` // "A" or "B"
 	Participants       []string `json:"participants,omitempty"`
 	Status             string   `json:"status,omitempty"`
@@ -92,6 +96,7 @@ type MeetingDetailResponse struct {
 	TranscriptB        string               `json:"transcriptB,omitempty"`
 	SelectedTranscript *string              `json:"selectedTranscript,omitempty"` // "A" | "B" | null
 	AudioKey           string               `json:"audioKey,omitempty"`
+	Transcription      json.RawMessage      `json:"transcription,omitempty"`
 	Attachments        []AttachmentResponse `json:"attachments,omitempty"`
 	Shares             []ShareResponse      `json:"shares,omitempty"` // Only visible to owner
 	CreatedAt          string               `json:"createdAt"`

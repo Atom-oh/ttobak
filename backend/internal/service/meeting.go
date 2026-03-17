@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -145,6 +146,12 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		}
 	}
 
+	// Parse transcript segments for speaker diarization
+	var transcription json.RawMessage
+	if meeting.TranscriptSegments != "" {
+		transcription = json.RawMessage(meeting.TranscriptSegments)
+	}
+
 	return &model.MeetingDetailResponse{
 		MeetingID:          meeting.MeetingID,
 		UserID:             meeting.UserID,
@@ -157,6 +164,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		TranscriptB:        meeting.TranscriptB,
 		SelectedTranscript: strPtr(meeting.SelectedTranscript),
 		AudioKey:           meeting.AudioKey,
+		Transcription:      transcription,
 		Attachments:        attachmentResponses,
 		Shares:             shareResponses,
 		CreatedAt:          meeting.CreatedAt.Format(time.RFC3339),
@@ -183,6 +191,9 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}
 	if req.Content != "" {
 		meeting.Content = req.Content
+	}
+	if req.TranscriptA != "" {
+		meeting.TranscriptA = req.TranscriptA
 	}
 	if req.SelectedTranscript != "" {
 		meeting.SelectedTranscript = req.SelectedTranscript

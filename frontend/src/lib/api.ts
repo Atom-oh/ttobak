@@ -139,7 +139,7 @@ export const meetingsApi = {
   create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic' }) =>
     api.post<import('@/types/meeting').Meeting>('/api/meetings', data),
 
-  update: (id: string, data: { title?: string; content?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }) =>
+  update: (id: string, data: { title?: string; content?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }) =>
     api.put<{ meetingId: string; updatedAt: string }>(`/api/meetings/${id}`, data),
 
   delete: (id: string) => api.delete(`/api/meetings/${id}`),

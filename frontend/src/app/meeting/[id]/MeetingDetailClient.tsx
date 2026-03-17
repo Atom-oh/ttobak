@@ -12,7 +12,7 @@ import { FileUploader } from '@/components/FileUploader';
 import { ExportMenu } from '@/components/ExportMenu';
 import { QAPanel } from '@/components/QAPanel';
 import { meetingsApi } from '@/lib/api';
-import type { Meeting, ActionItem, TranscriptSegment, Attachment, SharedUser } from '@/types/meeting';
+import type { Meeting, MeetingDetail, ActionItem, TranscriptSegment, Attachment, SharedUser } from '@/types/meeting';
 
 function formatDate(dateString: string): string {
   const date = new Date(dateString);
@@ -129,7 +129,7 @@ function MobileMoreMenu({ meetingId }: { meetingId: string }) {
 export default function MeetingDetailPage() {
   const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
-  const [meeting, setMeeting] = useState<Meeting | null>(null);
+  const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showUploader, setShowUploader] = useState(false);
 
@@ -149,7 +149,7 @@ export default function MeetingDetailPage() {
     const fetchMeeting = async () => {
       try {
         const data = await meetingsApi.get(meetingId);
-        setMeeting(data as Meeting);
+        setMeeting(data as MeetingDetail);
       } catch (err) {
         console.error('Failed to fetch meeting:', err);
       } finally {
@@ -166,7 +166,7 @@ export default function MeetingDetailPage() {
     const interval = setInterval(async () => {
       try {
         const data = await meetingsApi.get(meeting.meetingId);
-        setMeeting(data as Meeting);
+        setMeeting(data as MeetingDetail);
         if (data.status === 'done' || data.status === 'error') {
           clearInterval(interval);
         }
@@ -331,7 +331,7 @@ export default function MeetingDetailPage() {
               AI Summary
             </h3>
             <p className="text-text-secondary leading-relaxed">
-              {meeting.summary}
+              {meeting.content || meeting.summary}
             </p>
           </section>
 
