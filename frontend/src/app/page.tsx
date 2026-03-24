@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { LoginForm } from '@/components/auth/LoginForm';
@@ -39,9 +39,11 @@ export default function HomePage() {
   const [isFetching, setIsFetching] = useState(true);
   const [activeTab, setActiveTab] = useState('all');
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const fetchInProgressRef = useRef(false);
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && !fetchInProgressRef.current) {
+      fetchInProgressRef.current = true;
       const fetchMeetings = async () => {
         try {
           const result = await meetingsApi.list({ tab: activeTab === 'shared' ? 'shared' : undefined });
@@ -51,6 +53,7 @@ export default function HomePage() {
           console.error('Failed to fetch meetings:', err);
         } finally {
           setIsFetching(false);
+          fetchInProgressRef.current = false;
         }
       };
       fetchMeetings();
