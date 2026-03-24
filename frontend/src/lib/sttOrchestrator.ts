@@ -15,6 +15,7 @@ export interface SttCallbacks {
   onQuestion: (questions: string[]) => void;
   onSourceChange: (source: SttSource) => void;
   onError: (error: string) => void;
+  onBackendAudioSaved?: (key: string) => void;
 }
 
 export class SttOrchestrator {
@@ -27,10 +28,30 @@ export class SttOrchestrator {
   private targetLang: string;
   private stopped = false;
 
-  constructor(callbacks: SttCallbacks, sourceLang = 'ko', targetLang = 'en') {
+  private translationEnabled: boolean;
+  private userId?: string;
+  private meetingId?: string;
+  private backendAudioKey?: string;
+
+  constructor(
+    callbacks: SttCallbacks,
+    sourceLang = 'ko',
+    targetLang = 'en',
+    translationEnabled = false,
+    userId?: string,
+    meetingId?: string,
+  ) {
     this.callbacks = callbacks;
     this.sourceLang = sourceLang;
     this.targetLang = targetLang;
+    this.translationEnabled = translationEnabled;
+    this.userId = userId;
+    this.meetingId = meetingId;
+  }
+
+  updateTranslationEnabled(enabled: boolean): void {
+    this.translationEnabled = enabled;
+    this.fallbackClient?.updateTranslationEnabled(enabled);
   }
 
   async start(stream: MediaStream): Promise<void> {
@@ -54,14 +75,15 @@ export class SttOrchestrator {
           this.callbacks.onError(error);
         },
       },
-      this.targetLang
+      this.targetLang,
+      this.translationEnabled
     );
 
     this.fallbackClient.start(this.sourceLang === 'ko' ? 'ko-KR' : this.sourceLang);
     this.activeSource = 'fallback';
     this.callbacks.onSourceChange('fallback');
 
-    // 2. Request ECS start (async, non-blocking)
+    // 2. Start ECS polling for faster-whisper upgrade
     this.startEcsPolling();
   }
 
@@ -73,7 +95,7 @@ export class SttOrchestrator {
 
       // If already ready, switch immediately
       if (startResult.status === 'ready' && startResult.websocketUrl) {
-        await this.switchToWhisper(startResult.websocketUrl);
+        await this.switchToWhisper(this.buildWsUrl(startResult.websocketUrl));
         return;
       }
 
@@ -86,7 +108,7 @@ export class SttOrchestrator {
         try {
           const result = await realtimeApi.status();
           if (result.status === 'ready' && result.websocketUrl) {
-            await this.switchToWhisper(result.websocketUrl);
+            await this.switchToWhisper(this.buildWsUrl(result.websocketUrl));
             return;
           }
         } catch {
@@ -95,8 +117,9 @@ export class SttOrchestrator {
       }
       console.warn('ECS did not become ready within 120s, staying on fallback');
     } catch (err) {
-      console.error('ECS start failed:', err);
-      // Stay on fallback - it's still working
+      // ECS start failed (e.g. capacity provider empty, TLS error) — stay on fallback silently.
+      // Do NOT call callbacks.onError here: fallback STT is still working fine.
+      console.warn('ECS start failed, staying on fallback:', err);
     }
   }
 
@@ -122,13 +145,34 @@ export class SttOrchestrator {
           this.callbacks.onError(error);
         },
       },
-      this.targetLang
+      this.targetLang,
+      this.translationEnabled
     );
     this.fallbackClient.start(this.sourceLang === 'ko' ? 'ko-KR' : this.sourceLang);
   }
 
+  /** Build full WebSocket URL. Relative paths (e.g. "/ws") use the current host via CloudFront. */
+  private buildWsUrl(url: string): string {
+    if (url.startsWith('/')) {
+      const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = typeof window !== 'undefined' ? window.location.host : 'localhost';
+      return `${protocol}//${host}${url}`;
+    }
+    // Backward compat: full URL — upgrade ws:// to wss:// if needed
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:') {
+      return url.replace(/^ws:\/\//, 'wss://');
+    }
+    return url;
+  }
+
   private async switchToWhisper(websocketUrl: string): Promise<void> {
     if (this.stopped || !this.stream) return;
+
+    // Promote pending interim text from fallback before switching sources
+    const pendingInterim = this.fallbackClient?.getPendingInterim();
+    if (pendingInterim) {
+      this.callbacks.onTranscript(pendingInterim, true);
+    }
 
     this.realtimeClient = new RealtimeClient({
       onTranscript: (text, isFinal) => {
@@ -159,6 +203,10 @@ export class SttOrchestrator {
           this.restartFallback();
         }
       },
+      onAudioSaved: (key: string) => {
+        this.backendAudioKey = key;
+        this.callbacks.onBackendAudioSaved?.(key);
+      },
     });
 
     try {
@@ -166,7 +214,9 @@ export class SttOrchestrator {
         websocketUrl,
         this.stream,
         this.sourceLang,
-        this.targetLang
+        this.targetLang,
+        this.userId,
+        this.meetingId,
       );
 
       // Successfully connected - switch source
@@ -195,14 +245,22 @@ export class SttOrchestrator {
     this.realtimeClient?.disconnect();
     this.realtimeClient = null;
 
-    // Tell backend to scale down ECS
+    // Tell backend to scale down ECS (5s timeout — don't block post-recording flow)
     try {
-      await realtimeApi.stop();
+      await Promise.race([
+        realtimeApi.stop(),
+        new Promise<void>(resolve => setTimeout(resolve, 5000)),
+      ]);
     } catch (err) {
       console.error('Failed to stop ECS:', err);
     }
 
     this.callbacks.onSourceChange('idle');
+  }
+
+  /** Get backend-saved audio S3 key (if ECS whisper saved audio). */
+  getBackendAudioKey(): string | undefined {
+    return this.backendAudioKey;
   }
 
   get currentSource(): SttSource {

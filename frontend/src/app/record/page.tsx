@@ -82,11 +82,17 @@ export default function RecordPage() {
   // Server-pushed detected questions
   const [detectedQuestions, setDetectedQuestions] = useState<string[]>([]);
 
-  // Sentence-based question detection refs
+  // Question detection refs
   const detectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accumulatedForDetectRef = useRef<string[]>([]);
   const askedQuestionsRef = useRef<string[]>([]);
   const detectInFlightRef = useRef(false);
+  const [detectWordInterval, setDetectWordInterval] = useState(100);
+  const detectWordIntervalRef = useRef(100);
+  const detectWordsAccumRef = useRef(0);
+
+  // Backend audio key (from ECS realtime server)
+  const [backendAudioKey, setBackendAudioKey] = useState<string | null>(null);
 
   // Refs for closures in callbacks
   const targetLangRef = useRef(targetLang);
@@ -221,6 +227,8 @@ export default function RecordPage() {
     setDetectedQuestions([]);
     accumulatedForDetectRef.current = [];
     askedQuestionsRef.current = [];
+    detectWordsAccumRef.current = 0;
+    setBackendAudioKey(null);
     if (detectTimerRef.current) { clearTimeout(detectTimerRef.current); detectTimerRef.current = null; }
 
     // Create orchestrator with callbacks
@@ -251,30 +259,36 @@ export default function RecordPage() {
             return newTotal;
           });
 
-          // Sentence-based question detection (debounced, throttled, context-limited)
+          // Word-count-based question detection (triggers every N words)
+          detectWordsAccumRef.current += words;
           accumulatedForDetectRef.current.push(text);
-          if (detectTimerRef.current) clearTimeout(detectTimerRef.current);
-          detectTimerRef.current = setTimeout(async () => {
-            if (detectInFlightRef.current) return;
-            const accumulated = accumulatedForDetectRef.current.join('\n');
-            if (accumulated.length < 50) return;
-            accumulatedForDetectRef.current = [];
-            detectInFlightRef.current = true;
-            try {
-              const fullContext = transcriptsRef.current.map(t => t.text).join('\n');
-              const trimmedContext = fullContext.length > 2000
-                ? fullContext.slice(-2000)
-                : fullContext;
-              const result = await qaApi.detectQuestions(trimmedContext, askedQuestionsRef.current);
-              if (result.questions.length > 0) {
-                setDetectedQuestions(result.questions);
+          if (detectWordsAccumRef.current >= detectWordIntervalRef.current) {
+            detectWordsAccumRef.current = 0;
+            if (detectTimerRef.current) clearTimeout(detectTimerRef.current);
+            detectTimerRef.current = setTimeout(async () => {
+              if (detectInFlightRef.current) return;
+              accumulatedForDetectRef.current = [];
+              detectInFlightRef.current = true;
+              try {
+                const fullContext = transcriptsRef.current.map(t => t.text).join('\n');
+                const trimmedContext = fullContext.length > 2000
+                  ? fullContext.slice(-2000)
+                  : fullContext;
+                const result = await qaApi.detectQuestions(
+                  trimmedContext,
+                  askedQuestionsRef.current,
+                  liveSummaryRef.current || undefined,
+                );
+                if (result.questions.length > 0) {
+                  setDetectedQuestions(result.questions);
+                }
+              } catch {
+                // silent fail — don't block recording flow
+              } finally {
+                detectInFlightRef.current = false;
               }
-            } catch {
-              // silent fail — don't block recording flow
-            } finally {
-              detectInFlightRef.current = false;
-            }
-          }, 3000);
+            }, 1500);
+          }
         } else {
           setCurrentInterim(text);
         }
@@ -301,7 +315,10 @@ export default function RecordPage() {
       onError: (error) => {
         setSpeechError(speechErrorMessages[error] || error);
       },
-    }, 'ko', targetLangRef.current, translationEnabled);
+      onBackendAudioSaved: (key) => {
+        setBackendAudioKey(key);
+      },
+    }, 'ko', targetLangRef.current, translationEnabled, undefined, clientMeetingId);
 
     orchestratorRef.current = orchestrator;
     orchestrator.start(stream);
@@ -356,23 +373,34 @@ export default function RecordPage() {
         15000, 'Save transcript'
       );
 
-      // Step 3: Upload audio (REQUIRED — triggers backend Transcribe pipeline via notifyComplete)
+      // Step 3: Upload audio — prefer backend-aggregated audio if available
       setPostRecordingStep('uploading');
-      const fileName = `recording_${Date.now()}.webm`;
-      const { uploadUrl, key } = await withTimeout(
-        uploadsApi.getPresignedUrl({
-          fileName,
-          fileType: mimeType || 'audio/webm',
-          category: 'audio',
-          meetingId: newMeetingId,
-        }),
-        15000, 'Get upload URL'
-      );
-      await uploadAudioWithRetry(blob, uploadUrl, mimeType);
-      await withTimeout(
-        uploadsApi.notifyComplete({ meetingId: newMeetingId, key, category: 'audio' }),
-        15000, 'Notify upload complete'
-      );
+      const savedBackendKey = backendAudioKey || orchestratorRef.current?.getBackendAudioKey();
+
+      if (savedBackendKey) {
+        // Backend ECS already saved high-quality audio to S3
+        await withTimeout(
+          uploadsApi.notifyComplete({ meetingId: newMeetingId, key: savedBackendKey, category: 'audio' }),
+          15000, 'Notify backend audio'
+        );
+      } else {
+        // Fallback: upload MediaRecorder blob
+        const fileName = `recording_${Date.now()}.webm`;
+        const { uploadUrl, key } = await withTimeout(
+          uploadsApi.getPresignedUrl({
+            fileName,
+            fileType: mimeType || 'audio/webm',
+            category: 'audio',
+            meetingId: newMeetingId,
+          }),
+          15000, 'Get upload URL'
+        );
+        await uploadAudioWithRetry(blob, uploadUrl, mimeType);
+        await withTimeout(
+          uploadsApi.notifyComplete({ meetingId: newMeetingId, key, category: 'audio' }),
+          15000, 'Notify upload complete'
+        );
+      }
 
       // Step 4: Redirect to meeting detail
       setPostRecordingStep('redirecting');
@@ -492,6 +520,11 @@ export default function RecordPage() {
           onSummaryIntervalChange={(val) => {
             setSummaryInterval(val);
             summaryIntervalRef.current = val;
+          }}
+          detectWordInterval={detectWordInterval}
+          onDetectWordIntervalChange={(val) => {
+            setDetectWordInterval(val);
+            detectWordIntervalRef.current = val;
           }}
           translationEnabled={translationEnabled}
           onTranslationToggle={setTranslationEnabled}

@@ -1,10 +1,15 @@
 """FastAPI WebSocket server for real-time STT, translation, and question detection."""
 
 import asyncio
+import io
 import json
+import os
 import time
+import uuid
+import wave
 from typing import Any
 
+import boto3
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from detector import QuestionDetector
@@ -13,6 +18,10 @@ from translator import Translator
 
 # Initialize FastAPI app
 app = FastAPI(title="Ttobak Realtime STT Server")
+
+# S3 client for audio aggregation upload
+s3_client = boto3.client("s3")
+AUDIO_BUCKET = os.environ.get("AUDIO_BUCKET", "ttobak-data-180294183052-ap-northeast-2")
 
 # Global singletons - loaded once at startup
 stt_engine: WhisperSTT | None = None
@@ -50,6 +59,12 @@ class ConnectionState:
         self.target_lang = "en"
         self.lock = asyncio.Lock()
         self.running = True
+
+        # Audio aggregation for S3 upload on disconnect
+        self.session_id = str(uuid.uuid4())
+        self.user_id: str | None = None
+        self.meeting_id: str | None = None
+        self.aggregated_audio = bytearray()
 
 
 async def process_audio(
@@ -201,6 +216,10 @@ async def handle_control_message(
             async with state.lock:
                 state.source_lang = data.get("language", state.source_lang)
                 state.target_lang = data.get("targetLang", state.target_lang)
+                if data.get("userId"):
+                    state.user_id = data["userId"]
+                if data.get("meetingId"):
+                    state.meeting_id = data["meetingId"]
             return True
 
         elif action == "stop":
@@ -211,6 +230,52 @@ async def handle_control_message(
         print(f"Invalid JSON message: {message}")
 
     return True
+
+
+async def save_aggregated_audio(state: ConnectionState) -> str | None:
+    """Save aggregated audio chunks to S3 as WAV. Returns S3 key or None."""
+    if not state.aggregated_audio or len(state.aggregated_audio) < 16000:  # < 0.5s
+        return None
+
+    try:
+        # Create WAV file in memory (16kHz, 16-bit mono PCM)
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes(bytes(state.aggregated_audio))
+
+        wav_buffer.seek(0)
+        wav_data = wav_buffer.read()
+
+        user_id = state.user_id or "anonymous"
+        meeting_id = state.meeting_id or state.session_id
+        s3_key = f"audio/{user_id}/{meeting_id}/realtime_{state.session_id}.wav"
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: s3_client.put_object(
+                Bucket=AUDIO_BUCKET,
+                Key=s3_key,
+                Body=wav_data,
+                ContentType="audio/wav",
+                Metadata={
+                    "session-id": state.session_id,
+                    "duration-seconds": str(len(state.aggregated_audio) // 32000),
+                    "sample-rate": "16000",
+                },
+            ),
+        )
+
+        duration = len(state.aggregated_audio) // 32000
+        print(f"Saved aggregated audio: {s3_key} ({len(wav_data)} bytes, ~{duration}s)")
+        return s3_key
+
+    except Exception as e:
+        print(f"Failed to save aggregated audio: {e}")
+        return None
 
 
 @app.websocket("/ws")
@@ -236,8 +301,11 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 elif message["type"] == "websocket.receive":
                     if "bytes" in message:
                         # Binary frame = audio data
+                        audio_bytes = message["bytes"]
                         async with state.lock:
-                            state.audio_buffer.extend(message["bytes"])
+                            state.audio_buffer.extend(audio_bytes)
+                            # Aggregate for final S3 upload
+                            state.aggregated_audio.extend(audio_bytes)
 
                     elif "text" in message:
                         # Text frame = JSON control message
@@ -262,6 +330,17 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 await process_task
             except asyncio.CancelledError:
                 pass
+
+        # Save aggregated audio to S3
+        audio_key = await save_aggregated_audio(state)
+        if audio_key:
+            try:
+                await websocket.send_json({
+                    "type": "audio_saved",
+                    "key": audio_key,
+                })
+            except Exception:
+                pass  # Connection may already be closed
 
         try:
             await websocket.close()

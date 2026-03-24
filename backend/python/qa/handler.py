@@ -150,11 +150,17 @@ def agentic_converse(messages, transcript=None, session_id=None):
     tools_used = []
     sources = []
 
+    # Build system messages: base prompt + optional meeting context
+    system_messages = [{"text": SYSTEM_PROMPT}]
+    if transcript:
+        truncated = transcript[-2000:] if len(transcript) > 2000 else transcript
+        system_messages.append({"text": f"\n\n## 현재 미팅 대화 내용 (실시간)\n{truncated}\n\n위 대화 맥락에 기반하여 답변하세요. 미팅 내용과 관련없는 질문이라도 가능한 한 대화 맥락을 참조하세요."})
+
     for _ in range(MAX_TOOL_ROUNDS):
         try:
             resp = bedrock_runtime.converse(
                 modelId=BEDROCK_MODEL_ID,
-                system=[{"text": SYSTEM_PROMPT}],
+                system=system_messages,
                 messages=messages,
                 toolConfig={"tools": TOOL_DEFINITIONS},
                 inferenceConfig={"maxTokens": 4096, "temperature": 0.3},
@@ -227,12 +233,8 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None):
         # Load existing conversation or start new
         messages = load_session(session_id)
 
-        # Build user message — just the question (+ transcript hint if present)
-        user_content = question
-        if context:
-            user_content = f"[현재 미팅 트랜스크립트가 있습니다. search_transcript 도구로 검색할 수 있습니다.]\n\n{question}"
-
-        messages.append({"role": "user", "content": [{"text": user_content}]})
+        # User message is just the question — context is in system prompt
+        messages.append({"role": "user", "content": [{"text": question}]})
 
         answer, tools_used, sources = agentic_converse(
             messages,
@@ -305,16 +307,21 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
 
 
 def handle_detect_questions(body):
-    """Handle POST /api/qa/detect-questions — extract questions from transcript."""
+    """Handle POST /api/qa/detect-questions — extract topic-aware questions from transcript."""
     transcript = body.get('transcript', '').strip()
     if not transcript:
         return response(400, {'error': {'code': 'BAD_REQUEST', 'message': 'transcript is required'}})
 
+    summary = body.get('summary', '').strip()
     previous_questions = body.get('previousQuestions', [])
 
-    user_content = transcript
+    # Build context: summary (for topic understanding) + transcript
+    user_content = ''
+    if summary:
+        user_content += f'## 현재 미팅 요약\n{summary}\n\n'
+    user_content += f'## 최근 대화 내용\n{transcript}'
     if previous_questions:
-        user_content += '\n\n이미 추출된 질문:\n' + '\n'.join(f'- {q}' for q in previous_questions)
+        user_content += '\n\n이미 제안된 질문:\n' + '\n'.join(f'- {q}' for q in previous_questions)
 
     try:
         resp = bedrock_runtime.converse(

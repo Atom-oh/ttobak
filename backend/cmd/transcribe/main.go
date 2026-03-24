@@ -70,6 +70,18 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return nil
 	}
 
+	// Skip checkpoint files (periodic saves during recording, not final audio)
+	if strings.Contains(key, "checkpoint_") {
+		log.Printf("Skipping checkpoint file: %s", key)
+		return nil
+	}
+
+	// Skip realtime-aggregated audio (already transcribed in realtime by ECS whisper)
+	if strings.Contains(key, "realtime_") {
+		log.Printf("Skipping realtime audio file (already transcribed): %s", key)
+		return nil
+	}
+
 	// Extract meeting ID from key
 	// Expected format: audio/{userID}/{meetingID}/{filename}
 	meetingID := service.ExtractMeetingIDFromAudioKey(key)

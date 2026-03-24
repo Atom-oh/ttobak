@@ -9,6 +9,7 @@ export interface RealtimeCallbacks {
   onQuestion: (questions: string[]) => void;
   onError: (error: string) => void;
   onDisconnect: () => void;
+  onAudioSaved?: (key: string) => void;
 }
 
 export class RealtimeClient {
@@ -27,7 +28,9 @@ export class RealtimeClient {
     websocketUrl: string,
     stream: MediaStream,
     sourceLang = 'ko',
-    targetLang = 'en'
+    targetLang = 'en',
+    userId?: string,
+    meetingId?: string,
   ): Promise<void> {
     // 1. Connect WebSocket
     this.ws = new WebSocket(websocketUrl);
@@ -54,6 +57,9 @@ export class RealtimeClient {
           case 'error':
             this.callbacks.onError(msg.error || 'Unknown server error');
             break;
+          case 'audio_saved':
+            this.callbacks.onAudioSaved?.(msg.key);
+            break;
         }
       } catch (err) {
         console.error('Failed to parse WebSocket message:', err);
@@ -64,12 +70,14 @@ export class RealtimeClient {
       this.callbacks.onDisconnect();
     };
 
-    // 3. Send config
+    // 3. Send config (include IDs for backend audio aggregation)
     this.ws.send(
       JSON.stringify({
         action: 'config',
         language: sourceLang,
         targetLang: targetLang,
+        ...(userId && { userId }),
+        ...(meetingId && { meetingId }),
       })
     );
 

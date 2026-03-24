@@ -3,6 +3,8 @@
 interface RecordingConfigProps {
   summaryInterval: number;
   onSummaryIntervalChange: (val: number) => void;
+  detectWordInterval: number;
+  onDetectWordIntervalChange: (val: number) => void;
   translationEnabled: boolean;
   onTranslationToggle: (enabled: boolean) => void;
   targetLang: string;
@@ -15,6 +17,8 @@ interface RecordingConfigProps {
 export function RecordingConfig({
   summaryInterval,
   onSummaryIntervalChange,
+  detectWordInterval,
+  onDetectWordIntervalChange,
   translationEnabled,
   onTranslationToggle,
   targetLang,
@@ -34,6 +38,16 @@ export function RecordingConfig({
         <option value={200}>200w</option>
         <option value={500}>500w</option>
         <option value={1000}>1000w</option>
+      </select>
+      <select
+        value={detectWordInterval}
+        onChange={(e) => onDetectWordIntervalChange(Number(e.target.value))}
+        title="Q&A 감지 간격"
+        className="text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-3 py-1.5 text-[var(--color-text-secondary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/30"
+      >
+        <option value={50}>Q 50w</option>
+        <option value={100}>Q 100w</option>
+        <option value={200}>Q 200w</option>
       </select>
       <label className="flex items-center gap-1.5 text-sm text-[var(--color-text-secondary)]">
         <input

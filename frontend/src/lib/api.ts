@@ -204,10 +204,10 @@ export const qaApi = {
       { question, sessionId }
     ),
 
-  detectQuestions: (transcript: string, previousQuestions?: string[]) =>
+  detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string) =>
     api.post<{ questions: string[] }>(
       '/api/qa/detect-questions',
-      { transcript, previousQuestions }
+      { transcript, previousQuestions, summary }
     ),
 };
 

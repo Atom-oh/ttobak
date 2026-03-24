@@ -1,7 +1,11 @@
 /**
  * Browser-native Speech Recognition wrapper for real-time transcription.
  * Uses Web Speech API (SpeechRecognition / webkitSpeechRecognition).
- * Good Korean support in Chrome/Edge. Falls back gracefully if unsupported.
+ *
+ * Architecture: Let Chrome handle all segmentation naturally.
+ * NO forced restarts, NO sentence-ending detection, NO flush timers.
+ * Chrome's continuous mode segments Korean speech into interim/final results on its own.
+ * We only restart on: watchdog timeout (30s silence) or tab visibility change.
  */
 
 // Web Speech API type declarations (not in default TS lib)
@@ -63,23 +67,6 @@ export interface SpeechResult {
 
 type SpeechCallback = (result: SpeechResult) => void;
 
-/**
- * Detect Korean sentence endings in text.
- * Matches common verb/adjective endings: 다, 요, 까, 죠, 네, 지, 고, 며 etc.
- * Also matches period/question mark/exclamation.
- */
-function hasKoreanSentenceEnding(text: string): boolean {
-  const trimmed = text.trimEnd();
-  if (!trimmed) return false;
-  // Punctuation endings
-  if (/[.?!。？！]$/.test(trimmed)) return true;
-  // Korean sentence-final endings (common verb/adjective suffixes)
-  if (/(?:니다|에요|세요|해요|어요|아요|거든|잖아|네요|는데|ㅂ니다|습니다|었다|겠다|한다|된다|인데|할까|일까|볼까|는걸|다고|라고|라며|하며|면서)[.?!]?$/.test(trimmed)) return true;
-  // Single-char endings after Korean syllable block
-  if (/[\uAC00-\uD7AF][다요까죠네지고며서]$/.test(trimmed)) return true;
-  return false;
-}
-
 export class BrowserSpeechRecognition {
   private recognition: SpeechRecognitionInstance | null = null;
   private isListening = false;
@@ -92,31 +79,30 @@ export class BrowserSpeechRecognition {
   private lastFinalText = '';
   private lastResultTime = 0;
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
-  private interimStartTime = 0; // Track when interim accumulation started
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
-  private isRestarting = false; // Guard against onend → restartRecognition cascade
+  private isRestarting = false;
+
+  // Overlap buffer: tracks recently promoted text to prevent duplicates after restart
+  private overlapBuffer: string[] = [];
+  private overlapWindowEnd = 0;
+  private readonly OVERLAP_WINDOW_MS = 1500;
 
   constructor(lang = 'ko-KR') {
     this.lang = lang;
   }
 
   /**
-   * Check if two strings are duplicates.
-   * Only considers them duplicate if they are similar in length AND content.
-   * Used to prevent interim→final promotion from duplicating the last final result.
+   * Check if two strings are duplicates (for onend interim promotion).
+   * Prevents double-text when Chrome naturally restarts recognition.
    */
   private isDuplicate(a: string, b: string): boolean {
     if (!a || !b) return false;
     const na = a.trim();
     const nb = b.trim();
     if (na === nb) return true;
-    // Only check containment if lengths are within 30% of each other
-    // (prevents dropping "안녕하세요 오늘 회의를" because it contains "안녕하세요")
     const longer = na.length >= nb.length ? na : nb;
     const shorter = na.length < nb.length ? na : nb;
     const lengthRatio = shorter.length / longer.length;
     if (lengthRatio >= 0.7 && longer.includes(shorter)) return true;
-    // Character-level overlap — only if lengths are similar
     if (lengthRatio < 0.7) return false;
     let matches = 0;
     const bChars = [...nb];
@@ -127,36 +113,56 @@ export class BrowserSpeechRecognition {
         bChars.splice(idx, 1);
       }
     }
-    const ratio = matches / Math.max(na.length, nb.length);
-    return ratio >= 0.85;
+    return matches / Math.max(na.length, nb.length) >= 0.85;
   }
 
+  /**
+   * Restart recognition. Only used for:
+   * - Watchdog (30s no results — Chrome's 5-min limit)
+   * - Tab visibility change
+   * - Natural onend when Chrome stops unexpectedly
+   */
   private restartRecognition(): void {
-    if (this.isRestarting) return; // Prevent onend → restart cascade
+    if (this.isRestarting) return;
     this.isRestarting = true;
-    try {
-      this.recognition?.abort();
-    } catch {
-      // ignore
+
+    // Promote any pending interim text before restart
+    const pendingInterim = this.lastInterimText;
+    const pendingTimestamp = this.lastInterimTimestamp;
+    if (pendingInterim && !this.isDuplicate(pendingInterim, this.lastFinalText)) {
+      this.lastFinalText = pendingInterim;
+      // Track in overlap buffer to prevent duplicates from fresh instance
+      this.overlapBuffer.push(pendingInterim.trim());
+      if (this.overlapBuffer.length > 3) this.overlapBuffer.shift();
+      this.onResult?.({
+        text: pendingInterim,
+        isFinal: true,
+        timestamp: pendingTimestamp || new Date().toISOString(),
+      });
     }
+    this.lastInterimText = '';
+    this.lastInterimTimestamp = '';
+
+    // Start overlap window
+    this.overlapWindowEnd = Date.now() + this.OVERLAP_WINDOW_MS;
+
+    // Create fresh instance BEFORE aborting old one (closure guard)
+    const old = this.recognition;
     const fresh = this.setupRecognition();
     if (fresh) {
       this.recognition = fresh;
-      try {
-        fresh.start();
-      } catch {
-        this.onError?.('recognition-stalled');
-      }
+      try { old?.abort(); } catch { /* ignore */ }
+      try { fresh.start(); } catch { this.onError?.('recognition-stalled'); }
     } else {
+      try { old?.abort(); } catch { /* ignore */ }
       this.onError?.('recognition-stalled');
     }
-    // Release guard after old onend has had time to fire and be skipped
+
     setTimeout(() => { this.isRestarting = false; }, 500);
   }
 
   private handleVisibilityChange = () => {
     if (document.visibilityState === 'visible' && this.isListening && this.shouldRestart) {
-      // Tab regained focus — force restart to recover from Chrome throttling
       setTimeout(() => {
         if (this.isListening && this.shouldRestart) {
           this.restartRecognition();
@@ -183,38 +189,52 @@ export class BrowserSpeechRecognition {
     recognition.lang = this.lang;
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
+      // Ignore stale events from a previous recognition instance
+      if (this.recognition !== recognition) return;
       this.lastResultTime = Date.now();
+
+      // Clear expired overlap window
+      if (this.overlapWindowEnd > 0 && Date.now() >= this.overlapWindowEnd) {
+        this.overlapBuffer = [];
+        this.overlapWindowEnd = 0;
+      }
+
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
         const transcript = result[0].transcript;
+
         if (result.isFinal) {
+          // Check overlap window: skip duplicates from restart
+          if (Date.now() < this.overlapWindowEnd) {
+            const trimmed = transcript.trim();
+            const isOverlapDupe = this.overlapBuffer.some(buf =>
+              this.isDuplicate(trimmed, buf) ||
+              buf.includes(trimmed) ||
+              trimmed.includes(buf)
+            );
+            if (isOverlapDupe) continue;
+          }
+
+          // Chrome truncation guard: Chrome sometimes finalizes shorter text
+          // than what was shown as interim. Preserve the truncated tail
+          // as pending interim for promotion on onend/restart.
+          const trimmedFinal = transcript.trim();
+          const trimmedInterim = this.lastInterimText.trim();
+          if (trimmedInterim.length > trimmedFinal.length + 2 &&
+              trimmedInterim.startsWith(trimmedFinal)) {
+            this.lastInterimText = trimmedInterim.slice(trimmedFinal.length).trim();
+            this.lastInterimTimestamp = new Date().toISOString();
+          } else {
+            this.lastInterimText = '';
+            this.lastInterimTimestamp = '';
+          }
           this.lastFinalText = transcript;
-          this.lastInterimText = '';
-          this.lastInterimTimestamp = '';
-          this.interimStartTime = 0;
-          this.clearFlushTimer();
         } else {
           this.lastInterimText = transcript;
           this.lastInterimTimestamp = new Date().toISOString();
-          // Track when interim accumulation started
-          if (this.interimStartTime === 0) {
-            this.interimStartTime = Date.now();
-          }
-          // Force-flush: restart recognition to promote interim→final when
-          // a Korean sentence ending is detected or interim exceeds 5 seconds
-          const sentenceEnded = hasKoreanSentenceEnding(transcript);
-          const interimTooLong = Date.now() - this.interimStartTime > 5000;
-          if (sentenceEnded || interimTooLong) {
-            this.clearFlushTimer();
-            // Small delay to let the API settle before restarting
-            this.flushTimer = setTimeout(() => {
-              if (this.isListening && this.shouldRestart) {
-                this.interimStartTime = 0;
-                this.restartRecognition();
-              }
-            }, 300);
-          }
         }
+
+        // Pass through to consumer — let Chrome decide interim vs final
         this.onResult?.({
           text: transcript,
           isFinal: result.isFinal,
@@ -224,12 +244,9 @@ export class BrowserSpeechRecognition {
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      // no-speech is normal during pauses — ignore it
       if (event.error === 'no-speech') return;
-      // aborted happens when we call stop() — ignore it
       if (event.error === 'aborted') return;
 
-      // Fatal errors: stop auto-restart and notify the caller
       const fatalErrors = ['not-allowed', 'network', 'service-not-allowed', 'language-not-supported'];
       if (fatalErrors.includes(event.error)) {
         this.shouldRestart = false;
@@ -240,9 +257,10 @@ export class BrowserSpeechRecognition {
     };
 
     recognition.onend = () => {
-      // Promote any remaining interim text to final before restarting,
-      // but skip if it duplicates the last final result (prevents
-      // double-text when Chrome restarts recognition).
+      // Ignore stale events from a previous recognition instance
+      if (this.recognition !== recognition) return;
+
+      // Promote remaining interim text to final (Chrome stopped mid-utterance)
       if (this.lastInterimText && !this.isDuplicate(this.lastInterimText, this.lastFinalText)) {
         this.lastFinalText = this.lastInterimText;
         this.onResult?.({
@@ -254,8 +272,7 @@ export class BrowserSpeechRecognition {
       this.lastInterimText = '';
       this.lastInterimTimestamp = '';
 
-      // Auto-restart with a fresh instance if still supposed to be listening.
-      // Skip if restartRecognition() already handled the restart (prevents cascade).
+      // Auto-restart if Chrome stopped unexpectedly (e.g. silence timeout)
       if (this.shouldRestart && this.isListening && !this.isRestarting) {
         setTimeout(() => {
           if (this.shouldRestart && this.isListening && !this.isRestarting) {
@@ -290,11 +307,10 @@ export class BrowserSpeechRecognition {
       if (this.isListening && this.shouldRestart && Date.now() - this.lastResultTime > 30_000) {
         console.warn('Speech recognition watchdog: no results for 30s, restarting...');
         this.restartRecognition();
-        this.lastResultTime = Date.now(); // reset to avoid rapid retries
+        this.lastResultTime = Date.now();
       }
     }, 10_000);
 
-    // Visibility change: restart when tab regains focus
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
 
     try {
@@ -312,22 +328,11 @@ export class BrowserSpeechRecognition {
     }
   }
 
-  private clearFlushTimer(): void {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
-  }
-
   pause(): void {
     this.isListening = false;
     this.shouldRestart = false;
     this.clearWatchdog();
-    try {
-      this.recognition?.stop();
-    } catch {
-      // Ignore
-    }
+    try { this.recognition?.stop(); } catch { /* ignore */ }
   }
 
   resume(): void {
@@ -336,7 +341,6 @@ export class BrowserSpeechRecognition {
     this.shouldRestart = true;
     this.lastResultTime = Date.now();
 
-    // Restart watchdog
     this.clearWatchdog();
     this.watchdogTimer = setInterval(() => {
       if (this.isListening && this.shouldRestart && Date.now() - this.lastResultTime > 30_000) {
@@ -349,11 +353,7 @@ export class BrowserSpeechRecognition {
     const fresh = this.setupRecognition();
     if (fresh) {
       this.recognition = fresh;
-      try {
-        fresh.start();
-      } catch {
-        // Already running — ignore
-      }
+      try { fresh.start(); } catch { /* ignore */ }
     }
   }
 
@@ -361,15 +361,15 @@ export class BrowserSpeechRecognition {
     this.isListening = false;
     this.shouldRestart = false;
     this.clearWatchdog();
-    this.clearFlushTimer();
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
-    try {
-      this.recognition?.stop();
-    } catch {
-      // Ignore
-    }
+    try { this.recognition?.stop(); } catch { /* ignore */ }
     this.recognition = null;
     this.onResult = null;
+  }
+
+  /** Get pending interim text (for source-switch promotion). */
+  getPendingInterim(): string | null {
+    return this.lastInterimText || null;
   }
 }
 
@@ -397,8 +397,6 @@ export function countWords(text: string): number {
     }
   }
 
-  // ~2 Korean chars = 1 word
   wordCount += Math.ceil(koreanCharCount / 2);
-
   return wordCount;
 }
