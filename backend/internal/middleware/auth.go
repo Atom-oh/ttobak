@@ -72,6 +72,7 @@ type ALBOIDCClaims struct {
 	FamilyName    string `json:"family_name"`
 	Exp           int64  `json:"exp"`
 	Iss           string `json:"iss"`
+	TokenUse      string `json:"token_use"`
 }
 
 // Auth is middleware that extracts user information from JWT
@@ -208,7 +209,12 @@ func getStringClaim(claims jwt.MapClaims, key string) string {
 	return ""
 }
 
-// parseUnverifiedJWT decodes JWT payload without signature verification (fallback)
+// parseUnverifiedJWT decodes JWT payload with lightweight validation (fallback)
+// Provides defense-in-depth when JWKS verification is not available:
+// - Validates token has 3 parts (header.payload.signature)
+// - Validates issuer matches expected Cognito URL (if pool ID known)
+// - Validates token is not expired
+// - Validates token_use is "id" (not "access")
 func parseUnverifiedJWT(token string) (*ALBOIDCClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -225,7 +231,42 @@ func parseUnverifiedJWT(token string) (*ALBOIDCClaims, error) {
 		return nil, err
 	}
 
+	// Defense-in-depth: lightweight validation even without signature verification
+	if err := validateClaimsLightweight(&claims); err != nil {
+		return nil, err
+	}
+
 	return &claims, nil
+}
+
+// validateClaimsLightweight performs lightweight JWT claim validation
+// for defense-in-depth when full signature verification is not available
+func validateClaimsLightweight(claims *ALBOIDCClaims) error {
+	// Validate token is not expired
+	if claims.Exp > 0 && time.Now().Unix() > claims.Exp {
+		return &AuthError{Message: "token expired"}
+	}
+
+	// Validate issuer if we know the expected pool
+	if cognitoUserPoolID != "" && claims.Iss != "" {
+		// Extract region from pool ID (format: {region}_{poolId})
+		region := cognitoRegion
+		if idx := strings.Index(cognitoUserPoolID, "_"); idx > 0 {
+			region = cognitoUserPoolID[:idx]
+		}
+		expectedIssuer := fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", region, cognitoUserPoolID)
+		if claims.Iss != expectedIssuer {
+			return &AuthError{Message: "invalid token issuer"}
+		}
+	}
+
+	// Validate token_use is "id" (not "access") for ID tokens
+	// Allow empty token_use for backward compatibility with ALB OIDC tokens
+	if claims.TokenUse != "" && claims.TokenUse != "id" {
+		return &AuthError{Message: "invalid token_use: expected id token"}
+	}
+
+	return nil
 }
 
 // getJWKSKeys fetches and caches JWKS keys from Cognito

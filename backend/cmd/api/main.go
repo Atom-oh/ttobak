@@ -60,8 +60,8 @@ func init() {
 	ecsServiceName := os.Getenv("ECS_SERVICE_NAME")
 	albDnsName := os.Getenv("ALB_DNS_NAME")
 
-	// Initialize repository
-	repo := repository.NewDynamoDBRepository(dynamoClient, tableName)
+	// Initialize repository with S3 support for large transcript storage
+	repo := repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
 
 	// Initialize services
 	meetingService := service.NewMeetingService(repo)

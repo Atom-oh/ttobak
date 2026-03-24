@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -13,14 +14,21 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 )
 
+// transcriptSizeThreshold is the size above which transcripts are stored in S3
+// DynamoDB has a 400KB item limit; we use 300KB to leave room for other attributes
+const transcriptSizeThreshold = 300 * 1024
+
 // DynamoDBRepository provides DynamoDB operations for the meeting assistant
 type DynamoDBRepository struct {
-	client    *dynamodb.Client
-	tableName string
+	client     *dynamodb.Client
+	tableName  string
+	s3Client   *s3.Client
+	bucketName string
 }
 
 // NewDynamoDBRepository creates a new DynamoDB repository
@@ -29,6 +37,114 @@ func NewDynamoDBRepository(client *dynamodb.Client, tableName string) *DynamoDBR
 		client:    client,
 		tableName: tableName,
 	}
+}
+
+// NewDynamoDBRepositoryWithS3 creates a new DynamoDB repository with S3 support for large transcripts
+func NewDynamoDBRepositoryWithS3(client *dynamodb.Client, tableName string, s3Client *s3.Client, bucketName string) *DynamoDBRepository {
+	return &DynamoDBRepository{
+		client:     client,
+		tableName:  tableName,
+		s3Client:   s3Client,
+		bucketName: bucketName,
+	}
+}
+
+// SetS3Client sets the S3 client for transcript overflow storage
+func (r *DynamoDBRepository) SetS3Client(s3Client *s3.Client, bucketName string) {
+	r.s3Client = s3Client
+	r.bucketName = bucketName
+}
+
+// storeTranscript stores a transcript, using S3 if it exceeds the size threshold
+// Returns the value to store in DynamoDB (either the text or an s3:// reference)
+func (r *DynamoDBRepository) storeTranscript(ctx context.Context, meetingID, field, text string) (string, error) {
+	if text == "" {
+		return "", nil
+	}
+
+	// If small enough or no S3 client, store inline
+	if len(text) < transcriptSizeThreshold || r.s3Client == nil {
+		return text, nil
+	}
+
+	// Store in S3
+	key := fmt.Sprintf("transcripts/%s/%s.txt", meetingID, field)
+	_, err := r.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(r.bucketName),
+		Key:         aws.String(key),
+		Body:        strings.NewReader(text),
+		ContentType: aws.String("text/plain; charset=utf-8"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to store transcript in S3: %w", err)
+	}
+
+	return fmt.Sprintf("s3://%s/%s", r.bucketName, key), nil
+}
+
+// loadTranscript loads a transcript, fetching from S3 if it's an S3 reference
+func (r *DynamoDBRepository) loadTranscript(ctx context.Context, ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+
+	// If not an S3 reference, return as-is
+	if !strings.HasPrefix(ref, "s3://") {
+		return ref, nil
+	}
+
+	// Parse S3 URL: s3://bucket/key
+	if r.s3Client == nil {
+		return ref, nil // Return reference as-is if no S3 client
+	}
+
+	trimmed := strings.TrimPrefix(ref, "s3://")
+	parts := strings.SplitN(trimmed, "/", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid S3 reference: %s", ref)
+	}
+	bucket := parts[0]
+	key := parts[1]
+
+	result, err := r.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to load transcript from S3: %w", err)
+	}
+	defer result.Body.Close()
+
+	data, err := io.ReadAll(result.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read transcript from S3: %w", err)
+	}
+
+	return string(data), nil
+}
+
+// resolveTranscripts loads transcripts from S3 if they are S3 references
+func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meeting *model.Meeting) error {
+	if meeting == nil {
+		return nil
+	}
+
+	var err error
+	if strings.HasPrefix(meeting.TranscriptA, "s3://") {
+		meeting.TranscriptA, err = r.loadTranscript(ctx, meeting.TranscriptA)
+		if err != nil {
+			return fmt.Errorf("failed to load transcriptA: %w", err)
+		}
+	}
+
+	if strings.HasPrefix(meeting.TranscriptB, "s3://") {
+		meeting.TranscriptB, err = r.loadTranscript(ctx, meeting.TranscriptB)
+		if err != nil {
+			return fmt.Errorf("failed to load transcriptB: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // CreateMeeting creates a new meeting record
@@ -90,6 +206,11 @@ func (r *DynamoDBRepository) GetMeeting(ctx context.Context, userID, meetingID s
 		return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
 	}
 
+	// Resolve S3 transcript references
+	if err := r.resolveTranscripts(ctx, &meeting); err != nil {
+		return nil, err
+	}
+
 	return &meeting, nil
 }
 
@@ -126,6 +247,11 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 		return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
 	}
 
+	// Resolve S3 transcript references
+	if err := r.resolveTranscripts(ctx, &meeting); err != nil {
+		return nil, err
+	}
+
 	return &meeting, nil
 }
 
@@ -153,8 +279,30 @@ func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, meetingIDs []
 }
 
 // UpdateMeeting updates a meeting record
+// Large transcripts are automatically stored in S3 to avoid DynamoDB's 400KB limit
 func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.Meeting) error {
 	meeting.UpdatedAt = time.Now().UTC()
+
+	// Store large transcripts in S3 if S3 client is available
+	if r.s3Client != nil && r.bucketName != "" {
+		// Store transcriptA if needed
+		if meeting.TranscriptA != "" && !strings.HasPrefix(meeting.TranscriptA, "s3://") {
+			ref, err := r.storeTranscript(ctx, meeting.MeetingID, "transcriptA", meeting.TranscriptA)
+			if err != nil {
+				return fmt.Errorf("failed to store transcriptA: %w", err)
+			}
+			meeting.TranscriptA = ref
+		}
+
+		// Store transcriptB if needed
+		if meeting.TranscriptB != "" && !strings.HasPrefix(meeting.TranscriptB, "s3://") {
+			ref, err := r.storeTranscript(ctx, meeting.MeetingID, "transcriptB", meeting.TranscriptB)
+			if err != nil {
+				return fmt.Errorf("failed to store transcriptB: %w", err)
+			}
+			meeting.TranscriptB = ref
+		}
+	}
 
 	item, err := attributevalue.MarshalMap(meeting)
 	if err != nil {

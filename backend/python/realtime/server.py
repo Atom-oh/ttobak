@@ -4,6 +4,7 @@ import asyncio
 import io
 import json
 import os
+import signal
 import time
 import uuid
 import wave
@@ -12,12 +13,29 @@ from typing import Any
 import boto3
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+# Shutdown event for graceful Spot interruption handling
+shutdown_event = asyncio.Event()
+
+# Track active connections for flushing on shutdown
+active_connections: set["ConnectionState"] = set()
+
 from detector import QuestionDetector
 from stt import WhisperSTT
 from translator import Translator
 
 # Initialize FastAPI app
 app = FastAPI(title="Ttobak Realtime STT Server")
+
+
+def handle_sigterm(signum, frame):
+    """Handle SIGTERM signal (Spot interruption warning)."""
+    print("SIGTERM received - Spot interruption warning. Initiating graceful shutdown...")
+    # Set the shutdown event - asyncio.Event is thread-safe for set()
+    shutdown_event.set()
+
+
+# Register SIGTERM handler for Spot interruption (2-minute warning)
+signal.signal(signal.SIGTERM, handle_sigterm)
 
 # S3 client for audio aggregation upload
 s3_client = boto3.client("s3")
@@ -39,6 +57,27 @@ async def startup_event():
     translator_service = Translator()
     question_detector = QuestionDetector()
     print("All services initialized.")
+
+
+@app.on_event("shutdown")
+async def shutdown_handler():
+    """Flush all active connections on shutdown (Spot interruption or normal shutdown)."""
+    print(f"Shutdown event triggered. Flushing {len(active_connections)} active connections...")
+    shutdown_event.set()
+
+    # Give connections time to detect shutdown and flush their audio
+    await asyncio.sleep(2)
+
+    # Force flush any remaining connections
+    for state in list(active_connections):
+        try:
+            if state.aggregated_audio and len(state.aggregated_audio) >= 16000:
+                await save_aggregated_audio(state)
+                print(f"Force-flushed audio for session {state.session_id}")
+        except Exception as e:
+            print(f"Error flushing connection {state.session_id}: {e}")
+
+    print("Shutdown flush complete.")
 
 
 @app.get("/health")
@@ -78,6 +117,12 @@ async def process_audio(
     PROCESS_INTERVAL = 0.5  # seconds
 
     while state.running:
+        # Check for Spot interruption shutdown signal
+        if shutdown_event.is_set():
+            print(f"Shutdown detected in process_audio for session {state.session_id}")
+            state.running = False
+            break
+
         await asyncio.sleep(0.1)  # Check interval
 
         audio_to_process = b""
@@ -286,14 +331,34 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     state = ConnectionState()
     process_task: asyncio.Task | None = None
 
+    # Track this connection for shutdown flushing
+    active_connections.add(state)
+
     try:
         # Start background audio processing task
         process_task = asyncio.create_task(process_audio(websocket, state))
 
         # Main receive loop
         while state.running:
+            # Check for Spot interruption shutdown signal
+            if shutdown_event.is_set():
+                print(f"Spot interruption detected for session {state.session_id}. Flushing audio...")
+                # Save audio before closing
+                audio_key = await save_aggregated_audio(state)
+                # Notify client about Spot interruption so it can fall back to Web Speech API
+                try:
+                    await websocket.send_json({
+                        "type": "spot_interruption",
+                        "message": "Server is shutting down due to Spot instance reclaim. Please reconnect or use fallback.",
+                        "audioKey": audio_key,
+                    })
+                except Exception:
+                    pass
+                break
+
             try:
-                message = await websocket.receive()
+                # Use wait_for with timeout to allow checking shutdown_event periodically
+                message = await asyncio.wait_for(websocket.receive(), timeout=1.0)
 
                 if message["type"] == "websocket.disconnect":
                     break
@@ -315,6 +380,10 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         if not should_continue:
                             break
 
+            except asyncio.TimeoutError:
+                # Timeout is expected - allows us to check shutdown_event
+                continue
+
             except WebSocketDisconnect:
                 break
 
@@ -322,6 +391,9 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         print(f"WebSocket error: {e}")
 
     finally:
+        # Remove from active connections tracking
+        active_connections.discard(state)
+
         # Cleanup
         state.running = False
         if process_task:
@@ -331,7 +403,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             except asyncio.CancelledError:
                 pass
 
-        # Save aggregated audio to S3
+        # Save aggregated audio to S3 (skip if already saved during shutdown)
         audio_key = await save_aggregated_audio(state)
         if audio_key:
             try:

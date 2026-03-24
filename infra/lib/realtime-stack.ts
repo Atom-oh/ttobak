@@ -102,6 +102,8 @@ export class RealtimeStack extends cdk.Stack {
         retries: 3,
         startPeriod: cdk.Duration.seconds(300), // 5 minutes for Whisper large-v3 model loading on GPU
       },
+      // Allow 120 seconds for graceful shutdown on Spot interruption (2-minute warning)
+      stopTimeout: cdk.Duration.seconds(120),
     });
 
     // Security Group for ECS tasks

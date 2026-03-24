@@ -43,7 +43,7 @@ func init() {
 		outputBucket = "ttobak-assets"
 	}
 
-	repo = repository.NewDynamoDBRepository(dynamoClient, tableName)
+	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, outputBucket)
 	transcribeService = service.NewTranscribeService(transcribeClient, s3Client, repo, outputBucket)
 }
 

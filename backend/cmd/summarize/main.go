@@ -52,8 +52,12 @@ func init() {
 	if tableName == "" {
 		tableName = "ttobak-main"
 	}
+	bucketName := os.Getenv("BUCKET_NAME")
+	if bucketName == "" {
+		bucketName = "ttobak-assets"
+	}
 
-	repo = repository.NewDynamoDBRepository(dynamoClient, tableName)
+	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
 	bedrockService = service.NewBedrockService(bedrockClient, s3Client, repo)
 }
 
