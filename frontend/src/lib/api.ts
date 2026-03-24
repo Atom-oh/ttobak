@@ -62,15 +62,18 @@ export async function apiFetch<T>(
   if (response.status === 401 && !skipAuth) {
     const freshToken = await refreshSession();
     if (!freshToken) {
-      // Clear stale auth state to break infinite retry/re-render loop
-      triggerAuthFailure();
+      // Refresh failed — clear auth only if no valid tokens remain
+      // (avoids logging out on transient failures right after login)
+      if (!getIdToken()) {
+        triggerAuthFailure();
+      }
       throw new Error('Authentication required');
     }
     response = await fetch(url, {
       ...rest,
       headers: { ...mergedHeaders, Authorization: `Bearer ${freshToken}` },
     });
-    // If still 401 after retry, clear auth and redirect
+    // If still 401 after refresh+retry, auth is truly invalid
     if (response.status === 401) {
       triggerAuthFailure();
       throw new Error('Authentication required');
