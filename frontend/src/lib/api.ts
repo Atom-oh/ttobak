@@ -18,11 +18,8 @@ function isTokenExpired(token: string): boolean {
   }
 }
 
-function redirectToLogin(): void {
-  if (typeof window !== 'undefined' && window.location.pathname !== '/') {
-    window.location.href = '/';
-  }
-}
+// No hard redirect — let callers handle auth errors gracefully
+// (hard redirect during recording would lose in-progress work)
 
 // Mutex for token refresh — prevents concurrent refreshSession() race conditions
 let refreshPromise: Promise<string | null> | null = null;
@@ -70,7 +67,6 @@ export async function apiFetch<T>(
   if (response.status === 401 && !skipAuth) {
     const freshToken = await refreshTokenOnce();
     if (!freshToken) {
-      redirectToLogin();
       throw new Error('Authentication required');
     }
     response = await fetch(url, {
@@ -78,7 +74,6 @@ export async function apiFetch<T>(
       headers: { ...mergedHeaders, Authorization: `Bearer ${freshToken}` },
     });
     if (response.status === 401) {
-      redirectToLogin();
       throw new Error('Authentication required');
     }
   }
