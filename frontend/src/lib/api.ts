@@ -1,7 +1,6 @@
 'use client';
 
 import { getIdToken, refreshSession } from './auth';
-import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -71,16 +70,15 @@ export async function apiFetch<T>(
   if (response.status === 401 && !skipAuth) {
     const freshToken = await refreshTokenOnce();
     if (!freshToken) {
-      // Refresh failed — don't clear auth (may be transient; mutex prevents cascade)
+      redirectToLogin();
       throw new Error('Authentication required');
     }
     response = await fetch(url, {
       ...rest,
       headers: { ...mergedHeaders, Authorization: `Bearer ${freshToken}` },
     });
-    // If still 401 after refresh+retry, auth is truly invalid
     if (response.status === 401) {
-      triggerAuthFailure();
+      redirectToLogin();
       throw new Error('Authentication required');
     }
   }
