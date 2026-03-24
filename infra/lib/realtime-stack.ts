@@ -100,7 +100,7 @@ export class RealtimeStack extends cdk.Stack {
         interval: cdk.Duration.seconds(30),
         timeout: cdk.Duration.seconds(5),
         retries: 3,
-        startPeriod: cdk.Duration.seconds(120),
+        startPeriod: cdk.Duration.seconds(300), // 5 minutes for Whisper large-v3 model loading on GPU
       },
     });
 

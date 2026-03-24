@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -62,8 +63,50 @@ type TranscribeResult struct {
 		Transcripts []struct {
 			Transcript string `json:"transcript"`
 		} `json:"transcripts"`
+		SpeakerLabels *SpeakerLabels `json:"speaker_labels,omitempty"`
+		Items         []TranscribeItem `json:"items,omitempty"`
 	} `json:"results"`
 	Status string `json:"status"`
+}
+
+// SpeakerLabels represents the speaker diarization results
+type SpeakerLabels struct {
+	Speakers int              `json:"speakers"`
+	Segments []SpeakerSegment `json:"segments"`
+}
+
+// SpeakerSegment represents a contiguous speech segment by one speaker
+type SpeakerSegment struct {
+	StartTime    string        `json:"start_time"`
+	EndTime      string        `json:"end_time"`
+	SpeakerLabel string        `json:"speaker_label"`
+	Items        []SpeakerItem `json:"items"`
+}
+
+// SpeakerItem represents a word within a speaker segment
+type SpeakerItem struct {
+	StartTime    string `json:"start_time"`
+	EndTime      string `json:"end_time"`
+	SpeakerLabel string `json:"speaker_label"`
+}
+
+// TranscribeItem represents a word/punctuation in the transcribe output
+type TranscribeItem struct {
+	StartTime    string `json:"start_time,omitempty"`
+	EndTime      string `json:"end_time,omitempty"`
+	Type         string `json:"type"` // "pronunciation" or "punctuation"
+	Alternatives []struct {
+		Confidence string `json:"confidence"`
+		Content    string `json:"content"`
+	} `json:"alternatives"`
+}
+
+// TranscriptSegmentOut represents a speaker-labeled transcript segment for the API response
+type TranscriptSegmentOut struct {
+	Speaker   string  `json:"speaker"`
+	Text      string  `json:"text"`
+	StartTime float64 `json:"startTime"`
+	EndTime   float64 `json:"endTime"`
 }
 
 // Handler processes EventBridge S3 events for completed transcriptions
@@ -98,14 +141,14 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	isNova := strings.Contains(key, "-nova.json")
 
 	// Download and parse transcript
-	transcript, err := downloadAndParseTranscript(ctx, bucket, key)
+	transcript, segments, err := downloadAndParseTranscript(ctx, bucket, key)
 	if err != nil {
 		log.Printf("Failed to parse transcript: %v", err)
 		return nil
 	}
 
-	// Update meeting with transcript
-	err = updateMeetingTranscript(ctx, meetingID, transcript, isNova)
+	// Update meeting with transcript and speaker segments
+	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, isNova)
 	if err != nil {
 		log.Printf("Failed to update meeting with transcript: %v", err)
 		return nil
@@ -122,7 +165,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	// Generate summary if at least one transcript is available
 	if meeting != nil && (meeting.TranscriptA != "" || meeting.TranscriptB != "") {
-		if meeting.Status == model.StatusSummarizing || meeting.Status == model.StatusTranscribing {
+		if meeting.Status != model.StatusError {
 			meeting.Status = model.StatusSummarizing
 			repo.UpdateMeeting(ctx, meeting)
 
@@ -141,31 +184,77 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	return nil
 }
 
-func downloadAndParseTranscript(ctx context.Context, bucket, key string) (string, error) {
+func downloadAndParseTranscript(ctx context.Context, bucket, key string) (string, []TranscriptSegmentOut, error) {
 	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to download transcript: %w", err)
+		return "", nil, fmt.Errorf("failed to download transcript: %w", err)
 	}
 	defer result.Body.Close()
 
 	data, err := io.ReadAll(result.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read transcript: %w", err)
+		return "", nil, fmt.Errorf("failed to read transcript: %w", err)
 	}
 
 	var transcribeResult TranscribeResult
 	if err := json.Unmarshal(data, &transcribeResult); err != nil {
-		return "", fmt.Errorf("failed to parse transcript JSON: %w", err)
+		return "", nil, fmt.Errorf("failed to parse transcript JSON: %w", err)
 	}
 
-	if len(transcribeResult.Results.Transcripts) > 0 {
-		return transcribeResult.Results.Transcripts[0].Transcript, nil
+	if len(transcribeResult.Results.Transcripts) == 0 {
+		return "", nil, fmt.Errorf("no transcript found in result")
 	}
 
-	return "", fmt.Errorf("no transcript found in result")
+	transcript := transcribeResult.Results.Transcripts[0].Transcript
+	segments := extractSpeakerSegments(&transcribeResult)
+
+	return transcript, segments, nil
+}
+
+// extractSpeakerSegments builds speaker-labeled segments from Transcribe output
+func extractSpeakerSegments(result *TranscribeResult) []TranscriptSegmentOut {
+	if result.Results.SpeakerLabels == nil || len(result.Results.SpeakerLabels.Segments) == 0 {
+		return nil
+	}
+
+	// Build a map from item start_time -> content for pronunciation items
+	itemContent := make(map[string]string)
+	for _, item := range result.Results.Items {
+		if len(item.Alternatives) > 0 {
+			if item.Type == "pronunciation" && item.StartTime != "" {
+				itemContent[item.StartTime] = item.Alternatives[0].Content
+			}
+		}
+	}
+
+	// Walk speaker segments and accumulate text
+	var segments []TranscriptSegmentOut
+	for _, seg := range result.Results.SpeakerLabels.Segments {
+		var words []string
+		for _, item := range seg.Items {
+			if content, ok := itemContent[item.StartTime]; ok {
+				words = append(words, content)
+			}
+		}
+		if len(words) == 0 {
+			continue
+		}
+
+		startTime, _ := strconv.ParseFloat(seg.StartTime, 64)
+		endTime, _ := strconv.ParseFloat(seg.EndTime, 64)
+
+		segments = append(segments, TranscriptSegmentOut{
+			Speaker:   seg.SpeakerLabel,
+			Text:      strings.Join(words, " "),
+			StartTime: startTime,
+			EndTime:   endTime,
+		})
+	}
+
+	return segments
 }
 
 func extractMeetingIDFromTranscriptKey(key string) string {
@@ -176,7 +265,7 @@ func extractMeetingIDFromTranscriptKey(key string) string {
 	return key
 }
 
-func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, isNova bool) error {
+func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, segments []TranscriptSegmentOut, isNova bool) error {
 	meeting, err := repo.GetMeetingByID(ctx, meetingID)
 	if err != nil {
 		return err
@@ -189,6 +278,15 @@ func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, 
 		meeting.TranscriptB = transcript
 	} else {
 		meeting.TranscriptA = transcript
+	}
+
+	// Save speaker segments as JSON string
+	if len(segments) > 0 {
+		segJSON, err := json.Marshal(segments)
+		if err == nil {
+			meeting.TranscriptSegments = string(segJSON)
+			log.Printf("Saved %d speaker segments for meeting %s", len(segments), meetingID)
+		}
 	}
 
 	return repo.UpdateMeeting(ctx, meeting)

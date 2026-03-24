@@ -19,7 +19,10 @@ export class AiStack extends cdk.Stack {
     // IAM role for Lambda functions to access AI services
     this.lambdaRole = new iam.Role(this, 'TtobakLambdaRole', {
       roleName: 'ttobak-lambda-role',
-      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      assumedBy: new iam.CompositePrincipal(
+        new iam.ServicePrincipal('lambda.amazonaws.com'),
+        new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+      ),
       description: 'Role for Ttobak Lambda functions to access AI services',
     });
 
@@ -131,6 +134,21 @@ export class AiStack extends cdk.Stack {
         sid: 'ApiGatewayManagement',
         effect: iam.Effect.ALLOW,
         actions: ['execute-api:ManageConnections'],
+        resources: ['*'],
+      })
+    );
+
+    // ECS permissions (for realtime transcription service management)
+    this.lambdaRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'EcsRealtimeAccess',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'ecs:ListTasks',
+          'ecs:DescribeTasks',
+          'ecs:UpdateService',
+          'ecs:DescribeServices',
+        ],
         resources: ['*'],
       })
     );

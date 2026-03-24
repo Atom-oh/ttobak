@@ -55,9 +55,8 @@ func (s *RealtimeService) StartRealtime(ctx context.Context) (string, error) {
 		}
 
 		if len(tasks.TaskArns) > 0 {
-			// Task is running - return WebSocket URL via ALB
-			wsURL := fmt.Sprintf("ws://%s/ws", s.albDnsName)
-			return wsURL, nil
+			// Return relative path — frontend constructs full wss:// URL via CloudFront
+			return "/ws", nil
 		}
 
 		select {
@@ -97,7 +96,9 @@ func (s *RealtimeService) StartRealtimeAsync(ctx context.Context) error {
 	return nil
 }
 
-// GetStatus returns whether the ECS service has running tasks.
+// GetStatus returns whether the ECS service has a task that is actually RUNNING and HEALTHY.
+// Simply having a task ARN with DesiredStatus=RUNNING is not enough — we must check
+// that lastStatus is RUNNING and healthStatus is HEALTHY before returning ready.
 func (s *RealtimeService) GetStatus(ctx context.Context) (bool, string, error) {
 	tasks, err := s.ecsClient.ListTasks(ctx, &ecs.ListTasksInput{
 		Cluster:       aws.String(s.clusterName),
@@ -108,9 +109,30 @@ func (s *RealtimeService) GetStatus(ctx context.Context) (bool, string, error) {
 		return false, "", fmt.Errorf("failed to list tasks: %w", err)
 	}
 
-	if len(tasks.TaskArns) > 0 {
-		wsURL := fmt.Sprintf("ws://%s/ws", s.albDnsName)
-		return true, wsURL, nil
+	if len(tasks.TaskArns) == 0 {
+		return false, "", nil
 	}
+
+	// Describe tasks to check actual status and health
+	taskDetails, err := s.ecsClient.DescribeTasks(ctx, &ecs.DescribeTasksInput{
+		Cluster: aws.String(s.clusterName),
+		Tasks:   tasks.TaskArns,
+	})
+	if err != nil {
+		return false, "", fmt.Errorf("failed to describe tasks: %w", err)
+	}
+
+	for _, task := range taskDetails.Tasks {
+		// Check that lastStatus is RUNNING (not PENDING, PROVISIONING, etc.)
+		if task.LastStatus == nil || *task.LastStatus != "RUNNING" {
+			continue
+		}
+		// Check that healthStatus is HEALTHY (not UNKNOWN or UNHEALTHY)
+		// Note: healthStatus may be nil if no health check is configured
+		if task.HealthStatus == types.HealthStatusHealthy {
+			return true, "/ws", nil
+		}
+	}
+
 	return false, "", nil
 }

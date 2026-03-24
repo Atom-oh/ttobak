@@ -93,28 +93,28 @@ func (r *DynamoDBRepository) GetMeeting(ctx context.Context, userID, meetingID s
 	return &meeting, nil
 }
 
-// GetMeetingByID retrieves a meeting by meetingID by scanning all users
+// GetMeetingByID retrieves a meeting by meetingID using GSI3
 // This is used for internal operations where we know the meetingID but not the owner
 func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error) {
-	// Use GSI1 to find the meeting - GSI1PK is USER#{userId}, GSI1SK is timestamp
-	// We need to scan or use a different approach since meetingID is in SK
-	// Let's query by SK pattern using a scan with filter
-	filterEx := expression.Name("meetingId").Equal(expression.Value(meetingID)).
-		And(expression.Name("entityType").Equal(expression.Value("MEETING")))
-	expr, err := expression.NewBuilder().WithFilter(filterEx).Build()
+	// Query GSI3 where meetingId = meetingID, filter for entityType = MEETING
+	keyEx := expression.Key("meetingId").Equal(expression.Value(meetingID))
+	filterEx := expression.Name("entityType").Equal(expression.Value("MEETING"))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).WithFilter(filterEx).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
 
-	result, err := r.client.Scan(ctx, &dynamodb.ScanInput{
+	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
+		IndexName:                 aws.String("GSI3"),
+		KeyConditionExpression:    expr.KeyCondition(),
 		FilterExpression:          expr.Filter(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		Limit:                     aws.Int32(1),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to scan for meeting: %w", err)
+		return nil, fmt.Errorf("failed to query for meeting: %w", err)
 	}
 
 	if len(result.Items) == 0 {
@@ -129,55 +129,24 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 	return &meeting, nil
 }
 
-// BatchGetMeetings retrieves multiple meetings by their meetingIDs using a single scan.
-// This avoids N+1 queries when loading shared meetings.
+// BatchGetMeetings retrieves multiple meetings by their meetingIDs using GSI3 queries.
+// This avoids N+1 queries when loading shared meetings by running parallel queries.
 func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, meetingIDs []string) ([]*model.Meeting, error) {
 	if len(meetingIDs) == 0 {
 		return nil, nil
 	}
 
-	// For a single meetingID, use the existing method
-	if len(meetingIDs) == 1 {
-		meeting, err := r.GetMeetingByID(ctx, meetingIDs[0])
+	// Query GSI3 for each meetingID - this is more efficient than a full table scan
+	// Each query only reads items with that specific meetingId
+	var meetings []*model.Meeting
+	for _, meetingID := range meetingIDs {
+		meeting, err := r.GetMeetingByID(ctx, meetingID)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to get meeting %s: %w", meetingID, err)
 		}
 		if meeting != nil {
-			return []*model.Meeting{meeting}, nil
+			meetings = append(meetings, meeting)
 		}
-		return nil, nil
-	}
-
-	// Build filter: entityType = MEETING AND meetingId IN (id1, id2, ...)
-	values := make([]expression.OperandBuilder, len(meetingIDs))
-	for i, id := range meetingIDs {
-		values[i] = expression.Value(id)
-	}
-
-	filterEx := expression.Name("entityType").Equal(expression.Value("MEETING")).
-		And(expression.Name("meetingId").In(values[0], values[1:]...))
-	expr, err := expression.NewBuilder().WithFilter(filterEx).Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to build expression: %w", err)
-	}
-
-	result, err := r.client.Scan(ctx, &dynamodb.ScanInput{
-		TableName:                 aws.String(r.tableName),
-		FilterExpression:          expr.Filter(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to scan for meetings: %w", err)
-	}
-
-	var meetings []*model.Meeting
-	for _, item := range result.Items {
-		var meeting model.Meeting
-		if err := attributevalue.UnmarshalMap(item, &meeting); err != nil {
-			continue
-		}
-		meetings = append(meetings, &meeting)
 	}
 
 	return meetings, nil

@@ -99,8 +99,9 @@ export class SttOrchestrator {
         return;
       }
 
-      // Poll for readiness (max 24 polls = 120s)
-      for (let i = 0; i < 24; i++) {
+      // Poll for readiness (max 60 polls * 5s = 300s = 5 minutes)
+      // GPU cold start can take 3-5 minutes (instance launch + Whisper model load)
+      for (let i = 0; i < 60; i++) {
         if (this.stopped) return;
         await new Promise(resolve => setTimeout(resolve, 5000));
         if (this.stopped) return;
@@ -115,7 +116,7 @@ export class SttOrchestrator {
           // Continue polling on error
         }
       }
-      console.warn('ECS did not become ready within 120s, staying on fallback');
+      console.warn('ECS did not become ready within 300s, staying on fallback');
     } catch (err) {
       // ECS start failed (e.g. capacity provider empty, TLS error) — stay on fallback silently.
       // Do NOT call callbacks.onError here: fallback STT is still working fine.

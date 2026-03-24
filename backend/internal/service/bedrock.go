@@ -16,7 +16,15 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
-var ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-4-6-v1")
+// Model IDs for different use cases (cost optimization)
+var (
+	// ClaudeOpusModelID is for complex tasks (Q&A with tools, image analysis)
+	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-4-6-v1")
+	// ClaudeSonnetModelID is for summarization (final meeting summary)
+	ClaudeSonnetModelID = getEnvOrDefault("BEDROCK_SUMMARIZE_MODEL_ID", "global.anthropic.claude-sonnet-4-6-v1")
+	// ClaudeHaikuModelID is for live summary (fast, low-cost incremental updates)
+	ClaudeHaikuModelID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+)
 
 func getEnvOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
@@ -86,6 +94,14 @@ type ClaudeResponse struct {
 	} `json:"usage"`
 }
 
+// speakerSegment represents a speaker-labeled transcript segment for summary generation
+type speakerSegment struct {
+	Speaker   string  `json:"speaker"`
+	Text      string  `json:"text"`
+	StartTime float64 `json:"startTime"`
+	EndTime   float64 `json:"endTime"`
+}
+
 // SummarizeTranscript generates meeting notes (content) from the transcript using Claude
 func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID string) (string, error) {
 	meeting, err := s.repo.GetMeetingByID(ctx, meetingID)
@@ -107,32 +123,52 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID stri
 		return "", fmt.Errorf("no transcript available for meeting: %s", meetingID)
 	}
 
-	systemPrompt := `You are an expert meeting assistant that creates concise, well-structured meeting notes in Markdown format.
-전체 요약은 반드시 200단어 이내로 간결하게 작성하세요. 불필요한 반복이나 장황한 설명을 피하세요.
+	systemPrompt := `You are an expert meeting assistant. Create comprehensive, well-structured meeting notes in Markdown.
 
-Your output should include the following sections:
+Your output MUST follow this exact structure:
+
 # 회의록
 
+## 참석자
+- 화자별 식별 및 주요 역할 추정
+
 ## 개요
-- 회의 핵심 요약 (2-3문장)
+- 회의 핵심 요약 (3-5문장)
+
+## 화자별 주요 발언
+### [Speaker Label]
+- 주요 발언 요약 (2-3개)
 
 ## 주요 논의 사항
-- 핵심 토픽만 간결하게
+- 논의된 핵심 토픽 (상세하게)
 
 ## 결정 사항
 - 합의된 결정들
 
 ## 액션 아이템
-- [ ] 담당자: 할 일 내용
+- [ ] 담당자(Speaker Label): 할 일 내용
 
 Format in Korean unless the transcript is entirely in English.
-Use bullet points and checkboxes. Keep each bullet to one line.`
+Use bullet points and checkboxes. Include timestamps where available.`
 
+	// Build speaker-labeled prompt if segments exist
 	userPrompt := fmt.Sprintf("다음 회의 녹취록을 바탕으로 회의록을 작성해주세요:\n\n%s", transcript)
+
+	if meeting.TranscriptSegments != "" {
+		var segments []speakerSegment
+		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
+			var sb strings.Builder
+			sb.WriteString("다음은 화자별로 분리된 회의 녹취록입니다:\n\n")
+			for _, seg := range segments {
+				sb.WriteString(fmt.Sprintf("[%s %.0f초~%.0f초] %s\n", seg.Speaker, seg.StartTime, seg.EndTime, seg.Text))
+			}
+			userPrompt = sb.String() + "\n\n위 녹취록을 바탕으로 회의록을 작성해주세요."
+		}
+	}
 
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
-		MaxTokens:        1024,
+		MaxTokens:        4096,
 		System:           systemPrompt,
 		Messages: []ClaudeMessage{
 			{
@@ -144,7 +180,8 @@ Use bullet points and checkboxes. Keep each bullet to one line.`
 		},
 	}
 
-	content, err := s.invokeClaudeModel(ctx, request)
+	// Use Sonnet for summarization (cost optimization)
+	content, err := s.invokeClaudeModelWithID(ctx, request, ClaudeSonnetModelID)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
@@ -335,13 +372,18 @@ func (s *BedrockService) ProcessImageAttachment(ctx context.Context, meetingID, 
 
 // invokeClaudeModel sends a request to Claude via Bedrock and returns the response
 func (s *BedrockService) invokeClaudeModel(ctx context.Context, request ClaudeRequest) (string, error) {
+	return s.invokeClaudeModelWithID(ctx, request, ClaudeOpusModelID)
+}
+
+// invokeClaudeModelWithID sends a request to Claude via Bedrock using a specific model ID
+func (s *BedrockService) invokeClaudeModelWithID(ctx context.Context, request ClaudeRequest, modelID string) (string, error) {
 	requestBody, err := json.Marshal(request)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	output, err := s.bedrockClient.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
-		ModelId:     aws.String(ClaudeOpusModelID),
+		ModelId:     aws.String(modelID),
 		ContentType: aws.String("application/json"),
 		Accept:      aws.String("application/json"),
 		Body:        requestBody,
