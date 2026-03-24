@@ -85,7 +85,7 @@ export class GatewayStack extends cdk.Stack {
       role: props.lambdaRole as iam.Role,
       environment: {
         TABLE_NAME: props.table.tableName,
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-4-6-v1',
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6-v1',
         AWS_REGION_NAME: cdk.Aws.REGION,
       },
       timeout: cdk.Duration.minutes(2),
@@ -151,7 +151,10 @@ export class GatewayStack extends cdk.Stack {
       apiName: 'ttobak-api',
       description: 'Ttobak HTTP API',
       corsPreflight: {
-        allowOrigins: ['*'],
+        allowOrigins: [
+          'https://d115v97ubjhb06.cloudfront.net',
+          'http://localhost:3000',
+        ],
         allowMethods: [
           apigatewayv2.CorsHttpMethod.GET,
           apigatewayv2.CorsHttpMethod.POST,

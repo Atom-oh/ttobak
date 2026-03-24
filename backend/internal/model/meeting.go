@@ -18,6 +18,7 @@ type Meeting struct {
 	AudioKey           string    `dynamodbav:"audioKey,omitempty"`           // S3 key for audio file
 	SttProvider        string    `dynamodbav:"sttProvider,omitempty"`        // "transcribe" or "nova-sonic"
 	TranscriptSegments string    `dynamodbav:"transcriptSegments,omitempty"` // JSON string of speaker-labeled segments
+	ActionItems        string    `dynamodbav:"actionItems,omitempty"`        // JSON string of extracted action items
 	Participants       []string  `dynamodbav:"participants,omitempty"`
 	Tags               []string  `dynamodbav:"tags,omitempty"`
 	Status             string    `dynamodbav:"status"` // recording, transcribing, summarizing, done, error

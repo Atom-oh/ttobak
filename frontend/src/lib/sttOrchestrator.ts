@@ -4,7 +4,7 @@
  */
 
 import { TranscribeFallbackClient } from './transcribeClient';
-import { RealtimeClient } from './realtimeClient';
+import { RealtimeClient, VadConfig, VadStats } from './realtimeClient';
 import { realtimeApi } from './api';
 
 export type SttSource = 'fallback' | 'whisper' | 'idle';
@@ -16,6 +16,7 @@ export interface SttCallbacks {
   onSourceChange: (source: SttSource) => void;
   onError: (error: string) => void;
   onBackendAudioSaved?: (key: string) => void;
+  onVadStatus?: (isSpeaking: boolean) => void;
 }
 
 export class SttOrchestrator {
@@ -32,6 +33,7 @@ export class SttOrchestrator {
   private userId?: string;
   private meetingId?: string;
   private backendAudioKey?: string;
+  private vadConfig: Partial<VadConfig> = { enabled: true };
 
   constructor(
     callbacks: SttCallbacks,
@@ -52,6 +54,21 @@ export class SttOrchestrator {
   updateTranslationEnabled(enabled: boolean): void {
     this.translationEnabled = enabled;
     this.fallbackClient?.updateTranslationEnabled(enabled);
+  }
+
+  /**
+   * Update VAD configuration. Takes effect on next WebSocket connection.
+   */
+  setVadConfig(config: Partial<VadConfig>): void {
+    this.vadConfig = { ...this.vadConfig, ...config };
+    this.realtimeClient?.setVadConfig(this.vadConfig);
+  }
+
+  /**
+   * Get current VAD statistics (only available when using whisper/realtime).
+   */
+  getVadStats(): VadStats | null {
+    return this.realtimeClient?.getVadStats() ?? null;
   }
 
   async start(stream: MediaStream): Promise<void> {
@@ -208,7 +225,13 @@ export class SttOrchestrator {
         this.backendAudioKey = key;
         this.callbacks.onBackendAudioSaved?.(key);
       },
+      onVadStatus: (isSpeaking: boolean) => {
+        this.callbacks.onVadStatus?.(isSpeaking);
+      },
     });
+
+    // Apply VAD configuration
+    this.realtimeClient.setVadConfig(this.vadConfig);
 
     try {
       await this.realtimeClient.connect(

@@ -1,6 +1,7 @@
 /**
  * WebSocket client for ECS faster-whisper real-time transcription.
  * Captures audio via AudioWorklet, resamples to 16kHz PCM, and streams to the server.
+ * Includes client-side VAD (Voice Activity Detection) to filter silence and reduce bandwidth.
  */
 
 export interface RealtimeCallbacks {
@@ -10,6 +11,38 @@ export interface RealtimeCallbacks {
   onError: (error: string) => void;
   onDisconnect: () => void;
   onAudioSaved?: (key: string) => void;
+  onVadStatus?: (isSpeaking: boolean) => void;
+}
+
+export interface VadConfig {
+  enabled: boolean;
+  threshold: number;      // RMS threshold for speech detection (default: 0.01)
+  hangoverFrames: number; // Frames to keep sending after speech ends (default: 6 = ~300ms)
+  preBufferFrames: number; // Frames to buffer before speech (default: 2 = ~100ms)
+}
+
+export interface VadStats {
+  totalChunks: number;
+  sentChunks: number;
+  savedPercent: number;
+  isSpeaking: boolean;
+}
+
+/**
+ * Simple energy-based VAD using RMS (Root Mean Square) of audio samples.
+ * Returns true if the audio chunk contains voice activity.
+ */
+function isVoiceActive(pcmData: Int16Array, threshold: number): boolean {
+  if (pcmData.length === 0) return false;
+
+  // Calculate RMS energy (normalized to [-1, 1] range)
+  let sum = 0;
+  for (let i = 0; i < pcmData.length; i++) {
+    const normalized = pcmData[i] / 32768; // Convert int16 to float
+    sum += normalized * normalized;
+  }
+  const rms = Math.sqrt(sum / pcmData.length);
+  return rms > threshold;
 }
 
 export class RealtimeClient {
@@ -20,8 +53,111 @@ export class RealtimeClient {
   private silentGain: GainNode | null = null;
   private callbacks: RealtimeCallbacks;
 
+  // VAD state
+  private vadConfig: VadConfig = {
+    enabled: true,
+    threshold: 0.01,
+    hangoverFrames: 6,   // ~300ms at 50ms per frame
+    preBufferFrames: 2,  // ~100ms
+  };
+  private vadState = {
+    isSpeaking: false,
+    silenceFrames: 0,
+    preBuffer: [] as ArrayBuffer[],
+  };
+  private vadStats = {
+    totalChunks: 0,
+    sentChunks: 0,
+  };
+
   constructor(callbacks: RealtimeCallbacks) {
     this.callbacks = callbacks;
+  }
+
+  /**
+   * Configure VAD settings. Call before connect() to take effect.
+   */
+  setVadConfig(config: Partial<VadConfig>): void {
+    this.vadConfig = { ...this.vadConfig, ...config };
+  }
+
+  /**
+   * Get current VAD statistics.
+   */
+  getVadStats(): VadStats {
+    const savedPercent = this.vadStats.totalChunks > 0
+      ? Math.round((1 - this.vadStats.sentChunks / this.vadStats.totalChunks) * 100)
+      : 0;
+    return {
+      ...this.vadStats,
+      savedPercent,
+      isSpeaking: this.vadState.isSpeaking,
+    };
+  }
+
+  /**
+   * Process audio chunk through VAD filter.
+   * Returns true if chunk was sent, false if filtered (silence).
+   */
+  private processAudioWithVad(chunk: ArrayBuffer): boolean {
+    this.vadStats.totalChunks++;
+
+    // VAD disabled - send everything
+    if (!this.vadConfig.enabled) {
+      this.ws?.send(chunk);
+      this.vadStats.sentChunks++;
+      return true;
+    }
+
+    const pcm = new Int16Array(chunk);
+    const isActive = isVoiceActive(pcm, this.vadConfig.threshold);
+
+    if (isActive) {
+      // Speech detected
+      if (!this.vadState.isSpeaking) {
+        // Speech just started - send pre-buffer first (captures speech onset)
+        for (const buf of this.vadState.preBuffer) {
+          if (this.ws?.readyState === WebSocket.OPEN) {
+            this.ws.send(buf);
+            this.vadStats.sentChunks++;
+          }
+        }
+        this.vadState.preBuffer = [];
+        this.vadState.isSpeaking = true;
+        this.callbacks.onVadStatus?.(true);
+      }
+      this.vadState.silenceFrames = 0;
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(chunk);
+        this.vadStats.sentChunks++;
+      }
+      return true;
+    } else {
+      // Silence detected
+      this.vadState.silenceFrames++;
+
+      if (this.vadState.isSpeaking && this.vadState.silenceFrames <= this.vadConfig.hangoverFrames) {
+        // Still in hangover period - keep sending
+        if (this.ws?.readyState === WebSocket.OPEN) {
+          this.ws.send(chunk);
+          this.vadStats.sentChunks++;
+        }
+        return true;
+      }
+
+      // End of speech or continued silence
+      if (this.vadState.isSpeaking) {
+        this.vadState.isSpeaking = false;
+        this.callbacks.onVadStatus?.(false);
+      }
+
+      // Keep in pre-buffer (circular, limited to preBufferFrames)
+      this.vadState.preBuffer.push(chunk);
+      if (this.vadState.preBuffer.length > this.vadConfig.preBufferFrames) {
+        this.vadState.preBuffer.shift();
+      }
+      return false;
+    }
   }
 
   async connect(
@@ -88,10 +224,8 @@ export class RealtimeClient {
     this.workletNode = new AudioWorkletNode(this.audioContext, 'audio-processor');
 
     this.workletNode.port.onmessage = (event) => {
-      // Send PCM binary data via WebSocket
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(event.data);
-      }
+      // Process through VAD filter before sending
+      this.processAudioWithVad(event.data);
     };
 
     // Connect source -> worklet -> silent gain -> destination
@@ -133,6 +267,17 @@ export class RealtimeClient {
     this.sourceNode = null;
     this.silentGain = null;
     this.audioContext = null;
+
+    // Reset VAD state
+    this.vadState = {
+      isSpeaking: false,
+      silenceFrames: 0,
+      preBuffer: [],
+    };
+    this.vadStats = {
+      totalChunks: 0,
+      sentChunks: 0,
+    };
   }
 
   get isConnected(): boolean {

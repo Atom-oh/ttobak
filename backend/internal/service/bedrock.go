@@ -412,6 +412,99 @@ func (s *BedrockService) invokeClaudeModelWithID(ctx context.Context, request Cl
 	return result.String(), nil
 }
 
+// ActionItem represents an extracted action item from a meeting transcript
+type ActionItem struct {
+	Text     string `json:"text"`
+	Assignee string `json:"assignee,omitempty"`
+	DueDate  string `json:"dueDate,omitempty"`
+	Priority string `json:"priority,omitempty"`
+	Done     bool   `json:"done"`
+}
+
+// ExtractActionItems extracts action items from a meeting transcript using Claude Haiku
+func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID string) (string, error) {
+	meeting, err := s.repo.GetMeetingByID(ctx, meetingID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get meeting: %w", err)
+	}
+	if meeting == nil {
+		return "", fmt.Errorf("meeting not found: %s", meetingID)
+	}
+
+	// Use the selected transcript, or default to A, or B if A not available
+	transcript := meeting.TranscriptA
+	if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
+		transcript = meeting.TranscriptB
+	} else if transcript == "" && meeting.TranscriptB != "" {
+		transcript = meeting.TranscriptB
+	}
+	if transcript == "" {
+		return "[]", nil // No transcript, return empty array
+	}
+
+	systemPrompt := `You are an expert at extracting action items from meeting transcripts.
+Extract action items mentioned in the transcript. For each action item, identify:
+- text: The task description (required)
+- assignee: Who is responsible (speaker label if available, e.g., "spk_0", "spk_1")
+- priority: high, medium, or low based on urgency/importance mentioned
+- dueDate: Due date if explicitly mentioned (ISO format YYYY-MM-DD)
+
+Return ONLY a valid JSON array. If no action items found, return [].
+Example format:
+[{"text":"Complete the report","assignee":"spk_0","priority":"high","dueDate":"2024-03-25","done":false}]`
+
+	// Build prompt with speaker segments if available
+	userPrompt := fmt.Sprintf("Extract action items from this meeting transcript:\n\n%s", transcript)
+
+	if meeting.TranscriptSegments != "" {
+		var segments []speakerSegment
+		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Extract action items from this speaker-labeled meeting transcript:\n\n")
+			for _, seg := range segments {
+				sb.WriteString(fmt.Sprintf("[%s] %s\n", seg.Speaker, seg.Text))
+			}
+			userPrompt = sb.String()
+		}
+	}
+
+	request := ClaudeRequest{
+		AnthropicVersion: "bedrock-2023-05-31",
+		MaxTokens:        1024,
+		System:           systemPrompt,
+		Messages: []ClaudeMessage{
+			{
+				Role: "user",
+				Content: []ContentBlock{
+					{Type: "text", Text: userPrompt},
+				},
+			},
+		},
+	}
+
+	// Use Haiku for action item extraction (fast, cheap)
+	response, err := s.invokeClaudeModelWithID(ctx, request, ClaudeHaikuModelID)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract action items: %w", err)
+	}
+
+	// Validate JSON response
+	response = strings.TrimSpace(response)
+	var items []ActionItem
+	if err := json.Unmarshal([]byte(response), &items); err != nil {
+		// If parsing fails, return empty array
+		return "[]", nil
+	}
+
+	// Re-serialize to ensure consistent format
+	result, err := json.Marshal(items)
+	if err != nil {
+		return "[]", nil
+	}
+
+	return string(result), nil
+}
+
 // getImageMediaType determines the media type from the file key
 func (s *BedrockService) getImageMediaType(key string) string {
 	lower := strings.ToLower(key)

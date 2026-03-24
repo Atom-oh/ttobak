@@ -94,6 +94,12 @@ export default function RecordPage() {
   // Backend audio key (from ECS realtime server)
   const [backendAudioKey, setBackendAudioKey] = useState<string | null>(null);
 
+  // VAD (Voice Activity Detection) state
+  const [vadEnabled, setVadEnabled] = useState(true);
+  const [vadIsSpeaking, setVadIsSpeaking] = useState(false);
+  const [vadSavedPercent, setVadSavedPercent] = useState(0);
+  const vadEnabledRef = useRef(true);
+
   // Refs for closures in callbacks
   const targetLangRef = useRef(targetLang);
   const liveSummaryRef = useRef(liveSummary);
@@ -130,6 +136,27 @@ export default function RecordPage() {
   useEffect(() => {
     orchestratorRef.current?.updateTranslationEnabled(translationEnabled);
   }, [translationEnabled]);
+
+  // Sync VAD enabled ref and update orchestrator
+  useEffect(() => {
+    vadEnabledRef.current = vadEnabled;
+    orchestratorRef.current?.setVadConfig({ enabled: vadEnabled });
+  }, [vadEnabled]);
+
+  // Poll VAD stats while recording with whisper
+  useEffect(() => {
+    if (!isRecording || sttSource !== 'whisper') {
+      setVadSavedPercent(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      const stats = orchestratorRef.current?.getVadStats();
+      if (stats) {
+        setVadSavedPercent(stats.savedPercent);
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [isRecording, sttSource]);
 
   // Mic preview: create AudioContext + AnalyserNode when device changes (not recording)
   useEffect(() => {
@@ -318,7 +345,13 @@ export default function RecordPage() {
       onBackendAudioSaved: (key) => {
         setBackendAudioKey(key);
       },
+      onVadStatus: (isSpeaking) => {
+        setVadIsSpeaking(isSpeaking);
+      },
     }, 'ko', targetLangRef.current, translationEnabled, undefined, clientMeetingId);
+
+    // Apply VAD configuration
+    orchestrator.setVadConfig({ enabled: vadEnabledRef.current });
 
     orchestratorRef.current = orchestrator;
     orchestrator.start(stream);
@@ -533,6 +566,8 @@ export default function RecordPage() {
           isRecording={isRecording}
           sttProvider={sttProvider}
           onSttProviderChange={setSttProvider}
+          vadEnabled={vadEnabled}
+          onVadToggle={setVadEnabled}
         />
       </header>
 
@@ -604,15 +639,28 @@ export default function RecordPage() {
 
           {/* STT Source Indicator */}
           {isRecording && (
-            <div className="flex items-center gap-1.5 justify-center mt-2">
-              <span className={`w-2 h-2 rounded-full ${
-                sttSource === 'whisper' ? 'bg-green-500' :
-                sttSource === 'fallback' ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'
-              }`} />
-              <span className="text-xs text-slate-500">
-                {sttSource === 'whisper' ? 'AI Engine' :
-                 sttSource === 'fallback' ? 'AI Engine 준비 중...' : 'Idle'}
-              </span>
+            <div className="flex items-center gap-3 justify-center mt-2">
+              <div className="flex items-center gap-1.5">
+                <span className={`w-2 h-2 rounded-full ${
+                  sttSource === 'whisper' ? 'bg-green-500' :
+                  sttSource === 'fallback' ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'
+                }`} />
+                <span className="text-xs text-slate-500">
+                  {sttSource === 'whisper' ? 'AI Engine' :
+                   sttSource === 'fallback' ? 'AI Engine 준비 중...' : 'Idle'}
+                </span>
+              </div>
+              {/* VAD Status Indicator */}
+              {vadEnabled && sttSource === 'whisper' && (
+                <div className="flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full transition-colors ${
+                    vadIsSpeaking ? 'bg-green-500' : 'bg-slate-300'
+                  }`} />
+                  <span className="text-xs text-slate-500">
+                    VAD {vadSavedPercent > 0 ? `(-${vadSavedPercent}%)` : ''}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -12,6 +12,8 @@ interface RecordingConfigProps {
   isRecording: boolean;
   sttProvider: 'transcribe' | 'nova-sonic';
   onSttProviderChange: (provider: 'transcribe' | 'nova-sonic') => void;
+  vadEnabled?: boolean;
+  onVadToggle?: (enabled: boolean) => void;
 }
 
 export function RecordingConfig({
@@ -26,6 +28,8 @@ export function RecordingConfig({
   isRecording,
   sttProvider,
   onSttProviderChange,
+  vadEnabled = true,
+  onVadToggle,
 }: RecordingConfigProps) {
   return (
     <div className="flex items-center gap-2">
@@ -58,6 +62,17 @@ export function RecordingConfig({
         />
         번역
       </label>
+      {onVadToggle && (
+        <label className="flex items-center gap-1.5 text-sm text-[var(--color-text-secondary)]" title="Voice Activity Detection - filters silence to reduce bandwidth">
+          <input
+            type="checkbox"
+            checked={vadEnabled}
+            onChange={(e) => onVadToggle(e.target.checked)}
+            className="rounded border-slate-300 text-[var(--color-primary)] focus:ring-[var(--color-primary)]"
+          />
+          VAD
+        </label>
+      )}
       {translationEnabled && (
         <select
           value={targetLang}

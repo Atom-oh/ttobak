@@ -182,6 +182,23 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			}
 
 			log.Printf("Generated content for meeting %s: %d characters", meetingID, len(content))
+
+			// Extract action items using Haiku (fast, cheap)
+			actionItems, err := bedrockService.ExtractActionItems(ctx, meetingID)
+			if err != nil {
+				log.Printf("Failed to extract action items (non-fatal): %v", err)
+			} else {
+				// Re-fetch meeting to get updated state after summary
+				meeting, err = repo.GetMeetingByID(ctx, meetingID)
+				if err == nil && meeting != nil {
+					meeting.ActionItems = actionItems
+					if err := repo.UpdateMeeting(ctx, meeting); err != nil {
+						log.Printf("Failed to save action items: %v", err)
+					} else {
+						log.Printf("Extracted action items for meeting %s: %s", meetingID, actionItems)
+					}
+				}
+			}
 		}
 	}
 
