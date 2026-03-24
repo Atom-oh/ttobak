@@ -116,12 +116,16 @@ export default function HomePage() {
       <div className="flex-1 overflow-y-auto pb-24 lg:pb-8">
         {/* Desktop Title */}
         <div className="hidden lg:block lg:px-24 lg:pt-20 lg:pb-8">
-          <h2 className="notion-title">
-            Meeting Notes
-          </h2>
-          <p className="text-text-secondary mt-2">
-            Review your automated transcriptions and summaries.
-          </p>
+          <div className="flex justify-between items-end mb-6">
+            <div>
+              <h2 className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+                Meeting Notes
+              </h2>
+              <p className="text-slate-500 mt-1">
+                Review your automated transcriptions and summaries.
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Meeting List */}

@@ -18,6 +18,7 @@ interface RecordButtonProps {
   onPermissionGranted?: () => void;
   onCaptureImage?: (file: File) => void;
   onAnalyserReady?: (analyser: AnalyserNode | null) => void;
+  onCheckpoint?: (blob: Blob, mimeType: string) => void;
 }
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'uploading';
@@ -42,10 +43,12 @@ export function RecordButton({
   onPermissionGranted,
   onCaptureImage,
   onAnalyserReady,
+  onCheckpoint,
 }: RecordButtonProps) {
   const [state, setState] = useState<RecordingState>('idle');
   const [elapsedTime, setElapsedTime] = useState(0);
   const recordingStateRef = useRef<RecordingState>('idle');
+  const checkpointTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const setRecordingState = (newState: RecordingState) => {
     recordingStateRef.current = newState;
@@ -85,6 +88,7 @@ export function RecordButton({
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (checkpointTimerRef.current) clearInterval(checkpointTimerRef.current);
       cleanupAudioResources();
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
@@ -147,6 +151,16 @@ export function RecordButton({
       timerRef.current = setInterval(() => {
         setElapsedTime((prev) => prev + 1);
       }, 1000);
+
+      // Audio checkpoint every 60s (fire-and-forget for loss prevention)
+      if (onCheckpoint) {
+        checkpointTimerRef.current = setInterval(() => {
+          if (chunksRef.current.length > 0) {
+            const checkpointBlob = new Blob(chunksRef.current, { type: mimeType });
+            onCheckpoint(checkpointBlob, mimeType);
+          }
+        }, 60000);
+      }
     } catch (err) {
       // Clean up partially acquired resources on failure
       if (stream) {
@@ -163,6 +177,7 @@ export function RecordButton({
       mediaRecorderRef.current.pause();
       setRecordingState('paused');
       if (timerRef.current) clearInterval(timerRef.current);
+      if (checkpointTimerRef.current) { clearInterval(checkpointTimerRef.current); checkpointTimerRef.current = null; }
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
       onRecordingPause?.();
     }
@@ -183,6 +198,10 @@ export function RecordButton({
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
+    }
+    if (checkpointTimerRef.current) {
+      clearInterval(checkpointTimerRef.current);
+      checkpointTimerRef.current = null;
     }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       // onstop handler will call cleanupAudioResources
@@ -257,9 +276,9 @@ export function RecordButton({
       {state !== 'idle' && (
         <div className="relative flex items-center justify-center mb-8">
           <div className="absolute w-48 h-48 bg-primary/10 rounded-full animate-pulse" />
-          <div className="absolute w-40 h-40 rounded-full" style={{ background: 'conic-gradient(from 0deg, #3211d4, #7c3aed, #a78bfa, #3211d4)' }} />
-          <div className="z-10 bg-white dark:bg-slate-800 shadow-xl rounded-full w-32 h-32 flex items-center justify-center border-4 border-white dark:border-slate-800">
-            <span className="text-3xl font-bold text-primary">{formatTime(elapsedTime)}</span>
+          <div className="absolute w-40 h-40 bg-primary/20 rounded-full" />
+          <div className="z-10 bg-white dark:bg-slate-800 shadow-xl rounded-full w-32 h-32 flex items-center justify-center border-4 border-primary">
+            <span className="text-4xl font-black text-primary tabular-nums tracking-tighter">{formatTime(elapsedTime)}</span>
           </div>
         </div>
       )}
@@ -279,11 +298,12 @@ export function RecordButton({
       <div className="flex items-center justify-center gap-6">
         {state === 'idle' ? (
           <div className="flex flex-col items-center">
-            <div className="relative">
-              <div className="absolute inset-0 rounded-full bg-primary/20 animate-ping" style={{ animationDuration: '2s' }} />
+            <div className="relative flex items-center justify-center">
+              <div className="absolute w-28 h-28 bg-primary/10 rounded-full animate-pulse-ring" />
+              <div className="absolute w-24 h-24 bg-primary/20 rounded-full" />
               <button
                 onClick={startRecording}
-                className="relative w-20 h-20 rounded-full bg-primary flex items-center justify-center shadow-lg shadow-primary/40 hover:scale-105 active:scale-[0.97] transition-transform"
+                className="relative w-20 h-20 rounded-full bg-primary flex items-center justify-center shadow-lg shadow-primary/40 hover:scale-105 active:scale-[0.97] transition-transform z-10"
               >
                 <span className="material-symbols-outlined text-white text-3xl">mic</span>
               </button>

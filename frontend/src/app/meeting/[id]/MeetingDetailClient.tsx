@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -133,15 +133,15 @@ export default function MeetingDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [showUploader, setShowUploader] = useState(false);
 
-  // Extract meeting ID from URL after mount to avoid hydration mismatch.
+  // Extract meeting ID from URL. usePathname() updates on client-side navigation,
+  // unlike window.location.pathname in a mount-only effect which goes stale.
   // CloudFront rewrites /meeting/{id} → /meeting/_ for static export,
   // so useParams() returns "_" instead of the actual ID.
-  const [meetingId, setMeetingId] = useState('');
-
-  useEffect(() => {
-    const id = window.location.pathname.split('/meeting/')[1]?.split('/')[0] || '';
-    setMeetingId(id);
-  }, []);
+  const pathname = usePathname();
+  const meetingId = useMemo(
+    () => pathname.split('/meeting/')[1]?.split('/')[0] || '',
+    [pathname]
+  );
 
   useEffect(() => {
     if (!isAuthenticated || !meetingId) return;
@@ -306,15 +306,21 @@ export default function MeetingDetailPage() {
           </header>
 
           {/* Processing Status Indicator */}
-          {meeting.status !== 'done' && (
+          {meeting.status !== 'done' && meeting.status !== 'error' && (
             <div className="mb-8">
-              <div className="flex items-center gap-3 p-4 bg-primary/5 border border-primary/20 rounded-lg">
+              <div className="flex items-center gap-3 p-4 bg-primary/5 border border-primary/20 rounded-xl">
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent shrink-0" />
-                <span className="text-sm font-medium text-primary flex-1">
-                  {meeting.status === 'transcribing' ? 'Transcribing audio...' :
-                   meeting.status === 'summarizing' ? 'Generating summary...' :
-                   meeting.status === 'recording' ? 'Uploading & preparing...' : 'Processing...'}
-                </span>
+                <div className="flex-1">
+                  <span className="text-sm font-medium text-primary block">
+                    {meeting.status === 'transcribing' ? 'AI 음성 인식 중... (화자 분리 포함)' :
+                     meeting.status === 'summarizing' ? 'AI 회의록 생성 중...' :
+                     meeting.status === 'recording' ? '오디오 업로드 준비 중...' : '처리 중...'}
+                  </span>
+                  <span className="text-xs text-primary/60 mt-0.5 block">
+                    {meeting.status === 'transcribing' ? '음성을 텍스트로 변환하고 있습니다' :
+                     meeting.status === 'summarizing' ? '화자별 요약을 작성하고 있습니다' : '잠시만 기다려주세요'}
+                  </span>
+                </div>
               </div>
               <div className="mt-2 h-1 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
                 <div className="h-full bg-primary rounded-full animate-pulse" style={{
@@ -324,26 +330,53 @@ export default function MeetingDetailPage() {
             </div>
           )}
 
-          {/* AI Summary Section */}
+          {/* AI Summary / Live Transcript Section */}
           <section className="mb-12">
-            <h3 className="notion-subheading flex items-center gap-2 mb-4">
-              <span className="material-symbols-outlined text-text-muted">auto_awesome</span>
-              AI Summary
-            </h3>
-            <p className="text-text-secondary leading-relaxed">
-              {meeting.content || meeting.summary}
-            </p>
+            {meeting.status === 'done' ? (
+              <>
+                <h3 className="notion-subheading flex items-center gap-2 mb-4 text-primary">
+                  <span className="material-symbols-outlined">auto_awesome</span>
+                  <span>AI 회의록</span>
+                </h3>
+                <div className="prose prose-sm dark:prose-invert max-w-none text-text-secondary leading-relaxed whitespace-pre-wrap">
+                  {meeting.content || meeting.summary}
+                </div>
+                {/* Collapsible raw transcript */}
+                {meeting.transcriptA && (
+                  <details className="mt-6 border border-slate-200 dark:border-slate-700 rounded-lg">
+                    <summary className="px-4 py-3 text-sm font-medium text-text-secondary cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg flex items-center gap-2">
+                      <span className="material-symbols-outlined text-lg">notes</span>
+                      원본 텍스트 보기
+                    </summary>
+                    <div className="px-4 pb-4 text-sm text-text-muted leading-relaxed whitespace-pre-wrap border-t border-slate-200 dark:border-slate-700 pt-3">
+                      {meeting.transcriptA}
+                    </div>
+                  </details>
+                )}
+              </>
+            ) : (
+              <>
+                <h3 className="notion-subheading flex items-center gap-2 mb-4">
+                  <span className="material-symbols-outlined text-text-muted">subtitles</span>
+                  라이브 텍스트
+                </h3>
+                <p className="text-text-secondary leading-relaxed whitespace-pre-wrap">
+                  {meeting.transcriptA || meeting.content || '음성 인식 결과를 기다리는 중...'}
+                </p>
+              </>
+            )}
           </section>
 
           <div className="notion-divider mb-12" />
 
           {/* Action Items Section */}
           <section className="mb-12">
-            <h3 className="notion-subheading flex items-center gap-2 mb-4">
-              <span className="material-symbols-outlined text-text-muted">check_circle</span>
-              Action Items
-            </h3>
-            <div className="space-y-3">
+            <div className="bg-primary/5 dark:bg-primary/10 border border-primary/20 rounded-xl p-6">
+              <h3 className="flex items-center gap-2 mb-4 text-primary font-semibold">
+                <span className="material-symbols-outlined">check_circle</span>
+                Action Items
+              </h3>
+              <div className="space-y-4">
               {meeting.actionItems?.map((item) => (
                 <div key={item.id} className="flex items-start gap-3">
                   <input
@@ -364,6 +397,7 @@ export default function MeetingDetailPage() {
                   </div>
                 </div>
               ))}
+              </div>
             </div>
           </section>
 
@@ -428,8 +462,8 @@ export default function MeetingDetailPage() {
               <div className="space-y-6">
                 {meeting.transcription.map((segment) => (
                   <div key={segment.id} className="flex gap-4 lg:gap-6">
-                    <div className="w-12 lg:w-14 pt-1 flex-shrink-0">
-                      <span className="text-xs text-text-muted tabular-nums">
+                    <div className="w-14 lg:w-16 pt-1 flex-shrink-0">
+                      <span className="text-xs font-bold text-primary px-2 py-1 bg-primary/10 rounded">
                         {formatTimestamp(segment.startTime)}
                       </span>
                     </div>
@@ -439,7 +473,7 @@ export default function MeetingDetailPage() {
                           className="w-2 h-2 rounded-full shrink-0"
                           style={{ backgroundColor: `hsl(${segment.speaker.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 360}, 70%, 55%)` }}
                         />
-                        <span className="text-sm font-semibold text-text-primary">{segment.speaker}</span>
+                        <span className="text-sm font-black text-text-primary">{segment.speaker}</span>
                         <span className="text-[10px] text-text-muted">{segment.timestamp}</span>
                       </div>
                       <p className="text-text-secondary text-sm leading-relaxed">

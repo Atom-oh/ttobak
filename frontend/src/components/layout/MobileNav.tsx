@@ -11,7 +11,7 @@ const navItems = [
 
 export function MobileNav({ activePath }: { activePath: string }) {
   return (
-    <nav className="fixed bottom-0 left-0 right-0 flex gap-2 border-t border-slate-100 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md px-4 pb-6 pt-2 z-10 lg:hidden">
+    <nav className="fixed bottom-0 left-0 right-0 flex gap-2 border-t border-slate-100 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md px-4 pb-6 pb-safe pt-2 z-10 lg:hidden">
       {navItems.map((item) => (
         <Link
           key={item.href}

@@ -20,10 +20,10 @@ function NavItem({ href, icon, label, isActive }: { href: string; icon: string; 
   return (
     <Link
       href={href}
-      className={`flex items-center gap-2.5 px-2 py-1.5 rounded-md text-sm transition-colors notion-hover ${
+      className={`flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm transition-colors ${
         isActive
-          ? 'bg-[var(--notion-hover)] text-text-primary font-medium'
-          : 'text-text-secondary hover:text-text-primary'
+          ? 'bg-primary/10 text-primary font-semibold'
+          : 'text-text-secondary hover:text-text-primary notion-hover'
       }`}
     >
       <span className="material-symbols-outlined text-lg">{icon}</span>
@@ -44,10 +44,10 @@ export function Sidebar({ activePath }: { activePath: string }) {
   const { user, logout } = useAuth();
 
   return (
-    <aside className="w-60 bg-[var(--notion-sidebar-bg)] dark:bg-[var(--notion-sidebar-bg)] border-r border-border-default flex flex-col justify-between shrink-0 h-screen sticky top-0">
+    <aside className="w-64 bg-[var(--notion-sidebar-bg)] dark:bg-[var(--notion-sidebar-bg)] border-r border-border-default flex flex-col justify-between shrink-0 h-screen sticky top-0">
       <div className="flex flex-col px-2 pt-3">
         {/* Workspace Identity */}
-        <div className="flex items-center gap-2.5 px-2 py-2 rounded-md notion-hover cursor-default mb-1">
+        <div className="flex items-center gap-2.5 px-2 py-2 rounded-lg notion-hover cursor-default mb-1">
           <span className="material-symbols-outlined text-lg text-text-secondary">record_voice_over</span>
           <div className="flex flex-col">
             <h1 className="text-sm font-semibold leading-none text-text-primary">또박</h1>
@@ -58,7 +58,7 @@ export function Sidebar({ activePath }: { activePath: string }) {
         {/* New Meeting Action */}
         <Link
           href="/record"
-          className="flex items-center gap-2.5 px-2 py-1.5 rounded-md text-sm text-text-secondary hover:text-text-primary notion-hover"
+          className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-sm text-text-secondary hover:text-text-primary notion-hover"
         >
           <span className="material-symbols-outlined text-lg">add</span>
           <span>New Meeting</span>

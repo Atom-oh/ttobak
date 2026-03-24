@@ -16,6 +16,7 @@ import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { meetingsApi, summaryApi, uploadsApi, qaApi } from '@/lib/api';
 import { SttOrchestrator, SttSource } from '@/lib/sttOrchestrator';
 import { countWords } from '@/lib/speechRecognition';
+import { uploadAudioWithRetry } from '@/lib/upload';
 
 interface TranscriptEntry {
   text: string;
@@ -23,7 +24,7 @@ interface TranscriptEntry {
   timestamp: string;
 }
 
-type PostRecordingStep = 'creating' | 'saving' | 'redirecting' | 'error';
+type PostRecordingStep = 'creating' | 'saving' | 'uploading' | 'redirecting' | 'error';
 
 function formatDefaultTitle(date: Date): string {
   const month = date.getMonth() + 1;
@@ -69,6 +70,7 @@ export default function RecordPage() {
   const lastSummaryWordCountRef = useRef(0); // Internal tracking for callback closures
 
   // Translation state
+  const [translationEnabled, setTranslationEnabled] = useState(false);
   const [targetLang, setTargetLang] = useState('en');
   const [translations, setTranslations] = useState<{ original: string; translated: string; targetLang: string; timestamp: string }[]>([]);
   const [currentInterimTranslation, setCurrentInterimTranslation] = useState<{ original: string; translated: string; targetLang: string } | null>(null);
@@ -84,6 +86,7 @@ export default function RecordPage() {
   const detectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accumulatedForDetectRef = useRef<string[]>([]);
   const askedQuestionsRef = useRef<string[]>([]);
+  const detectInFlightRef = useRef(false);
 
   // Refs for closures in callbacks
   const targetLangRef = useRef(targetLang);
@@ -116,6 +119,11 @@ export default function RecordPage() {
   useEffect(() => {
     orchestratorRef.current?.updateTargetLang(targetLang);
   }, [targetLang]);
+
+  // Update orchestrator when translation toggle changes
+  useEffect(() => {
+    orchestratorRef.current?.updateTranslationEnabled(translationEnabled);
+  }, [translationEnabled]);
 
   // Mic preview: create AudioContext + AnalyserNode when device changes (not recording)
   useEffect(() => {
@@ -243,23 +251,30 @@ export default function RecordPage() {
             return newTotal;
           });
 
-          // Sentence-based question detection (debounced)
+          // Sentence-based question detection (debounced, throttled, context-limited)
           accumulatedForDetectRef.current.push(text);
           if (detectTimerRef.current) clearTimeout(detectTimerRef.current);
           detectTimerRef.current = setTimeout(async () => {
+            if (detectInFlightRef.current) return;
             const accumulated = accumulatedForDetectRef.current.join('\n');
             if (accumulated.length < 50) return;
             accumulatedForDetectRef.current = [];
+            detectInFlightRef.current = true;
             try {
               const fullContext = transcriptsRef.current.map(t => t.text).join('\n');
-              const result = await qaApi.detectQuestions(fullContext, askedQuestionsRef.current);
+              const trimmedContext = fullContext.length > 2000
+                ? fullContext.slice(-2000)
+                : fullContext;
+              const result = await qaApi.detectQuestions(trimmedContext, askedQuestionsRef.current);
               if (result.questions.length > 0) {
                 setDetectedQuestions(result.questions);
               }
             } catch {
               // silent fail — don't block recording flow
+            } finally {
+              detectInFlightRef.current = false;
             }
-          }, 1000);
+          }, 3000);
         } else {
           setCurrentInterim(text);
         }
@@ -286,7 +301,7 @@ export default function RecordPage() {
       onError: (error) => {
         setSpeechError(speechErrorMessages[error] || error);
       },
-    }, 'ko', targetLangRef.current);
+    }, 'ko', targetLangRef.current, translationEnabled);
 
     orchestratorRef.current = orchestrator;
     orchestrator.start(stream);
@@ -329,41 +344,39 @@ export default function RecordPage() {
       const newMeetingId = result.meetingId;
       setServerMeetingId(newMeetingId);
 
-      // Step 2: Save transcript and summary (15s timeout)
+      // Step 2: Save live transcript (status='transcribing' — backend pipeline will upgrade to full summary)
       setPostRecordingStep('saving');
       const transcriptText = transcriptsRef.current.map(t => t.text).join('\n');
       await withTimeout(
         meetingsApi.update(newMeetingId, {
           content: liveSummaryRef.current || transcriptText.slice(0, 500),
           transcriptA: transcriptText,
-          status: 'done',
+          status: 'transcribing',
         }),
         15000, 'Save transcript'
       );
 
-      // Step 3: Redirect immediately
+      // Step 3: Upload audio (REQUIRED — triggers backend Transcribe pipeline via notifyComplete)
+      setPostRecordingStep('uploading');
+      const fileName = `recording_${Date.now()}.webm`;
+      const { uploadUrl, key } = await withTimeout(
+        uploadsApi.getPresignedUrl({
+          fileName,
+          fileType: mimeType || 'audio/webm',
+          category: 'audio',
+          meetingId: newMeetingId,
+        }),
+        15000, 'Get upload URL'
+      );
+      await uploadAudioWithRetry(blob, uploadUrl, mimeType);
+      await withTimeout(
+        uploadsApi.notifyComplete({ meetingId: newMeetingId, key, category: 'audio' }),
+        15000, 'Notify upload complete'
+      );
+
+      // Step 4: Redirect to meeting detail
       setPostRecordingStep('redirecting');
       router.push(`/meeting/${newMeetingId}`);
-
-      // Step 4: Background audio upload (non-blocking, for archival)
-      (async () => {
-        try {
-          const fileName = `recording_${Date.now()}.webm`;
-          const { uploadUrl } = await uploadsApi.getPresignedUrl({
-            fileName,
-            fileType: mimeType || 'audio/webm',
-            category: 'audio',
-            meetingId: newMeetingId,
-          });
-          await fetch(uploadUrl, {
-            method: 'PUT',
-            body: blob,
-            headers: { 'Content-Type': mimeType || 'audio/webm' },
-          });
-        } catch (err) {
-          console.warn('Background audio upload failed:', err);
-        }
-      })();
     } catch (err) {
       console.error('Failed to process recording:', err);
       setErrorMessage(err instanceof Error ? err.message : 'Failed to process recording');
@@ -392,6 +405,26 @@ export default function RecordPage() {
     setPostRecordingStep(null);
     setErrorMessage(null);
     setSpeechError(null);
+  };
+
+  const handleCheckpoint = async (blob: Blob, mimeType: string) => {
+    // Fire-and-forget checkpoint upload for audio loss prevention
+    try {
+      const fileName = `checkpoint_${Date.now()}.webm`;
+      const { uploadUrl } = await uploadsApi.getPresignedUrl({
+        fileName,
+        fileType: mimeType || 'audio/webm',
+        category: 'audio',
+        meetingId: clientMeetingId,
+      });
+      await fetch(uploadUrl, {
+        method: 'PUT',
+        body: blob,
+        headers: { 'Content-Type': mimeType || 'audio/webm' },
+      });
+    } catch {
+      // Silent fail — checkpoint is best-effort
+    }
   };
 
   const handleUploadComplete = (files: { name: string; url: string }[]) => {
@@ -440,10 +473,10 @@ export default function RecordPage() {
   return (
     <AppLayout activePath="/record" showMobileNav={true}>
       {/* Header */}
-      <header className="flex items-center justify-between px-6 lg:px-16 py-4 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md sticky top-0 z-10">
+      <header className="flex items-center justify-between px-6 lg:px-16 py-4 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md sticky top-0 z-10 border-b border-slate-100 dark:border-slate-800">
         <button
           onClick={() => router.back()}
-          className="p-2 hover:bg-[var(--notion-hover)] rounded-md transition-colors"
+          className="p-2 hover:bg-[var(--notion-hover)] rounded-lg transition-colors"
         >
           <span className="material-symbols-outlined text-text-secondary">arrow_back</span>
         </button>
@@ -454,32 +487,45 @@ export default function RecordPage() {
           placeholder="Meeting Title"
           className="text-lg font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-text-primary placeholder:text-text-muted flex-1 mx-4"
         />
-        <select
-          value={summaryInterval}
-          onChange={(e) => {
-            const val = Number(e.target.value);
-            setSummaryInterval(val);
-            summaryIntervalRef.current = val;
-          }}
-          className="text-sm bg-surface-secondary border-none rounded-md px-3 py-1.5 text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
-        >
-          <option value={100}>100w</option>
-          <option value={200}>200w</option>
-          <option value={500}>500w</option>
-          <option value={1000}>1000w</option>
-        </select>
-        <select
-          value={targetLang}
-          onChange={(e) => setTargetLang(e.target.value)}
-          className="text-sm bg-surface-secondary border-none rounded-md px-3 py-1.5 text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
-        >
-          <option value="en">EN</option>
-          <option value="ja">JA</option>
-          <option value="zh">ZH</option>
-          <option value="es">ES</option>
-          <option value="fr">FR</option>
-          <option value="de">DE</option>
-        </select>
+        <div className="flex items-center gap-2">
+          <select
+            value={summaryInterval}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              setSummaryInterval(val);
+              summaryIntervalRef.current = val;
+            }}
+            className="text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-3 py-1.5 text-slate-600 dark:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30"
+          >
+            <option value={100}>100w</option>
+            <option value={200}>200w</option>
+            <option value={500}>500w</option>
+            <option value={1000}>1000w</option>
+          </select>
+          <label className="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-400">
+            <input
+              type="checkbox"
+              checked={translationEnabled}
+              onChange={(e) => setTranslationEnabled(e.target.checked)}
+              className="rounded border-slate-300 text-primary focus:ring-primary"
+            />
+            번역
+          </label>
+          {translationEnabled && (
+            <select
+              value={targetLang}
+              onChange={(e) => setTargetLang(e.target.value)}
+              className="text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-3 py-1.5 text-slate-600 dark:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30"
+            >
+              <option value="en">EN</option>
+              <option value="ja">JA</option>
+              <option value="zh">ZH</option>
+              <option value="es">ES</option>
+              <option value="fr">FR</option>
+              <option value="de">DE</option>
+            </select>
+          )}
+        </div>
       </header>
 
       {/* Speech Recognition Error Banner */}
@@ -564,6 +610,7 @@ export default function RecordPage() {
             onPermissionGranted={refreshDevices}
             onCaptureImage={handleCaptureImage}
             onAnalyserReady={setAnalyserNode}
+            onCheckpoint={handleCheckpoint}
           />
 
           {/* STT Source Indicator */}
@@ -596,13 +643,22 @@ export default function RecordPage() {
               />
             }
             translationContent={
-              <TranslationView
-                translations={translations}
-                targetLang={targetLang}
-                onTargetLangChange={setTargetLang}
-                isActive={true}
-                interimTranslation={currentInterimTranslation}
-              />
+              translationEnabled ? (
+                <TranslationView
+                  translations={translations}
+                  targetLang={targetLang}
+                  onTargetLangChange={setTargetLang}
+                  isActive={true}
+                  interimTranslation={currentInterimTranslation}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-slate-600 mb-3">translate</span>
+                  <p className="text-sm text-slate-400 dark:text-slate-500">
+                    번역 기능을 활성화하려면 상단의 번역 체크박스를 켜세요
+                  </p>
+                </div>
+              )
             }
             summaryContent={
               <LiveSummary
@@ -725,6 +781,7 @@ export default function RecordPage() {
                 <p className="flex-1 text-sm font-medium text-slate-700 dark:text-slate-300">
                   {postRecordingStep === 'creating' && 'Creating meeting...'}
                   {postRecordingStep === 'saving' && 'Saving transcript...'}
+                  {postRecordingStep === 'uploading' && 'Uploading audio...'}
                   {postRecordingStep === 'redirecting' && 'Opening meeting...'}
                 </p>
                 <button
