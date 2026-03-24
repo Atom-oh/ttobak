@@ -30,11 +30,11 @@ export function TranscriptSection({ transcription }: TranscriptSectionProps) {
           Full Transcription
         </h2>
         <div className="flex gap-2">
-          <button className="px-3 py-1.5 rounded-lg border border-[var(--color-border)] text-xs font-semibold flex items-center gap-2 bg-[var(--color-surface)] hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+          <button disabled title="Coming soon" className="px-3 py-1.5 rounded-lg border border-[var(--color-border)] text-xs font-semibold flex items-center gap-2 bg-[var(--color-surface)] opacity-50 cursor-not-allowed">
             <span className="material-symbols-outlined text-sm">search</span>
             <span className="hidden sm:inline">Search transcript</span>
           </button>
-          <button className="px-3 py-1.5 rounded-lg border border-[var(--color-border)] text-xs font-semibold flex items-center gap-2 bg-[var(--color-surface)] hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
+          <button disabled title="Coming soon" className="px-3 py-1.5 rounded-lg border border-[var(--color-border)] text-xs font-semibold flex items-center gap-2 bg-[var(--color-surface)] opacity-50 cursor-not-allowed">
             <span className="material-symbols-outlined text-sm">download</span>
             <span className="hidden sm:inline">Export</span>
           </button>

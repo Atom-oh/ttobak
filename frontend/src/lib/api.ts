@@ -25,11 +25,20 @@ function redirectToLogin(): void {
   }
 }
 
+// Mutex for token refresh — prevents concurrent refreshSession() race conditions
+let refreshPromise: Promise<string | null> | null = null;
+
+function refreshTokenOnce(): Promise<string | null> {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = refreshSession().finally(() => { refreshPromise = null; });
+  return refreshPromise;
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   let token = getIdToken();
 
   if (!token || isTokenExpired(token)) {
-    token = await refreshSession();
+    token = await refreshTokenOnce();
   }
 
   if (!token) {
@@ -58,15 +67,11 @@ export async function apiFetch<T>(
 
   let response = await fetch(url, { ...rest, headers: mergedHeaders });
 
-  // On 401, refresh token once and retry
+  // On 401, refresh token once and retry (mutex prevents concurrent refresh races)
   if (response.status === 401 && !skipAuth) {
-    const freshToken = await refreshSession();
+    const freshToken = await refreshTokenOnce();
     if (!freshToken) {
-      // Refresh failed — clear auth only if no valid tokens remain
-      // (avoids logging out on transient failures right after login)
-      if (!getIdToken()) {
-        triggerAuthFailure();
-      }
+      // Refresh failed — don't clear auth (may be transient; mutex prevents cascade)
       throw new Error('Authentication required');
     }
     response = await fetch(url, {

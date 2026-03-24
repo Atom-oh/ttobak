@@ -86,9 +86,10 @@ export function AudioPlayer({ audioUrl }: AudioPlayerProps) {
 
         {/* Controls */}
         <div className="flex items-center gap-3 text-[var(--color-text-muted)] shrink-0">
-          <button onClick={() => skip(-10)} className="material-symbols-outlined hover:text-[var(--color-primary)] transition-colors text-xl">fast_rewind</button>
-          <button onClick={() => skip(10)} className="material-symbols-outlined hover:text-[var(--color-primary)] transition-colors text-xl">fast_forward</button>
+          <button onClick={() => skip(-10)} aria-label="10초 뒤로" className="material-symbols-outlined hover:text-[var(--color-primary)] transition-colors text-xl">fast_rewind</button>
+          <button onClick={() => skip(10)} aria-label="10초 앞으로" className="material-symbols-outlined hover:text-[var(--color-primary)] transition-colors text-xl">fast_forward</button>
           <button onClick={() => { const v = volume > 0 ? 0 : 1; setVolume(v); if (audioRef.current) audioRef.current.volume = v; }}
+            aria-label={volume > 0 ? '음소거' : '음소거 해제'}
             className="material-symbols-outlined hover:text-[var(--color-primary)] transition-colors text-xl">
             {volume > 0 ? 'volume_up' : 'volume_off'}
           </button>

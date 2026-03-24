@@ -88,7 +88,7 @@ export function SttProviderSelector({
         disabled={isRecording}
         className={`px-4 py-1.5 text-xs font-medium transition-colors ${
           sttProvider === 'transcribe'
-            ? 'bg-[#3211d4] text-white'
+            ? 'bg-[var(--color-primary)] text-white'
             : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
         } disabled:opacity-50 disabled:cursor-not-allowed`}
       >
@@ -99,7 +99,7 @@ export function SttProviderSelector({
         disabled={isRecording}
         className={`px-4 py-1.5 text-xs font-medium transition-colors border-l border-slate-200 dark:border-slate-700 ${
           sttProvider === 'nova-sonic'
-            ? 'bg-[#3211d4] text-white'
+            ? 'bg-[var(--color-primary)] text-white'
             : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
         } disabled:opacity-50 disabled:cursor-not-allowed`}
       >
