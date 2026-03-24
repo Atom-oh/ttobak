@@ -12,6 +12,8 @@ import { RecordingTabs } from '@/components/RecordingTabs';
 import { TranslationView } from '@/components/TranslationView';
 import { LiveSummary } from '@/components/LiveSummary';
 import { LiveQAPanel } from '@/components/LiveQAPanel';
+import { RecordingConfig, SttProviderSelector } from '@/components/record/RecordingConfig';
+import { PostRecordingBanner, PostRecordingStep } from '@/components/record/PostRecordingBanner';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { meetingsApi, summaryApi, uploadsApi, qaApi } from '@/lib/api';
 import { SttOrchestrator, SttSource } from '@/lib/sttOrchestrator';
@@ -23,8 +25,6 @@ interface TranscriptEntry {
   isFinal: boolean;
   timestamp: string;
 }
-
-type PostRecordingStep = 'creating' | 'saving' | 'uploading' | 'redirecting' | 'error';
 
 function formatDefaultTitle(date: Date): string {
   const month = date.getMonth() + 1;
@@ -487,45 +487,20 @@ export default function RecordPage() {
           placeholder="Meeting Title"
           className="text-lg font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-text-primary placeholder:text-text-muted flex-1 mx-4"
         />
-        <div className="flex items-center gap-2">
-          <select
-            value={summaryInterval}
-            onChange={(e) => {
-              const val = Number(e.target.value);
-              setSummaryInterval(val);
-              summaryIntervalRef.current = val;
-            }}
-            className="text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-3 py-1.5 text-slate-600 dark:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30"
-          >
-            <option value={100}>100w</option>
-            <option value={200}>200w</option>
-            <option value={500}>500w</option>
-            <option value={1000}>1000w</option>
-          </select>
-          <label className="flex items-center gap-1.5 text-sm text-slate-600 dark:text-slate-400">
-            <input
-              type="checkbox"
-              checked={translationEnabled}
-              onChange={(e) => setTranslationEnabled(e.target.checked)}
-              className="rounded border-slate-300 text-primary focus:ring-primary"
-            />
-            번역
-          </label>
-          {translationEnabled && (
-            <select
-              value={targetLang}
-              onChange={(e) => setTargetLang(e.target.value)}
-              className="text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-3 py-1.5 text-slate-600 dark:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30"
-            >
-              <option value="en">EN</option>
-              <option value="ja">JA</option>
-              <option value="zh">ZH</option>
-              <option value="es">ES</option>
-              <option value="fr">FR</option>
-              <option value="de">DE</option>
-            </select>
-          )}
-        </div>
+        <RecordingConfig
+          summaryInterval={summaryInterval}
+          onSummaryIntervalChange={(val) => {
+            setSummaryInterval(val);
+            summaryIntervalRef.current = val;
+          }}
+          translationEnabled={translationEnabled}
+          onTranslationToggle={setTranslationEnabled}
+          targetLang={targetLang}
+          onTargetLangChange={setTargetLang}
+          isRecording={isRecording}
+          sttProvider={sttProvider}
+          onSttProviderChange={setSttProvider}
+        />
       </header>
 
       {/* Speech Recognition Error Banner */}
@@ -558,30 +533,11 @@ export default function RecordPage() {
               analyser={isRecording ? analyserNode : previewAnalyser}
             />
             {/* STT Engine Selector (for batch transcription after recording) */}
-            <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
-              <button
-                onClick={() => setSttProvider('transcribe')}
-                disabled={isRecording}
-                className={`px-4 py-1.5 text-xs font-medium transition-colors ${
-                  sttProvider === 'transcribe'
-                    ? 'bg-[#3211d4] text-white'
-                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
-              >
-                Transcribe
-              </button>
-              <button
-                onClick={() => setSttProvider('nova-sonic')}
-                disabled={isRecording}
-                className={`px-4 py-1.5 text-xs font-medium transition-colors border-l border-slate-200 dark:border-slate-700 ${
-                  sttProvider === 'nova-sonic'
-                    ? 'bg-[#3211d4] text-white'
-                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
-              >
-                Nova Sonic V2
-              </button>
-            </div>
+            <SttProviderSelector
+              sttProvider={sttProvider}
+              onSttProviderChange={setSttProvider}
+              isRecording={isRecording}
+            />
           </div>
         )}
 
@@ -750,51 +706,15 @@ export default function RecordPage() {
 
       {/* Post-Recording Toast Banner */}
       {postRecordingStep && (
-        <div className="fixed top-[64px] left-0 right-0 z-40 mx-4 mt-2">
-          <div className={`rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 ${
-            postRecordingStep === 'error'
-              ? 'bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800'
-              : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700'
-          }`}>
-            {postRecordingStep === 'error' ? (
-              <>
-                <span className="material-symbols-outlined text-red-500">error</span>
-                <p className="flex-1 text-sm text-red-700 dark:text-red-300 truncate">
-                  {errorMessage || 'An unexpected error occurred.'}
-                </p>
-                <button
-                  onClick={handleRetry}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-red-200 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors shrink-0"
-                >
-                  Try Again
-                </button>
-                <button
-                  onClick={() => router.push('/')}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-primary text-white hover:bg-primary/90 transition-colors shrink-0"
-                >
-                  Home
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent shrink-0" />
-                <p className="flex-1 text-sm font-medium text-slate-700 dark:text-slate-300">
-                  {postRecordingStep === 'creating' && 'Creating meeting...'}
-                  {postRecordingStep === 'saving' && 'Saving transcript...'}
-                  {postRecordingStep === 'uploading' && 'Uploading audio...'}
-                  {postRecordingStep === 'redirecting' && 'Opening meeting...'}
-                </p>
-                <button
-                  onClick={() => { setPostRecordingStep(null); router.push('/'); }}
-                  className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-md transition-colors shrink-0"
-                  title="Dismiss"
-                >
-                  <span className="material-symbols-outlined text-slate-400 text-lg">close</span>
-                </button>
-              </>
-            )}
-          </div>
-        </div>
+        <PostRecordingBanner
+          step={postRecordingStep}
+          errorMessage={errorMessage}
+          onRetry={handleRetry}
+          onDismiss={() => {
+            setPostRecordingStep(null);
+            router.push('/');
+          }}
+        />
       )}
 
       {/* Mobile Floating Q&A Button — visible during recording on small screens */}
