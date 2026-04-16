@@ -2,11 +2,20 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
+)
+
+// Sentinel errors for meeting operations
+var (
+	ErrForbidden = errors.New("forbidden")
+	ErrNotFound  = errors.New("not found")
 )
 
 // MeetingService handles meeting business logic
@@ -20,11 +29,11 @@ func NewMeetingService(repo *repository.DynamoDBRepository) *MeetingService {
 }
 
 // CreateMeeting creates a new meeting
-func (s *MeetingService) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string) (*model.Meeting, error) {
+func (s *MeetingService) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error) {
 	if title == "" {
 		return nil, fmt.Errorf("title is required")
 	}
-	return s.repo.CreateMeeting(ctx, userID, title, date, participants)
+	return s.repo.CreateMeeting(ctx, userID, title, date, participants, sttProvider)
 }
 
 // checkAccess verifies access and returns meeting, permission, and error
@@ -80,14 +89,17 @@ func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor s
 		response.Meetings = append(response.Meetings, item)
 	}
 
-	// Add shared meetings (batch query to avoid N+1)
+	// Add shared meetings (single BatchGetItem call)
 	if len(result.Shares) > 0 {
-		meetingIDs := make([]string, len(result.Shares))
+		keys := make([]repository.MeetingKey, len(result.Shares))
 		for i, share := range result.Shares {
-			meetingIDs[i] = share.MeetingID
+			keys[i] = repository.MeetingKey{
+				OwnerID:   share.OwnerID,
+				MeetingID: share.MeetingID,
+			}
 		}
 
-		meetings, err := s.repo.BatchGetMeetings(ctx, meetingIDs)
+		meetings, err := s.repo.BatchGetMeetings(ctx, keys)
 		if err == nil {
 			// Build lookup map
 			meetingMap := make(map[string]*model.Meeting, len(meetings))
@@ -114,7 +126,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		return nil, err
 	}
 	if meeting == nil {
-		return nil, fmt.Errorf("not found")
+		return nil, ErrNotFound
 	}
 
 	// Get attachments
@@ -129,6 +141,9 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 			Status:           att.Status,
 			Description:      att.Description,
 			ProcessedContent: att.ProcessedContent,
+			FileName:         att.FileName,
+			FileSize:         att.FileSize,
+			MimeType:         att.MimeType,
 		})
 	}
 
@@ -145,6 +160,12 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		}
 	}
 
+	// Parse transcript segments for speaker diarization
+	var transcription json.RawMessage
+	if meeting.TranscriptSegments != "" {
+		transcription = json.RawMessage(meeting.TranscriptSegments)
+	}
+
 	return &model.MeetingDetailResponse{
 		MeetingID:          meeting.MeetingID,
 		UserID:             meeting.UserID,
@@ -153,10 +174,16 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		Status:             meeting.Status,
 		Participants:       meeting.Participants,
 		Content:            meeting.Content,
+		Notes:              meeting.Notes,
 		TranscriptA:        meeting.TranscriptA,
 		TranscriptB:        meeting.TranscriptB,
 		SelectedTranscript: strPtr(meeting.SelectedTranscript),
 		AudioKey:           meeting.AudioKey,
+		Tags:               meeting.Tags,
+		ActionItems:        toRawJSON(meeting.ActionItems),
+		SpeakerMap:         meeting.SpeakerMap,
+		SttProvider:        meeting.SttProvider,
+		Transcription:      transcription,
 		Attachments:        attachmentResponses,
 		Shares:             shareResponses,
 		CreatedAt:          meeting.CreatedAt.Format(time.RFC3339),
@@ -171,10 +198,10 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		return nil, err
 	}
 	if meeting == nil {
-		return nil, fmt.Errorf("not found")
+		return nil, ErrNotFound
 	}
 	if permission != "owner" && permission != model.PermissionEdit {
-		return nil, fmt.Errorf("forbidden")
+		return nil, ErrForbidden
 	}
 
 	// Apply updates
@@ -183,6 +210,12 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}
 	if req.Content != "" {
 		meeting.Content = req.Content
+	}
+	if req.Notes != "" {
+		meeting.Notes = req.Notes
+	}
+	if req.TranscriptA != "" {
+		meeting.TranscriptA = req.TranscriptA
 	}
 	if req.SelectedTranscript != "" {
 		meeting.SelectedTranscript = req.SelectedTranscript
@@ -193,6 +226,44 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	if req.Status != "" {
 		meeting.Status = req.Status
 	}
+
+	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
+		return nil, err
+	}
+
+	return &model.MeetingUpdateResponse{
+		MeetingID: meeting.MeetingID,
+		UpdatedAt: meeting.UpdatedAt.Format(time.RFC3339),
+	}, nil
+}
+
+// UpdateSpeakers replaces speaker labels with real names in all text fields
+func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID string, req *model.UpdateSpeakersRequest) (*model.MeetingUpdateResponse, error) {
+	meeting, permission, err := s.checkAccess(ctx, userID, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	if meeting == nil {
+		return nil, ErrNotFound
+	}
+	if permission != "owner" && permission != model.PermissionEdit {
+		return nil, ErrForbidden
+	}
+
+	// Apply replacements to all text fields
+	for label, name := range req.SpeakerMap {
+		if name == "" {
+			continue
+		}
+		meeting.Content = strings.ReplaceAll(meeting.Content, label, name)
+		meeting.TranscriptA = strings.ReplaceAll(meeting.TranscriptA, label, name)
+		meeting.TranscriptB = strings.ReplaceAll(meeting.TranscriptB, label, name)
+		meeting.TranscriptSegments = strings.ReplaceAll(meeting.TranscriptSegments, label, name)
+		meeting.ActionItems = strings.ReplaceAll(meeting.ActionItems, label, name)
+	}
+
+	// Store the mapping for reference
+	meeting.SpeakerMap = req.SpeakerMap
 
 	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
 		return nil, err
@@ -215,9 +286,9 @@ func (s *MeetingService) DeleteMeeting(ctx context.Context, userID, meetingID st
 		// Check if it exists but user is not owner
 		existing, _ := s.repo.GetMeetingByID(ctx, meetingID)
 		if existing != nil {
-			return fmt.Errorf("forbidden")
+			return ErrForbidden
 		}
-		return fmt.Errorf("not found")
+		return ErrNotFound
 	}
 
 	return s.repo.DeleteMeeting(ctx, userID, meetingID)
@@ -230,10 +301,10 @@ func (s *MeetingService) SelectTranscript(ctx context.Context, userID, meetingID
 		return err
 	}
 	if meeting == nil {
-		return fmt.Errorf("not found")
+		return ErrNotFound
 	}
 	if permission != "owner" && permission != model.PermissionEdit {
-		return fmt.Errorf("forbidden")
+		return ErrForbidden
 	}
 
 	meeting.SelectedTranscript = selected
@@ -248,7 +319,7 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, owner
 		return nil, err
 	}
 	if meeting == nil {
-		return nil, fmt.Errorf("not found")
+		return nil, ErrNotFound
 	}
 
 	// Find user by email
@@ -279,9 +350,9 @@ func (s *MeetingService) RevokeShare(ctx context.Context, ownerID, meetingID, sh
 		// Check if meeting exists
 		existing, _ := s.repo.GetMeetingByID(ctx, meetingID)
 		if existing != nil {
-			return fmt.Errorf("forbidden")
+			return ErrForbidden
 		}
-		return fmt.Errorf("not found")
+		return ErrNotFound
 	}
 
 	return s.repo.DeleteShare(ctx, sharedToID, meetingID)
@@ -365,4 +436,12 @@ func strPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// toRawJSON converts a JSON string to json.RawMessage, or nil if empty/invalid
+func toRawJSON(s string) json.RawMessage {
+	if s == "" || s == "[]" {
+		return nil
+	}
+	return json.RawMessage(s)
 }

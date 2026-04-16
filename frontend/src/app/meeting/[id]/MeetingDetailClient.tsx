@@ -1,70 +1,66 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { MeetingEditor } from '@/components/MeetingEditor';
-import { ShareButton } from '@/components/ShareButton';
+import { AudioPlayer } from '@/components/AudioPlayer';
+import { AudioUploader } from '@/components/AudioUploader';
 import { AttachmentGallery } from '@/components/AttachmentGallery';
 import { FileUploader } from '@/components/FileUploader';
-import { ExportMenu } from '@/components/ExportMenu';
 import { QAPanel } from '@/components/QAPanel';
+import { MeetingHeader } from '@/components/meeting/MeetingHeader';
+import { AISummaryCard } from '@/components/meeting/AISummaryCard';
+import { ActionItemsCard } from '@/components/meeting/ActionItemsCard';
+import { ProcessingStatus } from '@/components/meeting/ProcessingStatus';
+import { TranscriptSection } from '@/components/meeting/TranscriptSection';
+import { SpeakerMapEditor } from '@/components/meeting/SpeakerMapEditor';
 import { meetingsApi } from '@/lib/api';
-import type { Meeting, ActionItem, TranscriptSegment, Attachment, SharedUser } from '@/types/meeting';
+import type { Meeting, MeetingDetail, ActionItem, SharedUser } from '@/types/meeting';
 
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
+/** Normalize action items from API — handles legacy `done` field and missing `id` */
+function normalizeActionItems(raw: unknown): ActionItem[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  return raw.map((item: Record<string, unknown>, i: number) => ({
+    id: (item.id as string) || `ai_${i + 1}`,
+    text: (item.text as string) || '',
+    completed: (item.completed as boolean) ?? (item.done as boolean) ?? false,
+    assignee: item.assignee as string | undefined,
+    dueDate: item.dueDate as string | undefined,
+  }));
 }
 
-function formatTime(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
-}
-
-function formatTimestamp(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
-}
-
-function DesktopDeleteButton({ meetingId }: { meetingId: string }) {
-  const router = useRouter();
-  const [isDeleting, setIsDeleting] = useState(false);
-
-  const handleDelete = async () => {
-    if (!confirm('이 미팅을 삭제하시겠습니까?')) return;
-    setIsDeleting(true);
-    try {
-      await meetingsApi.delete(meetingId);
-      router.push('/');
-    } catch (err) {
-      console.error('Failed to delete meeting:', err);
-      alert('미팅 삭제에 실패했습니다.');
-      setIsDeleting(false);
+class MeetingErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="min-h-screen flex items-center justify-center p-6">
+          <div className="max-w-md w-full bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-6">
+            <h2 className="text-lg font-bold text-red-700 dark:text-red-300 mb-2">페이지 오류</h2>
+            <p className="text-sm text-red-600 dark:text-red-400 mb-4 break-all">{this.state.error.message}</p>
+            <pre className="text-xs text-red-500/70 overflow-auto max-h-40 mb-4">{this.state.error.stack}</pre>
+            <button
+              onClick={() => window.location.href = '/'}
+              className="px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium"
+            >
+              홈으로 돌아가기
+            </button>
+          </div>
+        </div>
+      );
     }
-  };
-
-  return (
-    <button
-      onClick={handleDelete}
-      disabled={isDeleting}
-      className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-red-600 hover:border-red-200 dark:hover:text-red-400 dark:hover:border-red-800 transition-colors disabled:opacity-50"
-    >
-      <span className="material-symbols-outlined text-lg">delete</span>
-      {isDeleting ? '삭제 중...' : '삭제'}
-    </button>
-  );
+    return this.props.children;
+  }
 }
 
 function MobileMoreMenu({ meetingId }: { meetingId: string }) {
@@ -112,7 +108,7 @@ function MobileMoreMenu({ meetingId }: { meetingId: string }) {
         )}
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-20 min-w-[120px]">
+        <div className="absolute right-0 top-full mt-1 bg-white dark:bg-surface dark:glass-panel border border-slate-200 dark:border-white/10 rounded-lg shadow-lg z-20 min-w-[120px]">
           <button
             onClick={handleDelete}
             className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
@@ -126,22 +122,88 @@ function MobileMoreMenu({ meetingId }: { meetingId: string }) {
   );
 }
 
-export default function MeetingDetailPage() {
+function LiveTranscriptSection({ meeting }: { meeting: MeetingDetail }) {
+  return (
+    <section className="mb-12">
+      <h3 className="text-base font-bold flex items-center gap-2 mb-4 dark:font-[var(--font-headline)] dark:text-text-main">
+        <span className="material-symbols-outlined text-slate-400 dark:text-[#849396]">subtitles</span>
+        라이브 텍스트
+      </h3>
+      <p className="text-slate-600 dark:text-[#BAC9CC] dark:font-[var(--font-body)] leading-relaxed whitespace-pre-wrap">
+        {meeting.transcriptA || meeting.content || '음성 인식 결과를 기다리는 중...'}
+      </p>
+    </section>
+  );
+}
+
+function RecoveryBanner({ meetingId, onRecovered }: { meetingId: string; onRecovered: () => void }) {
+  const [recovering, setRecovering] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleRecover = async () => {
+    setRecovering(true);
+    setError(null);
+    try {
+      await meetingsApi.recover(meetingId);
+      onRecovered();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '복구에 실패했습니다');
+    } finally {
+      setRecovering(false);
+    }
+  };
+
+  return (
+    <div className="mb-8 animate-fade-in">
+      <div className="flex items-center gap-3 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl">
+        <span className="material-symbols-outlined text-red-500">warning</span>
+        <div className="flex-1">
+          <span className="text-sm font-medium text-red-700 dark:text-red-300 block">
+            이 녹음은 비정상 종료된 것으로 보입니다
+          </span>
+          <span className="text-xs text-red-600/70 dark:text-red-400/70 mt-0.5 block">
+            마지막 체크포인트까지의 오디오를 복구할 수 있습니다
+          </span>
+          {error && (
+            <span className="text-xs text-red-600 dark:text-red-400 mt-1 block">{error}</span>
+          )}
+        </div>
+        <button
+          onClick={handleRecover}
+          disabled={recovering}
+          className="px-4 py-2 rounded-lg text-xs font-bold border border-red-300 dark:border-red-700 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors shrink-0 disabled:opacity-50"
+        >
+          {recovering ? '복구 중...' : '녹음 복구'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MeetingDetailContent() {
   const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useAuth();
-  const [meeting, setMeeting] = useState<Meeting | null>(null);
+  const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showUploader, setShowUploader] = useState(false);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
-  // Extract meeting ID from URL after mount to avoid hydration mismatch.
+  // Extract meeting ID from URL. usePathname() updates on client-side navigation,
+  // unlike window.location.pathname in a mount-only effect which goes stale.
   // CloudFront rewrites /meeting/{id} → /meeting/_ for static export,
   // so useParams() returns "_" instead of the actual ID.
-  const [meetingId, setMeetingId] = useState('');
+  const pathname = usePathname();
+  const meetingId = useMemo(
+    () => pathname.split('/meeting/')[1]?.split('/')[0] || '',
+    [pathname]
+  );
 
+  // Fetch a fresh presigned audio URL when meeting has audio and is done
   useEffect(() => {
-    const id = window.location.pathname.split('/meeting/')[1]?.split('/')[0] || '';
-    setMeetingId(id);
-  }, []);
+    if (meeting?.audioKey && meeting.status === 'done' && meetingId) {
+      meetingsApi.audioUrl(meetingId).then(res => setAudioUrl(res.audioUrl)).catch(() => {});
+    }
+  }, [meeting?.audioKey, meeting?.status, meetingId]);
 
   useEffect(() => {
     if (!isAuthenticated || !meetingId) return;
@@ -149,7 +211,9 @@ export default function MeetingDetailPage() {
     const fetchMeeting = async () => {
       try {
         const data = await meetingsApi.get(meetingId);
-        setMeeting(data as Meeting);
+        const detail = data as MeetingDetail;
+        detail.actionItems = normalizeActionItems(detail.actionItems);
+        setMeeting(detail);
       } catch (err) {
         console.error('Failed to fetch meeting:', err);
       } finally {
@@ -159,14 +223,39 @@ export default function MeetingDetailPage() {
     fetchMeeting();
   }, [isAuthenticated, meetingId]);
 
-  // Polling for in-progress meetings
+  const refetchMeeting = async () => {
+    if (!meetingId) return;
+    try {
+      const data = await meetingsApi.get(meetingId);
+      const detail = data as MeetingDetail;
+      detail.actionItems = normalizeActionItems(detail.actionItems);
+      setMeeting(detail);
+    } catch (err) {
+      console.error('Failed to refetch meeting:', err);
+    }
+  };
+
+  // Polling for in-progress meetings (timeout after 5 minutes)
+  const pollCountRef = useRef(0);
+  const [pollTimedOut, setPollTimedOut] = useState(false);
+  const MAX_POLLS = 60; // 60 * 5s = 5 minutes
+
   useEffect(() => {
     if (!meeting || !['transcribing', 'summarizing'].includes(meeting.status)) return;
+    if (pollTimedOut) return;
 
     const interval = setInterval(async () => {
+      pollCountRef.current += 1;
+      if (pollCountRef.current >= MAX_POLLS) {
+        clearInterval(interval);
+        setPollTimedOut(true);
+        return;
+      }
       try {
         const data = await meetingsApi.get(meeting.meetingId);
-        setMeeting(data as Meeting);
+        const detail = data as MeetingDetail;
+        detail.actionItems = normalizeActionItems(detail.actionItems);
+        setMeeting(detail);
         if (data.status === 'done' || data.status === 'error') {
           clearInterval(interval);
         }
@@ -176,7 +265,7 @@ export default function MeetingDetailPage() {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [meeting?.meetingId, meeting?.status]);
+  }, [meeting?.meetingId, meeting?.status, pollTimedOut]);
 
   const handleActionItemToggle = (itemId: string) => {
     if (!meeting) return;
@@ -228,147 +317,118 @@ export default function MeetingDetailPage() {
   return (
     <AppLayout activePath="/">
       {/* Mobile Header */}
-      <header className="lg:hidden sticky top-0 z-10 flex items-center bg-white/90 dark:bg-slate-900/90 backdrop-blur-md p-4 border-b border-slate-200 dark:border-slate-800 justify-between">
-        <button onClick={() => router.back()} className="text-slate-700 dark:text-slate-300 flex size-10 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-slate-800">
+      <header className="lg:hidden sticky top-0 z-10 flex items-center bg-white/90 dark:bg-[#09090E]/90 backdrop-blur-md p-4 border-b border-slate-200 dark:border-white/10 justify-between">
+        <button onClick={() => router.back()} className="text-slate-700 dark:text-text-main flex size-10 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-white/5">
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
-        <h2 className="text-slate-900 dark:text-slate-100 text-sm font-bold flex-1 text-center">Meeting Report</h2>
+        <h2 className="text-slate-900 dark:text-text-main text-sm font-bold dark:font-[var(--font-headline)] flex-1 text-center">Meeting Report</h2>
         <MobileMoreMenu meetingId={meetingId} />
       </header>
 
       {/* Content */}
-      <div className="flex-1 p-4 lg:p-8 max-w-5xl mx-auto w-full">
-          {/* Breadcrumbs - Desktop */}
-          <div className="hidden lg:flex items-center gap-2 text-sm text-slate-500 mb-6">
-            <Link href="/" className="hover:text-primary transition-colors">Meetings</Link>
-            <span className="material-symbols-outlined text-xs">chevron_right</span>
-            <span className="text-slate-900 dark:text-slate-200 font-medium">{meeting.title}</span>
-          </div>
+      <div className="flex flex-1 min-h-0">
+        {/* Main Content */}
+        <div className="flex-1 p-4 lg:p-8 overflow-y-auto">
+          <div className="lg:max-w-5xl lg:mx-auto">
+          {/* Header */}
+          <MeetingHeader
+            meeting={meeting}
+            onShare={handleShare}
+            onUnshare={handleUnshare}
+            onTitleChange={async (newTitle) => {
+              setMeeting({ ...meeting, title: newTitle });
+              try {
+                await meetingsApi.update(meeting.meetingId, { title: newTitle });
+              } catch (err) {
+                console.error('Failed to update title:', err);
+                setMeeting(meeting);
+              }
+            }}
+          />
 
-          {/* Header Section */}
-          <header className="mb-8 lg:mb-10">
-            <div className="flex items-center gap-2 mb-3">
-              {meeting.tags?.[0] && (
-                <span className="bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded">
-                  {meeting.tags[0]}
-                </span>
-              )}
-              <span className="text-slate-400 dark:text-slate-500 text-xs">•</span>
-              <p className="text-slate-500 dark:text-slate-400 text-xs font-medium">
-                {formatDate(meeting.date)} • {formatTime(meeting.date)}
-              </p>
-            </div>
-            <h1 className="text-2xl lg:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">
-              {meeting.title}
-            </h1>
+          {/* Recovery banner for crashed recordings */}
+          {meeting.status === 'recording' && (
+            <RecoveryBanner meetingId={meetingId} onRecovered={refetchMeeting} />
+          )}
 
-            {/* Participants & Actions */}
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="flex -space-x-2">
-                  {meeting.participants?.slice(0, 4).map((p) => (
-                    <div
-                      key={p.id}
-                      className="size-8 lg:size-9 rounded-full border-2 border-white dark:border-slate-900 bg-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-500 overflow-hidden"
-                    >
-                      {p.avatarUrl ? (
-                        <img src={p.avatarUrl} alt={p.name} className="w-full h-full object-cover" />
-                      ) : (
-                        p.initials || p.name?.charAt(0)
-                      )}
-                    </div>
-                  ))}
-                  {(meeting.participants?.length || 0) > 4 && (
-                    <div className="size-8 lg:size-9 rounded-full border-2 border-white dark:border-slate-900 bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-500">
-                      +{meeting.participants!.length - 4}
-                    </div>
-                  )}
-                </div>
-                <p className="text-xs text-slate-500 font-medium hidden lg:block">
-                  {meeting.participants?.map((p) => p.name?.split(' ')[0]).slice(0, 3).join(', ')}
-                  {(meeting.participants?.length || 0) > 3 && ` and ${meeting.participants!.length - 3} others`}
-                </p>
+          {/* Speaker Name Mapping */}
+          {meeting.status === 'done' && (
+            <SpeakerMapEditor
+              transcription={meeting.transcription}
+              content={meeting.content}
+              speakerMap={meeting.speakerMap}
+              onSave={async (speakerMap) => {
+                await meetingsApi.updateSpeakers(meeting.meetingId, speakerMap);
+                const refreshed = await meetingsApi.get(meeting.meetingId);
+                setMeeting(refreshed as Meeting);
+              }}
+            />
+          )}
+
+          {/* Core Content Grid - show summary when done OR when content exists (e.g. error with saved live summary) */}
+          {(meeting.status === 'done' || meeting.content || meeting.summary) ? (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-12">
+              <div className="lg:col-span-7">
+                <AISummaryCard
+                  content={meeting.content}
+                  summary={meeting.summary}
+                  transcriptA={meeting.transcriptA}
+                />
               </div>
-
-              <div className="flex items-center gap-2">
-                <DesktopDeleteButton meetingId={meeting.meetingId} />
-                <ExportMenu meetingId={meeting.meetingId} />
-                <ShareButton
-                  meetingId={meeting.meetingId}
-                  sharedWith={meeting.sharedWith}
-                  onShare={handleShare}
-                  onUnshare={handleUnshare}
+              <div className="lg:col-span-5">
+                <ActionItemsCard
+                  items={meeting.actionItems}
+                  onToggle={handleActionItemToggle}
                 />
               </div>
             </div>
-          </header>
-
-          {/* Processing Status Indicator */}
-          {meeting.status !== 'done' && (
-            <div className="mb-6">
-              <div className="flex items-center gap-3 p-4 bg-primary/5 border border-primary/20 rounded-xl">
-                <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent shrink-0" />
-                <span className="text-sm font-medium text-primary flex-1">
-                  {meeting.status === 'transcribing' ? 'Transcribing audio...' :
-                   meeting.status === 'summarizing' ? 'Generating summary...' :
-                   meeting.status === 'recording' ? 'Uploading & preparing...' : 'Processing...'}
-                </span>
-              </div>
-              <div className="mt-2 h-1 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                <div className="h-full bg-primary rounded-full animate-pulse" style={{
-                  width: meeting.status === 'recording' ? '25%' : meeting.status === 'transcribing' ? '50%' : meeting.status === 'summarizing' ? '75%' : '90%'
-                }} />
-              </div>
-            </div>
-          )}
-
-          {/* Core Content Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 mb-8 lg:mb-12">
-            {/* AI Summary Box */}
-            <div className="lg:col-span-7 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 lg:p-6 shadow-sm">
-              <div className="flex items-center gap-2 mb-4 text-primary">
-                <span className="material-symbols-outlined">auto_awesome</span>
-                <h3 className="font-bold">AI Summary</h3>
-              </div>
-              <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-                {meeting.summary}
-              </p>
-            </div>
-
-            {/* Action Items List */}
-            <div className="lg:col-span-5 bg-primary/5 dark:bg-primary/10 border border-primary/20 rounded-xl p-5 lg:p-6">
-              <div className="flex items-center gap-2 mb-4 text-primary">
-                <span className="material-symbols-outlined">check_circle</span>
-                <h3 className="font-bold">Action Items</h3>
-              </div>
-              <div className="space-y-4">
-                {meeting.actionItems?.map((item) => (
-                  <div key={item.id} className="flex items-start gap-3">
-                    <input
-                      type="checkbox"
-                      checked={item.completed}
-                      onChange={() => handleActionItemToggle(item.id)}
-                      className="mt-1 rounded border-primary/30 text-primary focus:ring-primary h-4 w-4"
-                    />
-                    <div className="flex flex-col">
-                      <span className={`text-sm font-medium transition-all duration-200 ${item.completed ? 'line-through text-slate-400 dark:text-slate-500' : 'text-slate-900 dark:text-white'}`}>
-                        {item.text}
+          ) : meeting.status !== 'error' ? (
+            <>
+              {pollTimedOut ? (
+                <div className="mb-8 animate-fade-in">
+                  <div className="flex items-center gap-3 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl">
+                    <span className="material-symbols-outlined text-amber-500">schedule</span>
+                    <div className="flex-1">
+                      <span className="text-sm font-medium text-amber-700 dark:text-amber-300 block">
+                        처리 시간이 초과되었습니다
                       </span>
-                      {item.assignee && (
-                        <span className="text-[10px] text-slate-500">
-                          Assigned to: @{item.assignee}
-                        </span>
-                      )}
+                      <span className="text-xs text-amber-600/70 dark:text-amber-400/70 mt-0.5 block">
+                        음성 변환이 예상보다 오래 걸리고 있습니다
+                      </span>
                     </div>
+                    <button
+                      onClick={() => { pollCountRef.current = 0; setPollTimedOut(false); }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors shrink-0"
+                    >
+                      다시 확인
+                    </button>
                   </div>
-                ))}
+                </div>
+              ) : (
+                <ProcessingStatus status={meeting.status} />
+              )}
+              <LiveTranscriptSection meeting={meeting} />
+            </>
+          ) : null}
+
+          {/* Meeting Notes */}
+          {meeting.notes && (
+            <section className="mb-12">
+              <h3 className="text-base font-bold flex items-center gap-2 mb-4 dark:font-[var(--font-headline)] dark:text-text-main">
+                <span className="material-symbols-outlined text-slate-400 dark:text-[#849396]">edit_note</span>
+                미팅 노트
+              </h3>
+              <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-5 dark:border dark:border-white/10">
+                <p className="text-slate-700 dark:text-[#BAC9CC] dark:font-[var(--font-body)] leading-relaxed whitespace-pre-wrap text-sm">
+                  {meeting.notes}
+                </p>
               </div>
-            </div>
-          </div>
+            </section>
+          )}
 
           {/* Attachments Gallery */}
           {meeting.attachments && meeting.attachments.length > 0 && (
-            <section className="mb-8 lg:mb-12">
+            <section className="mb-12">
               <AttachmentGallery
                 attachments={meeting.attachments}
                 onUploadClick={() => setShowUploader(true)}
@@ -379,10 +439,10 @@ export default function MeetingDetailPage() {
           {/* Upload Modal */}
           {showUploader && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-              <div className="bg-white dark:bg-slate-900 rounded-xl p-6 max-w-lg w-full">
+              <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-6 max-w-lg w-full dark:border dark:border-white/10">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-slate-900 dark:text-white">Upload Files</h3>
-                  <button onClick={() => setShowUploader(false)} className="text-slate-400 hover:text-slate-600">
+                  <h3 className="font-bold text-slate-900 dark:text-text-main dark:font-[var(--font-headline)]">Upload Files</h3>
+                  <button onClick={() => setShowUploader(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-[#849396]">
                     <span className="material-symbols-outlined">close</span>
                   </button>
                 </div>
@@ -390,7 +450,6 @@ export default function MeetingDetailPage() {
                   meetingId={meeting.meetingId}
                   onUploadComplete={async (files) => {
                     setShowUploader(false);
-                    // Refetch meeting to get updated attachments
                     try {
                       const data = await meetingsApi.get(meeting.meetingId);
                       setMeeting(data as Meeting);
@@ -405,60 +464,40 @@ export default function MeetingDetailPage() {
 
           {/* Full Transcription */}
           {meeting.transcription && meeting.transcription.length > 0 && (
-            <section className="border-t border-slate-200 dark:border-slate-800 pt-8 lg:pt-12">
-              <div className="flex items-center justify-between mb-6 lg:mb-8">
-                <h2 className="text-lg lg:text-xl font-bold flex items-center gap-2 text-slate-900 dark:text-white">
-                  <span className="material-symbols-outlined">notes</span>
-                  Full Transcription
-                </h2>
-                <div className="flex gap-2">
-                  <button className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-semibold flex items-center gap-2 bg-white dark:bg-slate-900">
-                    <span className="material-symbols-outlined text-sm">search</span>
-                    <span className="hidden sm:inline">Search</span>
-                  </button>
-                  <button className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 text-xs font-semibold flex items-center gap-2 bg-white dark:bg-slate-900">
-                    <span className="material-symbols-outlined text-sm">download</span>
-                    <span className="hidden sm:inline">Export</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-6 lg:space-y-8">
-                {meeting.transcription.map((segment) => (
-                  <div key={segment.id} className="flex gap-4 lg:gap-6">
-                    <div className="w-12 lg:w-16 pt-1 flex-shrink-0">
-                      <span className="text-xs font-bold text-primary px-2 py-1 bg-primary/10 rounded">
-                        {formatTimestamp(segment.startTime)}
-                      </span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-2">
-                        <div
-                          className="w-2 h-2 rounded-full shrink-0"
-                          style={{ backgroundColor: `hsl(${segment.speaker.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 360}, 70%, 55%)` }}
-                        />
-                        <span className="text-sm font-black text-slate-900 dark:text-white">{segment.speaker}</span>
-                        <span className="text-[10px] text-slate-400 font-medium">{segment.timestamp}</span>
-                      </div>
-                      <p className="text-slate-600 dark:text-slate-400 text-sm leading-relaxed">
-                        {segment.text}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
+            <TranscriptSection transcription={meeting.transcription} />
           )}
 
-          {/* Q&A Panel */}
-          <section className="border-t border-slate-200 dark:border-slate-800 pt-8 lg:pt-12">
-            <h2 className="text-lg lg:text-xl font-bold flex items-center gap-2 text-slate-900 dark:text-white mb-6">
+          {/* Inline Q&A - mobile only */}
+          <section className="lg:hidden border-t border-slate-200 dark:border-white/10 pt-8">
+            <h2 className="text-lg font-bold flex items-center gap-2 text-slate-900 dark:text-text-main dark:font-[var(--font-headline)] mb-6">
               <span className="material-symbols-outlined">question_answer</span>
               Meeting Q&A
             </h2>
             <QAPanel meetingId={meeting.meetingId} />
           </section>
+
+          {/* Audio Player / Uploader */}
+          {audioUrl ? (
+            <AudioPlayer audioUrl={audioUrl} />
+          ) : (meeting.status === 'done' || meeting.status === 'error') && !meeting.audioKey ? (
+            <AudioUploader meetingId={meeting.meetingId} onUploadComplete={refetchMeeting} />
+          ) : null}
+          </div>
         </div>
+
+        {/* Q&A Side Panel - Desktop only */}
+        <aside className="hidden lg:flex lg:w-80 xl:w-96 border-l border-slate-200 dark:border-white/10 dark:bg-surface-lowest/50 flex-col sticky top-0 h-screen">
+          <QAPanel meetingId={meeting.meetingId} />
+        </aside>
+      </div>
     </AppLayout>
+  );
+}
+
+export default function MeetingDetailPage() {
+  return (
+    <MeetingErrorBoundary>
+      <MeetingDetailContent />
+    </MeetingErrorBoundary>
   );
 }

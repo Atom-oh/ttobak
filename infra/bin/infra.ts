@@ -68,10 +68,20 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   description: 'Ttobak AI Meeting Assistant - Gateway (API Gateway + Lambda)',
   userPool: authStack.userPool,
   userPoolClient: authStack.userPoolClient,
-  lambdaRole: aiStack.lambdaRole,
+  spaClient: authStack.spaClient,
+  apiRole: aiStack.apiRole,
+  transcribeRole: aiStack.transcribeRole,
+  summarizeRole: aiStack.summarizeRole,
+  processImageRole: aiStack.processImageRole,
+  kbRole: aiStack.kbRole,
+  qaRole: aiStack.qaRole,
   bucket: storageStack.bucket,
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
+  knowledgeBaseId: knowledgeStack.knowledgeBaseId,
+  dataSourceId: knowledgeStack.dataSourceId,
+  kmsKeyId: aiStack.kmsKey.keyId,
+  legacyRole: aiStack.legacyRole,
 });
 gatewayStack.addDependency(authStack);
 gatewayStack.addDependency(storageStack);
@@ -84,8 +94,8 @@ const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   crossRegionReferences: true,
   description: 'Ttobak AI Meeting Assistant - Frontend (S3 + CloudFront)',
   httpApiUrl: gatewayStack.httpApi.apiEndpoint,
-  websocketApiUrl: `wss://${gatewayStack.websocketApi.apiId}.execute-api.${env.region}.amazonaws.com/production`,
   edgeFunctionVersion: edgeAuthStack.edgeFunction,
+  qaStreamFunctionUrl: gatewayStack.qaStreamFunctionUrl.url,
 });
 frontendStack.addDependency(gatewayStack);
 frontendStack.addDependency(edgeAuthStack);

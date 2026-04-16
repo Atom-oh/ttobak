@@ -79,6 +79,41 @@ func (h *KBHandler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// CopyAttachment handles POST /api/kb/copy-attachment
+func (h *KBHandler) CopyAttachment(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+
+	var req struct {
+		MeetingID    string `json:"meetingId"`
+		AttachmentID string `json:"attachmentId"`
+		SourceKey    string `json:"sourceKey"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.SourceKey == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "sourceKey is required")
+		return
+	}
+
+	if err := h.kbService.CopyAttachmentToKB(ctx, userID, req.SourceKey); err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		return
+	}
+
+	// Trigger ingestion after copy
+	if _, err := h.kbService.SyncKB(ctx, userID); err != nil {
+		// Non-fatal — file is already copied
+		writeJSON(w, http.StatusOK, map[string]string{"status": "copied", "ingestion": "failed"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "copied", "ingestion": "started"})
+}
+
 // DeleteFile handles DELETE /api/kb/files/{fileId}
 func (h *KBHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

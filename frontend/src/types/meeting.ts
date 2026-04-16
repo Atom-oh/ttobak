@@ -49,12 +49,14 @@ export interface TranscriptSegment {
 export interface Attachment {
   id: string;
   name: string;
-  type: 'image' | 'document' | 'audio' | 'video';
+  type: 'image' | 'document' | 'audio' | 'video' | 'photo' | 'screenshot' | 'diagram' | 'whiteboard' | 'audio_file';
   url: string;
   thumbnailUrl?: string;
   originalUrl?: string;
   processedUrl?: string;
   size?: number;
+  mimeType?: string;
+  status?: string;
   timestamp?: string;
   createdAt: string;
 }
@@ -99,10 +101,12 @@ export interface User {
 // Extended meeting detail from API
 export interface MeetingDetail extends Meeting {
   content?: string;
+  notes?: string;
   transcriptA?: string;
   transcriptB?: string;
   selectedTranscript?: 'A' | 'B' | null;
   audioKey?: string;
+  speakerMap?: Record<string, string>;
   shares?: SharedUser[];
   isShared?: boolean;
   sharedBy?: string | null;

@@ -72,6 +72,7 @@ type ALBOIDCClaims struct {
 	FamilyName    string `json:"family_name"`
 	Exp           int64  `json:"exp"`
 	Iss           string `json:"iss"`
+	TokenUse      string `json:"token_use"`
 }
 
 // Auth is middleware that extracts user information from JWT
@@ -135,13 +136,12 @@ func parseALBJWT(token string) (*ALBOIDCClaims, error) {
 }
 
 // parseJWT parses and verifies a JWT token.
-// If COGNITO_USER_POOL_ID is set, performs full signature verification.
-// Otherwise falls back to unverified decode (backward compatibility).
+// COGNITO_USER_POOL_ID must be set; otherwise token is rejected.
 func parseJWT(token string) (*ALBOIDCClaims, error) {
-	if cognitoUserPoolID != "" {
-		return parseVerifiedJWT(token)
+	if cognitoUserPoolID == "" {
+		return nil, &AuthError{Message: "server misconfiguration: COGNITO_USER_POOL_ID is not set"}
 	}
-	return parseUnverifiedJWT(token)
+	return parseVerifiedJWT(token)
 }
 
 // parseVerifiedJWT verifies JWT signature using Cognito JWKS
@@ -208,7 +208,12 @@ func getStringClaim(claims jwt.MapClaims, key string) string {
 	return ""
 }
 
-// parseUnverifiedJWT decodes JWT payload without signature verification (fallback)
+// parseUnverifiedJWT decodes JWT payload with lightweight validation (fallback)
+// Provides defense-in-depth when JWKS verification is not available:
+// - Validates token has 3 parts (header.payload.signature)
+// - Validates issuer matches expected Cognito URL (if pool ID known)
+// - Validates token is not expired
+// - Validates token_use is "id" (not "access")
 func parseUnverifiedJWT(token string) (*ALBOIDCClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -225,7 +230,42 @@ func parseUnverifiedJWT(token string) (*ALBOIDCClaims, error) {
 		return nil, err
 	}
 
+	// Defense-in-depth: lightweight validation even without signature verification
+	if err := validateClaimsLightweight(&claims); err != nil {
+		return nil, err
+	}
+
 	return &claims, nil
+}
+
+// validateClaimsLightweight performs lightweight JWT claim validation
+// for defense-in-depth when full signature verification is not available
+func validateClaimsLightweight(claims *ALBOIDCClaims) error {
+	// Validate token is not expired
+	if claims.Exp > 0 && time.Now().Unix() > claims.Exp {
+		return &AuthError{Message: "token expired"}
+	}
+
+	// Validate issuer if we know the expected pool
+	if cognitoUserPoolID != "" && claims.Iss != "" {
+		// Extract region from pool ID (format: {region}_{poolId})
+		region := cognitoRegion
+		if idx := strings.Index(cognitoUserPoolID, "_"); idx > 0 {
+			region = cognitoUserPoolID[:idx]
+		}
+		expectedIssuer := fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", region, cognitoUserPoolID)
+		if claims.Iss != expectedIssuer {
+			return &AuthError{Message: "invalid token issuer"}
+		}
+	}
+
+	// Validate token_use is "id" (not "access") for ID tokens
+	// Allow empty token_use for backward compatibility with ALB OIDC tokens
+	if claims.TokenUse != "" && claims.TokenUse != "id" {
+		return &AuthError{Message: "invalid token_use: expected id token"}
+	}
+
+	return nil
 }
 
 // getJWKSKeys fetches and caches JWKS keys from Cognito
@@ -350,13 +390,25 @@ func GetUserName(ctx context.Context) string {
 	return ""
 }
 
+// allowedOrigins for CORS validation
+var allowedOrigins = map[string]bool{
+	"https://d115v97ubjhb06.cloudfront.net": true,
+	"http://localhost:3000":                 true,
+}
+
 // CORS middleware adds CORS headers to responses
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-amzn-oidc-data")
-		w.Header().Set("Access-Control-Max-Age", "86400")
+		origin := r.Header.Get("Origin")
+
+		// Only set CORS headers for allowed origins
+		if allowedOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-amzn-oidc-data")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			w.Header().Set("Vary", "Origin")
+		}
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)

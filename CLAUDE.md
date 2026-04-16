@@ -9,10 +9,13 @@ Ttobak (또박) is a Korean AI meeting assistant: record audio → STT (A/B: AWS
 ## Build Commands
 
 ```bash
-# Go Lambda binaries (ARM64 cross-compile, all 6 functions)
-cd backend && for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/websocket cmd/kb; do
+# Go Lambda binaries (ARM64 cross-compile, all 5 functions)
+cd backend && for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
   GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o $dir/bootstrap ./$dir
 done
+
+# Build a single Lambda (e.g. after editing only the api handler)
+cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/api/bootstrap ./cmd/api
 
 # Frontend
 cd frontend && npm run build     # static export to out/
@@ -26,18 +29,17 @@ cd infra && npm test             # jest tests
 
 # Deploy frontend to S3 + invalidate CloudFront
 aws s3 sync frontend/out/ s3://ttobak-site-180294183052-ap-northeast-2/ --delete
-aws cloudfront create-invalidation --distribution-id E3BPV9VFNI1H2S --paths "/*"
+aws cloudfront create-invalidation --distribution-id E3IFMH57E9UTB5 --paths "/*"
 ```
 
 ## Architecture
 
 ### Request Flow
 ```
-CloudFront (d115v97ubjhb06.cloudfront.net)
+CloudFront (d2olomx8td8txt.cloudfront.net)
   ├→ Lambda@Edge (us-east-1) — JWT auth on /api/*
   ├→ S3 OAC — static frontend (Next.js static export)
-  ├→ HTTP API Gateway → ttobak-api Lambda (chi router, all REST endpoints)
-  └→ WebSocket API Gateway → ttobak-websocket Lambda (realtime)
+  └→ HTTP API Gateway → ttobak-api Lambda (chi router, all REST endpoints)
 ```
 
 ### Event-Driven Pipeline
@@ -52,42 +54,17 @@ Auth + Storage (parallel) → AI → Knowledge → EdgeAuth (us-east-1) → Gate
 
 ### Backend (Go)
 
-6 Lambda entry points in `backend/cmd/{api,transcribe,summarize,process-image,websocket,kb}/main.go`. The `api` function uses chi router with `aws-lambda-go-api-proxy` (payload format v1.0 required). Shared code lives in `backend/internal/`:
-- `handler/` — HTTP handlers (chi routes)
-- `service/` — business logic (transcribe, bedrock, kb, knowledge, notion, translate)
-- `repository/` — DynamoDB single-table access
-- `model/` — data models and key prefixes
-- `middleware/` — auth (JWT parsing), CORS, recovery
+5 Lambda entry points in `backend/cmd/{api,transcribe,summarize,process-image,kb}/main.go`. `api` uses chi router + `aws-lambda-go-api-proxy` (payload v1.0). Q&A (`/api/qa/*`) is a separate Python Lambda (`backend/python/qa/`). Shared code in `backend/internal/` (handler, service, repository, model, middleware). Service layer uses sentinel errors (`ErrForbidden`, `ErrNotFound`) for typed error handling.
 
-### DynamoDB Single-Table Design
-Table: `ttobak-main`. Key prefixes in `backend/internal/model/meeting.go`:
-- `PK=USER#{userId} SK=MEETING#{meetingId}` — meetings
-- `PK=MEETING#{meetingId} SK=ATTACH#{id}` — attachments
-- `PK=USER#{userId} SK=PROFILE` — user profiles
-- `PK=USER#{userId} SK=SHARED#{meetingId}` — shared access
-- GSI1 (date sorting), GSI2 (email search)
+### DynamoDB & S3
+Table `ttobak-main`, single-table design. Key schema and GSIs in `backend/internal/model/meeting.go`. S3 keys: `{audio|images|transcripts}/{userId|meetingId}/...`
 
 ### Frontend (Next.js 16)
-Static export for S3 deployment (`output: 'export'` in production only). Key patterns:
-- Auth: Cognito SDK in `src/lib/auth.ts`, tokens in localStorage, auto-refresh in `src/lib/api.ts`
-- API client: typed wrapper in `src/lib/api.ts` with 401 retry
-- Dynamic routes (e.g. `meeting/[id]`) use `generateStaticParams` with dummy param + CloudFront 404→index.html SPA fallback
-- Tailwind CSS v4, TipTap rich text editor, Material Symbols icons
-
-### S3 Key Conventions
-- `audio/{userId}/{meetingId}/{filename}` — audio files
-- `images/{userId}/{meetingId}/{filename}` — image attachments
-- `transcripts/{meetingId}.json` / `transcripts/{meetingId}-nova.json` — transcription results
+Static export (`output: 'export'` prod only). Auth via Cognito SDK (`src/lib/auth.ts`), API client (`src/lib/api.ts`). Dynamic routes use `generateStaticParams` + CloudFront 404→index.html SPA fallback. Tailwind v4 with class-based dark mode (`@custom-variant dark` in `globals.css`), TipTap editor, Material Symbols. Client-side AWS Transcribe Streaming via `@aws-sdk/client-transcribe-streaming`.
 
 ## Documentation
 
-Detailed specs live in `docs/` — CLAUDE.md summarizes key patterns; refer to the full docs for complete details.
-
-- `docs/PRD.md` — Product requirements, feature status tracking (P0/P1 priorities)
-- `docs/API-SPEC.md` — Full REST + WebSocket API spec with request/response schemas
-- `docs/INFRA-SPEC.md` — CDK stack details, Lambda configs, cross-region deployment
-- `docs/DESIGN-SPEC.md` — Design tokens, component specs, icon mapping
-- `docs/CODE-REVIEW.md` — Known issues, decisions needed, deployment blockers
+Detailed specs in `docs/`: PRD.md, API-SPEC.md, INFRA-SPEC.md, DESIGN-SPEC.md, CODE-REVIEW.md
 
 ## Design System
 
@@ -109,34 +86,20 @@ Error codes: `BAD_REQUEST` (400), `UNAUTHORIZED` (401), `FORBIDDEN` (403), `NOT_
 
 ## Lambda Environment Variables
 
-CDK injects these env vars per Lambda function:
-
-| Lambda | Key Env Vars |
-|--------|-------------|
-| api | `TABLE_NAME`, `BUCKET_NAME`, `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `KB_ID`, `AOSS_ENDPOINT` |
-| transcribe | `TABLE_NAME`, `BUCKET_NAME`, `NOVA_SONIC_MODEL_ID` |
-| summarize | `TABLE_NAME`, `BEDROCK_MODEL_ID` |
-| process-image | `TABLE_NAME`, `BUCKET_NAME`, `BEDROCK_MODEL_ID` |
-| websocket | `TABLE_NAME`, `CONNECTIONS_TABLE_NAME`, `NOVA_SONIC_MODEL_ID`, `BEDROCK_MODEL_ID`, `WEBSOCKET_ENDPOINT` |
-| kb | `TABLE_NAME`, `BUCKET_NAME`, `KB_ID`, `AOSS_ENDPOINT` |
+CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE_NAME`, `BUCKET_NAME`, `BEDROCK_MODEL_ID`. The `api` Lambda also gets `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `KB_BUCKET_NAME`, `KMS_KEY_ID`.
 
 ## Known Issues & Decisions
 
-From `docs/CODE-REVIEW.md` — items to be aware of when working on the codebase:
-
-### Blockers (HIGH)
+### HIGH
 - **`updateAttachmentByKey` not implemented** (`process-image/main.go`): Image processing results are not saved to DynamoDB. Needs meetingId parsing from S3 key path.
-- **Summarize Lambda trigger mismatch**: CDK configures DynamoDB Stream trigger, but code expects S3 event. Recommended: unify to S3 event trigger on `transcripts/` prefix.
 
 ### Medium
 - **JWT signature not verified in backend** (`middleware/auth.go`): Backend only decodes JWT payload without signature verification. Safe because Lambda@Edge pre-validates, but lacks defense-in-depth.
-- **N+1 query in shared meetings** (`service/meeting.go:85-92`): Each shared meeting triggers a separate `GetMeetingByID` call. Should use `BatchGetItem` or denormalize.
-- **Mock data in frontend** (`app/page.tsx`): Meeting list uses hardcoded mock data instead of API calls.
+- **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID are hardcoded in CDK stacks. Should be extracted to CDK context for multi-account/stage support.
 
 ### Low
-- S3 key URL decoding incomplete (`transcribe/main.go:57`) — only handles `+` → space, not full `%`-encoding
 - Default table/bucket names in Go don't match CDK defaults (no runtime impact since CDK injects env vars)
-- `AudioContext` not closed on recording stop (`RecordButton.tsx`) — potential memory leak
+- ~~`AudioContext` not closed on recording stop~~ — **FIXED** (`RecordButton.tsx:80` now calls `audioContextRef.current.close()`)
 
 ## Important Gotchas
 
@@ -146,5 +109,19 @@ From `docs/CODE-REVIEW.md` — items to be aware of when working on the codebase
 - **CDK cross-stack tokens**: Use `Fn.split`/`Fn.select` for cross-stack string manipulation, not JS string methods
 - **OpenSearch Serverless**: Data access policies require exact IAM role ARN principals (no wildcards). Out-of-band AOSS policy changes cause CloudFormation version conflicts — revert before deploying
 - **Next.js static export**: `output: 'export'` only in production; local dev uses normal SSR for dynamic routes
-- **WebSocket connections table**: Separate DynamoDB table `ttobak-connections` with TTL for auto-cleanup
-- **Bedrock models**: Claude Opus 4.6 for summarize/vision, Claude Haiku for fast translation, Nova Sonic v2 for realtime STT
+- **Bedrock models**: Claude Opus 4.6 for summarize/vision, Claude Haiku for fast translation/detection
+- **STT**: Three engines available — Browser Web Speech API (free, Korean-only), client-side AWS Transcribe Streaming (`@aws-sdk/client-transcribe-streaming` in browser via `sttManager.ts`), and server-side AWS Transcribe/Nova Sonic (async after upload). `liveSttProvider` controls live engine; `sttProvider` controls which engine the transcribe Lambda uses post-upload.
+- **Auto-expiry**: GetMeeting handler auto-marks stuck `transcribing`/`summarizing` status as `error` after 30 minutes. Long audio files rarely exceed this but be aware when debugging.
+- **Sentinel errors**: `service.ErrForbidden` and `service.ErrNotFound` enable typed error handling in handlers via `errors.Is()`
+
+## Auto-Sync Rules
+
+When exiting Plan mode or completing significant changes, update relevant documentation:
+
+- **API changes** (`backend/internal/handler/`): Update `docs/API-SPEC.md`
+- **Infra changes** (`infra/lib/`): Update `docs/INFRA-SPEC.md`
+- **Design changes** (`frontend/src/components/`): Update `docs/DESIGN-SPEC.md`
+- **Architecture changes** (new stacks, services, pipelines): Update `docs/architecture.md`
+- **New decisions**: Add ADR in `docs/decisions/`
+
+Documentation must stay in sync with code. When modifying a source file, check if the corresponding doc needs updating.

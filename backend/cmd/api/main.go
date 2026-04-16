@@ -10,6 +10,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/translate"
 	"github.com/awslabs/aws-lambda-go-api-proxy/chi"
@@ -33,10 +35,11 @@ func init() {
 	// Initialize AWS clients
 	dynamoClient := dynamodb.NewFromConfig(cfg)
 	s3Client := s3.NewFromConfig(cfg)
+	ebClient := eventbridge.NewFromConfig(cfg)
 	bedrockAgentClient := bedrockagent.NewFromConfig(cfg)
 	translateClient := translate.NewFromConfig(cfg)
 	bedrockRuntimeClient2 := bedrockruntime.NewFromConfig(cfg)
-
+	kmsClient := kms.NewFromConfig(cfg)
 	// Get environment variables (per API spec: TABLE_NAME, BUCKET_NAME)
 	tableName := os.Getenv("TABLE_NAME")
 	if tableName == "" {
@@ -53,27 +56,31 @@ func init() {
 	kbID := os.Getenv("KB_ID")                     // Bedrock Knowledge Base ID
 	kbDataSourceID := os.Getenv("KB_DATASOURCE_ID") // Bedrock Data Source ID
 
-	// Initialize repository
-	repo := repository.NewDynamoDBRepository(dynamoClient, tableName)
+	// Initialize repository with S3 support for large transcript storage
+	repo := repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
 
 	// Initialize services
 	meetingService := service.NewMeetingService(repo)
-	uploadService := service.NewUploadService(s3Client, repo, bucketName)
+	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)
+	kbService.SetAssetsBucketName(bucketName)
 	notionService := service.NewNotionService()
 	translateService := service.NewTranslateService(translateClient)
-
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler()
-	meetingHandler := handler.NewMeetingHandler(meetingService, repo)
+	meetingHandler := handler.NewMeetingHandler(meetingService, repo, uploadService)
 	shareHandler := handler.NewShareHandler(meetingService)
 	uploadHandler := handler.NewUploadHandler(uploadService)
 	kbHandler := handler.NewKBHandler(kbService)
 	exportHandler := handler.NewExportHandler(meetingService, notionService, repo)
-	settingsHandler := handler.NewSettingsHandler(repo)
+	// Initialize crypto service for API key encryption (optional — requires KMS_KEY_ID)
+	var cryptoService *service.CryptoService
+	if kmsKeyID := os.Getenv("KMS_KEY_ID"); kmsKeyID != "" {
+		cryptoService = service.NewCryptoService(kmsClient, kmsKeyID)
+	}
+	settingsHandler := handler.NewSettingsHandler(repo, cryptoService)
 	translateHandler := handler.NewTranslateHandler(translateService)
 	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2)
-
 	// Setup router
 	r := chi.NewRouter()
 
@@ -99,8 +106,17 @@ func init() {
 		r.Put("/api/meetings/{meetingId}", meetingHandler.UpdateMeeting)
 		r.Delete("/api/meetings/{meetingId}", meetingHandler.DeleteMeeting)
 
+		// Audio playback
+		r.Get("/api/meetings/{meetingId}/audio", meetingHandler.GetAudioURL)
+
+		// Recording recovery (crashed browser)
+		r.Post("/api/meetings/{meetingId}/recover", meetingHandler.RecoverMeeting)
+
 		// Transcript selection
 		r.Put("/api/meetings/{meetingId}/transcript", meetingHandler.SelectTranscript)
+
+		// Speaker mapping
+		r.Put("/api/meetings/{meetingId}/speakers", meetingHandler.UpdateSpeakers)
 
 		// Share routes
 		r.Post("/api/meetings/{meetingId}/share", shareHandler.ShareMeeting)
@@ -116,6 +132,7 @@ func init() {
 		// KB routes
 		r.Post("/api/kb/upload", kbHandler.GetPresignedURL)
 		r.Post("/api/kb/sync", kbHandler.SyncKB)
+		r.Post("/api/kb/copy-attachment", kbHandler.CopyAttachment)
 		r.Get("/api/kb/files", kbHandler.ListFiles)
 		r.Delete("/api/kb/files/{fileId}", kbHandler.DeleteFile)
 
@@ -135,6 +152,7 @@ func init() {
 
 		// Live summarize route
 		r.Post("/api/meetings/{meetingId}/summarize", summarizeLiveHandler.SummarizeLive)
+
 	})
 
 	chiLambda = chiadapter.New(r)

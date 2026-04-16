@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -45,7 +46,7 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 	}
 
 	// Create unique job name
-	jobName := fmt.Sprintf("ttobak-%s", meetingID)
+	jobName := fmt.Sprintf("ttobak-%s-%d", meetingID, time.Now().Unix())
 	mediaURI := fmt.Sprintf("s3://%s/%s", bucket, key)
 
 	input := &transcribe.StartTranscriptionJobInput{
@@ -84,7 +85,7 @@ func (s *TranscribeService) StartNovaSonicTranscription(ctx context.Context, mee
 	// For now, this is a placeholder that uses standard Transcribe as fallback
 	// In production, this would use Amazon Transcribe Streaming API with WebSocket
 
-	jobName := fmt.Sprintf("ttobak-nova-%s", meetingID)
+	jobName := fmt.Sprintf("ttobak-nova-%s-%d", meetingID, time.Now().Unix())
 	mediaFormat := s.getMediaFormat(key)
 	if mediaFormat == "" {
 		return "", fmt.Errorf("unsupported audio format")

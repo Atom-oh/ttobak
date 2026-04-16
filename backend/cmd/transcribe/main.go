@@ -43,7 +43,7 @@ func init() {
 		outputBucket = "ttobak-assets"
 	}
 
-	repo = repository.NewDynamoDBRepository(dynamoClient, tableName)
+	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, outputBucket)
 	transcribeService = service.NewTranscribeService(transcribeClient, s3Client, repo, outputBucket)
 }
 
@@ -70,6 +70,24 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return nil
 	}
 
+	// Skip checkpoint files (periodic saves during recording, not final audio)
+	if strings.Contains(key, "checkpoint_") {
+		log.Printf("Skipping checkpoint file: %s", key)
+		return nil
+	}
+
+	// Skip progress files (cumulative checkpoint for crash recovery, not final audio)
+	if strings.Contains(key, "recording_progress") {
+		log.Printf("Skipping progress file: %s", key)
+		return nil
+	}
+
+	// Skip realtime-aggregated audio (already transcribed in realtime by ECS whisper)
+	if strings.Contains(key, "realtime_") {
+		log.Printf("Skipping realtime audio file (already transcribed): %s", key)
+		return nil
+	}
+
 	// Extract meeting ID from key
 	// Expected format: audio/{userID}/{meetingID}/{filename}
 	meetingID := service.ExtractMeetingIDFromAudioKey(key)
@@ -80,11 +98,26 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	log.Printf("Starting transcription for meeting: %s", meetingID)
 
-	// Start AWS Transcribe job
-	jobName, err := transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key)
+	// Read meeting record to check sttProvider selection
+	meeting, err := repo.GetMeetingByID(ctx, meetingID)
+	if err != nil {
+		log.Printf("Failed to get meeting record: %v", err)
+	}
+
+	sttProvider := "transcribe"
+	if meeting != nil && meeting.SttProvider != "" {
+		sttProvider = meeting.SttProvider
+	}
+
+	var jobName string
+	if sttProvider == "nova-sonic" {
+		log.Printf("Using Nova Sonic transcription for meeting: %s", meetingID)
+		jobName, err = transcribeService.StartNovaSonicTranscription(ctx, meetingID, bucket, key)
+	} else {
+		jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key)
+	}
 	if err != nil {
 		log.Printf("Failed to start transcription job: %v", err)
-		meeting, _ := repo.GetMeetingByID(ctx, meetingID)
 		if meeting != nil {
 			meeting.Status = model.StatusError
 			repo.UpdateMeeting(ctx, meeting)
@@ -92,11 +125,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return fmt.Errorf("failed to start transcription job: %w", err)
 	}
 
-	log.Printf("Started transcription job: %s for meeting: %s", jobName, meetingID)
-
-	// NOTE: Nova Sonic provider selection is stored in DynamoDB meeting record.
-	// Currently all transcriptions use standard AWS Transcribe.
-	// Nova Sonic integration will be added when the service supports it.
+	log.Printf("Started transcription job: %s (provider=%s) for meeting: %s", jobName, sttProvider, meetingID)
 
 	return nil
 }

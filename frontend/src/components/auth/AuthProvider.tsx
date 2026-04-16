@@ -15,9 +15,29 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+// Module-level callback so api.ts can trigger logout without circular React deps
+let authFailureCallback: (() => void) | null = null;
+export function setAuthFailureCallback(cb: (() => void) | null) {
+  authFailureCallback = cb;
+}
+export function triggerAuthFailure() {
+  authFailureCallback?.();
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    // Register callback so api.ts can force logout on 401 refresh failure
+    setAuthFailureCallback(() => {
+      setUser(null);
+      localStorage.removeItem('idToken');
+      localStorage.removeItem('accessToken');
+      localStorage.removeItem('refreshToken');
+    });
+    return () => setAuthFailureCallback(null);
+  }, []);
 
   useEffect(() => {
     // Dev mode: skip Cognito auth when env var is set

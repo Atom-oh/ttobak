@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -13,14 +14,21 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 )
 
+// transcriptSizeThreshold is the size above which transcripts are stored in S3
+// DynamoDB has a 400KB item limit; we use 300KB to leave room for other attributes
+const transcriptSizeThreshold = 300 * 1024
+
 // DynamoDBRepository provides DynamoDB operations for the meeting assistant
 type DynamoDBRepository struct {
-	client    *dynamodb.Client
-	tableName string
+	client     *dynamodb.Client
+	tableName  string
+	s3Client   *s3.Client
+	bucketName string
 }
 
 // NewDynamoDBRepository creates a new DynamoDB repository
@@ -31,8 +39,116 @@ func NewDynamoDBRepository(client *dynamodb.Client, tableName string) *DynamoDBR
 	}
 }
 
+// NewDynamoDBRepositoryWithS3 creates a new DynamoDB repository with S3 support for large transcripts
+func NewDynamoDBRepositoryWithS3(client *dynamodb.Client, tableName string, s3Client *s3.Client, bucketName string) *DynamoDBRepository {
+	return &DynamoDBRepository{
+		client:     client,
+		tableName:  tableName,
+		s3Client:   s3Client,
+		bucketName: bucketName,
+	}
+}
+
+// SetS3Client sets the S3 client for transcript overflow storage
+func (r *DynamoDBRepository) SetS3Client(s3Client *s3.Client, bucketName string) {
+	r.s3Client = s3Client
+	r.bucketName = bucketName
+}
+
+// storeTranscript stores a transcript, using S3 if it exceeds the size threshold
+// Returns the value to store in DynamoDB (either the text or an s3:// reference)
+func (r *DynamoDBRepository) storeTranscript(ctx context.Context, meetingID, field, text string) (string, error) {
+	if text == "" {
+		return "", nil
+	}
+
+	// If small enough or no S3 client, store inline
+	if len(text) < transcriptSizeThreshold || r.s3Client == nil {
+		return text, nil
+	}
+
+	// Store in S3
+	key := fmt.Sprintf("transcripts/%s/%s.txt", meetingID, field)
+	_, err := r.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(r.bucketName),
+		Key:         aws.String(key),
+		Body:        strings.NewReader(text),
+		ContentType: aws.String("text/plain; charset=utf-8"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to store transcript in S3: %w", err)
+	}
+
+	return fmt.Sprintf("s3://%s/%s", r.bucketName, key), nil
+}
+
+// loadTranscript loads a transcript, fetching from S3 if it's an S3 reference
+func (r *DynamoDBRepository) loadTranscript(ctx context.Context, ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+
+	// If not an S3 reference, return as-is
+	if !strings.HasPrefix(ref, "s3://") {
+		return ref, nil
+	}
+
+	// Parse S3 URL: s3://bucket/key
+	if r.s3Client == nil {
+		return ref, nil // Return reference as-is if no S3 client
+	}
+
+	trimmed := strings.TrimPrefix(ref, "s3://")
+	parts := strings.SplitN(trimmed, "/", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid S3 reference: %s", ref)
+	}
+	bucket := parts[0]
+	key := parts[1]
+
+	result, err := r.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to load transcript from S3: %w", err)
+	}
+	defer result.Body.Close()
+
+	data, err := io.ReadAll(result.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read transcript from S3: %w", err)
+	}
+
+	return string(data), nil
+}
+
+// resolveTranscripts loads transcripts from S3 if they are S3 references
+func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meeting *model.Meeting) error {
+	if meeting == nil {
+		return nil
+	}
+
+	var err error
+	if strings.HasPrefix(meeting.TranscriptA, "s3://") {
+		meeting.TranscriptA, err = r.loadTranscript(ctx, meeting.TranscriptA)
+		if err != nil {
+			return fmt.Errorf("failed to load transcriptA: %w", err)
+		}
+	}
+
+	if strings.HasPrefix(meeting.TranscriptB, "s3://") {
+		meeting.TranscriptB, err = r.loadTranscript(ctx, meeting.TranscriptB)
+		if err != nil {
+			return fmt.Errorf("failed to load transcriptB: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // CreateMeeting creates a new meeting record
-func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string) (*model.Meeting, error) {
+func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error) {
 	meetingID := uuid.New().String()
 	now := time.Now().UTC()
 
@@ -44,6 +160,7 @@ func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title st
 		Title:        title,
 		Date:         date,
 		Participants: participants,
+		SttProvider:  sttProvider,
 		Status:       model.StatusRecording,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -90,31 +207,36 @@ func (r *DynamoDBRepository) GetMeeting(ctx context.Context, userID, meetingID s
 		return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
 	}
 
+	// Resolve S3 transcript references
+	if err := r.resolveTranscripts(ctx, &meeting); err != nil {
+		return nil, err
+	}
+
 	return &meeting, nil
 }
 
-// GetMeetingByID retrieves a meeting by meetingID by scanning all users
+// GetMeetingByID retrieves a meeting by meetingID using GSI3
 // This is used for internal operations where we know the meetingID but not the owner
 func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error) {
-	// Use GSI1 to find the meeting - GSI1PK is USER#{userId}, GSI1SK is timestamp
-	// We need to scan or use a different approach since meetingID is in SK
-	// Let's query by SK pattern using a scan with filter
-	filterEx := expression.Name("meetingId").Equal(expression.Value(meetingID)).
-		And(expression.Name("entityType").Equal(expression.Value("MEETING")))
-	expr, err := expression.NewBuilder().WithFilter(filterEx).Build()
+	// Query GSI3 where meetingId = meetingID, filter for entityType = MEETING
+	keyEx := expression.Key("meetingId").Equal(expression.Value(meetingID))
+	filterEx := expression.Name("entityType").Equal(expression.Value("MEETING"))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).WithFilter(filterEx).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
 
-	result, err := r.client.Scan(ctx, &dynamodb.ScanInput{
+	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
+		IndexName:                 aws.String("GSI3"),
+		KeyConditionExpression:    expr.KeyCondition(),
 		FilterExpression:          expr.Filter(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		Limit:                     aws.Int32(1),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to scan for meeting: %w", err)
+		return nil, fmt.Errorf("failed to query for meeting: %w", err)
 	}
 
 	if len(result.Items) == 0 {
@@ -126,66 +248,102 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 		return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
 	}
 
+	// Resolve S3 transcript references
+	if err := r.resolveTranscripts(ctx, &meeting); err != nil {
+		return nil, err
+	}
+
 	return &meeting, nil
 }
 
-// BatchGetMeetings retrieves multiple meetings by their meetingIDs using a single scan.
-// This avoids N+1 queries when loading shared meetings.
-func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, meetingIDs []string) ([]*model.Meeting, error) {
-	if len(meetingIDs) == 0 {
+// MeetingKey identifies a meeting by its owner and meeting ID (primary key).
+type MeetingKey struct {
+	OwnerID   string
+	MeetingID string
+}
+
+// BatchGetMeetings retrieves multiple meetings in a single DynamoDB BatchGetItem call.
+// Requires owner IDs to construct primary keys (PK=USER#{ownerID}, SK=MEETING#{meetingID}).
+func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, keys []MeetingKey) ([]*model.Meeting, error) {
+	if len(keys) == 0 {
 		return nil, nil
-	}
-
-	// For a single meetingID, use the existing method
-	if len(meetingIDs) == 1 {
-		meeting, err := r.GetMeetingByID(ctx, meetingIDs[0])
-		if err != nil {
-			return nil, err
-		}
-		if meeting != nil {
-			return []*model.Meeting{meeting}, nil
-		}
-		return nil, nil
-	}
-
-	// Build filter: entityType = MEETING AND meetingId IN (id1, id2, ...)
-	values := make([]expression.OperandBuilder, len(meetingIDs))
-	for i, id := range meetingIDs {
-		values[i] = expression.Value(id)
-	}
-
-	filterEx := expression.Name("entityType").Equal(expression.Value("MEETING")).
-		And(expression.Name("meetingId").In(values[0], values[1:]...))
-	expr, err := expression.NewBuilder().WithFilter(filterEx).Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to build expression: %w", err)
-	}
-
-	result, err := r.client.Scan(ctx, &dynamodb.ScanInput{
-		TableName:                 aws.String(r.tableName),
-		FilterExpression:          expr.Filter(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to scan for meetings: %w", err)
 	}
 
 	var meetings []*model.Meeting
-	for _, item := range result.Items {
-		var meeting model.Meeting
-		if err := attributevalue.UnmarshalMap(item, &meeting); err != nil {
-			continue
+
+	// Process in chunks of 100 (BatchGetItem limit)
+	for i := 0; i < len(keys); i += 100 {
+		end := i + 100
+		if end > len(keys) {
+			end = len(keys)
 		}
-		meetings = append(meetings, &meeting)
+		chunk := keys[i:end]
+
+		ddbKeys := make([]map[string]types.AttributeValue, len(chunk))
+		for j, k := range chunk {
+			ddbKeys[j] = map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + k.OwnerID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + k.MeetingID},
+			}
+		}
+
+		requestItems := map[string]types.KeysAndAttributes{
+			r.tableName: {Keys: ddbKeys},
+		}
+
+		for len(requestItems) > 0 {
+			result, err := r.client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
+				RequestItems: requestItems,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to batch get meetings: %w", err)
+			}
+
+			for _, item := range result.Responses[r.tableName] {
+				var meeting model.Meeting
+				if err := attributevalue.UnmarshalMap(item, &meeting); err != nil {
+					return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
+				}
+				meetings = append(meetings, &meeting)
+			}
+
+			// Retry unprocessed keys
+			if len(result.UnprocessedKeys) > 0 {
+				requestItems = result.UnprocessedKeys
+			} else {
+				break
+			}
+		}
 	}
 
 	return meetings, nil
 }
 
 // UpdateMeeting updates a meeting record
+// Large transcripts are automatically stored in S3 to avoid DynamoDB's 400KB limit
 func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.Meeting) error {
 	meeting.UpdatedAt = time.Now().UTC()
+
+	// Store large transcripts in S3 if S3 client is available
+	if r.s3Client != nil && r.bucketName != "" {
+		// Store transcriptA if needed
+		if meeting.TranscriptA != "" && !strings.HasPrefix(meeting.TranscriptA, "s3://") {
+			ref, err := r.storeTranscript(ctx, meeting.MeetingID, "transcriptA", meeting.TranscriptA)
+			if err != nil {
+				return fmt.Errorf("failed to store transcriptA: %w", err)
+			}
+			meeting.TranscriptA = ref
+		}
+
+		// Store transcriptB if needed
+		if meeting.TranscriptB != "" && !strings.HasPrefix(meeting.TranscriptB, "s3://") {
+			ref, err := r.storeTranscript(ctx, meeting.MeetingID, "transcriptB", meeting.TranscriptB)
+			if err != nil {
+				return fmt.Errorf("failed to store transcriptB: %w", err)
+			}
+			meeting.TranscriptB = ref
+		}
+	}
 
 	item, err := attributevalue.MarshalMap(meeting)
 	if err != nil {
@@ -203,40 +361,140 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	return nil
 }
 
-// DeleteMeeting deletes a meeting and all related items
-func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingID string) error {
-	// Delete the meeting
-	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+// UpdateMeetingFields atomically updates only the specified fields on a meeting item
+// using DynamoDB UpdateItem (SET expression). This avoids the read-modify-write race
+// condition inherent in the PutItem-based UpdateMeeting method.
+// Fields map keys must be DynamoDB attribute names (e.g., "status", "audioKey", "content").
+func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error {
+	// Handle S3 transcript overflow for large transcript fields
+	if r.s3Client != nil && r.bucketName != "" {
+		for _, field := range []string{"transcriptA", "transcriptB"} {
+			if val, ok := fields[field]; ok {
+				if text, isStr := val.(string); isStr && text != "" && !strings.HasPrefix(text, "s3://") {
+					ref, err := r.storeTranscript(ctx, meetingID, field, text)
+					if err != nil {
+						return fmt.Errorf("failed to store %s: %w", field, err)
+					}
+					fields[field] = ref
+				}
+			}
+		}
+	}
+
+	// Always include updatedAt
+	fields["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+
+	// Build SET expression
+	var update expression.UpdateBuilder
+	first := true
+	for k, v := range fields {
+		if first {
+			update = expression.Set(expression.Name(k), expression.Value(v))
+			first = false
+		} else {
+			update = update.Set(expression.Name(k), expression.Value(v))
+		}
+	}
+
+	// Condition: item must already exist
+	condition := expression.AttributeExists(expression.Name("PK"))
+
+	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build update expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(r.tableName),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 		},
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to delete meeting: %w", err)
+		return fmt.Errorf("failed to update meeting fields: %w", err)
 	}
 
-	// Delete attachments
+	return nil
+}
+
+// DeleteMeeting deletes a meeting and all related items atomically using TransactWriteItems.
+// DynamoDB TransactWriteItems supports up to 100 items per transaction.
+func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingID string) error {
+	// Collect all items to delete
+	var transactItems []types.TransactWriteItem
+
+	// 1. The meeting itself
+	transactItems = append(transactItems, types.TransactWriteItem{
+		Delete: &types.Delete{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+			},
+		},
+	})
+
+	// 2. Attachments
 	attachments, err := r.ListAttachments(ctx, meetingID)
 	if err != nil {
 		return fmt.Errorf("failed to list attachments: %w", err)
 	}
 	for _, att := range attachments {
-		if err := r.DeleteAttachment(ctx, meetingID, att.AttachmentID); err != nil {
-			return fmt.Errorf("failed to delete attachment: %w", err)
-		}
+		transactItems = append(transactItems, types.TransactWriteItem{
+			Delete: &types.Delete{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixAttachment + att.AttachmentID},
+				},
+			},
+		})
 	}
 
-	// Delete shares for meeting (MEETING#{meetingId}, SHARE_TO#)
+	// 3. Shares (both recipient and meeting records)
 	shares, err := r.ListSharesForMeeting(ctx, meetingID)
 	if err != nil {
 		return fmt.Errorf("failed to list shares: %w", err)
 	}
 	for _, share := range shares {
-		// Delete both share records (recipient's and meeting's)
-		if err := r.DeleteShare(ctx, share.SharedToID, meetingID); err != nil {
-			return fmt.Errorf("failed to delete share: %w", err)
+		// Recipient record: PK=USER#{sharedToId}, SK=SHARED#{meetingId}
+		transactItems = append(transactItems, types.TransactWriteItem{
+			Delete: &types.Delete{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + share.SharedToID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixShare + meetingID},
+				},
+			},
+		})
+		// Meeting record: PK=MEETING#{meetingId}, SK=SHARE_TO#{userId}
+		transactItems = append(transactItems, types.TransactWriteItem{
+			Delete: &types.Delete{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixShareTo + share.SharedToID},
+				},
+			},
+		})
+	}
+
+	// Execute in batches of 100 (TransactWriteItems limit)
+	for i := 0; i < len(transactItems); i += 100 {
+		end := i + 100
+		if end > len(transactItems) {
+			end = len(transactItems)
+		}
+		_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+			TransactItems: transactItems[i:end],
+		})
+		if err != nil {
+			return fmt.Errorf("failed to delete meeting batch: %w", err)
 		}
 	}
 

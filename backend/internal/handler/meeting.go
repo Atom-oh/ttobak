@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -15,15 +16,20 @@ import (
 // MeetingHandler handles meeting-related requests
 type MeetingHandler struct {
 	meetingService *service.MeetingService
+	uploadService  *service.UploadService
 	repo           *repository.DynamoDBRepository
 }
 
 // NewMeetingHandler creates a new meeting handler
-func NewMeetingHandler(meetingService *service.MeetingService, repo *repository.DynamoDBRepository) *MeetingHandler {
-	return &MeetingHandler{
+func NewMeetingHandler(meetingService *service.MeetingService, repo *repository.DynamoDBRepository, uploadService ...*service.UploadService) *MeetingHandler {
+	h := &MeetingHandler{
 		meetingService: meetingService,
 		repo:           repo,
 	}
+	if len(uploadService) > 0 {
+		h.uploadService = uploadService[0]
+	}
+	return h
 }
 
 // ListMeetings handles GET /api/meetings?tab={all|shared}&cursor={lastKey}&limit={20}
@@ -92,7 +98,7 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 		h.repo.GetOrCreateUser(ctx, userID, email, name)
 	}
 
-	meeting, err := h.meetingService.CreateMeeting(ctx, userID, req.Title, date, req.Participants)
+	meeting, err := h.meetingService.CreateMeeting(ctx, userID, req.Title, date, req.Participants, req.SttProvider)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
@@ -124,16 +130,31 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.meetingService.GetMeetingDetail(ctx, userID, meetingID)
 	if err != nil {
-		if err.Error() == "forbidden" {
+		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 			return
 		}
-		if err.Error() == "not found" {
+		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
+	}
+
+	// Auto-expire stuck transcribing/summarizing status after 30 minutes
+	if (result.Status == model.StatusTranscribing || result.Status == model.StatusSummarizing) &&
+		result.UpdatedAt != "" {
+		if updatedAt, parseErr := time.Parse(time.RFC3339, result.UpdatedAt); parseErr == nil {
+			if time.Since(updatedAt) > 30*time.Minute {
+				result.Status = model.StatusError
+				// Also update in DynamoDB so it doesn't stay stuck
+				if meeting, mErr := h.repo.GetMeetingByID(ctx, meetingID); mErr == nil && meeting != nil {
+					meeting.Status = model.StatusError
+					h.repo.UpdateMeeting(ctx, meeting)
+				}
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, result)
@@ -158,11 +179,11 @@ func (h *MeetingHandler) UpdateMeeting(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.meetingService.UpdateMeeting(ctx, userID, meetingID, &req)
 	if err != nil {
-		if err.Error() == "forbidden" {
+		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied - read-only permission")
 			return
 		}
-		if err.Error() == "not found" {
+		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
 		}
@@ -186,11 +207,11 @@ func (h *MeetingHandler) DeleteMeeting(w http.ResponseWriter, r *http.Request) {
 
 	err := h.meetingService.DeleteMeeting(ctx, userID, meetingID)
 	if err != nil {
-		if err.Error() == "forbidden" {
+		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only owner can delete")
 			return
 		}
-		if err.Error() == "not found" {
+		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
 		}
@@ -199,6 +220,45 @@ func (h *MeetingHandler) DeleteMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// UpdateSpeakers handles PUT /api/meetings/{meetingId}/speakers
+func (h *MeetingHandler) UpdateSpeakers(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	meetingID := chi.URLParam(r, "meetingId")
+
+	if meetingID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Meeting ID is required")
+		return
+	}
+
+	var req model.UpdateSpeakersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	if len(req.SpeakerMap) == 0 {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Speaker map is required")
+		return
+	}
+
+	result, err := h.meetingService.UpdateSpeakers(ctx, userID, meetingID, &req)
+	if err != nil {
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 // SelectTranscript handles PUT /api/meetings/{meetingId}/transcript
@@ -225,11 +285,11 @@ func (h *MeetingHandler) SelectTranscript(w http.ResponseWriter, r *http.Request
 
 	err := h.meetingService.SelectTranscript(ctx, userID, meetingID, req.Selected)
 	if err != nil {
-		if err.Error() == "forbidden" {
+		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 			return
 		}
-		if err.Error() == "not found" {
+		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
 		}
@@ -239,6 +299,82 @@ func (h *MeetingHandler) SelectTranscript(w http.ResponseWriter, r *http.Request
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("{}"))
+}
+
+// GetAudioURL handles GET /api/meetings/{meetingId}/audio
+// Returns a fresh presigned download URL for the meeting's audio file
+func (h *MeetingHandler) GetAudioURL(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	meetingID := chi.URLParam(r, "meetingId")
+
+	if meetingID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Meeting ID is required")
+		return
+	}
+
+	// Verify ownership via GetMeetingDetail
+	result, err := h.meetingService.GetMeetingDetail(ctx, userID, meetingID)
+	if err != nil {
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		return
+	}
+
+	if result.AudioKey == "" {
+		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "No audio file for this meeting")
+		return
+	}
+
+	if h.uploadService == nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Upload service not configured")
+		return
+	}
+
+	audioURL, err := h.uploadService.GeneratePresignedDownloadURL(ctx, result.AudioKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to generate audio URL")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"audioUrl": audioURL})
+}
+
+// RecoverMeeting handles POST /api/meetings/{meetingId}/recover
+// Recovers a crashed recording by copying the progress checkpoint to a final audio file
+func (h *MeetingHandler) RecoverMeeting(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	meetingID := chi.URLParam(r, "meetingId")
+
+	if meetingID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Meeting ID is required")
+		return
+	}
+
+	if h.uploadService == nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Upload service not configured")
+		return
+	}
+
+	err := h.uploadService.RecoverMeeting(ctx, userID, meetingID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+			return
+		}
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"meetingId": meetingID, "status": "transcribing"})
 }
 
 // writeJSON writes a JSON response

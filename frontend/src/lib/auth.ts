@@ -149,6 +149,9 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
 
       localStorage.setItem('idToken', idToken.getJwtToken());
       localStorage.setItem('accessToken', session.getAccessToken().getJwtToken());
+      // Sync refresh token — getSession() may have refreshed it internally
+      const rt = session.getRefreshToken()?.getToken();
+      if (rt) localStorage.setItem('refreshToken', rt);
 
       resolve({
         userId: payload.sub,
@@ -175,22 +178,43 @@ export async function refreshSession(): Promise<string | null> {
 
     const refreshTokenStr = localStorage.getItem('refreshToken');
     if (!refreshTokenStr) {
-      resolve(null);
-      return;
+      // No app-managed refresh token — try SDK's getSession as fallback
+      return fallbackGetSession(cognitoUser, resolve);
     }
 
     const refreshToken = new CognitoRefreshToken({ RefreshToken: refreshTokenStr });
     cognitoUser.refreshSession(refreshToken, (err: Error | null, session: CognitoUserSession | null) => {
       if (err || !session) {
-        resolve(null);
-        return;
+        // Manual refresh failed — try SDK's getSession (may have a valid token in its own storage)
+        console.warn('Token refresh failed, trying SDK fallback:', err?.message);
+        return fallbackGetSession(cognitoUser, resolve);
       }
 
       const idToken = session.getIdToken().getJwtToken();
       localStorage.setItem('idToken', idToken);
       localStorage.setItem('accessToken', session.getAccessToken().getJwtToken());
+      const rt = session.getRefreshToken()?.getToken();
+      if (rt) localStorage.setItem('refreshToken', rt);
       resolve(idToken);
     });
+  });
+}
+
+function fallbackGetSession(
+  cognitoUser: CognitoUser,
+  resolve: (value: string | null) => void,
+): void {
+  cognitoUser.getSession((err: Error | null, session: CognitoUserSession | null) => {
+    if (err || !session || !session.isValid()) {
+      resolve(null);
+      return;
+    }
+    const idToken = session.getIdToken().getJwtToken();
+    localStorage.setItem('idToken', idToken);
+    localStorage.setItem('accessToken', session.getAccessToken().getJwtToken());
+    const rt = session.getRefreshToken()?.getToken();
+    if (rt) localStorage.setItem('refreshToken', rt);
+    resolve(idToken);
   });
 }
 

@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 
 export interface AuthStackProps extends cdk.StackProps {
@@ -11,6 +12,7 @@ export class AuthStack extends cdk.Stack {
   public readonly userPoolClient: cognito.UserPoolClient;
   public readonly spaClient: cognito.UserPoolClient;
   public readonly userPoolDomain: cognito.UserPoolDomain;
+  public readonly identityPoolId: string;
 
   constructor(scope: Construct, id: string, props?: AuthStackProps) {
     super(scope, id, props);
@@ -95,6 +97,48 @@ export class AuthStack extends cdk.Stack {
       ],
     });
 
+    // Cognito Identity Pool — enables browser-direct access to AWS services
+    // (e.g., Amazon Transcribe Streaming for real-time STT)
+    const identityPool = new cognito.CfnIdentityPool(this, 'TtobakIdentityPool', {
+      identityPoolName: 'ttobak-identity-pool',
+      allowUnauthenticatedIdentities: false,
+      cognitoIdentityProviders: [{
+        clientId: this.spaClient.userPoolClientId,
+        providerName: this.userPool.userPoolProviderName,
+      }],
+    });
+
+    this.identityPoolId = identityPool.ref;
+
+    // IAM role for authenticated users — scoped to Transcribe Streaming only
+    const authenticatedRole = new iam.Role(this, 'CognitoAuthenticatedRole', {
+      roleName: `ttobak-cognito-authenticated-${this.region}`,
+      assumedBy: new iam.FederatedPrincipal(
+        'cognito-identity.amazonaws.com',
+        {
+          'StringEquals': {
+            'cognito-identity.amazonaws.com:aud': identityPool.ref,
+          },
+          'ForAnyValue:StringLike': {
+            'cognito-identity.amazonaws.com:amr': 'authenticated',
+          },
+        },
+        'sts:AssumeRoleWithWebIdentity',
+      ),
+    });
+
+    authenticatedRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'TranscribeStreamingAccess',
+      effect: iam.Effect.ALLOW,
+      actions: ['transcribe:StartStreamTranscriptionWebSocket'],
+      resources: ['*'],
+    }));
+
+    new cognito.CfnIdentityPoolRoleAttachment(this, 'IdentityPoolRoleAttachment', {
+      identityPoolId: identityPool.ref,
+      roles: { authenticated: authenticatedRole.roleArn },
+    });
+
     // Outputs
     new cdk.CfnOutput(this, 'UserPoolId', {
       value: this.userPool.userPoolId,
@@ -119,6 +163,11 @@ export class AuthStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'UserPoolDomainName', {
       value: `ttobak-auth-${cdk.Aws.ACCOUNT_ID}`,
       exportName: 'TtobakUserPoolDomainName',
+    });
+
+    new cdk.CfnOutput(this, 'IdentityPoolId', {
+      value: identityPool.ref,
+      exportName: 'TtobakIdentityPoolId',
     });
   }
 }

@@ -17,6 +17,9 @@
     ]
   },
   "context": {
+    "ttobak:domainName": "ttobak.atomai.click",
+    "ttobak:certificateArn": "arn:aws:acm:us-east-1:180294183052:certificate/f6b6907a-5747-4039-967a-a8c7c73116a7",
+    "ttobak:cloudfrontDomain": "d2olomx8td8txt.cloudfront.net",
     "@aws-cdk/aws-signer:signingProfileNamePassedToCfn": true,
     "@aws-cdk/aws-ecs-patterns:secGroupsDisablesImplicitOpenListener": true,
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,

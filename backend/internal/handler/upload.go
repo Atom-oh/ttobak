@@ -47,8 +47,8 @@ func (h *UploadHandler) GetPresignedURL(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if req.Category != "audio" && req.Category != "image" {
-		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "category must be 'audio' or 'image'")
+	if req.Category != "audio" && req.Category != "image" && req.Category != "file" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "category must be 'audio', 'image', or 'file'")
 		return
 	}
 

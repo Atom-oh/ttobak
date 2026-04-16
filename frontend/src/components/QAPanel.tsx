@@ -3,17 +3,17 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { qaApi } from '@/lib/api';
 import type { QAEntry } from '@/types/meeting';
+import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
 
 interface QAPanelProps {
   meetingId: string;
 }
 
-const TOOL_LABELS: Record<string, { label: string; color: string }> = {
-  search_knowledge_base: { label: 'KB 검색', color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' },
-  search_aws_docs: { label: 'AWS Docs', color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
-  search_transcript: { label: '회의록 검색', color: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400' },
-  get_aws_recommendation: { label: 'AWS 추천', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
-};
+const defaultSuggestions = [
+  '주요 논의 사항은?',
+  '결정된 액션 아이템은?',
+  '참석자별 발언 요약',
+];
 
 export function QAPanel({ meetingId }: QAPanelProps) {
   const [question, setQuestion] = useState('');
@@ -34,11 +34,9 @@ export function QAPanel({ meetingId }: QAPanelProps) {
     }
   }, [qaHistory]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!question.trim() || isAsking) return;
+  const handleAsk = async (q: string) => {
+    if (!q.trim() || isAsking) return;
 
-    const currentQuestion = question.trim();
     setQuestion('');
     setError(null);
     setIsAsking(true);
@@ -47,45 +45,80 @@ export function QAPanel({ meetingId }: QAPanelProps) {
     const entryId = Date.now().toString();
     const newEntry: QAEntry = {
       id: entryId,
-      question: currentQuestion,
+      question: q.trim(),
       answer: '',
       timestamp: new Date().toISOString(),
     };
     setQaHistory((prev) => [...prev, newEntry]);
 
     try {
-      const response = await qaApi.askMeeting(meetingId, currentQuestion, sessionId);
-      setQaHistory((prev) =>
-        prev.map((entry) =>
-          entry.id === entryId
-            ? {
-                ...entry,
-                answer: response.answer,
-                sources: response.sources,
-                usedKB: response.usedKB,
-                usedDocs: response.usedDocs,
-                toolsUsed: response.toolsUsed,
-              }
-            : entry
-        )
+      // Stream answer via SSE — text appears token by token
+      await qaApi.streamAskMeeting(
+        meetingId,
+        q.trim(),
+        sessionId,
+        (text) => {
+          // Append each text chunk to the answer progressively
+          setQaHistory((prev) =>
+            prev.map((entry) =>
+              entry.id === entryId
+                ? { ...entry, answer: entry.answer + text }
+                : entry
+            )
+          );
+        },
+        (meta) => {
+          // Apply metadata (sources, tools) once streaming completes
+          setQaHistory((prev) =>
+            prev.map((entry) =>
+              entry.id === entryId
+                ? { ...entry, ...meta }
+                : entry
+            )
+          );
+        },
       );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to get answer');
-      setQaHistory((prev) =>
-        prev.map((entry) =>
-          entry.id === entryId
-            ? { ...entry, answer: 'Sorry, I could not process your question. Please try again.' }
-            : entry
-        )
-      );
+    } catch {
+      // Fallback to sync endpoint on streaming failure
+      try {
+        const response = await qaApi.askMeeting(meetingId, q.trim(), sessionId);
+        setQaHistory((prev) =>
+          prev.map((entry) =>
+            entry.id === entryId
+              ? {
+                  ...entry,
+                  answer: response.answer,
+                  sources: response.sources,
+                  usedKB: response.usedKB,
+                  usedDocs: response.usedDocs,
+                  toolsUsed: response.toolsUsed,
+                }
+              : entry
+          )
+        );
+      } catch (syncErr) {
+        setError(syncErr instanceof Error ? syncErr.message : 'Failed to get answer');
+        setQaHistory((prev) =>
+          prev.map((entry) =>
+            entry.id === entryId
+              ? { ...entry, answer: '죄송합니다. 답변을 생성하지 못했습니다. 다시 시도해주세요.' }
+              : entry
+          )
+        );
+      }
     } finally {
       setIsAsking(false);
       inputRef.current?.focus();
     }
   };
 
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    handleAsk(question);
+  };
+
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+    <div className="flex flex-col h-full bg-white dark:bg-[#0e0e13] rounded-xl lg:rounded-none border border-slate-200 dark:border-white/10 lg:border-0">
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 dark:border-slate-800">
         <span className="material-symbols-outlined text-primary">question_answer</span>
@@ -95,103 +128,25 @@ export function QAPanel({ meetingId }: QAPanelProps) {
       {/* Chat History */}
       <div ref={containerRef} className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
         {qaHistory.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-slate-400">
-            <span className="material-symbols-outlined text-4xl mb-2">chat</span>
-            <p className="text-sm text-center">
-              Ask questions about this meeting.
-              <br />
-              <span className="text-xs">e.g., &quot;What were the action items?&quot;</span>
-            </p>
+          <div className="space-y-4">
+            <QAEmptyState isLive={false} />
+            <QASuggestedQuestions
+              questions={defaultSuggestions}
+              onAsk={handleAsk}
+              disabled={isAsking}
+            />
           </div>
         ) : (
           qaHistory.map((entry) => (
-            <div key={entry.id} className="space-y-3">
-              {/* Question */}
-              <div className="flex justify-end">
-                <div className="bg-primary/10 rounded-xl px-4 py-2.5 max-w-[85%]">
-                  <p className="text-sm text-slate-900 dark:text-slate-100">{entry.question}</p>
-                </div>
-              </div>
-
-              {/* Answer */}
-              <div className="flex justify-start">
-                <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 max-w-[85%]">
-                  {entry.answer ? (
-                    <>
-                      <p className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
-                        {entry.answer}
-                      </p>
-                      {/* Tool badges */}
-                      {entry.toolsUsed && entry.toolsUsed.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1.5">
-                          {entry.toolsUsed.map((tool) => {
-                            const info = TOOL_LABELS[tool];
-                            if (!info) return null;
-                            return (
-                              <span
-                                key={tool}
-                                className={`inline-block text-[10px] px-1.5 py-0.5 rounded ${info.color}`}
-                              >
-                                {info.label}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      )}
-                      {/* Fallback: legacy badges when toolsUsed is empty */}
-                      {(!entry.toolsUsed || entry.toolsUsed.length === 0) && (
-                        <div className="flex gap-1 mt-1.5">
-                          {entry.usedKB && (
-                            <span className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                              KB 참조
-                            </span>
-                          )}
-                          {entry.usedDocs && (
-                            <span className="inline-block text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                              AWS Docs
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      {entry.sources && entry.sources.length > 0 && (
-                        <div className="mt-3 pt-2 border-t border-slate-100 dark:border-slate-700">
-                          <p className="text-[10px] font-semibold text-slate-400 uppercase mb-1.5">
-                            Sources
-                          </p>
-                          <div className="flex flex-wrap gap-1.5">
-                            {entry.sources.map((source, index) => (
-                              source.startsWith('http') ? (
-                                <a
-                                  key={index}
-                                  href={source}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-[10px] px-2 py-1 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded hover:underline"
-                                >
-                                  {new URL(source).hostname}
-                                </a>
-                              ) : (
-                                <span
-                                  key={index}
-                                  className="text-[10px] px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded text-slate-600 dark:text-slate-300"
-                                >
-                                  {source}
-                                </span>
-                              )
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
-                      <span className="text-sm text-slate-400">Thinking...</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+            <QAChatMessage
+              key={entry.id}
+              question={entry.question}
+              answer={entry.answer}
+              sources={entry.sources}
+              usedKB={entry.usedKB}
+              usedDocs={entry.usedDocs}
+              toolsUsed={entry.toolsUsed}
+            />
           ))
         )}
       </div>
@@ -212,7 +167,7 @@ export function QAPanel({ meetingId }: QAPanelProps) {
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             placeholder="Ask a question..."
-            className="flex-1 px-4 py-2.5 text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg focus:ring-2 focus:ring-primary/20 placeholder:text-slate-400"
+            className="flex-1 px-4 py-2.5 text-sm bg-transparent border border-slate-200 dark:border-white/10 rounded-lg focus:ring-2 focus:ring-primary/20 placeholder:text-slate-400"
             disabled={isAsking}
           />
           <button

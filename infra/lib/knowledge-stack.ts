@@ -4,7 +4,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 
 export interface KnowledgeStackProps extends cdk.StackProps {
-  // No dependencies required
+  // No dependencies required - role names are deterministic
 }
 
 export class KnowledgeStack extends cdk.Stack {
@@ -77,13 +77,14 @@ export class KnowledgeStack extends cdk.Stack {
                 Resource: [`collection/${collectionName}`],
               },
             ],
-            AllowFromPublic: true,
+            AllowFromPublic: true, // AOSS requires true or SourceVPCEs — VPC endpoint needed to restrict
           },
         ]),
       },
     });
 
     // Data Access Policy for OpenSearch Serverless
+    // Note: Role names are deterministic (ttobak-kb-role, ttobak-api-role) and created by AiStack
     const dataAccessPolicy = new cdk.CfnResource(this, 'OSSDataAccessPolicy', {
       type: 'AWS::OpenSearchServerless::AccessPolicy',
       properties: {
@@ -114,7 +115,7 @@ export class KnowledgeStack extends cdk.Stack {
               },
             ],
             Principal: [
-              'arn:aws:iam::${AWS::AccountId}:role/ttobak-lambda-role',
+              'arn:aws:iam::${AWS::AccountId}:role/ttobak-kb-role',
               'arn:aws:iam::${AWS::AccountId}:role/ttobak-bedrock-kb-role',
               'arn:aws:iam::${AWS::AccountId}:role/mgmt-vpc-VSCode-Role',
             ],
@@ -174,7 +175,13 @@ export class KnowledgeStack extends cdk.Stack {
       })
     );
 
-    // Bedrock Knowledge Base
+    // Phase 1: AOSS collection + index must exist before KB can be created
+    // After deploying Phase 1, create the AOSS vector index out-of-band,
+    // then uncomment Phase 2 below and redeploy.
+    this.knowledgeBaseId = 'PENDING';
+    this.dataSourceId = 'PENDING';
+
+    /* Phase 2: Uncomment after AOSS index is created
     const knowledgeBase = new cdk.CfnResource(this, 'BedrockKnowledgeBase', {
       type: 'AWS::Bedrock::KnowledgeBase',
       properties: {
@@ -204,13 +211,11 @@ export class KnowledgeStack extends cdk.Stack {
       },
     });
 
-    // KB depends on collection and role
     knowledgeBase.addDependency(collection);
+    knowledgeBase.node.addDependency(bedrockKbRole);
 
-    // Get Knowledge Base ID
     this.knowledgeBaseId = cdk.Token.asString(knowledgeBase.getAtt('KnowledgeBaseId'));
 
-    // Bedrock DataSource (S3)
     const dataSource = new cdk.CfnResource(this, 'BedrockDataSource', {
       type: 'AWS::Bedrock::DataSource',
       properties: {
@@ -228,8 +233,8 @@ export class KnowledgeStack extends cdk.Stack {
 
     dataSource.addDependency(knowledgeBase);
 
-    // Get DataSource ID
     this.dataSourceId = cdk.Token.asString(dataSource.getAtt('DataSourceId'));
+    */
 
     // Outputs
     new cdk.CfnOutput(this, 'KbBucketName', {
