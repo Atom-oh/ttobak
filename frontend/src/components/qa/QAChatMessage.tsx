@@ -23,15 +23,15 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
     <div className="space-y-3 animate-fade-in">
       {/* Question bubble - right aligned */}
       <div className="flex justify-end">
-        <div className="bg-[var(--color-primary)]/10 rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%]">
-          <p className="text-sm text-[var(--color-text-primary)]">{question}</p>
+        <div className="bg-primary/10 rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%]">
+          <p className="text-sm text-slate-900 dark:text-gray-100">{question}</p>
         </div>
       </div>
 
       {/* Answer bubble - left aligned with AI avatar */}
       <div className="flex justify-start gap-2">
         {/* AI Avatar */}
-        <div className="flex-shrink-0 w-7 h-7 rounded-full bg-[var(--color-primary)] flex items-center justify-center">
+        <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary flex items-center justify-center">
           <span className="material-symbols-outlined text-white text-sm">auto_awesome</span>
         </div>
 
@@ -41,15 +41,15 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
               <span className="text-sm text-slate-500 dark:text-slate-400">답변을 생성하고 있어요</span>
               <div className="flex gap-1">
                 <span
-                  className="w-1.5 h-1.5 rounded-full bg-[var(--color-primary)] animate-bounce"
+                  className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce"
                   style={{ animationDelay: '0ms' }}
                 />
                 <span
-                  className="w-1.5 h-1.5 rounded-full bg-[var(--color-primary)] animate-bounce"
+                  className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce"
                   style={{ animationDelay: '150ms' }}
                 />
                 <span
-                  className="w-1.5 h-1.5 rounded-full bg-[var(--color-primary)] animate-bounce"
+                  className="w-1.5 h-1.5 rounded-full bg-primary animate-bounce"
                   style={{ animationDelay: '300ms' }}
                 />
               </div>

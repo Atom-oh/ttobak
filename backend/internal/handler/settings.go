@@ -8,18 +8,22 @@ import (
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
+	"github.com/ttobak/backend/internal/service"
 )
 
 // SettingsHandler handles settings-related requests
 type SettingsHandler struct {
-	repo *repository.DynamoDBRepository
+	repo   *repository.DynamoDBRepository
+	crypto *service.CryptoService
 }
 
 // NewSettingsHandler creates a new settings handler
-func NewSettingsHandler(repo *repository.DynamoDBRepository) *SettingsHandler {
-	return &SettingsHandler{
-		repo: repo,
+func NewSettingsHandler(repo *repository.DynamoDBRepository, crypto ...*service.CryptoService) *SettingsHandler {
+	h := &SettingsHandler{repo: repo}
+	if len(crypto) > 0 {
+		h.crypto = crypto[0]
 	}
+	return h
 }
 
 // GetIntegrations handles GET /api/settings/integrations
@@ -37,7 +41,14 @@ func (h *SettingsHandler) GetIntegrations(w http.ResponseWriter, r *http.Request
 	}
 
 	if notionIntegration != nil {
-		maskedKey := maskAPIKey(notionIntegration.APIKey)
+		// Decrypt API key if crypto service is available
+		displayKey := notionIntegration.APIKey
+		if h.crypto != nil {
+			if decrypted, err := h.crypto.Decrypt(ctx, notionIntegration.APIKey); err == nil {
+				displayKey = decrypted
+			}
+		}
+		maskedKey := maskAPIKey(displayKey)
 		response.Notion = &model.IntegrationStatusResponse{
 			Configured: true,
 			MaskedKey:  maskedKey,
@@ -73,12 +84,23 @@ func (h *SettingsHandler) SaveNotionKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Encrypt API key if crypto service is available
+	apiKeyToStore := req.APIKey
+	if h.crypto != nil {
+		encrypted, err := h.crypto.Encrypt(ctx, req.APIKey)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to encrypt API key")
+			return
+		}
+		apiKeyToStore = encrypted
+	}
+
 	integration := &model.Integration{
 		PK:           model.PrefixUser + userID,
 		SK:           model.PrefixIntegration + "notion",
 		UserID:       userID,
 		Service:      "notion",
-		APIKey:       req.APIKey, // In production, this should be encrypted
+		APIKey:       apiKeyToStore,
 		ConfiguredAt: time.Now().UTC(),
 		EntityType:   "INTEGRATION",
 	}

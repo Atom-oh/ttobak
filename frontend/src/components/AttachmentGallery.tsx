@@ -98,7 +98,7 @@ function AttachmentCard({
   return (
     <div
       onClick={onClick}
-      className="group relative aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 cursor-pointer bg-white dark:bg-slate-900 transition-all duration-300 hover:shadow-lg"
+      className="group relative aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-white/10 cursor-pointer bg-white dark:bg-[#0e0e13] transition-all duration-300 hover:shadow-lg"
     >
       {isImage ? (
         <>
@@ -174,7 +174,7 @@ export function AttachmentGallery({
       </div>
 
       {/* Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {attachments.map((attachment) => (
           <AttachmentCard
             key={attachment.id}

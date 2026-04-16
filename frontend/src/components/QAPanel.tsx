@@ -52,30 +52,60 @@ export function QAPanel({ meetingId }: QAPanelProps) {
     setQaHistory((prev) => [...prev, newEntry]);
 
     try {
-      const response = await qaApi.askMeeting(meetingId, q.trim(), sessionId);
-      setQaHistory((prev) =>
-        prev.map((entry) =>
-          entry.id === entryId
-            ? {
-                ...entry,
-                answer: response.answer,
-                sources: response.sources,
-                usedKB: response.usedKB,
-                usedDocs: response.usedDocs,
-                toolsUsed: response.toolsUsed,
-              }
-            : entry
-        )
+      // Stream answer via SSE — text appears token by token
+      await qaApi.streamAskMeeting(
+        meetingId,
+        q.trim(),
+        sessionId,
+        (text) => {
+          // Append each text chunk to the answer progressively
+          setQaHistory((prev) =>
+            prev.map((entry) =>
+              entry.id === entryId
+                ? { ...entry, answer: entry.answer + text }
+                : entry
+            )
+          );
+        },
+        (meta) => {
+          // Apply metadata (sources, tools) once streaming completes
+          setQaHistory((prev) =>
+            prev.map((entry) =>
+              entry.id === entryId
+                ? { ...entry, ...meta }
+                : entry
+            )
+          );
+        },
       );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to get answer');
-      setQaHistory((prev) =>
-        prev.map((entry) =>
-          entry.id === entryId
-            ? { ...entry, answer: 'Sorry, I could not process your question. Please try again.' }
-            : entry
-        )
-      );
+    } catch {
+      // Fallback to sync endpoint on streaming failure
+      try {
+        const response = await qaApi.askMeeting(meetingId, q.trim(), sessionId);
+        setQaHistory((prev) =>
+          prev.map((entry) =>
+            entry.id === entryId
+              ? {
+                  ...entry,
+                  answer: response.answer,
+                  sources: response.sources,
+                  usedKB: response.usedKB,
+                  usedDocs: response.usedDocs,
+                  toolsUsed: response.toolsUsed,
+                }
+              : entry
+          )
+        );
+      } catch (syncErr) {
+        setError(syncErr instanceof Error ? syncErr.message : 'Failed to get answer');
+        setQaHistory((prev) =>
+          prev.map((entry) =>
+            entry.id === entryId
+              ? { ...entry, answer: '죄송합니다. 답변을 생성하지 못했습니다. 다시 시도해주세요.' }
+              : entry
+          )
+        );
+      }
     } finally {
       setIsAsking(false);
       inputRef.current?.focus();
@@ -88,7 +118,7 @@ export function QAPanel({ meetingId }: QAPanelProps) {
   };
 
   return (
-    <div className="flex flex-col h-full bg-surface rounded-xl lg:rounded-none border border-border-default lg:border-0">
+    <div className="flex flex-col h-full bg-white dark:bg-[#0e0e13] rounded-xl lg:rounded-none border border-slate-200 dark:border-white/10 lg:border-0">
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 dark:border-slate-800">
         <span className="material-symbols-outlined text-primary">question_answer</span>
@@ -137,7 +167,7 @@ export function QAPanel({ meetingId }: QAPanelProps) {
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             placeholder="Ask a question..."
-            className="flex-1 px-4 py-2.5 text-sm bg-transparent border border-border-default rounded-lg focus:ring-2 focus:ring-primary/20 placeholder:text-text-muted"
+            className="flex-1 px-4 py-2.5 text-sm bg-transparent border border-slate-200 dark:border-white/10 rounded-lg focus:ring-2 focus:ring-primary/20 placeholder:text-slate-400"
             disabled={isAsking}
           />
           <button

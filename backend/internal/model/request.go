@@ -17,6 +17,7 @@ type CreateMeetingRequest struct {
 type UpdateMeetingRequest struct {
 	Title              string   `json:"title,omitempty"`
 	Content            string   `json:"content,omitempty"`
+	Notes              string   `json:"notes,omitempty"`
 	TranscriptA        string   `json:"transcriptA,omitempty"`
 	SelectedTranscript string   `json:"selectedTranscript,omitempty"` // "A" or "B"
 	Participants       []string `json:"participants,omitempty"`
@@ -26,6 +27,11 @@ type UpdateMeetingRequest struct {
 // SelectTranscriptRequest represents the request body for selecting a transcript
 type SelectTranscriptRequest struct {
 	Selected string `json:"selected"` // "A" or "B"
+}
+
+// UpdateSpeakersRequest represents the request body for mapping speaker labels to names
+type UpdateSpeakersRequest struct {
+	SpeakerMap map[string]string `json:"speakerMap"` // e.g. {"spk_0": "김팀장", "spk_1": "이매니저"}
 }
 
 // ShareMeetingRequest represents the request body for sharing a meeting
@@ -53,7 +59,10 @@ type PresignedURLResponse struct {
 type UploadCompleteRequest struct {
 	MeetingID string `json:"meetingId"`
 	Key       string `json:"key"`
-	Category  string `json:"category"` // "audio" or "image"
+	Category  string `json:"category"`           // "audio", "image", or "file"
+	FileName  string `json:"fileName,omitempty"`
+	FileSize  int64  `json:"fileSize,omitempty"`
+	MimeType  string `json:"mimeType,omitempty"`
 }
 
 // UploadCompleteResponse represents the response for upload completion
@@ -92,11 +101,16 @@ type MeetingDetailResponse struct {
 	Status             string               `json:"status"`
 	Participants       []string             `json:"participants,omitempty"`
 	Content            string               `json:"content,omitempty"`
+	Notes              string               `json:"notes,omitempty"`
 	TranscriptA        string               `json:"transcriptA,omitempty"`
 	TranscriptB        string               `json:"transcriptB,omitempty"`
 	SelectedTranscript *string              `json:"selectedTranscript,omitempty"` // "A" | "B" | null
 	AudioKey           string               `json:"audioKey,omitempty"`
 	Transcription      json.RawMessage      `json:"transcription,omitempty"`
+	Tags               []string             `json:"tags,omitempty"`
+	ActionItems        json.RawMessage      `json:"actionItems,omitempty"`
+	SpeakerMap         map[string]string    `json:"speakerMap,omitempty"`
+	SttProvider        string               `json:"sttProvider,omitempty"`
 	Attachments        []AttachmentResponse `json:"attachments,omitempty"`
 	Shares             []ShareResponse      `json:"shares,omitempty"` // Only visible to owner
 	CreatedAt          string               `json:"createdAt"`
@@ -108,10 +122,13 @@ type AttachmentResponse struct {
 	AttachmentID     string `json:"attachmentId"`
 	OriginalKey      string `json:"originalKey"`
 	ProcessedKey     string `json:"processedKey,omitempty"`
-	Type             string `json:"type"` // photo, screenshot, diagram, whiteboard
+	Type             string `json:"type"` // photo, screenshot, diagram, whiteboard, document, video, audio_file
 	Status           string `json:"status"`
 	Description      string `json:"description,omitempty"`
 	ProcessedContent string `json:"processedContent,omitempty"`
+	FileName         string `json:"fileName,omitempty"`
+	FileSize         int64  `json:"fileSize,omitempty"`
+	MimeType         string `json:"mimeType,omitempty"`
 }
 
 // UserSearchResponse represents a user in search results
@@ -298,6 +315,7 @@ func ToMeetingDetailResponse(m *Meeting, attachments []AttachmentResponse, share
 		Status:             m.Status,
 		Participants:       m.Participants,
 		Content:            m.Content,
+		Notes:              m.Notes,
 		TranscriptA:        m.TranscriptA,
 		TranscriptB:        m.TranscriptB,
 		SelectedTranscript: selectedTranscript,

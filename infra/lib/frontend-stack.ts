@@ -2,13 +2,14 @@ import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
 
 export interface FrontendStackProps extends cdk.StackProps {
   httpApiUrl: string;
-  realtimeAlbDns: string;
   edgeFunctionVersion: lambda.IVersion;
+  qaStreamFunctionUrl?: string;
 }
 
 export class FrontendStack extends cdk.Stack {
@@ -79,8 +80,14 @@ function handler(event) {
       `),
     });
 
+    // ACM certificate for custom domain (must be in us-east-1 for CloudFront)
+    const certificateArn = this.node.tryGetContext('ttobak:certificateArn');
+    const certificate = acm.Certificate.fromCertificateArn(this, 'TtobakCert', certificateArn);
+
     // CloudFront distribution
     this.distribution = new cloudfront.Distribution(this, 'TtobakDistribution', {
+      domainNames: [this.node.tryGetContext('ttobak:domainName')],
+      certificate,
       comment: 'Ttobak AI Meeting Assistant',
       defaultRootObject: 'index.html',
       defaultBehavior: {
@@ -98,6 +105,28 @@ function handler(event) {
         ],
       },
       additionalBehaviors: {
+        // QA streaming via Lambda Function URL (must be before /api/* catch-all)
+        ...(props.qaStreamFunctionUrl ? {
+          '/api/qa/stream/*': {
+            origin: new origins.HttpOrigin(
+              cdk.Fn.select(2, cdk.Fn.split('/', props.qaStreamFunctionUrl)),
+              {
+                protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+              }
+            ),
+            viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+            allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+            cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+            originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+            compress: false, // Don't compress SSE — prevents buffering
+            edgeLambdas: [
+              {
+                functionVersion: props.edgeFunctionVersion,
+                eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
+              },
+            ],
+          },
+        } : {}),
         '/api/*': {
           origin: apiOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -136,9 +165,5 @@ function handler(event) {
       exportName: 'TtobakCloudFrontUrl',
     });
 
-    new cdk.CfnOutput(this, 'RealtimeAlbDns', {
-      value: props.realtimeAlbDns,
-      exportName: 'TtobakRealtimeAlbDns',
-    });
   }
 }

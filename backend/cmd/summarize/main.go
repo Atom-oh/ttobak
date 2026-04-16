@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -22,9 +24,10 @@ import (
 )
 
 var (
-	bedrockService *service.BedrockService
-	repo           *repository.DynamoDBRepository
-	s3Client       *s3.Client
+	bedrockService  *service.BedrockService
+	kbExportService *service.KBExportService
+	repo            *repository.DynamoDBRepository
+	s3Client        *s3.Client
 )
 
 func init() {
@@ -59,6 +62,16 @@ func init() {
 
 	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
 	bedrockService = service.NewBedrockService(bedrockClient, s3Client, repo)
+
+	// KB export service — gracefully skips if not configured
+	kbBucketName := os.Getenv("KB_BUCKET_NAME")
+	kbID := os.Getenv("KB_ID")
+	dataSourceID := os.Getenv("DATA_SOURCE_ID")
+	var bedrockAgentClient *bedrockagent.Client
+	if kbBucketName != "" {
+		bedrockAgentClient = bedrockagent.NewFromConfig(cfg)
+	}
+	kbExportService = service.NewKBExportService(s3Client, bedrockAgentClient, kbBucketName, kbID, dataSourceID)
 }
 
 // TranscribeResult represents the AWS Transcribe output JSON structure
@@ -123,8 +136,10 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	bucket := event.Detail.Bucket.Name
 	key := event.Detail.Object.Key
 
-	// URL decode the key
-	key = strings.ReplaceAll(key, "+", " ")
+	// URL decode the key (handles both + and %XX encoding)
+	if decoded, err := url.QueryUnescape(key); err == nil {
+		key = decoded
+	}
 
 	log.Printf("Processing transcript: bucket=%s, key=%s", bucket, key)
 
@@ -148,13 +163,15 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	transcript, segments, err := downloadAndParseTranscript(ctx, bucket, key)
 	if err != nil {
 		log.Printf("Failed to parse transcript: %v", err)
+		setMeetingError(ctx, meetingID)
 		return nil
 	}
 
-	// Update meeting with transcript and speaker segments
+	// Update meeting with transcript and speaker segments (atomic partial update)
 	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, isNova)
 	if err != nil {
 		log.Printf("Failed to update meeting with transcript: %v", err)
+		setMeetingError(ctx, meetingID)
 		return nil
 	}
 
@@ -170,14 +187,17 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	// Generate summary if at least one transcript is available
 	if meeting != nil && (meeting.TranscriptA != "" || meeting.TranscriptB != "") {
 		if meeting.Status != model.StatusError {
-			meeting.Status = model.StatusSummarizing
-			repo.UpdateMeeting(ctx, meeting)
+			// Atomic status transition to summarizing
+			repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
+				"status": model.StatusSummarizing,
+			})
 
 			content, err := bedrockService.SummarizeTranscript(ctx, meetingID)
 			if err != nil {
 				log.Printf("Failed to generate summary: %v", err)
-				meeting.Status = model.StatusError
-				repo.UpdateMeeting(ctx, meeting)
+				repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
+					"status": model.StatusError,
+				})
 				return nil
 			}
 
@@ -188,15 +208,43 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			if err != nil {
 				log.Printf("Failed to extract action items (non-fatal): %v", err)
 			} else {
-				// Re-fetch meeting to get updated state after summary
-				meeting, err = repo.GetMeetingByID(ctx, meetingID)
-				if err == nil && meeting != nil {
-					meeting.ActionItems = actionItems
-					if err := repo.UpdateMeeting(ctx, meeting); err != nil {
-						log.Printf("Failed to save action items: %v", err)
-					} else {
-						log.Printf("Extracted action items for meeting %s: %s", meetingID, actionItems)
-					}
+				if err := repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
+					"actionItems": actionItems,
+				}); err != nil {
+					log.Printf("Failed to save action items: %v", err)
+				} else {
+					log.Printf("Extracted action items for meeting %s: %s", meetingID, actionItems)
+				}
+			}
+
+			// Extract tags using Haiku (fast, cheap)
+			tags, err := bedrockService.ExtractTags(ctx, meetingID)
+			if err != nil {
+				log.Printf("Failed to extract tags (non-fatal): %v", err)
+			} else if len(tags) > 0 {
+				if err := repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
+					"tags": tags,
+				}); err != nil {
+					log.Printf("Failed to save tags: %v", err)
+				} else {
+					log.Printf("Extracted tags for meeting %s: %v", meetingID, tags)
+				}
+			}
+
+			// KB Export: generate meeting context document and upload to KB bucket
+			// Re-fetch meeting to get the latest state (summary, action items, tags now saved)
+			updatedMeeting, err := repo.GetMeetingByID(ctx, meetingID)
+			if err != nil {
+				log.Printf("Failed to re-fetch meeting for KB export (non-fatal): %v", err)
+			} else if updatedMeeting != nil {
+				attachments, _ := repo.ListAttachments(ctx, meetingID)
+				doc := service.GenerateMeetingDocument(updatedMeeting, attachments)
+				if err := kbExportService.ExportToKB(ctx, updatedMeeting.UserID, meetingID, doc); err != nil {
+					log.Printf("Failed to export to KB (non-fatal): %v", err)
+				}
+				// P2: Auto-trigger KB ingestion
+				if err := kbExportService.TriggerIngestion(ctx); err != nil {
+					log.Printf("Failed to trigger KB ingestion (non-fatal): %v", err)
 				}
 			}
 		}
@@ -278,6 +326,18 @@ func extractSpeakerSegments(result *TranscribeResult) []TranscriptSegmentOut {
 	return segments
 }
 
+// setMeetingError sets a meeting's status to error via atomic update.
+// Logs and swallows errors since this is a best-effort error path.
+func setMeetingError(ctx context.Context, meetingID string) {
+	meeting, err := repo.GetMeetingByID(ctx, meetingID)
+	if err != nil || meeting == nil {
+		return
+	}
+	repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
+		"status": model.StatusError,
+	})
+}
+
 func extractMeetingIDFromTranscriptKey(key string) string {
 	// Expected format: transcripts/{meetingID}.json or transcripts/{meetingID}-nova.json
 	key = strings.TrimPrefix(key, "transcripts/")
@@ -287,6 +347,7 @@ func extractMeetingIDFromTranscriptKey(key string) string {
 }
 
 func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, segments []TranscriptSegmentOut, isNova bool) error {
+	// Get meeting to obtain userID for the primary key
 	meeting, err := repo.GetMeetingByID(ctx, meetingID)
 	if err != nil {
 		return err
@@ -295,22 +356,24 @@ func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, 
 		return fmt.Errorf("meeting not found")
 	}
 
+	// Build partial update — only touch transcript fields
+	fields := map[string]interface{}{}
 	if isNova {
-		meeting.TranscriptB = transcript
+		fields["transcriptB"] = transcript
 	} else {
-		meeting.TranscriptA = transcript
+		fields["transcriptA"] = transcript
 	}
 
 	// Save speaker segments as JSON string
 	if len(segments) > 0 {
 		segJSON, err := json.Marshal(segments)
 		if err == nil {
-			meeting.TranscriptSegments = string(segJSON)
+			fields["transcriptSegments"] = string(segJSON)
 			log.Printf("Saved %d speaker segments for meeting %s", len(segments), meetingID)
 		}
 	}
 
-	return repo.UpdateMeeting(ctx, meeting)
+	return repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, fields)
 }
 
 func main() {

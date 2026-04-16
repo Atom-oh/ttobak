@@ -186,10 +186,12 @@ Use bullet points and checkboxes. Include timestamps where available.`
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	// Update meeting with content (meeting notes)
-	meeting.Content = content
-	meeting.Status = model.StatusDone
-	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
+	// Atomic partial update — only set content and status to avoid clobbering
+	// concurrent writes to other fields (e.g., audioKey from CompleteUpload)
+	if err := s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
+		"content": content,
+		"status":  model.StatusDone,
+	}); err != nil {
 		return "", fmt.Errorf("failed to update meeting: %w", err)
 	}
 
@@ -414,11 +416,12 @@ func (s *BedrockService) invokeClaudeModelWithID(ctx context.Context, request Cl
 
 // ActionItem represents an extracted action item from a meeting transcript
 type ActionItem struct {
-	Text     string `json:"text"`
-	Assignee string `json:"assignee,omitempty"`
-	DueDate  string `json:"dueDate,omitempty"`
-	Priority string `json:"priority,omitempty"`
-	Done     bool   `json:"done"`
+	ID        string `json:"id"`
+	Text      string `json:"text"`
+	Completed bool   `json:"completed"`
+	Assignee  string `json:"assignee,omitempty"`
+	DueDate   string `json:"dueDate,omitempty"`
+	Priority  string `json:"priority,omitempty"`
 }
 
 // ExtractActionItems extracts action items from a meeting transcript using Claude Haiku
@@ -451,7 +454,7 @@ Extract action items mentioned in the transcript. For each action item, identify
 
 Return ONLY a valid JSON array. If no action items found, return [].
 Example format:
-[{"text":"Complete the report","assignee":"spk_0","priority":"high","dueDate":"2024-03-25","done":false}]`
+[{"text":"Complete the report","assignee":"spk_0","priority":"high","dueDate":"2024-03-25","completed":false}]`
 
 	// Build prompt with speaker segments if available
 	userPrompt := fmt.Sprintf("Extract action items from this meeting transcript:\n\n%s", transcript)
@@ -496,6 +499,11 @@ Example format:
 		return "[]", nil
 	}
 
+	// Assign stable IDs to each item
+	for i := range items {
+		items[i].ID = fmt.Sprintf("ai_%d", i+1)
+	}
+
 	// Re-serialize to ensure consistent format
 	result, err := json.Marshal(items)
 	if err != nil {
@@ -503,6 +511,98 @@ Example format:
 	}
 
 	return string(result), nil
+}
+
+// ExtractTags extracts topic tags from a meeting transcript using Claude Haiku
+func (s *BedrockService) ExtractTags(ctx context.Context, meetingID string) ([]string, error) {
+	meeting, err := s.repo.GetMeetingByID(ctx, meetingID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get meeting: %w", err)
+	}
+	if meeting == nil {
+		return nil, fmt.Errorf("meeting not found: %s", meetingID)
+	}
+
+	// Use the selected transcript, or default to A, or B if A not available
+	transcript := meeting.TranscriptA
+	if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
+		transcript = meeting.TranscriptB
+	} else if transcript == "" && meeting.TranscriptB != "" {
+		transcript = meeting.TranscriptB
+	}
+	if transcript == "" {
+		return []string{}, nil
+	}
+
+	systemPrompt := `You are an expert at categorizing meeting topics. Analyze the meeting transcript and extract 1-5 short tags that describe the main topics discussed.
+
+Rules:
+- Tags must be lowercase, single words or short hyphenated terms
+- Maximum 5 tags, minimum 1
+- Focus on technical domains, projects, and team areas
+- Examples: "ai", "database", "security", "frontend", "devops", "infrastructure", "연구개발망", "dmz", "agentcore", "backend", "design", "planning"
+- Return ONLY a valid JSON array of strings. Example: ["ai","database","security"]
+- If nothing specific can be determined, return ["general"]`
+
+	// Build prompt with speaker segments if available
+	userPrompt := fmt.Sprintf("Extract topic tags from this meeting transcript:\n\n%s", transcript)
+
+	if meeting.TranscriptSegments != "" {
+		var segments []speakerSegment
+		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Extract topic tags from this speaker-labeled meeting transcript:\n\n")
+			for _, seg := range segments {
+				sb.WriteString(fmt.Sprintf("[%s] %s\n", seg.Speaker, seg.Text))
+			}
+			userPrompt = sb.String()
+		}
+	}
+
+	request := ClaudeRequest{
+		AnthropicVersion: "bedrock-2023-05-31",
+		MaxTokens:        256,
+		System:           systemPrompt,
+		Messages: []ClaudeMessage{
+			{
+				Role: "user",
+				Content: []ContentBlock{
+					{Type: "text", Text: userPrompt},
+				},
+			},
+		},
+	}
+
+	// Use Haiku for tag extraction (fast, cheap)
+	response, err := s.invokeClaudeModelWithID(ctx, request, ClaudeHaikuModelID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract tags: %w", err)
+	}
+
+	// Validate JSON response
+	response = strings.TrimSpace(response)
+	var tags []string
+	if err := json.Unmarshal([]byte(response), &tags); err != nil {
+		return []string{}, nil
+	}
+
+	// Validate and normalize: max 5 tags, each max 30 chars, lowercase
+	var validated []string
+	for _, tag := range tags {
+		tag = strings.TrimSpace(strings.ToLower(tag))
+		if tag != "" && len(tag) <= 30 {
+			validated = append(validated, tag)
+		}
+		if len(validated) >= 5 {
+			break
+		}
+	}
+
+	if len(validated) == 0 {
+		return []string{}, nil
+	}
+
+	return validated, nil
 }
 
 // getImageMediaType determines the media type from the file key

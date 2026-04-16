@@ -26,6 +26,9 @@ function getFileIcon(fileType?: string): string {
   if (fileType.includes('presentation') || fileType.includes('ppt')) return 'slideshow';
   if (fileType.includes('markdown') || fileType.includes('md')) return 'description';
   if (fileType.includes('word') || fileType.includes('doc')) return 'article';
+  if (fileType.includes('json')) return 'data_object';
+  if (fileType.includes('text') || fileType.includes('txt')) return 'text_snippet';
+  if (fileType.includes('csv') || fileType.includes('spreadsheet') || fileType.includes('xls')) return 'table_chart';
   return 'insert_drive_file';
 }
 
@@ -135,7 +138,7 @@ export function KBFileList() {
         className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${
           isDragging
             ? 'border-primary bg-primary/5'
-            : 'border-slate-300 dark:border-slate-700 hover:border-primary/50'
+            : 'border-slate-300 dark:border-white/10 hover:border-primary/50'
         }`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -146,23 +149,23 @@ export function KBFileList() {
           type="file"
           className="hidden"
           multiple
-          accept=".md,.pdf,.ppt,.pptx"
+          accept=".md,.pdf,.ppt,.pptx,.doc,.docx,.txt,.json,.csv,.xls,.xlsx"
           onChange={(e) => handleUpload(e.target.files)}
         />
 
-        <span className="material-symbols-outlined text-4xl text-slate-400 mb-3">cloud_upload</span>
-        <p className="text-slate-600 dark:text-slate-400 mb-2">
+        <span className="material-symbols-outlined text-4xl text-slate-400 dark:text-[#849396] mb-3">cloud_upload</span>
+        <p className="text-slate-600 dark:text-[#bac9cc] mb-2">
           {isDragging ? 'Drop files here' : 'Drag and drop files here'}
         </p>
-        <p className="text-xs text-slate-400 mb-4">Supports: Markdown, PDF, PowerPoint</p>
+        <p className="text-xs text-slate-400 dark:text-[#849396] mb-4">Supports: Markdown, PDF, Word, PowerPoint, Excel, TXT, JSON, CSV</p>
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          className="px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
+          className="px-4 py-2 bg-primary text-white dark:text-[#09090E] rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
         >
           {uploading ? (
             <span className="flex items-center gap-2">
-              <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+              <span className="animate-spin rounded-full h-4 w-4 border-2 border-white dark:border-[#09090E] border-t-transparent" />
               Uploading...
             </span>
           ) : (
@@ -180,13 +183,13 @@ export function KBFileList() {
 
       {/* Sync Button */}
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-[#e4e1e9]">
           Uploaded Files ({files.length})
         </h3>
         <button
           onClick={handleSync}
           disabled={syncing || files.length === 0}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold text-primary border border-primary rounded-lg hover:bg-primary/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold text-primary border border-primary rounded-lg hover:bg-primary/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors dark:border-[#00E5FF]/30 dark:hover:bg-[#00E5FF]/10"
         >
           {syncing ? (
             <>
@@ -208,30 +211,30 @@ export function KBFileList() {
           <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
         </div>
       ) : files.length === 0 ? (
-        <div className="text-center py-12 text-slate-400">
+        <div className="text-center py-12 text-slate-400 dark:text-[#849396]">
           <span className="material-symbols-outlined text-4xl mb-2">folder_open</span>
           <p className="text-sm">No files uploaded yet</p>
         </div>
       ) : (
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-200 dark:divide-slate-800">
+        <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-200 dark:glass-panel dark:divide-white/5">
           {files.map((file) => (
-            <div key={file.fileId} className="flex items-center justify-between py-3 px-4">
+            <div key={file.fileId} className="flex items-center justify-between py-3 px-4 dark:hover:bg-white/5 transition-colors">
               <div className="flex items-center gap-3 min-w-0">
-                <span className="material-symbols-outlined text-slate-400">
+                <span className="material-symbols-outlined text-slate-400 dark:text-[#849396]">
                   {getFileIcon(file.fileType)}
                 </span>
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-slate-900 dark:text-white truncate">
+                  <p className="text-sm font-medium text-slate-900 dark:text-[#e4e1e9] truncate">
                     {file.fileName}
                   </p>
-                  <p className="text-xs text-slate-400">
+                  <p className="text-xs text-slate-400 dark:text-[#849396]">
                     {formatFileSize(file.size)} &bull; {formatDate(file.lastModified)}
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => handleDelete(file.fileId)}
-                className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                className="p-2 text-slate-400 dark:text-[#849396] hover:text-red-500 transition-colors"
                 title="Delete file"
               >
                 <span className="material-symbols-outlined text-xl">delete</span>

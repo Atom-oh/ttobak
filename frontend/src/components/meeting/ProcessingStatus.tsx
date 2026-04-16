@@ -31,20 +31,20 @@ export function ProcessingStatus({ status }: ProcessingStatusProps) {
 
   return (
     <div className="mb-8 animate-fade-in">
-      <div className="flex items-center gap-3 p-4 bg-[var(--color-primary)]/5 border border-[var(--color-primary)]/20 rounded-xl">
-        <div className="animate-spin rounded-full h-5 w-5 border-2 border-[var(--color-primary)] border-t-transparent shrink-0" />
+      <div className="flex items-center gap-3 p-4 bg-primary/5 border border-primary/20 rounded-xl">
+        <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent shrink-0" />
         <div className="flex-1">
-          <span className="text-sm font-medium text-[var(--color-primary)] block">
+          <span className="text-sm font-medium text-primary block">
             {config.label}
           </span>
-          <span className="text-xs text-[var(--color-primary)]/60 mt-0.5 block">
+          <span className="text-xs text-primary/60 mt-0.5 block">
             {config.detail}
           </span>
         </div>
       </div>
       <div className="mt-2 h-1 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
         <div
-          className="h-full bg-[var(--color-primary)] rounded-full animate-pulse"
+          className="h-full bg-primary rounded-full animate-pulse"
           style={{ width: config.progress }}
         />
       </div>

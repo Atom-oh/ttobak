@@ -23,18 +23,18 @@ export function TranscriptSection({ transcription }: TranscriptSectionProps) {
   }
 
   return (
-    <section className="border-t border-[var(--color-border)] pt-12 mb-12">
+    <section className="border-t border-slate-200 dark:border-white/10 pt-12 mb-12">
       <div className="flex items-center justify-between mb-8">
-        <h2 className="text-xl font-bold flex items-center gap-2 text-[var(--color-text-primary)]">
+        <h2 className="text-xl font-bold flex items-center gap-2 text-slate-900 dark:text-gray-100">
           <span className="material-symbols-outlined">notes</span>
           Full Transcription
         </h2>
         <div className="flex gap-2">
-          <button disabled title="Coming soon" className="px-3 py-1.5 rounded-lg border border-[var(--color-border)] text-xs font-semibold flex items-center gap-2 bg-[var(--color-surface)] opacity-50 cursor-not-allowed">
+          <button disabled title="Coming soon" className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-xs font-semibold flex items-center gap-2 bg-white dark:bg-[#0e0e13] opacity-50 cursor-not-allowed">
             <span className="material-symbols-outlined text-sm">search</span>
             <span className="hidden sm:inline">Search transcript</span>
           </button>
-          <button disabled title="Coming soon" className="px-3 py-1.5 rounded-lg border border-[var(--color-border)] text-xs font-semibold flex items-center gap-2 bg-[var(--color-surface)] opacity-50 cursor-not-allowed">
+          <button disabled title="Coming soon" className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-xs font-semibold flex items-center gap-2 bg-white dark:bg-[#0e0e13] opacity-50 cursor-not-allowed">
             <span className="material-symbols-outlined text-sm">download</span>
             <span className="hidden sm:inline">Export</span>
           </button>
@@ -45,7 +45,7 @@ export function TranscriptSection({ transcription }: TranscriptSectionProps) {
         {transcription.map((segment) => (
           <div key={segment.id} className="flex gap-6">
             <div className="w-16 pt-1 flex-shrink-0">
-              <span className="text-xs font-bold text-[var(--color-primary)] px-2 py-1 bg-[var(--color-primary)]/10 rounded">
+              <span className="text-xs font-bold text-primary px-2 py-1 bg-primary/10 rounded">
                 {formatTimestamp(segment.startTime)}
               </span>
             </div>
@@ -55,10 +55,10 @@ export function TranscriptSection({ transcription }: TranscriptSectionProps) {
                   className="w-2 h-2 rounded-full shrink-0"
                   style={{ backgroundColor: getSpeakerColor(segment.speaker) }}
                 />
-                <span className="text-sm font-black text-[var(--color-text-primary)]">{segment.speaker}</span>
-                <span className="text-[10px] text-[var(--color-text-muted)] font-medium">{segment.timestamp}</span>
+                <span className="text-sm font-black text-slate-900 dark:text-gray-100">{segment.speaker}</span>
+                <span className="text-[10px] text-slate-400 font-medium">{segment.timestamp}</span>
               </div>
-              <p className="text-[var(--color-text-secondary)] text-sm leading-relaxed">
+              <p className="text-slate-600 dark:text-gray-400 text-sm leading-relaxed">
                 {segment.text}
               </p>
             </div>

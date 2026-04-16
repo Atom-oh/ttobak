@@ -11,9 +11,11 @@ interface ShareButtonProps {
   onUnshare?: (userId: string) => void;
 }
 
+const EMPTY_SHARED: SharedUser[] = [];
+
 export function ShareButton({
   meetingId,
-  sharedWith = [],
+  sharedWith = EMPTY_SHARED,
   onShare,
   onUnshare,
 }: ShareButtonProps) {

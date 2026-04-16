@@ -23,8 +23,25 @@ MAX_TOOL_ROUNDS = 5
 # AWS clients
 bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
 bedrock_runtime = boto3.client('bedrock-runtime')
+s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
+BUCKET_NAME = os.environ.get('BUCKET_NAME', 'ttobak-assets')
+
+
+def resolve_s3_ref(value):
+    """Resolve s3:// reference to actual content. Returns original value if not an S3 ref."""
+    if not isinstance(value, str) or not value.startswith('s3://'):
+        return value
+    try:
+        # Parse s3://bucket/key
+        path = value[5:]  # strip "s3://"
+        bucket, key = path.split('/', 1)
+        obj = s3_client.get_object(Bucket=bucket, Key=key)
+        return obj['Body'].read().decode('utf-8')
+    except Exception as e:
+        logger.warning(f'Failed to resolve S3 reference {value[:60]}: {e}')
+        return ''
 
 
 def lambda_handler(event, context):
@@ -44,15 +61,17 @@ def lambda_handler(event, context):
     except json.JSONDecodeError:
         return response(400, {'error': {'code': 'BAD_REQUEST', 'message': 'Invalid JSON body'}})
 
-    # Extract userId from JWT (Authorization header)
+    # Extract userId from JWT (Authorization header) — required for all endpoints
     user_id = extract_user_id(event)
+    if not user_id:
+        return response(401, {'error': {'code': 'UNAUTHORIZED', 'message': 'Authentication required'}})
 
     # Route handling
     if path == '/api/qa/ask':
         question = body.get('question', '').strip()
         if not question:
             return response(400, {'error': {'code': 'BAD_REQUEST', 'message': 'question is required'}})
-        return handle_ask(question, body.get('context'), body.get('meetingId'), body.get('sessionId'))
+        return handle_ask(question, body.get('context'), body.get('meetingId'), body.get('sessionId'), user_id)
     elif path == '/api/qa/detect-questions':
         return handle_detect_questions(body)
     elif path.startswith('/api/qa/meeting/'):
@@ -85,17 +104,26 @@ def extract_user_id(event):
         return None
 
 
-def retrieve_from_kb(question, number_of_results=5):
+def retrieve_from_kb(question, number_of_results=5, user_id=None):
     """Retrieve relevant documents from Bedrock Knowledge Base."""
     try:
+        retrieval_config = {
+            'vectorSearchConfiguration': {
+                'numberOfResults': min(number_of_results, 10),
+            }
+        }
+        # Filter by user's KB prefix to prevent cross-user document access
+        if user_id:
+            retrieval_config['vectorSearchConfiguration']['filter'] = {
+                'stringContains': {
+                    'key': 'x-amz-bedrock-kb-source-uri',
+                    'value': f'kb/{user_id}/'
+                }
+            }
         resp = bedrock_agent_runtime.retrieve(
             knowledgeBaseId=KB_ID,
             retrievalQuery={'text': question},
-            retrievalConfiguration={
-                'vectorSearchConfiguration': {
-                    'numberOfResults': min(number_of_results, 10),
-                }
-            }
+            retrievalConfiguration=retrieval_config
         )
         results = []
         for item in resp.get('retrievalResults', []):
@@ -111,12 +139,14 @@ def retrieve_from_kb(question, number_of_results=5):
         return []
 
 
-def load_session(session_id):
+def load_session(session_id, user_id=None):
     """Load conversation history from DynamoDB."""
     if not session_id:
         return []
+    # Scope session key to user to prevent cross-user session access
+    pk = f"SESSION#{user_id}#{session_id}" if user_id else f"SESSION#{session_id}"
     try:
-        result = table.get_item(Key={"PK": f"SESSION#{session_id}", "SK": "MESSAGES"})
+        result = table.get_item(Key={"PK": pk, "SK": "MESSAGES"})
         item = result.get("Item")
         if item:
             return json.loads(item.get("messages", "[]"))
@@ -126,13 +156,14 @@ def load_session(session_id):
         return []
 
 
-def save_session(session_id, messages):
+def save_session(session_id, messages, user_id=None):
     """Save conversation history to DynamoDB with 24h TTL."""
     if not session_id:
         return
+    pk = f"SESSION#{user_id}#{session_id}" if user_id else f"SESSION#{session_id}"
     try:
         table.put_item(Item={
-            "PK": f"SESSION#{session_id}",
+            "PK": pk,
             "SK": "MESSAGES",
             "messages": json.dumps(messages, ensure_ascii=False),
             "TTL": int(time.time()) + 86400,
@@ -141,11 +172,11 @@ def save_session(session_id, messages):
         logger.warning(f"Failed to save session {session_id}: {e}")
 
 
-def agentic_converse(messages, transcript=None, session_id=None):
+def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
     """Agentic tool-use loop: model decides what tools to call."""
     context = {
         "transcript": transcript or "",
-        "retrieve_from_kb": retrieve_from_kb,
+        "retrieve_from_kb": lambda q, n=5: retrieve_from_kb(q, n, user_id=user_id),
     }
     tools_used = []
     sources = []
@@ -205,7 +236,7 @@ def agentic_converse(messages, transcript=None, session_id=None):
     answer = extract_text_answer(output_message)
 
     # Save conversation
-    save_session(session_id, messages)
+    save_session(session_id, messages, user_id=user_id)
 
     # Deduplicate sources
     seen = set()
@@ -227,11 +258,11 @@ def extract_text_answer(message):
     return "\n".join(parts) if parts else ""
 
 
-def handle_ask(question, context=None, meeting_id=None, session_id=None):
+def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id=None):
     """Handle POST /api/qa/ask — agentic Q&A with tool-use loop."""
     try:
         # Load existing conversation or start new
-        messages = load_session(session_id)
+        messages = load_session(session_id, user_id=user_id)
 
         # User message is just the question — context is in system prompt
         messages.append({"role": "user", "content": [{"text": question}]})
@@ -240,6 +271,7 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None):
             messages,
             transcript=context,
             session_id=session_id,
+            user_id=user_id,
         )
 
         return response(200, {
@@ -254,36 +286,43 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None):
         return response(500, {'error': {'code': 'INTERNAL_ERROR', 'message': 'Failed to generate answer'}})
 
 
+def load_meeting_context(user_id, meeting_id):
+    """Load meeting transcript from DynamoDB + S3 for QA context.
+
+    Returns (transcript_string, error_dict_or_None).
+    On success error_dict is None; on failure transcript is None.
+    """
+    try:
+        result = table.get_item(
+            Key={'PK': f'USER#{user_id}', 'SK': f'MEETING#{meeting_id}'}
+        )
+        item = result.get('Item')
+        if not item:
+            return None, {'code': 'NOT_FOUND', 'message': 'Meeting not found', 'status': 404}
+        parts = []
+        if item.get('title'):
+            parts.append(f"제목: {item['title']}")
+        if item.get('content'):
+            parts.append(f"내용:\n{resolve_s3_ref(item['content'])}")
+        if item.get('transcriptA'):
+            parts.append(f"트랜스크립트:\n{resolve_s3_ref(item['transcriptA'])}")
+        return '\n\n'.join(parts), None
+    except Exception as e:
+        logger.error(f'Failed to fetch meeting: {e}')
+        return None, {'code': 'INTERNAL_ERROR', 'message': 'Failed to fetch meeting', 'status': 500}
+
+
 def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
     """Handle POST /api/qa/meeting/{meetingId} — meeting-context agentic Q&A."""
-    # 1. Fetch meeting from DynamoDB
-    transcript = None
-    if user_id:
-        try:
-            result = table.get_item(
-                Key={'PK': f'USER#{user_id}', 'SK': f'MEETING#{meeting_id}'}
-            )
-            item = result.get('Item')
-            if item:
-                parts = []
-                if item.get('title'):
-                    parts.append(f"제목: {item['title']}")
-                if item.get('content'):
-                    parts.append(f"내용:\n{item['content']}")
-                if item.get('transcriptA'):
-                    parts.append(f"트랜스크립트:\n{item['transcriptA']}")
-                transcript = '\n\n'.join(parts)
-            else:
-                return response(404, {'error': {'code': 'NOT_FOUND', 'message': 'Meeting not found'}})
-        except Exception as e:
-            logger.error(f'Failed to fetch meeting: {e}')
-            return response(500, {'error': {'code': 'INTERNAL_ERROR', 'message': 'Failed to fetch meeting'}})
-    else:
+    if not user_id:
         return response(401, {'error': {'code': 'UNAUTHORIZED', 'message': 'Authentication required'}})
 
-    # 2. Agentic conversation
+    transcript, err = load_meeting_context(user_id, meeting_id)
+    if err:
+        return response(err['status'], {'error': {'code': err['code'], 'message': err['message']}})
+
     try:
-        messages = load_session(session_id)
+        messages = load_session(session_id, user_id=user_id)
 
         user_content = f"[미팅 '{meeting_id}'의 트랜스크립트가 있습니다. search_transcript 도구로 검색할 수 있습니다.]\n\n{question}"
         messages.append({"role": "user", "content": [{"text": user_content}]})
@@ -292,6 +331,7 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None):
             messages,
             transcript=transcript,
             session_id=session_id,
+            user_id=user_id,
         )
 
         return response(200, {

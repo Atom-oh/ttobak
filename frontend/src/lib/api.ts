@@ -1,6 +1,7 @@
 'use client';
 
 import { getIdToken, refreshSession } from './auth';
+import { triggerAuthFailure } from '@/components/auth/AuthProvider';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -67,6 +68,7 @@ export async function apiFetch<T>(
   if (response.status === 401 && !skipAuth) {
     const freshToken = await refreshTokenOnce();
     if (!freshToken) {
+      triggerAuthFailure();
       throw new Error('Authentication required');
     }
     response = await fetch(url, {
@@ -74,6 +76,7 @@ export async function apiFetch<T>(
       headers: { ...mergedHeaders, Authorization: `Bearer ${freshToken}` },
     });
     if (response.status === 401) {
+      triggerAuthFailure();
       throw new Error('Authentication required');
     }
   }
@@ -139,10 +142,13 @@ export const meetingsApi = {
 
   get: (id: string) => api.get<import('@/types/meeting').Meeting>(`/api/meetings/${id}`),
 
-  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic' }) =>
+  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string }) =>
     api.post<import('@/types/meeting').Meeting>('/api/meetings', data),
 
-  update: (id: string, data: { title?: string; content?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }) =>
+  recover: (meetingId: string) =>
+    api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/recover`, {}),
+
+  update: (id: string, data: { title?: string; content?: string; notes?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }) =>
     api.put<{ meetingId: string; updatedAt: string }>(`/api/meetings/${id}`, data),
 
   delete: (id: string) => api.delete(`/api/meetings/${id}`),
@@ -155,14 +161,20 @@ export const meetingsApi = {
 
   selectTranscript: (id: string, selected: 'A' | 'B') =>
     api.put(`/api/meetings/${id}/transcript`, { selected }),
+
+  updateSpeakers: (id: string, speakerMap: Record<string, string>) =>
+    api.put<{ meetingId: string; updatedAt: string }>(`/api/meetings/${id}/speakers`, { speakerMap }),
+
+  audioUrl: (id: string) =>
+    api.get<{ audioUrl: string }>(`/api/meetings/${id}/audio`),
 };
 
 // Presigned URL for uploads
 export const uploadsApi = {
-  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image'; meetingId?: string }) =>
+  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image' | 'file'; meetingId?: string }) =>
     api.post<{ uploadUrl: string; key: string; expiresIn: number }>('/api/upload/presigned', data),
 
-  notifyComplete: (data: { meetingId: string; key: string; category: 'audio' | 'image' }) =>
+  notifyComplete: (data: { meetingId: string; key: string; category: 'audio' | 'image' | 'file'; fileName?: string; fileSize?: number; mimeType?: string }) =>
     api.post<{ status: string }>('/api/upload/complete', data),
 };
 
@@ -183,6 +195,9 @@ export const kbApi = {
     api.get<{ files: import('@/types/meeting').KBFile[] }>('/api/kb/files'),
 
   deleteFile: (fileId: string) => api.delete(`/api/kb/files/${fileId}`),
+
+  copyAttachment: (sourceKey: string) =>
+    api.post<{ status: string; ingestion: string }>('/api/kb/copy-attachment', { sourceKey }),
 };
 
 // Q&A API
@@ -192,6 +207,76 @@ interface QAResponse {
   usedKB?: boolean;
   usedDocs?: boolean;
   toolsUsed?: string[];
+}
+
+interface QAStreamMeta {
+  sources?: string[];
+  usedKB?: boolean;
+  usedDocs?: boolean;
+  toolsUsed?: string[];
+}
+
+/** Parse SSE stream from /api/qa/stream/* endpoints. Calls onChunk for text deltas,
+ *  onMeta for metadata, and resolves when the stream ends.
+ *  Falls back to the sync endpoint on streaming failure. */
+async function streamSSE(
+  endpoint: string,
+  body: Record<string, unknown>,
+  onChunk: (text: string) => void,
+  onMeta: (meta: QAStreamMeta) => void,
+): Promise<void> {
+  const authHeaders = await getAuthHeaders();
+  const url = `${API_BASE_URL}${endpoint}`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`Stream request failed: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // Process complete SSE lines (terminated by \n\n)
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() || '';
+
+    for (const part of parts) {
+      for (const line of part.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const event = JSON.parse(line.slice(6));
+          if (event.type === 'chunk' && event.text) {
+            onChunk(event.text);
+          } else if (event.type === 'meta') {
+            onMeta({
+              sources: event.sources,
+              usedKB: event.usedKB,
+              usedDocs: event.usedDocs,
+              toolsUsed: event.toolsUsed,
+            });
+          } else if (event.type === 'error') {
+            throw new Error(event.text || 'Stream error');
+          }
+          // type === 'done' — stream will end naturally
+        } catch (e) {
+          if (e instanceof SyntaxError) continue; // ignore malformed JSON
+          throw e;
+        }
+      }
+    }
+  }
 }
 
 export const qaApi = {
@@ -206,6 +291,38 @@ export const qaApi = {
       `/api/qa/meeting/${meetingId}`,
       { question, sessionId }
     ),
+
+  /** Stream a meeting Q&A answer via SSE. Falls back to sync on failure. */
+  streamAskMeeting: async (
+    meetingId: string,
+    question: string,
+    sessionId: string,
+    onChunk: (text: string) => void,
+    onMeta: (meta: QAStreamMeta) => void,
+  ): Promise<void> => {
+    await streamSSE(
+      `/api/qa/stream/meeting/${meetingId}`,
+      { question, sessionId },
+      onChunk,
+      onMeta,
+    );
+  },
+
+  /** Stream a general Q&A answer via SSE. Falls back to sync on failure. */
+  streamAsk: async (
+    question: string,
+    context: string | undefined,
+    sessionId: string,
+    onChunk: (text: string) => void,
+    onMeta: (meta: QAStreamMeta) => void,
+  ): Promise<void> => {
+    await streamSSE(
+      '/api/qa/stream/ask',
+      { question, context, sessionId },
+      onChunk,
+      onMeta,
+    );
+  },
 
   detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string) =>
     api.post<{ questions: string[] }>(
@@ -257,12 +374,3 @@ export const summaryApi = {
     ),
 };
 
-// Realtime STT API (ECS faster-whisper)
-export const realtimeApi = {
-  start: () =>
-    api.post<{ websocketUrl?: string; status: string }>('/api/realtime/start'),
-  status: () =>
-    api.get<{ websocketUrl?: string; status: string }>('/api/realtime/status'),
-  stop: () =>
-    api.post<{ status: string }>('/api/realtime/stop'),
-};

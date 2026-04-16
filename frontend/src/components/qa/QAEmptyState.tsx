@@ -8,8 +8,8 @@ export function QAEmptyState({ isLive = false }: QAEmptyStateProps) {
   return (
     <div className="flex flex-col items-center justify-center py-6 text-slate-400">
       {/* Large icon in tinted square */}
-      <div className="size-16 rounded-2xl bg-[var(--color-primary)]/10 flex items-center justify-center mb-4">
-        <span className="material-symbols-outlined text-3xl text-[var(--color-primary)]">
+      <div className="size-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
+        <span className="material-symbols-outlined text-3xl text-primary">
           assistant
         </span>
       </div>

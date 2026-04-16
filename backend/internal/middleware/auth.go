@@ -136,13 +136,12 @@ func parseALBJWT(token string) (*ALBOIDCClaims, error) {
 }
 
 // parseJWT parses and verifies a JWT token.
-// If COGNITO_USER_POOL_ID is set, performs full signature verification.
-// Otherwise falls back to unverified decode (backward compatibility).
+// COGNITO_USER_POOL_ID must be set; otherwise token is rejected.
 func parseJWT(token string) (*ALBOIDCClaims, error) {
-	if cognitoUserPoolID != "" {
-		return parseVerifiedJWT(token)
+	if cognitoUserPoolID == "" {
+		return nil, &AuthError{Message: "server misconfiguration: COGNITO_USER_POOL_ID is not set"}
 	}
-	return parseUnverifiedJWT(token)
+	return parseVerifiedJWT(token)
 }
 
 // parseVerifiedJWT verifies JWT signature using Cognito JWKS

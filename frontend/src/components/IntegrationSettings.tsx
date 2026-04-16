@@ -91,10 +91,10 @@ export function IntegrationSettings() {
       )}
 
       {/* Notion Integration */}
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-6">
+      <div className="bg-white rounded-xl border border-slate-200 p-6 dark:glass-panel">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-slate-100 dark:bg-slate-800 rounded-lg flex items-center justify-center">
+            <div className="w-10 h-10 bg-slate-100 dark:bg-white/5 rounded-lg flex items-center justify-center">
               <svg className="w-6 h-6" viewBox="0 0 100 100" fill="none">
                 <path
                   d="M6.017 4.313l55.333-4.087c6.797-.583 8.543-.19 12.817 2.917l17.663 12.443c2.913 2.14 3.883 2.723 3.883 5.053v68.243c0 4.277-1.553 6.807-6.99 7.193L24.467 99.967c-4.08.193-6.023-.39-8.16-3.113L3.3 79.94c-2.333-3.113-3.3-5.443-3.3-8.167V11.113c0-3.497 1.553-6.413 6.017-6.8z"
@@ -109,15 +109,15 @@ export function IntegrationSettings() {
               </svg>
             </div>
             <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-white">Notion</h3>
-              <p className="text-sm text-slate-500">Export meeting notes to Notion</p>
+              <h3 className="text-base font-semibold text-slate-900 dark:text-[#e4e1e9]">Notion</h3>
+              <p className="text-sm text-slate-500 dark:text-[#849396]">Export meeting notes to Notion</p>
             </div>
           </div>
           <span
             className={`text-xs font-semibold px-2 py-1 rounded-full ${
               integrations?.notion?.configured
-                ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                ? 'bg-green-100 text-green-700 dark:bg-[#00E5FF]/10 dark:text-[#00E5FF]'
+                : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-[#849396]'
             }`}
           >
             {integrations?.notion?.configured ? 'Connected' : 'Not connected'}
@@ -126,9 +126,9 @@ export function IntegrationSettings() {
 
         {integrations?.notion?.configured ? (
           <div className="space-y-4">
-            <div className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-              <span className="material-symbols-outlined text-slate-400">key</span>
-              <span className="text-sm text-slate-600 dark:text-slate-400 font-mono">
+            <div className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-[#0e0e13] dark:border dark:border-white/10 rounded-lg">
+              <span className="material-symbols-outlined text-slate-400 dark:text-[#849396]">key</span>
+              <span className="text-sm text-slate-600 dark:text-[#bac9cc] font-mono">
                 {integrations.notion.maskedKey || '••••••••••••'}
               </span>
             </div>
@@ -153,7 +153,7 @@ export function IntegrationSettings() {
         ) : (
           <form onSubmit={handleSaveNotion} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+              <label className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-1">
                 Notion Integration Token
               </label>
               <div className="flex items-center gap-2">
@@ -163,12 +163,12 @@ export function IntegrationSettings() {
                     value={notionKey}
                     onChange={(e) => setNotionKey(e.target.value)}
                     placeholder="secret_..."
-                    className="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg focus:ring-2 focus:ring-primary/20 placeholder:text-slate-400 font-mono"
+                    className="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-[#849396] placeholder:text-slate-400 font-mono"
                   />
                   <button
                     type="button"
                     onClick={() => setShowKey(!showKey)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:text-[#849396] dark:hover:text-[#bac9cc]"
                   >
                     <span className="material-symbols-outlined text-lg">
                       {showKey ? 'visibility_off' : 'visibility'}
@@ -191,7 +191,7 @@ export function IntegrationSettings() {
             <button
               type="submit"
               disabled={!notionKey.trim() || saving}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-white dark:text-[#09090E] rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
             >
               {saving ? (
                 <>

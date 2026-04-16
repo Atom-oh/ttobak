@@ -37,11 +37,11 @@ export function QASuggestedQuestions({ questions, isDetected = false, onAsk, dis
               hover:scale-[1.01] active:scale-[0.99]
               ${isDetected
                 ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/40'
-                : 'bg-[var(--color-primary)]/5 text-[var(--color-primary)]/80 hover:bg-[var(--color-primary)]/10'
+                : 'bg-primary/5 text-primary/80 hover:bg-primary/10'
               }
             `}
           >
-            <span className={`material-symbols-outlined text-lg flex-shrink-0 ${isDetected ? 'text-amber-500' : 'text-[var(--color-primary)]/60'}`}>
+            <span className={`material-symbols-outlined text-lg flex-shrink-0 ${isDetected ? 'text-amber-500' : 'text-primary/60'}`}>
               {isDetected ? 'psychology' : 'chat_bubble'}
             </span>
             <span className="flex-1">{q}</span>

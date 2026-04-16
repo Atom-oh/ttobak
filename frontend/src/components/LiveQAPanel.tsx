@@ -84,30 +84,58 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     setQaHistory((prev) => [...prev, newEntry]);
 
     try {
-      const response = await qaApi.ask(q.trim(), transcriptContext, sessionId);
-      setQaHistory((prev) =>
-        prev.map((entry) =>
-          entry.id === entryId
-            ? {
-                ...entry,
-                answer: response.answer,
-                sources: response.sources,
-                usedKB: response.usedKB,
-                usedDocs: response.usedDocs,
-                toolsUsed: response.toolsUsed,
-              }
-            : entry
-        )
+      // Stream answer via SSE — text appears token by token
+      await qaApi.streamAsk(
+        q.trim(),
+        transcriptContext,
+        sessionId,
+        (text) => {
+          setQaHistory((prev) =>
+            prev.map((entry) =>
+              entry.id === entryId
+                ? { ...entry, answer: entry.answer + text }
+                : entry
+            )
+          );
+        },
+        (meta) => {
+          setQaHistory((prev) =>
+            prev.map((entry) =>
+              entry.id === entryId
+                ? { ...entry, ...meta }
+                : entry
+            )
+          );
+        },
       );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to get answer');
-      setQaHistory((prev) =>
-        prev.map((entry) =>
-          entry.id === entryId
-            ? { ...entry, answer: '답변을 가져오지 못했습니다. 다시 시도해주세요.' }
-            : entry
-        )
-      );
+    } catch {
+      // Fallback to sync endpoint
+      try {
+        const response = await qaApi.ask(q.trim(), transcriptContext, sessionId);
+        setQaHistory((prev) =>
+          prev.map((entry) =>
+            entry.id === entryId
+              ? {
+                  ...entry,
+                  answer: response.answer,
+                  sources: response.sources,
+                  usedKB: response.usedKB,
+                  usedDocs: response.usedDocs,
+                  toolsUsed: response.toolsUsed,
+                }
+              : entry
+          )
+        );
+      } catch (syncErr) {
+        setError(syncErr instanceof Error ? syncErr.message : 'Failed to get answer');
+        setQaHistory((prev) =>
+          prev.map((entry) =>
+            entry.id === entryId
+              ? { ...entry, answer: '답변을 가져오지 못했습니다. 다시 시도해주세요.' }
+              : entry
+          )
+        );
+      }
     } finally {
       setIsAsking(false);
       inputRef.current?.focus();

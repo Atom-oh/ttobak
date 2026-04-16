@@ -80,6 +80,10 @@ export class BrowserSpeechRecognition {
   private lastResultTime = 0;
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
   private isRestarting = false;
+  private networkRetryCount = 0;
+  private readonly MAX_NETWORK_RETRIES = 5;
+  private readonly WATCHDOG_TIMEOUT_MS = 15_000;
+  private readonly WATCHDOG_CHECK_INTERVAL_MS = 5_000;
 
   // Overlap buffer: tracks recently promoted text to prevent duplicates after restart
   private overlapBuffer: string[] = [];
@@ -88,6 +92,11 @@ export class BrowserSpeechRecognition {
 
   constructor(lang = 'ko-KR') {
     this.lang = lang;
+  }
+
+  /** Exponential backoff: 500ms, 1s, 2s, 4s, 5s (capped) */
+  private getRetryDelay(): number {
+    return Math.min(500 * Math.pow(2, this.networkRetryCount - 1), 5000);
   }
 
   /**
@@ -99,10 +108,13 @@ export class BrowserSpeechRecognition {
     const na = a.trim();
     const nb = b.trim();
     if (na === nb) return true;
+    // Short strings: only exact match (Korean syllables are too similar for fuzzy matching)
+    if (Math.max(na.length, nb.length) < 8) return false;
     const longer = na.length >= nb.length ? na : nb;
     const shorter = na.length < nb.length ? na : nb;
     const lengthRatio = shorter.length / longer.length;
-    if (lengthRatio >= 0.7 && longer.includes(shorter)) return true;
+    // Substring check: require minimum length to avoid false positives with common Korean particles
+    if (shorter.length >= 6 && lengthRatio >= 0.7 && longer.includes(shorter)) return true;
     if (lengthRatio < 0.7) return false;
     let matches = 0;
     const bChars = [...nb];
@@ -113,7 +125,7 @@ export class BrowserSpeechRecognition {
         bChars.splice(idx, 1);
       }
     }
-    return matches / Math.max(na.length, nb.length) >= 0.85;
+    return matches / Math.max(na.length, nb.length) >= 0.95;
   }
 
   /**
@@ -152,13 +164,20 @@ export class BrowserSpeechRecognition {
     if (fresh) {
       this.recognition = fresh;
       try { old?.abort(); } catch { /* ignore */ }
-      try { fresh.start(); } catch { this.onError?.('recognition-stalled'); }
+      try { fresh.start(); } catch {
+        this.isRestarting = false;
+        this.onError?.('recognition-stalled');
+        return;
+      }
     } else {
       try { old?.abort(); } catch { /* ignore */ }
+      this.isRestarting = false;
       this.onError?.('recognition-stalled');
+      return;
     }
 
-    setTimeout(() => { this.isRestarting = false; }, 500);
+    // Clear isRestarting immediately — the flag only prevents re-entrant calls
+    this.isRestarting = false;
   }
 
   private handleVisibilityChange = () => {
@@ -192,6 +211,8 @@ export class BrowserSpeechRecognition {
       // Ignore stale events from a previous recognition instance
       if (this.recognition !== recognition) return;
       this.lastResultTime = Date.now();
+      // Reset network retry counter on successful result
+      this.networkRetryCount = 0;
 
       // Clear expired overlap window
       if (this.overlapWindowEnd > 0 && Date.now() >= this.overlapWindowEnd) {
@@ -247,11 +268,29 @@ export class BrowserSpeechRecognition {
       if (event.error === 'no-speech') return;
       if (event.error === 'aborted') return;
 
-      const fatalErrors = ['not-allowed', 'network', 'service-not-allowed', 'language-not-supported'];
+      const fatalErrors = ['not-allowed', 'service-not-allowed', 'language-not-supported'];
+      const transientErrors = ['network', 'audio-capture'];
+
       if (fatalErrors.includes(event.error)) {
         this.shouldRestart = false;
         this.isListening = false;
         this.onError?.(event.error);
+      } else if (transientErrors.includes(event.error)) {
+        // Transient error: auto-retry with backoff, up to MAX_NETWORK_RETRIES
+        this.networkRetryCount++;
+        console.warn(`Speech recognition transient error: ${event.error} (retry ${this.networkRetryCount}/${this.MAX_NETWORK_RETRIES})`);
+        if (this.networkRetryCount <= this.MAX_NETWORK_RETRIES) {
+          setTimeout(() => {
+            if (this.isListening && this.shouldRestart) {
+              this.restartRecognition();
+            }
+          }, this.getRetryDelay());
+        } else {
+          console.error('Speech recognition: max retries exceeded, stopping');
+          this.shouldRestart = false;
+          this.isListening = false;
+          this.onError?.('recognition-failed');
+        }
       }
       console.warn('Speech recognition error:', event.error);
     };
@@ -263,6 +302,10 @@ export class BrowserSpeechRecognition {
       // Promote remaining interim text to final (Chrome stopped mid-utterance)
       if (this.lastInterimText && !this.isDuplicate(this.lastInterimText, this.lastFinalText)) {
         this.lastFinalText = this.lastInterimText;
+        // Track in overlap buffer so the fresh instance doesn't duplicate this text
+        this.overlapBuffer.push(this.lastInterimText.trim());
+        if (this.overlapBuffer.length > 3) this.overlapBuffer.shift();
+        this.overlapWindowEnd = Date.now() + this.OVERLAP_WINDOW_MS;
         this.onResult?.({
           text: this.lastInterimText,
           isFinal: true,
@@ -273,9 +316,11 @@ export class BrowserSpeechRecognition {
       this.lastInterimTimestamp = '';
 
       // Auto-restart if Chrome stopped unexpectedly (e.g. silence timeout)
-      if (this.shouldRestart && this.isListening && !this.isRestarting) {
+      // Skip restart when tab is hidden — Chrome kills new instances immediately in background.
+      // handleVisibilityChange will restart when the tab becomes visible again.
+      if (this.shouldRestart && this.isListening && !this.isRestarting && document.visibilityState !== 'hidden') {
         setTimeout(() => {
-          if (this.shouldRestart && this.isListening && !this.isRestarting) {
+          if (this.shouldRestart && this.isListening && !this.isRestarting && document.visibilityState !== 'hidden') {
             this.restartRecognition();
           }
         }, 100);
@@ -301,15 +346,15 @@ export class BrowserSpeechRecognition {
     if (!recognition) return false;
     this.recognition = recognition;
 
-    // Watchdog: if no onresult for 30s while listening, force restart
+    // Watchdog: if no onresult for 15s while listening, force restart
     this.clearWatchdog();
     this.watchdogTimer = setInterval(() => {
-      if (this.isListening && this.shouldRestart && Date.now() - this.lastResultTime > 30_000) {
-        console.warn('Speech recognition watchdog: no results for 30s, restarting...');
+      if (this.isListening && this.shouldRestart && Date.now() - this.lastResultTime > this.WATCHDOG_TIMEOUT_MS) {
+        console.warn('Speech recognition watchdog: no results, restarting...');
         this.restartRecognition();
         this.lastResultTime = Date.now();
       }
-    }, 10_000);
+    }, this.WATCHDOG_CHECK_INTERVAL_MS);
 
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
 
@@ -343,17 +388,17 @@ export class BrowserSpeechRecognition {
 
     this.clearWatchdog();
     this.watchdogTimer = setInterval(() => {
-      if (this.isListening && this.shouldRestart && Date.now() - this.lastResultTime > 30_000) {
-        console.warn('Speech recognition watchdog: no results for 30s, restarting...');
+      if (this.isListening && this.shouldRestart && Date.now() - this.lastResultTime > this.WATCHDOG_TIMEOUT_MS) {
+        console.warn('Speech recognition watchdog: no results, restarting...');
         this.restartRecognition();
         this.lastResultTime = Date.now();
       }
-    }, 10_000);
+    }, this.WATCHDOG_CHECK_INTERVAL_MS);
 
     const fresh = this.setupRecognition();
     if (fresh) {
       this.recognition = fresh;
-      try { fresh.start(); } catch { /* ignore */ }
+      try { fresh.start(); } catch { this.onError?.('recognition-stalled'); }
     }
   }
 

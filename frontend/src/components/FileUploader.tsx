@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
-import { uploadImage, formatFileSize, UploadProgress } from '@/lib/upload';
+import { uploadFile, notifyUploadComplete, formatFileSize, UploadProgress } from '@/lib/upload';
 
 interface FileUploaderProps {
   meetingId?: string;
-  onUploadComplete?: (files: { name: string; url: string }[]) => void;
+  onUploadComplete?: (files: { name: string; url: string; mimeType?: string }[]) => void;
   onError?: (error: string) => void;
   accept?: string;
   multiple?: boolean;
@@ -21,13 +21,24 @@ interface UploadingFile {
   url?: string;
 }
 
+function getFileIcon(mimeType: string, fileName: string): string {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('video/')) return 'videocam';
+  if (mimeType.startsWith('audio/')) return 'audio_file';
+  const ext = fileName.split('.').pop()?.toLowerCase() || '';
+  if (['ppt', 'pptx'].includes(ext)) return 'slideshow';
+  if (['xls', 'xlsx', 'csv'].includes(ext)) return 'table_chart';
+  return 'description';
+}
+
 export function FileUploader({
+  meetingId,
   onUploadComplete,
   onError,
-  accept = 'image/*',
+  accept = 'image/*,video/*,audio/*,.md,.ppt,.pptx,.docx,.doc,.pdf,.txt,.json,.csv,.xls,.xlsx',
   multiple = true,
   maxFiles = 10,
-  maxSize = 10 * 1024 * 1024, // 10MB
+  maxSize = 500 * 1024 * 1024, // 500MB
 }: FileUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [files, setFiles] = useState<UploadingFile[]>([]);
@@ -57,7 +68,7 @@ export function FileUploader({
       setFiles((prev) => [...prev, ...uploadingFiles]);
 
       // Upload files sequentially
-      const results: { name: string; url: string }[] = [];
+      const results: { name: string; url: string; mimeType?: string }[] = [];
 
       for (let i = 0; i < validFiles.length; i++) {
         const file = validFiles[i];
@@ -70,13 +81,25 @@ export function FileUploader({
         );
 
         try {
-          const result = await uploadImage(file, (progress: UploadProgress) => {
+          const result = await uploadFile(file, (progress: UploadProgress) => {
             setFiles((prev) =>
               prev.map((f, idx) =>
                 idx === fileIndex ? { ...f, progress: progress.percentage } : f
               )
             );
-          });
+          }, meetingId);
+
+          // Notify backend that upload is complete
+          if (meetingId) {
+            const category = file.type.startsWith('image/') ? 'image' as const : 'file' as const;
+            await notifyUploadComplete(meetingId, result.key, category, {
+              fileName: file.name,
+              fileSize: file.size,
+              mimeType: file.type,
+            }).catch((err) =>
+              console.warn('notifyComplete failed (meeting may not exist yet):', err),
+            );
+          }
 
           setFiles((prev) =>
             prev.map((f, idx) =>
@@ -86,7 +109,7 @@ export function FileUploader({
             )
           );
 
-          results.push({ name: file.name, url: result.url });
+          results.push({ name: file.name, url: result.url, mimeType: file.type });
         } catch (err) {
           setFiles((prev) =>
             prev.map((f, idx) =>
@@ -106,7 +129,7 @@ export function FileUploader({
         onUploadComplete?.(results);
       }
     },
-    [files.length, maxFiles, maxSize, onUploadComplete, onError]
+    [files.length, maxFiles, maxSize, meetingId, onUploadComplete, onError]
   );
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -136,9 +159,6 @@ export function FileUploader({
   const removeFile = (index: number) => {
     setFiles((prev) => prev.filter((_, i) => i !== index));
   };
-
-  const completedFiles = files.filter((f) => f.status === 'complete');
-  const pendingFiles = files.filter((f) => f.status !== 'complete' && f.status !== 'error');
 
   return (
     <div className="space-y-4">
@@ -170,10 +190,10 @@ export function FileUploader({
           cloud_upload
         </span>
         <p className="text-slate-600 dark:text-slate-400 font-medium">
-          {isDragging ? 'Drop files here' : 'Drag and drop files here'}
+          {isDragging ? '여기에 파일을 놓으세요' : '파일을 드래그하거나 클릭하여 첨부'}
         </p>
         <p className="text-slate-400 text-sm mt-1">
-          or click to browse (max {formatFileSize(maxSize)})
+          이미지, 문서, 동영상, 음성 파일 (최대 {formatFileSize(maxSize)})
         </p>
       </div>
 
@@ -195,7 +215,7 @@ export function FileUploader({
                   />
                 ) : (
                   <span className="material-symbols-outlined text-slate-400">
-                    {file.file.type.startsWith('image/') ? 'image' : 'description'}
+                    {getFileIcon(file.file.type, file.file.name)}
                   </span>
                 )}
               </div>

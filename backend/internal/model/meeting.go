@@ -18,8 +18,10 @@ type Meeting struct {
 	AudioKey           string    `dynamodbav:"audioKey,omitempty"`           // S3 key for audio file
 	SttProvider        string    `dynamodbav:"sttProvider,omitempty"`        // "transcribe" or "nova-sonic"
 	TranscriptSegments string    `dynamodbav:"transcriptSegments,omitempty"` // JSON string of speaker-labeled segments
-	ActionItems        string    `dynamodbav:"actionItems,omitempty"`        // JSON string of extracted action items
-	Participants       []string  `dynamodbav:"participants,omitempty"`
+	ActionItems        string            `dynamodbav:"actionItems,omitempty"`        // JSON string of extracted action items
+	Notes              string            `dynamodbav:"notes,omitempty"`              // User-written meeting notes (post-recording)
+	SpeakerMap         map[string]string `dynamodbav:"speakerMap,omitempty"`         // spk_0 -> "김팀장" mapping
+	Participants       []string          `dynamodbav:"participants,omitempty"`
 	Tags               []string  `dynamodbav:"tags,omitempty"`
 	Status             string    `dynamodbav:"status"` // recording, transcribing, summarizing, done, error
 	CreatedAt          time.Time `dynamodbav:"createdAt"`
@@ -43,6 +45,9 @@ type Attachment struct {
 	Status           string    `dynamodbav:"status"`                     // uploaded, processing, done
 	Description      string    `dynamodbav:"description,omitempty"`
 	ProcessedContent string    `dynamodbav:"processedContent,omitempty"` // Mermaid/markdown result
+	FileName         string    `dynamodbav:"fileName,omitempty"`
+	FileSize         int64     `dynamodbav:"fileSize,omitempty"`
+	MimeType         string    `dynamodbav:"mimeType,omitempty"`
 	CreatedAt        time.Time `dynamodbav:"createdAt"`
 	EntityType       string    `dynamodbav:"entityType"` // "ATTACHMENT"
 }
@@ -92,12 +97,15 @@ const (
 	PermissionEdit = "edit"
 )
 
-// Attachment type constants (per API spec: photo, screenshot, diagram, whiteboard)
+// Attachment type constants (per API spec: photo, screenshot, diagram, whiteboard, document, video, audio_file)
 const (
 	AttachTypePhoto      = "photo"
 	AttachTypeScreenshot = "screenshot"
 	AttachTypeDiagram    = "diagram"
 	AttachTypeWhiteboard = "whiteboard"
+	AttachTypeDocument   = "document"
+	AttachTypeVideo      = "video"
+	AttachTypeAudioFile  = "audio_file"
 )
 
 // Attachment status constants

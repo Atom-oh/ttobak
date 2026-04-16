@@ -93,6 +93,14 @@ export class TranscribeFallbackClient {
     return this.speech?.getPendingInterim() ?? null;
   }
 
+  pause(): void {
+    this.speech?.pause();
+  }
+
+  resume(): void {
+    this.speech?.resume();
+  }
+
   stop(): void {
     this.speech?.stop();
     this.speech = null;

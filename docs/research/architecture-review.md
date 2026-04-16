@@ -19,7 +19,7 @@
          │               │               │           │
          ▼               ▼               ▼           ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              CloudFront (d115v97ubjhb06)                     │
+│              CloudFront (d2olomx8td8txt)                     │
 │  ├─ Lambda@Edge (JWT auth on /api/*)                         │
 │  ├─ S3 OAC (static frontend)                                │
 │  ├─ API Gateway HTTP API → Lambda (REST)                     │

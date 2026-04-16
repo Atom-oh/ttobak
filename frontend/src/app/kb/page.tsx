@@ -26,12 +26,12 @@ export default function KnowledgeBasePage() {
   return (
     <AppLayout activePath="/kb">
       {/* Mobile Header */}
-      <header className="lg:hidden flex items-center bg-white dark:bg-slate-900 px-4 py-4 justify-between border-b border-slate-100 dark:border-slate-800 sticky top-0 z-10">
+      <header className="lg:hidden flex items-center bg-white dark:bg-[var(--surface)] px-4 py-4 justify-between border-b border-slate-100 dark:border-white/10 sticky top-0 z-10">
         <div className="flex items-center gap-3">
           <div className="text-primary flex size-10 shrink-0 items-center justify-center bg-primary/10 rounded-lg">
             <span className="material-symbols-outlined">library_books</span>
           </div>
-          <h1 className="text-slate-900 dark:text-slate-100 text-xl font-bold leading-tight tracking-tight">
+          <h1 className="text-slate-900 dark:text-[#e4e1e9] dark:font-[var(--font-headline)] text-xl font-bold leading-tight tracking-tight">
             Knowledge Base
           </h1>
         </div>
@@ -42,18 +42,18 @@ export default function KnowledgeBasePage() {
         <div className="p-4 lg:px-16 lg:pt-16 lg:pb-8 max-w-4xl w-full">
           {/* Page Header */}
           <div className="hidden lg:block mb-8">
-            <h2 className="notion-title">
+            <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-[var(--font-headline)] dark:text-[#e4e1e9]">
               Knowledge Base
             </h2>
-            <p className="text-text-secondary mt-2">
+            <p className="text-slate-600 dark:text-[#849396] mt-2">
               Upload documents to enhance Q&amp;A with your meeting notes.
             </p>
           </div>
           <div className="lg:hidden mb-8">
-            <h2 className="text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+            <h2 className="text-2xl font-extrabold text-slate-900 dark:text-[#e4e1e9] dark:font-[var(--font-headline)] tracking-tight">
               Knowledge Base
             </h2>
-            <p className="text-slate-500 mt-1">
+            <p className="text-slate-500 dark:text-[#849396] mt-1">
               Upload documents to enhance Q&amp;A with your meeting notes.
             </p>
           </div>

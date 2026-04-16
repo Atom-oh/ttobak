@@ -34,7 +34,210 @@
 
 ## OPEN
 
-(없음)
+### ISSUE-021: 메인화면 녹음시작 오류
+메인 화면에서 New Recording으로 진입 후.
+Recording 누르면 아래와 같은 오류 발생 
+
+[Translator] Settings loaded: {enablePageTranslation: false, enableDragTranslation: false, popupWidth: 350, popupHeight: 150}
+075d34a44f34f3db.js:1  GET https://ttobak.atomai.click/api/meetings 401 (Unauthorized)
+s @ 075d34a44f34f3db.js:1
+await in s
+a @ 075d34a44f34f3db.js:1
+list @ 075d34a44f34f3db.js:1
+(anonymous) @ 075d34a44f34f3db.js:1
+(anonymous) @ 075d34a44f34f3db.js:1
+ih @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+sE @ f2f58a7e93290fbb.js:1
+(anonymous) @ f2f58a7e93290fbb.js:1
+O @ f2f58a7e93290fbb.js:1
+075d34a44f34f3db.js:1  GET https://ttobak.atomai.click/api/meetings 401 (Unauthorized)
+s @ 075d34a44f34f3db.js:1
+await in s
+a @ 075d34a44f34f3db.js:1
+list @ 075d34a44f34f3db.js:1
+(anonymous) @ 075d34a44f34f3db.js:1
+(anonymous) @ 075d34a44f34f3db.js:1
+ih @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+uc @ f2f58a7e93290fbb.js:1
+uf @ f2f58a7e93290fbb.js:1
+sE @ f2f58a7e93290fbb.js:1
+(anonymous) @ f2f58a7e93290fbb.js:1
+O @ f2f58a7e93290fbb.js:1
+075d34a44f34f3db.js:1 Failed to fetch meetings: Error: Authentication required
+    at s (075d34a44f34f3db.js:1:9793)
+    at async 075d34a44f34f3db.js:1:37525
 
 ---
 
@@ -45,6 +248,38 @@
 ---
 
 ## Resolved
+
+### ISSUE-023: 음성 인식 문장 중간 끊김 (Resolved)
+- **Category**: transcript
+- **Severity**: critical
+- **Affected**: `frontend/src/lib/speechRecognition.ts`
+- **Description**: 긴 문장 발화 시 "워크샵에서", "온라인으로", "프로젝트입니다" 등 조각으로 끊겨서 들어옴
+- **Root Cause**: `hasKoreanSentenceEnding()`이 접속 조사/연결 어미(서, 고, 며, 는데, 인데, 다고, 라고, 면서 등)를 문장 종결로 오인하여 premature restart 발생
+- **Fix**: 단일 문자 패턴에서 고, 며, 서 제거. 복합 패턴에서 다고, 라고, 라며, 하며, 면서, 는데, 인데 제거. 진짜 종결 어미(니다, 해요, 세요, 습니다 등)만 유지.
+
+### ISSUE-024: 녹음 후 Processing 영구 대기 (Resolved)
+- **Category**: recording / frontend
+- **Severity**: critical
+- **Affected**: `frontend/src/lib/sttOrchestrator.ts`, `frontend/src/app/record/page.tsx`
+- **Description**: 녹음 종료 후 Processing 화면이 끝나지 않고 버튼 조작 불가
+- **Root Cause**: (1) `orchestrator.stop()` → `realtimeApi.stop()` API 호출이 timeout 없이 hang. (2) `handleRecordingStop`이 orchestrator stop을 await하여 UI 블로킹.
+- **Fix**: (1) `realtimeApi.stop()`에 5초 timeout 추가 (Promise.race). (2) `handleRecordingStop`에서 `orchestrator.stop()`을 fire-and-forget으로 변경 (await 제거).
+
+### ISSUE-021: ECS ListTasks AccessDeniedException (Resolved)
+- **Category**: infra
+- **Severity**: critical
+- **Affected**: `infra/lib/ai-stack.ts`
+- **Description**: `/api/realtime/start` 호출 시 500 에러. Lambda role에 ECS IAM 권한 없음.
+- **Root Cause**: `ttobak-lambda-role`에 `ecs:ListTasks`, `ecs:DescribeTasks`, `ecs:UpdateService`, `ecs:DescribeServices` 액션 미포함
+- **Fix**: ai-stack.ts에 EcsRealtimeAccess 정책 추가 + `aws iam put-role-policy`로 즉시 적용
+
+### ISSUE-022: 음성 인식 텍스트 앞부분 유실 (Resolved)
+- **Category**: transcript
+- **Severity**: critical
+- **Affected**: `frontend/src/lib/speechRecognition.ts`
+- **Description**: 음성 인식 텍스트가 앞부분 유실되고 끝에만 남음
+- **Root Cause**: `restartRecognition()`에서 abort() 후 old recognition의 onresult/onend가 비동기로 실행되며 new session의 `lastInterimText` 공유 변수를 덮어씀 (race condition)
+- **Fix**: (1) restartRecognition()에서 abort 전에 interim을 동기 승격. (2) setupRecognition() handlers에 closure guard 추가 (`this.recognition !== recognition`) — stale 이벤트 무시. (3) fresh instance를 abort 전에 `this.recognition`에 할당하여 guard 즉시 작동.
 
 ### 1.1 Q&A 질문 인식 지연 (Resolved)
 - **문제**: 미팅중 질문을 했는데 Q&A가 바로 인식하지 못함
