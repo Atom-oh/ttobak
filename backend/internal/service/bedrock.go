@@ -26,6 +26,18 @@ var (
 	ClaudeHaikuModelID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 )
 
+// stripCodeFences removes markdown code fences (```json ... ```) that LLMs sometimes wrap around JSON output.
+func stripCodeFences(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "```") {
+		lines := strings.Split(s, "\n")
+		if len(lines) >= 3 && strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "```") {
+			s = strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
+		}
+	}
+	return s
+}
+
 func getEnvOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -491,8 +503,8 @@ Example format:
 		return "", fmt.Errorf("failed to extract action items: %w", err)
 	}
 
-	// Validate JSON response
-	response = strings.TrimSpace(response)
+	// Validate JSON response (strip code fences LLMs sometimes add)
+	response = stripCodeFences(response)
 	var items []ActionItem
 	if err := json.Unmarshal([]byte(response), &items); err != nil {
 		// If parsing fails, return empty array
@@ -579,8 +591,8 @@ Rules:
 		return nil, fmt.Errorf("failed to extract tags: %w", err)
 	}
 
-	// Validate JSON response
-	response = strings.TrimSpace(response)
+	// Validate JSON response (strip code fences LLMs sometimes add)
+	response = stripCodeFences(response)
 	var tags []string
 	if err := json.Unmarshal([]byte(response), &tags); err != nil {
 		return []string{}, nil
