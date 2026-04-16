@@ -32,41 +32,15 @@
 
 ## 아키텍처
 
-```
-                        ┌─────────────────────────────┐
-                        │  CloudFront Distribution     │
-                        │  d2olomx8td8txt.cloudfront   │
-                        └──────┬──────┬──────┬────────┘
-                               │      │      │
-                    ┌──────────┘      │      └──────────┐
-                    ▼                 ▼                  ▼
-           Lambda@Edge         S3 (Static)      API Gateway HTTP
-           (JWT Auth)          (Next.js SPA)         API
-           us-east-1                                    │
-                                                        ▼
-                                              ┌─────────────────┐
-                                              │  Lambda Functions │
-                                              │  (Go, ARM64)     │
-                                              ├─────────────────┤
-                                              │ api (chi router) │
-                                              │ transcribe       │
-                                              │ summarize        │
-                                              │ process-image    │
-                                              │ kb               │
-                                              └────┬───┬───┬────┘
-                                                   │   │   │
-                            ┌──────────────────────┘   │   └────────────────┐
-                            ▼                          ▼                    ▼
-                       DynamoDB                   S3 (Assets)         Bedrock / KB
-                     (Single Table)             audio, images,      Claude, Transcribe,
-                                               transcripts          OpenSearch Serverless
-```
+![Ttobak Architecture Diagram](docs/architecture-diagram.png)
+
+> draw.io 원본: [`docs/architecture-diagram.drawio`](docs/architecture-diagram.drawio)
 
 ### 이벤트 기반 파이프라인
 
 ```
 audio/ 업로드 ──→ EventBridge ──→ transcribe Lambda ──→ Transcribe + Nova Sonic ──→ transcripts/ S3
-transcripts/ 업로드 ──→ EventBridge ──→ summarize Lambda ──→ Bedrock Claude ──→ DynamoDB (content)
+transcripts/ 업로드 ──→ EventBridge ──→ summarize Lambda ──→ Bedrock Claude ──→ DynamoDB (content, tags)
 images/ 업로드 ──→ EventBridge ──→ process-image Lambda ──→ Bedrock Vision ──→ DynamoDB (attachment)
 ```
 
