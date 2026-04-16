@@ -27,6 +27,7 @@ export class StorageStack extends cdk.Stack {
         pointInTimeRecoveryEnabled: true,
       },
       stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+      timeToLiveAttribute: 'TTL',
     });
 
     // GSI1 for date-based queries and meeting lookups

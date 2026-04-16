@@ -14,6 +14,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	awslambda "github.com/aws/aws-sdk-go-v2/service/lambda"
+	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
@@ -22,6 +24,8 @@ var (
 	repo             *repository.DynamoDBRepository
 	novaSonicService *service.NovaSonicService
 	tableName        string
+	lambdaClient     *awslambda.Client
+	qaFunctionName   string
 )
 
 func init() {
@@ -41,16 +45,25 @@ func init() {
 	// Initialize Bedrock for Nova Sonic
 	bedrockClient := bedrockruntime.NewFromConfig(cfg)
 	novaSonicService = service.NewNovaSonicService(bedrockClient)
+
+	// Lambda client used to async-invoke the Python QA Lambda for streaming answers
+	lambdaClient = awslambda.NewFromConfig(cfg)
+	qaFunctionName = os.Getenv("QA_FUNCTION_NAME")
+	if qaFunctionName == "" {
+		qaFunctionName = "ttobak-qa"
+	}
 }
 
 // WebSocketMessage represents an incoming WebSocket message
 type WebSocketMessage struct {
-	Action      string   `json:"action"`               // "start", "audio", "stop"
+	Action      string   `json:"action"`                // "start", "audio", "stop", "ask_live"
 	MeetingID   string   `json:"meetingId,omitempty"`
 	Language    string   `json:"language,omitempty"`    // Source language
 	TargetLangs []string `json:"targetLangs,omitempty"` // Target languages for translation
 	AudioData   string   `json:"audioData,omitempty"`   // Base64-encoded audio chunk
 	SessionID   string   `json:"sessionId,omitempty"`
+	Question    string   `json:"question,omitempty"`    // ask_live: user question
+	Context     string   `json:"context,omitempty"`     // ask_live: transcript context
 }
 
 // WebSocketResponse represents an outgoing WebSocket message
@@ -126,6 +139,8 @@ func handleMessage(ctx context.Context, event events.APIGatewayWebsocketProxyReq
 		return handleAudio(ctx, apiGwClient, connectionID, &msg)
 	case "stop":
 		return handleStop(ctx, apiGwClient, connectionID, &msg)
+	case "ask_live":
+		return handleAskLive(ctx, apiGwClient, connectionID, event, &msg)
 	default:
 		sendError(ctx, apiGwClient, connectionID, "Unknown action: "+msg.Action)
 		return events.APIGatewayProxyResponse{StatusCode: 400}, nil
@@ -186,6 +201,46 @@ func handleAudio(ctx context.Context, apiGwClient *apigatewaymanagementapi.Clien
 			IsFinal:   false,
 		}
 		sendMessage(ctx, apiGwClient, connectionID, &response)
+	}
+
+	return events.APIGatewayProxyResponse{StatusCode: 200}, nil
+}
+
+// handleAskLive forwards a live Q&A question to the Python QA Lambda.
+// The QA Lambda streams answer tokens back over WebSocket via PostToConnection,
+// so this handler only kicks off the async invocation and returns immediately.
+func handleAskLive(ctx context.Context, apiGwClient *apigatewaymanagementapi.Client, connectionID string, event events.APIGatewayWebsocketProxyRequest, msg *WebSocketMessage) (events.APIGatewayProxyResponse, error) {
+	question := msg.Question
+	if question == "" {
+		sendError(ctx, apiGwClient, connectionID, "question is required")
+		return events.APIGatewayProxyResponse{StatusCode: 400}, nil
+	}
+
+	endpoint := fmt.Sprintf("https://%s/%s", event.RequestContext.DomainName, event.RequestContext.Stage)
+	payload := map[string]any{
+		"streamMode":   "ask_live",
+		"connectionId": connectionID,
+		"endpoint":     endpoint,
+		"question":     question,
+		"context":      msg.Context,
+		"meetingId":    msg.MeetingID,
+		"sessionId":    msg.SessionID,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		sendError(ctx, apiGwClient, connectionID, "Failed to encode ask_live payload")
+		return events.APIGatewayProxyResponse{StatusCode: 500}, nil
+	}
+
+	_, err = lambdaClient.Invoke(ctx, &awslambda.InvokeInput{
+		FunctionName:   aws.String(qaFunctionName),
+		InvocationType: lambdatypes.InvocationTypeEvent,
+		Payload:        payloadBytes,
+	})
+	if err != nil {
+		log.Printf("ask_live invoke failed: %v", err)
+		sendError(ctx, apiGwClient, connectionID, "Failed to start live Q&A")
+		return events.APIGatewayProxyResponse{StatusCode: 500}, nil
 	}
 
 	return events.APIGatewayProxyResponse{StatusCode: 200}, nil

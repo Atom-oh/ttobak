@@ -2,6 +2,9 @@
 
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { qaApi } from '@/lib/api';
+import { RealtimeWebSocket, WebSocketMessage } from '@/lib/websocket';
+
+const WEBSOCKET_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
 
 interface LiveQAPanelProps {
   transcriptContext?: string;
@@ -50,6 +53,16 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     return `qa-${meetingId || 'live'}-${ts}`;
   }, [meetingId]);
 
+  const wsRef = useRef<RealtimeWebSocket | null>(null);
+  const pendingEntryIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      wsRef.current?.disconnect();
+      wsRef.current = null;
+    };
+  }, []);
+
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
@@ -90,6 +103,73 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     };
   }, [transcriptContext, askedQuestions]);
 
+  const finishAsk = (failedMessage?: string) => {
+    if (failedMessage) {
+      setError(failedMessage);
+      const entryId = pendingEntryIdRef.current;
+      if (entryId) {
+        setQaHistory((prev) =>
+          prev.map((entry) =>
+            entry.id === entryId && !entry.answer
+              ? { ...entry, answer: '답변을 가져오지 못했습니다. 다시 시도해주세요.' }
+              : entry
+          )
+        );
+      }
+    }
+    pendingEntryIdRef.current = null;
+    setIsAsking(false);
+    inputRef.current?.focus();
+  };
+
+  const handleStreamMessage = (msg: WebSocketMessage) => {
+    const entryId = pendingEntryIdRef.current;
+    if (!entryId) return;
+    if (msg.type === 'answer_delta' && msg.text) {
+      setQaHistory((prev) =>
+        prev.map((entry) =>
+          entry.id === entryId ? { ...entry, answer: (entry.answer || '') + msg.text } : entry
+        )
+      );
+    } else if (msg.type === 'answer_complete') {
+      setQaHistory((prev) =>
+        prev.map((entry) =>
+          entry.id === entryId
+            ? {
+                ...entry,
+                // Trust the final answer from the server if we got nothing via deltas
+                answer: entry.answer || msg.answer || '',
+                sources: msg.sources,
+                usedKB: msg.usedKB,
+                usedDocs: msg.usedDocs,
+                toolsUsed: msg.toolsUsed,
+              }
+            : entry
+        )
+      );
+      finishAsk();
+    } else if (msg.type === 'answer_error' || msg.type === 'error') {
+      finishAsk(msg.error || 'Failed to stream answer');
+    }
+  };
+
+  const ensureWebSocket = async (): Promise<RealtimeWebSocket | null> => {
+    if (!WEBSOCKET_URL) return null;
+    if (wsRef.current?.isConnected) return wsRef.current;
+    const ws = new RealtimeWebSocket(WEBSOCKET_URL, handleStreamMessage, () => {
+      if (pendingEntryIdRef.current) {
+        finishAsk('Connection closed');
+      }
+    });
+    try {
+      await ws.connect();
+      wsRef.current = ws;
+      return ws;
+    } catch {
+      return null;
+    }
+  };
+
   const handleAsk = async (q: string) => {
     if (!q.trim() || isAsking) return;
 
@@ -104,12 +184,24 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     setIsAsking(true);
 
     const entryId = Date.now().toString();
+    pendingEntryIdRef.current = entryId;
     const newEntry: QAEntry = {
       id: entryId,
       question: q.trim(),
       answer: '',
     };
     setQaHistory((prev) => [...prev, newEntry]);
+
+    // Try streaming via WebSocket first — falls back to HTTP on any failure.
+    const ws = await ensureWebSocket();
+    if (ws) {
+      try {
+        ws.askLive(q.trim(), transcriptContext, meetingId, sessionId);
+        return; // finishAsk() will run when answer_complete/error arrives
+      } catch {
+        // fall through to HTTP
+      }
+    }
 
     try {
       const response = await qaApi.ask(q.trim(), transcriptContext, sessionId);
@@ -127,18 +219,9 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
             : entry
         )
       );
+      finishAsk();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to get answer');
-      setQaHistory((prev) =>
-        prev.map((entry) =>
-          entry.id === entryId
-            ? { ...entry, answer: '답변을 가져오지 못했습니다. 다시 시도해주세요.' }
-            : entry
-        )
-      );
-    } finally {
-      setIsAsking(false);
-      inputRef.current?.focus();
+      finishAsk(err instanceof Error ? err.message : 'Failed to get answer');
     }
   };
 

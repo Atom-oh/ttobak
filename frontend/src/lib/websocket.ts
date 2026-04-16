@@ -3,12 +3,28 @@
 import { getIdToken } from './auth';
 
 export interface WebSocketMessage {
-  type: 'transcript' | 'translation' | 'error' | 'connected' | 'session_started';
+  type:
+    | 'transcript'
+    | 'translation'
+    | 'error'
+    | 'connected'
+    | 'session_started'
+    | 'answer_start'
+    | 'answer_delta'
+    | 'answer_complete'
+    | 'answer_error';
   text?: string;
   isFinal?: boolean;
   targetLang?: string;
   timestamp?: string;
   error?: string;
+  // ask_live streaming fields
+  sessionId?: string;
+  answer?: string;
+  sources?: string[];
+  usedKB?: boolean;
+  usedDocs?: boolean;
+  toolsUsed?: string[];
 }
 
 type MessageHandler = (msg: WebSocketMessage) => void;
@@ -65,6 +81,16 @@ export class RealtimeWebSocket {
 
   stopSession() {
     this.send({ action: 'stop' });
+  }
+
+  askLive(question: string, ctx?: string, meetingId?: string, sessionId?: string) {
+    this.send({
+      action: 'ask_live',
+      question,
+      context: ctx,
+      meetingId,
+      sessionId,
+    });
   }
 
   private send(data: unknown) {

@@ -123,6 +123,7 @@ export class GatewayStack extends cdk.Stack {
         // Will be updated after WebSocket API is created
         WEBSOCKET_API_ENDPOINT: '',
         AWS_REGION_NAME: cdk.Aws.REGION,
+        QA_FUNCTION_NAME: 'ttobak-qa',
       },
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,
@@ -159,6 +160,8 @@ export class GatewayStack extends cdk.Stack {
         KB_ID: 'XGFBOMVSS8',
         BEDROCK_MODEL_ID: 'anthropic.claude-opus-4-6-v1',
         DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
+        MAX_TOOL_ROUNDS: '3',
+        KB_CACHE_TTL_SECONDS: '600',
       },
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,
@@ -261,6 +264,9 @@ export class GatewayStack extends cdk.Stack {
     cfnWebsocketFunction.addPropertyOverride('Environment.Variables.WEBSOCKET_API_ENDPOINT',
       `https://${this.websocketApi.apiId}.execute-api.${cdk.Aws.REGION}.amazonaws.com/${websocketStageName}`
     );
+
+    // Allow WebSocket Lambda to async-invoke the Python QA Lambda for live Q&A streaming
+    this.qaFunction.grantInvoke(this.websocketFunction);
 
     // EventBridge rule for audio uploads -> Transcribe Lambda
     const audioUploadRule = new events.Rule(this, 'AudioUploadRule', {
