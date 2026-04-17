@@ -1,6 +1,7 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { AuthUser, getCurrentUser, signIn, signOut, signUp, confirmSignUp } from '@/lib/auth';
 
 interface AuthContextType {
@@ -27,9 +28,11 @@ export function triggerAuthFailure() {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const router = useRouter();
+  const pathname = usePathname();
+  const wasAuthenticated = useRef(false);
 
   useEffect(() => {
-    // Register callback so api.ts can force logout on 401 refresh failure
     setAuthFailureCallback(() => {
       setUser(null);
       localStorage.removeItem('idToken');
@@ -38,6 +41,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     return () => setAuthFailureCallback(null);
   }, []);
+
+  // Redirect to login when auth expires on non-root pages
+  useEffect(() => {
+    if (!isLoading && wasAuthenticated.current && !user && pathname !== '/') {
+      router.push('/');
+    }
+    if (user) wasAuthenticated.current = true;
+  }, [user, isLoading, pathname, router]);
 
   useEffect(() => {
     // Dev mode: skip Cognito auth when env var is set
