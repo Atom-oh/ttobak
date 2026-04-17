@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/components/auth/AuthProvider';
+import ReactMarkdown from 'react-markdown';
 import { insightsApi } from '@/lib/api';
 import type { CrawledDocument } from '@/types/meeting';
 
@@ -166,15 +167,15 @@ export default function InsightDetailPage() {
                 )}
               </div>
 
-              {/* Summary Card (if summary exists separately from content) */}
+              {/* Summary Card */}
               {doc.summary && (
                 <div className="glass-panel rounded-2xl p-6 lg:p-8">
                   <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-[#e4e1e9] uppercase tracking-wide mb-4">
                     <span className="material-symbols-outlined text-primary dark:text-[#00E5FF] text-lg">auto_awesome</span>
                     AI Summary
                   </h2>
-                  <div className="text-sm text-slate-700 dark:text-[#bac9cc] leading-relaxed whitespace-pre-wrap">
-                    {doc.summary}
+                  <div className="prose prose-sm dark:prose-invert max-w-none text-slate-700 dark:text-[#bac9cc] leading-relaxed [&_table]:text-xs [&_table]:border-collapse [&_th]:bg-slate-100 [&_th]:dark:bg-white/5 [&_th]:px-3 [&_th]:py-2 [&_td]:px-3 [&_td]:py-2 [&_th]:border [&_td]:border [&_th]:border-slate-200 [&_td]:border-slate-200 [&_th]:dark:border-white/10 [&_td]:dark:border-white/10 [&_blockquote]:border-l-4 [&_blockquote]:border-primary/30 [&_blockquote]:dark:border-[#00E5FF]/30 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-slate-500 [&_blockquote]:dark:text-[#849396] [&_code]:bg-slate-100 [&_code]:dark:bg-white/5 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_a]:text-primary [&_a]:dark:text-[#00E5FF] [&_a]:underline">
+                    <ReactMarkdown>{doc.summary}</ReactMarkdown>
                   </div>
                 </div>
               )}
@@ -185,18 +186,8 @@ export default function InsightDetailPage() {
                   <span className="material-symbols-outlined text-primary dark:text-[#00E5FF] text-lg">article</span>
                   Article Content
                 </h2>
-                <div className="prose prose-sm dark:prose-invert max-w-none text-slate-700 dark:text-[#bac9cc] leading-relaxed">
-                  {doc.content.split('\n').map((line, i) => {
-                    if (line.startsWith('# ')) return <h1 key={i} className="text-xl font-bold text-slate-900 dark:text-[#e4e1e9] mt-6 mb-3">{line.slice(2)}</h1>;
-                    if (line.startsWith('## ')) return <h2 key={i} className="text-lg font-bold text-slate-900 dark:text-[#e4e1e9] mt-5 mb-2">{line.slice(3)}</h2>;
-                    if (line.startsWith('### ')) return <h3 key={i} className="text-base font-semibold text-slate-900 dark:text-[#e4e1e9] mt-4 mb-2">{line.slice(4)}</h3>;
-                    if (line.startsWith('**') && line.endsWith('**')) return <p key={i} className="font-semibold mt-3">{line.slice(2, -2)}</p>;
-                    if (line.startsWith('---')) return <hr key={i} className="my-4 border-slate-200 dark:border-white/10" />;
-                    if (line.startsWith('| ')) return <p key={i} className="font-mono text-xs bg-slate-50 dark:bg-[#0e0e13] px-3 py-1 rounded">{line}</p>;
-                    if (line.startsWith('- ')) return <li key={i} className="ml-4 list-disc">{line.slice(2)}</li>;
-                    if (line.trim() === '') return <div key={i} className="h-2" />;
-                    return <p key={i} className="mb-1">{line}</p>;
-                  })}
+                <div className="prose prose-sm dark:prose-invert max-w-none text-slate-700 dark:text-[#bac9cc] leading-relaxed [&_table]:text-xs [&_table]:border-collapse [&_th]:bg-slate-100 [&_th]:dark:bg-white/5 [&_th]:px-3 [&_th]:py-2 [&_td]:px-3 [&_td]:py-2 [&_th]:border [&_td]:border [&_th]:border-slate-200 [&_td]:border-slate-200 [&_th]:dark:border-white/10 [&_td]:dark:border-white/10 [&_blockquote]:border-l-4 [&_blockquote]:border-primary/30 [&_blockquote]:dark:border-[#00E5FF]/30 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-slate-500 [&_blockquote]:dark:text-[#849396] [&_code]:bg-slate-100 [&_code]:dark:bg-white/5 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_a]:text-primary [&_a]:dark:text-[#00E5FF] [&_a]:underline">
+                  <ReactMarkdown>{doc.content}</ReactMarkdown>
                 </div>
               </div>
             </div>

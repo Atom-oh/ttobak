@@ -223,7 +223,10 @@ function RecordPageInner() {
   };
 
   const handleAudioUpload = async (file: File) => {
-    if (!file.type.startsWith('audio/')) {
+    const audioExtensions = ['.m4a', '.mp3', '.wav', '.webm', '.ogg', '.flac', '.aac', '.mp4', '.caf'];
+    const isAudioByType = file.type.startsWith('audio/') || file.type === 'video/mp4';
+    const isAudioByExt = audioExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
+    if (!isAudioByType && !isAudioByExt) {
       session.setSpeechError('음성 파일만 업로드할 수 있습니다.');
       return;
     }
@@ -340,7 +343,7 @@ function RecordPageInner() {
                 <input
                   ref={audioInputRef}
                   type="file"
-                  accept="audio/*"
+                  accept="audio/*,.m4a,.mp3,.wav,.webm,.ogg,.flac,.aac,.mp4,.caf"
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
