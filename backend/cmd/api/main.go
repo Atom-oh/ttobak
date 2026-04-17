@@ -81,6 +81,11 @@ func init() {
 	settingsHandler := handler.NewSettingsHandler(repo, cryptoService)
 	translateHandler := handler.NewTranslateHandler(translateService)
 	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2)
+	crawlerRepo := repository.NewCrawlerRepository(dynamoClient, tableName)
+	crawlerService := service.NewCrawlerService(crawlerRepo)
+	insightsService := service.NewInsightsService(crawlerRepo)
+	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
+	insightsHandler := handler.NewInsightsHandler(insightsService)
 	// Setup router
 	r := chi.NewRouter()
 
@@ -153,6 +158,16 @@ func init() {
 
 		// Live summarize route
 		r.Post("/api/meetings/{meetingId}/summarize", summarizeLiveHandler.SummarizeLive)
+
+		// Crawler settings
+		r.Get("/api/crawler/sources", crawlerHandler.ListSources)
+		r.Post("/api/crawler/sources", crawlerHandler.AddSource)
+		r.Put("/api/crawler/sources/{sourceId}", crawlerHandler.UpdateSource)
+		r.Delete("/api/crawler/sources/{sourceId}", crawlerHandler.Unsubscribe)
+		r.Get("/api/crawler/sources/{sourceId}/history", crawlerHandler.GetHistory)
+
+		// Insights
+		r.Get("/api/insights", insightsHandler.ListInsights)
 
 	})
 
