@@ -200,7 +200,7 @@ export default function HomePage() {
           {/* Action Buttons */}
           <div className="flex gap-3 mb-8">
             <Link
-              href="/record"
+              href="/record?mode=upload"
               className="glass-panel rounded-lg px-5 py-2.5 text-sm font-semibold text-[#00E5FF] hover:border-[#00E5FF]/30 hover:shadow-[0_0_15px_rgba(0,229,255,0.15)] transition-all flex items-center gap-2"
             >
               <span className="material-symbols-outlined text-lg">upload</span>
