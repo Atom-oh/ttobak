@@ -457,16 +457,16 @@ func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID strin
 		return "[]", nil // No transcript, return empty array
 	}
 
-	systemPrompt := `You are an expert at extracting action items from meeting transcripts.
-Extract action items mentioned in the transcript. For each action item, identify:
-- text: The task description (required)
-- assignee: Who is responsible (speaker label if available, e.g., "spk_0", "spk_1")
-- priority: high, medium, or low based on urgency/importance mentioned
-- dueDate: Due date if explicitly mentioned (ISO format YYYY-MM-DD)
+	systemPrompt := `회의 트랜스크립트에서 액션 아이템(해야 할 일)을 추출하세요.
+각 액션 아이템에 대해 아래를 식별하세요:
+- text: 할 일 설명 (한국어로 작성, 필수)
+- assignee: 담당자 (화자 라벨 예: "spk_0", "spk_1")
+- priority: high, medium, low (중요도/긴급도 기준)
+- dueDate: 명시적으로 언급된 경우만 (ISO 형식 YYYY-MM-DD)
 
-Return ONLY a valid JSON array. If no action items found, return [].
-Example format:
-[{"text":"Complete the report","assignee":"spk_0","priority":"high","dueDate":"2024-03-25","completed":false}]`
+유효한 JSON 배열만 반환하세요. 액션 아이템이 없으면 []를 반환하세요.
+예시:
+[{"text":"보고서 작성 완료","assignee":"spk_0","priority":"high","completed":false}]`
 
 	// Build prompt with speaker segments if available
 	userPrompt := fmt.Sprintf("Extract action items from this meeting transcript:\n\n%s", transcript)
