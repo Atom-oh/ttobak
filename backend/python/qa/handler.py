@@ -175,13 +175,14 @@ def retrieve_from_kb(question, number_of_results=5, user_id=None):
                 'numberOfResults': capped,
             }
         }
-        # Filter by user's KB prefix to prevent cross-user document access
+        # Filter: user's personal KB + user's meeting docs + shared crawler docs
         if user_id:
             retrieval_config['vectorSearchConfiguration']['filter'] = {
-                'stringContains': {
-                    'key': 'x-amz-bedrock-kb-source-uri',
-                    'value': f'kb/{user_id}/'
-                }
+                'orAll': [
+                    {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'kb/{user_id}/'}},
+                    {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'meetings/{user_id}/'}},
+                    {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': 'shared/'}},
+                ]
             }
         resp = bedrock_agent_runtime.retrieve(
             knowledgeBaseId=KB_ID,
