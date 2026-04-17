@@ -64,8 +64,8 @@ export class AiStack extends cdk.Stack {
     // Bedrock model ARNs (shared across roles that need them)
     const bedrockModelResources = [
       `arn:aws:bedrock:*::foundation-model/anthropic.claude-*`,
-      `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.anthropic.claude-*`,
-      `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/apac.anthropic.claude-*`,
+      `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.anthropic.claude-*`,
+      `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/apac.anthropic.claude-*`,
     ];
 
     // ==================== API Role ====================
