@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useState, useEffect, useMemo } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { insightsApi } from '@/lib/api';
@@ -17,15 +17,21 @@ function formatDate(value: string | number): string {
 }
 
 export default function InsightDetailPage() {
-  const params = useParams();
   const router = useRouter();
+  const pathname = usePathname();
   const { isLoading: authLoading, isAuthenticated } = useAuth();
   const [doc, setDoc] = useState<(CrawledDocument & { content: string }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const sourceId = params?.sourceId as string;
-  const docHash = params?.docHash as string;
+  // Extract sourceId and docHash from URL pathname (useParams returns '_' in static export)
+  const { sourceId, docHash } = useMemo(() => {
+    const parts = pathname.split('/insights/')[1]?.split('/') || [];
+    return {
+      sourceId: decodeURIComponent(parts[0] || ''),
+      docHash: parts[1] || '',
+    };
+  }, [pathname]);
 
   useEffect(() => {
     if (!sourceId || !docHash || sourceId === '_') return;

@@ -312,6 +312,6 @@ export const insightsApi = {
     }>(`/api/insights?${q.toString()}`);
   },
   getDetail: (sourceId: string, docHash: string) =>
-    api.get<CrawledDocument & { content: string }>(`/api/insights/${sourceId}/${docHash}`),
+    api.get<CrawledDocument & { content: string }>(`/api/insights/${encodeURIComponent(sourceId)}/${encodeURIComponent(docHash)}`),
 };
 
