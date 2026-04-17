@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
@@ -231,14 +232,14 @@ func (s *CrawlerService) rebuildSourceUnion(ctx context.Context, sourceID string
 }
 
 // normalizeSourceID converts a human-readable source name to a stable ID.
-// e.g. "AWS Blog" -> "aws-blog"
+// Keeps unicode letters (Korean, etc.), ASCII digits, and hyphens.
+// e.g. "AWS Blog" -> "aws-blog", "하나금융그룹" -> "하나금융그룹"
 func normalizeSourceID(name string) string {
 	id := strings.ToLower(strings.TrimSpace(name))
 	id = strings.ReplaceAll(id, " ", "-")
-	// Remove characters that are not alphanumeric or hyphens
 	var b strings.Builder
 	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' {
 			b.WriteRune(r)
 		}
 	}

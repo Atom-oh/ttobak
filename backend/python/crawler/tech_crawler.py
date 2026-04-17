@@ -112,23 +112,30 @@ def _fetch_url(url: str, timeout: int = FETCH_TIMEOUT_SECONDS) -> str:
 
 
 def _search_aws_docs(service: str) -> list:
-    """Search AWS docs for a given service, return list of {title, url}."""
-    query = quote_plus(f'AWS {service} documentation')
-    search_url = f'{AWS_DOCS_SEARCH_URL}?searchQuery={query}&locale=en_us&size={MAX_DOCS_PER_SERVICE}'
+    """Search AWS docs for a given service via POST JSON API (same as QA Lambda)."""
     try:
-        raw = _fetch_url(search_url)
-        data = json.loads(raw)
+        payload = json.dumps({
+            'textQuery': {'input': f'AWS {service} best practices getting started'},
+            'contextAttributes': [],
+            'locales': ['en_us', 'ko_kr'],
+        }).encode('utf-8')
+        req = Request(
+            AWS_DOCS_SEARCH_URL,
+            data=payload,
+            headers={'Content-Type': 'application/json', 'User-Agent': 'TtobakCrawler/1.0'},
+            method='POST',
+        )
+        with urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
         results = []
-        for item in data.get('items', []):
-            url = item.get('url') or item.get('href', '')
-            title = item.get('title', {})
-            if isinstance(title, dict):
-                title = title.get('value', '')
+        for suggestion in data.get('suggestions', []):
+            excerpt = suggestion.get('textExcerptSuggestion', {})
+            url = excerpt.get('link', '')
+            title = excerpt.get('title', '')
             if url and title:
-                # Ensure full URL
-                if url.startswith('/'):
-                    url = f'https://docs.aws.amazon.com{url}'
-                results.append({'title': str(title), 'url': str(url)})
+                results.append({'title': title, 'url': url})
+                if len(results) >= MAX_DOCS_PER_SERVICE:
+                    break
         return results
     except Exception as e:
         logger.warning(f'AWS docs search failed for {service}: {e}')

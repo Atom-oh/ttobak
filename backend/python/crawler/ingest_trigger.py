@@ -38,8 +38,14 @@ def handler(event, context):
         "totalErrors": N
       }
     """
-    # Aggregate crawler results to decide if ingestion is needed
-    crawler_results = event.get('crawlerResults', [])
+    # Step Functions Map outputs a list of per-source results (each is [tech_result, news_result])
+    raw = event if isinstance(event, list) else event.get('crawlerResults', [])
+    crawler_results = []
+    for item in raw:
+        if isinstance(item, list):
+            crawler_results.extend(item)
+        elif isinstance(item, dict):
+            crawler_results.append(item)
     total_added = sum(r.get('docsAdded', 0) for r in crawler_results)
     total_updated = sum(r.get('docsUpdated', 0) for r in crawler_results)
     total_errors = sum(len(r.get('errors', [])) for r in crawler_results)

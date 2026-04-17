@@ -124,11 +124,13 @@ def _parse_rss(xml_text: str) -> list:
             title_el = item.find('title')
             link_el = item.find('link')
             pub_el = item.find('pubDate')
+            desc_el = item.find('description')
             if title_el is not None and link_el is not None:
                 articles.append({
                     'title': title_el.text or '',
                     'url': link_el.text or '',
                     'pubDate': pub_el.text if pub_el is not None else '',
+                    'description': desc_el.text if desc_el is not None else '',
                 })
     except ET.ParseError as e:
         logger.warning(f'RSS parse error: {e}')
@@ -239,7 +241,7 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
 # ---------------------------------------------------------------------------
 
 def _process_article(source_id: str, title: str, url: str,
-                     pub_date: str) -> bool:
+                     pub_date: str, description: str = '') -> bool:
     """Process a single article. Returns True if added, False if skipped."""
     doc_hash = _make_hash(url)
 
@@ -247,10 +249,18 @@ def _process_article(source_id: str, title: str, url: str,
         logger.debug(f'Skipping duplicate: {url}')
         return False
 
-    html = _fetch_url(url)
-    text = extract_paragraphs(html)
+    # Try fetching full article; fall back to RSS description if content is thin
+    text = ''
+    try:
+        html = _fetch_url(url)
+        text = extract_paragraphs(html)
+    except Exception as e:
+        logger.info(f'Could not fetch article body: {e}')
+
     if not text or len(text) < 50:
-        logger.info(f'Skipping low-content article: {url}')
+        text = description or title
+    if not text or len(text) < 10:
+        logger.info(f'Skipping article with no content: {url}')
         return False
 
     summary = _summarize(title, text)
@@ -289,7 +299,8 @@ def handler(event, context):
         for article in articles:
             try:
                 if _process_article(source_id, article['title'],
-                                    article['url'], article.get('pubDate', '')):
+                                    article['url'], article.get('pubDate', ''),
+                                    article.get('description', '')):
                     docs_added += 1
             except Exception as e:
                 error_msg = f'news/{query}/{article.get("url", "?")}: {e}'
