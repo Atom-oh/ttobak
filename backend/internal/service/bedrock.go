@@ -21,7 +21,7 @@ var (
 	// ClaudeOpusModelID is for complex tasks (Q&A with tools, image analysis)
 	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-4-6-v1")
 	// ClaudeSonnetModelID is for summarization (final meeting summary)
-	ClaudeSonnetModelID = getEnvOrDefault("BEDROCK_SUMMARIZE_MODEL_ID", "global.anthropic.claude-sonnet-4-6-v1")
+	ClaudeSonnetModelID = getEnvOrDefault("BEDROCK_SUMMARIZE_MODEL_ID", "global.anthropic.claude-sonnet-4-6")
 	// ClaudeHaikuModelID is for live summary (fast, low-cost incremental updates)
 	ClaudeHaikuModelID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 )
