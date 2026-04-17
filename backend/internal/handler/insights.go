@@ -63,7 +63,7 @@ func (h *InsightsHandler) GetDocumentContent(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	result, err := h.insightsService.GetDocumentContent(ctx, sourceID, docHash)
+	result, err := h.insightsService.GetDocumentDetail(ctx, sourceID, docHash)
 	if err != nil {
 		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "document content not found")
 		return

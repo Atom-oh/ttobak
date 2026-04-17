@@ -319,8 +319,8 @@ type InsightsResponse struct {
 
 // InsightDetailResponse represents the full content of a crawled document
 type InsightDetailResponse struct {
+	CrawledDocument
 	Content string `json:"content"`
-	S3Key   string `json:"s3Key"`
 }
 
 // ToMeetingListItem converts a Meeting to MeetingListItem

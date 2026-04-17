@@ -311,7 +311,7 @@ export const insightsApi = {
       limit: number;
     }>(`/api/insights?${q.toString()}`);
   },
-  getContent: (sourceId: string, docHash: string) =>
-    api.get<{ content: string; s3Key: string }>(`/api/insights/${sourceId}/${docHash}`),
+  getDetail: (sourceId: string, docHash: string) =>
+    api.get<CrawledDocument & { content: string }>(`/api/insights/${sourceId}/${docHash}`),
 };
 

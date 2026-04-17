@@ -23,8 +23,29 @@ func NewInsightsService(repo *repository.CrawlerRepository, s3Client *s3.Client,
 	return &InsightsService{repo: repo, s3Client: s3Client, kbBucketName: kbBucketName}
 }
 
-// GetDocumentContent reads the full article content from S3.
-func (s *InsightsService) GetDocumentContent(ctx context.Context, sourceID, docHash string) (*model.InsightDetailResponse, error) {
+// GetDocumentDetail reads metadata from DynamoDB and full content from S3.
+func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHash string) (*model.InsightDetailResponse, error) {
+	// Get metadata from DynamoDB
+	docs, _, _, err := s.repo.ListDocuments(ctx, sourceID, "", 1, nil)
+	var meta *model.CrawledDocument
+	for i := range docs {
+		if docs[i].DocHash == docHash {
+			meta = &docs[i]
+			break
+		}
+	}
+	// Fallback: query specifically
+	if meta == nil {
+		allDocs, _, _, _ := s.repo.ListDocuments(ctx, sourceID, "", 100, nil)
+		for i := range allDocs {
+			if allDocs[i].DocHash == docHash {
+				meta = &allDocs[i]
+				break
+			}
+		}
+	}
+
+	// Read content from S3
 	s3Key := fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash)
 	result, err := s.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.kbBucketName),
@@ -37,20 +58,26 @@ func (s *InsightsService) GetDocumentContent(ctx context.Context, sourceID, docH
 			Key:    aws.String(s3Key),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("document not found in S3: %w", err)
+			return nil, fmt.Errorf("document not found: %w", err)
 		}
 	}
 	defer result.Body.Close()
 
 	body, err := io.ReadAll(result.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read S3 content: %w", err)
+		return nil, fmt.Errorf("failed to read content: %w", err)
 	}
 
-	return &model.InsightDetailResponse{
-		Content: string(body),
-		S3Key:   s3Key,
-	}, nil
+	resp := &model.InsightDetailResponse{Content: string(body)}
+	if meta != nil {
+		resp.CrawledDocument = *meta
+	} else {
+		resp.CrawledDocument = model.CrawledDocument{
+			DocHash:  docHash,
+			SourceID: sourceID,
+		}
+	}
+	return resp, nil
 }
 
 // ListInsights retrieves crawled documents with optional filtering by type, source, and service.
