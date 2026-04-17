@@ -12,12 +12,12 @@ interface SpeakerMapEditorProps {
 export function SpeakerMapEditor({ transcription, content, speakerMap: existingSpeakerMap, onSave }: SpeakerMapEditorProps) {
   const speakers = useMemo(() => {
     const labels = new Set<string>();
-    // From transcript segments
+    // From transcript segments (always has spk_N labels)
     transcription?.forEach((seg) => {
       if (seg.speaker && /^spk_\d+$/.test(seg.speaker)) labels.add(seg.speaker);
     });
-    // From content text
-    if (content) {
+    // From content text (fallback)
+    if (labels.size === 0 && content) {
       const matches = content.match(/spk_\d+/g);
       matches?.forEach((m) => labels.add(m));
     }
@@ -36,10 +36,9 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
   const [saving, setSaving] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
 
-  // Don't render if no spk_ labels remain or already fully mapped
   if (speakers.length === 0) return null;
-  if (existingSpeakerMap && speakers.every((s) => existingSpeakerMap[s])) return null;
 
+  const allMapped = existingSpeakerMap && speakers.every((s) => existingSpeakerMap[s]);
   const hasAnyName = Object.values(mapping).some((v) => v.trim());
 
   const handleSave = async () => {
@@ -60,26 +59,37 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
   const speakerColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1'];
 
   return (
-    <div className="bg-amber-50 dark:bg-[#1a1520] border border-amber-200 dark:border-amber-900/30 rounded-xl p-4 mb-6">
+    <div className={`rounded-xl p-4 mb-6 ${allMapped
+      ? 'bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10'
+      : 'bg-amber-50 dark:bg-[#1a1520] border border-amber-200 dark:border-amber-900/30'
+    }`}>
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-2 w-full text-left"
       >
-        <span className="material-symbols-outlined text-amber-600 dark:text-amber-400">person_edit</span>
-        <span className="font-semibold text-sm text-amber-800 dark:text-amber-300">
-          화자 이름 설정
+        <span className={`material-symbols-outlined ${allMapped ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
+          {allMapped ? 'group' : 'person_edit'}
         </span>
-        <span className="text-xs text-amber-600 dark:text-amber-400/70 ml-1">
-          ({speakers.length}명의 화자)
+        <span className={`font-semibold text-sm ${allMapped ? 'text-slate-700 dark:text-slate-300' : 'text-amber-800 dark:text-amber-300'}`}>
+          {allMapped ? '참석자' : '화자 이름 설정'}
         </span>
-        <span className="material-symbols-outlined text-sm text-amber-500 ml-auto">
+        {allMapped ? (
+          <span className="text-xs text-slate-500 dark:text-slate-400 ml-1">
+            {speakers.map((s) => existingSpeakerMap?.[s] || s).join(', ')}
+          </span>
+        ) : (
+          <span className="text-xs text-amber-600 dark:text-amber-400/70 ml-1">
+            ({speakers.length}명의 화자)
+          </span>
+        )}
+        <span className={`material-symbols-outlined text-sm ml-auto ${allMapped ? 'text-slate-400' : 'text-amber-500'}`}>
           {isOpen ? 'expand_less' : 'expand_more'}
         </span>
       </button>
 
       {isOpen && (
         <div className="mt-4 space-y-3">
-          <p className="text-xs text-amber-700 dark:text-amber-400/70">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
             화자 라벨에 실제 이름을 입력하면 요약, 트랜스크립트, 액션 아이템에서 일괄 변경됩니다.
           </p>
           {speakers.map((label, i) => (
@@ -96,7 +106,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
                 type="text"
                 value={mapping[label] || ''}
                 onChange={(e) => setMapping({ ...mapping, [label]: e.target.value })}
-                placeholder="이름 입력..."
+                placeholder={existingSpeakerMap?.[label] || '이름 입력...'}
                 className="flex-1 text-sm px-3 py-1.5 border border-slate-200 dark:border-white/10 rounded-lg bg-white dark:bg-white/5 text-slate-900 dark:text-white placeholder:text-slate-400 focus:ring-2 focus:ring-primary/20 outline-none"
               />
             </div>

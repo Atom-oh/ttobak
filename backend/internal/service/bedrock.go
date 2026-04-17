@@ -471,7 +471,7 @@ func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID strin
 "~하기로 했다", "~할 예정", "~를 준비", "팔로업", "확인 필요" 등의 표현에서 액션을 추출하세요.
 유효한 JSON 배열만 반환하세요. 액션 아이템이 없으면 []를 반환하세요.
 예시:
-[{"text":"PoC 환경 구축 제안서 준비","assignee":"이윤경","priority":"high","completed":false}]`
+[{"text":"PoC 환경 구축 제안서 준비","assignee":"spk_1","priority":"high","completed":false}]`
 
 	userPrompt := fmt.Sprintf("다음 회의 내용에서 액션 아이템을 추출하세요:\n\n%s", source)
 
