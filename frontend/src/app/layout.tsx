@@ -26,7 +26,10 @@ export const metadata: Metadata = {
   description: 'Record, transcribe, and summarize your meetings with AI',
   manifest: '/manifest.json',
   icons: {
-    icon: '/favicon.ico',
+    icon: [
+      { url: '/favicon.ico', sizes: '48x48' },
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+    ],
     apple: '/apple-touch-icon.png',
   },
 };
