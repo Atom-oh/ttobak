@@ -82,6 +82,56 @@ type User struct {
 	EntityType string    `dynamodbav:"entityType"`       // "USER"
 }
 
+// CrawlerSource represents a crawler source configuration
+// PK: USER#{userId}, SK: CRAWLER#{sourceId}
+type CrawlerSource struct {
+	SourceID      string   `dynamodbav:"sourceId" json:"sourceId"`
+	SourceName    string   `dynamodbav:"sourceName" json:"sourceName"`
+	Subscribers   []string `dynamodbav:"subscribers" json:"subscribers"`
+	AWSServices   []string `dynamodbav:"awsServices" json:"awsServices"`
+	NewsQueries   []string `dynamodbav:"newsQueries" json:"newsQueries"`
+	CustomUrls    []string `dynamodbav:"customUrls" json:"customUrls"`
+	Schedule      string   `dynamodbav:"schedule" json:"schedule"`
+	LastCrawledAt string   `dynamodbav:"lastCrawledAt" json:"lastCrawledAt"`
+	Status        string   `dynamodbav:"status" json:"status"`
+	DocumentCount int      `dynamodbav:"documentCount" json:"documentCount"`
+}
+
+// CrawlerSubscription represents a user's subscription to a crawler source
+// PK: USER#{userId}, SK: CRAWL_SUB#{sourceId}
+type CrawlerSubscription struct {
+	SourceID    string   `dynamodbav:"sourceId" json:"sourceId"`
+	AWSServices []string `dynamodbav:"awsServices" json:"awsServices"`
+	NewsSources []string `dynamodbav:"newsSources" json:"newsSources"`
+	CustomUrls  []string `dynamodbav:"customUrls" json:"customUrls"`
+	AddedAt     string   `dynamodbav:"addedAt" json:"addedAt"`
+}
+
+// CrawledDocument represents a document fetched by the crawler
+// PK: CRAWLER#{sourceId}, SK: DOC#{docHash}
+type CrawledDocument struct {
+	DocHash     string   `dynamodbav:"docHash" json:"docHash"`
+	Type        string   `dynamodbav:"type" json:"type"`
+	Title       string   `dynamodbav:"title" json:"title"`
+	URL         string   `dynamodbav:"url" json:"url"`
+	Source      string   `dynamodbav:"source" json:"source"`
+	Summary     string   `dynamodbav:"summary" json:"summary"`
+	AWSServices []string `dynamodbav:"awsServices,omitempty" json:"awsServices,omitempty"`
+	S3Key       string   `dynamodbav:"s3Key" json:"s3Key"`
+	CrawledAt   string   `dynamodbav:"crawledAt" json:"crawledAt"`
+	InKB        bool     `dynamodbav:"inKB" json:"inKB"`
+}
+
+// CrawlHistory represents a crawl execution history entry
+// PK: CRAWLER#{sourceId}, SK: HISTORY#{timestamp}
+type CrawlHistory struct {
+	Timestamp   string   `dynamodbav:"timestamp" json:"timestamp"`
+	DocsAdded   int      `dynamodbav:"docsAdded" json:"docsAdded"`
+	DocsUpdated int      `dynamodbav:"docsUpdated" json:"docsUpdated"`
+	Errors      []string `dynamodbav:"errors" json:"errors"`
+	Duration    int      `dynamodbav:"duration" json:"duration"`
+}
+
 // MeetingStatus constants
 const (
 	StatusRecording    = "recording"
@@ -124,4 +174,9 @@ const (
 	PrefixShareTo    = "SHARE_TO#"
 	PrefixEmail      = "EMAIL#"
 	PrefixProfile    = "PROFILE"
+	PrefixCrawler    = "CRAWLER#"
+	PrefixCrawlSub   = "CRAWL_SUB#"
+	PrefixDoc        = "DOC#"
+	PrefixHistory    = "HISTORY#"
+	PrefixConfig     = "CONFIG"
 )

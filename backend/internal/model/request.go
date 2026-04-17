@@ -277,6 +277,46 @@ type KBSyncResponse struct {
 	Message   string `json:"message,omitempty"`
 }
 
+// AddCrawlerSourceRequest represents the request body for adding a crawler source
+type AddCrawlerSourceRequest struct {
+	SourceName  string   `json:"sourceName"`
+	AWSServices []string `json:"awsServices"`
+	NewsSources []string `json:"newsSources"`
+	CustomUrls  []string `json:"customUrls,omitempty"`
+	NewsQueries []string `json:"newsQueries,omitempty"`
+}
+
+// UpdateCrawlerSourceRequest represents the request body for updating a crawler source
+type UpdateCrawlerSourceRequest struct {
+	AWSServices []string `json:"awsServices"`
+	NewsSources []string `json:"newsSources"`
+	CustomUrls  []string `json:"customUrls,omitempty"`
+}
+
+// CrawlerSourceResponse represents a single crawler source with its subscription
+type CrawlerSourceResponse struct {
+	Source       CrawlerSource       `json:"source"`
+	Subscription CrawlerSubscription `json:"subscription"`
+}
+
+// CrawlerSourcesResponse represents the response for listing crawler sources
+type CrawlerSourcesResponse struct {
+	Sources []CrawlerSourceResponse `json:"sources"`
+}
+
+// CrawlHistoryResponse represents the response for crawl history
+type CrawlHistoryResponse struct {
+	History []CrawlHistory `json:"history"`
+}
+
+// InsightsResponse represents the response for insights/documents listing
+type InsightsResponse struct {
+	Documents  []CrawledDocument `json:"documents"`
+	TotalCount int               `json:"totalCount"`
+	Page       int               `json:"page"`
+	Limit      int               `json:"limit"`
+}
+
 // ToMeetingListItem converts a Meeting to MeetingListItem
 func ToMeetingListItem(m *Meeting, isShared bool, sharedBy *string, permission *string) MeetingListItem {
 	summary := m.Content
