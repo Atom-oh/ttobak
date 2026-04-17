@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -177,17 +178,22 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	log.Printf("Updated meeting %s with transcript (nova=%v)", meetingID, isNova)
 
-	// Check if we should generate summary
+	// We just saved the transcript, so proceed directly to summary generation.
+	// Avoid re-reading via GSI (eventual consistency can return stale data).
 	meeting, err := repo.GetMeetingByID(ctx, meetingID)
-	if err != nil {
-		log.Printf("Failed to get meeting: %v", err)
-		return nil
+	if err != nil || meeting == nil {
+		log.Printf("Failed to get meeting via GSI, retrying after 1s: %v", err)
+		time.Sleep(1 * time.Second)
+		meeting, err = repo.GetMeetingByID(ctx, meetingID)
+		if err != nil || meeting == nil {
+			log.Printf("Still failed to get meeting: %v", err)
+			return nil
+		}
 	}
 
-	// Generate summary if at least one transcript is available
-	if meeting != nil && (meeting.TranscriptA != "" || meeting.TranscriptB != "") {
+	// Generate summary — transcript was just saved so it's guaranteed to exist
+	if transcript != "" {
 		if meeting.Status != model.StatusError {
-			// Atomic status transition to summarizing
 			repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
 				"status": model.StatusSummarizing,
 			})
