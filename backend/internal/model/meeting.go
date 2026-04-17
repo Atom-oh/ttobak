@@ -110,16 +110,17 @@ type CrawlerSubscription struct {
 // CrawledDocument represents a document fetched by the crawler
 // PK: CRAWLER#{sourceId}, SK: DOC#{docHash}
 type CrawledDocument struct {
-	DocHash     string   `dynamodbav:"docHash" json:"docHash"`
+	DocHash     string   `dynamodbav:"docHash,omitempty" json:"docHash"`
 	Type        string   `dynamodbav:"type" json:"type"`
 	Title       string   `dynamodbav:"title" json:"title"`
 	URL         string   `dynamodbav:"url" json:"url"`
-	Source      string   `dynamodbav:"source" json:"source"`
-	Summary     string   `dynamodbav:"summary" json:"summary"`
+	Source      string   `dynamodbav:"source,omitempty" json:"source"`
+	Summary     string   `dynamodbav:"summary,omitempty" json:"summary"`
 	AWSServices []string `dynamodbav:"awsServices,omitempty" json:"awsServices,omitempty"`
-	S3Key       string   `dynamodbav:"s3Key" json:"s3Key"`
-	CrawledAt   string   `dynamodbav:"crawledAt" json:"crawledAt"`
-	InKB        bool     `dynamodbav:"inKB" json:"inKB"`
+	S3Key       string   `dynamodbav:"s3Key,omitempty" json:"s3Key"`
+	CrawledAt   int64    `dynamodbav:"crawledAt" json:"crawledAt"`
+	InKB        bool     `dynamodbav:"inKB,omitempty" json:"inKB"`
+	PubDate     string   `dynamodbav:"pubDate,omitempty" json:"pubDate,omitempty"`
 }
 
 // CrawlHistory represents a crawl execution history entry

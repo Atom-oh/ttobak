@@ -277,14 +277,11 @@ func (r *CrawlerRepository) ListAllDocumentsByType(ctx context.Context, docType 
 		limit = 20
 	}
 
-	filterEx := expression.Name("entityType").Equal(expression.Value("CRAWLED_DOCUMENT"))
+	filterEx := expression.Name("PK").BeginsWith(model.PrefixCrawler).
+		And(expression.Name("SK").BeginsWith(model.PrefixDoc))
 	if docType != "" {
 		filterEx = filterEx.And(expression.Name("type").Equal(expression.Value(docType)))
 	}
-
-	// Also filter to only CRAWLER# partition keys with DOC# sort keys
-	filterEx = filterEx.And(expression.Name("PK").BeginsWith(model.PrefixCrawler)).
-		And(expression.Name("SK").BeginsWith(model.PrefixDoc))
 
 	expr, err := expression.NewBuilder().WithFilter(filterEx).Build()
 	if err != nil {
