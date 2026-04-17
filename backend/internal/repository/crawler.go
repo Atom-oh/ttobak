@@ -325,6 +325,9 @@ func (r *CrawlerRepository) ListAllDocumentsByType(ctx context.Context, docType 
 			if doc.DocHash == "" && strings.HasPrefix(item.SK, model.PrefixDoc) {
 				doc.DocHash = strings.TrimPrefix(item.SK, model.PrefixDoc)
 			}
+			if doc.SourceID == "" && strings.HasPrefix(item.PK, model.PrefixCrawler) {
+				doc.SourceID = strings.TrimPrefix(item.PK, model.PrefixCrawler)
+			}
 			allDocs = append(allDocs, doc)
 		}
 
