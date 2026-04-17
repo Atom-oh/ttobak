@@ -3,19 +3,54 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
 
 // InsightsService handles document listing and insights for crawled content.
 type InsightsService struct {
-	repo crawlerRepo
+	repo         crawlerRepo
+	s3Client     *s3.Client
+	kbBucketName string
 }
 
 // NewInsightsService creates a new InsightsService.
-func NewInsightsService(repo *repository.CrawlerRepository) *InsightsService {
-	return &InsightsService{repo: repo}
+func NewInsightsService(repo *repository.CrawlerRepository, s3Client *s3.Client, kbBucketName string) *InsightsService {
+	return &InsightsService{repo: repo, s3Client: s3Client, kbBucketName: kbBucketName}
+}
+
+// GetDocumentContent reads the full article content from S3.
+func (s *InsightsService) GetDocumentContent(ctx context.Context, sourceID, docHash string) (*model.InsightDetailResponse, error) {
+	s3Key := fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash)
+	result, err := s.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.kbBucketName),
+		Key:    aws.String(s3Key),
+	})
+	if err != nil {
+		s3Key = fmt.Sprintf("shared/aws-docs/%s/%s.md", sourceID, docHash)
+		result, err = s.s3Client.GetObject(ctx, &s3.GetObjectInput{
+			Bucket: aws.String(s.kbBucketName),
+			Key:    aws.String(s3Key),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("document not found in S3: %w", err)
+		}
+	}
+	defer result.Body.Close()
+
+	body, err := io.ReadAll(result.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read S3 content: %w", err)
+	}
+
+	return &model.InsightDetailResponse{
+		Content: string(body),
+		S3Key:   s3Key,
+	}, nil
 }
 
 // ListInsights retrieves crawled documents with optional filtering by type, source, and service.

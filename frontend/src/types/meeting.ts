@@ -177,6 +177,7 @@ export interface CrawlerSourceResponse {
 
 export interface CrawledDocument {
   docHash: string;
+  sourceId?: string;
   type: 'news' | 'tech';
   title: string;
   url: string;

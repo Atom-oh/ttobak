@@ -111,6 +111,7 @@ type CrawlerSubscription struct {
 // PK: CRAWLER#{sourceId}, SK: DOC#{docHash}
 type CrawledDocument struct {
 	DocHash     string   `dynamodbav:"docHash,omitempty" json:"docHash"`
+	SourceID    string   `dynamodbav:"-" json:"sourceId,omitempty"`
 	Type        string   `dynamodbav:"type" json:"type"`
 	Title       string   `dynamodbav:"title" json:"title"`
 	URL         string   `dynamodbav:"url" json:"url"`

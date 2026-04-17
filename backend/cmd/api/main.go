@@ -83,7 +83,7 @@ func init() {
 	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2)
 	crawlerRepo := repository.NewCrawlerRepository(dynamoClient, tableName)
 	crawlerService := service.NewCrawlerService(crawlerRepo)
-	insightsService := service.NewInsightsService(crawlerRepo)
+	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
 	insightsHandler := handler.NewInsightsHandler(insightsService)
 	// Setup router
@@ -168,6 +168,7 @@ func init() {
 
 		// Insights
 		r.Get("/api/insights", insightsHandler.ListInsights)
+		r.Get("/api/insights/{sourceId}/{docHash}", insightsHandler.GetDocumentContent)
 
 	})
 

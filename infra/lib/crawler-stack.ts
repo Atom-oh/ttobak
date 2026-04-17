@@ -26,7 +26,7 @@ export class CrawlerStack extends cdk.Stack {
       KB_BUCKET_NAME: props.kbBucket.bucketName,
       KB_ID: props.knowledgeBaseId || '',
       DATA_SOURCE_ID: props.dataSourceId || '',
-      HAIKU_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+      SUMMARIZE_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
     };
 
     // 4 Lambda functions all using Python 3.12 ARM64

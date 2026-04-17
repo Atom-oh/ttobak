@@ -339,10 +339,11 @@ export class AiStack extends cdk.Stack {
     props.kbBucket.grantReadWrite(this.crawlerRole);
 
     this.crawlerRole.addToPolicy(new iam.PolicyStatement({
-      sid: 'BedrockHaikuForSummarization',
+      sid: 'BedrockSonnetForSummarization',
       effect: iam.Effect.ALLOW,
-      actions: ['bedrock:InvokeModel'],
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
       resources: [
+        ...bedrockModelResources,
         `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-*`,
         `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*claude-haiku*`,
       ],

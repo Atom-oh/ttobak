@@ -268,6 +268,9 @@ func (r *CrawlerRepository) ListDocuments(ctx context.Context, sourceID, docType
 		if docs[i].DocHash == "" && strings.HasPrefix(item.SK, model.PrefixDoc) {
 			docs[i].DocHash = strings.TrimPrefix(item.SK, model.PrefixDoc)
 		}
+		if docs[i].SourceID == "" && strings.HasPrefix(item.PK, model.PrefixCrawler) {
+			docs[i].SourceID = strings.TrimPrefix(item.PK, model.PrefixCrawler)
+		}
 	}
 
 	return docs, result.LastEvaluatedKey, len(docs), nil

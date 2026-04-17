@@ -317,6 +317,12 @@ type InsightsResponse struct {
 	Limit      int               `json:"limit"`
 }
 
+// InsightDetailResponse represents the full content of a crawled document
+type InsightDetailResponse struct {
+	Content string `json:"content"`
+	S3Key   string `json:"s3Key"`
+}
+
 // ToMeetingListItem converts a Meeting to MeetingListItem
 func ToMeetingListItem(m *Meeting, isShared bool, sharedBy *string, permission *string) MeetingListItem {
 	summary := m.Content

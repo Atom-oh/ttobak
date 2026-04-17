@@ -24,7 +24,7 @@ logger.setLevel(logging.INFO)
 
 TABLE_NAME = os.environ.get('TABLE_NAME', 'ttobak-main')
 KB_BUCKET_NAME = os.environ.get('KB_BUCKET_NAME', 'ttobak-kb')
-HAIKU_MODEL_ID = os.environ.get('HAIKU_MODEL_ID', 'anthropic.claude-haiku-3-v1:0')
+SUMMARIZE_MODEL_ID = os.environ.get('SUMMARIZE_MODEL_ID', 'anthropic.claude-haiku-3-v1:0')
 
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
@@ -158,7 +158,7 @@ def _summarize(title: str, text: str) -> str:
     )
     try:
         resp = bedrock.invoke_model(
-            modelId=HAIKU_MODEL_ID,
+            modelId=SUMMARIZE_MODEL_ID,
             contentType='application/json',
             accept='application/json',
             body=json.dumps({

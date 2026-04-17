@@ -19,6 +19,35 @@ function formatDate(value: string | number): string {
   });
 }
 
+function ArticleContent({ sourceId, docHash }: { sourceId: string; docHash: string }) {
+  const [content, setContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    insightsApi.getContent(sourceId, docHash)
+      .then((res) => setContent(res.content))
+      .catch(() => setContent('Failed to load content.'))
+      .finally(() => setLoading(false));
+  }, [sourceId, docHash]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-4 text-sm text-slate-400 dark:text-[#849396]">
+        <div className="animate-spin rounded-full h-4 w-4 border-2 border-primary border-t-transparent" />
+        Loading article...
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-slate-200 dark:border-white/10">
+      <div className="prose prose-sm dark:prose-invert max-w-none text-sm text-slate-700 dark:text-[#bac9cc] whitespace-pre-wrap leading-relaxed">
+        {content}
+      </div>
+    </div>
+  );
+}
+
 export function InsightsList() {
   const [activeTab, setActiveTab] = useState<TabType>('news');
   const [documents, setDocuments] = useState<CrawledDocument[]>([]);
@@ -28,6 +57,7 @@ export function InsightsList() {
   const [totalCount, setTotalCount] = useState(0);
   const [sourceFilter, setSourceFilter] = useState('');
   const [serviceFilter, setServiceFilter] = useState('');
+  const [expandedDoc, setExpandedDoc] = useState<string | null>(null);
   const limit = 20;
 
   const fetchDocuments = useCallback(async () => {
@@ -187,10 +217,18 @@ export function InsightsList() {
               key={doc.docHash || doc.url || String(idx)}
               className="glass-panel rounded-xl p-5 transition-shadow hover:shadow-lg dark:hover:shadow-[0_0_20px_rgba(0,229,255,0.06)]"
             >
-              {/* Title */}
-              <h3 className="text-base font-semibold text-slate-900 dark:text-[#e4e1e9] line-clamp-2 leading-snug">
-                {doc.title}
-              </h3>
+              {/* Title — click to expand */}
+              <button
+                onClick={() => setExpandedDoc(expandedDoc === (doc.docHash || doc.url) ? null : (doc.docHash || doc.url))}
+                className="text-left w-full group"
+              >
+                <h3 className="text-base font-semibold text-slate-900 dark:text-[#e4e1e9] leading-snug group-hover:text-primary dark:group-hover:text-[#00E5FF] transition-colors flex items-start gap-2">
+                  <span className="material-symbols-outlined text-lg mt-0.5 shrink-0 text-slate-400 dark:text-[#849396] transition-transform" style={{ transform: expandedDoc === (doc.docHash || doc.url) ? 'rotate(90deg)' : undefined }}>
+                    chevron_right
+                  </span>
+                  <span className={expandedDoc === (doc.docHash || doc.url) ? '' : 'line-clamp-2'}>{doc.title}</span>
+                </h3>
+              </button>
 
               {/* Meta row: source, date, tags */}
               <div className="flex flex-wrap items-center gap-2 mt-2">
@@ -230,7 +268,7 @@ export function InsightsList() {
                 </p>
               )}
 
-              {/* Footer: KB status + Open button */}
+              {/* Footer: KB status + Read/Open buttons */}
               <div className="flex items-center justify-between mt-4">
                 <div>
                   {doc.inKB ? (
@@ -244,14 +282,28 @@ export function InsightsList() {
                     </span>
                   )}
                 </div>
-                <button
-                  onClick={() => window.open(doc.url, '_blank')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-primary dark:text-[#00E5FF] border border-primary/20 dark:border-[#00E5FF]/20 rounded-lg hover:bg-primary/5 dark:hover:bg-[#00E5FF]/10 transition-colors"
-                >
-                  <span className="material-symbols-outlined text-lg">open_in_new</span>
-                  Open
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setExpandedDoc(expandedDoc === (doc.docHash || doc.url) ? null : (doc.docHash || doc.url))}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-slate-600 dark:text-[#bac9cc] border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-lg">article</span>
+                    {expandedDoc === (doc.docHash || doc.url) ? 'Close' : 'Read'}
+                  </button>
+                  <button
+                    onClick={() => window.open(doc.url, '_blank')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-primary dark:text-[#00E5FF] border border-primary/20 dark:border-[#00E5FF]/20 rounded-lg hover:bg-primary/5 dark:hover:bg-[#00E5FF]/10 transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-lg">open_in_new</span>
+                    Original
+                  </button>
+                </div>
               </div>
+
+              {/* Expanded article content */}
+              {expandedDoc === (doc.docHash || doc.url) && doc.docHash && doc.sourceId && (
+                <ArticleContent sourceId={doc.sourceId} docHash={doc.docHash} />
+              )}
             </div>
           ))}
         </div>

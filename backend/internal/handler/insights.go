@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/service"
 )
@@ -48,5 +49,24 @@ func (h *InsightsHandler) ListInsights(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusOK, result)
+}
+
+// GetDocumentContent handles GET /api/insights/{sourceId}/{docHash}
+func (h *InsightsHandler) GetDocumentContent(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	sourceID := chi.URLParam(r, "sourceId")
+	docHash := chi.URLParam(r, "docHash")
+
+	if sourceID == "" || docHash == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "sourceId and docHash are required")
+		return
+	}
+
+	result, err := h.insightsService.GetDocumentContent(ctx, sourceID, docHash)
+	if err != nil {
+		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "document content not found")
+		return
+	}
 	writeJSON(w, http.StatusOK, result)
 }

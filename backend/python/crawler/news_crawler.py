@@ -25,7 +25,7 @@ logger.setLevel(logging.INFO)
 
 TABLE_NAME = os.environ.get('TABLE_NAME', 'ttobak-main')
 KB_BUCKET_NAME = os.environ.get('KB_BUCKET_NAME', 'ttobak-kb')
-HAIKU_MODEL_ID = os.environ.get('HAIKU_MODEL_ID', 'anthropic.claude-haiku-3-v1:0')
+SUMMARIZE_MODEL_ID = os.environ.get('SUMMARIZE_MODEL_ID', 'global.anthropic.claude-sonnet-4-6')
 
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
@@ -164,7 +164,7 @@ def _summarize(title: str, text: str) -> str:
     )
     try:
         resp = bedrock.invoke_model(
-            modelId=HAIKU_MODEL_ID,
+            modelId=SUMMARIZE_MODEL_ID,
             contentType='application/json',
             accept='application/json',
             body=json.dumps({
@@ -223,17 +223,25 @@ def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
 
 
 def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
-                    pub_date: str) -> None:
+                    pub_date: str, summary: str = '', source_name: str = '') -> None:
     """Write article metadata to DynamoDB."""
-    table.put_item(Item={
+    item = {
         'PK': f'CRAWLER#{source_id}',
         'SK': f'DOC#{doc_hash}',
+        'docHash': doc_hash,
         'url': url,
         'title': title,
         'pubDate': pub_date,
         'crawledAt': int(time.time()),
         'type': 'news',
-    })
+        's3Key': f'shared/news/{source_id}/{doc_hash}.md',
+        'inKB': True,
+    }
+    if summary:
+        item['summary'] = summary
+    if source_name:
+        item['source'] = source_name
+    table.put_item(Item=item)
 
 
 # ---------------------------------------------------------------------------
@@ -264,9 +272,17 @@ def _process_article(source_id: str, title: str, url: str,
         return False
 
     summary = _summarize(title, text)
+    source_name = _extract_source_name(title)
     _write_to_s3(source_id, doc_hash, title, url, text, summary, pub_date)
-    _write_metadata(source_id, doc_hash, title, url, pub_date)
+    _write_metadata(source_id, doc_hash, title, url, pub_date, summary, source_name)
     return True
+
+
+def _extract_source_name(title: str) -> str:
+    """Extract news outlet name from title suffix like '제목 - 출처'."""
+    if ' - ' in title:
+        return title.rsplit(' - ', 1)[-1].strip()
+    return ''
 
 
 def handler(event, context):
