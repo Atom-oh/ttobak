@@ -36,7 +36,7 @@ bedrock = boto3.client('bedrock-runtime')
 GOOGLE_NEWS_RSS = 'https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko'
 
 # Limits
-MAX_ARTICLES_PER_QUERY = 15
+MAX_ARTICLES_PER_QUERY = 5
 FETCH_TIMEOUT_SECONDS = 10
 MAX_CONTENT_LENGTH = 30000  # chars
 
@@ -154,28 +154,24 @@ def _search_google_news(query: str) -> list:
 # ---------------------------------------------------------------------------
 
 def _summarize(title: str, text: str) -> str:
-    """Generate a concise Korean summary using Bedrock Haiku."""
-    truncated = text[:6000] if len(text) > 6000 else text
+    """Generate an SA-focused Korean briefing using Bedrock Sonnet."""
+    content = text[:4000] if len(text) > 4000 else text
     prompt = (
-        f'다음 뉴스 기사를 한국어로 3-5문장으로 요약해주세요. '
-        f'핵심 내용과 시사점을 포함하세요.\n\n'
-        f'제목: {title}\n\n'
-        f'본문:\n{truncated}'
+        f'당신은 AWS Solutions Architect를 위한 고객사 뉴스 브리핑을 작성합니다.\n\n'
+        f'아래 뉴스 기사를 분석하여 한국어로 다음 형식의 브리핑을 작성하세요:\n\n'
+        f'1. **핵심 요약** (3-5문장): 기사의 주요 내용\n'
+        f'2. **비즈니스 시사점**: 이 소식이 고객사의 IT/클라우드 전략에 미치는 영향\n'
+        f'3. **AWS 관련성**: 관련될 수 있는 AWS 서비스나 기회 (있는 경우)\n\n'
+        f'기사 제목: {title}\n\n'
+        f'기사 내용:\n{content if content and len(content) > 30 else "(본문 없음 — 제목 기반으로 분석해주세요)"}'
     )
     try:
-        resp = bedrock.invoke_model(
+        resp = bedrock.converse(
             modelId=SUMMARIZE_MODEL_ID,
-            contentType='application/json',
-            accept='application/json',
-            body=json.dumps({
-                'anthropic_version': 'bedrock-2023-05-31',
-                'max_tokens': 512,
-                'temperature': 0.2,
-                'messages': [{'role': 'user', 'content': prompt}],
-            }),
+            messages=[{'role': 'user', 'content': [{'text': prompt}]}],
+            inferenceConfig={'maxTokens': 1024, 'temperature': 0.3},
         )
-        result = json.loads(resp['body'].read())
-        return result.get('content', [{}])[0].get('text', '')
+        return resp['output']['message']['content'][0]['text']
     except Exception as e:
         logger.warning(f'Bedrock summarize failed for "{title}": {e}')
         return ''
@@ -207,11 +203,13 @@ def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
     """Write article markdown to S3."""
     md = (
         f'# {title}\n\n'
-        f'**Source:** {url}\n'
-        f'**Published:** {pub_date}\n\n'
-        f'## Summary\n\n{summary}\n\n'
-        f'## Content\n\n{content[:MAX_CONTENT_LENGTH]}\n'
+        f'**Published:** {pub_date}\n'
+        f'**Source:** {url}\n\n'
+        f'---\n\n'
+        f'{summary}\n'
     )
+    if content and len(content) > 50:
+        md += f'\n---\n\n## 원문 발췌\n\n{content[:MAX_CONTENT_LENGTH]}\n'
     key = f'shared/news/{source_id}/{doc_hash}.md'
     s3.put_object(
         Bucket=KB_BUCKET_NAME,
@@ -298,8 +296,8 @@ def handler(event, context):
       }
     """
     source_id = event.get('sourceId', 'unknown')
-    queries = event.get('newsQueries', [])
-    custom_urls = event.get('customUrls', [])
+    queries = event.get('newsQueries') or []
+    custom_urls = event.get('customUrls') or []
     logger.info(f'News crawler: sourceId={source_id}, queries={queries}, '
                 f'customUrls={len(custom_urls)}')
 

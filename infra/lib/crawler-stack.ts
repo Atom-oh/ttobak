@@ -50,7 +50,7 @@ export class CrawlerStack extends cdk.Stack {
       code: lambda.Code.fromAsset('../backend/python/crawler'),
       role: props.crawlerRole as iam.Role,
       environment: commonEnv,
-      timeout: cdk.Duration.minutes(5),
+      timeout: cdk.Duration.minutes(14),
       memorySize: 512,
     });
 
@@ -62,7 +62,7 @@ export class CrawlerStack extends cdk.Stack {
       code: lambda.Code.fromAsset('../backend/python/crawler'),
       role: props.crawlerRole as iam.Role,
       environment: commonEnv,
-      timeout: cdk.Duration.minutes(5),
+      timeout: cdk.Duration.minutes(14),
       memorySize: 512,
     });
 
