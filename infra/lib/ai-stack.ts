@@ -20,6 +20,7 @@ export class AiStack extends cdk.Stack {
   public readonly qaRole: iam.Role;
   public readonly websocketRole: iam.Role;
   public readonly wsAuthorizerRole: iam.Role;
+  public readonly crawlerRole: iam.Role;
   public readonly kmsKey: kms.Key;
   /** @deprecated Legacy shared role — kept for RealtimeStack backward compatibility */
   public readonly legacyRole: iam.Role;
@@ -326,6 +327,34 @@ export class AiStack extends cdk.Stack {
       'Role for ttobak-ws-authorizer Lambda function'
     );
 
+    // ==================== Crawler Role ====================
+    // Needs: DynamoDB R/W, KB bucket R/W, Bedrock Haiku, Bedrock KB ingestion
+    this.crawlerRole = createLambdaRole(
+      'TtobakCrawlerRole',
+      'ttobak-crawler-role',
+      'Role for crawler Lambda functions'
+    );
+
+    props.table.grantReadWriteData(this.crawlerRole);
+    props.kbBucket.grantReadWrite(this.crawlerRole);
+
+    this.crawlerRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockHaikuForSummarization',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:InvokeModel'],
+      resources: [
+        `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-*`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*claude-haiku*`,
+      ],
+    }));
+
+    this.crawlerRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockKBIngestion',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:StartIngestionJob'],
+      resources: ['*'],
+    }));
+
     // QA role also needs ManageConnections for streaming answers back to WebSocket
     this.qaRole.addToPolicy(
       new iam.PolicyStatement({
@@ -382,6 +411,11 @@ export class AiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'QaRoleArn', {
       value: this.qaRole.roleArn,
       exportName: 'TtobakQaRoleArn',
+    });
+
+    new cdk.CfnOutput(this, 'CrawlerRoleArn', {
+      value: this.crawlerRole.roleArn,
+      exportName: 'TtobakCrawlerRoleArn',
     });
   }
 }
