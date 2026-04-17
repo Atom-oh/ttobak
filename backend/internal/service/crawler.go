@@ -6,13 +6,28 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
 
+// crawlerRepo defines the repository methods used by CrawlerService and InsightsService.
+type crawlerRepo interface {
+	GetSource(ctx context.Context, sourceID string) (*model.CrawlerSource, error)
+	PutSource(ctx context.Context, source *model.CrawlerSource) error
+	GetSubscription(ctx context.Context, userID, sourceID string) (*model.CrawlerSubscription, error)
+	PutSubscription(ctx context.Context, userID string, sub *model.CrawlerSubscription) error
+	DeleteSubscription(ctx context.Context, userID, sourceID string) error
+	ListUserSubscriptions(ctx context.Context, userID string) ([]model.CrawlerSubscription, error)
+	ListHistory(ctx context.Context, sourceID string, limit int32) ([]model.CrawlHistory, error)
+	ListDocuments(ctx context.Context, sourceID, docType string, limit int32, lastKey map[string]types.AttributeValue) ([]model.CrawledDocument, map[string]types.AttributeValue, int, error)
+	ListAllDocumentsByType(ctx context.Context, docType string, limit int32, page int) ([]model.CrawledDocument, int, error)
+	NormalizeSourceID(name string) string
+}
+
 // CrawlerService handles crawler source management and subscription logic.
 type CrawlerService struct {
-	repo *repository.CrawlerRepository
+	repo crawlerRepo
 }
 
 // NewCrawlerService creates a new CrawlerService.

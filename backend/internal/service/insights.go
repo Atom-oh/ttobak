@@ -10,7 +10,7 @@ import (
 
 // InsightsService handles document listing and insights for crawled content.
 type InsightsService struct {
-	repo *repository.CrawlerRepository
+	repo crawlerRepo
 }
 
 // NewInsightsService creates a new InsightsService.
