@@ -158,7 +158,7 @@ export class GatewayStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.table.tableName,
         KB_ID: 'XGFBOMVSS8',
-        BEDROCK_MODEL_ID: 'anthropic.claude-opus-4-6-v1',
+        BEDROCK_MODEL_ID: 'anthropic.claude-sonnet-4-6-v1',
         DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
         MAX_TOOL_ROUNDS: '3',
         KB_CACHE_TTL_SECONDS: '600',
