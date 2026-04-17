@@ -101,6 +101,15 @@ CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE
 - Default table/bucket names in Go don't match CDK defaults (no runtime impact since CDK injects env vars)
 - ~~`AudioContext` not closed on recording stop~~ — **FIXED** (`RecordButton.tsx:80` now calls `audioContextRef.current.close()`)
 
+## Security Policy
+
+- **All public traffic MUST go through CloudFront only.** No AWS resource (Lambda, ALB/NLB, S3, API Gateway, etc.) may be directly accessible from the internet.
+- **NEVER create Lambda Function URLs with `AuthType: NONE`** — this makes the function world-accessible and bypasses all auth.
+- **S3 buckets must not have public access.** Use CloudFront OAC for serving static content.
+- **API Gateway** is accessed only via CloudFront origin, not directly from the internet.
+- **No public Load Balancers** — if an LB is needed, it must be internal and routed through CloudFront or VPC-only.
+- When adding any new resource, verify it has no public endpoint. If a public endpoint is required, it must be behind CloudFront with Lambda@Edge auth.
+
 ## Important Gotchas
 
 - **Go binary path**: Use `/usr/local/go/bin/go` (not just `go`)

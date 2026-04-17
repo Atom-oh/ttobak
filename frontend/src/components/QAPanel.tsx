@@ -52,60 +52,30 @@ export function QAPanel({ meetingId }: QAPanelProps) {
     setQaHistory((prev) => [...prev, newEntry]);
 
     try {
-      // Stream answer via SSE — text appears token by token
-      await qaApi.streamAskMeeting(
-        meetingId,
-        q.trim(),
-        sessionId,
-        (text) => {
-          // Append each text chunk to the answer progressively
-          setQaHistory((prev) =>
-            prev.map((entry) =>
-              entry.id === entryId
-                ? { ...entry, answer: entry.answer + text }
-                : entry
-            )
-          );
-        },
-        (meta) => {
-          // Apply metadata (sources, tools) once streaming completes
-          setQaHistory((prev) =>
-            prev.map((entry) =>
-              entry.id === entryId
-                ? { ...entry, ...meta }
-                : entry
-            )
-          );
-        },
+      const response = await qaApi.askMeeting(meetingId, q.trim(), sessionId);
+      setQaHistory((prev) =>
+        prev.map((entry) =>
+          entry.id === entryId
+            ? {
+                ...entry,
+                answer: response.answer,
+                sources: response.sources,
+                usedKB: response.usedKB,
+                usedDocs: response.usedDocs,
+                toolsUsed: response.toolsUsed,
+              }
+            : entry
+        )
       );
-    } catch {
-      // Fallback to sync endpoint on streaming failure
-      try {
-        const response = await qaApi.askMeeting(meetingId, q.trim(), sessionId);
-        setQaHistory((prev) =>
-          prev.map((entry) =>
-            entry.id === entryId
-              ? {
-                  ...entry,
-                  answer: response.answer,
-                  sources: response.sources,
-                  usedKB: response.usedKB,
-                  usedDocs: response.usedDocs,
-                  toolsUsed: response.toolsUsed,
-                }
-              : entry
-          )
-        );
-      } catch (syncErr) {
-        setError(syncErr instanceof Error ? syncErr.message : 'Failed to get answer');
-        setQaHistory((prev) =>
-          prev.map((entry) =>
-            entry.id === entryId
-              ? { ...entry, answer: '죄송합니다. 답변을 생성하지 못했습니다. 다시 시도해주세요.' }
-              : entry
-          )
-        );
-      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to get answer');
+      setQaHistory((prev) =>
+        prev.map((entry) =>
+          entry.id === entryId
+            ? { ...entry, answer: '죄송합니다. 답변을 생성하지 못했습니다. 다시 시도해주세요.' }
+            : entry
+        )
+      );
     } finally {
       setIsAsking(false);
       inputRef.current?.focus();

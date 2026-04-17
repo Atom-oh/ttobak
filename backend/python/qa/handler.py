@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import base64
@@ -15,10 +16,11 @@ logger.setLevel(logging.INFO)
 # Environment variables
 TABLE_NAME = os.environ.get('TABLE_NAME', 'ttobak-main')
 KB_ID = os.environ.get('KB_ID', 'XGFBOMVSS8')
-BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'global.anthropic.claude-opus-4-6-v1')
-DETECT_MODEL_ID = os.environ.get('DETECT_MODEL_ID', 'global.anthropic.claude-haiku-4-5-20251001-v1:0')
+BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'global.anthropic.claude-sonnet-4-6-v1')
+DETECT_MODEL_ID = os.environ.get('DETECT_MODEL_ID', 'qwen.qwen3-32b-v1:0')
 
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = int(os.environ.get('MAX_TOOL_ROUNDS', '3'))
+KB_CACHE_TTL_SECONDS = int(os.environ.get('KB_CACHE_TTL_SECONDS', '600'))
 
 # AWS clients
 bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
@@ -27,6 +29,7 @@ s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
 BUCKET_NAME = os.environ.get('BUCKET_NAME', 'ttobak-assets')
+ORIGIN_VERIFY_SECRET = os.environ.get('ORIGIN_VERIFY_SECRET', '')
 
 
 def resolve_s3_ref(value):
@@ -45,7 +48,20 @@ def resolve_s3_ref(value):
 
 
 def lambda_handler(event, context):
-    """Main Lambda handler for API Gateway HTTP API v2.0 payload."""
+    """Main Lambda handler for API Gateway HTTP API v2.0 payload.
+
+    Also handles async streaming invocations from the WebSocket Lambda
+    (event shape: {"streamMode": "ask_live", "connectionId", "endpoint", ...}).
+    """
+    if event.get('streamMode') == 'ask_live':
+        return handle_ask_stream(event)
+
+    # Block direct API Gateway access — only allow requests through CloudFront
+    if ORIGIN_VERIFY_SECRET:
+        headers = event.get('headers', {})
+        if headers.get('x-origin-verify', '') != ORIGIN_VERIFY_SECRET:
+            return response(403, {'error': {'code': 'FORBIDDEN', 'message': 'direct access not allowed'}})
+
     http_method = event.get('requestContext', {}).get('http', {}).get('method', '')
     path = event.get('rawPath', '')
 
@@ -104,12 +120,59 @@ def extract_user_id(event):
         return None
 
 
+def _kb_cache_key(question, number_of_results, user_id=None):
+    """Build a deterministic cache key for a KB query."""
+    normalized = ' '.join(question.lower().split())
+    raw = f"{user_id or ''}|{normalized}|{number_of_results}"
+    digest = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+    return f"CACHE#KB#{digest}"
+
+
+def _kb_cache_get(question, number_of_results, user_id=None):
+    """Look up a cached KB retrieve() response. Returns list or None."""
+    if KB_CACHE_TTL_SECONDS <= 0:
+        return None
+    try:
+        result = table.get_item(Key={"PK": _kb_cache_key(question, number_of_results, user_id), "SK": "V1"})
+        item = result.get("Item")
+        if not item:
+            return None
+        if int(item.get("TTL", 0)) < int(time.time()):
+            return None
+        return json.loads(item["results"])
+    except Exception as e:
+        logger.warning(f"KB cache read failed: {e}")
+        return None
+
+
+def _kb_cache_put(question, number_of_results, results, user_id=None):
+    """Store KB retrieve() response with TTL."""
+    if KB_CACHE_TTL_SECONDS <= 0:
+        return
+    try:
+        table.put_item(Item={
+            "PK": _kb_cache_key(question, number_of_results, user_id),
+            "SK": "V1",
+            "results": json.dumps(results, ensure_ascii=False),
+            "TTL": int(time.time()) + KB_CACHE_TTL_SECONDS,
+        })
+    except Exception as e:
+        logger.warning(f"KB cache write failed: {e}")
+
+
 def retrieve_from_kb(question, number_of_results=5, user_id=None):
-    """Retrieve relevant documents from Bedrock Knowledge Base."""
+    """Retrieve relevant documents from Bedrock Knowledge Base, with short-lived DynamoDB cache."""
+    capped = min(number_of_results, 10)
+
+    cached = _kb_cache_get(question, capped, user_id)
+    if cached is not None:
+        logger.info(f"KB cache hit: query={question[:60]!r} n={capped}")
+        return cached
+
     try:
         retrieval_config = {
             'vectorSearchConfiguration': {
-                'numberOfResults': min(number_of_results, 10),
+                'numberOfResults': capped,
             }
         }
         # Filter by user's KB prefix to prevent cross-user document access
@@ -133,6 +196,7 @@ def retrieve_from_kb(question, number_of_results=5, user_id=None):
                 uri = item.get('location', {}).get('s3Location', {}).get('uri', '')
                 if text:
                     results.append({'text': text, 'uri': uri, 'score': score})
+        _kb_cache_put(question, capped, results, user_id)
         return results
     except Exception as e:
         logger.warning(f'KB retrieve failed: {e}')
@@ -405,3 +469,223 @@ def response(status_code, body):
         },
         'body': json.dumps(body, ensure_ascii=False),
     }
+
+
+# ---------------------------------------------------------------------------
+# Streaming (WebSocket) path — invoked async from the Go websocket Lambda.
+# Streams answer tokens back over WebSocket via PostToConnection.
+# ---------------------------------------------------------------------------
+
+
+def _apigw_client(endpoint):
+    """Build an ApiGatewayManagementApi client bound to a WebSocket endpoint."""
+    return boto3.client('apigatewaymanagementapi', endpoint_url=endpoint)
+
+
+def _post_ws(apigw, connection_id, payload):
+    """Post a JSON message to a WebSocket connection. Returns False if gone."""
+    try:
+        apigw.post_to_connection(
+            ConnectionId=connection_id,
+            Data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
+        )
+        return True
+    except apigw.exceptions.GoneException:
+        logger.info(f"WebSocket {connection_id} is gone; aborting stream")
+        return False
+    except Exception as e:
+        logger.warning(f"post_to_connection failed: {e}")
+        return False
+
+
+def handle_ask_stream(event):
+    """Handle a streaming ask invocation from the WebSocket Lambda.
+
+    Expected event:
+      {
+        "streamMode": "ask_live",
+        "connectionId": "...",
+        "endpoint": "https://<api>.execute-api.<region>.amazonaws.com/<stage>",
+        "question": "...",
+        "context": "... optional transcript ...",
+        "meetingId": "... optional ...",
+        "sessionId": "... optional ...",
+        "userId": "... from WebSocket authorizer ...",
+      }
+    """
+    connection_id = event.get('connectionId')
+    endpoint = event.get('endpoint')
+    question = (event.get('question') or '').strip()
+    transcript = event.get('context')
+    session_id = event.get('sessionId')
+    user_id = event.get('userId')
+
+    if not connection_id or not endpoint or not question:
+        logger.warning("ask_live invocation missing required fields")
+        return {'status': 'bad_request'}
+
+    apigw = _apigw_client(endpoint)
+
+    if not _post_ws(apigw, connection_id, {
+        'type': 'answer_start',
+        'sessionId': session_id,
+    }):
+        return {'status': 'gone'}
+
+    try:
+        messages = load_session(session_id, user_id=user_id)
+        user_content = question
+        if transcript:
+            user_content = f"[현재 미팅 트랜스크립트가 있습니다. search_transcript 도구로 검색할 수 있습니다.]\n\n{question}"
+        messages.append({"role": "user", "content": [{"text": user_content}]})
+
+        answer, tools_used, sources = agentic_converse_stream(
+            messages,
+            transcript=transcript,
+            session_id=session_id,
+            user_id=user_id,
+            apigw=apigw,
+            connection_id=connection_id,
+        )
+
+        _post_ws(apigw, connection_id, {
+            'type': 'answer_complete',
+            'sessionId': session_id,
+            'answer': answer,
+            'sources': sources,
+            'toolsUsed': list(set(tools_used)),
+            'usedKB': 'search_knowledge_base' in tools_used,
+            'usedDocs': 'search_aws_docs' in tools_used,
+        })
+    except Exception as e:
+        logger.error(f"handle_ask_stream failed: {e}", exc_info=True)
+        _post_ws(apigw, connection_id, {
+            'type': 'answer_error',
+            'sessionId': session_id,
+            'error': '답변 생성 중 오류가 발생했습니다.',
+        })
+        return {'status': 'error'}
+
+    return {'status': 'ok'}
+
+
+def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, connection_id):
+    """Agentic tool-use loop using ConverseStream. Streams text deltas to the WebSocket."""
+    context = {
+        "transcript": transcript or "",
+        "retrieve_from_kb": lambda q, n=5: retrieve_from_kb(q, n, user_id=user_id),
+    }
+    tools_used = []
+    sources = []
+    final_answer_parts = []
+
+    for _ in range(MAX_TOOL_ROUNDS):
+        try:
+            stream_resp = bedrock_runtime.converse_stream(
+                modelId=BEDROCK_MODEL_ID,
+                system=[{"text": SYSTEM_PROMPT}],
+                messages=messages,
+                toolConfig={"tools": TOOL_DEFINITIONS},
+                inferenceConfig={"maxTokens": 4096, "temperature": 0.3},
+            )
+        except Exception as e:
+            logger.error(f"Bedrock converse_stream failed: {e}", exc_info=True)
+            _post_ws(apigw, connection_id, {
+                'type': 'answer_delta',
+                'sessionId': session_id,
+                'text': '\n(응답 생성 중 오류)',
+            })
+            break
+
+        assembled_content = []
+        current_block = None
+        stop_reason = None
+        round_text = ''
+
+        for ev in stream_resp.get('stream', []):
+            if 'messageStart' in ev:
+                continue
+            if 'contentBlockStart' in ev:
+                start = ev['contentBlockStart'].get('start', {})
+                if 'toolUse' in start:
+                    current_block = {
+                        'toolUse': {
+                            'toolUseId': start['toolUse']['toolUseId'],
+                            'name': start['toolUse']['name'],
+                            'input': '',
+                        }
+                    }
+                else:
+                    current_block = {'text': ''}
+                continue
+            if 'contentBlockDelta' in ev:
+                delta = ev['contentBlockDelta'].get('delta', {})
+                if 'text' in delta and current_block is not None and 'text' in current_block:
+                    current_block['text'] += delta['text']
+                    round_text += delta['text']
+                    _post_ws(apigw, connection_id, {
+                        'type': 'answer_delta',
+                        'sessionId': session_id,
+                        'text': delta['text'],
+                    })
+                elif 'toolUse' in delta and current_block is not None and 'toolUse' in current_block:
+                    current_block['toolUse']['input'] += delta['toolUse'].get('input', '')
+                continue
+            if 'contentBlockStop' in ev:
+                if current_block is not None:
+                    if 'toolUse' in current_block:
+                        raw_input = current_block['toolUse']['input']
+                        try:
+                            current_block['toolUse']['input'] = json.loads(raw_input) if raw_input else {}
+                        except json.JSONDecodeError:
+                            logger.warning(f"Tool input JSON parse failed: {raw_input!r}")
+                            current_block['toolUse']['input'] = {}
+                    assembled_content.append(current_block)
+                    current_block = None
+                continue
+            if 'messageStop' in ev:
+                stop_reason = ev['messageStop'].get('stopReason')
+                continue
+            if 'metadata' in ev:
+                continue
+
+        messages.append({"role": "assistant", "content": assembled_content})
+        if round_text:
+            final_answer_parts.append(round_text)
+
+        if stop_reason == 'end_turn' or stop_reason is None:
+            break
+
+        if stop_reason == 'tool_use':
+            tool_results = []
+            for block in assembled_content:
+                if 'toolUse' not in block:
+                    continue
+                tool = block['toolUse']
+                logger.info(f"Tool call (stream): {tool['name']}")
+                try:
+                    result, result_sources = execute_tool(tool['name'], tool['input'], context)
+                except Exception as e:
+                    logger.warning(f"Tool execution failed ({tool['name']}): {e}")
+                    result = f"도구 실행 중 오류가 발생했습니다: {tool['name']}"
+                    result_sources = []
+                tools_used.append(tool['name'])
+                sources.extend(result_sources)
+                tool_results.append({
+                    'toolResult': {
+                        'toolUseId': tool['toolUseId'],
+                        'content': [{'text': result}],
+                    }
+                })
+            messages.append({'role': 'user', 'content': tool_results})
+
+    save_session(session_id, messages, user_id=user_id)
+
+    seen = set()
+    unique_sources = []
+    for s in sources:
+        if s and s not in seen:
+            seen.add(s)
+            unique_sources.append(s)
+
+    return '\n'.join(final_answer_parts), tools_used, unique_sources

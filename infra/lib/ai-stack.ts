@@ -18,6 +18,8 @@ export class AiStack extends cdk.Stack {
   public readonly processImageRole: iam.Role;
   public readonly kbRole: iam.Role;
   public readonly qaRole: iam.Role;
+  public readonly websocketRole: iam.Role;
+  public readonly wsAuthorizerRole: iam.Role;
   public readonly kmsKey: kms.Key;
   /** @deprecated Legacy shared role — kept for RealtimeStack backward compatibility */
   public readonly legacyRole: iam.Role;
@@ -287,6 +289,54 @@ export class AiStack extends cdk.Stack {
         resources: ['*'],
       })
     );
+
+    // ==================== WebSocket Role ====================
+    // Needs: Lambda basic execution, Lambda invoke (QA), execute-api:ManageConnections
+    this.websocketRole = createLambdaRole(
+      'TtobakWebsocketRole',
+      'ttobak-websocket-role',
+      'Role for ttobak-websocket Lambda function'
+    );
+
+    props.table.grantReadData(this.websocketRole);
+
+    this.websocketRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'InvokeQALambda',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:ttobak-qa`],
+      })
+    );
+
+    this.websocketRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'WebSocketManageConnections',
+        effect: iam.Effect.ALLOW,
+        actions: ['execute-api:ManageConnections'],
+        resources: ['*'],
+      })
+    );
+
+    // ==================== WS Authorizer Role ====================
+    // Needs: Lambda basic execution only (JWT verification is pure crypto)
+    this.wsAuthorizerRole = createLambdaRole(
+      'TtobakWsAuthorizerRole',
+      'ttobak-ws-authorizer-role',
+      'Role for ttobak-ws-authorizer Lambda function'
+    );
+
+    // QA role also needs ManageConnections for streaming answers back to WebSocket
+    this.qaRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'WebSocketManageConnections',
+        effect: iam.Effect.ALLOW,
+        actions: ['execute-api:ManageConnections'],
+        resources: ['*'],
+      })
+    );
+
+    // QA role needs converse_stream (already covered by InvokeModel + InvokeModelWithResponseStream)
 
     // Legacy outputs (retained for RealtimeStack compatibility)
     new cdk.CfnOutput(this, 'LambdaRoleArn', {

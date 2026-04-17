@@ -209,76 +209,6 @@ interface QAResponse {
   toolsUsed?: string[];
 }
 
-interface QAStreamMeta {
-  sources?: string[];
-  usedKB?: boolean;
-  usedDocs?: boolean;
-  toolsUsed?: string[];
-}
-
-/** Parse SSE stream from /api/qa/stream/* endpoints. Calls onChunk for text deltas,
- *  onMeta for metadata, and resolves when the stream ends.
- *  Falls back to the sync endpoint on streaming failure. */
-async function streamSSE(
-  endpoint: string,
-  body: Record<string, unknown>,
-  onChunk: (text: string) => void,
-  onMeta: (meta: QAStreamMeta) => void,
-): Promise<void> {
-  const authHeaders = await getAuthHeaders();
-  const url = `${API_BASE_URL}${endpoint}`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok || !response.body) {
-    throw new Error(`Stream request failed: ${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    // Process complete SSE lines (terminated by \n\n)
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop() || '';
-
-    for (const part of parts) {
-      for (const line of part.split('\n')) {
-        if (!line.startsWith('data: ')) continue;
-        try {
-          const event = JSON.parse(line.slice(6));
-          if (event.type === 'chunk' && event.text) {
-            onChunk(event.text);
-          } else if (event.type === 'meta') {
-            onMeta({
-              sources: event.sources,
-              usedKB: event.usedKB,
-              usedDocs: event.usedDocs,
-              toolsUsed: event.toolsUsed,
-            });
-          } else if (event.type === 'error') {
-            throw new Error(event.text || 'Stream error');
-          }
-          // type === 'done' — stream will end naturally
-        } catch (e) {
-          if (e instanceof SyntaxError) continue; // ignore malformed JSON
-          throw e;
-        }
-      }
-    }
-  }
-}
-
 export const qaApi = {
   ask: (question: string, context?: string, sessionId?: string) =>
     api.post<QAResponse>(
@@ -291,38 +221,6 @@ export const qaApi = {
       `/api/qa/meeting/${meetingId}`,
       { question, sessionId }
     ),
-
-  /** Stream a meeting Q&A answer via SSE. Falls back to sync on failure. */
-  streamAskMeeting: async (
-    meetingId: string,
-    question: string,
-    sessionId: string,
-    onChunk: (text: string) => void,
-    onMeta: (meta: QAStreamMeta) => void,
-  ): Promise<void> => {
-    await streamSSE(
-      `/api/qa/stream/meeting/${meetingId}`,
-      { question, sessionId },
-      onChunk,
-      onMeta,
-    );
-  },
-
-  /** Stream a general Q&A answer via SSE. Falls back to sync on failure. */
-  streamAsk: async (
-    question: string,
-    context: string | undefined,
-    sessionId: string,
-    onChunk: (text: string) => void,
-    onMeta: (meta: QAStreamMeta) => void,
-  ): Promise<void> => {
-    await streamSSE(
-      '/api/qa/stream/ask',
-      { question, context, sessionId },
-      onChunk,
-      onMeta,
-    );
-  },
 
   detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string) =>
     api.post<{ questions: string[] }>(
