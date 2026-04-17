@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useRef, useEffect, useCallback, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { RecordButton } from '@/components/RecordButton';
@@ -18,11 +18,22 @@ import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
 import { usePostRecording } from '@/hooks/usePostRecording';
-import { uploadsApi, kbApi } from '@/lib/api';
+import { uploadsApi, meetingsApi, kbApi } from '@/lib/api';
+import { uploadFile } from '@/lib/upload';
 import type { LiveSttProvider } from '@/lib/sttManager';
 
 export default function RecordPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" /></div>}>
+      <RecordPageInner />
+    </Suspense>
+  );
+}
+
+function RecordPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const isUploadMode = searchParams.get('mode') === 'upload';
   const { isAuthenticated, isLoading } = useAuth();
   const { devices, selectedDeviceId, selectDevice, refreshDevices } = useAudioDevices();
 
@@ -43,6 +54,10 @@ export default function RecordPage() {
 
   // Client-side meeting ID (stable across re-renders)
   const [clientMeetingIdBase] = useState(() => `meeting_${Date.now()}`);
+
+  // Upload mode state
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
 
   // Mobile Q&A bottom sheet state
   const [isQAOpen, setIsQAOpen] = useState(false);
@@ -207,6 +222,32 @@ export default function RecordPage() {
     session.setSpeechError(null);
   };
 
+  const handleAudioUpload = async (file: File) => {
+    if (!file.type.startsWith('audio/')) {
+      session.setSpeechError('음성 파일만 업로드할 수 있습니다.');
+      return;
+    }
+    setUploadProgress('미팅 생성 중...');
+    try {
+      const title = meetingTitle || file.name.replace(/\.[^.]+$/, '');
+      const meeting = await meetingsApi.create({ title, sttProvider });
+      const meetingId = meeting.meetingId;
+
+      setUploadProgress('음성 파일 업로드 중...');
+      await uploadFile(file, (p) => {
+        setUploadProgress(`업로드 중... ${p.percentage}%`);
+      }, meetingId);
+
+      setUploadProgress('전사 처리 시작...');
+      // EventBridge auto-triggers ttobak-transcribe → ttobak-summarize
+      router.push(`/meeting/${meetingId}`);
+    } catch (err) {
+      console.error('Audio upload failed:', err);
+      setUploadProgress(null);
+      session.setSpeechError(err instanceof Error ? err.message : '업로드에 실패했습니다.');
+    }
+  };
+
   return (
     <AppLayout activePath="/record" showMobileNav={true} isRecording={session.isRecording} breadcrumbs={[{ label: 'Recording' }, { label: meetingTitle || 'New Meeting' }]}>
       {/* Header */}
@@ -271,8 +312,64 @@ export default function RecordPage() {
       {/* Main Content */}
       <div className="flex flex-1 min-h-0">
       <main className="flex-1 flex flex-col px-6 lg:px-8 pt-8 lg:pt-8 pb-32 lg:pb-8 overflow-y-auto">
-        {/* Config Controls — visible only when idle */}
-        {!postRecording.step && !session.isRecording && (
+        {/* Upload Mode — audio file upload flow */}
+        {isUploadMode && !postRecording.step && !session.isRecording && (
+          <div className="flex flex-col items-center gap-6 py-8">
+            <div className="hidden lg:block mb-2">
+              <span className="hidden dark:block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8B8D98] text-center mb-2">Upload</span>
+              <input
+                type="text"
+                value={meetingTitle}
+                onChange={(e) => setMeetingTitle(e.target.value)}
+                placeholder="Meeting Title"
+                className="text-2xl font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-slate-900 dark:text-gray-100 dark:font-[var(--font-headline)] placeholder:text-slate-400 w-full"
+              />
+            </div>
+            <SttProviderSelector
+              sttProvider={sttProvider}
+              onSttProviderChange={setSttProvider}
+              isRecording={false}
+            />
+            {uploadProgress ? (
+              <div className="flex flex-col items-center gap-3 py-8">
+                <div className="animate-spin rounded-full h-10 w-10 border-2 border-primary border-t-transparent" />
+                <p className="text-sm font-medium text-slate-600 dark:text-slate-300">{uploadProgress}</p>
+              </div>
+            ) : (
+              <>
+                <input
+                  ref={audioInputRef}
+                  type="file"
+                  accept="audio/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleAudioUpload(file);
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  onClick={() => audioInputRef.current?.click()}
+                  className="w-full max-w-md border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-primary/40 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded-xl p-10 text-center transition-all cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-5xl text-slate-400 mb-3 block">audio_file</span>
+                  <p className="text-slate-600 dark:text-slate-400 font-medium">음성 파일을 선택하세요</p>
+                  <p className="text-slate-400 text-sm mt-1">MP3, WAV, M4A, WebM 등</p>
+                </button>
+                <button
+                  onClick={() => router.push('/record')}
+                  className="text-sm text-slate-500 hover:text-primary transition-colors flex items-center gap-1"
+                >
+                  <span className="material-symbols-outlined text-base">mic</span>
+                  실시간 녹음으로 전환
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Config Controls — visible only when idle (record mode) */}
+        {!isUploadMode && !postRecording.step && !session.isRecording && (
           <div className="flex flex-col items-center gap-3">
             {/* Desktop: editable title */}
             <div className="hidden lg:block mb-4">
@@ -316,8 +413,8 @@ export default function RecordPage() {
           </div>
         )}
 
-        {/* Recording Section */}
-        <div className="flex flex-col items-center justify-center mb-8">
+        {/* Recording Section — hidden in upload mode */}
+        {!isUploadMode && <div className="flex flex-col items-center justify-center mb-8">
           <RecordButton
             meetingId={clientMeetingId}
             meetingTitle={meetingTitle || 'Untitled Meeting'}
@@ -343,12 +440,7 @@ export default function RecordPage() {
             onAnalyserReady={setAnalyserNode}
             onCheckpoint={handleCheckpoint}
           />
-        </div>
-        {!session.isRecording && !postRecording.step && (
-          <p className="text-center text-sm text-slate-400 dark:text-slate-500 -mt-4 mb-4">
-            Tap the microphone to start recording
-          </p>
-        )}
+        </div>}
 
         {/* Desktop: Live Transcript in main content (centered) during recording */}
         {session.isRecording && (
@@ -401,8 +493,8 @@ export default function RecordPage() {
           </div>
         )}
 
-        {/* Unified File Attachments — shown in both idle and recording states */}
-        {!postRecording.step && (
+        {/* File Attachments — shown during recording only */}
+        {!postRecording.step && session.isRecording && (
           <section className="mt-8">
             <div className="flex items-center justify-between mb-4 px-1">
               <h3 className="font-bold text-slate-800 dark:text-slate-200">첨부 파일</h3>

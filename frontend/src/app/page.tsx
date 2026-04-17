@@ -86,6 +86,7 @@ export default function HomePage() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [isFetching, setIsFetching] = useState(true);
   const [activeTab, setActiveTab] = useState('all');
+  const [showNewMenu, setShowNewMenu] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const fetchInProgressRef = useRef(false);
 
@@ -269,12 +270,55 @@ export default function HomePage() {
       </div>
 
       {/* Mobile FAB */}
-      <Link
-        href="/record"
+      <button
+        onClick={() => setShowNewMenu(true)}
         className="lg:hidden fixed bottom-24 right-6 size-14 bg-primary text-white rounded-full shadow-lg flex items-center justify-center hover:scale-105 active:scale-95 transition-transform z-20"
       >
         <span className="material-symbols-outlined text-[28px]">add</span>
-      </Link>
+      </button>
+
+      {/* New Meeting Bottom Sheet */}
+      {showNewMenu && (
+        <div className="lg:hidden fixed inset-0 z-40">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setShowNewMenu(false)} />
+          <div className="absolute bottom-0 left-0 right-0 bg-white dark:bg-slate-900 rounded-t-2xl shadow-2xl animate-slide-up pb-safe">
+            <button onClick={() => setShowNewMenu(false)} className="flex justify-center w-full pt-3 pb-2">
+              <div className="w-10 h-1 rounded-full bg-slate-300 dark:bg-slate-600" />
+            </button>
+            <div className="px-6 pb-2">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">새 미팅</h3>
+            </div>
+            <div className="px-4 pb-8 flex flex-col gap-2">
+              <Link
+                href="/record"
+                onClick={() => setShowNewMenu(false)}
+                className="flex items-center gap-4 px-4 py-4 rounded-xl hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
+              >
+                <div className="size-12 rounded-full bg-primary/10 flex items-center justify-center">
+                  <span className="material-symbols-outlined text-primary text-2xl">mic</span>
+                </div>
+                <div>
+                  <p className="font-semibold text-slate-900 dark:text-white">실시간 녹음</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">마이크로 회의를 녹음하고 실시간 전사</p>
+                </div>
+              </Link>
+              <Link
+                href="/record?mode=upload"
+                onClick={() => setShowNewMenu(false)}
+                className="flex items-center gap-4 px-4 py-4 rounded-xl hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
+              >
+                <div className="size-12 rounded-full bg-violet-500/10 flex items-center justify-center">
+                  <span className="material-symbols-outlined text-violet-500 text-2xl">upload_file</span>
+                </div>
+                <div>
+                  <p className="font-semibold text-slate-900 dark:text-white">음성 파일 업로드</p>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">녹음된 음성 파일을 업로드하여 전사</p>
+                </div>
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
     </AppLayout>
   );
 }
