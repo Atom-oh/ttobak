@@ -8,6 +8,7 @@ const mainNav = [
   { href: '/', icon: 'video_camera_front', label: 'Meetings' },
   { href: '/files', icon: 'description', label: 'Files' },
   { href: '/kb', icon: 'library_books', label: 'Knowledge Base' },
+  { href: '/insights', icon: 'insights', label: 'Insights' },
   { href: '/settings', icon: 'settings', label: 'Settings' },
 ];
 

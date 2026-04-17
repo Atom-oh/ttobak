@@ -2,6 +2,7 @@
 
 import { getIdToken, refreshSession } from './auth';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -270,5 +271,45 @@ export const summaryApi = {
       `/api/meetings/${meetingId}/summarize`,
       { transcript, previousSummary }
     ),
+};
+
+// Crawler API
+export const crawlerApi = {
+  listSources: () =>
+    api.get<{ sources: CrawlerSourceResponse[] }>('/api/crawler/sources'),
+  addSource: (data: {
+    sourceName: string;
+    awsServices: string[];
+    newsSources: string[];
+    customUrls?: string[];
+    newsQueries?: string[];
+  }) => api.post<CrawlerSourceResponse>('/api/crawler/sources', data),
+  updateSource: (sourceId: string, data: {
+    awsServices: string[];
+    newsSources: string[];
+    customUrls?: string[];
+  }) => api.put<{ status: string }>(`/api/crawler/sources/${sourceId}`, data),
+  unsubscribe: (sourceId: string) =>
+    api.delete(`/api/crawler/sources/${sourceId}`),
+  getHistory: (sourceId: string) =>
+    api.get<{ history: CrawlHistory[] }>(`/api/crawler/sources/${sourceId}/history`),
+};
+
+// Insights API
+export const insightsApi = {
+  list: (params: { type: string; source?: string; service?: string; page?: number; limit?: number }) => {
+    const q = new URLSearchParams();
+    q.set('type', params.type);
+    if (params.source) q.set('source', params.source);
+    if (params.service) q.set('service', params.service);
+    q.set('page', String(params.page || 1));
+    q.set('limit', String(params.limit || 20));
+    return api.get<{
+      documents: CrawledDocument[];
+      totalCount: number;
+      page: number;
+      limit: number;
+    }>(`/api/insights?${q.toString()}`);
+  },
 };
 
