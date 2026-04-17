@@ -180,12 +180,13 @@ export interface CrawledDocument {
   type: 'news' | 'tech';
   title: string;
   url: string;
-  source: string;
-  summary: string;
+  source?: string;
+  summary?: string;
   awsServices?: string[];
-  s3Key: string;
-  crawledAt: string;
-  inKB: boolean;
+  s3Key?: string;
+  crawledAt: number | string;
+  inKB?: boolean;
+  pubDate?: string;
 }
 
 export interface CrawlHistory {

@@ -6,9 +6,13 @@ import type { CrawledDocument } from '@/types/meeting';
 
 type TabType = 'news' | 'tech';
 
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString('en-US', {
+function formatDate(value: string | number): string {
+  if (!value) return '';
+  const date = typeof value === 'number'
+    ? new Date(value > 1e12 ? value : value * 1000)
+    : new Date(value);
+  if (isNaN(date.getTime())) return String(value).slice(0, 20);
+  return date.toLocaleDateString('ko-KR', {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
@@ -178,9 +182,9 @@ export function InsightsList() {
         </div>
       ) : (
         <div className="space-y-4">
-          {documents.map((doc) => (
+          {documents.map((doc, idx) => (
             <div
-              key={doc.docHash}
+              key={doc.docHash || doc.url || String(idx)}
               className="glass-panel rounded-xl p-5 transition-shadow hover:shadow-lg dark:hover:shadow-[0_0_20px_rgba(0,229,255,0.06)]"
             >
               {/* Title */}
@@ -190,12 +194,14 @@ export function InsightsList() {
 
               {/* Meta row: source, date, tags */}
               <div className="flex flex-wrap items-center gap-2 mt-2">
-                <span className="text-xs text-slate-500 dark:text-[#849396]">
-                  {doc.source}
-                </span>
+                {(doc.source || doc.type) && (
+                  <span className="text-xs text-slate-500 dark:text-[#849396]">
+                    {doc.source || (doc.type === 'news' ? 'News' : 'AWS Docs')}
+                  </span>
+                )}
                 <span className="text-xs text-slate-300 dark:text-[#849396]/40">|</span>
                 <span className="text-xs text-slate-500 dark:text-[#849396]">
-                  {formatDate(doc.crawledAt)}
+                  {formatDate(doc.pubDate || doc.crawledAt)}
                 </span>
                 {doc.awsServices && doc.awsServices.length > 0 && (
                   <>
@@ -218,9 +224,11 @@ export function InsightsList() {
               </div>
 
               {/* Summary */}
-              <p className="text-sm text-slate-600 dark:text-[#bac9cc] mt-3 line-clamp-3 leading-relaxed">
-                {doc.summary}
-              </p>
+              {(doc.summary || doc.title) && (
+                <p className="text-sm text-slate-600 dark:text-[#bac9cc] mt-3 line-clamp-3 leading-relaxed">
+                  {doc.summary || doc.title}
+                </p>
+              )}
 
               {/* Footer: KB status + Open button */}
               <div className="flex items-center justify-between mt-4">

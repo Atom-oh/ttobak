@@ -265,6 +265,9 @@ func (r *CrawlerRepository) ListDocuments(ctx context.Context, sourceID, docType
 	docs := make([]model.CrawledDocument, len(items))
 	for i, item := range items {
 		docs[i] = item.CrawledDocument
+		if docs[i].DocHash == "" && strings.HasPrefix(item.SK, model.PrefixDoc) {
+			docs[i].DocHash = strings.TrimPrefix(item.SK, model.PrefixDoc)
+		}
 	}
 
 	return docs, result.LastEvaluatedKey, len(docs), nil
@@ -315,7 +318,11 @@ func (r *CrawlerRepository) ListAllDocumentsByType(ctx context.Context, docType 
 		}
 
 		for _, item := range items {
-			allDocs = append(allDocs, item.CrawledDocument)
+			doc := item.CrawledDocument
+			if doc.DocHash == "" && strings.HasPrefix(item.SK, model.PrefixDoc) {
+				doc.DocHash = strings.TrimPrefix(item.SK, model.PrefixDoc)
+			}
+			allDocs = append(allDocs, doc)
 		}
 
 		lastKey = result.LastEvaluatedKey

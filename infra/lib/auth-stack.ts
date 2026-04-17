@@ -84,10 +84,22 @@ export class AuthStack extends cdk.Stack {
       },
     });
 
-    // Public SPA client (no secret — safe for browser-based auth)
+    // Public SPA client (no secret — safe for browser-based auth + MCP OAuth PKCE)
     this.spaClient = this.userPool.addClient('TtobakSpaClient', {
       userPoolClientName: 'ttobak-spa-client',
       generateSecret: false,
+      oAuth: {
+        flows: {
+          authorizationCodeGrant: true,
+        },
+        scopes: [
+          cognito.OAuthScope.EMAIL,
+          cognito.OAuthScope.OPENID,
+          cognito.OAuthScope.PROFILE,
+        ],
+        callbackUrls: ['http://localhost:9876/callback'],
+        logoutUrls: ['http://localhost:9876'],
+      },
       authFlows: {
         userPassword: true,
         userSrp: true,
