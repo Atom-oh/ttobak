@@ -19,7 +19,7 @@ import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
 import { usePostRecording } from '@/hooks/usePostRecording';
 import { uploadsApi, meetingsApi, kbApi } from '@/lib/api';
-import { uploadFile } from '@/lib/upload';
+import { uploadFile, uploadToS3, notifyUploadComplete } from '@/lib/upload';
 import type { LiveSttProvider } from '@/lib/sttManager';
 
 export default function RecordPage() {
@@ -237,12 +237,16 @@ function RecordPageInner() {
       const meetingId = meeting.meetingId;
 
       setUploadProgress('음성 파일 업로드 중...');
-      await uploadFile(file, (p) => {
+      const { key } = await uploadToS3(file, 'audio', (p) => {
         setUploadProgress(`업로드 중... ${p.percentage}%`);
       }, meetingId);
 
       setUploadProgress('전사 처리 시작...');
-      // EventBridge auto-triggers ttobak-transcribe → ttobak-summarize
+      await notifyUploadComplete(meetingId, key, 'audio', {
+        fileName: file.name,
+        fileSize: file.size,
+        mimeType: file.type || 'audio/mp4',
+      });
       router.push(`/meeting/${meetingId}`);
     } catch (err) {
       console.error('Audio upload failed:', err);
