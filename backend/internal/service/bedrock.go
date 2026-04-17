@@ -446,42 +446,34 @@ func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID strin
 		return "", fmt.Errorf("meeting not found: %s", meetingID)
 	}
 
-	// Use the selected transcript, or default to A, or B if A not available
-	transcript := meeting.TranscriptA
-	if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-	} else if transcript == "" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
+	// Prefer summary (content) as input — it's structured and contains action items already identified.
+	// Fall back to transcript if summary isn't available yet.
+	source := meeting.Content
+	if source == "" {
+		source = meeting.TranscriptA
+		if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
+			source = meeting.TranscriptB
+		} else if source == "" && meeting.TranscriptB != "" {
+			source = meeting.TranscriptB
+		}
 	}
-	if transcript == "" {
-		return "[]", nil // No transcript, return empty array
+	if source == "" {
+		return "[]", nil
 	}
 
-	systemPrompt := `회의 트랜스크립트에서 액션 아이템(해야 할 일)을 추출하세요.
+	systemPrompt := `회의 요약 또는 트랜스크립트에서 액션 아이템(해야 할 일, 후속 조치)을 추출하세요.
 각 액션 아이템에 대해 아래를 식별하세요:
 - text: 할 일 설명 (한국어로 작성, 필수)
-- assignee: 담당자 (화자 라벨 예: "spk_0", "spk_1")
+- assignee: 담당자 (이름 또는 화자 라벨)
 - priority: high, medium, low (중요도/긴급도 기준)
 - dueDate: 명시적으로 언급된 경우만 (ISO 형식 YYYY-MM-DD)
 
+"~하기로 했다", "~할 예정", "~를 준비", "팔로업", "확인 필요" 등의 표현에서 액션을 추출하세요.
 유효한 JSON 배열만 반환하세요. 액션 아이템이 없으면 []를 반환하세요.
 예시:
-[{"text":"보고서 작성 완료","assignee":"spk_0","priority":"high","completed":false}]`
+[{"text":"PoC 환경 구축 제안서 준비","assignee":"이윤경","priority":"high","completed":false}]`
 
-	// Build prompt with speaker segments if available
-	userPrompt := fmt.Sprintf("Extract action items from this meeting transcript:\n\n%s", transcript)
-
-	if meeting.TranscriptSegments != "" {
-		var segments []speakerSegment
-		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
-			var sb strings.Builder
-			sb.WriteString("Extract action items from this speaker-labeled meeting transcript:\n\n")
-			for _, seg := range segments {
-				sb.WriteString(fmt.Sprintf("[%s] %s\n", seg.Speaker, seg.Text))
-			}
-			userPrompt = sb.String()
-		}
-	}
+	userPrompt := fmt.Sprintf("다음 회의 내용에서 액션 아이템을 추출하세요:\n\n%s", source)
 
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
