@@ -7,6 +7,7 @@ import { GatewayStack } from '../lib/gateway-stack';
 import { EdgeAuthStack } from '../lib/edge-auth-stack';
 import { KnowledgeStack } from '../lib/knowledge-stack';
 import { FrontendStack } from '../lib/frontend-stack';
+import { CrawlerStack } from '../lib/crawler-stack';
 
 const app = new cdk.App();
 
@@ -95,7 +96,21 @@ gatewayStack.addDependency(storageStack);
 gatewayStack.addDependency(aiStack);
 gatewayStack.addDependency(knowledgeStack);
 
-// Stack 7: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth
+// Stack 7.5: Crawler (Step Functions + Lambda) - depends on AI, Storage, Knowledge
+const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {
+  env,
+  description: 'Ttobak AI Meeting Assistant - Crawler (Step Functions + Lambda)',
+  crawlerRole: aiStack.crawlerRole,
+  table: storageStack.table,
+  kbBucket: knowledgeStack.kbBucket,
+  knowledgeBaseId: knowledgeStack.knowledgeBaseId,
+  dataSourceId: knowledgeStack.dataSourceId,
+});
+crawlerStack.addDependency(aiStack);
+crawlerStack.addDependency(storageStack);
+crawlerStack.addDependency(knowledgeStack);
+
+// Stack 8: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth
 const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   env,
   crossRegionReferences: true,
