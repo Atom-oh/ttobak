@@ -177,7 +177,7 @@ export function useRecordingSession({
       : 'web-speech';
 
     setActiveProvider(preferredProvider);
-    manager.start(stream, preferredProvider, 'ko-KR');
+    manager.start(stream, preferredProvider);
   }, [translationEnabled, liveSttProvider, onProviderChange]);
 
   const pauseSession = useCallback(() => {
