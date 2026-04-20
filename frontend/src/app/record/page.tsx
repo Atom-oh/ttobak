@@ -14,6 +14,7 @@ import { LiveSummary } from '@/components/LiveSummary';
 import { LiveQAPanel } from '@/components/LiveQAPanel';
 import { RecordingConfig, SttProviderSelector, LiveSttSelector } from '@/components/record/RecordingConfig';
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
+import { supportsTabAudioCapture } from '@/lib/device';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
@@ -45,6 +46,8 @@ function RecordPageInner() {
   const [targetLang, setTargetLang] = useState('en');
   const [attachments, setAttachments] = useState<{ name: string; url: string; s3Key?: string; mimeType?: string; status?: 'uploading' | 'complete' | 'error'; kbStatus?: 'idle' | 'copying' | 'done' | 'error' }[]>([]);
   const [liveSttProvider, setLiveSttProvider] = useState<LiveSttProvider>('web-speech');
+  const [audioSource, setAudioSource] = useState<'mic' | 'tab'>('mic');
+  const [tabSharingLabel, setTabSharingLabel] = useState<string | null>(null);
 
   // Analyser nodes for MicSelector level meter
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
@@ -88,6 +91,7 @@ function RecordPageInner() {
   // Mic preview: create AudioContext + AnalyserNode when device changes (not recording)
   useEffect(() => {
     if (session.isRecording) return;
+    if (audioSource !== 'mic') return;
 
     const cleanupPreview = () => {
       previewStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -120,7 +124,7 @@ function RecordPageInner() {
     })();
 
     return () => { cancelled = true; cleanupPreview(); };
-  }, [selectedDeviceId, session.isRecording]);
+  }, [selectedDeviceId, session.isRecording, audioSource]);
 
   // --- Early returns ---
   if (isLoading) {
@@ -134,6 +138,10 @@ function RecordPageInner() {
 
   // --- Handlers ---
   const handleRecordingStart = async (stream: MediaStream) => {
+    if (audioSource === 'tab') {
+      const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
+      setTabSharingLabel(label);
+    }
     summary.reset();
     // Create draft meeting immediately for crash recovery
     await postRecording.createDraftMeeting();
@@ -220,6 +228,7 @@ function RecordPageInner() {
   const handleRetry = () => {
     postRecording.handleRetry();
     session.setSpeechError(null);
+    setTabSharingLabel(null);
   };
 
   const handleAudioUpload = async (file: File) => {
@@ -389,13 +398,52 @@ function RecordPageInner() {
                 className="text-2xl font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-slate-900 dark:text-gray-100 dark:font-[var(--font-headline)] placeholder:text-slate-400 w-full"
               />
             </div>
-            <MicSelector
-              devices={devices}
-              selectedDeviceId={selectedDeviceId}
-              onSelect={selectDevice}
-              disabled={session.isRecording}
-              analyser={session.isRecording ? analyserNode : previewAnalyser}
-            />
+            {supportsTabAudioCapture() && (
+              <div className="flex flex-col items-center gap-2 w-full max-w-xs">
+                <span className="text-xs font-semibold text-slate-500 dark:text-[#849396] uppercase tracking-wide">
+                  Audio Source
+                </span>
+                <div className="flex rounded-lg border border-slate-200 dark:border-white/10 overflow-hidden w-full">
+                  <button
+                    onClick={() => setAudioSource('mic')}
+                    className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold transition-colors ${
+                      audioSource === 'mic'
+                        ? 'bg-primary text-white dark:text-[#09090E]'
+                        : 'text-slate-600 dark:text-[#849396] hover:bg-slate-50 dark:hover:bg-white/5'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-base">mic</span>
+                    Mic
+                  </button>
+                  <button
+                    onClick={() => setAudioSource('tab')}
+                    className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold transition-colors ${
+                      audioSource === 'tab'
+                        ? 'bg-primary text-white dark:text-[#09090E]'
+                        : 'text-slate-600 dark:text-[#849396] hover:bg-slate-50 dark:hover:bg-white/5'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-base">tab</span>
+                    Tab Audio
+                  </button>
+                </div>
+              </div>
+            )}
+            {audioSource === 'mic' && (
+              <MicSelector
+                devices={devices}
+                selectedDeviceId={selectedDeviceId}
+                onSelect={selectDevice}
+                disabled={session.isRecording}
+                analyser={session.isRecording ? analyserNode : previewAnalyser}
+              />
+            )}
+            {audioSource === 'tab' && !session.isRecording && (
+              <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-500/20 rounded-lg text-sm text-blue-700 dark:text-blue-300">
+                <span className="material-symbols-outlined text-base">info</span>
+                Record 버튼을 누르면 공유할 탭을 선택할 수 있습니다
+              </div>
+            )}
             <SttProviderSelector
               sttProvider={sttProvider}
               onSttProviderChange={setSttProvider}
@@ -420,12 +468,21 @@ function RecordPageInner() {
           </div>
         )}
 
+        {/* Tab sharing status during recording */}
+        {audioSource === 'tab' && session.isRecording && tabSharingLabel && (
+          <div className="flex items-center gap-2 px-4 py-2 bg-green-50 dark:bg-green-900/10 border border-green-200 dark:border-green-500/20 rounded-lg text-sm text-green-700 dark:text-green-300 mb-4">
+            <span className="material-symbols-outlined text-base">volume_up</span>
+            Sharing: {tabSharingLabel}
+          </div>
+        )}
+
         {/* Recording Section — hidden in upload mode */}
         {!isUploadMode && <div className="flex flex-col items-center justify-center mb-8">
           <RecordButton
             meetingId={clientMeetingId}
             meetingTitle={meetingTitle || 'Untitled Meeting'}
-            deviceId={selectedDeviceId || undefined}
+            audioSource={audioSource}
+            deviceId={audioSource === 'mic' ? (selectedDeviceId || undefined) : undefined}
             onRecordingComplete={postRecording.handleRecordingComplete}
             onBlobReady={postRecording.handleBlobReady}
             onError={(error) => {
@@ -441,7 +498,7 @@ function RecordPageInner() {
             onRecordingStart={handleRecordingStart}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
-            onRecordingStop={session.stopSession}
+            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); }}
             onPermissionGranted={refreshDevices}
             onCaptureImage={handleFileAttach}
             onAnalyserReady={setAnalyserNode}
