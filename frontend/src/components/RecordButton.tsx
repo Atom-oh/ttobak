@@ -91,6 +91,22 @@ export function RecordButton({
     }
   }, [onAnalyserReady]);
 
+  // Save checkpoint immediately when tab becomes hidden (lid close, tab switch)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden && isRecordingRef.current && onCheckpoint) {
+        const allChunks = chunksRef.current.slice(0);
+        if (allChunks.length > 0) {
+          const mimeType = mediaRecorderRef.current?.mimeType || getPreferredMimeType();
+          const blob = new Blob(allChunks, { type: mimeType });
+          onCheckpoint(blob, mimeType);
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [onCheckpoint]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -214,15 +230,19 @@ export function RecordButton({
         setElapsedTime((prev) => prev + 1);
       }, 1000);
 
-      // Audio checkpoint every 60s — cumulative (all chunks from start) for crash recovery
+      // Audio checkpoint: first at 10s, then every 60s — crash recovery
       if (onCheckpoint) {
-        checkpointTimerRef.current = setInterval(() => {
+        const doCheckpoint = () => {
           const allChunks = chunksRef.current.slice(0);
           if (allChunks.length > 0) {
-            const checkpointBlob = new Blob(allChunks, { type: mimeType });
-            onCheckpoint(checkpointBlob, mimeType);
+            onCheckpoint(new Blob(allChunks, { type: mimeType }), mimeType);
           }
-        }, 60000);
+        };
+        const firstTimer = setTimeout(() => {
+          doCheckpoint();
+          checkpointTimerRef.current = setInterval(doCheckpoint, 60000);
+        }, 10000);
+        checkpointTimerRef.current = firstTimer as unknown as NodeJS.Timeout;
       }
     } catch (err) {
       // Clean up partially acquired resources on failure
