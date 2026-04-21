@@ -176,17 +176,34 @@ export function IntegrationSettings() {
                   </button>
                 </div>
               </div>
-              <p className="mt-2 text-xs text-slate-500">
-                Create an integration at{' '}
-                <a
-                  href="https://www.notion.so/my-integrations"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  notion.so/my-integrations
-                </a>
-              </p>
+              <details className="mt-3 group">
+                <summary className="flex items-center gap-1.5 text-xs font-semibold text-primary dark:text-[#00E5FF] cursor-pointer hover:underline">
+                  <span className="material-symbols-outlined text-sm transition-transform group-open:rotate-90">chevron_right</span>
+                  API Key 발급 방법
+                </summary>
+                <div className="mt-3 space-y-3 text-xs text-slate-600 dark:text-[#bac9cc] bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 rounded-lg p-4">
+                  <div className="flex items-start gap-2">
+                    <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 dark:bg-[#00E5FF]/10 flex items-center justify-center text-[10px] font-bold text-primary dark:text-[#00E5FF]">1</span>
+                    <span><a href="https://www.notion.so/my-integrations" target="_blank" rel="noopener noreferrer" className="text-primary dark:text-[#00E5FF] font-semibold hover:underline">notion.so/my-integrations</a> 접속</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 dark:bg-[#00E5FF]/10 flex items-center justify-center text-[10px] font-bold text-primary dark:text-[#00E5FF]">2</span>
+                    <span><strong>&quot;New integration&quot;</strong> 클릭 → 이름 입력 (예: Ttobak) → 워크스페이스 선택</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 dark:bg-[#00E5FF]/10 flex items-center justify-center text-[10px] font-bold text-primary dark:text-[#00E5FF]">3</span>
+                    <span><strong>&quot;Internal Integration Token&quot;</strong> 복사 (<code className="bg-slate-200 dark:bg-white/10 px-1 py-0.5 rounded text-[10px]">secret_...</code> 또는 <code className="bg-slate-200 dark:bg-white/10 px-1 py-0.5 rounded text-[10px]">ntn_...</code>)</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 dark:bg-[#00E5FF]/10 flex items-center justify-center text-[10px] font-bold text-primary dark:text-[#00E5FF]">4</span>
+                    <span>위 입력 필드에 붙여넣고 <strong>Connect</strong> 클릭</span>
+                  </div>
+                  <div className="flex items-start gap-2 pt-2 border-t border-slate-200 dark:border-white/10">
+                    <span className="material-symbols-outlined text-amber-500 text-sm shrink-0 mt-0.5">warning</span>
+                    <span className="text-slate-500 dark:text-[#849396]">Notion에서 내보낼 페이지를 Integration에 <strong>공유(Share)</strong>해야 합니다. 페이지 우측 상단 ··· → Connections → 생성한 Integration 추가</span>
+                  </div>
+                </div>
+              </details>
             </div>
             <button
               type="submit"
