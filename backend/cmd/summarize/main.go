@@ -198,7 +198,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 				"status": model.StatusSummarizing,
 			})
 
-			content, err := bedrockService.SummarizeTranscript(ctx, meetingID)
+			content, err := bedrockService.SummarizeTranscript(ctx, meetingID, meeting.UserID)
 			if err != nil {
 				log.Printf("Failed to generate summary: %v", err)
 				repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
@@ -210,7 +210,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			log.Printf("Generated content for meeting %s: %d characters", meetingID, len(content))
 
 			// Extract action items using Haiku (fast, cheap)
-			actionItems, err := bedrockService.ExtractActionItems(ctx, meetingID)
+			actionItems, err := bedrockService.ExtractActionItems(ctx, meetingID, meeting.UserID)
 			if err != nil {
 				log.Printf("Failed to extract action items (non-fatal): %v", err)
 			} else {
@@ -224,7 +224,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			}
 
 			// Extract tags using Haiku (fast, cheap)
-			tags, err := bedrockService.ExtractTags(ctx, meetingID)
+			tags, err := bedrockService.ExtractTags(ctx, meetingID, meeting.UserID)
 			if err != nil {
 				log.Printf("Failed to extract tags (non-fatal): %v", err)
 			} else if len(tags) > 0 {
@@ -239,7 +239,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 			// KB Export: generate meeting context document and upload to KB bucket
 			// Re-fetch meeting to get the latest state (summary, action items, tags now saved)
-			updatedMeeting, err := repo.GetMeetingByID(ctx, meetingID)
+			updatedMeeting, err := repo.GetMeeting(ctx, meeting.UserID, meetingID)
 			if err != nil {
 				log.Printf("Failed to re-fetch meeting for KB export (non-fatal): %v", err)
 			} else if updatedMeeting != nil {

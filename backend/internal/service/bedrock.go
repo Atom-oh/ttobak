@@ -114,9 +114,16 @@ type speakerSegment struct {
 	EndTime   float64 `json:"endTime"`
 }
 
-// SummarizeTranscript generates meeting notes (content) from the transcript using Claude
-func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID string) (string, error) {
-	meeting, err := s.repo.GetMeetingByID(ctx, meetingID)
+// SummarizeTranscript generates meeting notes (content) from the transcript using Claude.
+// When userID is provided, uses strongly-consistent base table read instead of GSI.
+func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID string, userID ...string) (string, error) {
+	var meeting *model.Meeting
+	var err error
+	if len(userID) > 0 && userID[0] != "" {
+		meeting, err = s.repo.GetMeeting(ctx, userID[0], meetingID)
+	} else {
+		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get meeting: %w", err)
 	}
@@ -436,9 +443,16 @@ type ActionItem struct {
 	Priority  string `json:"priority,omitempty"`
 }
 
-// ExtractActionItems extracts action items from a meeting transcript using Claude Haiku
-func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID string) (string, error) {
-	meeting, err := s.repo.GetMeetingByID(ctx, meetingID)
+// ExtractActionItems extracts action items from a meeting using Claude Haiku.
+// When userID is provided, uses strongly-consistent base table read instead of GSI.
+func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID string, userID ...string) (string, error) {
+	var meeting *model.Meeting
+	var err error
+	if len(userID) > 0 && userID[0] != "" {
+		meeting, err = s.repo.GetMeeting(ctx, userID[0], meetingID)
+	} else {
+		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get meeting: %w", err)
 	}
@@ -517,9 +531,16 @@ func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID strin
 	return string(result), nil
 }
 
-// ExtractTags extracts topic tags from a meeting transcript using Claude Haiku
-func (s *BedrockService) ExtractTags(ctx context.Context, meetingID string) ([]string, error) {
-	meeting, err := s.repo.GetMeetingByID(ctx, meetingID)
+// ExtractTags extracts topic tags from a meeting transcript using Claude Haiku.
+// When userID is provided, uses strongly-consistent base table read instead of GSI.
+func (s *BedrockService) ExtractTags(ctx context.Context, meetingID string, userID ...string) ([]string, error) {
+	var meeting *model.Meeting
+	var err error
+	if len(userID) > 0 && userID[0] != "" {
+		meeting, err = s.repo.GetMeeting(ctx, userID[0], meetingID)
+	} else {
+		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get meeting: %w", err)
 	}

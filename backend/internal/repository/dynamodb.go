@@ -188,7 +188,8 @@ func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title st
 // GetMeeting retrieves a meeting by userID and meetingID
 func (r *DynamoDBRepository) GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error) {
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(r.tableName),
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
