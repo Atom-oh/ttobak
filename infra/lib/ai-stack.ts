@@ -18,6 +18,9 @@ export class AiStack extends cdk.Stack {
   public readonly processImageRole: iam.Role;
   public readonly kbRole: iam.Role;
   public readonly qaRole: iam.Role;
+  public readonly websocketRole: iam.Role;
+  public readonly wsAuthorizerRole: iam.Role;
+  public readonly crawlerRole: iam.Role;
   public readonly kmsKey: kms.Key;
   /** @deprecated Legacy shared role — kept for RealtimeStack backward compatibility */
   public readonly legacyRole: iam.Role;
@@ -62,8 +65,8 @@ export class AiStack extends cdk.Stack {
     // Bedrock model ARNs (shared across roles that need them)
     const bedrockModelResources = [
       `arn:aws:bedrock:*::foundation-model/anthropic.claude-*`,
-      `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.anthropic.claude-*`,
-      `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/apac.anthropic.claude-*`,
+      `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/global.anthropic.claude-*`,
+      `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/apac.anthropic.claude-*`,
     ];
 
     // ==================== API Role ====================
@@ -288,6 +291,83 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // ==================== WebSocket Role ====================
+    // Needs: Lambda basic execution, Lambda invoke (QA), execute-api:ManageConnections
+    this.websocketRole = createLambdaRole(
+      'TtobakWebsocketRole',
+      'ttobak-websocket-role',
+      'Role for ttobak-websocket Lambda function'
+    );
+
+    props.table.grantReadData(this.websocketRole);
+
+    this.websocketRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'InvokeQALambda',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:ttobak-qa`],
+      })
+    );
+
+    this.websocketRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'WebSocketManageConnections',
+        effect: iam.Effect.ALLOW,
+        actions: ['execute-api:ManageConnections'],
+        resources: ['*'],
+      })
+    );
+
+    // ==================== WS Authorizer Role ====================
+    // Needs: Lambda basic execution only (JWT verification is pure crypto)
+    this.wsAuthorizerRole = createLambdaRole(
+      'TtobakWsAuthorizerRole',
+      'ttobak-ws-authorizer-role',
+      'Role for ttobak-ws-authorizer Lambda function'
+    );
+
+    // ==================== Crawler Role ====================
+    // Needs: DynamoDB R/W, KB bucket R/W, Bedrock Haiku, Bedrock KB ingestion
+    this.crawlerRole = createLambdaRole(
+      'TtobakCrawlerRole',
+      'ttobak-crawler-role',
+      'Role for crawler Lambda functions'
+    );
+
+    props.table.grantReadWriteData(this.crawlerRole);
+    props.kbBucket.grantReadWrite(this.crawlerRole);
+
+    this.crawlerRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockSonnetForSummarization',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+      resources: [
+        ...bedrockModelResources,
+        `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-*`,
+        `arn:aws:bedrock:*:${cdk.Aws.ACCOUNT_ID}:inference-profile/*claude-haiku*`,
+      ],
+    }));
+
+    this.crawlerRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'BedrockKBIngestion',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:StartIngestionJob'],
+      resources: ['*'],
+    }));
+
+    // QA role also needs ManageConnections for streaming answers back to WebSocket
+    this.qaRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'WebSocketManageConnections',
+        effect: iam.Effect.ALLOW,
+        actions: ['execute-api:ManageConnections'],
+        resources: ['*'],
+      })
+    );
+
+    // QA role needs converse_stream (already covered by InvokeModel + InvokeModelWithResponseStream)
+
     // Legacy outputs (retained for RealtimeStack compatibility)
     new cdk.CfnOutput(this, 'LambdaRoleArn', {
       value: this.legacyRole.roleArn,
@@ -332,6 +412,11 @@ export class AiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'QaRoleArn', {
       value: this.qaRole.roleArn,
       exportName: 'TtobakQaRoleArn',
+    });
+
+    new cdk.CfnOutput(this, 'CrawlerRoleArn', {
+      value: this.crawlerRole.roleArn,
+      exportName: 'TtobakCrawlerRoleArn',
     });
   }
 }

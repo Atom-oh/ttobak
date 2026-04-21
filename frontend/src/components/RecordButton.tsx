@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { isIOS, getPreferredMimeType, supportsMediaRecorder } from '@/lib/device';
+import { isIOS, getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
 import { CameraCapture } from '@/components/CameraCapture';
 
@@ -20,6 +20,7 @@ interface RecordButtonProps {
   onCaptureImage?: (file: File) => void;
   onAnalyserReady?: (analyser: AnalyserNode | null) => void;
   onCheckpoint?: (blob: Blob, mimeType: string) => void;
+  audioSource?: 'mic' | 'tab';
 }
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'uploading';
@@ -45,11 +46,13 @@ export function RecordButton({
   onCaptureImage,
   onAnalyserReady,
   onCheckpoint,
+  audioSource = 'mic',
 }: RecordButtonProps) {
   const [state, setState] = useState<RecordingState>('idle');
   const [elapsedTime, setElapsedTime] = useState(0);
   const recordingStateRef = useRef<RecordingState>('idle');
   const checkpointTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isRecordingRef = useRef(false);
 
   const setRecordingState = (newState: RecordingState) => {
     recordingStateRef.current = newState;
@@ -71,6 +74,7 @@ export function RecordButton({
   const useNativeCapture = isIOS() || !supportsMediaRecorder();
 
   const cleanupAudioResources = useCallback(() => {
+    isRecordingRef.current = false;
     if (animationRef.current) {
       cancelAnimationFrame(animationRef.current);
       animationRef.current = null;
@@ -86,6 +90,22 @@ export function RecordButton({
       streamRef.current = null;
     }
   }, [onAnalyserReady]);
+
+  // Save checkpoint immediately when tab becomes hidden (lid close, tab switch)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden && isRecordingRef.current && onCheckpoint) {
+        const allChunks = chunksRef.current.slice(0);
+        if (allChunks.length > 0) {
+          const mimeType = mediaRecorderRef.current?.mimeType || getPreferredMimeType();
+          const blob = new Blob(allChunks, { type: mimeType });
+          onCheckpoint(blob, mimeType);
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [onCheckpoint]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -130,13 +150,41 @@ export function RecordButton({
 
     let stream: MediaStream | null = null;
     try {
-      const audioConstraints: MediaTrackConstraints | boolean = deviceId
-        ? { deviceId: { exact: deviceId } }
-        : true;
-      stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      if (audioSource === 'tab') {
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { width: 1, height: 1 },
+            audio: true,
+          });
+          stream.getVideoTracks().forEach(t => t.stop());
+          if (stream.getAudioTracks().length === 0) {
+            onError?.('선택한 탭에서 오디오를 캡처할 수 없습니다');
+            return;
+          }
+        } catch (err: unknown) {
+          if (err instanceof DOMException && err.name === 'NotAllowedError') {
+            return;
+          }
+          throw err;
+        }
+      } else {
+        const audioConstraints: MediaTrackConstraints | boolean = deviceId
+          ? { deviceId: { exact: deviceId } }
+          : true;
+        stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      }
 
       onPermissionGranted?.();
       streamRef.current = stream;
+      isRecordingRef.current = true;
+
+      if (audioSource === 'tab') {
+        stream.getAudioTracks()[0].onended = () => {
+          if (isRecordingRef.current) {
+            stopRecording();
+          }
+        };
+      }
 
       const mimeType = getPreferredMimeType();
       const mediaRecorder = new MediaRecorder(stream, { mimeType });
@@ -182,15 +230,19 @@ export function RecordButton({
         setElapsedTime((prev) => prev + 1);
       }, 1000);
 
-      // Audio checkpoint every 60s — cumulative (all chunks from start) for crash recovery
+      // Audio checkpoint: first at 10s, then every 60s — crash recovery
       if (onCheckpoint) {
-        checkpointTimerRef.current = setInterval(() => {
+        const doCheckpoint = () => {
           const allChunks = chunksRef.current.slice(0);
           if (allChunks.length > 0) {
-            const checkpointBlob = new Blob(allChunks, { type: mimeType });
-            onCheckpoint(checkpointBlob, mimeType);
+            onCheckpoint(new Blob(allChunks, { type: mimeType }), mimeType);
           }
-        }, 60000);
+        };
+        const firstTimer = setTimeout(() => {
+          doCheckpoint();
+          checkpointTimerRef.current = setInterval(doCheckpoint, 60000);
+        }, 10000);
+        checkpointTimerRef.current = firstTimer as unknown as NodeJS.Timeout;
       }
     } catch (err) {
       // Clean up partially acquired resources on failure
@@ -237,6 +289,7 @@ export function RecordButton({
   };
 
   const stopRecording = () => {
+    isRecordingRef.current = false;
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;

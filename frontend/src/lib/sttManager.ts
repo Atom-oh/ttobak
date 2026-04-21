@@ -49,13 +49,12 @@ export class SttManager {
   async start(
     stream: MediaStream,
     preferredProvider: LiveSttProvider,
-    sourceLang = 'ko-KR',
   ): Promise<void> {
     this.stream = stream;
 
     if (preferredProvider === 'transcribe-streaming' && this.config.transcribeStreamingConfig) {
       try {
-        await this.startTranscribeStreaming(stream, sourceLang);
+        await this.startTranscribeStreaming(stream);
         this.activeProvider = 'transcribe-streaming';
         return;
       } catch (err) {
@@ -64,20 +63,26 @@ export class SttManager {
       }
     }
 
-    // Fallback: Web Speech API
-    this.startWebSpeech(sourceLang);
+    this.startWebSpeech('ko-KR');
     this.activeProvider = 'web-speech';
   }
 
-  private async startTranscribeStreaming(stream: MediaStream, sourceLang: string): Promise<void> {
+  private lastDetectedLang = 'ko';
+
+  private async startTranscribeStreaming(stream: MediaStream): Promise<void> {
     const tsConfig = this.config.transcribeStreamingConfig!;
 
     this.transcribeSession = new TranscribeStreamingSession({
       region: tsConfig.region,
       identityPoolId: tsConfig.identityPoolId,
       userPoolId: tsConfig.userPoolId,
-      languageCode: sourceLang,
-      onTranscript: (text, isFinal) => {
+      multiLanguage: true,
+      languageOptions: 'ko-KR,en-US',
+      preferredLanguage: 'ko-KR',
+      onTranscript: (text, isFinal, detectedLang) => {
+        if (detectedLang) {
+          this.lastDetectedLang = detectedLang.substring(0, 2);
+        }
         this.config.callbacks.onTranscript(text, isFinal);
         if (isFinal) {
           this.handleFinalTranslation(text);
@@ -87,22 +92,19 @@ export class SttManager {
       },
       onError: (error) => {
         console.error('Transcribe Streaming error, switching to Web Speech:', error);
-        // Auto-fallback to Web Speech
         this.transcribeSession?.stop();
         this.transcribeSession = null;
-        this.startWebSpeech(sourceLang);
+        this.startWebSpeech('ko-KR');
         this.activeProvider = 'web-speech';
         this.config.onProviderChange?.('web-speech');
       },
     });
 
-    // start() is async — it opens the WebSocket and begins streaming.
-    // Run in background so we don't block the caller.
     this.transcribeSession.start(stream).catch((err) => {
       console.error('Transcribe Streaming start failed:', err);
       this.transcribeSession?.stop();
       this.transcribeSession = null;
-      this.startWebSpeech(sourceLang);
+      this.startWebSpeech('ko-KR');
       this.activeProvider = 'web-speech';
       this.config.onProviderChange?.('web-speech');
     });
@@ -125,8 +127,10 @@ export class SttManager {
       const batch = this.pendingTexts.splice(0);
       if (batch.length === 0) return;
       const combined = batch.join('\n');
+      const srcLang = this.lastDetectedLang || 'ko';
+      if (srcLang === this.config.targetLang) return;
       translateApi
-        .translate(combined, 'ko', this.config.targetLang)
+        .translate(combined, srcLang, this.config.targetLang)
         .then((res) => {
           const parts = res.translatedText.split('\n');
           batch.forEach((original, i) => {
@@ -141,8 +145,10 @@ export class SttManager {
     if (!this.config.translationEnabled) return;
     if (this.interimTranslateTimer) clearTimeout(this.interimTranslateTimer);
     this.interimTranslateTimer = setTimeout(() => {
+      const srcLang = this.lastDetectedLang || 'ko';
+      if (srcLang === this.config.targetLang) return;
       translateApi
-        .translate(text, 'ko', this.config.targetLang)
+        .translate(text, srcLang, this.config.targetLang)
         .then((res) => {
           this.config.callbacks.onTranslation(text, res.translatedText, this.config.targetLang, false);
         })
@@ -171,8 +177,7 @@ export class SttManager {
 
   resume(): void {
     if (this.activeProvider === 'transcribe-streaming' && this.stream) {
-      // Restart Transcribe Streaming session
-      this.startTranscribeStreaming(this.stream, 'ko-KR').catch(() => {
+      this.startTranscribeStreaming(this.stream).catch(() => {
         this.startWebSpeech('ko-KR');
         this.activeProvider = 'web-speech';
         this.config.onProviderChange?.('web-speech');

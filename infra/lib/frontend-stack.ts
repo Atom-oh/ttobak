@@ -9,7 +9,7 @@ import { Construct } from 'constructs';
 export interface FrontendStackProps extends cdk.StackProps {
   httpApiUrl: string;
   edgeFunctionVersion: lambda.IVersion;
-  qaStreamFunctionUrl?: string;
+  originVerifySecret?: string;
 }
 
 export class FrontendStack extends cdk.Stack {
@@ -38,9 +38,12 @@ export class FrontendStack extends cdk.Stack {
     // Split by '/' → ['https:', '', 'domain'] → select index 2
     const httpApiDomain = cdk.Fn.select(2, cdk.Fn.split('/', props.httpApiUrl));
 
-    // API Gateway HTTP API Origin
+    // API Gateway HTTP API Origin — custom header prevents direct access (bypassing CloudFront)
     const apiOrigin = new origins.HttpOrigin(httpApiDomain, {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+      customHeaders: props.originVerifySecret
+        ? { 'x-origin-verify': props.originVerifySecret }
+        : undefined,
     });
 
     // CloudFront Function to rewrite dynamic routes for Next.js static export
@@ -65,8 +68,14 @@ function handler(event) {
     request.uri = uri;
   }
 
+  // Dynamic route: /insights/{sourceId}/{docHash} → rewrite to /insights/_/_
+  if (uri.match(/^\\/insights\\/[^\\/]+\\/[^\\/]+/) && !uri.match(/^\\/insights\\/_\\/_/)) {
+    uri = uri.replace(/^\\/insights\\/[^\\/]+\\/[^\\/\\.]+/, '/insights/_/_');
+    request.uri = uri;
+  }
+
   // Known static pages → append .html; unknown paths → SPA fallback
-  var knownPages = ['/files', '/kb', '/settings', '/record', '/profile', '/meeting/_'];
+  var knownPages = ['/files', '/kb', '/settings', '/record', '/profile', '/insights', '/meeting/_', '/insights/_/_'];
   if (uri !== '/' && !uri.includes('.') && !uri.endsWith('/')) {
     if (knownPages.indexOf(uri) >= 0) {
       request.uri = uri + '.html';
@@ -105,28 +114,6 @@ function handler(event) {
         ],
       },
       additionalBehaviors: {
-        // QA streaming via Lambda Function URL (must be before /api/* catch-all)
-        ...(props.qaStreamFunctionUrl ? {
-          '/api/qa/stream/*': {
-            origin: new origins.HttpOrigin(
-              cdk.Fn.select(2, cdk.Fn.split('/', props.qaStreamFunctionUrl)),
-              {
-                protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
-              }
-            ),
-            viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-            allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
-            cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
-            originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
-            compress: false, // Don't compress SSE — prevents buffering
-            edgeLambdas: [
-              {
-                functionVersion: props.edgeFunctionVersion,
-                eventType: cloudfront.LambdaEdgeEventType.VIEWER_REQUEST,
-              },
-            ],
-          },
-        } : {}),
         '/api/*': {
           origin: apiOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,

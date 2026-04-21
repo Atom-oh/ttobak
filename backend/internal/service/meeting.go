@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	cognitoidp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -358,24 +362,48 @@ func (s *MeetingService) RevokeShare(ctx context.Context, ownerID, meetingID, sh
 	return s.repo.DeleteShare(ctx, sharedToID, meetingID)
 }
 
-// SearchUsers searches users by email
+// SearchUsers searches users by email using Cognito ListUsers API
 func (s *MeetingService) SearchUsers(ctx context.Context, query string) ([]model.UserSearchResponse, error) {
-	users, err := s.repo.SearchUsersByEmail(ctx, query)
+	poolID := os.Getenv("COGNITO_USER_POOL_ID")
+	if poolID == "" {
+		return []model.UserSearchResponse{}, nil
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+	}
+	client := cognitoidp.NewFromConfig(cfg)
+
+	result, err := client.ListUsers(ctx, &cognitoidp.ListUsersInput{
+		UserPoolId: aws.String(poolID),
+		Filter:     aws.String(fmt.Sprintf("email ^= \"%s\"", strings.ReplaceAll(query, "\"", ""))),
+		Limit:      aws.Int32(10),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to search users: %w", err)
 	}
 
-	var responses []model.UserSearchResponse
-	for _, u := range users {
-		responses = append(responses, model.UserSearchResponse{
-			UserID: u.UserID,
-			Email:  u.Email,
-			Name:   u.Name,
-		})
-	}
-
-	if responses == nil {
-		responses = []model.UserSearchResponse{}
+	responses := make([]model.UserSearchResponse, 0, len(result.Users))
+	for _, u := range result.Users {
+		var email, name, userID string
+		for _, attr := range u.Attributes {
+			switch aws.ToString(attr.Name) {
+			case "sub":
+				userID = aws.ToString(attr.Value)
+			case "email":
+				email = aws.ToString(attr.Value)
+			case "name":
+				name = aws.ToString(attr.Value)
+			}
+		}
+		if userID != "" && email != "" {
+			responses = append(responses, model.UserSearchResponse{
+				UserID: userID,
+				Email:  email,
+				Name:   name,
+			})
+		}
 	}
 
 	return responses, nil

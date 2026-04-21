@@ -34,3 +34,10 @@ infra/cdk.out.deploy/
 
 # Review screenshots
 review/*.png
+*.png
+*.jpg
+*.jpeg
+!frontend/public/**
+!frontend/src/app/**
+!docs/**
+.playwright-mcp/

@@ -55,3 +55,9 @@ export function getPreferredMimeType(): string {
 
   return 'audio/webm';
 }
+
+export function supportsTabAudioCapture(): boolean {
+  if (typeof window === 'undefined') return false;
+  if (typeof navigator?.mediaDevices?.getDisplayMedia !== 'function') return false;
+  return /Chrome|Edg/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent);
+}

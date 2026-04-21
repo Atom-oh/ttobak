@@ -14,10 +14,11 @@ interface QAChatMessageProps {
   usedKB?: boolean;
   usedDocs?: boolean;
   toolsUsed?: string[];
+  isStreaming?: boolean;
 }
 
-export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, toolsUsed }: QAChatMessageProps) {
-  const isLoading = !answer;
+export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, toolsUsed, isStreaming }: QAChatMessageProps) {
+  const isLoading = !answer && !isStreaming;
 
   return (
     <div className="space-y-3 animate-fade-in">
@@ -54,10 +55,16 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
                 />
               </div>
             </div>
+          ) : isStreaming && !answer ? (
+            <div className="flex items-center gap-1.5 py-1">
+              <span className="text-sm text-slate-500 dark:text-slate-400">AI가 답변을 작성 중...</span>
+              <span className="inline-block w-0.5 h-4 bg-primary animate-pulse" />
+            </div>
           ) : (
             <>
               <p className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
                 {answer}
+                {isStreaming && <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-middle" />}
               </p>
 
               {/* Tool badges */}

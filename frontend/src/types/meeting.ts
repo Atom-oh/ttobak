@@ -148,3 +148,52 @@ export interface ExportResponse {
   filename?: string;
   content?: string;
 }
+
+export interface CrawlerSource {
+  sourceId: string;
+  sourceName: string;
+  subscribers: string[];
+  awsServices: string[];
+  newsQueries: string[];
+  customUrls: string[];
+  schedule: string;
+  lastCrawledAt: string;
+  status: string;
+  documentCount: number;
+}
+
+export interface CrawlerSubscription {
+  sourceId: string;
+  awsServices: string[];
+  newsSources: string[];
+  customUrls: string[];
+  addedAt: string;
+}
+
+export interface CrawlerSourceResponse {
+  source: CrawlerSource;
+  subscription: CrawlerSubscription;
+}
+
+export interface CrawledDocument {
+  docHash: string;
+  sourceId?: string;
+  type: 'news' | 'tech';
+  title: string;
+  url: string;
+  source?: string;
+  summary?: string;
+  awsServices?: string[];
+  s3Key?: string;
+  crawledAt: number | string;
+  inKB?: boolean;
+  pubDate?: string;
+}
+
+export interface CrawlHistory {
+  timestamp: string;
+  docsAdded: number;
+  docsUpdated: number;
+  errors: string[];
+  duration: number;
+}

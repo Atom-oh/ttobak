@@ -23,8 +23,11 @@ export interface TranscribeStreamingConfig {
   region: string;
   identityPoolId: string;
   userPoolId: string;
-  languageCode: string;
-  onTranscript: (text: string, isFinal: boolean) => void;
+  languageCode?: string;
+  multiLanguage?: boolean;
+  languageOptions?: string;
+  preferredLanguage?: string;
+  onTranscript: (text: string, isFinal: boolean, languageCode?: string) => void;
   onError: (error: string) => void;
 }
 
@@ -123,12 +126,21 @@ export class TranscribeStreamingSession {
     this.abortController = new AbortController();
 
     try {
-      const command = new StartStreamTranscriptionCommand({
-        LanguageCode: this.config.languageCode as StartStreamTranscriptionCommandInput['LanguageCode'],
+      const commandInput: StartStreamTranscriptionCommandInput = {
         MediaEncoding: 'pcm',
         MediaSampleRateHertz: 16000,
         AudioStream: audioStream as AsyncIterable<AudioStream>,
-      });
+      };
+
+      if (this.config.multiLanguage) {
+        commandInput.IdentifyMultipleLanguages = true;
+        commandInput.LanguageOptions = this.config.languageOptions || 'ko-KR,en-US';
+        commandInput.PreferredLanguage = (this.config.preferredLanguage || 'ko-KR') as StartStreamTranscriptionCommandInput['PreferredLanguage'];
+      } else {
+        commandInput.LanguageCode = (this.config.languageCode || 'ko-KR') as StartStreamTranscriptionCommandInput['LanguageCode'];
+      }
+
+      const command = new StartStreamTranscriptionCommand(commandInput);
 
       const response = await this.client.send(command, {
         abortSignal: this.abortController.signal,
@@ -145,7 +157,8 @@ export class TranscribeStreamingSession {
           for (const result of event.TranscriptEvent.Transcript.Results) {
             const text = result.Alternatives?.[0]?.Transcript || '';
             if (text) {
-              this.config.onTranscript(text, !result.IsPartial);
+              const lang = (result as Record<string, unknown>).LanguageCode as string | undefined;
+              this.config.onTranscript(text, !result.IsPartial, lang);
             }
           }
         }

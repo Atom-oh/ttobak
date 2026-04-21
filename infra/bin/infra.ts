@@ -7,6 +7,7 @@ import { GatewayStack } from '../lib/gateway-stack';
 import { EdgeAuthStack } from '../lib/edge-auth-stack';
 import { KnowledgeStack } from '../lib/knowledge-stack';
 import { FrontendStack } from '../lib/frontend-stack';
+import { CrawlerStack } from '../lib/crawler-stack';
 
 const app = new cdk.App();
 
@@ -62,6 +63,10 @@ const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
 });
 edgeAuthStack.addDependency(authStack);
 
+// Origin verify secret: CloudFront injects this header; Lambdas reject requests without it.
+// This prevents direct API Gateway access, enforcing CloudFront-only traffic.
+const originVerifySecret = app.node.tryGetContext('ttobak:originVerifySecret') || '';
+
 // Stack 6: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge
 const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   env,
@@ -80,22 +85,39 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   kbBucket: knowledgeStack.kbBucket,
   knowledgeBaseId: knowledgeStack.knowledgeBaseId,
   dataSourceId: knowledgeStack.dataSourceId,
+  websocketRole: aiStack.websocketRole,
+  wsAuthorizerRole: aiStack.wsAuthorizerRole,
   kmsKeyId: aiStack.kmsKey.keyId,
   legacyRole: aiStack.legacyRole,
+  originVerifySecret,
 });
 gatewayStack.addDependency(authStack);
 gatewayStack.addDependency(storageStack);
 gatewayStack.addDependency(aiStack);
 gatewayStack.addDependency(knowledgeStack);
 
-// Stack 7: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth
+// Stack 7.5: Crawler (Step Functions + Lambda) - depends on AI, Storage, Knowledge
+const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {
+  env,
+  description: 'Ttobak AI Meeting Assistant - Crawler (Step Functions + Lambda)',
+  crawlerRole: aiStack.crawlerRole,
+  table: storageStack.table,
+  kbBucket: knowledgeStack.kbBucket,
+  knowledgeBaseId: knowledgeStack.knowledgeBaseId,
+  dataSourceId: knowledgeStack.dataSourceId,
+});
+crawlerStack.addDependency(aiStack);
+crawlerStack.addDependency(storageStack);
+crawlerStack.addDependency(knowledgeStack);
+
+// Stack 8: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth
 const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   env,
   crossRegionReferences: true,
   description: 'Ttobak AI Meeting Assistant - Frontend (S3 + CloudFront)',
   httpApiUrl: gatewayStack.httpApi.apiEndpoint,
   edgeFunctionVersion: edgeAuthStack.edgeFunction,
-  qaStreamFunctionUrl: gatewayStack.qaStreamFunctionUrl.url,
+  originVerifySecret,
 });
 frontendStack.addDependency(gatewayStack);
 frontendStack.addDependency(edgeAuthStack);

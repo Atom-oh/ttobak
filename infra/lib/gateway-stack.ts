@@ -18,6 +18,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   processImageRole: iam.IRole;
   kbRole: iam.IRole;
   qaRole: iam.IRole;
+  websocketRole: iam.IRole;
+  wsAuthorizerRole: iam.IRole;
   bucket: s3.IBucket;
   table: dynamodb.ITable;
   userPool: cognito.IUserPool;
@@ -29,6 +31,7 @@ export interface GatewayStackProps extends cdk.StackProps {
   dataSourceId?: string;
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
+  originVerifySecret?: string;
 }
 
 export class GatewayStack extends cdk.Stack {
@@ -39,9 +42,8 @@ export class GatewayStack extends cdk.Stack {
   public readonly processImageFunction: lambda.Function;
   public readonly kbFunction: lambda.Function;
   public readonly qaFunction: lambda.Function;
-  public readonly qaStreamFunction: lambda.Function;
-  public readonly qaStreamFunctionUrl: lambda.FunctionUrl;
-
+  public readonly websocketApi: apigatewayv2.WebSocketApi;
+  public readonly websocketFunction: lambda.Function;
   constructor(scope: Construct, id: string, props: GatewayStackProps) {
     super(scope, id, props);
 
@@ -60,6 +62,7 @@ export class GatewayStack extends cdk.Stack {
         COGNITO_CLIENT_ID: props.userPoolClient.userPoolClientId,
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         KMS_KEY_ID: props.kmsKeyId || '',
+        ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
         AWS_REGION_NAME: cdk.Aws.REGION,
       },
       timeout: cdk.Duration.seconds(30),
@@ -95,7 +98,7 @@ export class GatewayStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6-v1',
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         KB_ID: props.knowledgeBaseId || '',
         DATA_SOURCE_ID: props.dataSourceId || '',
@@ -152,35 +155,14 @@ export class GatewayStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.table.tableName,
         KB_ID: props.knowledgeBaseId || '',
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-4-6-v1',
-        DETECT_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
+        DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
+        MAX_TOOL_ROUNDS: '3',
+        KB_CACHE_TTL_SECONDS: '600',
+        ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
       },
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,
-    });
-
-    // Q&A Streaming Lambda (response streaming via Function URL)
-    this.qaStreamFunction = new lambda.Function(this, 'QAStreamFunction', {
-      functionName: 'ttobak-qa-stream',
-      runtime: lambda.Runtime.PYTHON_3_12,
-      architecture: lambda.Architecture.ARM_64,
-      handler: 'stream_handler.lambda_handler',
-      code: lambda.Code.fromAsset('../backend/python/qa'),
-      role: props.qaRole as iam.Role,
-      environment: {
-        TABLE_NAME: props.table.tableName,
-        KB_ID: props.knowledgeBaseId || '',
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-4-6-v1',
-        DETECT_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
-      },
-      timeout: cdk.Duration.seconds(120),
-      memorySize: 512,
-    });
-
-    // Function URL with response streaming for SSE
-    this.qaStreamFunctionUrl = this.qaStreamFunction.addFunctionUrl({
-      authType: lambda.FunctionUrlAuthType.NONE,
-      invokeMode: lambda.InvokeMode.RESPONSE_STREAM,
     });
 
     // JWT Authorizer for Cognito
@@ -312,6 +294,80 @@ export class GatewayStack extends cdk.Stack {
     });
     transcriptUploadRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction));
 
+    // ==================== WebSocket API (Live QA Streaming) ====================
+
+    // WebSocket authorizer Lambda (validates Cognito JWT on $connect)
+    const wsAuthorizerFunction = new lambda.Function(this, 'WsAuthorizerFunction', {
+      functionName: 'ttobak-ws-authorizer',
+      runtime: lambda.Runtime.PROVIDED_AL2023,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'bootstrap',
+      code: lambda.Code.fromAsset('../backend/cmd/ws-authorizer'),
+      role: props.wsAuthorizerRole as iam.Role,
+      environment: {
+        COGNITO_USER_POOL_ID: props.userPool.userPoolId,
+        COGNITO_REGION: cdk.Aws.REGION,
+      },
+      timeout: cdk.Duration.seconds(10),
+      memorySize: 128,
+    });
+
+    // WebSocket handler Lambda (routes messages, async-invokes QA)
+    this.websocketFunction = new lambda.Function(this, 'WebsocketFunction', {
+      functionName: 'ttobak-websocket',
+      runtime: lambda.Runtime.PROVIDED_AL2023,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'bootstrap',
+      code: lambda.Code.fromAsset('../backend/cmd/websocket'),
+      role: props.websocketRole as iam.Role,
+      environment: {
+        TABLE_NAME: props.table.tableName,
+        QA_FUNCTION_NAME: this.qaFunction.functionName,
+      },
+      timeout: cdk.Duration.seconds(29),
+      memorySize: 256,
+    });
+
+    // Lambda authorizer for WebSocket $connect
+    const wsAuthorizer = new apigatewayv2Authorizers.WebSocketLambdaAuthorizer(
+      'WsAuthorizer',
+      wsAuthorizerFunction,
+      {
+        identitySource: ['route.request.querystring.token'],
+      }
+    );
+
+    // WebSocket API
+    this.websocketApi = new apigatewayv2.WebSocketApi(this, 'TtobakWebSocketApi', {
+      apiName: 'ttobak-realtime',
+      description: 'Ttobak WebSocket API for live QA streaming',
+      connectRouteOptions: {
+        integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+          'WsConnectIntegration',
+          this.websocketFunction,
+        ),
+        authorizer: wsAuthorizer,
+      },
+      disconnectRouteOptions: {
+        integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+          'WsDisconnectIntegration',
+          this.websocketFunction,
+        ),
+      },
+      defaultRouteOptions: {
+        integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
+          'WsDefaultIntegration',
+          this.websocketFunction,
+        ),
+      },
+    });
+
+    const wsStage = new apigatewayv2.WebSocketStage(this, 'WsProductionStage', {
+      webSocketApi: this.websocketApi,
+      stageName: 'production',
+      autoDeploy: true,
+    });
+
     // Keep legacy role cross-stack reference alive (used by RealtimeStack)
     if (props.legacyRole) {
       new cdk.CfnOutput(this, 'LegacyRoleArn', {
@@ -335,9 +391,10 @@ export class GatewayStack extends cdk.Stack {
       exportName: 'TtobakApiFunctionArn',
     });
 
-    new cdk.CfnOutput(this, 'QAStreamFunctionUrl', {
-      value: this.qaStreamFunctionUrl.url,
-      exportName: 'TtobakQAStreamFunctionUrl',
+    new cdk.CfnOutput(this, 'WebsocketApiUrl', {
+      value: wsStage.url,
+      exportName: 'TtobakWebsocketApiUrl',
     });
+
   }
 }

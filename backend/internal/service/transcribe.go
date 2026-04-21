@@ -50,8 +50,9 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 	mediaURI := fmt.Sprintf("s3://%s/%s", bucket, key)
 
 	input := &transcribe.StartTranscriptionJobInput{
-		TranscriptionJobName: aws.String(jobName),
-		LanguageCode:         types.LanguageCodeKoKr, // Korean default
+		TranscriptionJobName:      aws.String(jobName),
+		IdentifyMultipleLanguages: aws.Bool(true),
+		LanguageOptions:           []types.LanguageCode{types.LanguageCodeKoKr, types.LanguageCodeEnUs},
 		Media: &types.Media{
 			MediaFileUri: aws.String(mediaURI),
 		},
@@ -94,8 +95,9 @@ func (s *TranscribeService) StartNovaSonicTranscription(ctx context.Context, mee
 	mediaURI := fmt.Sprintf("s3://%s/%s", bucket, key)
 
 	input := &transcribe.StartTranscriptionJobInput{
-		TranscriptionJobName: aws.String(jobName),
-		LanguageCode:         types.LanguageCodeKoKr,
+		TranscriptionJobName:      aws.String(jobName),
+		IdentifyMultipleLanguages: aws.Bool(true),
+		LanguageOptions:           []types.LanguageCode{types.LanguageCodeKoKr, types.LanguageCodeEnUs},
 		Media: &types.Media{
 			MediaFileUri: aws.String(mediaURI),
 		},

@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { qaApi } from '@/lib/api';
+import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
 import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
 
 interface LiveQAPanelProps {
@@ -20,6 +21,7 @@ interface QAEntry {
   usedKB?: boolean;
   usedDocs?: boolean;
   toolsUsed?: string[];
+  isStreaming?: boolean;
 }
 
 const suggestedQuestions = [
@@ -27,6 +29,8 @@ const suggestedQuestions = [
   '결정된 액션 아이템은?',
   '핵심 키워드 정리해줘',
 ];
+
+const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
 
 export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, onAskedQuestion }: LiveQAPanelProps) {
   const [question, setQuestion] = useState('');
@@ -37,6 +41,8 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   const inputRef = useRef<HTMLInputElement>(null);
   const [detectedQuestions, setDetectedQuestions] = useState<string[]>([]);
   const [askedQuestions, setAskedQuestions] = useState<string[]>([]);
+  const wsRef = useRef<RealtimeWebSocket | null>(null);
+  const activeEntryIdRef = useRef<string | null>(null);
 
   const sessionId = useMemo(() => {
     const ts = Date.now();
@@ -49,10 +55,9 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     }
   }, [qaHistory]);
 
-  // Merge server-detected questions when they arrive (prefer server over client detection)
+  // Merge server-detected questions
   useEffect(() => {
     if (serverDetectedQuestions && serverDetectedQuestions.length > 0) {
-      // Filter out already-asked questions
       const newQuestions = serverDetectedQuestions.filter(q => !askedQuestions.includes(q));
       if (newQuestions.length > 0) {
         setDetectedQuestions(newQuestions);
@@ -60,6 +65,79 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       }
     }
   }, [serverDetectedQuestions, askedQuestions, onDetectedQuestionsChange]);
+
+  const handleStreamMessage = useCallback((msg: WebSocketMessage) => {
+    const entryId = activeEntryIdRef.current;
+    if (!entryId) return;
+
+    switch (msg.type) {
+      case 'answer_delta':
+        setQaHistory(prev =>
+          prev.map(e =>
+            e.id === entryId ? { ...e, answer: e.answer + (msg.text || '') } : e
+          )
+        );
+        break;
+      case 'answer_complete':
+        setQaHistory(prev =>
+          prev.map(e =>
+            e.id === entryId
+              ? {
+                  ...e,
+                  answer: msg.answer || e.answer,
+                  sources: msg.sources,
+                  usedKB: msg.usedKB,
+                  usedDocs: msg.usedDocs,
+                  toolsUsed: msg.toolsUsed,
+                  isStreaming: false,
+                }
+              : e
+          )
+        );
+        setIsAsking(false);
+        activeEntryIdRef.current = null;
+        inputRef.current?.focus();
+        break;
+      case 'answer_error':
+        setQaHistory(prev =>
+          prev.map(e =>
+            e.id === entryId
+              ? { ...e, answer: msg.error || '답변 생성 중 오류가 발생했습니다.', isStreaming: false }
+              : e
+          )
+        );
+        setIsAsking(false);
+        activeEntryIdRef.current = null;
+        inputRef.current?.focus();
+        break;
+      case 'error':
+        setError(msg.error || 'WebSocket error');
+        break;
+    }
+  }, []);
+
+  const ensureWebSocket = useCallback(async (): Promise<RealtimeWebSocket | null> => {
+    if (!WS_URL) return null;
+    if (wsRef.current?.isConnected) return wsRef.current;
+
+    const ws = new RealtimeWebSocket(WS_URL, handleStreamMessage, () => {
+      wsRef.current = null;
+    });
+    try {
+      await ws.connect();
+      wsRef.current = ws;
+      return ws;
+    } catch {
+      return null;
+    }
+  }, [handleStreamMessage]);
+
+  // Cleanup WebSocket on unmount
+  useEffect(() => {
+    return () => {
+      wsRef.current?.disconnect();
+    };
+  }, []);
 
   const handleAsk = async (q: string) => {
     if (!q.trim() || isAsking) return;
@@ -80,64 +158,48 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       id: entryId,
       question: q.trim(),
       answer: '',
+      isStreaming: true,
     };
     setQaHistory((prev) => [...prev, newEntry]);
+    activeEntryIdRef.current = entryId;
 
+    // Try WebSocket streaming first
+    const ws = await ensureWebSocket();
+    if (ws) {
+      ws.askLive(q.trim(), transcriptContext, meetingId, sessionId);
+      return;
+    }
+
+    // Fallback to HTTP sync
     try {
-      // Stream answer via SSE — text appears token by token
-      await qaApi.streamAsk(
-        q.trim(),
-        transcriptContext,
-        sessionId,
-        (text) => {
-          setQaHistory((prev) =>
-            prev.map((entry) =>
-              entry.id === entryId
-                ? { ...entry, answer: entry.answer + text }
-                : entry
-            )
-          );
-        },
-        (meta) => {
-          setQaHistory((prev) =>
-            prev.map((entry) =>
-              entry.id === entryId
-                ? { ...entry, ...meta }
-                : entry
-            )
-          );
-        },
+      setQaHistory(prev => prev.map(e => e.id === entryId ? { ...e, isStreaming: false } : e));
+      const response = await qaApi.ask(q.trim(), transcriptContext, sessionId);
+      setQaHistory((prev) =>
+        prev.map((entry) =>
+          entry.id === entryId
+            ? {
+                ...entry,
+                answer: response.answer,
+                sources: response.sources,
+                usedKB: response.usedKB,
+                usedDocs: response.usedDocs,
+                toolsUsed: response.toolsUsed,
+              }
+            : entry
+        )
       );
-    } catch {
-      // Fallback to sync endpoint
-      try {
-        const response = await qaApi.ask(q.trim(), transcriptContext, sessionId);
-        setQaHistory((prev) =>
-          prev.map((entry) =>
-            entry.id === entryId
-              ? {
-                  ...entry,
-                  answer: response.answer,
-                  sources: response.sources,
-                  usedKB: response.usedKB,
-                  usedDocs: response.usedDocs,
-                  toolsUsed: response.toolsUsed,
-                }
-              : entry
-          )
-        );
-      } catch (syncErr) {
-        setError(syncErr instanceof Error ? syncErr.message : 'Failed to get answer');
-        setQaHistory((prev) =>
-          prev.map((entry) =>
-            entry.id === entryId
-              ? { ...entry, answer: '답변을 가져오지 못했습니다. 다시 시도해주세요.' }
-              : entry
-          )
-        );
-      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to get answer');
+      setQaHistory((prev) =>
+        prev.map((entry) =>
+          entry.id === entryId
+            ? { ...entry, answer: '답변을 가져오지 못했습니다. 다시 시도해주세요.' }
+            : entry
+        )
+      );
     } finally {
       setIsAsking(false);
+      activeEntryIdRef.current = null;
       inputRef.current?.focus();
     }
   };
@@ -177,6 +239,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
               usedKB={entry.usedKB}
               usedDocs={entry.usedDocs}
               toolsUsed={entry.toolsUsed}
+              isStreaming={entry.isStreaming}
             />
           ))
         )}

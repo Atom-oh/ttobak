@@ -21,7 +21,7 @@ var (
 	// ClaudeOpusModelID is for complex tasks (Q&A with tools, image analysis)
 	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-4-6-v1")
 	// ClaudeSonnetModelID is for summarization (final meeting summary)
-	ClaudeSonnetModelID = getEnvOrDefault("BEDROCK_SUMMARIZE_MODEL_ID", "global.anthropic.claude-sonnet-4-6-v1")
+	ClaudeSonnetModelID = getEnvOrDefault("BEDROCK_SUMMARIZE_MODEL_ID", "global.anthropic.claude-sonnet-4-6")
 	// ClaudeHaikuModelID is for live summary (fast, low-cost incremental updates)
 	ClaudeHaikuModelID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 )
@@ -114,9 +114,16 @@ type speakerSegment struct {
 	EndTime   float64 `json:"endTime"`
 }
 
-// SummarizeTranscript generates meeting notes (content) from the transcript using Claude
-func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID string) (string, error) {
-	meeting, err := s.repo.GetMeetingByID(ctx, meetingID)
+// SummarizeTranscript generates meeting notes (content) from the transcript using Claude.
+// When userID is provided, uses strongly-consistent base table read instead of GSI.
+func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID string, userID ...string) (string, error) {
+	var meeting *model.Meeting
+	var err error
+	if len(userID) > 0 && userID[0] != "" {
+		meeting, err = s.repo.GetMeeting(ctx, userID[0], meetingID)
+	} else {
+		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get meeting: %w", err)
 	}
@@ -436,9 +443,16 @@ type ActionItem struct {
 	Priority  string `json:"priority,omitempty"`
 }
 
-// ExtractActionItems extracts action items from a meeting transcript using Claude Haiku
-func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID string) (string, error) {
-	meeting, err := s.repo.GetMeetingByID(ctx, meetingID)
+// ExtractActionItems extracts action items from a meeting using Claude Haiku.
+// When userID is provided, uses strongly-consistent base table read instead of GSI.
+func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID string, userID ...string) (string, error) {
+	var meeting *model.Meeting
+	var err error
+	if len(userID) > 0 && userID[0] != "" {
+		meeting, err = s.repo.GetMeeting(ctx, userID[0], meetingID)
+	} else {
+		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get meeting: %w", err)
 	}
@@ -446,42 +460,34 @@ func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID strin
 		return "", fmt.Errorf("meeting not found: %s", meetingID)
 	}
 
-	// Use the selected transcript, or default to A, or B if A not available
-	transcript := meeting.TranscriptA
-	if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-	} else if transcript == "" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-	}
-	if transcript == "" {
-		return "[]", nil // No transcript, return empty array
-	}
-
-	systemPrompt := `You are an expert at extracting action items from meeting transcripts.
-Extract action items mentioned in the transcript. For each action item, identify:
-- text: The task description (required)
-- assignee: Who is responsible (speaker label if available, e.g., "spk_0", "spk_1")
-- priority: high, medium, or low based on urgency/importance mentioned
-- dueDate: Due date if explicitly mentioned (ISO format YYYY-MM-DD)
-
-Return ONLY a valid JSON array. If no action items found, return [].
-Example format:
-[{"text":"Complete the report","assignee":"spk_0","priority":"high","dueDate":"2024-03-25","completed":false}]`
-
-	// Build prompt with speaker segments if available
-	userPrompt := fmt.Sprintf("Extract action items from this meeting transcript:\n\n%s", transcript)
-
-	if meeting.TranscriptSegments != "" {
-		var segments []speakerSegment
-		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
-			var sb strings.Builder
-			sb.WriteString("Extract action items from this speaker-labeled meeting transcript:\n\n")
-			for _, seg := range segments {
-				sb.WriteString(fmt.Sprintf("[%s] %s\n", seg.Speaker, seg.Text))
-			}
-			userPrompt = sb.String()
+	// Prefer summary (content) as input — it's structured and contains action items already identified.
+	// Fall back to transcript if summary isn't available yet.
+	source := meeting.Content
+	if source == "" {
+		source = meeting.TranscriptA
+		if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
+			source = meeting.TranscriptB
+		} else if source == "" && meeting.TranscriptB != "" {
+			source = meeting.TranscriptB
 		}
 	}
+	if source == "" {
+		return "[]", nil
+	}
+
+	systemPrompt := `회의 요약 또는 트랜스크립트에서 액션 아이템(해야 할 일, 후속 조치)을 추출하세요.
+각 액션 아이템에 대해 아래를 식별하세요:
+- text: 할 일 설명 (한국어로 작성, 필수)
+- assignee: 담당자 (이름 또는 화자 라벨)
+- priority: high, medium, low (중요도/긴급도 기준)
+- dueDate: 명시적으로 언급된 경우만 (ISO 형식 YYYY-MM-DD)
+
+"~하기로 했다", "~할 예정", "~를 준비", "팔로업", "확인 필요" 등의 표현에서 액션을 추출하세요.
+유효한 JSON 배열만 반환하세요. 액션 아이템이 없으면 []를 반환하세요.
+예시:
+[{"text":"PoC 환경 구축 제안서 준비","assignee":"spk_1","priority":"high","completed":false}]`
+
+	userPrompt := fmt.Sprintf("다음 회의 내용에서 액션 아이템을 추출하세요:\n\n%s", source)
 
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
@@ -525,9 +531,16 @@ Example format:
 	return string(result), nil
 }
 
-// ExtractTags extracts topic tags from a meeting transcript using Claude Haiku
-func (s *BedrockService) ExtractTags(ctx context.Context, meetingID string) ([]string, error) {
-	meeting, err := s.repo.GetMeetingByID(ctx, meetingID)
+// ExtractTags extracts topic tags from a meeting transcript using Claude Haiku.
+// When userID is provided, uses strongly-consistent base table read instead of GSI.
+func (s *BedrockService) ExtractTags(ctx context.Context, meetingID string, userID ...string) ([]string, error) {
+	var meeting *model.Meeting
+	var err error
+	if len(userID) > 0 && userID[0] != "" {
+		meeting, err = s.repo.GetMeeting(ctx, userID[0], meetingID)
+	} else {
+		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get meeting: %w", err)
 	}

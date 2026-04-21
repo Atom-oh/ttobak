@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -177,22 +178,27 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	log.Printf("Updated meeting %s with transcript (nova=%v)", meetingID, isNova)
 
-	// Check if we should generate summary
+	// We just saved the transcript, so proceed directly to summary generation.
+	// Avoid re-reading via GSI (eventual consistency can return stale data).
 	meeting, err := repo.GetMeetingByID(ctx, meetingID)
-	if err != nil {
-		log.Printf("Failed to get meeting: %v", err)
-		return nil
+	if err != nil || meeting == nil {
+		log.Printf("Failed to get meeting via GSI, retrying after 1s: %v", err)
+		time.Sleep(1 * time.Second)
+		meeting, err = repo.GetMeetingByID(ctx, meetingID)
+		if err != nil || meeting == nil {
+			log.Printf("Still failed to get meeting: %v", err)
+			return nil
+		}
 	}
 
-	// Generate summary if at least one transcript is available
-	if meeting != nil && (meeting.TranscriptA != "" || meeting.TranscriptB != "") {
+	// Generate summary — transcript was just saved so it's guaranteed to exist
+	if transcript != "" {
 		if meeting.Status != model.StatusError {
-			// Atomic status transition to summarizing
 			repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
 				"status": model.StatusSummarizing,
 			})
 
-			content, err := bedrockService.SummarizeTranscript(ctx, meetingID)
+			content, err := bedrockService.SummarizeTranscript(ctx, meetingID, meeting.UserID)
 			if err != nil {
 				log.Printf("Failed to generate summary: %v", err)
 				repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
@@ -204,7 +210,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			log.Printf("Generated content for meeting %s: %d characters", meetingID, len(content))
 
 			// Extract action items using Haiku (fast, cheap)
-			actionItems, err := bedrockService.ExtractActionItems(ctx, meetingID)
+			actionItems, err := bedrockService.ExtractActionItems(ctx, meetingID, meeting.UserID)
 			if err != nil {
 				log.Printf("Failed to extract action items (non-fatal): %v", err)
 			} else {
@@ -218,7 +224,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			}
 
 			// Extract tags using Haiku (fast, cheap)
-			tags, err := bedrockService.ExtractTags(ctx, meetingID)
+			tags, err := bedrockService.ExtractTags(ctx, meetingID, meeting.UserID)
 			if err != nil {
 				log.Printf("Failed to extract tags (non-fatal): %v", err)
 			} else if len(tags) > 0 {
@@ -233,7 +239,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 			// KB Export: generate meeting context document and upload to KB bucket
 			// Re-fetch meeting to get the latest state (summary, action items, tags now saved)
-			updatedMeeting, err := repo.GetMeetingByID(ctx, meetingID)
+			updatedMeeting, err := repo.GetMeeting(ctx, meeting.UserID, meetingID)
 			if err != nil {
 				log.Printf("Failed to re-fetch meeting for KB export (non-fatal): %v", err)
 			} else if updatedMeeting != nil {

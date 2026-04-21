@@ -8,6 +8,7 @@ const mainNav = [
   { href: '/', icon: 'video_camera_front', label: 'Meetings' },
   { href: '/files', icon: 'description', label: 'Files' },
   { href: '/kb', icon: 'library_books', label: 'Knowledge Base' },
+  { href: '/insights', icon: 'insights', label: 'Insights' },
   { href: '/settings', icon: 'settings', label: 'Settings' },
 ];
 
@@ -49,6 +50,7 @@ function useDarkMode() {
 export function Sidebar({ activePath }: { activePath: string }) {
   const { user, logout } = useAuth();
   const { isDark, toggle: toggleDark } = useDarkMode();
+  const [showNewMenu, setShowNewMenu] = useState(false);
 
   return (
     <aside className="w-64 border-r border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest/80 dark:backdrop-blur-xl flex flex-col justify-between p-4 shrink-0 h-screen sticky top-0">
@@ -82,13 +84,44 @@ export function Sidebar({ activePath }: { activePath: string }) {
       {/* Action Area */}
       <div className="flex flex-col gap-4">
         {/* New Meeting Button */}
-        <Link
-          href="/record"
-          className="w-full bg-primary hover:bg-primary-hover text-white dark:text-[#09090E] rounded-lg h-10 px-4 font-semibold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-primary/20 dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
-        >
-          <span className="material-symbols-outlined text-lg">add</span>
-          <span>New Meeting</span>
-        </Link>
+        <div className="relative">
+          <button
+            onClick={() => setShowNewMenu(!showNewMenu)}
+            className="w-full bg-primary hover:bg-primary-hover text-white dark:text-[#09090E] rounded-lg h-10 px-4 font-semibold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-primary/20 dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
+          >
+            <span className="material-symbols-outlined text-lg">add</span>
+            <span>New Meeting</span>
+          </button>
+          {showNewMenu && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setShowNewMenu(false)} />
+              <div className="absolute bottom-full left-0 right-0 mb-2 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-white/10 overflow-hidden z-20">
+                <Link
+                  href="/record"
+                  onClick={() => setShowNewMenu(false)}
+                  className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-primary text-xl">mic</span>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900 dark:text-white">실시간 녹음</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">마이크로 실시간 녹음 · 전사</p>
+                  </div>
+                </Link>
+                <Link
+                  href="/record?mode=upload"
+                  onClick={() => setShowNewMenu(false)}
+                  className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors border-t border-slate-100 dark:border-white/5"
+                >
+                  <span className="material-symbols-outlined text-violet-500 text-xl">upload_file</span>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900 dark:text-white">음성 파일 업로드</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">녹음 파일 업로드 · 전사</p>
+                  </div>
+                </Link>
+              </div>
+            </>
+          )}
+        </div>
 
         {/* Dark Mode Toggle + User Profile */}
         <div className="flex flex-col gap-3 pt-4 border-t border-slate-200 dark:border-white/10">
