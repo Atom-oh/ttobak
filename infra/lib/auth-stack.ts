@@ -42,6 +42,11 @@ export class AuthStack extends cdk.Stack {
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
+      userVerification: {
+        emailSubject: 'Ttobak 인증 코드',
+        emailBody: '인증 코드: {####}',
+        emailStyle: cognito.VerificationEmailStyle.CODE,
+      },
     });
 
     // User Pool Domain for hosted UI
