@@ -1,0 +1,166 @@
+name: Deploy Ttobak
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: 'What to deploy'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - backend
+          - frontend
+          - infra
+
+env:
+  AWS_REGION: ap-northeast-2
+  S3_BUCKET: ttobak-site-180294183052-ap-northeast-2
+  CF_DISTRIBUTION: E3IFMH57E9UTB5
+
+jobs:
+  detect-changes:
+    runs-on: self-hosted
+    outputs:
+      backend: ${{ steps.changes.outputs.backend }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+      infra: ${{ steps.changes.outputs.infra }}
+      crawler: ${{ steps.changes.outputs.crawler }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed paths
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEPLOY_TARGET: ${{ github.event.inputs.deploy_target }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "backend=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'backend' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+            echo "frontend=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'frontend' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+            echo "infra=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'infra' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+            echo "crawler=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'backend' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD)
+            echo "backend=$(echo "$CHANGED" | grep -q '^backend/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+            echo "frontend=$(echo "$CHANGED" | grep -q '^frontend/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+            echo "infra=$(echo "$CHANGED" | grep -q '^infra/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+            echo "crawler=$(echo "$CHANGED" | grep -q '^backend/python/crawler/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
+  build-backend:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Go Lambda binaries (ARM64)
+        working-directory: backend
+        run: |
+          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
+            echo "Building $dir..."
+            GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
+            echo "  OK: $dir"
+          done
+
+      - name: Run Go tests
+        working-directory: backend
+        run: /usr/local/go/bin/go test ./internal/... -count=1
+
+  build-frontend:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build static export
+        working-directory: frontend
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-out
+          path: frontend/out/
+          retention-days: 1
+
+  deploy-infra:
+    needs: [detect-changes, build-backend]
+    if: always() && (needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.crawler == 'true')
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Go binaries if backend changed
+        if: needs.detect-changes.outputs.backend == 'true'
+        working-directory: backend
+        run: |
+          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
+            GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
+          done
+
+      - name: Install CDK dependencies
+        working-directory: infra
+        run: npm ci
+
+      - name: CDK diff
+        working-directory: infra
+        run: npx cdk diff 2>&1 || true
+
+      - name: CDK deploy
+        working-directory: infra
+        run: npx cdk deploy --all --require-approval never
+
+  deploy-frontend:
+    needs: [detect-changes, build-frontend, deploy-infra]
+    if: always() && needs.detect-changes.outputs.frontend == 'true' && needs.build-frontend.result == 'success'
+    runs-on: self-hosted
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-out
+          path: frontend-out/
+
+      - name: Sync to S3
+        run: aws s3 sync frontend-out/ "s3://${S3_BUCKET}/" --delete
+
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${CF_DISTRIBUTION}" \
+            --paths "/*"
+
+  notify:
+    needs: [deploy-infra, deploy-frontend]
+    if: always()
+    runs-on: self-hosted
+    steps:
+      - name: Summary
+        env:
+          INFRA_RESULT: ${{ needs.deploy-infra.result }}
+          FRONTEND_RESULT: ${{ needs.deploy-frontend.result }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          echo "## Deploy Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Component | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Infra | ${INFRA_RESULT:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Frontend | ${FRONTEND_RESULT:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Trigger | ${EVENT} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch | ${REF_NAME} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | ${SHA} |" >> "$GITHUB_STEP_SUMMARY"
