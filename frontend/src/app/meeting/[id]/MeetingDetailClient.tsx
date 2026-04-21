@@ -137,8 +137,10 @@ function LiveTranscriptSection({ meeting }: { meeting: MeetingDetail }) {
 }
 
 function RecoveryBanner({ meetingId, onRecovered }: { meetingId: string; onRecovered: () => void }) {
+  const router = useRouter();
   const [recovering, setRecovering] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const handleRecover = async () => {
     setRecovering(true);
@@ -153,28 +155,58 @@ function RecoveryBanner({ meetingId, onRecovered }: { meetingId: string; onRecov
     }
   };
 
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await meetingsApi.delete(meetingId);
+      router.push('/');
+    } catch {
+      setDeleting(false);
+    }
+  };
+
+  const isNoProgress = error?.includes('progress file missing');
+
   return (
     <div className="mb-8 animate-fade-in">
-      <div className="flex items-center gap-3 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl">
-        <span className="material-symbols-outlined text-red-500">warning</span>
+      <div className="flex items-start gap-3 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl">
+        <span className="material-symbols-outlined text-red-500 mt-0.5">warning</span>
         <div className="flex-1">
           <span className="text-sm font-medium text-red-700 dark:text-red-300 block">
             이 녹음은 비정상 종료된 것으로 보입니다
           </span>
-          <span className="text-xs text-red-600/70 dark:text-red-400/70 mt-0.5 block">
-            마지막 체크포인트까지의 오디오를 복구할 수 있습니다
-          </span>
-          {error && (
+          {isNoProgress ? (
+            <span className="text-xs text-red-600/70 dark:text-red-400/70 mt-0.5 block">
+              저장된 체크포인트가 없어 복구할 수 없습니다. 이 미팅을 삭제하시겠습니까?
+            </span>
+          ) : (
+            <span className="text-xs text-red-600/70 dark:text-red-400/70 mt-0.5 block">
+              마지막 체크포인트까지의 오디오를 복구할 수 있습니다
+            </span>
+          )}
+          {error && !isNoProgress && (
             <span className="text-xs text-red-600 dark:text-red-400 mt-1 block">{error}</span>
           )}
         </div>
-        <button
-          onClick={handleRecover}
-          disabled={recovering}
-          className="px-4 py-2 rounded-lg text-xs font-bold border border-red-300 dark:border-red-700 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors shrink-0 disabled:opacity-50"
-        >
-          {recovering ? '복구 중...' : '녹음 복구'}
-        </button>
+        <div className="flex gap-2 shrink-0">
+          {isNoProgress ? (
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              className="px-4 py-2 rounded-lg text-xs font-bold bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+            >
+              {deleting ? '삭제 중...' : '미팅 삭제'}
+            </button>
+          ) : (
+            <button
+              onClick={handleRecover}
+              disabled={recovering}
+              className="px-4 py-2 rounded-lg text-xs font-bold border border-red-300 dark:border-red-700 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors disabled:opacity-50"
+            >
+              {recovering ? '복구 중...' : '녹음 복구'}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
