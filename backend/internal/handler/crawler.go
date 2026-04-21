@@ -30,7 +30,7 @@ func (h *CrawlerHandler) ListSources(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.crawlerService.ListSources(ctx, userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
 		return
 	}
 
@@ -55,7 +55,7 @@ func (h *CrawlerHandler) AddSource(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.crawlerService.AddSource(ctx, userID, &req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
 		return
 	}
 
@@ -85,7 +85,7 @@ func (h *CrawlerHandler) UpdateSource(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Source subscription not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
 		return
 	}
 
@@ -105,7 +105,7 @@ func (h *CrawlerHandler) Unsubscribe(w http.ResponseWriter, r *http.Request) {
 
 	err := h.crawlerService.Unsubscribe(ctx, userID, sourceID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
 		return
 	}
 
@@ -124,7 +124,7 @@ func (h *CrawlerHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.crawlerService.GetHistory(ctx, sourceID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
 		return
 	}
 

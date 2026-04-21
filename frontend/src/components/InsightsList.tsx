@@ -260,7 +260,7 @@ export function InsightsList() {
                     Read
                   </button>
                   <button
-                    onClick={() => window.open(doc.url, '_blank')}
+                    onClick={() => { if (doc.url?.startsWith('http')) window.open(doc.url, '_blank'); }}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-slate-500 dark:text-[#849396] border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
                   >
                     <span className="material-symbols-outlined text-lg">open_in_new</span>

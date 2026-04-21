@@ -104,7 +104,9 @@ def extract_paragraphs(html: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _fetch_url(url: str, timeout: int = FETCH_TIMEOUT_SECONDS) -> str:
-    """Fetch a URL and return response body as text."""
+    """Fetch a URL and return response body as text. Only http/https allowed."""
+    if not url.startswith(('http://', 'https://')):
+        raise ValueError(f'Unsupported URL scheme: {url[:30]}')
     req = Request(url, headers={'User-Agent': 'TtobakCrawler/1.0'})
     with urlopen(req, timeout=timeout) as resp:
         charset = resp.headers.get_content_charset() or 'utf-8'

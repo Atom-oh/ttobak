@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/model"
@@ -60,6 +61,11 @@ func (h *InsightsHandler) GetDocumentContent(w http.ResponseWriter, r *http.Requ
 
 	if sourceID == "" || docHash == "" {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "sourceId and docHash are required")
+		return
+	}
+	if strings.Contains(sourceID, "..") || strings.Contains(sourceID, "/") ||
+		strings.Contains(docHash, "..") || strings.Contains(docHash, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid sourceId or docHash")
 		return
 	}
 

@@ -7,6 +7,7 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
 import { insightsApi } from '@/lib/api';
 import type { CrawledDocument } from '@/types/meeting';
 
@@ -191,7 +192,7 @@ export default function InsightDetailPage() {
                   AI Briefing
                 </h2>
                 <div className="prose prose-sm dark:prose-invert max-w-none text-slate-700 dark:text-[#bac9cc] leading-relaxed break-words overflow-hidden [&_table]:text-xs [&_table]:border-collapse [&_table]:w-full [&_th]:bg-slate-100 [&_th]:dark:bg-white/5 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_td]:px-3 [&_td]:py-2 [&_th]:border [&_td]:border [&_th]:border-slate-200 [&_td]:border-slate-200 [&_th]:dark:border-white/10 [&_td]:dark:border-white/10 [&_blockquote]:border-l-4 [&_blockquote]:border-primary/30 [&_blockquote]:dark:border-[#00E5FF]/30 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-slate-500 [&_blockquote]:dark:text-[#849396] [&_code]:bg-slate-100 [&_code]:dark:bg-white/5 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_a]:text-primary [&_a]:dark:text-[#00E5FF] [&_a]:underline [&_a]:break-all [&_hr]:border-slate-200 [&_hr]:dark:border-white/10 [&_p]:overflow-hidden [&_p]:text-ellipsis">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{stripS3Header(doc.content)}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]}>{stripS3Header(doc.content)}</ReactMarkdown>
                 </div>
               </div>
             </div>
