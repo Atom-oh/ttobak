@@ -243,6 +243,17 @@ type IntegrationsResponse struct {
 	Notion *IntegrationStatusResponse `json:"notion,omitempty"`
 }
 
+// AllowedDomainsResponse represents the response for allowed domains
+type AllowedDomainsResponse struct {
+	Domains  []string `json:"domains"`
+	Enforced bool     `json:"enforced"`
+}
+
+// UpdateAllowedDomainsRequest represents the request body for updating allowed domains
+type UpdateAllowedDomainsRequest struct {
+	Domains []string `json:"domains"`
+}
+
 // KBUploadRequest represents the request body for KB file upload
 type KBUploadRequest struct {
 	FileName string `json:"fileName"`

@@ -107,6 +107,9 @@ func init() {
 	// Health check (no auth required)
 	r.Get("/api/health", healthHandler.Health)
 
+	// Public: allowed domains (no auth required)
+	r.Get("/api/auth/allowed-domains", settingsHandler.GetAllowedDomains)
+
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth)
@@ -158,6 +161,9 @@ func init() {
 		r.Get("/api/settings/integrations", settingsHandler.GetIntegrations)
 		r.Put("/api/settings/integrations/notion", settingsHandler.SaveNotionKey)
 		r.Delete("/api/settings/integrations/notion", settingsHandler.DeleteNotionKey)
+
+		// Allowed domains management
+		r.Put("/api/settings/allowed-domains", settingsHandler.SaveAllowedDomains)
 
 		// Translation route
 		r.Post("/api/translate", translateHandler.Translate)

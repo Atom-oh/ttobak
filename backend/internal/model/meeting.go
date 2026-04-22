@@ -202,3 +202,19 @@ const (
 	PrefixConfig     = "CONFIG"
 	PrefixResearch   = "RESEARCH#"
 )
+
+// Config SK constants
+const (
+	ConfigSKAllowedDomains = "ALLOWED_DOMAINS"
+)
+
+// AllowedDomainsConfig represents the allowed email domains configuration
+// PK: CONFIG, SK: ALLOWED_DOMAINS
+type AllowedDomainsConfig struct {
+	PK         string    `dynamodbav:"PK"`
+	SK         string    `dynamodbav:"SK"`
+	Domains    []string  `dynamodbav:"domains"`
+	UpdatedAt  time.Time `dynamodbav:"updatedAt"`
+	UpdatedBy  string    `dynamodbav:"updatedBy"`
+	EntityType string    `dynamodbav:"entityType"`
+}

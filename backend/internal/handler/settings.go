@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ttobak/backend/internal/middleware"
@@ -137,6 +138,57 @@ func maskAPIKey(key string) string {
 	}
 	// Show first 4 and last 4 characters
 	return key[:4] + "****" + key[len(key)-4:]
+}
+
+// GetAllowedDomains handles GET /api/auth/allowed-domains (public, no auth required)
+func (h *SettingsHandler) GetAllowedDomains(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	domains, err := h.repo.GetAllowedDomains(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		return
+	}
+	if domains == nil {
+		domains = []string{}
+	}
+	writeJSON(w, http.StatusOK, model.AllowedDomainsResponse{
+		Domains:  domains,
+		Enforced: len(domains) > 0,
+	})
+}
+
+// SaveAllowedDomains handles PUT /api/settings/allowed-domains (auth required)
+func (h *SettingsHandler) SaveAllowedDomains(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+
+	var req model.UpdateAllowedDomainsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	// Normalize domains: lowercase, trim whitespace
+	for i, d := range req.Domains {
+		req.Domains[i] = strings.ToLower(strings.TrimSpace(d))
+	}
+	// Remove empty entries
+	var cleaned []string
+	for _, d := range req.Domains {
+		if d != "" {
+			cleaned = append(cleaned, d)
+		}
+	}
+
+	if err := h.repo.SaveAllowedDomains(ctx, cleaned, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, model.AllowedDomainsResponse{
+		Domains:  cleaned,
+		Enforced: len(cleaned) > 0,
+	})
 }
 
 // isValidNotionKey validates Notion API key format

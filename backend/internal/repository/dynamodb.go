@@ -1169,3 +1169,50 @@ func (r *DynamoDBRepository) DeleteChatSession(ctx context.Context, userID, sess
 
 	return nil
 }
+
+// GetAllowedDomains retrieves the allowed email domains configuration
+func (r *DynamoDBRepository) GetAllowedDomains(ctx context.Context) ([]string, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+			"SK": &types.AttributeValueMemberS{Value: model.ConfigSKAllowedDomains},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed domains: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+
+	var config model.AllowedDomainsConfig
+	if err := attributevalue.UnmarshalMap(result.Item, &config); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal allowed domains: %w", err)
+	}
+	return config.Domains, nil
+}
+
+// SaveAllowedDomains saves the allowed email domains configuration
+func (r *DynamoDBRepository) SaveAllowedDomains(ctx context.Context, domains []string, updatedBy string) error {
+	config := &model.AllowedDomainsConfig{
+		PK:         model.PrefixConfig,
+		SK:         model.ConfigSKAllowedDomains,
+		Domains:    domains,
+		UpdatedAt:  time.Now().UTC(),
+		UpdatedBy:  updatedBy,
+		EntityType: "CONFIG",
+	}
+	item, err := attributevalue.MarshalMap(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal allowed domains: %w", err)
+	}
+	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(r.tableName),
+		Item:      item,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to save allowed domains: %w", err)
+	}
+	return nil
+}

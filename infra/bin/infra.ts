@@ -24,16 +24,19 @@ const usEast1Env = {
   region: 'us-east-1',
 };
 
-// Stack 1 & 2: Auth and Storage can be deployed in parallel (no dependencies)
-const authStack = new AuthStack(app, 'TtobakAuthStack', {
-  env,
-  description: 'Ttobak AI Meeting Assistant - Authentication (Cognito)',
-});
-
+// Stack 1: Storage first (Auth now depends on it for Pre Sign-Up Lambda DynamoDB access)
 const storageStack = new StorageStack(app, 'TtobakStorageStack', {
   env,
   description: 'Ttobak AI Meeting Assistant - Storage (DynamoDB + S3)',
 });
+
+// Stack 2: Auth (depends on Storage for Pre Sign-Up Lambda's DynamoDB table access)
+const authStack = new AuthStack(app, 'TtobakAuthStack', {
+  env,
+  description: 'Ttobak AI Meeting Assistant - Authentication (Cognito)',
+  table: storageStack.table,
+});
+authStack.addDependency(storageStack);
 
 // Stack 3: Knowledge Base (OpenSearch Serverless + Bedrock KB)
 const knowledgeStack = new KnowledgeStack(app, 'TtobakKnowledgeStack', {
