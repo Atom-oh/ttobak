@@ -1103,3 +1103,69 @@ func (r *DynamoDBRepository) DeleteIntegration(ctx context.Context, userID, serv
 	}
 	return nil
 }
+
+// ChatSession represents a chat session metadata item in DynamoDB
+type ChatSession struct {
+	SessionID     string `dynamodbav:"sessionId" json:"sessionId"`
+	Title         string `dynamodbav:"title" json:"title"`
+	CreatedAt     string `dynamodbav:"createdAt" json:"createdAt"`
+	LastMessageAt string `dynamodbav:"lastMessageAt" json:"lastMessageAt"`
+	MessageCount  int    `dynamodbav:"messageCount" json:"messageCount"`
+}
+
+// ListChatSessions returns all chat sessions for a user, newest first
+func (r *DynamoDBRepository) ListChatSessions(ctx context.Context, userID string) ([]ChatSession, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixUser + userID)).
+		And(expression.Key("SK").BeginsWith("CHAT_SESSION#"))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build expression: %w", err)
+	}
+
+	queryResult, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(false),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to query chat sessions: %w", err)
+	}
+
+	var sessions []ChatSession
+	if err := attributevalue.UnmarshalListOfMaps(queryResult.Items, &sessions); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal chat sessions: %w", err)
+	}
+
+	return sessions, nil
+}
+
+// DeleteChatSession deletes both session metadata and session messages
+func (r *DynamoDBRepository) DeleteChatSession(ctx context.Context, userID, sessionID string) error {
+	// Delete session metadata: PK=USER#{userID}, SK=CHAT_SESSION#{sessionID}
+	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: "CHAT_SESSION#" + sessionID},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete chat session metadata: %w", err)
+	}
+
+	// Delete session messages: PK=SESSION#{userID}#{sessionID}, SK=MESSAGES
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "SESSION#" + userID + "#" + sessionID},
+			"SK": &types.AttributeValueMemberS{Value: "MESSAGES"},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete chat session messages: %w", err)
+	}
+
+	return nil
+}

@@ -89,6 +89,7 @@ func init() {
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
 	researchService := service.NewResearchService(researchRepo, s3Client, kbBucketName, os.Getenv("RESEARCH_AGENT_ID"), os.Getenv("RESEARCH_AGENT_ALIAS_ID"))
 	researchHandler := handler.NewResearchHandler(researchService)
+	chatHandler := handler.NewChatHandler(repo)
 	// Setup router
 	r := chi.NewRouter()
 
@@ -178,6 +179,10 @@ func init() {
 		r.Get("/api/research", researchHandler.ListResearch)
 		r.Get("/api/research/{researchId}", researchHandler.GetResearchDetail)
 		r.Delete("/api/research/{researchId}", researchHandler.DeleteResearch)
+
+		// Chat session routes
+		r.Get("/api/chat/sessions", chatHandler.ListSessions)
+		r.Delete("/api/chat/sessions/{sessionId}", chatHandler.DeleteSession)
 
 	})
 
