@@ -1,0 +1,13 @@
+{
+  "name": "ttobak-deep-research",
+  "description": "Deep Research Agent for Ttobak — performs multi-source web research and generates citation-backed reports for AWS Solutions Architects",
+  "entrypoint": "agent.py",
+  "runtime": "python3.13",
+  "environment": {
+    "TABLE_NAME": "ttobak-main",
+    "KB_BUCKET_NAME": "ttobak-kb-180294183052",
+    "AWS_REGION": "ap-northeast-2"
+  },
+  "timeout": 28800,
+  "memory": 1024
+}
