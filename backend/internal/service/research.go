@@ -108,7 +108,7 @@ func (s *ResearchService) invokeAgentCore(research *model.Research) {
 		AgentRuntimeArn:  aws.String(agentRuntimeArn),
 		Qualifier:        aws.String(qualifier),
 		Payload:          payloadBytes,
-		RuntimeSessionId: aws.String(research.ResearchID),
+		RuntimeSessionId: aws.String("ttobak-research-" + research.ResearchID),
 		ContentType:      aws.String("application/json"),
 		Accept:           aws.String("application/json"),
 	})

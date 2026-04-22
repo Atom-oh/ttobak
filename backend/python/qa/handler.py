@@ -7,7 +7,7 @@ import time
 import boto3
 
 from aws_docs import search_aws_docs
-from prompts import SYSTEM_PROMPT, DETECT_QUESTIONS_PROMPT
+from prompts import get_system_prompt, DETECT_QUESTIONS_PROMPT
 from tools import TOOL_DEFINITIONS, execute_tool
 
 logger = logging.getLogger()
@@ -397,7 +397,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
     sources = []
 
     # Build system messages: base prompt + optional meeting context
-    system_messages = [{"text": SYSTEM_PROMPT}]
+    system_messages = [{"text": get_system_prompt()}]
     if transcript:
         truncated = transcript[-2000:] if len(transcript) > 2000 else transcript
         system_messages.append({"text": f"\n\n## 현재 미팅 대화 내용 (실시간)\n{truncated}\n\n위 대화 맥락에 기반하여 답변하세요. 미팅 내용과 관련없는 질문이라도 가능한 한 대화 맥락을 참조하세요."})
@@ -736,7 +736,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         try:
             stream_resp = bedrock_runtime.converse_stream(
                 modelId=BEDROCK_MODEL_ID,
-                system=[{"text": SYSTEM_PROMPT}],
+                system=[{"text": get_system_prompt()}],
                 messages=messages,
                 toolConfig={"tools": TOOL_DEFINITIONS},
                 inferenceConfig={"maxTokens": 4096, "temperature": 0.3},

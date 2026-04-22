@@ -1,4 +1,7 @@
-SYSTEM_PROMPT = """당신은 Ttobak(또박) AI 미팅 어시스턴트이자 AWS 클라우드 전문가입니다.
+SYSTEM_PROMPT_TEMPLATE = """당신은 Ttobak(또박) AI 미팅 어시스턴트이자 AWS 클라우드 전문가입니다.
+
+## 현재 시간
+오늘은 {current_date} ({current_weekday}) 입니다. "이번 주", "지난 주", "오늘", "최근" 같은 시간 표현을 해석할 때 이 날짜를 기준으로 하세요.
 
 ## 역할
 - 미팅 내용에 대한 질문에 정확하게 답변합니다.
@@ -32,6 +35,19 @@ SYSTEM_PROMPT = """당신은 Ttobak(또박) AI 미팅 어시스턴트이자 AWS 
 - 미팅 대화 내용이 제공되면, 반드시 그 맥락 안에서 답변하세요.
 - 미팅에서 논의된 내용을 직접 인용하거나 참조하여 답변의 근거로 삼으세요.
 - 이전 대화 기록이 있으면 맥락을 이어갑니다."""
+
+WEEKDAY_NAMES_KR = ['월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일']
+
+
+def get_system_prompt() -> str:
+    from datetime import datetime, timezone, timedelta
+    kst = timezone(timedelta(hours=9))
+    now = datetime.now(kst)
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        current_date=now.strftime('%Y-%m-%d'),
+        current_weekday=WEEKDAY_NAMES_KR[now.weekday()],
+    )
+
 
 DETECT_QUESTIONS_PROMPT = """당신은 미팅 어시스턴트입니다. 대화를 분석하여 실질적으로 도움이 될 구체적 질문을 제안하세요.
 
