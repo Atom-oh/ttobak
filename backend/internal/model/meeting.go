@@ -134,6 +134,23 @@ type CrawlHistory struct {
 	Duration    int      `dynamodbav:"duration" json:"duration"`
 }
 
+// Research represents a deep research task
+// PK: USER#{userId}, SK: RESEARCH#{researchId}
+type Research struct {
+	ResearchID   string `dynamodbav:"researchId" json:"researchId"`
+	UserID       string `dynamodbav:"userId" json:"userId"`
+	Topic        string `dynamodbav:"topic" json:"topic"`
+	Mode         string `dynamodbav:"mode" json:"mode"`
+	Status       string `dynamodbav:"status" json:"status"`
+	CreatedAt    string `dynamodbav:"createdAt" json:"createdAt"`
+	CompletedAt  string `dynamodbav:"completedAt,omitempty" json:"completedAt,omitempty"`
+	S3Key        string `dynamodbav:"s3Key,omitempty" json:"s3Key,omitempty"`
+	SourceCount  int    `dynamodbav:"sourceCount,omitempty" json:"sourceCount,omitempty"`
+	WordCount    int    `dynamodbav:"wordCount,omitempty" json:"wordCount,omitempty"`
+	Summary      string `dynamodbav:"summary,omitempty" json:"summary,omitempty"`
+	ErrorMessage string `dynamodbav:"errorMessage,omitempty" json:"errorMessage,omitempty"`
+}
+
 // MeetingStatus constants
 const (
 	StatusRecording    = "recording"
@@ -181,4 +198,5 @@ const (
 	PrefixDoc        = "DOC#"
 	PrefixHistory    = "HISTORY#"
 	PrefixConfig     = "CONFIG"
+	PrefixResearch   = "RESEARCH#"
 )

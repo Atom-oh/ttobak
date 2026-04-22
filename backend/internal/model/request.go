@@ -323,6 +323,23 @@ type InsightDetailResponse struct {
 	Content string `json:"content"`
 }
 
+// CreateResearchRequest represents the request body for creating a research task
+type CreateResearchRequest struct {
+	Topic string `json:"topic"`
+	Mode  string `json:"mode"`
+}
+
+// ResearchResponse represents a single research task in API responses
+type ResearchResponse struct {
+	Research
+	Content string `json:"content,omitempty"`
+}
+
+// ResearchListResponse represents the response for listing research tasks
+type ResearchListResponse struct {
+	Research []Research `json:"research"`
+}
+
 // ToMeetingListItem converts a Meeting to MeetingListItem
 func ToMeetingListItem(m *Meeting, isShared bool, sharedBy *string, permission *string) MeetingListItem {
 	summary := m.Content
