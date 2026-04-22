@@ -243,6 +243,32 @@ export class GatewayStack extends cdk.Stack {
       authorizer: jwtAuthorizer,
     });
 
+    // Warm the API Lambda every 5 minutes to eliminate cold starts
+    const warmingRule = new events.Rule(this, 'ApiWarmingRule', {
+      ruleName: 'ttobak-api-warming',
+      description: 'Keep API Lambda warm by invoking /api/health every 5 minutes',
+      schedule: events.Schedule.expression('cron(0/5 0-9 ? * MON-FRI *)'),
+    });
+    warmingRule.addTarget(new eventsTargets.LambdaFunction(this.apiFunction, {
+      event: events.RuleTargetInput.fromObject({
+        version: '1.0',
+        resource: '/api/health',
+        path: '/api/health',
+        httpMethod: 'GET',
+        headers: { 'X-Warming': 'true' },
+        queryStringParameters: null,
+        pathParameters: null,
+        stageVariables: null,
+        requestContext: {
+          resourcePath: '/api/health',
+          httpMethod: 'GET',
+          path: '/api/health',
+        },
+        body: null,
+        isBase64Encoded: false,
+      }),
+    }));
+
     // EventBridge rule for audio uploads -> Transcribe Lambda
     const audioUploadRule = new events.Rule(this, 'AudioUploadRule', {
       ruleName: 'ttobak-audio-upload',
