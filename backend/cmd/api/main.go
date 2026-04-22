@@ -86,6 +86,9 @@ func init() {
 	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
 	insightsHandler := handler.NewInsightsHandler(insightsService)
+	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
+	researchService := service.NewResearchService(researchRepo, s3Client, kbBucketName, os.Getenv("RESEARCH_AGENT_ID"), os.Getenv("RESEARCH_AGENT_ALIAS_ID"))
+	researchHandler := handler.NewResearchHandler(researchService)
 	// Setup router
 	r := chi.NewRouter()
 
@@ -169,6 +172,12 @@ func init() {
 		// Insights
 		r.Get("/api/insights", insightsHandler.ListInsights)
 		r.Get("/api/insights/{sourceId}/{docHash}", insightsHandler.GetDocumentContent)
+
+		// Research
+		r.Post("/api/research", researchHandler.CreateResearch)
+		r.Get("/api/research", researchHandler.ListResearch)
+		r.Get("/api/research/{researchId}", researchHandler.GetResearchDetail)
+		r.Delete("/api/research/{researchId}", researchHandler.DeleteResearch)
 
 	})
 
