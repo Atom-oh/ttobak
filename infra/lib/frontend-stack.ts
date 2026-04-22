@@ -68,6 +68,12 @@ function handler(event) {
     request.uri = uri;
   }
 
+  // Dynamic route: /insights/research/{researchId} → /insights/research/_
+  if (uri.match(/^\\/insights\\/research\\/[^\\/]+/) && !uri.match(/^\\/insights\\/research\\/_/)) {
+    uri = uri.replace(/^\\/insights\\/research\\/[^\\/\\.]+/, '/insights/research/_');
+    request.uri = uri;
+  }
+
   // Dynamic route: /insights/{sourceId}/{docHash} → rewrite to /insights/_/_
   if (uri.match(/^\\/insights\\/[^\\/]+\\/[^\\/]+/) && !uri.match(/^\\/insights\\/_\\/_/)) {
     uri = uri.replace(/^\\/insights\\/[^\\/]+\\/[^\\/\\.]+/, '/insights/_/_');
@@ -75,7 +81,7 @@ function handler(event) {
   }
 
   // Known static pages → append .html; unknown paths → SPA fallback
-  var knownPages = ['/files', '/kb', '/settings', '/record', '/profile', '/insights', '/meeting/_', '/insights/_/_'];
+  var knownPages = ['/files', '/kb', '/settings', '/record', '/profile', '/insights', '/meeting/_', '/insights/_/_', '/insights/research/_'];
   if (uri !== '/' && !uri.includes('.') && !uri.endsWith('/')) {
     if (knownPages.indexOf(uri) >= 0) {
       request.uri = uri + '.html';
