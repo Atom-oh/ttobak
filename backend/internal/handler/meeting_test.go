@@ -12,13 +12,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
 
 // withUserCtx injects a userID into the request context for testing.
 func withUserCtx(r *http.Request, userID string) *http.Request {
 	ctx := context.WithValue(r.Context(), middleware.UserIDKey, userID)
-	ctx = context.WithValue(ctx, middleware.UserEmailKey, userID+"@test.com")
+	// Intentionally omit UserEmailKey so handler skips h.repo.GetOrCreateUser call
 	return r.WithContext(ctx)
 }
 
@@ -118,10 +119,10 @@ func (m *mockHandlerMeetingRepo) ListAttachments(_ context.Context, meetingID st
 func (m *mockHandlerMeetingRepo) ListSharesForMeeting(_ context.Context, meetingID string) ([]model.Share, error) {
 	return nil, nil
 }
-func (m *mockHandlerMeetingRepo) ListMeetings(_ context.Context, _ interface{}) (interface{}, error) {
-	return nil, nil
+func (m *mockHandlerMeetingRepo) ListMeetings(_ context.Context, params repository.ListMeetingsParams) (*repository.ListMeetingsResult, error) {
+	return &repository.ListMeetingsResult{}, nil
 }
-func (m *mockHandlerMeetingRepo) BatchGetMeetings(_ context.Context, _ interface{}) (interface{}, error) {
+func (m *mockHandlerMeetingRepo) BatchGetMeetings(_ context.Context, _ []repository.MeetingKey) ([]*model.Meeting, error) {
 	return nil, nil
 }
 func (m *mockHandlerMeetingRepo) GetOrCreateUser(_ context.Context, userID, email, name string) (*model.User, error) {
