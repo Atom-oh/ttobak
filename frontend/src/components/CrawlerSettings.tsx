@@ -254,16 +254,16 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
             <div className="grid grid-cols-2 gap-2">
               {NEWS_SOURCE_OPTIONS.map((ns) => (
                 <label
-                  key={ns}
+                  key={ns.id}
                   className="flex items-center gap-2 px-3 py-2 bg-slate-50 dark:bg-[#0e0e13] dark:border dark:border-white/10 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
                 >
                   <input
                     type="checkbox"
-                    checked={newsSources.includes(ns)}
-                    onChange={() => toggleNewsSource(ns)}
+                    checked={newsSources.includes(ns.id)}
+                    onChange={() => toggleNewsSource(ns.id)}
                     className="rounded border-slate-300 text-primary focus:ring-primary/20 dark:border-white/20 dark:bg-white/5"
                   />
-                  <span className="text-sm text-slate-700 dark:text-[#bac9cc]">{ns}</span>
+                  <span className="text-sm text-slate-700 dark:text-[#bac9cc]">{ns.label}</span>
                 </label>
               ))}
             </div>
@@ -466,7 +466,6 @@ export function CrawlerSettings() {
       awsServices: data.awsServices,
       newsSources: data.newsSources,
       customUrls: data.customUrls.length > 0 ? data.customUrls : undefined,
-      newsQueries: data.newsSources.length > 0 ? data.newsSources : undefined,
     });
     setSuccess('Source added successfully');
     await fetchSources();
@@ -626,7 +625,7 @@ export function CrawlerSettings() {
                 {/* News sources */}
                 {subscription.newsSources.length > 0 && (
                   <p className="text-xs text-slate-500 dark:text-[#849396] mb-2">
-                    News: {subscription.newsSources.join(', ')}
+                    News: {subscription.newsSources.map((id) => NEWS_SOURCE_OPTIONS.find((o) => o.id === id)?.label || id).join(', ')}
                   </p>
                 )}
 

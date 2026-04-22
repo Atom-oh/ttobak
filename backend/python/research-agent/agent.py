@@ -93,16 +93,24 @@ The user message will specify a mode:
 
 IMPORTANT: You MUST call save_report at the end with the complete report. The researchId will be provided in the user message."""
 
-model = BedrockModel(
-    model_id="anthropic.claude-sonnet-4-6-v1:0",
-    region_name=os.environ.get("AWS_REGION", "ap-northeast-2"),
-)
+REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 
-agent = Agent(
-    model=model,
-    system_prompt=SYSTEM_PROMPT,
-    tools=[web_search, fetch_page, save_report],
-)
+MODEL_BY_MODE = {
+    "quick": "global.anthropic.claude-sonnet-4-6",
+    "standard": "global.anthropic.claude-sonnet-4-6",
+    "deep": "us.anthropic.claude-opus-4-7",
+}
+
+
+def _create_agent(mode: str) -> Agent:
+    model_id = MODEL_BY_MODE.get(mode, MODEL_BY_MODE["standard"])
+    logger.info(f"Using model {model_id} for {mode} mode")
+    model = BedrockModel(model_id=model_id, region_name=REGION)
+    return Agent(
+        model=model,
+        system_prompt=SYSTEM_PROMPT,
+        tools=[web_search, fetch_page, save_report],
+    )
 
 
 @app.entrypoint
@@ -126,6 +134,7 @@ def handle(payload):
     logger.info(f"Starting research: id={research_id}, mode={mode}, topic={topic[:80]}")
 
     try:
+        agent = _create_agent(mode)
         result = agent(prompt)
         return {"status": "completed", "researchId": research_id}
     except Exception as e:

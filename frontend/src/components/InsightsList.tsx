@@ -346,6 +346,23 @@ export function InsightsList() {
                         {r.errorMessage}
                       </p>
                     )}
+                    {/* Delete button for error/done jobs */}
+                    {(r.status === 'error' || r.status === 'done') && (
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!confirm('Delete this research?')) return;
+                          try {
+                            await researchApi.delete(r.researchId);
+                            await fetchResearchJobs();
+                          } catch {}
+                        }}
+                        className="mt-2 flex items-center gap-1 text-xs text-red-500 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 transition-colors"
+                      >
+                        <span className="material-symbols-outlined text-sm">delete</span>
+                        Delete
+                      </button>
+                    )}
                   </div>
                 );
               })}

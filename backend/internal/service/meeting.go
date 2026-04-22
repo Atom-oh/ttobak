@@ -55,6 +55,14 @@ func newMeetingServiceWithRepo(repo meetingRepo) *MeetingService {
 	return &MeetingService{repo: repo}
 }
 
+// NewMeetingServiceForTest creates a MeetingService with a custom MeetingRepo (exported for cross-package tests).
+func NewMeetingServiceForTest(repo MeetingRepo) *MeetingService {
+	return &MeetingService{repo: repo}
+}
+
+// MeetingRepo is the exported version of meetingRepo for cross-package test mocks.
+type MeetingRepo = meetingRepo
+
 // CreateMeeting creates a new meeting
 func (s *MeetingService) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error) {
 	if title == "" {
