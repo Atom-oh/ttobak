@@ -87,6 +87,9 @@ export class AuthStack extends cdk.Stack {
         userPassword: true,
         userSrp: true,
       },
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1),
+      refreshTokenValidity: cdk.Duration.days(7),
     });
 
     // Public SPA client (no secret — safe for browser-based auth + MCP OAuth PKCE)
@@ -112,6 +115,9 @@ export class AuthStack extends cdk.Stack {
       supportedIdentityProviders: [
         cognito.UserPoolClientIdentityProvider.COGNITO,
       ],
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1),
+      refreshTokenValidity: cdk.Duration.days(30),
     });
 
     // Cognito Identity Pool — enables browser-direct access to AWS services
