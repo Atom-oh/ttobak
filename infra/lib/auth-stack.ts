@@ -89,7 +89,7 @@ export class AuthStack extends cdk.Stack {
       },
       accessTokenValidity: cdk.Duration.hours(1),
       idTokenValidity: cdk.Duration.hours(1),
-      refreshTokenValidity: cdk.Duration.days(7),
+      refreshTokenValidity: cdk.Duration.days(30),
     });
 
     // Public SPA client (no secret — safe for browser-based auth + MCP OAuth PKCE)
