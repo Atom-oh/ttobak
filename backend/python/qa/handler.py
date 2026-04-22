@@ -160,6 +160,37 @@ def _kb_cache_put(question, number_of_results, results, user_id=None):
         logger.warning(f"KB cache write failed: {e}")
 
 
+# Cache shared-meeting lookups per user (warm for Lambda lifetime)
+_shared_meetings_cache = {}
+
+
+def _list_shared_meetings(user_id):
+    """Query DynamoDB for meetings shared with this user.
+
+    Returns list of {'meetingId': ..., 'ownerId': ...}.
+    Results are cached in module-level dict keyed by user_id.
+    """
+    if user_id in _shared_meetings_cache:
+        return _shared_meetings_cache[user_id]
+    try:
+        from boto3.dynamodb.conditions import Key
+        resp = table.query(
+            KeyConditionExpression=Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('SHARED#'),
+            ProjectionExpression='meetingId, ownerId',
+        )
+        items = [
+            {'meetingId': item['meetingId'], 'ownerId': item['ownerId']}
+            for item in resp.get('Items', [])
+            if item.get('meetingId') and item.get('ownerId')
+        ]
+        _shared_meetings_cache[user_id] = items
+        return items
+    except Exception as e:
+        logger.warning(f"Failed to list shared meetings for {user_id}: {e}")
+        _shared_meetings_cache[user_id] = []
+        return []
+
+
 def retrieve_from_kb(question, number_of_results=5, user_id=None):
     """Retrieve relevant documents from Bedrock Knowledge Base, with short-lived DynamoDB cache."""
     capped = min(number_of_results, 10)
@@ -175,15 +206,22 @@ def retrieve_from_kb(question, number_of_results=5, user_id=None):
                 'numberOfResults': capped,
             }
         }
-        # Filter: user's personal KB + user's meeting docs + shared crawler docs
+        # Filter: user's personal KB + user's meeting docs + shared crawler docs + shared meetings
         if user_id:
-            retrieval_config['vectorSearchConfiguration']['filter'] = {
-                'orAll': [
-                    {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'kb/{user_id}/'}},
-                    {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'meetings/{user_id}/'}},
-                    {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': 'shared/'}},
-                ]
-            }
+            filters = [
+                {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'kb/{user_id}/'}},
+                {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'meetings/{user_id}/'}},
+                {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': 'shared/'}},
+            ]
+            # Include documents from meetings shared with this user
+            for shared in _list_shared_meetings(user_id):
+                filters.append({
+                    'stringContains': {
+                        'key': 'x-amz-bedrock-kb-source-uri',
+                        'value': f"meetings/{shared['ownerId']}/{shared['meetingId']}",
+                    }
+                })
+            retrieval_config['vectorSearchConfiguration']['filter'] = {'orAll': filters}
         resp = bedrock_agent_runtime.retrieve(
             knowledgeBaseId=KB_ID,
             retrievalQuery={'text': question},
