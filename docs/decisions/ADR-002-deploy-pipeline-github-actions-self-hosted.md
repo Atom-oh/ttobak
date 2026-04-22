@@ -142,17 +142,27 @@ Three separate workflows:
 
 All workflows also support `workflow_dispatch` for manual triggers.
 
+## Post-Implementation Updates
+
+The actual implementation diverged from the original design in the following ways:
+
+1. **Single unified workflow**: Instead of 3 separate workflow files, a single `deploy.yml` handles all deployment targets. A `detect-changes` job uses path-based change detection to determine which components (backend, frontend, infra) need deployment. This reduces workflow duplication and simplifies maintenance.
+2. **Single runner label**: Uses `self-hosted` label instead of architecture-specific `ttobak-x86`/`ttobak-arm` labels. Go ARM64 cross-compilation (`GOOS=linux GOARCH=arm64`) works reliably from x86 runners, making a dedicated ARM runner unnecessary.
+3. **`workflow_dispatch` with target selection**: Manual triggers support selecting `all`, `backend`, `frontend`, or `infra` as the deploy target, enabling selective manual deployments.
+4. **CDK stacks expanded**: The project now has 9 stacks (originally 7): added `CrawlerStack` and `ResearchAgentStack`.
+
 ## Consequences
 
 ### Positive
 - Eliminates manual deployment errors (forgotten builds, dirty working trees)
 - Automated CloudFront invalidation on every frontend deploy
-- Native ARM64 Go builds — faster and eliminates cross-compilation edge cases
 - Push-to-deploy on `main` — merge a PR and deployment happens automatically
 - Workflow files are code-reviewed alongside application code
+- Single workflow is simpler to maintain than three separate ones
+- `workflow_dispatch` enables selective manual deployments when needed
 
 ### Negative
-- Runner instances must remain online; if an instance is stopped, CI breaks
+- Runner instance must remain online; if the instance is stopped, CI breaks
 - No auto-scaling — concurrent pushes queue on a single runner
 - Runner maintenance (OS updates, Go/Node upgrades) is the developer's responsibility
 - If the project goes public in the future, self-hosted runners need additional hardening (e.g., restrict to `main` branch only, disable on PR events from forks)
@@ -292,13 +302,24 @@ AWS 네이티브 CI/CD를 사용합니다.
 
 모든 워크플로우는 수동 트리거를 위한 `workflow_dispatch`도 지원합니다.
 
+## 구현 후 업데이트
+
+실제 구현은 원래 설계에서 다음과 같이 변경되었습니다:
+
+1. **단일 통합 워크플로우**: 3개 별도 워크플로우 파일 대신 하나의 `deploy.yml`이 모든 배포 대상을 처리합니다. `detect-changes` 잡이 경로 기반 변경 감지를 사용하여 어떤 컴포넌트(backend, frontend, infra)를 배포해야 하는지 결정합니다.
+2. **단일 러너 레이블**: 아키텍처별 `ttobak-x86`/`ttobak-arm` 레이블 대신 `self-hosted`를 사용합니다. Go ARM64 크로스 컴파일(`GOOS=linux GOARCH=arm64`)이 x86 러너에서 안정적으로 동작하여 전용 ARM 러너가 불필요합니다.
+3. **`workflow_dispatch` 대상 선택**: 수동 트리거가 `all`, `backend`, `frontend`, `infra`를 배포 대상으로 선택할 수 있어 선택적 수동 배포가 가능합니다.
+4. **CDK 스택 확장**: 프로젝트가 현재 9개 스택으로 확장되었습니다 (원래 7개): `CrawlerStack`과 `ResearchAgentStack`이 추가되었습니다.
+
 ## 영향
 
 ### 긍정적
 - 수동 배포 오류 제거 (빌드 누락, 더티 워킹 트리)
 - 프론트엔드 배포마다 자동 CloudFront 무효화
-- 네이티브 ARM64 Go 빌드 — 빠르고 크로스 컴파일 엣지 케이스 제거
 - `main`에 push-to-deploy — PR 병합 시 자동 배포
+- 워크플로우 파일이 코드와 함께 리뷰됨
+- 단일 워크플로우가 3개 별도 파일보다 유지보수가 간단
+- `workflow_dispatch`로 필요 시 선택적 수동 배포 가능
 
 ### 부정적
 - 러너 인스턴스가 온라인 상태여야 함; 인스턴스 중지 시 CI 중단
@@ -307,7 +328,7 @@ AWS 네이티브 CI/CD를 사용합니다.
 - 프로젝트가 퍼블릭으로 전환되면 self-hosted runner 추가 보안 강화 필요
 
 ## 참고 자료
+- `.github/workflows/deploy.yml` — 통합 배포 워크플로우 (원래 3개에서 1개로 통합)
 - [GitHub Actions: Self-hosted runners](https://docs.github.com/en/actions/hosting-your-own-runners)
-- [GitHub Actions: Workflow syntax — `runs-on`](https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idruns-on)
 - 현재 배포 명령어: `CLAUDE.md` Build Commands 섹션
-- CDK 스택: `infra/lib/` (7개 스택, 의존성 순서는 CLAUDE.md 참조)
+- CDK 스택: `infra/lib/` (9개 스택, 의존성 순서는 CLAUDE.md 참조)
