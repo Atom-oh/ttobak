@@ -90,6 +90,7 @@ type CrawlerSource struct {
 	Subscribers   []string `dynamodbav:"subscribers" json:"subscribers"`
 	AWSServices   []string `dynamodbav:"awsServices" json:"awsServices"`
 	NewsQueries   []string `dynamodbav:"newsQueries" json:"newsQueries"`
+	NewsSources   []string `dynamodbav:"newsSources" json:"newsSources"`
 	CustomUrls    []string `dynamodbav:"customUrls" json:"customUrls"`
 	Schedule      string   `dynamodbav:"schedule" json:"schedule"`
 	LastCrawledAt string   `dynamodbav:"lastCrawledAt" json:"lastCrawledAt"`
@@ -118,6 +119,7 @@ type CrawledDocument struct {
 	Source      string   `dynamodbav:"source,omitempty" json:"source"`
 	Summary     string   `dynamodbav:"summary,omitempty" json:"summary"`
 	AWSServices []string `dynamodbav:"awsServices,omitempty" json:"awsServices,omitempty"`
+	Tags        []string `dynamodbav:"tags,omitempty" json:"tags,omitempty"`
 	S3Key       string   `dynamodbav:"s3Key,omitempty" json:"s3Key"`
 	CrawledAt   int64    `dynamodbav:"crawledAt" json:"crawledAt"`
 	InKB        bool     `dynamodbav:"inKB,omitempty" json:"inKB"`

@@ -10,10 +10,12 @@ const AWS_SERVICE_PRESETS = [
 ];
 
 const NEWS_SOURCE_OPTIONS = [
-  'Naver News',
-  'Google News',
-  'ZDNet Korea',
-  'IT Chosun',
+  { id: 'google', label: 'Google News' },
+  { id: 'naver', label: 'Naver News' },
+  { id: 'zdnet', label: 'ZDNet Korea' },
+  { id: 'etnews', label: '전자신문' },
+  { id: 'itchosun', label: 'IT Chosun' },
+  { id: 'bloter', label: 'Bloter' },
 ];
 
 type SourceStatus = 'active' | 'idle' | 'crawling' | 'error' | 'disabled';

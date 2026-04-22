@@ -1,8 +1,9 @@
 """News Crawler Lambda — fetches and indexes Korean tech news articles.
 
 Triggered by Step Functions with a source config containing newsQueries
-and/or customUrls. Searches Google News RSS, fetches articles, extracts
-text, generates summaries via Bedrock Haiku, and stores in S3 + DynamoDB.
+and/or customUrls. Searches Google News RSS and Naver News RSS, fetches
+articles, extracts text, generates summaries + auto-tags via Bedrock,
+and stores in S3 + DynamoDB.
 
 Dependencies: stdlib + boto3 only.
 """
@@ -11,11 +12,12 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from urllib.error import URLError
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 from urllib.request import Request, urlopen
 
 import boto3
@@ -32,17 +34,25 @@ table = dynamodb.Table(TABLE_NAME)
 s3 = boto3.client('s3')
 bedrock = boto3.client('bedrock-runtime')
 
-# Google News RSS base
+# RSS sources
 GOOGLE_NEWS_RSS = 'https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko'
+NAVER_NEWS_RSS = 'https://news.search.naver.com/search.naver?where=rss&query={query}'
 
-# Limits
+# Site-specific RSS feeds (Korean tech/business news)
+SITE_RSS_FEEDS = {
+    'zdnet': 'https://zdnet.co.kr/rss/newsall.xml',
+    'etnews': 'https://rss.etnews.com/Section901.xml',
+    'itchosun': 'https://it.chosun.com/rss/it_all_rss.xml',
+    'bloter': 'https://www.bloter.net/feed',
+}
+
 MAX_ARTICLES_PER_QUERY = 5
+MAX_ARTICLES_PER_FEED = 3
 FETCH_TIMEOUT_SECONDS = 10
-MAX_CONTENT_LENGTH = 30000  # chars
+MAX_CONTENT_LENGTH = 30000
 
 
 def _make_hash(url: str) -> str:
-    """Generate a 16-char hex hash for dedup: sha256('news:{url}')."""
     return hashlib.sha256(f'news:{url}'.encode('utf-8')).hexdigest()[:16]
 
 
@@ -51,8 +61,6 @@ def _make_hash(url: str) -> str:
 # ---------------------------------------------------------------------------
 
 class _ParagraphExtractor(HTMLParser):
-    """Simple HTML parser that extracts text from <p> tags."""
-
     _SKIP_TAGS = {'script', 'style', 'nav', 'footer', 'header', 'noscript', 'aside'}
 
     def __init__(self):
@@ -76,7 +84,7 @@ class _ParagraphExtractor(HTMLParser):
             self._skip_depth = max(0, self._skip_depth - 1)
         elif tag_lower == 'p' and self._in_p:
             text = ''.join(self._current).strip()
-            if text and len(text) > 20:  # skip very short fragments
+            if text and len(text) > 20:
                 self._paragraphs.append(text)
             self._in_p = False
             self._current = []
@@ -90,7 +98,6 @@ class _ParagraphExtractor(HTMLParser):
 
 
 def extract_paragraphs(html: str) -> str:
-    """Extract paragraph text from HTML."""
     parser = _ParagraphExtractor()
     try:
         parser.feed(html)
@@ -104,24 +111,49 @@ def extract_paragraphs(html: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _fetch_url(url: str, timeout: int = FETCH_TIMEOUT_SECONDS) -> str:
-    """Fetch a URL and return response body as text. Only http/https allowed."""
     if not url.startswith(('http://', 'https://')):
         raise ValueError(f'Unsupported URL scheme: {url[:30]}')
-    req = Request(url, headers={'User-Agent': 'TtobakCrawler/1.0'})
+    req = Request(url, headers={
+        'User-Agent': 'Mozilla/5.0 (compatible; TtobakCrawler/2.0)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.5',
+    })
     with urlopen(req, timeout=timeout) as resp:
         charset = resp.headers.get_content_charset() or 'utf-8'
         return resp.read().decode(charset, errors='replace')
 
 
-def _parse_rss(xml_text: str) -> list:
-    """Parse Google News RSS XML, return list of {title, url, pubDate}."""
+def _strip_html_tags(text: str) -> str:
+    return re.sub(r'<[^>]+>', '', text).strip()
+
+
+def _parse_rss(xml_text: str, max_items: int = MAX_ARTICLES_PER_QUERY) -> list:
     articles = []
     try:
         root = ET.fromstring(xml_text)
-        # RSS 2.0 structure: <rss><channel><item>...</item></channel></rss>
         channel = root.find('channel')
         if channel is None:
+            for ns_prefix in ['', '{http://www.w3.org/2005/Atom}']:
+                entries = root.findall(f'{ns_prefix}entry')
+                for entry in entries:
+                    title_el = entry.find(f'{ns_prefix}title')
+                    link_el = entry.find(f'{ns_prefix}link')
+                    pub_el = entry.find(f'{ns_prefix}published') or entry.find(f'{ns_prefix}updated')
+                    summary_el = entry.find(f'{ns_prefix}summary') or entry.find(f'{ns_prefix}content')
+                    href = ''
+                    if link_el is not None:
+                        href = link_el.get('href', '') or (link_el.text or '')
+                    if title_el is not None and href:
+                        articles.append({
+                            'title': _strip_html_tags(title_el.text or ''),
+                            'url': href,
+                            'pubDate': (pub_el.text if pub_el is not None else ''),
+                            'description': _strip_html_tags(summary_el.text or '') if summary_el is not None else '',
+                        })
+                        if len(articles) >= max_items:
+                            break
             return articles
+
         for item in channel.findall('item'):
             title_el = item.find('title')
             link_el = item.find('link')
@@ -129,41 +161,94 @@ def _parse_rss(xml_text: str) -> list:
             desc_el = item.find('description')
             if title_el is not None and link_el is not None:
                 articles.append({
-                    'title': title_el.text or '',
+                    'title': _strip_html_tags(title_el.text or ''),
                     'url': link_el.text or '',
                     'pubDate': pub_el.text if pub_el is not None else '',
-                    'description': desc_el.text if desc_el is not None else '',
+                    'description': _strip_html_tags(desc_el.text or '') if desc_el is not None else '',
                 })
+                if len(articles) >= max_items:
+                    break
     except ET.ParseError as e:
         logger.warning(f'RSS parse error: {e}')
-    return articles[:MAX_ARTICLES_PER_QUERY]
+    return articles
 
 
 def _search_google_news(query: str) -> list:
-    """Search Google News RSS for articles matching query."""
     encoded = quote_plus(query)
     rss_url = GOOGLE_NEWS_RSS.format(query=encoded)
     try:
         xml_text = _fetch_url(rss_url)
         return _parse_rss(xml_text)
     except Exception as e:
-        logger.warning(f'Google News RSS fetch failed for "{query}": {e}')
+        logger.warning(f'Google News RSS failed for "{query}": {e}')
         return []
 
 
+def _search_naver_news(query: str) -> list:
+    encoded = quote_plus(query)
+    rss_url = NAVER_NEWS_RSS.format(query=encoded)
+    try:
+        xml_text = _fetch_url(rss_url)
+        return _parse_rss(xml_text, max_items=MAX_ARTICLES_PER_QUERY)
+    except Exception as e:
+        logger.warning(f'Naver News RSS failed for "{query}": {e}')
+        return []
+
+
+def _fetch_site_rss(feed_url: str, keyword_filter: str = '') -> list:
+    try:
+        xml_text = _fetch_url(feed_url, timeout=15)
+        articles = _parse_rss(xml_text, max_items=20)
+        if keyword_filter:
+            kw_lower = keyword_filter.lower()
+            articles = [a for a in articles
+                        if kw_lower in a.get('title', '').lower()
+                        or kw_lower in a.get('description', '').lower()]
+        return articles[:MAX_ARTICLES_PER_FEED]
+    except Exception as e:
+        logger.warning(f'Site RSS failed for {feed_url}: {e}')
+        return []
+
+
+def _generate_search_queries(source_name: str, news_queries: list) -> list:
+    """Generate diverse search queries from source name and explicit queries."""
+    queries = list(news_queries or [])
+
+    if source_name:
+        base_queries = [
+            source_name,
+            f'{source_name} IT',
+            f'{source_name} 클라우드',
+            f'{source_name} AI',
+            f'{source_name} 디지털전환',
+        ]
+        for q in base_queries:
+            if q not in queries:
+                queries.append(q)
+
+    return queries
+
+
 # ---------------------------------------------------------------------------
-# Bedrock summarization
+# Bedrock summarization + auto-tagging
 # ---------------------------------------------------------------------------
 
-def _summarize(title: str, text: str) -> str:
-    """Generate an SA-focused Korean briefing using Bedrock Sonnet."""
+def _summarize_and_tag(title: str, text: str, source_name: str = '') -> tuple:
+    """Generate SA briefing + auto-tags. Returns (summary, tags_list)."""
     content = text[:4000] if len(text) > 4000 else text
+    source_hint = f'\n고객사: {source_name}' if source_name else ''
     prompt = (
-        f'당신은 AWS Solutions Architect를 위한 고객사 뉴스 브리핑을 작성합니다.\n\n'
-        f'아래 뉴스 기사를 분석하여 한국어로 다음 형식의 브리핑을 작성하세요:\n\n'
-        f'1. **핵심 요약** (3-5문장): 기사의 주요 내용\n'
-        f'2. **비즈니스 시사점**: 이 소식이 고객사의 IT/클라우드 전략에 미치는 영향\n'
-        f'3. **AWS 관련성**: 관련될 수 있는 AWS 서비스나 기회 (있는 경우)\n\n'
+        f'당신은 AWS Solutions Architect를 위한 고객사 뉴스 브리핑을 작성합니다.{source_hint}\n\n'
+        f'아래 뉴스 기사를 분석하여 한국어로 다음 형식의 JSON으로 응답하세요:\n\n'
+        f'{{"summary": "브리핑 내용 (핵심요약 3-5문장 + 비즈니스 시사점 + AWS 관련성)", '
+        f'"tags": ["태그1", "태그2", ...]}}\n\n'
+        f'태그 규칙:\n'
+        f'- 기사 내용에서 핵심 주제/키워드를 3-8개 추출\n'
+        f'- 회사명 (예: 우리은행, 삼성전자, SK텔레콤)\n'
+        f'- 산업분야 (예: 금융, 통신, 제조, 유통, 공공)\n'
+        f'- 기술 키워드 (예: AI, GPU, 클라우드, 반도체, LLM, 데이터, 보안, SaaS)\n'
+        f'- 비즈니스 주제 (예: 디지털전환, M&A, 투자, 경제, 규제, ESG)\n'
+        f'- 모두 한국어로 작성 (영문 약어는 그대로: AI, GPU, LLM, SaaS 등)\n\n'
         f'기사 제목: {title}\n\n'
         f'기사 내용:\n{content if content and len(content) > 30 else "(본문 없음 — 제목 기반으로 분석해주세요)"}'
     )
@@ -171,12 +256,25 @@ def _summarize(title: str, text: str) -> str:
         resp = bedrock.converse(
             modelId=SUMMARIZE_MODEL_ID,
             messages=[{'role': 'user', 'content': [{'text': prompt}]}],
-            inferenceConfig={'maxTokens': 1024, 'temperature': 0.3},
+            inferenceConfig={'maxTokens': 1500, 'temperature': 0.2},
         )
-        return resp['output']['message']['content'][0]['text']
+        response_text = resp['output']['message']['content'][0]['text']
+
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            parsed = json.loads(json_match.group())
+            summary = parsed.get('summary', '')
+            tags = parsed.get('tags', [])
+            if isinstance(tags, list):
+                tags = [str(t).strip() for t in tags if t][:10]
+            else:
+                tags = []
+            return summary, tags
+
+        return response_text, []
     except Exception as e:
-        logger.warning(f'Bedrock summarize failed for "{title}": {e}')
-        return ''
+        logger.warning(f'Bedrock summarize+tag failed for "{title}": {e}')
+        return '', []
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +282,6 @@ def _summarize(title: str, text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _doc_exists(source_id: str, doc_hash: str) -> bool:
-    """Check if DOC#{hash} already exists for this source."""
     try:
         resp = table.get_item(
             Key={'PK': f'CRAWLER#{source_id}', 'SK': f'DOC#{doc_hash}'},
@@ -201,12 +298,13 @@ def _doc_exists(source_id: str, doc_hash: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
-                 content: str, summary: str, pub_date: str) -> None:
-    """Write article markdown to S3."""
+                 content: str, summary: str, pub_date: str, tags: list) -> None:
+    tag_line = f'**Tags:** {", ".join(tags)}\n' if tags else ''
     md = (
         f'# {title}\n\n'
         f'**Published:** {pub_date}\n'
-        f'**Source:** {url}\n\n'
+        f'**Source:** {url}\n'
+        f'{tag_line}\n'
         f'---\n\n'
         f'{summary}\n'
     )
@@ -223,8 +321,8 @@ def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
 
 
 def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
-                    pub_date: str, summary: str = '', source_name: str = '') -> None:
-    """Write article metadata to DynamoDB."""
+                    pub_date: str, summary: str = '', source_name: str = '',
+                    tags: list = None) -> None:
     item = {
         'PK': f'CRAWLER#{source_id}',
         'SK': f'DOC#{doc_hash}',
@@ -241,6 +339,8 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
         item['summary'] = summary
     if source_name:
         item['source'] = source_name
+    if tags:
+        item['tags'] = tags
     table.put_item(Item=item)
 
 
@@ -249,15 +349,14 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
 # ---------------------------------------------------------------------------
 
 def _process_article(source_id: str, title: str, url: str,
-                     pub_date: str, description: str = '') -> bool:
-    """Process a single article. Returns True if added, False if skipped."""
+                     pub_date: str, description: str = '',
+                     crawler_source_name: str = '') -> bool:
     doc_hash = _make_hash(url)
 
     if _doc_exists(source_id, doc_hash):
         logger.debug(f'Skipping duplicate: {url}')
         return False
 
-    # Try fetching full article; fall back to RSS description if content is thin
     text = ''
     try:
         html = _fetch_url(url)
@@ -271,71 +370,93 @@ def _process_article(source_id: str, title: str, url: str,
         logger.info(f'Skipping article with no content: {url}')
         return False
 
-    summary = _summarize(title, text)
+    summary, tags = _summarize_and_tag(title, text, crawler_source_name)
     source_name = _extract_source_name(title)
-    _write_to_s3(source_id, doc_hash, title, url, text, summary, pub_date)
-    _write_metadata(source_id, doc_hash, title, url, pub_date, summary, source_name)
+    _write_to_s3(source_id, doc_hash, title, url, text, summary, pub_date, tags)
+    _write_metadata(source_id, doc_hash, title, url, pub_date, summary, source_name, tags)
     return True
 
 
 def _extract_source_name(title: str) -> str:
-    """Extract news outlet name from title suffix like '제목 - 출처'."""
     if ' - ' in title:
         return title.rsplit(' - ', 1)[-1].strip()
     return ''
 
 
 def handler(event, context):
-    """Process news articles from Google News RSS and custom URLs.
+    """Process news articles from multiple RSS sources.
 
     Expected event:
       {
-        "sourceId": "tech-news",
-        "newsQueries": ["AWS 클라우드", "AI 인공지능"],
-        "customUrls": [
-          {"url": "https://example.com/article", "title": "Custom Article"}
-        ]
+        "sourceId": "wooribank",
+        "sourceName": "우리은행",
+        "newsQueries": ["우리은행 IT", "우리은행 클라우드"],
+        "customUrls": [{"url": "https://...", "title": "..."}],
+        "newsSources": ["google", "naver", "zdnet", "etnews"]
       }
     """
     source_id = event.get('sourceId', 'unknown')
+    source_name = event.get('sourceName', '')
     queries = event.get('newsQueries') or []
     custom_urls = event.get('customUrls') or []
-    logger.info(f'News crawler: sourceId={source_id}, queries={queries}, '
-                f'customUrls={len(custom_urls)}')
+    news_sources = event.get('newsSources') or ['google']
+
+    all_queries = _generate_search_queries(source_name, queries)
+    logger.info(f'News crawler: sourceId={source_id}, sourceName={source_name}, '
+                f'queries={all_queries}, sources={news_sources}, customUrls={len(custom_urls)}')
 
     docs_added = 0
     docs_updated = 0
     errors = []
+    seen_urls = set()
 
-    # Process Google News RSS queries
-    for query in queries:
-        articles = _search_google_news(query)
-        logger.info(f'Query "{query}": found {len(articles)} article(s)')
+    def _try_process(title, url, pub_date='', description=''):
+        nonlocal docs_added
+        if url in seen_urls:
+            return
+        seen_urls.add(url)
+        try:
+            if _process_article(source_id, title, url, pub_date, description, source_name):
+                docs_added += 1
+        except Exception as e:
+            error_msg = f'{url}: {e}'
+            logger.error(f'Article error: {error_msg}', exc_info=True)
+            errors.append(error_msg)
 
-        for article in articles:
-            try:
-                if _process_article(source_id, article['title'],
-                                    article['url'], article.get('pubDate', ''),
-                                    article.get('description', '')):
-                    docs_added += 1
-            except Exception as e:
-                error_msg = f'news/{query}/{article.get("url", "?")}: {e}'
-                logger.error(f'Article error: {error_msg}', exc_info=True)
-                errors.append(error_msg)
+    # 1. Google News RSS
+    if 'google' in news_sources or not news_sources:
+        for query in all_queries:
+            articles = _search_google_news(query)
+            logger.info(f'Google News "{query}": {len(articles)} article(s)')
+            for article in articles:
+                _try_process(article['title'], article['url'],
+                             article.get('pubDate', ''), article.get('description', ''))
 
-    # Process custom URLs
+    # 2. Naver News RSS
+    if 'naver' in news_sources:
+        for query in all_queries:
+            articles = _search_naver_news(query)
+            logger.info(f'Naver News "{query}": {len(articles)} article(s)')
+            for article in articles:
+                _try_process(article['title'], article['url'],
+                             article.get('pubDate', ''), article.get('description', ''))
+
+    # 3. Site-specific RSS feeds (filtered by source name keyword)
+    for site_key, feed_url in SITE_RSS_FEEDS.items():
+        if site_key in news_sources or 'all' in news_sources:
+            keyword = source_name or (all_queries[0] if all_queries else '')
+            articles = _fetch_site_rss(feed_url, keyword)
+            logger.info(f'Site RSS {site_key} (filter="{keyword}"): {len(articles)} article(s)')
+            for article in articles:
+                _try_process(article['title'], article['url'],
+                             article.get('pubDate', ''), article.get('description', ''))
+
+    # 4. Custom URLs
     for entry in custom_urls:
         url = entry.get('url', '')
         title = entry.get('title', url)
-        if not url:
-            continue
-        try:
-            if _process_article(source_id, title, url, ''):
-                docs_added += 1
-        except Exception as e:
-            error_msg = f'custom/{url}: {e}'
-            logger.error(f'Custom URL error: {error_msg}', exc_info=True)
-            errors.append(error_msg)
+        if url:
+            _try_process(title, url)
 
     result = {
         'docsAdded': docs_added,

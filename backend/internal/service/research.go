@@ -9,8 +9,10 @@ import (
 	"log"
 	"time"
 
+	"encoding/json"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcore"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -18,23 +20,23 @@ import (
 
 // ResearchService handles research task business logic.
 type ResearchService struct {
-	repo          *repository.ResearchRepository
-	s3Client      *s3.Client
-	agentClient   *bedrockagentruntime.Client
-	kbBucketName  string
-	agentId       string
-	agentAliasId  string
+	repo             *repository.ResearchRepository
+	s3Client         *s3.Client
+	agentCoreClient  *bedrockagentcore.Client
+	kbBucketName     string
+	agentRuntimeId   string
+	endpointName     string
 }
 
 // NewResearchService creates a new ResearchService.
-func NewResearchService(repo *repository.ResearchRepository, s3Client *s3.Client, agentClient *bedrockagentruntime.Client, kbBucketName, agentId, agentAliasId string) *ResearchService {
+func NewResearchService(repo *repository.ResearchRepository, s3Client *s3.Client, agentCoreClient *bedrockagentcore.Client, kbBucketName, agentRuntimeId, endpointName string) *ResearchService {
 	return &ResearchService{
-		repo:         repo,
-		s3Client:     s3Client,
-		agentClient:  agentClient,
-		kbBucketName: kbBucketName,
-		agentId:      agentId,
-		agentAliasId: agentAliasId,
+		repo:            repo,
+		s3Client:        s3Client,
+		agentCoreClient: agentCoreClient,
+		kbBucketName:    kbBucketName,
+		agentRuntimeId:  agentRuntimeId,
+		endpointName:    endpointName,
 	}
 }
 
@@ -73,57 +75,64 @@ func (s *ResearchService) CreateResearch(ctx context.Context, userId string, req
 		return nil, fmt.Errorf("failed to create research: %w", err)
 	}
 
-	// Invoke Bedrock Agent asynchronously
-	if s.agentClient != nil && s.agentId != "" && s.agentAliasId != "" {
-		go s.invokeAgent(research)
+	// Invoke AgentCore Runtime asynchronously
+	if s.agentCoreClient != nil && s.agentRuntimeId != "" {
+		go s.invokeAgentCore(research)
 	} else {
-		log.Printf("Research agent not configured (agentId=%q), skipping invocation for %s", s.agentId, id)
+		log.Printf("AgentCore not configured (runtimeId=%q), skipping invocation for %s", s.agentRuntimeId, id)
 	}
 
 	return research, nil
 }
 
-// invokeAgent calls the Bedrock Agent with the research topic. Runs in a goroutine.
-func (s *ResearchService) invokeAgent(research *model.Research) {
+// invokeAgentCore calls AgentCore Runtime with the research topic. Runs in a goroutine.
+func (s *ResearchService) invokeAgentCore(research *model.Research) {
 	ctx := context.Background()
-	prompt := fmt.Sprintf("Research topic: %s\nMode: %s\nResearch ID: %s\n\nPlease conduct the research following the pipeline for %s mode and call save_report when complete.",
-		research.Topic, research.Mode, research.ResearchID, research.Mode)
 
-	log.Printf("Invoking Bedrock Agent %s for research %s", s.agentId, research.ResearchID)
+	payload := map[string]string{
+		"topic":      research.Topic,
+		"mode":       research.Mode,
+		"researchId": research.ResearchID,
+	}
+	payloadBytes, _ := json.Marshal(payload)
 
-	output, err := s.agentClient.InvokeAgent(ctx, &bedrockagentruntime.InvokeAgentInput{
-		AgentId:      aws.String(s.agentId),
-		AgentAliasId: aws.String(s.agentAliasId),
-		SessionId:    aws.String(research.ResearchID),
-		InputText:    aws.String(prompt),
+	agentRuntimeArn := s.agentRuntimeId
+	qualifier := s.endpointName
+	if qualifier == "" {
+		qualifier = "ttobakResearchEndpoint"
+	}
+
+	log.Printf("Invoking AgentCore Runtime %s (endpoint=%s) for research %s", agentRuntimeArn, qualifier, research.ResearchID)
+
+	output, err := s.agentCoreClient.InvokeAgentRuntime(ctx, &bedrockagentcore.InvokeAgentRuntimeInput{
+		AgentRuntimeArn:  aws.String(agentRuntimeArn),
+		Qualifier:        aws.String(qualifier),
+		Payload:          payloadBytes,
+		RuntimeSessionId: aws.String(research.ResearchID),
+		ContentType:      aws.String("application/json"),
+		Accept:           aws.String("application/json"),
 	})
 	if err != nil {
-		log.Printf("Failed to invoke agent for research %s: %v", research.ResearchID, err)
+		log.Printf("Failed to invoke AgentCore for research %s: %v", research.ResearchID, err)
 		s.repo.UpdateResearchFields(ctx, research.ResearchID, map[string]interface{}{
 			"status":       "error",
-			"errorMessage": fmt.Sprintf("Agent invocation failed: %v", err),
+			"errorMessage": fmt.Sprintf("AgentCore invocation failed: %v", err),
 		})
 		return
 	}
 
-	// Consume the streaming response (agent runs asynchronously via tools)
-	stream := output.GetStream()
-	evReader := stream.Reader
-	defer stream.Close()
+	// Read response — agent runs inside AgentCore Runtime microVM
+	if output.Response != nil {
+		defer output.Response.Close()
+		respBody, err := io.ReadAll(output.Response)
+		if err != nil {
+			log.Printf("AgentCore response read error for research %s: %v", research.ResearchID, err)
+		} else {
+			log.Printf("AgentCore response for research %s: %s", research.ResearchID, string(respBody)[:200])
+		}
+	}
 
-	for event := range evReader.Events() {
-		// Just consume events — the agent calls save_report tool which updates DynamoDB
-		_ = event
-	}
-	if err := evReader.Err(); err != nil {
-		log.Printf("Agent stream error for research %s: %v", research.ResearchID, err)
-		s.repo.UpdateResearchFields(ctx, research.ResearchID, map[string]interface{}{
-			"status":       "error",
-			"errorMessage": fmt.Sprintf("Agent execution failed: %v", err),
-		})
-	} else {
-		log.Printf("Agent completed for research %s", research.ResearchID)
-	}
+	log.Printf("AgentCore completed for research %s", research.ResearchID)
 }
 
 // ListResearch returns all research tasks belonging to a user.

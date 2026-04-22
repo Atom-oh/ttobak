@@ -155,6 +155,7 @@ export interface CrawlerSource {
   subscribers: string[];
   awsServices: string[];
   newsQueries: string[];
+  newsSources: string[];
   customUrls: string[];
   schedule: string;
   lastCrawledAt: string;
@@ -184,6 +185,7 @@ export interface CrawledDocument {
   source?: string;
   summary?: string;
   awsServices?: string[];
+  tags?: string[];
   s3Key?: string;
   crawledAt: number | string;
   inKB?: boolean;

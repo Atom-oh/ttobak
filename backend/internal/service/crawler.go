@@ -55,11 +55,9 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 		if !contains(source.Subscribers, userID) {
 			source.Subscribers = append(source.Subscribers, userID)
 		}
-		// Merge awsServices as union
 		source.AWSServices = union(source.AWSServices, req.AWSServices)
-		// Merge newsQueries as union
 		source.NewsQueries = union(source.NewsQueries, req.NewsQueries)
-		// Merge customUrls as union
+		source.NewsSources = union(source.NewsSources, req.NewsSources)
 		source.CustomUrls = union(source.CustomUrls, req.CustomUrls)
 
 		if err := s.repo.PutSource(ctx, source); err != nil {
@@ -73,6 +71,7 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 			Subscribers: []string{userID},
 			AWSServices: req.AWSServices,
 			NewsQueries: req.NewsQueries,
+			NewsSources: req.NewsSources,
 			CustomUrls:  req.CustomUrls,
 			Schedule:    "daily",
 			Status:      "idle",
@@ -207,7 +206,7 @@ func (s *CrawlerService) rebuildSourceUnion(ctx context.Context, sourceID string
 	}
 
 	// Fetch each subscriber's subscription individually
-	var allAWS, allNews, allURLs []string
+	var allAWS, allNewsSources, allURLs []string
 	for _, uid := range source.Subscribers {
 		sub, err := s.repo.GetSubscription(ctx, uid, sourceID)
 		if err != nil {
@@ -217,12 +216,12 @@ func (s *CrawlerService) rebuildSourceUnion(ctx context.Context, sourceID string
 			continue
 		}
 		allAWS = union(allAWS, sub.AWSServices)
-		allNews = union(allNews, sub.NewsSources)
+		allNewsSources = union(allNewsSources, sub.NewsSources)
 		allURLs = union(allURLs, sub.CustomUrls)
 	}
 
 	source.AWSServices = allAWS
-	source.NewsQueries = allNews
+	source.NewsSources = allNewsSources
 	source.CustomUrls = allURLs
 
 	if err := s.repo.PutSource(ctx, source); err != nil {

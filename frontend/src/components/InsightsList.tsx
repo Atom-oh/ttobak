@@ -30,6 +30,7 @@ export function InsightsList() {
   const [totalCount, setTotalCount] = useState(0);
   const [sourceFilter, setSourceFilter] = useState('');
   const [serviceFilter, setServiceFilter] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const limit = 20;
 
   // Research tab state
@@ -46,7 +47,7 @@ export function InsightsList() {
     try {
       setLoading(true);
       setError(null);
-      const params: { type: string; source?: string; service?: string; page: number; limit: number } = {
+      const params: { type: string; source?: string; service?: string; tags?: string[]; page: number; limit: number } = {
         type: activeTab,
         page,
         limit,
@@ -56,6 +57,9 @@ export function InsightsList() {
       }
       if (activeTab === 'tech' && serviceFilter) {
         params.service = serviceFilter;
+      }
+      if (selectedTags.length > 0) {
+        params.tags = selectedTags;
       }
       const response = await insightsApi.list(params);
       setDocuments(response.documents || []);
@@ -67,7 +71,7 @@ export function InsightsList() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, page, sourceFilter, serviceFilter, limit]);
+  }, [activeTab, page, sourceFilter, serviceFilter, selectedTags, limit]);
 
   const fetchResearchJobs = useCallback(async () => {
     try {
@@ -117,12 +121,12 @@ export function InsightsList() {
     };
   }, [activeTab, researchJobs]);
 
-  // Reset page and filters when switching tabs
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
     setPage(1);
     setSourceFilter('');
     setServiceFilter('');
+    setSelectedTags([]);
   };
 
   const handleCreateResearch = async () => {
@@ -141,16 +145,41 @@ export function InsightsList() {
     }
   };
 
-  // Collect unique sources from current results for the filter dropdown
+  const toggleTag = (tag: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+    );
+    setPage(1);
+  };
+
+  const clearTags = () => {
+    setSelectedTags([]);
+    setPage(1);
+  };
+
+  // Collect unique sources from current results
   const uniqueSources = useMemo(() => {
     const sources = new Set(documents.map((d) => d.source).filter(Boolean));
     return Array.from(sources).sort();
   }, [documents]);
 
-  // Collect unique AWS services from current results for the filter dropdown
+  // Collect unique AWS services from current results
   const uniqueServices = useMemo(() => {
     const services = new Set(documents.flatMap((d) => d.awsServices || []));
     return Array.from(services).sort();
+  }, [documents]);
+
+  // Collect all unique tags from current results
+  const availableTags = useMemo(() => {
+    const tagCounts = new Map<string, number>();
+    documents.forEach((d) => {
+      (d.tags || []).forEach((tag) => {
+        tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+      });
+    });
+    return Array.from(tagCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([tag]) => tag);
   }, [documents]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / limit));
@@ -273,12 +302,9 @@ export function InsightsList() {
                       r.status === 'done' ? 'cursor-pointer' : ''
                     }`}
                   >
-                    {/* Topic */}
                     <h3 className="text-base font-semibold text-slate-900 dark:text-[#e4e1e9] leading-snug line-clamp-2">
                       {r.topic}
                     </h3>
-
-                    {/* Badges row */}
                     <div className="flex flex-wrap items-center gap-2 mt-2">
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${modeBadgeClass(r.mode)}`}>
                         {r.mode === 'quick' ? 'Quick' : r.mode === 'standard' ? 'Standard' : 'Deep'}
@@ -292,8 +318,6 @@ export function InsightsList() {
                         </span>
                       )}
                     </div>
-
-                    {/* Meta row */}
                     <div className="flex flex-wrap items-center gap-2 mt-3">
                       {r.status === 'done' && (
                         <>
@@ -317,8 +341,6 @@ export function InsightsList() {
                         {formatDate(r.createdAt)}
                       </span>
                     </div>
-
-                    {/* Error message */}
                     {r.status === 'error' && r.errorMessage && (
                       <p className="text-sm text-red-500 dark:text-red-400 mt-2">
                         {r.errorMessage}
@@ -337,8 +359,6 @@ export function InsightsList() {
                 <h2 className="text-lg font-semibold text-slate-900 dark:text-[#e4e1e9]">
                   New Research
                 </h2>
-
-                {/* Topic */}
                 <textarea
                   value={researchTopic}
                   onChange={(e) => setResearchTopic(e.target.value)}
@@ -346,8 +366,6 @@ export function InsightsList() {
                   rows={3}
                   className="w-full px-4 py-3 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-[#e4e1e9] placeholder-slate-400 dark:placeholder-[#849396] focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
                 />
-
-                {/* Mode selector */}
                 <div>
                   <label className="text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-2 block">
                     Research Mode
@@ -375,8 +393,6 @@ export function InsightsList() {
                     ))}
                   </div>
                 </div>
-
-                {/* Actions */}
                 <div className="flex items-center justify-end gap-3">
                   <button
                     onClick={() => {
@@ -408,45 +424,93 @@ export function InsightsList() {
       ) : (
         <>
           {/* Filters */}
-          <div className="flex items-center gap-3">
-            {activeTab === 'news' && uniqueSources.length > 0 && (
-              <select
-                value={sourceFilter}
-                onChange={(e) => {
-                  setSourceFilter(e.target.value);
-                  setPage(1);
-                }}
-                className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
-              >
-                <option value="">All Sources</option>
-                {uniqueSources.map((source) => (
-                  <option key={source} value={source}>
-                    {source}
-                  </option>
-                ))}
-              </select>
+          <div className="space-y-3">
+            {/* Source/Service dropdown + count */}
+            <div className="flex items-center gap-3">
+              {activeTab === 'news' && uniqueSources.length > 0 && (
+                <select
+                  value={sourceFilter}
+                  onChange={(e) => {
+                    setSourceFilter(e.target.value);
+                    setPage(1);
+                  }}
+                  className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  <option value="">All Sources</option>
+                  {uniqueSources.map((source) => (
+                    <option key={source} value={source}>
+                      {source}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {activeTab === 'tech' && uniqueServices.length > 0 && (
+                <select
+                  value={serviceFilter}
+                  onChange={(e) => {
+                    setServiceFilter(e.target.value);
+                    setPage(1);
+                  }}
+                  className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  <option value="">All Services</option>
+                  {uniqueServices.map((service) => (
+                    <option key={service} value={service}>
+                      {service}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {!loading && (
+                <span className="text-xs text-slate-500 dark:text-[#849396] ml-auto">
+                  {totalCount} document{totalCount !== 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+
+            {/* Tag filter chips */}
+            {availableTags.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="material-symbols-outlined text-sm text-slate-400 dark:text-[#849396] mr-1">label</span>
+                {availableTags.slice(0, 20).map((tag) => {
+                  const isSelected = selectedTags.includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      onClick={() => toggleTag(tag)}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
+                        isSelected
+                          ? 'bg-primary text-white dark:bg-[#00E5FF] dark:text-[#09090E] shadow-sm'
+                          : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-[#bac9cc] hover:bg-slate-200 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      {tag}
+                    </button>
+                  );
+                })}
+                {selectedTags.length > 0 && (
+                  <button
+                    onClick={clearTags}
+                    className="flex items-center gap-0.5 px-2 py-1 rounded-full text-xs font-medium text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-500/10 hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-sm">close</span>
+                    Clear
+                  </button>
+                )}
+              </div>
             )}
-            {activeTab === 'tech' && uniqueServices.length > 0 && (
-              <select
-                value={serviceFilter}
-                onChange={(e) => {
-                  setServiceFilter(e.target.value);
-                  setPage(1);
-                }}
-                className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
-              >
-                <option value="">All Services</option>
-                {uniqueServices.map((service) => (
-                  <option key={service} value={service}>
-                    {service}
-                  </option>
+
+            {/* Active tag filters summary */}
+            {selectedTags.length > 0 && (
+              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-[#849396]">
+                <span className="material-symbols-outlined text-sm">filter_alt</span>
+                Filtering by: {selectedTags.map((tag, i) => (
+                  <span key={tag}>
+                    <span className="font-semibold text-primary dark:text-[#00E5FF]">{tag}</span>
+                    {i < selectedTags.length - 1 && <span className="mx-1">+</span>}
+                  </span>
                 ))}
-              </select>
-            )}
-            {!loading && (
-              <span className="text-xs text-slate-500 dark:text-[#849396] ml-auto">
-                {totalCount} document{totalCount !== 1 ? 's' : ''}
-              </span>
+              </div>
             )}
           </div>
 
@@ -467,9 +531,11 @@ export function InsightsList() {
               <span className="material-symbols-outlined text-4xl mb-2">search_off</span>
               <p className="text-sm mt-2">No documents found</p>
               <p className="text-xs mt-1 text-slate-400 dark:text-[#849396]/70">
-                {activeTab === 'news'
-                  ? 'Subscribe to news sources in Settings to see articles here.'
-                  : 'Subscribe to AWS services in Settings to see updates here.'}
+                {selectedTags.length > 0
+                  ? 'No documents match the selected tags. Try removing some filters.'
+                  : activeTab === 'news'
+                    ? 'Subscribe to news sources in Settings to see articles here.'
+                    : 'Subscribe to AWS services in Settings to see updates here.'}
               </p>
             </div>
           ) : (
@@ -479,7 +545,7 @@ export function InsightsList() {
                   key={doc.docHash || doc.url || String(idx)}
                   className="glass-panel rounded-xl p-5 transition-shadow hover:shadow-lg dark:hover:shadow-[0_0_20px_rgba(0,229,255,0.06)]"
                 >
-                  {/* Title — click to detail page */}
+                  {/* Title */}
                   <button
                     onClick={() => doc.sourceId && doc.docHash && router.push(`/insights/${doc.sourceId}/${doc.docHash}`)}
                     className="text-left w-full group"
@@ -489,7 +555,7 @@ export function InsightsList() {
                     </h3>
                   </button>
 
-                  {/* Meta row: source, date, tags */}
+                  {/* Meta row: source, date */}
                   <div className="flex flex-wrap items-center gap-2 mt-2">
                     {(doc.source || doc.type) && (
                       <span className="text-xs text-slate-500 dark:text-[#849396]">
@@ -500,25 +566,45 @@ export function InsightsList() {
                     <span className="text-xs text-slate-500 dark:text-[#849396]">
                       {formatDate(doc.pubDate || doc.crawledAt)}
                     </span>
-                    {doc.awsServices && doc.awsServices.length > 0 && (
-                      <>
-                        <span className="text-xs text-slate-300 dark:text-[#849396]/40">|</span>
-                        {doc.awsServices.slice(0, 3).map((svc) => (
-                          <span
-                            key={svc}
-                            className="bg-primary/5 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] text-xs px-2 py-0.5 rounded-full"
-                          >
-                            {svc}
-                          </span>
-                        ))}
-                        {doc.awsServices.length > 3 && (
-                          <span className="text-xs text-slate-400 dark:text-[#849396]">
-                            +{doc.awsServices.length - 3}
-                          </span>
-                        )}
-                      </>
-                    )}
                   </div>
+
+                  {/* Tags row */}
+                  {((doc.tags && doc.tags.length > 0) || (doc.awsServices && doc.awsServices.length > 0)) && (
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                      {(doc.tags || []).slice(0, 6).map((tag) => (
+                        <button
+                          key={tag}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!selectedTags.includes(tag)) toggleTag(tag);
+                          }}
+                          className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
+                            selectedTags.includes(tag)
+                              ? 'bg-primary/20 text-primary dark:bg-[#00E5FF]/20 dark:text-[#00E5FF] ring-1 ring-primary/30 dark:ring-[#00E5FF]/30'
+                              : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-[#bac9cc] hover:bg-slate-200 dark:hover:bg-white/10'
+                          }`}
+                        >
+                          {tag}
+                        </button>
+                      ))}
+                      {(doc.tags || []).length > 6 && (
+                        <span className="text-xs text-slate-400 dark:text-[#849396]">
+                          +{(doc.tags || []).length - 6}
+                        </span>
+                      )}
+                      {doc.awsServices && doc.awsServices.length > 0 && (doc.tags || []).length > 0 && (
+                        <span className="text-xs text-slate-300 dark:text-[#849396]/40">|</span>
+                      )}
+                      {(doc.awsServices || []).slice(0, 3).map((svc) => (
+                        <span
+                          key={svc}
+                          className="bg-primary/5 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] text-xs px-2 py-0.5 rounded-full"
+                        >
+                          {svc}
+                        </span>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Summary */}
                   {(doc.summary || doc.title) && (

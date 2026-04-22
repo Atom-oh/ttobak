@@ -50,15 +50,18 @@ def handler(event, context):
                 source_id = pk.split('#', 1)[1] if '#' in pk else pk
                 sources.append({
                     'sourceId': source_id,
+                    'sourceName': item.get('sourceName', ''),
                     'type': item.get('type', 'unknown'),
                     'status': item.get('status', 'active'),
                     'awsServices': item.get('awsServices', []),
                     'newsQueries': item.get('newsQueries', []),
                     'customUrls': item.get('customUrls', []),
+                    'newsSources': item.get('newsSources', ['google']),
                     'config': {
                         k: v for k, v in item.items()
                         if k not in ('PK', 'SK', 'status', 'type',
-                                     'awsServices', 'newsQueries', 'customUrls')
+                                     'awsServices', 'newsQueries', 'customUrls',
+                                     'sourceName', 'newsSources')
                     },
                 })
 
