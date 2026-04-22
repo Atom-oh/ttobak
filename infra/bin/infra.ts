@@ -8,6 +8,7 @@ import { EdgeAuthStack } from '../lib/edge-auth-stack';
 import { KnowledgeStack } from '../lib/knowledge-stack';
 import { FrontendStack } from '../lib/frontend-stack';
 import { CrawlerStack } from '../lib/crawler-stack';
+import { ResearchAgentStack } from '../lib/research-agent-stack';
 
 const app = new cdk.App();
 
@@ -109,6 +110,17 @@ const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {
 crawlerStack.addDependency(aiStack);
 crawlerStack.addDependency(storageStack);
 crawlerStack.addDependency(knowledgeStack);
+
+// Stack 7.75: Research Agent (Bedrock Agent + tool Lambdas)
+const researchAgentStack = new ResearchAgentStack(app, 'TtobakResearchAgentStack', {
+  env,
+  description: 'Ttobak AI Meeting Assistant - Research Agent (Bedrock Agent)',
+  table: storageStack.table,
+  kbBucket: knowledgeStack.kbBucket,
+  knowledgeBaseId: knowledgeStack.knowledgeBaseId,
+});
+researchAgentStack.addDependency(storageStack);
+researchAgentStack.addDependency(knowledgeStack);
 
 // Stack 8: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth
 const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
