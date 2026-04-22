@@ -197,3 +197,22 @@ export interface CrawlHistory {
   errors: string[];
   duration: number;
 }
+
+export interface Research {
+  researchId: string;
+  userId?: string;
+  topic: string;
+  mode: 'quick' | 'standard' | 'deep';
+  status: 'running' | 'done' | 'error';
+  createdAt: string;
+  completedAt?: string;
+  s3Key?: string;
+  sourceCount?: number;
+  wordCount?: number;
+  summary?: string;
+  errorMessage?: string;
+}
+
+export interface ResearchDetail extends Research {
+  content?: string;
+}

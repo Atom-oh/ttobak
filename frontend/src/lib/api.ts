@@ -2,7 +2,7 @@
 
 import { getIdToken, refreshSession } from './auth';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
-import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory } from '@/types/meeting';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -313,5 +313,17 @@ export const insightsApi = {
   },
   getDetail: (sourceId: string, docHash: string) =>
     api.get<CrawledDocument & { content: string }>(`/api/insights/${encodeURIComponent(sourceId)}/${encodeURIComponent(docHash)}`),
+};
+
+// Research API
+export const researchApi = {
+  create: (data: { topic: string; mode: string }) =>
+    api.post<Research>('/api/research', data),
+  list: () =>
+    api.get<{ research: Research[] }>('/api/research'),
+  getDetail: (researchId: string) =>
+    api.get<ResearchDetail>(`/api/research/${encodeURIComponent(researchId)}`),
+  delete: (researchId: string) =>
+    api.delete(`/api/research/${encodeURIComponent(researchId)}`),
 };
 
