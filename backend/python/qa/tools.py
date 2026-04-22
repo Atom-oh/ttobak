@@ -69,6 +69,24 @@ TOOL_DEFINITIONS = [
                 }
             }
         }
+    },
+    {
+        "toolSpec": {
+            "name": "list_meetings",
+            "description": "사용자의 미팅 목록을 검색합니다. 본인 미팅과 공유받은 미팅 모두 포함. 날짜, 태그, 키워드로 필터링 가능합니다.",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": {
+                        "dateFrom": {"type": "string", "description": "시작 날짜 (ISO 8601, 예: 2026-04-01)"},
+                        "dateTo": {"type": "string", "description": "종료 날짜 (ISO 8601, 예: 2026-04-22)"},
+                        "tag": {"type": "string", "description": "태그 필터 (예: eks, database)"},
+                        "keyword": {"type": "string", "description": "제목 키워드 검색"},
+                        "limit": {"type": "integer", "description": "최대 결과 수 (기본 20)"}
+                    }
+                }
+            }
+        }
     }
 ]
 
@@ -100,6 +118,19 @@ def execute_tool(tool_name, tool_input, context):
             ), []
         elif tool_name == "get_aws_recommendation":
             return get_aws_recommendation(tool_input["useCase"]), []
+        elif tool_name == "list_meetings":
+            user_id = context.get("user_id")
+            if not user_id:
+                return "사용자 인증 정보가 없습니다.", []
+            meetings = context["list_meetings"](
+                user_id,
+                date_from=tool_input.get("dateFrom"),
+                date_to=tool_input.get("dateTo"),
+                tag=tool_input.get("tag"),
+                keyword=tool_input.get("keyword"),
+                limit=tool_input.get("limit"),
+            )
+            return format_meetings_results(meetings), []
         else:
             return f"Unknown tool: {tool_name}", []
     except Exception as e:
@@ -165,3 +196,19 @@ def search_in_transcript(keywords, transcript):
 
     # Limit to top 5 matches
     return f"트랜스크립트에서 '{keywords}' 관련 {len(matches)}건 발견:\n\n" + "\n\n---\n\n".join(matches[:5])
+
+
+def format_meetings_results(meetings):
+    """Format meeting list results into a readable string."""
+    if not meetings:
+        return "조건에 맞는 미팅을 찾지 못했습니다."
+    lines = []
+    for m in meetings:
+        parts = [f"- **{m.get('title', '제목 없음')}** ({m.get('date', '날짜 없음')})"]
+        if m.get('isShared'):
+            parts.append(f"  [공유받은 미팅, from: {m.get('sharedBy', '알 수 없음')}]")
+        if m.get('tags'):
+            parts.append(f"  태그: {', '.join(m['tags'])}")
+        parts.append(f"  상태: {m.get('status', 'unknown')} | ID: {m.get('meetingId', '')}")
+        lines.append('\n'.join(parts))
+    return f"미팅 {len(meetings)}건 검색됨:\n\n" + "\n\n".join(lines)

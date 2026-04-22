@@ -191,6 +191,81 @@ def _list_shared_meetings(user_id):
         return []
 
 
+def list_meetings_for_user(user_id, date_from=None, date_to=None, tag=None, keyword=None, limit=None):
+    """List meetings for a user (own + shared), with optional filters.
+
+    Returns list of dicts: {meetingId, title, date, tags, status, isShared, sharedBy?}
+    """
+    from boto3.dynamodb.conditions import Key
+
+    limit = limit or 20
+    projection = 'meetingId, title, createdAt, tags, #s'
+    expr_names = {'#s': 'status'}
+    meetings = []
+
+    # 1. Own meetings
+    try:
+        resp = table.query(
+            KeyConditionExpression=Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('MEETING#'),
+            ProjectionExpression=projection,
+            ExpressionAttributeNames=expr_names,
+        )
+        for item in resp.get('Items', []):
+            meetings.append({
+                'meetingId': item.get('meetingId', ''),
+                'title': item.get('title', ''),
+                'date': item.get('createdAt', ''),
+                'tags': item.get('tags', []),
+                'status': item.get('status', ''),
+                'isShared': False,
+            })
+    except Exception as e:
+        logger.warning(f"Failed to query own meetings for {user_id}: {e}")
+
+    # 2. Shared meetings
+    try:
+        shared = _list_shared_meetings(user_id)
+        for s in shared:
+            try:
+                resp = table.get_item(
+                    Key={'PK': f"USER#{s['ownerId']}", 'SK': f"MEETING#{s['meetingId']}"},
+                    ProjectionExpression=projection,
+                    ExpressionAttributeNames=expr_names,
+                )
+                item = resp.get('Item')
+                if item:
+                    meetings.append({
+                        'meetingId': item.get('meetingId', ''),
+                        'title': item.get('title', ''),
+                        'date': item.get('createdAt', ''),
+                        'tags': item.get('tags', []),
+                        'status': item.get('status', ''),
+                        'isShared': True,
+                        'sharedBy': s['ownerId'],
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get shared meeting {s['meetingId']}: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to list shared meetings for {user_id}: {e}")
+
+    # 3. Apply client-side filters
+    if date_from:
+        meetings = [m for m in meetings if m['date'] >= date_from]
+    if date_to:
+        # Include the entire end date (compare with date_to + 'Z' to include full day)
+        meetings = [m for m in meetings if m['date'] <= date_to + 'T23:59:59Z']
+    if tag:
+        tag_lower = tag.lower()
+        meetings = [m for m in meetings if any(tag_lower in t.lower() for t in m.get('tags', []))]
+    if keyword:
+        kw_lower = keyword.lower()
+        meetings = [m for m in meetings if kw_lower in (m.get('title') or '').lower()]
+
+    # 4. Sort by date descending, limit
+    meetings.sort(key=lambda m: m.get('date', ''), reverse=True)
+    return meetings[:limit]
+
+
 def retrieve_from_kb(question, number_of_results=5, user_id=None):
     """Retrieve relevant documents from Bedrock Knowledge Base, with short-lived DynamoDB cache."""
     capped = min(number_of_results, 10)
@@ -280,6 +355,8 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
     context = {
         "transcript": transcript or "",
         "retrieve_from_kb": lambda q, n=5: retrieve_from_kb(q, n, user_id=user_id),
+        "list_meetings": list_meetings_for_user,
+        "user_id": user_id,
     }
     tools_used = []
     sources = []
@@ -613,6 +690,8 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
     context = {
         "transcript": transcript or "",
         "retrieve_from_kb": lambda q, n=5: retrieve_from_kb(q, n, user_id=user_id),
+        "list_meetings": list_meetings_for_user,
+        "user_id": user_id,
     }
     tools_used = []
     sources = []
