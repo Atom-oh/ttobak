@@ -216,3 +216,11 @@ export interface Research {
 export interface ResearchDetail extends Research {
   content?: string;
 }
+
+export interface ChatSession {
+  sessionId: string;
+  title: string;
+  createdAt: string;
+  lastMessageAt: string;
+  messageCount: number;
+}

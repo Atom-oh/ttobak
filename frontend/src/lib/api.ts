@@ -264,6 +264,15 @@ export const translateApi = {
     ),
 };
 
+// Chat Session API
+export const chatApi = {
+  listSessions: () =>
+    api.get<{ sessions: import('@/types/meeting').ChatSession[] }>('/api/chat/sessions'),
+
+  deleteSession: (sessionId: string) =>
+    api.delete(`/api/chat/sessions/${sessionId}`),
+};
+
 // Live Summary API
 export const summaryApi = {
   summarizeLive: (meetingId: string, transcript: string, previousSummary?: string) =>

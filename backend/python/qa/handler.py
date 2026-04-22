@@ -335,7 +335,7 @@ def load_session(session_id, user_id=None):
 
 
 def save_session(session_id, messages, user_id=None):
-    """Save conversation history to DynamoDB with 24h TTL."""
+    """Save conversation history to DynamoDB with 7-day TTL."""
     if not session_id:
         return
     pk = f"SESSION#{user_id}#{session_id}" if user_id else f"SESSION#{session_id}"
@@ -344,10 +344,45 @@ def save_session(session_id, messages, user_id=None):
             "PK": pk,
             "SK": "MESSAGES",
             "messages": json.dumps(messages, ensure_ascii=False),
-            "TTL": int(time.time()) + 86400,
+            "TTL": int(time.time()) + 604800,  # 7 days
         })
     except Exception as e:
         logger.warning(f"Failed to save session {session_id}: {e}")
+
+    # Create/update CHAT_SESSION metadata for chat- prefixed sessions
+    if user_id and session_id.startswith('chat-'):
+        try:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).isoformat()
+
+            # Extract first user question text
+            first_question = None
+            msg_count = 0
+            for msg in messages:
+                role = msg.get('role', '')
+                if role == 'user':
+                    content = msg.get('content', [])
+                    # Skip tool result messages
+                    if isinstance(content, list) and content and isinstance(content[0], dict):
+                        if 'toolResult' in content[0]:
+                            continue
+                        if first_question is None:
+                            first_question = content[0].get('text', '')[:50]
+                    msg_count += 1
+
+            table.put_item(Item={
+                "PK": f"USER#{user_id}",
+                "SK": f"CHAT_SESSION#{session_id}",
+                "sessionId": session_id,
+                "title": first_question or '새 대화',
+                "createdAt": now,
+                "lastMessageAt": now,
+                "messageCount": msg_count,
+                "entityType": "CHAT_SESSION",
+                "TTL": int(time.time()) + 2592000,  # 30 days
+            })
+        except Exception as e:
+            logger.warning(f"Failed to save chat session metadata {session_id}: {e}")
 
 
 def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
