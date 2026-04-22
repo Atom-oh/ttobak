@@ -92,6 +92,16 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // Bedrock Agent invocation (for deep research)
+    this.apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockInvokeAgent',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeAgent'],
+        resources: [`arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:agent-alias/*`],
+      })
+    );
+
     // Translate (for live translation)
     this.apiRole.addToPolicy(
       new iam.PolicyStatement({
