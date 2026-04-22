@@ -22,13 +22,36 @@ var (
 	ErrNotFound  = errors.New("not found")
 )
 
+// meetingRepo defines the repository methods used by MeetingService.
+type meetingRepo interface {
+	CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error)
+	GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error)
+	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
+	UpdateMeeting(ctx context.Context, meeting *model.Meeting) error
+	DeleteMeeting(ctx context.Context, userID, meetingID string) error
+	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
+	ListAttachments(ctx context.Context, meetingID string) ([]model.Attachment, error)
+	ListSharesForMeeting(ctx context.Context, meetingID string) ([]model.Share, error)
+	ListMeetings(ctx context.Context, params repository.ListMeetingsParams) (*repository.ListMeetingsResult, error)
+	BatchGetMeetings(ctx context.Context, keys []repository.MeetingKey) ([]*model.Meeting, error)
+	GetOrCreateUser(ctx context.Context, userID, email, name string) (*model.User, error)
+	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
+	CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error)
+	DeleteShare(ctx context.Context, sharedToID, meetingID string) error
+}
+
 // MeetingService handles meeting business logic
 type MeetingService struct {
-	repo *repository.DynamoDBRepository
+	repo meetingRepo
 }
 
 // NewMeetingService creates a new meeting service
 func NewMeetingService(repo *repository.DynamoDBRepository) *MeetingService {
+	return &MeetingService{repo: repo}
+}
+
+// newMeetingServiceWithRepo creates a MeetingService with a custom repo (for testing).
+func newMeetingServiceWithRepo(repo meetingRepo) *MeetingService {
 	return &MeetingService{repo: repo}
 }
 
