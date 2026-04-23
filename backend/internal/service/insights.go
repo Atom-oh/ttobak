@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -84,8 +85,9 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 	return resp, nil
 }
 
-// ListInsights retrieves crawled documents with optional filtering by type, source, service, and tags.
-func (s *InsightsService) ListInsights(ctx context.Context, docType, source, service string, tags []string, page, limit int) (*model.InsightsResponse, error) {
+// ListInsights retrieves crawled documents with optional filtering by type, source, service, tags, and sort.
+// sortBy: "newest" (default), "oldest", "title"
+func (s *InsightsService) ListInsights(ctx context.Context, docType, source, service string, tags []string, sortBy string, page, limit int) (*model.InsightsResponse, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -108,6 +110,8 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 	if err != nil {
 		return nil, err
 	}
+
+	sortDocuments(docs, sortBy)
 
 	return &model.InsightsResponse{
 		Documents:  docs,
@@ -207,4 +211,22 @@ func matchesTags(docTags []string, filterTags []string) bool {
 		}
 	}
 	return true
+}
+
+// sortDocuments sorts documents in-place by the specified field.
+func sortDocuments(docs []model.CrawledDocument, sortBy string) {
+	switch sortBy {
+	case "oldest":
+		sort.Slice(docs, func(i, j int) bool {
+			return docs[i].CrawledAt < docs[j].CrawledAt
+		})
+	case "title":
+		sort.Slice(docs, func(i, j int) bool {
+			return docs[i].Title < docs[j].Title
+		})
+	default: // "newest" or empty
+		sort.Slice(docs, func(i, j int) bool {
+			return docs[i].CrawledAt > docs[j].CrawledAt
+		})
+	}
 }

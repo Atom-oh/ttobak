@@ -31,6 +31,7 @@ export function InsightsList() {
   const [sourceFilter, setSourceFilter] = useState('');
   const [serviceFilter, setServiceFilter] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [sortBy, setSortBy] = useState('newest');
   const limit = 20;
 
   // Research tab state
@@ -47,7 +48,7 @@ export function InsightsList() {
     try {
       setLoading(true);
       setError(null);
-      const params: { type: string; source?: string; service?: string; tags?: string[]; page: number; limit: number } = {
+      const params: { type: string; source?: string; service?: string; tags?: string[]; sort?: string; page: number; limit: number } = {
         type: activeTab,
         page,
         limit,
@@ -61,6 +62,9 @@ export function InsightsList() {
       if (selectedTags.length > 0) {
         params.tags = selectedTags;
       }
+      if (sortBy !== 'newest') {
+        params.sort = sortBy;
+      }
       const response = await insightsApi.list(params);
       setDocuments(response.documents || []);
       setTotalCount(response.totalCount || 0);
@@ -71,7 +75,7 @@ export function InsightsList() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, page, sourceFilter, serviceFilter, selectedTags, limit]);
+  }, [activeTab, page, sourceFilter, serviceFilter, selectedTags, sortBy, limit]);
 
   const fetchResearchJobs = useCallback(async () => {
     try {
@@ -127,6 +131,7 @@ export function InsightsList() {
     setSourceFilter('');
     setServiceFilter('');
     setSelectedTags([]);
+    setSortBy('newest');
   };
 
   const handleCreateResearch = async () => {
@@ -478,6 +483,18 @@ export function InsightsList() {
                   ))}
                 </select>
               )}
+              <select
+                value={sortBy}
+                onChange={(e) => {
+                  setSortBy(e.target.value);
+                  setPage(1);
+                }}
+                className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="title">Title A-Z</option>
+              </select>
               {!loading && (
                 <span className="text-xs text-slate-500 dark:text-[#849396] ml-auto">
                   {totalCount} document{totalCount !== 1 ? 's' : ''}

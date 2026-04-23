@@ -1,99 +1,21 @@
-"""Ttobak Deep Research Agent — AgentCore Runtime.
+"""Ttobak Deep Research Agent — AgentCore Runtime (Container).
 
-Performs multi-source web research and generates citation-backed reports.
-Deployed to AgentCore Runtime with Strands Agents SDK.
+stdlib http.server for instant port 8080 binding (health check).
+Strands agent loads lazily on first invocation.
 """
 
-import os
+import http.server
 import json
 import logging
-from bedrock_agentcore.runtime import BedrockAgentCoreApp
-from strands import Agent
-from strands.models.bedrock import BedrockModel
-from tools import web_search, fetch_page, save_report
+import os
+import sys
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("research-agent")
 
-app = BedrockAgentCoreApp()
-
-SYSTEM_PROMPT = """You are a Deep Research Agent for Ttobak, an AI meeting assistant for AWS Solutions Architects.
-
-Your task is to perform comprehensive multi-source research on a given topic and produce a structured, citation-backed report in Korean.
-
-## Research Pipeline
-
-Follow these phases in order:
-
-### Phase 1: SCOPE
-- Analyze the topic carefully
-- Identify 3-5 research angles
-- Generate 5-10 search queries (mix Korean and English for broader coverage)
-
-### Phase 2: PLAN
-- Design report structure with 4-6 main sections
-- Define what evidence each section needs
-- Prioritize sections by importance to an AWS SA
-
-### Phase 3: RETRIEVE
-- Use fetch_page tool to gather information from multiple web sources
-- For each search query, fetch the most relevant pages
-- Collect 8-12 sources for standard mode, 5-8 for quick mode
-- Extract key findings with source URLs
-- Focus on: official docs, case studies, technical blogs, news
-
-### Phase 4: TRIANGULATE
-- Cross-verify claims across multiple sources
-- Flag any contradictions between sources
-- Note source credibility (official docs > blogs > forums)
-
-### Phase 5: SYNTHESIZE
-- Draft each section (600-2000 words each)
-- Ensure every major claim cites at least 2 sources
-- Write in Korean with technical terms in English where appropriate
-- Use markdown formatting: headings, tables, bullet points, blockquotes
-
-### Phase 6: CRITIQUE (standard/deep mode only)
-- Self-review the draft
-- Check for gaps, unsupported claims, or bias
-- If critical gaps found, fetch additional sources and revise
-
-### Phase 7: REFINE (deep mode only)
-- Polish prose and flow
-- Ensure executive summary captures all key insights
-- Verify all citations are valid and URLs are included
-
-### Phase 8: PACKAGE
-- Generate final markdown report with this structure:
-  - # Title
-  - ## Executive Summary (200-400 words)
-  - ## 1. Section Title (each 600-2000 words)
-  - ...
-  - ## Synthesis & Implications
-  - ## References (numbered list with URLs)
-- Call save_report tool with the complete report content
-
-## Output Requirements
-- Write in Korean (기술 용어는 영어 병기)
-- Include source URLs for all major claims
-- Executive summary: 200-400 words
-- Each finding section: 600-2,000 words
-- Format as clean markdown with tables where data comparison is needed
-
-## Mode Behavior
-The user message will specify a mode:
-- quick: Phases 1, 3, 8 only. 5+ sources. Shorter sections.
-- standard: Phases 1-6, 8. 8-12 sources. Full sections.
-- deep: All 8 phases. 12-20 sources. Maximum depth.
-
-## Tool Usage
-- web_search: Search Google News RSS for Korean queries. Returns article titles + URLs.
-- fetch_page: Fetch and extract text from a URL. Use for detailed content.
-- save_report: Call ONCE at the very end with the complete markdown report.
-
-IMPORTANT: You MUST call save_report at the end with the complete report. The researchId will be provided in the user message."""
-
+PORT = 8080
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
+TABLE_NAME = os.environ.get("TABLE_NAME", "ttobak-main")
 
 MODEL_BY_MODE = {
     "quick": "global.anthropic.claude-sonnet-4-6",
@@ -101,54 +23,131 @@ MODEL_BY_MODE = {
     "deep": "us.anthropic.claude-opus-4-7",
 }
 
+SYSTEM_PROMPT = """You are a Deep Research Agent for Ttobak, an AI meeting assistant for AWS Solutions Architects.
 
-def _create_agent(mode: str) -> Agent:
+Perform comprehensive multi-source research and produce a structured, citation-backed report in Korean.
+
+## Research Pipeline
+Follow these phases: SCOPE → RETRIEVE → SYNTHESIZE → PACKAGE
+
+## Tools
+- web_search: Search Google News RSS for Korean/English queries
+- fetch_page: Fetch and extract text from a URL
+- save_report: Save the final report (MUST be called at the end)
+
+## Output
+- Korean with English technical terms
+- Markdown with ## headings, tables, bullet points
+- Executive summary 200-400 words, sections 600-2000 words each
+- Include source URLs
+
+## Mode
+- quick: 5+ sources, shorter
+- standard: 8-12 sources, full with critique
+- deep: 12-20 sources, maximum depth
+
+CRITICAL: You MUST call save_report at the end with the complete markdown report. If you do not, the research will fail."""
+
+_agents = {}
+
+
+def _get_agent(mode):
+    if mode in _agents:
+        return _agents[mode]
+
+    logger.info(f"Building agent for mode={mode}...")
+    from strands import Agent
+    from strands.models.bedrock import BedrockModel
+    from tools import web_search, fetch_page, save_report
+
     model_id = MODEL_BY_MODE.get(mode, MODEL_BY_MODE["standard"])
-    logger.info(f"Using model {model_id} for {mode} mode")
     model = BedrockModel(model_id=model_id, region_name=REGION)
-    return Agent(
+    agent = Agent(
         model=model,
         system_prompt=SYSTEM_PROMPT,
         tools=[web_search, fetch_page, save_report],
     )
+    _agents[mode] = agent
+    logger.info(f"Agent ready: mode={mode}, model={model_id}")
+    return agent
 
 
-@app.entrypoint
-def handle(payload):
-    """AgentCore Runtime entrypoint."""
-    topic = payload.get("topic", "")
-    mode = payload.get("mode", "standard")
-    research_id = payload.get("researchId", "")
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"status":"Healthy"}')
 
-    if not topic or not research_id:
-        return {"error": "topic and researchId are required"}
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        try:
+            payload = json.loads(body)
+        except Exception:
+            self._respond(400, {"error": "invalid JSON"})
+            return
 
-    prompt = (
-        f"Research ID: {research_id}\n"
-        f"Mode: {mode}\n"
-        f"Topic: {topic}\n\n"
-        f"Please conduct the research following the {mode} mode pipeline. "
-        f"Call save_report with researchId='{research_id}' when the report is complete."
-    )
+        topic = payload.get("topic", "")
+        mode = payload.get("mode", "standard")
+        research_id = payload.get("researchId", "")
 
-    logger.info(f"Starting research: id={research_id}, mode={mode}, topic={topic[:80]}")
+        if not topic or not research_id:
+            self._respond(400, {"error": "topic and researchId required"})
+            return
 
-    try:
-        agent = _create_agent(mode)
-        result = agent(prompt)
-        return {"status": "completed", "researchId": research_id}
-    except Exception as e:
-        logger.error(f"Research failed: {e}", exc_info=True)
-        # Update DynamoDB with error status
+        logger.info(f"Research: id={research_id} mode={mode} topic={topic[:80]}")
+
+        try:
+            agent = _get_agent(mode)
+        except Exception as e:
+            logger.error(f"Agent init failed: {e}", exc_info=True)
+            self._update_error(research_id, f"Agent init: {e}")
+            self._respond(500, {"error": f"init failed: {e}"})
+            return
+
+        prompt = (
+            f"Research ID: {research_id}\n"
+            f"Mode: {mode}\n"
+            f"Topic: {topic}\n\n"
+            f"Conduct research following the {mode} pipeline. "
+            f"Call save_report with researchId='{research_id}' when the report is complete."
+        )
+
+        try:
+            agent(prompt)
+            self._respond(200, {"status": "completed", "researchId": research_id})
+        except Exception as e:
+            logger.error(f"Research failed: {e}", exc_info=True)
+            self._update_error(research_id, str(e)[:500])
+            self._respond(500, {"error": str(e)[:300], "researchId": research_id})
+
+    def _respond(self, code, data):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
+    def _update_error(self, research_id, msg):
         try:
             import boto3
-            table = boto3.resource("dynamodb").Table(os.environ.get("TABLE_NAME", "ttobak-main"))
-            table.update_item(
+            boto3.resource("dynamodb").Table(TABLE_NAME).update_item(
                 Key={"PK": f"RESEARCH#{research_id}", "SK": "CONFIG"},
                 UpdateExpression="SET #s = :s, errorMessage = :e",
                 ExpressionAttributeNames={"#s": "status"},
-                ExpressionAttributeValues={":s": "error", ":e": str(e)[:500]},
+                ExpressionAttributeValues={":s": "error", ":e": msg},
             )
         except Exception:
             pass
-        return {"error": str(e), "researchId": research_id}
+
+    def log_message(self, format, *args):
+        if "/ping" not in str(args):
+            logger.info(format % args)
+
+
+if __name__ == "__main__":
+    sys.stdout.write(f"Research agent starting pid={os.getpid()}\n")
+    sys.stdout.flush()
+    with http.server.HTTPServer(("0.0.0.0", PORT), Handler) as httpd:
+        logger.info(f"Listening on {PORT}")
+        httpd.serve_forever()

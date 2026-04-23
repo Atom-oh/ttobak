@@ -29,6 +29,7 @@ func (h *InsightsHandler) ListInsights(w http.ResponseWriter, r *http.Request) {
 	docType := r.URL.Query().Get("type")
 	source := r.URL.Query().Get("source")
 	svc := r.URL.Query().Get("service")
+	sortBy := r.URL.Query().Get("sort")
 
 	var tags []string
 	if t := r.URL.Query().Get("tags"); t != "" {
@@ -54,7 +55,7 @@ func (h *InsightsHandler) ListInsights(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := h.insightsService.ListInsights(ctx, docType, source, svc, tags, page, limit)
+	result, err := h.insightsService.ListInsights(ctx, docType, source, svc, tags, sortBy, page, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return

@@ -15,11 +15,15 @@ on:
           - backend
           - frontend
           - infra
+          - research-agent
 
 env:
   AWS_REGION: ap-northeast-2
+  AWS_ACCOUNT_ID: "180294183052"
   S3_BUCKET: ttobak-site-180294183052-ap-northeast-2
   CF_DISTRIBUTION: E3IFMH57E9UTB5
+  RESEARCH_ECR_REPO: ttobak/research-agent
+  AGENTCORE_RUNTIME_ID: ttobakDeepResearch-5vzwFf3Q5K
 
 jobs:
   detect-changes:
@@ -29,6 +33,7 @@ jobs:
       frontend: ${{ steps.changes.outputs.frontend }}
       infra: ${{ steps.changes.outputs.infra }}
       crawler: ${{ steps.changes.outputs.crawler }}
+      research_agent: ${{ steps.changes.outputs.research_agent }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,12 +50,14 @@ jobs:
             echo "frontend=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'frontend' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
             echo "infra=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'infra' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
             echo "crawler=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'backend' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+            echo "research_agent=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'research-agent' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
           else
             CHANGED=$(git diff --name-only HEAD~1 HEAD)
             echo "backend=$(echo "$CHANGED" | grep -q '^backend/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
             echo "frontend=$(echo "$CHANGED" | grep -q '^frontend/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
             echo "infra=$(echo "$CHANGED" | grep -q '^infra/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
             echo "crawler=$(echo "$CHANGED" | grep -q '^backend/python/crawler/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+            echo "research_agent=$(echo "$CHANGED" | grep -q '^backend/python/research-agent/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
           fi
           cat "$GITHUB_OUTPUT"
 
@@ -123,6 +130,30 @@ jobs:
         working-directory: infra
         run: npx cdk deploy --all --require-approval never
 
+  deploy-research-agent:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.research_agent == 'true'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and push research agent container (ARM64)
+        working-directory: backend/python/research-agent
+        run: |
+          ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${RESEARCH_ECR_REPO}"
+          aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          docker buildx build --platform linux/arm64 -t "${ECR_URI}:latest" -t "${ECR_URI}:${GITHUB_SHA::8}" --push .
+
+      - name: Update AgentCore Runtime
+        run: |
+          ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${RESEARCH_ECR_REPO}:${GITHUB_SHA::8}"
+          aws bedrock-agentcore-control update-agent-runtime \
+            --agent-runtime-id "${AGENTCORE_RUNTIME_ID}" \
+            --role-arn "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ttobak-agentcore-research-role" \
+            --network-configuration '{"networkMode":"PUBLIC"}' \
+            --agent-runtime-artifact "{\"containerConfiguration\":{\"containerUri\":\"${ECR_URI}\",\"containerEntrypoint\":[\"python\",\"agent.py\"]}}"
+          echo "AgentCore runtime updated with image: ${ECR_URI}"
+
   deploy-frontend:
     needs: [detect-changes, build-frontend, deploy-infra]
     if: always() && needs.detect-changes.outputs.frontend == 'true' && needs.build-frontend.result == 'success'
@@ -144,7 +175,7 @@ jobs:
             --paths "/*"
 
   notify:
-    needs: [deploy-infra, deploy-frontend]
+    needs: [deploy-infra, deploy-frontend, deploy-research-agent]
     if: always()
     runs-on: self-hosted
     steps:
@@ -152,6 +183,7 @@ jobs:
         env:
           INFRA_RESULT: ${{ needs.deploy-infra.result }}
           FRONTEND_RESULT: ${{ needs.deploy-frontend.result }}
+          RESEARCH_RESULT: ${{ needs.deploy-research-agent.result }}
           REF_NAME: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
           EVENT: ${{ github.event_name }}
@@ -161,6 +193,7 @@ jobs:
           echo "|-----------|--------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Infra | ${INFRA_RESULT:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Frontend | ${FRONTEND_RESULT:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Research Agent | ${RESEARCH_RESULT:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Trigger | ${EVENT} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Branch | ${REF_NAME} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Commit | ${SHA} |" >> "$GITHUB_STEP_SUMMARY"

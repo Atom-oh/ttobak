@@ -307,12 +307,13 @@ export const crawlerApi = {
 
 // Insights API
 export const insightsApi = {
-  list: (params: { type: string; source?: string; service?: string; tags?: string[]; page?: number; limit?: number }) => {
+  list: (params: { type: string; source?: string; service?: string; tags?: string[]; sort?: string; page?: number; limit?: number }) => {
     const q = new URLSearchParams();
     q.set('type', params.type);
     if (params.source) q.set('source', params.source);
     if (params.service) q.set('service', params.service);
     if (params.tags && params.tags.length > 0) q.set('tags', params.tags.join(','));
+    if (params.sort) q.set('sort', params.sort);
     q.set('page', String(params.page || 1));
     q.set('limit', String(params.limit || 20));
     return api.get<{
