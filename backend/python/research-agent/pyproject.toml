@@ -1,0 +1,11 @@
+[project]
+name = "research-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "bedrock-agentcore>=1.6.3",
+    "strands-agents>=1.36.0",
+    "strands-agents-tools>=0.5.0",
+]

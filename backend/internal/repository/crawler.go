@@ -213,6 +213,37 @@ func (r *CrawlerRepository) ListUserSubscriptions(ctx context.Context, userID st
 	return subs, nil
 }
 
+// GetDocument retrieves a single crawled document by sourceID and docHash.
+// PK=CRAWLER#{sourceID}, SK=DOC#{docHash}
+func (r *CrawlerRepository) GetDocument(ctx context.Context, sourceID, docHash string) (*model.CrawledDocument, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docHash},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get document: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+
+	var item documentItem
+	if err := attributevalue.UnmarshalMap(result.Item, &item); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal document: %w", err)
+	}
+	doc := item.CrawledDocument
+	if doc.DocHash == "" {
+		doc.DocHash = docHash
+	}
+	if doc.SourceID == "" {
+		doc.SourceID = sourceID
+	}
+	return &doc, nil
+}
+
 // ListDocuments lists crawled documents for a source with optional type filter and pagination
 // Query PK=CRAWLER#{sourceID}, SK begins_with DOC#
 func (r *CrawlerRepository) ListDocuments(ctx context.Context, sourceID, docType string, limit int32, lastKey map[string]types.AttributeValue) ([]model.CrawledDocument, map[string]types.AttributeValue, int, error) {

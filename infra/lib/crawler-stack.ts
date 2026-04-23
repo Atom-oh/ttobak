@@ -29,7 +29,6 @@ export class CrawlerStack extends cdk.Stack {
       SUMMARIZE_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
     };
 
-    // 4 Lambda functions all using Python 3.12 ARM64
     const orchestrator = new lambda.Function(this, 'OrchestratorFunction', {
       functionName: 'ttobak-crawler-orchestrator',
       runtime: lambda.Runtime.PYTHON_3_12,
@@ -81,30 +80,39 @@ export class CrawlerStack extends cdk.Stack {
       memorySize: 256,
     });
 
-    // Step Functions Workflow
+    // --- Step Functions Workflow ---
+    // Orchestrator returns: { newsSources: [...], techConfig: { sourceId, awsServices } }
+
     const listSources = new tasks.LambdaInvoke(this, 'ListActiveSources', {
       lambdaFunction: orchestrator,
       outputPath: '$.Payload',
     });
 
+    // Tech: single global crawl with merged awsServices from all sources
     const crawlTech = new tasks.LambdaInvoke(this, 'CrawlTechDocs', {
       lambdaFunction: techCrawler,
-      outputPath: '$.Payload',
+      inputPath: '$.techConfig',
+      resultPath: '$.techResult',
     });
 
+    // News: per-customer fan-out
     const crawlNews = new tasks.LambdaInvoke(this, 'CrawlNews', {
       lambdaFunction: newsCrawler,
       outputPath: '$.Payload',
     });
 
-    const parallelCrawl = new sfn.Parallel(this, 'ParallelCrawl')
-      .branch(crawlTech)
-      .branch(crawlNews);
-
-    const mapSources = new sfn.Map(this, 'MapSources', {
+    const mapNewsSources = new sfn.Map(this, 'MapNewsSources', {
       maxConcurrency: 5,
-      itemsPath: '$.sources',
-    }).itemProcessor(parallelCrawl);
+      itemsPath: '$.newsSources',
+      resultPath: '$.newsResults',
+    }).itemProcessor(crawlNews);
+
+    // Run Tech (1x global) and News (per-customer) in parallel
+    const parallelCrawl = new sfn.Parallel(this, 'ParallelCrawl', {
+      resultPath: '$.crawlResults',
+    })
+      .branch(crawlTech)
+      .branch(mapNewsSources);
 
     const triggerIngestion = new tasks.LambdaInvoke(this, 'TriggerIngestion', {
       lambdaFunction: ingestTrigger,
@@ -112,7 +120,7 @@ export class CrawlerStack extends cdk.Stack {
     });
 
     const definition = listSources
-      .next(mapSources)
+      .next(parallelCrawl)
       .next(triggerIngestion);
 
     const stateMachine = new sfn.StateMachine(this, 'CrawlerWorkflow', {

@@ -155,6 +155,7 @@ export interface CrawlerSource {
   subscribers: string[];
   awsServices: string[];
   newsQueries: string[];
+  newsSources: string[];
   customUrls: string[];
   schedule: string;
   lastCrawledAt: string;
@@ -184,6 +185,7 @@ export interface CrawledDocument {
   source?: string;
   summary?: string;
   awsServices?: string[];
+  tags?: string[];
   s3Key?: string;
   crawledAt: number | string;
   inKB?: boolean;
@@ -196,4 +198,31 @@ export interface CrawlHistory {
   docsUpdated: number;
   errors: string[];
   duration: number;
+}
+
+export interface Research {
+  researchId: string;
+  userId?: string;
+  topic: string;
+  mode: 'quick' | 'standard' | 'deep';
+  status: 'running' | 'done' | 'error';
+  createdAt: string;
+  completedAt?: string;
+  s3Key?: string;
+  sourceCount?: number;
+  wordCount?: number;
+  summary?: string;
+  errorMessage?: string;
+}
+
+export interface ResearchDetail extends Research {
+  content?: string;
+}
+
+export interface ChatSession {
+  sessionId: string;
+  title: string;
+  createdAt: string;
+  lastMessageAt: string;
+  messageCount: number;
 }

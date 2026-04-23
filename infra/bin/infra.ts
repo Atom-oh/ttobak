@@ -8,6 +8,7 @@ import { EdgeAuthStack } from '../lib/edge-auth-stack';
 import { KnowledgeStack } from '../lib/knowledge-stack';
 import { FrontendStack } from '../lib/frontend-stack';
 import { CrawlerStack } from '../lib/crawler-stack';
+import { ResearchAgentStack } from '../lib/research-agent-stack';
 
 const app = new cdk.App();
 
@@ -23,16 +24,19 @@ const usEast1Env = {
   region: 'us-east-1',
 };
 
-// Stack 1 & 2: Auth and Storage can be deployed in parallel (no dependencies)
-const authStack = new AuthStack(app, 'TtobakAuthStack', {
-  env,
-  description: 'Ttobak AI Meeting Assistant - Authentication (Cognito)',
-});
-
+// Stack 1: Storage first (Auth now depends on it for Pre Sign-Up Lambda DynamoDB access)
 const storageStack = new StorageStack(app, 'TtobakStorageStack', {
   env,
   description: 'Ttobak AI Meeting Assistant - Storage (DynamoDB + S3)',
 });
+
+// Stack 2: Auth (depends on Storage for Pre Sign-Up Lambda's DynamoDB table access)
+const authStack = new AuthStack(app, 'TtobakAuthStack', {
+  env,
+  description: 'Ttobak AI Meeting Assistant - Authentication (Cognito)',
+  table: storageStack.table,
+});
+authStack.addDependency(storageStack);
 
 // Stack 3: Knowledge Base (OpenSearch Serverless + Bedrock KB)
 const knowledgeStack = new KnowledgeStack(app, 'TtobakKnowledgeStack', {
@@ -42,12 +46,15 @@ const knowledgeStack = new KnowledgeStack(app, 'TtobakKnowledgeStack', {
 knowledgeStack.addDependency(storageStack);
 
 // Stack 4: AI (IAM roles) - depends on Storage + Knowledge for bucket/table references
+const agentCoreRuntimeArn = 'arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/ttobakDeepResearch-5vzwFf3Q5K';
+
 const aiStack = new AiStack(app, 'TtobakAiStack', {
   env,
   description: 'Ttobak AI Meeting Assistant - AI Services (IAM roles)',
   bucket: storageStack.bucket,
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
+  agentCoreRuntimeArn,
 });
 aiStack.addDependency(storageStack);
 aiStack.addDependency(knowledgeStack);
@@ -90,6 +97,8 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   kmsKeyId: aiStack.kmsKey.keyId,
   legacyRole: aiStack.legacyRole,
   originVerifySecret,
+  agentCoreRuntimeArn,
+  researchWorkerRole: aiStack.researchWorkerRole,
 });
 gatewayStack.addDependency(authStack);
 gatewayStack.addDependency(storageStack);
@@ -109,6 +118,17 @@ const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {
 crawlerStack.addDependency(aiStack);
 crawlerStack.addDependency(storageStack);
 crawlerStack.addDependency(knowledgeStack);
+
+// Stack 7.75: Research Agent (Bedrock Agent + tool Lambdas)
+const researchAgentStack = new ResearchAgentStack(app, 'TtobakResearchAgentStack', {
+  env,
+  description: 'Ttobak AI Meeting Assistant - Research Agent (Bedrock Agent)',
+  table: storageStack.table,
+  kbBucket: knowledgeStack.kbBucket,
+  knowledgeBaseId: knowledgeStack.knowledgeBaseId,
+});
+researchAgentStack.addDependency(storageStack);
+researchAgentStack.addDependency(knowledgeStack);
 
 // Stack 8: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth
 const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {

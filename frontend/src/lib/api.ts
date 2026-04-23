@@ -2,7 +2,7 @@
 
 import { getIdToken, refreshSession } from './auth';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
-import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory } from '@/types/meeting';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -264,6 +264,15 @@ export const translateApi = {
     ),
 };
 
+// Chat Session API
+export const chatApi = {
+  listSessions: () =>
+    api.get<{ sessions: import('@/types/meeting').ChatSession[] }>('/api/chat/sessions'),
+
+  deleteSession: (sessionId: string) =>
+    api.delete(`/api/chat/sessions/${sessionId}`),
+};
+
 // Live Summary API
 export const summaryApi = {
   summarizeLive: (meetingId: string, transcript: string, previousSummary?: string) =>
@@ -288,6 +297,7 @@ export const crawlerApi = {
     awsServices: string[];
     newsSources: string[];
     customUrls?: string[];
+    newsQueries?: string[];
   }) => api.put<{ status: string }>(`/api/crawler/sources/${sourceId}`, data),
   unsubscribe: (sourceId: string) =>
     api.delete(`/api/crawler/sources/${sourceId}`),
@@ -297,11 +307,12 @@ export const crawlerApi = {
 
 // Insights API
 export const insightsApi = {
-  list: (params: { type: string; source?: string; service?: string; page?: number; limit?: number }) => {
+  list: (params: { type: string; source?: string; service?: string; tags?: string[]; page?: number; limit?: number }) => {
     const q = new URLSearchParams();
     q.set('type', params.type);
     if (params.source) q.set('source', params.source);
     if (params.service) q.set('service', params.service);
+    if (params.tags && params.tags.length > 0) q.set('tags', params.tags.join(','));
     q.set('page', String(params.page || 1));
     q.set('limit', String(params.limit || 20));
     return api.get<{
@@ -313,5 +324,17 @@ export const insightsApi = {
   },
   getDetail: (sourceId: string, docHash: string) =>
     api.get<CrawledDocument & { content: string }>(`/api/insights/${encodeURIComponent(sourceId)}/${encodeURIComponent(docHash)}`),
+};
+
+// Research API
+export const researchApi = {
+  create: (data: { topic: string; mode: string }) =>
+    api.post<Research>('/api/research', data),
+  list: () =>
+    api.get<{ research: Research[] }>('/api/research'),
+  getDetail: (researchId: string) =>
+    api.get<ResearchDetail>(`/api/research/${encodeURIComponent(researchId)}`),
+  delete: (researchId: string) =>
+    api.delete(`/api/research/${encodeURIComponent(researchId)}`),
 };
 

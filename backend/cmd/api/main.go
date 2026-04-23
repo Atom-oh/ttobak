@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
@@ -86,6 +87,11 @@ func init() {
 	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
 	insightsHandler := handler.NewInsightsHandler(insightsService)
+	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
+	sfnClient := sfn.NewFromConfig(cfg)
+	researchService := service.NewResearchService(researchRepo, s3Client, sfnClient, kbBucketName, os.Getenv("RESEARCH_SFN_ARN"))
+	researchHandler := handler.NewResearchHandler(researchService)
+	chatHandler := handler.NewChatHandler(repo)
 	// Setup router
 	r := chi.NewRouter()
 
@@ -100,6 +106,9 @@ func init() {
 
 	// Health check (no auth required)
 	r.Get("/api/health", healthHandler.Health)
+
+	// Public: allowed domains (no auth required)
+	r.Get("/api/auth/allowed-domains", settingsHandler.GetAllowedDomains)
 
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
@@ -153,6 +162,9 @@ func init() {
 		r.Put("/api/settings/integrations/notion", settingsHandler.SaveNotionKey)
 		r.Delete("/api/settings/integrations/notion", settingsHandler.DeleteNotionKey)
 
+		// Allowed domains management
+		r.Put("/api/settings/allowed-domains", settingsHandler.SaveAllowedDomains)
+
 		// Translation route
 		r.Post("/api/translate", translateHandler.Translate)
 
@@ -169,6 +181,16 @@ func init() {
 		// Insights
 		r.Get("/api/insights", insightsHandler.ListInsights)
 		r.Get("/api/insights/{sourceId}/{docHash}", insightsHandler.GetDocumentContent)
+
+		// Research
+		r.Post("/api/research", researchHandler.CreateResearch)
+		r.Get("/api/research", researchHandler.ListResearch)
+		r.Get("/api/research/{researchId}", researchHandler.GetResearchDetail)
+		r.Delete("/api/research/{researchId}", researchHandler.DeleteResearch)
+
+		// Chat session routes
+		r.Get("/api/chat/sessions", chatHandler.ListSessions)
+		r.Delete("/api/chat/sessions/{sessionId}", chatHandler.DeleteSession)
 
 	})
 

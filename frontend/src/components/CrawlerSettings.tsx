@@ -9,11 +9,9 @@ const AWS_SERVICE_PRESETS = [
   'CloudFront', 'Bedrock', 'SageMaker', 'OpenSearch',
 ];
 
-const NEWS_SOURCE_OPTIONS = [
-  'Naver News',
-  'Google News',
-  'ZDNet Korea',
-  'IT Chosun',
+const KEYWORD_SUGGESTIONS = [
+  'AI', '클라우드', '디지털전환', '보안', '데이터', 'SaaS',
+  '반도체', 'GPU', '핀테크', 'ESG',
 ];
 
 type SourceStatus = 'active' | 'idle' | 'crawling' | 'error' | 'disabled';
@@ -58,13 +56,13 @@ interface AddEditModalProps {
   onSubmit: (data: {
     sourceName: string;
     awsServices: string[];
-    newsSources: string[];
+    newsQueries: string[];
     customUrls: string[];
   }) => Promise<void>;
   initial?: {
     sourceName: string;
     awsServices: string[];
-    newsSources: string[];
+    newsQueries: string[];
     customUrls: string[];
   };
   isEdit?: boolean;
@@ -74,7 +72,8 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
   const [sourceName, setSourceName] = useState(initial?.sourceName || '');
   const [awsServices, setAwsServices] = useState<string[]>(initial?.awsServices || []);
   const [customServiceInput, setCustomServiceInput] = useState('');
-  const [newsSources, setNewsSources] = useState<string[]>(initial?.newsSources || []);
+  const [newsQueries, setNewsQueries] = useState<string[]>(initial?.newsQueries || []);
+  const [keywordInput, setKeywordInput] = useState('');
   const [customUrls, setCustomUrls] = useState<string[]>(initial?.customUrls || ['']);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,10 +96,16 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
     setAwsServices((prev) => prev.filter((s) => s !== svc));
   };
 
-  const toggleNewsSource = (ns: string) => {
-    setNewsSources((prev) =>
-      prev.includes(ns) ? prev.filter((n) => n !== ns) : [...prev, ns]
-    );
+  const addKeyword = (kw?: string) => {
+    const trimmed = (kw || keywordInput).trim();
+    if (trimmed && !newsQueries.includes(trimmed)) {
+      setNewsQueries((prev) => [...prev, trimmed]);
+      if (!kw) setKeywordInput('');
+    }
+  };
+
+  const removeKeyword = (kw: string) => {
+    setNewsQueries((prev) => prev.filter((q) => q !== kw));
   };
 
   const updateCustomUrl = (index: number, value: string) => {
@@ -129,7 +134,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
       await onSubmit({
         sourceName: sourceName.trim(),
         awsServices,
-        newsSources,
+        newsQueries,
         customUrls: customUrls.filter((u) => u.trim() !== ''),
       });
       onClose();
@@ -165,22 +170,97 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
           {/* Customer Name */}
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-1">
-              Customer Name
+              고객사
             </label>
             <input
               type="text"
               value={sourceName}
               onChange={(e) => setSourceName(e.target.value)}
-              placeholder="e.g. Acme Corp"
+              placeholder="예: 우리은행, SK텔레콤, 삼성전자"
               disabled={isEdit}
               className="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-[#849396] placeholder:text-slate-400 disabled:opacity-60"
             />
+            <p className="text-xs text-slate-400 dark:text-[#849396] mt-1">
+              고객사명으로 Google News, Naver News 등에서 자동으로 관련 기사를 검색합니다.
+            </p>
+          </div>
+
+          {/* Interest Keywords */}
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-2">
+              관심 키워드 <span className="font-normal text-slate-400 dark:text-[#849396]">(선택)</span>
+            </label>
+            <p className="text-xs text-slate-400 dark:text-[#849396] mb-2">
+              고객사와 조합하여 더 정확한 기사를 검색합니다. 예: &quot;우리은행 AI&quot;, &quot;우리은행 클라우드&quot;
+            </p>
+            {/* Keyword suggestions */}
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {KEYWORD_SUGGESTIONS.map((kw) => (
+                <button
+                  key={kw}
+                  type="button"
+                  onClick={() => addKeyword(kw)}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
+                    newsQueries.includes(kw)
+                      ? 'bg-primary text-white dark:bg-[#00E5FF] dark:text-[#09090E]'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-white/5 dark:text-[#849396] dark:hover:bg-white/10'
+                  }`}
+                >
+                  {kw}
+                </button>
+              ))}
+            </div>
+            {/* Custom keywords */}
+            {newsQueries.filter((q) => !KEYWORD_SUGGESTIONS.includes(q)).length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {newsQueries
+                  .filter((q) => !KEYWORD_SUGGESTIONS.includes(q))
+                  .map((kw) => (
+                    <span
+                      key={kw}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] rounded-full"
+                    >
+                      {kw}
+                      <button
+                        type="button"
+                        onClick={() => removeKeyword(kw)}
+                        className="hover:text-red-500"
+                      >
+                        <span className="material-symbols-outlined text-sm">close</span>
+                      </button>
+                    </span>
+                  ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={keywordInput}
+                onChange={(e) => setKeywordInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addKeyword();
+                  }
+                }}
+                placeholder="직접 입력... (Enter로 추가)"
+                className="flex-1 px-3 py-2 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-[#849396] placeholder:text-slate-400"
+              />
+              <button
+                type="button"
+                onClick={() => addKeyword()}
+                disabled={!keywordInput.trim()}
+                className="px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10 dark:text-[#00E5FF] dark:hover:bg-[#00E5FF]/10 rounded-lg transition-colors disabled:opacity-40"
+              >
+                Add
+              </button>
+            </div>
           </div>
 
           {/* AWS Services */}
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-2">
-              AWS Services
+              AWS Services <span className="font-normal text-slate-400 dark:text-[#849396]">(Tech 크롤링용)</span>
             </label>
             <div className="flex flex-wrap gap-2 mb-2">
               {AWS_SERVICE_PRESETS.map((svc) => (
@@ -198,7 +278,6 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                 </button>
               ))}
             </div>
-            {/* Selected custom services */}
             {awsServices.filter((s) => !AWS_SERVICE_PRESETS.includes(s)).length > 0 && (
               <div className="flex flex-wrap gap-1.5 mb-2">
                 {awsServices
@@ -244,34 +323,14 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
             </div>
           </div>
 
-          {/* News Sources */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-2">
-              News Sources
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              {NEWS_SOURCE_OPTIONS.map((ns) => (
-                <label
-                  key={ns}
-                  className="flex items-center gap-2 px-3 py-2 bg-slate-50 dark:bg-[#0e0e13] dark:border dark:border-white/10 rounded-lg cursor-pointer hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
-                >
-                  <input
-                    type="checkbox"
-                    checked={newsSources.includes(ns)}
-                    onChange={() => toggleNewsSource(ns)}
-                    className="rounded border-slate-300 text-primary focus:ring-primary/20 dark:border-white/20 dark:bg-white/5"
-                  />
-                  <span className="text-sm text-slate-700 dark:text-[#bac9cc]">{ns}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
           {/* Custom URLs */}
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-2">
-              Custom URLs
+              Custom URLs <span className="font-normal text-slate-400 dark:text-[#849396]">(선택)</span>
             </label>
+            <p className="text-xs text-slate-400 dark:text-[#849396] mb-2">
+              특정 기사나 페이지를 직접 크롤링하고 싶을 때 URL을 추가하세요.
+            </p>
             <div className="space-y-2">
               {customUrls.map((url, idx) => (
                 <div key={idx} className="flex gap-2">
@@ -445,7 +504,6 @@ export function CrawlerSettings() {
     fetchSources();
   }, [fetchSources]);
 
-  // Close menu on outside click
   useEffect(() => {
     if (!openMenuId) return;
     const handler = () => setOpenMenuId(null);
@@ -456,15 +514,15 @@ export function CrawlerSettings() {
   const handleAddSource = async (data: {
     sourceName: string;
     awsServices: string[];
-    newsSources: string[];
+    newsQueries: string[];
     customUrls: string[];
   }) => {
     await crawlerApi.addSource({
       sourceName: data.sourceName,
       awsServices: data.awsServices,
-      newsSources: data.newsSources,
+      newsSources: [],
+      newsQueries: data.newsQueries,
       customUrls: data.customUrls.length > 0 ? data.customUrls : undefined,
-      newsQueries: data.newsSources.length > 0 ? data.newsSources : undefined,
     });
     setSuccess('Source added successfully');
     await fetchSources();
@@ -473,13 +531,14 @@ export function CrawlerSettings() {
   const handleEditSource = async (data: {
     sourceName: string;
     awsServices: string[];
-    newsSources: string[];
+    newsQueries: string[];
     customUrls: string[];
   }) => {
     if (!editingSource) return;
     await crawlerApi.updateSource(editingSource.source.sourceId, {
       awsServices: data.awsServices,
-      newsSources: data.newsSources,
+      newsSources: [],
+      newsQueries: data.newsQueries,
       customUrls: data.customUrls.length > 0 ? data.customUrls : undefined,
     });
     setSuccess('Source updated successfully');
@@ -508,7 +567,6 @@ export function CrawlerSettings() {
 
   return (
     <div className="space-y-6">
-      {/* Error/Success Messages */}
       {error && (
         <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg">
           {error}
@@ -520,7 +578,6 @@ export function CrawlerSettings() {
         </div>
       )}
 
-      {/* Source Cards */}
       {sources.length === 0 ? (
         <div className="glass-panel rounded-xl p-8 text-center">
           <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-[#849396] mb-3 block">
@@ -530,7 +587,7 @@ export function CrawlerSettings() {
             No crawler sources configured.
           </p>
           <p className="text-slate-400 dark:text-[#849396]/60 text-xs mt-1">
-            Add a source to start crawling AWS updates and news.
+            고객사를 추가하면 관련 뉴스와 AWS 업데이트를 자동으로 수집합니다.
           </p>
         </div>
       ) : (
@@ -559,7 +616,6 @@ export function CrawlerSettings() {
                     </div>
                   </div>
 
-                  {/* Menu button */}
                   <div className="relative">
                     <button
                       onClick={(e) => {
@@ -621,14 +677,20 @@ export function CrawlerSettings() {
                   </div>
                 )}
 
-                {/* News sources */}
-                {subscription.newsSources.length > 0 && (
-                  <p className="text-xs text-slate-500 dark:text-[#849396] mb-2">
-                    News: {subscription.newsSources.join(', ')}
-                  </p>
+                {/* Keywords */}
+                {source.newsQueries && source.newsQueries.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {source.newsQueries.map((kw) => (
+                      <span
+                        key={kw}
+                        className="px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-[#bac9cc] rounded-full"
+                      >
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
                 )}
 
-                {/* Last crawled */}
                 {source.lastCrawledAt && (
                   <p className="text-xs text-slate-400 dark:text-[#849396]">
                     Last crawled: {new Date(source.lastCrawledAt).toLocaleString()}
@@ -640,7 +702,6 @@ export function CrawlerSettings() {
         </div>
       )}
 
-      {/* Add Source Button */}
       <button
         onClick={() => setShowAddModal(true)}
         className="flex items-center gap-2 px-4 py-2 bg-primary text-white dark:text-[#09090E] rounded-lg font-semibold text-sm hover:bg-primary/90 transition-colors dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
@@ -649,7 +710,6 @@ export function CrawlerSettings() {
         Add Source
       </button>
 
-      {/* Add Modal */}
       {showAddModal && (
         <AddEditModal
           onClose={() => setShowAddModal(false)}
@@ -657,7 +717,6 @@ export function CrawlerSettings() {
         />
       )}
 
-      {/* Edit Modal */}
       {editingSource && (
         <AddEditModal
           onClose={() => setEditingSource(null)}
@@ -665,7 +724,7 @@ export function CrawlerSettings() {
           initial={{
             sourceName: editingSource.source.sourceName,
             awsServices: editingSource.subscription.awsServices,
-            newsSources: editingSource.subscription.newsSources,
+            newsQueries: editingSource.source.newsQueries || [],
             customUrls: editingSource.subscription.customUrls.length > 0
               ? editingSource.subscription.customUrls
               : [''],
@@ -674,7 +733,6 @@ export function CrawlerSettings() {
         />
       )}
 
-      {/* History Modal */}
       {historySource && (
         <HistoryModal
           sourceName={historySource.name}

@@ -1,10 +1,14 @@
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as path from 'path';
 import { Construct } from 'constructs';
 
 export interface AuthStackProps extends cdk.StackProps {
   cloudFrontDomain?: string;
+  table?: dynamodb.ITable;
 }
 
 export class AuthStack extends cdk.Stack {
@@ -16,6 +20,29 @@ export class AuthStack extends cdk.Stack {
 
   constructor(scope: Construct, id: string, props?: AuthStackProps) {
     super(scope, id, props);
+
+    // Pre Sign-Up Lambda — validates email domain against allowed list
+    const preSignUpFn = new lambda.Function(this, 'PreSignUpFunction', {
+      functionName: 'ttobak-pre-signup',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/pre-signup')),
+      environment: {
+        TABLE_NAME: props?.table?.tableName || 'ttobak-main',
+      },
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 128,
+    });
+
+    if (props?.table) {
+      props.table.grantReadData(preSignUpFn);
+    } else {
+      preSignUpFn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['dynamodb:GetItem'],
+        resources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/ttobak-main`],
+      }));
+    }
 
     // Cognito User Pool with email/password sign-up/sign-in
     this.userPool = new cognito.UserPool(this, 'TtobakUserPool', {
@@ -39,6 +66,9 @@ export class AuthStack extends cdk.Stack {
         requireUppercase: false,
         requireDigits: true,
         requireSymbols: false,
+      },
+      lambdaTriggers: {
+        preSignUp: preSignUpFn,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -87,6 +117,9 @@ export class AuthStack extends cdk.Stack {
         userPassword: true,
         userSrp: true,
       },
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1),
+      refreshTokenValidity: cdk.Duration.days(30),
     });
 
     // Public SPA client (no secret — safe for browser-based auth + MCP OAuth PKCE)
@@ -112,6 +145,9 @@ export class AuthStack extends cdk.Stack {
       supportedIdentityProviders: [
         cognito.UserPoolClientIdentityProvider.COGNITO,
       ],
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1),
+      refreshTokenValidity: cdk.Duration.days(30),
     });
 
     // Cognito Identity Pool — enables browser-direct access to AWS services

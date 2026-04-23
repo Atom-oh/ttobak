@@ -28,6 +28,15 @@ Thumbs.db
 infra/cdk.out/
 infra/cdk.out.deploy/
 
+# Python packaging / AgentCore deploy
+backend/python/research-agent/package/
+backend/python/research-agent/deploy.zip
+backend/python/research-agent/.venv/
+*.egg-info/
+dist/
+build/
+uv.lock
+
 # OMC / Playwright
 .omc/
 .playwright-mcp/

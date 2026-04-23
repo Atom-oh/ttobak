@@ -10,7 +10,7 @@
 # English
 
 ## Status
-Proposed
+Superseded by [ADR-006](ADR-006-tab-audio-capture-and-tauri-mac-app.md)
 
 ## Context
 
@@ -174,7 +174,7 @@ Rationale:
 # 한국어
 
 ## 상태
-제안됨
+[ADR-006](ADR-006-tab-audio-capture-and-tauri-mac-app.md)으로 대체됨
 
 ## 배경
 

@@ -4,8 +4,8 @@ import Link from 'next/link';
 
 const navItems = [
   { href: '/', icon: 'home', label: 'Home' },
+  { href: '/chat', icon: 'smart_toy', label: 'AI' },
   { href: '/record', icon: 'mic', label: 'Record' },
-  { href: '/files', icon: 'description', label: 'Files' },
   { href: '/insights', icon: 'insights', label: 'Insights' },
   { href: '/profile', icon: 'person', label: 'Profile' },
 ];

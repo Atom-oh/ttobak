@@ -64,7 +64,7 @@ jobs:
       - name: Build Go Lambda binaries (ARM64)
         working-directory: backend
         run: |
-          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
+          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
             echo "Building $dir..."
             GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
             echo "  OK: $dir"
@@ -107,7 +107,7 @@ jobs:
         if: needs.detect-changes.outputs.backend == 'true'
         working-directory: backend
         run: |
-          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
+          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
             GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
           done
 

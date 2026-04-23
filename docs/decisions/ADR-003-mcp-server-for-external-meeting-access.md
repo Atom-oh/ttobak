@@ -73,24 +73,30 @@ The MCP server exposes five tools: `ttobak_list_meetings`, `ttobak_get_meeting`,
 
 Option 4 was rejected because it requires coordinated changes across three auth layers (including Lambda@Edge in us-east-1) for isolation that provides no practical security benefit in a single-user project.
 
+## Post-Implementation Updates
+
+1. **`ttobak_status` tool added**: A sixth tool was added that returns the current authentication status (logged in, token expiry, user email). Useful for debugging auth issues without logging out.
+2. **Refresh token extended to 30 days**: Both the SPA client and MCP client now use 30-day refresh tokens (originally 7 days for MCP). This was changed to reduce the frequency of re-authentication for daily users.
+3. **Dedicated MCP app client**: A separate Cognito app client (`ttobak-mcp-client`) was created for the MCP server after all, diverging from the original decision to reuse the SPA client. The Lambda@Edge audience check was updated to accept both client IDs. This provides cleaner token management and independent refresh token configuration.
+
 ## Consequences
 
 ### Positive
-- Zero new AWS infrastructure; only a CDK config change to the existing SPA client
-- Claude Code can natively call `ttobak_list_meetings`, `ttobak_get_meeting`, and `ttobak_ask` as MCP tools
-- Refresh tokens provide ~30-day sessions before re-login is needed
+- Zero new AWS infrastructure beyond the Cognito client config change
+- Claude Code can natively call 6 MCP tools: `ttobak_login`, `ttobak_status`, `ttobak_list_meetings`, `ttobak_get_meeting`, `ttobak_ask`, `ttobak_logout`
+- 30-day refresh tokens minimize re-login friction for daily use
 - The same pattern can be extended to expose additional tools (export, translation, KB search)
 
 ### Negative
-- Adding OAuth config to the SPA client couples browser auth and MCP auth on the same client; a future multi-tenant deployment may want to separate them (can be revisited via Option 4 at that point)
+- Two Cognito app clients to manage (SPA + MCP), with Lambda@Edge updated to accept both audience values
 - The MCP server requires `node` and `npm install` on the developer's local machine
 - Browser-based login does not work in headless/CI environments (acceptable for the briefing use case)
 
 ## References
-- `mcp-server/` — MCP server implementation
-- `infra/lib/auth-stack.ts` — Cognito SPA client OAuth configuration
-- `infra/lib/edge-auth-stack.ts` — Lambda@Edge JWT validation (audience check at line 143)
-- `infra/lib/gateway-stack.ts` — API Gateway JWT authorizer (audience at line 173)
+- `mcp-server/` — MCP server implementation (6 tools)
+- `infra/lib/auth-stack.ts` — Cognito SPA + MCP client OAuth configuration
+- `infra/lib/edge-auth-stack.ts` — Lambda@Edge JWT validation (accepts both SPA and MCP client IDs)
+- `infra/lib/gateway-stack.ts` — API Gateway JWT authorizer
 - [Cognito OAuth 2.0 PKCE](https://docs.aws.amazon.com/cognito/latest/developerguide/authorization-endpoint.html)
 - [MCP Protocol Specification](https://modelcontextprotocol.io)
 
@@ -164,23 +170,29 @@ MCP 서버는 다섯 가지 도구를 노출합니다: `ttobak_list_meetings`, `
 
 옵션 4는 단일 사용자 프로젝트에서 실질적인 보안 이점이 없는 분리를 위해 세 가지 인증 레이어(us-east-1의 Lambda@Edge 포함)에 대한 조율된 변경이 필요하여 기각되었습니다.
 
+## 구현 후 업데이트
+
+1. **`ttobak_status` 도구 추가**: 현재 인증 상태(로그인 여부, 토큰 만료, 사용자 이메일)를 반환하는 6번째 도구가 추가되었습니다. 로그아웃하지 않고 인증 문제를 디버깅하는 데 유용합니다.
+2. **리프레시 토큰 30일로 연장**: SPA 클라이언트와 MCP 클라이언트 모두 30일 리프레시 토큰을 사용합니다 (MCP는 원래 7일). 일일 사용자의 재인증 빈도를 줄이기 위해 변경되었습니다.
+3. **전용 MCP 앱 클라이언트**: 원래 SPA 클라이언트를 재사용하기로 한 결정에서 벗어나, MCP 서버용 별도 Cognito 앱 클라이언트(`ttobak-mcp-client`)가 생성되었습니다. Lambda@Edge audience 검사가 두 클라이언트 ID를 모두 수용하도록 업데이트되었습니다. 이는 더 깔끔한 토큰 관리와 독립적인 리프레시 토큰 설정을 제공합니다.
+
 ## 영향
 
 ### 긍정적
-- 새로운 AWS 인프라 불필요; 기존 SPA 클라이언트에 대한 CDK 설정 변경만 필요
-- Claude Code가 `ttobak_list_meetings`, `ttobak_get_meeting`, `ttobak_ask`를 MCP 도구로 네이티브 호출 가능
-- 리프레시 토큰으로 재로그인 전 약 30일 세션 유지
+- Cognito 클라이언트 설정 변경 외 새로운 AWS 인프라 불필요
+- Claude Code가 6개 MCP 도구를 네이티브 호출 가능: `ttobak_login`, `ttobak_status`, `ttobak_list_meetings`, `ttobak_get_meeting`, `ttobak_ask`, `ttobak_logout`
+- 30일 리프레시 토큰으로 일상 사용 시 재로그인 부담 최소화
 - 동일한 패턴을 확장하여 추가 도구 노출 가능 (내보내기, 번역, KB 검색)
 
 ### 부정적
-- SPA 클라이언트에 OAuth 설정을 추가하면 브라우저 인증과 MCP 인증이 동일 클라이언트에 결합됨; 향후 멀티테넌트 배포 시 분리가 필요할 수 있음 (그 시점에 옵션 4로 재검토 가능)
+- 두 개의 Cognito 앱 클라이언트 관리 필요 (SPA + MCP), Lambda@Edge가 두 audience 값을 수용하도록 업데이트됨
 - MCP 서버는 개발자 로컬 머신에 `node`와 `npm install`이 필요
 - 브라우저 기반 로그인은 헤드리스/CI 환경에서 작동하지 않음 (브리핑 용도로는 허용 가능)
 
 ## 참고 자료
-- `mcp-server/` — MCP 서버 구현
-- `infra/lib/auth-stack.ts` — Cognito SPA 클라이언트 OAuth 설정
-- `infra/lib/edge-auth-stack.ts` — Lambda@Edge JWT 검증 (143행 audience 확인)
-- `infra/lib/gateway-stack.ts` — API Gateway JWT authorizer (173행 audience)
+- `mcp-server/` — MCP 서버 구현 (6개 도구)
+- `infra/lib/auth-stack.ts` — Cognito SPA + MCP 클라이언트 OAuth 설정
+- `infra/lib/edge-auth-stack.ts` — Lambda@Edge JWT 검증 (SPA 및 MCP 클라이언트 ID 모두 수용)
+- `infra/lib/gateway-stack.ts` — API Gateway JWT authorizer
 - [Cognito OAuth 2.0 PKCE](https://docs.aws.amazon.com/cognito/latest/developerguide/authorization-endpoint.html)
 - [MCP Protocol Specification](https://modelcontextprotocol.io)

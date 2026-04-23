@@ -6,6 +6,8 @@ github.com/aws/aws-sdk-go-v2 v1.41.6 h1:1AX0AthnBQzMx1vbmir3Y4WsnJgiydmnJjiLu+Lv
 github.com/aws/aws-sdk-go-v2 v1.41.6/go.mod h1:dy0UzBIfwSeot4grGvY1AqFWN5zgziMmWGzysDnHFcQ=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 h1:eBMB84YGghSocM7PsjmmPffTa+1FBUeNvGvFou6V/4o=
 github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8/go.mod h1:lyw7GFp3qENLh7kwzf7iMzAxDn+NzjXEAGjKS2UOKqI=
+github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.9 h1:adBsCIIpLbLmYnkQU+nAChU5yhVTvu5PerROm+/Kq2A=
+github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.9/go.mod h1:uOYhgfgThm/ZyAuJGNQ5YgNyOlYfqnGpTHXvk3cpykg=
 github.com/aws/aws-sdk-go-v2/config v1.32.11 h1:ftxI5sgz8jZkckuUHXfC/wMUc8u3fG1vQS0plr2F2Zs=
 github.com/aws/aws-sdk-go-v2/config v1.32.11/go.mod h1:twF11+6ps9aNRKEDimksp923o44w/Thk9+8YIlzWMmo=
 github.com/aws/aws-sdk-go-v2/credentials v1.19.11 h1:NdV8cwCcAXrCWyxArt58BrvZJ9pZ9Fhf9w6Uh5W3Uyc=
@@ -32,6 +34,8 @@ github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi v1.29.14 h1:3cZs+0p
 github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi v1.29.14/go.mod h1:qQrL+qYYxyGckiOhOkv0qzjM5mIncSrElEzjWUEPq0s=
 github.com/aws/aws-sdk-go-v2/service/bedrockagent v1.52.5 h1:e9Mpv26+CrDGlFIbLHAVDAwF4cgIQJAhu7yFg3udoCE=
 github.com/aws/aws-sdk-go-v2/service/bedrockagent v1.52.5/go.mod h1:xRrrUCYuOzKBqOdsJbeJFVSPWI98tDNrWgdnjcaoDdc=
+github.com/aws/aws-sdk-go-v2/service/bedrockagentcore v1.21.1 h1:Yo9Ju0DXQpVge6Y3mO34dFCpUTki6Krjzy/wypJWAds=
+github.com/aws/aws-sdk-go-v2/service/bedrockagentcore v1.21.1/go.mod h1:UA3W/iRdUajqHyMWwi7ZXh4/Mzy4HC2fRnqxx+m8OwE=
 github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime v1.51.5 h1:+OH7Oem3lqQwpsNHUbqsQnftsTPzvpGiU/yimx3n4AI=
 github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime v1.51.5/go.mod h1:O51cTC72W3Lz086bbUFWojgAeTuoFY+/NZ6kGZ8YLQY=
 github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.50.1 h1:tnLUbtNW5c056BEbQ4xvlZaakvgdaEdiKF87R1fxuoo=
@@ -60,6 +64,8 @@ github.com/aws/aws-sdk-go-v2/service/lambda v1.89.0 h1:e4NAllPs/ygQ7W4dTlAuP5N7Q
 github.com/aws/aws-sdk-go-v2/service/lambda v1.89.0/go.mod h1:6HBXRyFFqOw+ALkJ6YGHfrr20/YXYv6X9pcZErXRvCA=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.96.3 h1:+d0SsTvxtIJt4tSJ6wr+jrxEMDa6XeupjRv8H7Qitkk=
 github.com/aws/aws-sdk-go-v2/service/s3 v1.96.3/go.mod h1:ROUNFvFWPwBlOu687WJNQ9cPvd2ccpFrnCiA1YGz50o=
+github.com/aws/aws-sdk-go-v2/service/sfn v1.40.11 h1:GZVmdkqgNtTFMH5HDEvqk6UOXu9hvEAOkKPfbH1fQ2Y=
+github.com/aws/aws-sdk-go-v2/service/sfn v1.40.11/go.mod h1:uncFALoLM30hwDKY6Tr+cZwZEvP1XHG+qGAAHvjdx6E=
 github.com/aws/aws-sdk-go-v2/service/signin v1.0.7 h1:Y2cAXlClHsXkkOvWZFXATr34b0hxxloeQu/pAZz2row=
 github.com/aws/aws-sdk-go-v2/service/signin v1.0.7/go.mod h1:idzZ7gmDeqeNrSPkdbtMp9qWMgcBwykA7P7Rzh5DXVU=
 github.com/aws/aws-sdk-go-v2/service/sso v1.30.12 h1:iSsvB9EtQ09YrsmIc44Heqlx5ByGErqhPK1ZQLppias=

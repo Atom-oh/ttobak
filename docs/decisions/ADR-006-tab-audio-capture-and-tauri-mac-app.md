@@ -86,9 +86,17 @@ Tauri was chosen over Electron because:
 - Offline mode requires local storage management and sync conflict resolution
 - macOS permission prompts (Screen Recording permission) may confuse users on first launch of the Mac App
 
+## Post-Implementation Updates
+
+1. **Sub-project 1 (Tab Audio) completed**: `getDisplayMedia` tab audio capture is implemented in `RecordButton.tsx` and `device.ts`. Users can capture Google Meet tab audio on Chrome/Edge. Audio source selector on the Record page lets users choose between Microphone and Tab Audio modes.
+2. **Sub-project 2 (Tauri Mac App) deferred**: After evaluating the clamshell mode use case, the Tauri Mac App was deprioritized. The primary use case (recording in meetings without opening a laptop) is better served by recording on an iPhone and uploading via the existing file upload flow. The web app's upload mode (`/record?mode=upload`) already supports this.
+3. **ADR-001 superseded**: ADR-001 (original system audio proposal) has been marked as superseded by this ADR.
+
 ## References
 - `docs/superpowers/specs/2026-04-20-tab-audio-capture-design.md` -- Sub-project 1 design spec
-- `docs/decisions/ADR-001-system-audio-capture-for-remote-meetings.md` -- Original proposal for system audio (Proposed status, not implemented)
+- `frontend/src/components/RecordButton.tsx` -- Tab audio capture implementation (`getDisplayMedia`)
+- `frontend/src/lib/device.ts` -- `supportsTabAudioCapture()` capability check
+- `docs/decisions/ADR-001-system-audio-capture-for-remote-meetings.md` -- Superseded by this ADR
 - `docs/decisions/ADR-003-mcp-server-for-external-meeting-access.md` -- OAuth PKCE pattern reusable for Mac App auth
 - [MDN getDisplayMedia](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
 - [Tauri Framework](https://tauri.app/)
@@ -177,9 +185,17 @@ Electron 대신 Tauri를 선택한 이유:
 - 오프라인 모드에 로컬 저장소 관리 및 동기화 충돌 해결 필요
 - macOS 권한 프롬프트(화면 녹화 권한)가 Mac App 첫 실행 시 사용자를 혼란시킬 수 있음
 
+## 구현 후 업데이트
+
+1. **서브프로젝트 1 (탭 오디오) 완료**: `getDisplayMedia` 탭 오디오 캡처가 `RecordButton.tsx`와 `device.ts`에 구현되었습니다. 사용자가 Chrome/Edge에서 Google Meet 탭 오디오를 캡처할 수 있습니다. Record 페이지의 오디오 소스 선택기로 마이크와 탭 오디오 모드를 선택할 수 있습니다.
+2. **서브프로젝트 2 (Tauri Mac App) 보류**: 클램쉘 모드 사용 사례를 평가한 후, Tauri Mac App의 우선순위가 낮아졌습니다. 주요 사용 사례(노트북을 열지 않고 미팅 녹음)는 iPhone으로 녹음하고 기존 파일 업로드 플로우를 통해 업로드하는 것이 더 적합합니다. 웹 앱의 업로드 모드(`/record?mode=upload`)가 이미 이를 지원합니다.
+3. **ADR-001 대체됨**: ADR-001(원래 시스템 오디오 제안)이 이 ADR에 의해 대체됨으로 표시되었습니다.
+
 ## 참고 자료
 - `docs/superpowers/specs/2026-04-20-tab-audio-capture-design.md` -- 서브프로젝트 1 설계 명세
-- `docs/decisions/ADR-001-system-audio-capture-for-remote-meetings.md` -- 시스템 오디오 원래 제안 (제안됨 상태, 미구현)
+- `frontend/src/components/RecordButton.tsx` -- 탭 오디오 캡처 구현 (`getDisplayMedia`)
+- `frontend/src/lib/device.ts` -- `supportsTabAudioCapture()` 기능 확인
+- `docs/decisions/ADR-001-system-audio-capture-for-remote-meetings.md` -- 이 ADR에 의해 대체됨
 - `docs/decisions/ADR-003-mcp-server-for-external-meeting-access.md` -- Mac App 인증에 재사용 가능한 OAuth PKCE 패턴
 - [MDN getDisplayMedia](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
 - [Tauri Framework](https://tauri.app/)

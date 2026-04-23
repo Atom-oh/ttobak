@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -25,38 +26,41 @@ func NewInsightsService(repo *repository.CrawlerRepository, s3Client *s3.Client,
 
 // GetDocumentDetail reads metadata from DynamoDB and full content from S3.
 func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHash string) (*model.InsightDetailResponse, error) {
-	// Get metadata from DynamoDB
-	docs, _, _, err := s.repo.ListDocuments(ctx, sourceID, "", 1, nil)
-	var meta *model.CrawledDocument
-	for i := range docs {
-		if docs[i].DocHash == docHash {
-			meta = &docs[i]
-			break
-		}
-	}
-	// Fallback: query specifically
-	if meta == nil {
-		allDocs, _, _, _ := s.repo.ListDocuments(ctx, sourceID, "", 100, nil)
-		for i := range allDocs {
-			if allDocs[i].DocHash == docHash {
-				meta = &allDocs[i]
-				break
-			}
-		}
+	meta, err := s.repo.GetDocument(ctx, sourceID, docHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get document metadata: %w", err)
 	}
 
-	// Read content from S3
-	s3Key := fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash)
+	// Read content from S3 — prefer stored s3Key from metadata
+	var s3Key string
+	if meta != nil && meta.S3Key != "" {
+		s3Key = meta.S3Key
+	} else {
+		s3Key = fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash)
+	}
+
 	result, err := s.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.kbBucketName),
 		Key:    aws.String(s3Key),
 	})
 	if err != nil {
-		s3Key = fmt.Sprintf("shared/aws-docs/%s/%s.md", sourceID, docHash)
-		result, err = s.s3Client.GetObject(ctx, &s3.GetObjectInput{
-			Bucket: aws.String(s.kbBucketName),
-			Key:    aws.String(s3Key),
-		})
+		// Fallback paths
+		fallbacks := []string{
+			fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash),
+			fmt.Sprintf("shared/aws-docs/%s/%s.md", sourceID, docHash),
+		}
+		for _, fb := range fallbacks {
+			if fb == s3Key {
+				continue
+			}
+			result, err = s.s3Client.GetObject(ctx, &s3.GetObjectInput{
+				Bucket: aws.String(s.kbBucketName),
+				Key:    aws.String(fb),
+			})
+			if err == nil {
+				break
+			}
+		}
 		if err != nil {
 			return nil, fmt.Errorf("document not found: %w", err)
 		}
@@ -80,10 +84,8 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 	return resp, nil
 }
 
-// ListInsights retrieves crawled documents with optional filtering by type, source, and service.
-// Defaults: page=1, limit=20, max limit=50.
-func (s *InsightsService) ListInsights(ctx context.Context, docType, source, service string, page, limit int) (*model.InsightsResponse, error) {
-	// Apply defaults
+// ListInsights retrieves crawled documents with optional filtering by type, source, service, and tags.
+func (s *InsightsService) ListInsights(ctx context.Context, docType, source, service string, tags []string, page, limit int) (*model.InsightsResponse, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -99,11 +101,9 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 	var err error
 
 	if source != "" {
-		// Query a specific source's documents
-		docs, totalCount, err = s.listBySource(ctx, source, docType, service, page, limit)
+		docs, totalCount, err = s.listBySource(ctx, source, docType, service, tags, page, limit)
 	} else {
-		// Scan all documents by type
-		docs, totalCount, err = s.scanAll(ctx, docType, page, limit)
+		docs, totalCount, err = s.scanAll(ctx, docType, tags, page, limit)
 	}
 	if err != nil {
 		return nil, err
@@ -117,10 +117,8 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 	}, nil
 }
 
-// listBySource queries documents from a specific source with optional type/service filters.
-func (s *InsightsService) listBySource(ctx context.Context, source, docType, service string, page, limit int) ([]model.CrawledDocument, int, error) {
-	// Fetch documents from the source; use the repository's ListDocuments which supports
-	// optional docType filtering. We fetch page*limit items and paginate in-memory.
+// listBySource queries documents from a specific source with optional type/service/tags filters.
+func (s *InsightsService) listBySource(ctx context.Context, source, docType, service string, tags []string, page, limit int) ([]model.CrawledDocument, int, error) {
 	fetchLimit := int32(page * limit)
 
 	docs, _, count, err := s.repo.ListDocuments(ctx, source, docType, fetchLimit, nil)
@@ -128,13 +126,16 @@ func (s *InsightsService) listBySource(ctx context.Context, source, docType, ser
 		return nil, 0, fmt.Errorf("failed to list documents for source %s: %w", source, err)
 	}
 
-	// Apply in-memory service filter if specified
 	if service != "" {
 		docs = filterByService(docs, service)
 		count = len(docs)
 	}
 
-	// Apply pagination offset
+	if len(tags) > 0 {
+		docs = filterByTags(docs, tags)
+		count = len(docs)
+	}
+
 	start := (page - 1) * limit
 	if start >= len(docs) {
 		return []model.CrawledDocument{}, count, nil
@@ -147,16 +148,19 @@ func (s *InsightsService) listBySource(ctx context.Context, source, docType, ser
 }
 
 // scanAll scans all documents filtered by type with pagination.
-func (s *InsightsService) scanAll(ctx context.Context, docType string, page, limit int) ([]model.CrawledDocument, int, error) {
+func (s *InsightsService) scanAll(ctx context.Context, docType string, tags []string, page, limit int) ([]model.CrawledDocument, int, error) {
 	if docType == "" {
-		docType = "blog" // default document type
+		docType = "blog"
 	}
 
-	// Use the repository's ListAllDocumentsByType which handles full-table scan + pagination.
-	// The repo uses 0-based page offset, while our API uses 1-based page.
 	docs, total, err := s.repo.ListAllDocumentsByType(ctx, docType, int32(limit), page-1)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to scan documents: %w", err)
+	}
+
+	if len(tags) > 0 {
+		docs = filterByTags(docs, tags)
+		total = len(docs)
 	}
 
 	return docs, total, nil
@@ -174,4 +178,33 @@ func filterByService(docs []model.CrawledDocument, service string) []model.Crawl
 		}
 	}
 	return filtered
+}
+
+// filterByTags filters documents that contain ALL specified tags (case-insensitive).
+func filterByTags(docs []model.CrawledDocument, tags []string) []model.CrawledDocument {
+	lowerTags := make([]string, len(tags))
+	for i, t := range tags {
+		lowerTags[i] = strings.ToLower(t)
+	}
+
+	var filtered []model.CrawledDocument
+	for _, doc := range docs {
+		if matchesTags(doc.Tags, lowerTags) {
+			filtered = append(filtered, doc)
+		}
+	}
+	return filtered
+}
+
+func matchesTags(docTags []string, filterTags []string) bool {
+	docTagSet := make(map[string]bool, len(docTags))
+	for _, t := range docTags {
+		docTagSet[strings.ToLower(t)] = true
+	}
+	for _, ft := range filterTags {
+		if !docTagSet[ft] {
+			return false
+		}
+	}
+	return true
 }

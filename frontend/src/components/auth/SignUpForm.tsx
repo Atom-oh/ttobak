@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from './AuthProvider';
+import { apiFetch } from '@/lib/api';
 
 interface SignUpFormProps {
   onSwitchToLogin?: () => void;
@@ -74,6 +75,17 @@ export function SignUpForm({ onSwitchToLogin }: SignUpFormProps) {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [allowedDomains, setAllowedDomains] = useState<string[]>([]);
+  const [domainsEnforced, setDomainsEnforced] = useState(false);
+
+  useEffect(() => {
+    apiFetch<{ domains: string[]; enforced: boolean }>('/api/auth/allowed-domains', { skipAuth: true })
+      .then((res) => {
+        setAllowedDomains(res.domains || []);
+        setDomainsEnforced(res.enforced);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,6 +99,14 @@ export function SignUpForm({ onSwitchToLogin }: SignUpFormProps) {
     if (password.length < 8) {
       setError('비밀번호는 8자 이상이어야 합니다');
       return;
+    }
+
+    if (domainsEnforced) {
+      const domain = email.split('@')[1]?.toLowerCase();
+      if (!domain || !allowedDomains.includes(domain)) {
+        setError(`허용된 이메일 도메인: ${allowedDomains.join(', ')}`);
+        return;
+      }
     }
 
     setIsLoading(true);
@@ -179,6 +199,11 @@ export function SignUpForm({ onSwitchToLogin }: SignUpFormProps) {
 
         <FormField id="signup-name" label="이름" labelEn="Name" icon="person" value={name} onChange={setName} placeholder="이름을 입력하세요" required={false} />
         <FormField id="signup-email" label="이메일" labelEn="Email Address" icon="mail" type="email" value={email} onChange={setEmail} placeholder="you@example.com" />
+        {domainsEnforced && (
+          <p className="text-xs text-slate-500 dark:text-[#849396] -mt-2 ml-1">
+            허용 도메인: {allowedDomains.join(', ')}
+          </p>
+        )}
         <FormField id="signup-password" label="비밀번호" labelEn="Password" icon="lock" type="password" value={password} onChange={setPassword} placeholder="8자 이상 입력하세요" />
         <FormField id="signup-confirm" label="비밀번호 확인" labelEn="Confirm Password" icon="lock_reset" type="password" value={confirmPassword} onChange={setConfirmPassword} placeholder="비밀번호를 다시 입력하세요" />
 

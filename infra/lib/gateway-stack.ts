@@ -6,6 +6,8 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
@@ -29,6 +31,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   kmsKeyId?: string;
   knowledgeBaseId?: string;
   dataSourceId?: string;
+  agentCoreRuntimeArn?: string;
+  researchWorkerRole?: iam.IRole;
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
   originVerifySecret?: string;
@@ -68,6 +72,38 @@ export class GatewayStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
     });
+
+    // Research worker Lambda — invoked by Step Functions, calls AgentCore
+    const researchWorker = new lambda.Function(this, 'ResearchWorkerFunction', {
+      functionName: 'ttobak-research-worker',
+      runtime: lambda.Runtime.PROVIDED_AL2023,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'bootstrap',
+      code: lambda.Code.fromAsset('../backend/cmd/research-worker'),
+      role: (props.researchWorkerRole || props.apiRole) as iam.Role,
+      environment: {
+        TABLE_NAME: props.table.tableName,
+        KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
+        AGENTCORE_RUNTIME_ID: props.agentCoreRuntimeArn || '',
+        AGENTCORE_ENDPOINT_NAME: 'ttobakResearchEndpoint',
+      },
+      timeout: cdk.Duration.minutes(15),
+      memorySize: 512,
+    });
+
+    // Research Step Functions workflow
+    const researchTask = new tasks.LambdaInvoke(this, 'InvokeResearchWorker', {
+      lambdaFunction: researchWorker,
+      outputPath: '$.Payload',
+    });
+
+    const researchSfn = new sfn.StateMachine(this, 'ResearchWorkflow', {
+      stateMachineName: 'ttobak-research-workflow',
+      definitionBody: sfn.DefinitionBody.fromChainable(researchTask),
+      timeout: cdk.Duration.minutes(20),
+    });
+
+    this.apiFunction.addEnvironment('RESEARCH_SFN_ARN', researchSfn.stateMachineArn);
 
     // Transcribe Lambda function - triggered by S3 events via EventBridge
     this.transcribeFunction = new lambda.Function(this, 'TranscribeFunction', {
@@ -242,6 +278,32 @@ export class GatewayStack extends cdk.Stack {
       integration: apiIntegration,
       authorizer: jwtAuthorizer,
     });
+
+    // Warm the API Lambda every 5 minutes to eliminate cold starts
+    const warmingRule = new events.Rule(this, 'ApiWarmingRule', {
+      ruleName: 'ttobak-api-warming',
+      description: 'Keep API Lambda warm by invoking /api/health every 5 minutes',
+      schedule: events.Schedule.expression('cron(0/5 0-9 ? * MON-FRI *)'),
+    });
+    warmingRule.addTarget(new eventsTargets.LambdaFunction(this.apiFunction, {
+      event: events.RuleTargetInput.fromObject({
+        version: '1.0',
+        resource: '/api/health',
+        path: '/api/health',
+        httpMethod: 'GET',
+        headers: { 'X-Warming': 'true' },
+        queryStringParameters: null,
+        pathParameters: null,
+        stageVariables: null,
+        requestContext: {
+          resourcePath: '/api/health',
+          httpMethod: 'GET',
+          path: '/api/health',
+        },
+        body: null,
+        isBase64Encoded: false,
+      }),
+    }));
 
     // EventBridge rule for audio uploads -> Transcribe Lambda
     const audioUploadRule = new events.Rule(this, 'AudioUploadRule', {

@@ -90,6 +90,7 @@ type CrawlerSource struct {
 	Subscribers   []string `dynamodbav:"subscribers" json:"subscribers"`
 	AWSServices   []string `dynamodbav:"awsServices" json:"awsServices"`
 	NewsQueries   []string `dynamodbav:"newsQueries" json:"newsQueries"`
+	NewsSources   []string `dynamodbav:"newsSources" json:"newsSources"`
 	CustomUrls    []string `dynamodbav:"customUrls" json:"customUrls"`
 	Schedule      string   `dynamodbav:"schedule" json:"schedule"`
 	LastCrawledAt string   `dynamodbav:"lastCrawledAt" json:"lastCrawledAt"`
@@ -103,6 +104,7 @@ type CrawlerSubscription struct {
 	SourceID    string   `dynamodbav:"sourceId" json:"sourceId"`
 	AWSServices []string `dynamodbav:"awsServices" json:"awsServices"`
 	NewsSources []string `dynamodbav:"newsSources" json:"newsSources"`
+	NewsQueries []string `dynamodbav:"newsQueries" json:"newsQueries"`
 	CustomUrls  []string `dynamodbav:"customUrls" json:"customUrls"`
 	AddedAt     string   `dynamodbav:"addedAt" json:"addedAt"`
 }
@@ -118,6 +120,7 @@ type CrawledDocument struct {
 	Source      string   `dynamodbav:"source,omitempty" json:"source"`
 	Summary     string   `dynamodbav:"summary,omitempty" json:"summary"`
 	AWSServices []string `dynamodbav:"awsServices,omitempty" json:"awsServices,omitempty"`
+	Tags        []string `dynamodbav:"tags,omitempty" json:"tags,omitempty"`
 	S3Key       string   `dynamodbav:"s3Key,omitempty" json:"s3Key"`
 	CrawledAt   int64    `dynamodbav:"crawledAt" json:"crawledAt"`
 	InKB        bool     `dynamodbav:"inKB,omitempty" json:"inKB"`
@@ -132,6 +135,23 @@ type CrawlHistory struct {
 	DocsUpdated int      `dynamodbav:"docsUpdated" json:"docsUpdated"`
 	Errors      []string `dynamodbav:"errors" json:"errors"`
 	Duration    int      `dynamodbav:"duration" json:"duration"`
+}
+
+// Research represents a deep research task
+// PK: USER#{userId}, SK: RESEARCH#{researchId}
+type Research struct {
+	ResearchID   string `dynamodbav:"researchId" json:"researchId"`
+	UserID       string `dynamodbav:"userId" json:"userId"`
+	Topic        string `dynamodbav:"topic" json:"topic"`
+	Mode         string `dynamodbav:"mode" json:"mode"`
+	Status       string `dynamodbav:"status" json:"status"`
+	CreatedAt    string `dynamodbav:"createdAt" json:"createdAt"`
+	CompletedAt  string `dynamodbav:"completedAt,omitempty" json:"completedAt,omitempty"`
+	S3Key        string `dynamodbav:"s3Key,omitempty" json:"s3Key,omitempty"`
+	SourceCount  int    `dynamodbav:"sourceCount,omitempty" json:"sourceCount,omitempty"`
+	WordCount    int    `dynamodbav:"wordCount,omitempty" json:"wordCount,omitempty"`
+	Summary      string `dynamodbav:"summary,omitempty" json:"summary,omitempty"`
+	ErrorMessage string `dynamodbav:"errorMessage,omitempty" json:"errorMessage,omitempty"`
 }
 
 // MeetingStatus constants
@@ -181,4 +201,21 @@ const (
 	PrefixDoc        = "DOC#"
 	PrefixHistory    = "HISTORY#"
 	PrefixConfig     = "CONFIG"
+	PrefixResearch   = "RESEARCH#"
 )
+
+// Config SK constants
+const (
+	ConfigSKAllowedDomains = "ALLOWED_DOMAINS"
+)
+
+// AllowedDomainsConfig represents the allowed email domains configuration
+// PK: CONFIG, SK: ALLOWED_DOMAINS
+type AllowedDomainsConfig struct {
+	PK         string    `dynamodbav:"PK"`
+	SK         string    `dynamodbav:"SK"`
+	Domains    []string  `dynamodbav:"domains"`
+	UpdatedAt  time.Time `dynamodbav:"updatedAt"`
+	UpdatedBy  string    `dynamodbav:"updatedBy"`
+	EntityType string    `dynamodbav:"entityType"`
+}

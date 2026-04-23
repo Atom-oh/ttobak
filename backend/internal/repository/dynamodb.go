@@ -1103,3 +1103,116 @@ func (r *DynamoDBRepository) DeleteIntegration(ctx context.Context, userID, serv
 	}
 	return nil
 }
+
+// ChatSession represents a chat session metadata item in DynamoDB
+type ChatSession struct {
+	SessionID     string `dynamodbav:"sessionId" json:"sessionId"`
+	Title         string `dynamodbav:"title" json:"title"`
+	CreatedAt     string `dynamodbav:"createdAt" json:"createdAt"`
+	LastMessageAt string `dynamodbav:"lastMessageAt" json:"lastMessageAt"`
+	MessageCount  int    `dynamodbav:"messageCount" json:"messageCount"`
+}
+
+// ListChatSessions returns all chat sessions for a user, newest first
+func (r *DynamoDBRepository) ListChatSessions(ctx context.Context, userID string) ([]ChatSession, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixUser + userID)).
+		And(expression.Key("SK").BeginsWith("CHAT_SESSION#"))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build expression: %w", err)
+	}
+
+	queryResult, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(false),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to query chat sessions: %w", err)
+	}
+
+	var sessions []ChatSession
+	if err := attributevalue.UnmarshalListOfMaps(queryResult.Items, &sessions); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal chat sessions: %w", err)
+	}
+
+	return sessions, nil
+}
+
+// DeleteChatSession deletes both session metadata and session messages
+func (r *DynamoDBRepository) DeleteChatSession(ctx context.Context, userID, sessionID string) error {
+	// Delete session metadata: PK=USER#{userID}, SK=CHAT_SESSION#{sessionID}
+	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: "CHAT_SESSION#" + sessionID},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete chat session metadata: %w", err)
+	}
+
+	// Delete session messages: PK=SESSION#{userID}#{sessionID}, SK=MESSAGES
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "SESSION#" + userID + "#" + sessionID},
+			"SK": &types.AttributeValueMemberS{Value: "MESSAGES"},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete chat session messages: %w", err)
+	}
+
+	return nil
+}
+
+// GetAllowedDomains retrieves the allowed email domains configuration
+func (r *DynamoDBRepository) GetAllowedDomains(ctx context.Context) ([]string, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+			"SK": &types.AttributeValueMemberS{Value: model.ConfigSKAllowedDomains},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed domains: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+
+	var config model.AllowedDomainsConfig
+	if err := attributevalue.UnmarshalMap(result.Item, &config); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal allowed domains: %w", err)
+	}
+	return config.Domains, nil
+}
+
+// SaveAllowedDomains saves the allowed email domains configuration
+func (r *DynamoDBRepository) SaveAllowedDomains(ctx context.Context, domains []string, updatedBy string) error {
+	config := &model.AllowedDomainsConfig{
+		PK:         model.PrefixConfig,
+		SK:         model.ConfigSKAllowedDomains,
+		Domains:    domains,
+		UpdatedAt:  time.Now().UTC(),
+		UpdatedBy:  updatedBy,
+		EntityType: "CONFIG",
+	}
+	item, err := attributevalue.MarshalMap(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal allowed domains: %w", err)
+	}
+	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(r.tableName),
+		Item:      item,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to save allowed domains: %w", err)
+	}
+	return nil
+}

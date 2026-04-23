@@ -30,6 +30,16 @@ func (h *InsightsHandler) ListInsights(w http.ResponseWriter, r *http.Request) {
 	source := r.URL.Query().Get("source")
 	svc := r.URL.Query().Get("service")
 
+	var tags []string
+	if t := r.URL.Query().Get("tags"); t != "" {
+		for _, tag := range strings.Split(t, ",") {
+			tag = strings.TrimSpace(tag)
+			if tag != "" {
+				tags = append(tags, tag)
+			}
+		}
+	}
+
 	page := 1
 	if p := r.URL.Query().Get("page"); p != "" {
 		if v, err := strconv.Atoi(p); err == nil && v > 0 {
@@ -44,7 +54,7 @@ func (h *InsightsHandler) ListInsights(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := h.insightsService.ListInsights(ctx, docType, source, svc, page, limit)
+	result, err := h.insightsService.ListInsights(ctx, docType, source, svc, tags, page, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return

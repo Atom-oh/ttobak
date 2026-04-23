@@ -7,7 +7,7 @@ import time
 import boto3
 
 from aws_docs import search_aws_docs
-from prompts import SYSTEM_PROMPT, DETECT_QUESTIONS_PROMPT
+from prompts import get_system_prompt, DETECT_QUESTIONS_PROMPT
 from tools import TOOL_DEFINITIONS, execute_tool
 
 logger = logging.getLogger()
@@ -160,6 +160,112 @@ def _kb_cache_put(question, number_of_results, results, user_id=None):
         logger.warning(f"KB cache write failed: {e}")
 
 
+# Cache shared-meeting lookups per user (warm for Lambda lifetime)
+_shared_meetings_cache = {}
+
+
+def _list_shared_meetings(user_id):
+    """Query DynamoDB for meetings shared with this user.
+
+    Returns list of {'meetingId': ..., 'ownerId': ...}.
+    Results are cached in module-level dict keyed by user_id.
+    """
+    if user_id in _shared_meetings_cache:
+        return _shared_meetings_cache[user_id]
+    try:
+        from boto3.dynamodb.conditions import Key
+        resp = table.query(
+            KeyConditionExpression=Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('SHARED#'),
+            ProjectionExpression='meetingId, ownerId',
+        )
+        items = [
+            {'meetingId': item['meetingId'], 'ownerId': item['ownerId']}
+            for item in resp.get('Items', [])
+            if item.get('meetingId') and item.get('ownerId')
+        ]
+        _shared_meetings_cache[user_id] = items
+        return items
+    except Exception as e:
+        logger.warning(f"Failed to list shared meetings for {user_id}: {e}")
+        _shared_meetings_cache[user_id] = []
+        return []
+
+
+def list_meetings_for_user(user_id, date_from=None, date_to=None, tag=None, keyword=None, limit=None):
+    """List meetings for a user (own + shared), with optional filters.
+
+    Returns list of dicts: {meetingId, title, date, tags, status, isShared, sharedBy?}
+    """
+    from boto3.dynamodb.conditions import Key
+
+    limit = limit or 20
+    projection = 'meetingId, title, createdAt, tags, #s'
+    expr_names = {'#s': 'status'}
+    meetings = []
+
+    # 1. Own meetings
+    try:
+        resp = table.query(
+            KeyConditionExpression=Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('MEETING#'),
+            ProjectionExpression=projection,
+            ExpressionAttributeNames=expr_names,
+        )
+        for item in resp.get('Items', []):
+            meetings.append({
+                'meetingId': item.get('meetingId', ''),
+                'title': item.get('title', ''),
+                'date': item.get('createdAt', ''),
+                'tags': item.get('tags', []),
+                'status': item.get('status', ''),
+                'isShared': False,
+            })
+    except Exception as e:
+        logger.warning(f"Failed to query own meetings for {user_id}: {e}")
+
+    # 2. Shared meetings
+    try:
+        shared = _list_shared_meetings(user_id)
+        for s in shared:
+            try:
+                resp = table.get_item(
+                    Key={'PK': f"USER#{s['ownerId']}", 'SK': f"MEETING#{s['meetingId']}"},
+                    ProjectionExpression=projection,
+                    ExpressionAttributeNames=expr_names,
+                )
+                item = resp.get('Item')
+                if item:
+                    meetings.append({
+                        'meetingId': item.get('meetingId', ''),
+                        'title': item.get('title', ''),
+                        'date': item.get('createdAt', ''),
+                        'tags': item.get('tags', []),
+                        'status': item.get('status', ''),
+                        'isShared': True,
+                        'sharedBy': s['ownerId'],
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get shared meeting {s['meetingId']}: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to list shared meetings for {user_id}: {e}")
+
+    # 3. Apply client-side filters
+    if date_from:
+        meetings = [m for m in meetings if m['date'] >= date_from]
+    if date_to:
+        # Include the entire end date (compare with date_to + 'Z' to include full day)
+        meetings = [m for m in meetings if m['date'] <= date_to + 'T23:59:59Z']
+    if tag:
+        tag_lower = tag.lower()
+        meetings = [m for m in meetings if any(tag_lower in t.lower() for t in m.get('tags', []))]
+    if keyword:
+        kw_lower = keyword.lower()
+        meetings = [m for m in meetings if kw_lower in (m.get('title') or '').lower()]
+
+    # 4. Sort by date descending, limit
+    meetings.sort(key=lambda m: m.get('date', ''), reverse=True)
+    return meetings[:limit]
+
+
 def retrieve_from_kb(question, number_of_results=5, user_id=None):
     """Retrieve relevant documents from Bedrock Knowledge Base, with short-lived DynamoDB cache."""
     capped = min(number_of_results, 10)
@@ -175,15 +281,22 @@ def retrieve_from_kb(question, number_of_results=5, user_id=None):
                 'numberOfResults': capped,
             }
         }
-        # Filter: user's personal KB + user's meeting docs + shared crawler docs
+        # Filter: user's personal KB + user's meeting docs + shared crawler docs + shared meetings
         if user_id:
-            retrieval_config['vectorSearchConfiguration']['filter'] = {
-                'orAll': [
-                    {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'kb/{user_id}/'}},
-                    {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'meetings/{user_id}/'}},
-                    {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': 'shared/'}},
-                ]
-            }
+            filters = [
+                {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'kb/{user_id}/'}},
+                {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': f'meetings/{user_id}/'}},
+                {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': 'shared/'}},
+            ]
+            # Include documents from meetings shared with this user
+            for shared in _list_shared_meetings(user_id):
+                filters.append({
+                    'stringContains': {
+                        'key': 'x-amz-bedrock-kb-source-uri',
+                        'value': f"meetings/{shared['ownerId']}/{shared['meetingId']}",
+                    }
+                })
+            retrieval_config['vectorSearchConfiguration']['filter'] = {'orAll': filters}
         resp = bedrock_agent_runtime.retrieve(
             knowledgeBaseId=KB_ID,
             retrievalQuery={'text': question},
@@ -222,7 +335,7 @@ def load_session(session_id, user_id=None):
 
 
 def save_session(session_id, messages, user_id=None):
-    """Save conversation history to DynamoDB with 24h TTL."""
+    """Save conversation history to DynamoDB with 7-day TTL."""
     if not session_id:
         return
     pk = f"SESSION#{user_id}#{session_id}" if user_id else f"SESSION#{session_id}"
@@ -231,10 +344,45 @@ def save_session(session_id, messages, user_id=None):
             "PK": pk,
             "SK": "MESSAGES",
             "messages": json.dumps(messages, ensure_ascii=False),
-            "TTL": int(time.time()) + 86400,
+            "TTL": int(time.time()) + 604800,  # 7 days
         })
     except Exception as e:
         logger.warning(f"Failed to save session {session_id}: {e}")
+
+    # Create/update CHAT_SESSION metadata for chat- prefixed sessions
+    if user_id and session_id.startswith('chat-'):
+        try:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).isoformat()
+
+            # Extract first user question text
+            first_question = None
+            msg_count = 0
+            for msg in messages:
+                role = msg.get('role', '')
+                if role == 'user':
+                    content = msg.get('content', [])
+                    # Skip tool result messages
+                    if isinstance(content, list) and content and isinstance(content[0], dict):
+                        if 'toolResult' in content[0]:
+                            continue
+                        if first_question is None:
+                            first_question = content[0].get('text', '')[:50]
+                    msg_count += 1
+
+            table.put_item(Item={
+                "PK": f"USER#{user_id}",
+                "SK": f"CHAT_SESSION#{session_id}",
+                "sessionId": session_id,
+                "title": first_question or '새 대화',
+                "createdAt": now,
+                "lastMessageAt": now,
+                "messageCount": msg_count,
+                "entityType": "CHAT_SESSION",
+                "TTL": int(time.time()) + 2592000,  # 30 days
+            })
+        except Exception as e:
+            logger.warning(f"Failed to save chat session metadata {session_id}: {e}")
 
 
 def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
@@ -242,12 +390,14 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
     context = {
         "transcript": transcript or "",
         "retrieve_from_kb": lambda q, n=5: retrieve_from_kb(q, n, user_id=user_id),
+        "list_meetings": list_meetings_for_user,
+        "user_id": user_id,
     }
     tools_used = []
     sources = []
 
     # Build system messages: base prompt + optional meeting context
-    system_messages = [{"text": SYSTEM_PROMPT}]
+    system_messages = [{"text": get_system_prompt()}]
     if transcript:
         truncated = transcript[-2000:] if len(transcript) > 2000 else transcript
         system_messages.append({"text": f"\n\n## 현재 미팅 대화 내용 (실시간)\n{truncated}\n\n위 대화 맥락에 기반하여 답변하세요. 미팅 내용과 관련없는 질문이라도 가능한 한 대화 맥락을 참조하세요."})
@@ -575,6 +725,8 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
     context = {
         "transcript": transcript or "",
         "retrieve_from_kb": lambda q, n=5: retrieve_from_kb(q, n, user_id=user_id),
+        "list_meetings": list_meetings_for_user,
+        "user_id": user_id,
     }
     tools_used = []
     sources = []
@@ -584,7 +736,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         try:
             stream_resp = bedrock_runtime.converse_stream(
                 modelId=BEDROCK_MODEL_ID,
-                system=[{"text": SYSTEM_PROMPT}],
+                system=[{"text": get_system_prompt()}],
                 messages=messages,
                 toolConfig={"tools": TOOL_DEFINITIONS},
                 inferenceConfig={"maxTokens": 4096, "temperature": 0.3},

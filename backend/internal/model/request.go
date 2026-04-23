@@ -243,6 +243,17 @@ type IntegrationsResponse struct {
 	Notion *IntegrationStatusResponse `json:"notion,omitempty"`
 }
 
+// AllowedDomainsResponse represents the response for allowed domains
+type AllowedDomainsResponse struct {
+	Domains  []string `json:"domains"`
+	Enforced bool     `json:"enforced"`
+}
+
+// UpdateAllowedDomainsRequest represents the request body for updating allowed domains
+type UpdateAllowedDomainsRequest struct {
+	Domains []string `json:"domains"`
+}
+
 // KBUploadRequest represents the request body for KB file upload
 type KBUploadRequest struct {
 	FileName string `json:"fileName"`
@@ -290,6 +301,7 @@ type AddCrawlerSourceRequest struct {
 type UpdateCrawlerSourceRequest struct {
 	AWSServices []string `json:"awsServices"`
 	NewsSources []string `json:"newsSources"`
+	NewsQueries []string `json:"newsQueries,omitempty"`
 	CustomUrls  []string `json:"customUrls,omitempty"`
 }
 
@@ -321,6 +333,23 @@ type InsightsResponse struct {
 type InsightDetailResponse struct {
 	CrawledDocument
 	Content string `json:"content"`
+}
+
+// CreateResearchRequest represents the request body for creating a research task
+type CreateResearchRequest struct {
+	Topic string `json:"topic"`
+	Mode  string `json:"mode"`
+}
+
+// ResearchResponse represents a single research task in API responses
+type ResearchResponse struct {
+	Research
+	Content string `json:"content,omitempty"`
+}
+
+// ResearchListResponse represents the response for listing research tasks
+type ResearchListResponse struct {
+	Research []Research `json:"research"`
 }
 
 // ToMeetingListItem converts a Meeting to MeetingListItem
