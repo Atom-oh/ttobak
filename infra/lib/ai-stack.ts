@@ -120,7 +120,7 @@ export class AiStack extends cdk.Stack {
           sid: 'AgentCoreInvoke',
           effect: iam.Effect.ALLOW,
           actions: ['bedrock-agentcore:InvokeAgentRuntime'],
-          resources: [props.agentCoreRuntimeArn],
+          resources: [props.agentCoreRuntimeArn, `${props.agentCoreRuntimeArn}/*`],
         })
       );
     }
