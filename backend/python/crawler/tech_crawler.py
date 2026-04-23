@@ -385,16 +385,19 @@ def _write_to_s3(service: str, doc_hash: str, title: str, url: str,
 def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
                     service: str, summary: str = '', tags: list = None,
                     pub_date: str = '') -> None:
+    crawled_at = int(time.time())
     item = {
         'PK': f'CRAWLER#{source_id}',
         'SK': f'DOC#{doc_hash}',
         'url': url,
         'title': title,
         'service': service,
-        'crawledAt': int(time.time()),
+        'crawledAt': crawled_at,
         'type': 'tech',
         's3Key': f'shared/aws-docs/{service}/{doc_hash}.md',
         'inKB': True,
+        'GSI4PK': 'DOC#tech',
+        'GSI4SK': crawled_at,
     }
     if summary:
         item['summary'] = summary
@@ -457,6 +460,10 @@ def handler(event, context):
             doc_hash = _make_hash(url)
 
             try:
+                if any(p in url.lower() for p in ('contents.premium.naver.com', 'premium.chosun.com')):
+                    logger.info(f'Skipping paywalled URL: {url}')
+                    continue
+
                 if _doc_exists(source_id, doc_hash):
                     logger.debug(f'Skipping duplicate: {url}')
                     continue
@@ -470,8 +477,8 @@ def handler(event, context):
                 except Exception as e:
                     logger.info(f'Could not fetch full page for {url}: {e}')
 
-                if not text or len(text) < 50:
-                    logger.info(f'Skipping low-content page: {url}')
+                if not text or len(text) < 100:
+                    logger.info(f'Skipping low-content page ({len(text or "")} chars): {title[:60]}')
                     continue
 
                 summary, tags = _summarize_and_tag(title, text, service)

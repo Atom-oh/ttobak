@@ -307,6 +307,75 @@ func (r *CrawlerRepository) ListDocuments(ctx context.Context, sourceID, docType
 	return docs, result.LastEvaluatedKey, len(docs), nil
 }
 
+// QueryDocumentsByType queries GSI4 for documents by type, sorted by crawledAt descending.
+// GSI4PK = "DOC#{type}", GSI4SK = crawledAt (number). Falls back to scan if GSI4 has no data.
+func (r *CrawlerRepository) QueryDocumentsByType(ctx context.Context, docType string, limit int32, page int) ([]model.CrawledDocument, int, error) {
+	if limit == 0 {
+		limit = 20
+	}
+
+	gsi4pk := "DOC#" + docType
+	keyEx := expression.Key("GSI4PK").Equal(expression.Value(gsi4pk))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to build expression: %w", err)
+	}
+
+	var allDocs []model.CrawledDocument
+	var lastKey map[string]types.AttributeValue
+
+	for {
+		input := &dynamodb.QueryInput{
+			TableName:                 aws.String(r.tableName),
+			IndexName:                 aws.String("GSI4"),
+			KeyConditionExpression:    expr.KeyCondition(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ScanIndexForward:          aws.Bool(false),
+		}
+		if lastKey != nil {
+			input.ExclusiveStartKey = lastKey
+		}
+
+		result, err := r.client.Query(ctx, input)
+		if err != nil {
+			return r.ListAllDocumentsByType(ctx, docType, limit, page)
+		}
+
+		var items []documentItem
+		if err := attributevalue.UnmarshalListOfMaps(result.Items, &items); err != nil {
+			return nil, 0, fmt.Errorf("failed to unmarshal documents: %w", err)
+		}
+
+		for _, item := range items {
+			doc := item.CrawledDocument
+			if doc.DocHash == "" && strings.HasPrefix(item.SK, model.PrefixDoc) {
+				doc.DocHash = strings.TrimPrefix(item.SK, model.PrefixDoc)
+			}
+			if doc.SourceID == "" && strings.HasPrefix(item.PK, model.PrefixCrawler) {
+				doc.SourceID = strings.TrimPrefix(item.PK, model.PrefixCrawler)
+			}
+			allDocs = append(allDocs, doc)
+		}
+
+		lastKey = result.LastEvaluatedKey
+		if lastKey == nil {
+			break
+		}
+	}
+
+	total := len(allDocs)
+	start := int(limit) * page
+	if start > total {
+		return []model.CrawledDocument{}, total, nil
+	}
+	end := start + int(limit)
+	if end > total {
+		end = total
+	}
+	return allDocs[start:end], total, nil
+}
+
 // ListAllDocumentsByType performs a table scan to find documents across all sources filtered by type.
 // This is used for cross-source queries. Uses pagination with limit and page offset.
 func (r *CrawlerRepository) ListAllDocumentsByType(ctx context.Context, docType string, limit int32, page int) ([]model.CrawledDocument, int, error) {
