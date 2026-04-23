@@ -151,7 +151,7 @@ jobs:
             --agent-runtime-id "${AGENTCORE_RUNTIME_ID}" \
             --role-arn "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ttobak-agentcore-research-role" \
             --network-configuration '{"networkMode":"PUBLIC"}' \
-            --agent-runtime-artifact "{\"containerConfiguration\":{\"containerUri\":\"${ECR_URI}\",\"containerEntrypoint\":[\"python\",\"agent.py\"]}}"
+            --agent-runtime-artifact "{\"containerConfiguration\":{\"containerUri\":\"${ECR_URI}\"}}"
           echo "AgentCore runtime updated with image: ${ECR_URI}"
 
   deploy-frontend:
