@@ -10,8 +10,11 @@ import (
 	"strings"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	ecsTypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	"github.com/ttobak/backend/internal/model"
@@ -22,6 +25,10 @@ import (
 var (
 	transcribeService *service.TranscribeService
 	repo              *repository.DynamoDBRepository
+	ecsClient         *ecs.Client
+	whisperCluster    string
+	whisperTaskDef    string
+	whisperContainer  string
 )
 
 func init() {
@@ -45,6 +52,14 @@ func init() {
 
 	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, outputBucket)
 	transcribeService = service.NewTranscribeService(transcribeClient, s3Client, repo, outputBucket)
+
+	ecsClient = ecs.NewFromConfig(cfg)
+	whisperCluster = os.Getenv("WHISPER_CLUSTER")
+	whisperTaskDef = os.Getenv("WHISPER_TASK_DEF")
+	whisperContainer = os.Getenv("WHISPER_CONTAINER")
+	if whisperContainer == "" {
+		whisperContainer = "whisper"
+	}
 }
 
 // Handler processes EventBridge S3 events for new audio uploads
@@ -109,11 +124,28 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		sttProvider = meeting.SttProvider
 	}
 
+	// Extract userID from key: audio/{userID}/{meetingID}/{filename}
+	parts := strings.Split(key, "/")
+	userID := ""
+	if len(parts) >= 3 {
+		userID = parts[1]
+	}
+
 	var jobName string
-	if sttProvider == "nova-sonic" {
+	switch sttProvider {
+	case "whisper":
+		if whisperCluster == "" || whisperTaskDef == "" {
+			log.Printf("Whisper not configured, falling back to Transcribe")
+			jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key)
+		} else {
+			log.Printf("Using Whisper GPU for meeting: %s", meetingID)
+			err = startWhisperTask(ctx, meetingID, userID, key)
+			jobName = "whisper-ecs-" + meetingID
+		}
+	case "nova-sonic":
 		log.Printf("Using Nova Sonic transcription for meeting: %s", meetingID)
 		jobName, err = transcribeService.StartNovaSonicTranscription(ctx, meetingID, bucket, key)
-	} else {
+	default:
 		jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key)
 	}
 	if err != nil {
@@ -128,6 +160,33 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	log.Printf("Started transcription job: %s (provider=%s) for meeting: %s", jobName, sttProvider, meetingID)
 
 	return nil
+}
+
+func startWhisperTask(ctx context.Context, meetingID, userID, audioKey string) error {
+	_, err := ecsClient.RunTask(ctx, &ecs.RunTaskInput{
+		Cluster:        aws.String(whisperCluster),
+		TaskDefinition: aws.String(whisperTaskDef),
+		Count:          aws.Int32(1),
+		CapacityProviderStrategy: []ecsTypes.CapacityProviderStrategyItem{
+			{
+				CapacityProvider: aws.String("ttobak-whisper-spot"),
+				Weight:           1,
+			},
+		},
+		Overrides: &ecsTypes.TaskOverride{
+			ContainerOverrides: []ecsTypes.ContainerOverride{
+				{
+					Name: aws.String(whisperContainer),
+					Environment: []ecsTypes.KeyValuePair{
+						{Name: aws.String("AUDIO_KEY"), Value: aws.String(audioKey)},
+						{Name: aws.String("MEETING_ID"), Value: aws.String(meetingID)},
+						{Name: aws.String("USER_ID"), Value: aws.String(userID)},
+					},
+				},
+			},
+		},
+	})
+	return err
 }
 
 func main() {
