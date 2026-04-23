@@ -21,20 +21,30 @@ export interface WebSocketMessage {
 
 type MessageHandler = (msg: WebSocketMessage) => void;
 
-const MAX_RECONNECT_ATTEMPTS = 3;
+const MAX_RECONNECT_ATTEMPTS = 5;
 const BASE_RECONNECT_DELAY = 1000;
+const MAX_RECONNECT_DELAY = 15000;
 
 export class RealtimeWebSocket {
   private ws: WebSocket | null = null;
   private url: string;
   private onMessage: MessageHandler;
   private onClose?: () => void;
+  private onReconnect?: () => void;
   private reconnectAttempts = 0;
+  private intentionalClose = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(url: string, onMessage: MessageHandler, onClose?: () => void) {
+  constructor(
+    url: string,
+    onMessage: MessageHandler,
+    onClose?: () => void,
+    onReconnect?: () => void,
+  ) {
     this.url = url;
     this.onMessage = onMessage;
     this.onClose = onClose;
+    this.onReconnect = onReconnect;
   }
 
   async connect(): Promise<void> {
@@ -44,6 +54,7 @@ export class RealtimeWebSocket {
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(wsUrl);
+      this.intentionalClose = false;
 
       this.ws.onopen = () => {
         this.reconnectAttempts = 0;
@@ -61,19 +72,48 @@ export class RealtimeWebSocket {
 
       this.ws.onclose = () => {
         this.ws = null;
-        this.onClose?.();
+        if (this.intentionalClose) {
+          this.onClose?.();
+          return;
+        }
+        this.scheduleReconnect();
       };
 
       this.ws.onerror = () => {
-        reject(new Error('WebSocket connection failed'));
+        if (this.reconnectAttempts === 0) {
+          reject(new Error('WebSocket connection failed'));
+        }
       };
     });
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      this.onClose?.();
+      return;
+    }
+    this.reconnectAttempts++;
+    const delay = Math.min(
+      BASE_RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts - 1),
+      MAX_RECONNECT_DELAY,
+    );
+    this.reconnectTimer = setTimeout(async () => {
+      try {
+        await this.connect();
+        this.onReconnect?.();
+      } catch {
+        // connect failed — onclose will trigger another scheduleReconnect
+      }
+    }, delay);
   }
 
   async reconnect(): Promise<boolean> {
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) return false;
     this.reconnectAttempts++;
-    const delay = BASE_RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts - 1);
+    const delay = Math.min(
+      BASE_RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts - 1),
+      MAX_RECONNECT_DELAY,
+    );
     await new Promise((r) => setTimeout(r, delay));
     try {
       await this.connect();
@@ -100,6 +140,11 @@ export class RealtimeWebSocket {
   }
 
   disconnect() {
+    this.intentionalClose = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.ws?.close();
     this.ws = null;
   }
