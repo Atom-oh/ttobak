@@ -73,6 +73,14 @@ export class GatewayStack extends cdk.Stack {
       memorySize: 256,
     });
 
+    // API Lambda alias with provisioned concurrency for zero cold-start after deploy
+    const apiVersion = this.apiFunction.currentVersion;
+    const apiAlias = new lambda.Alias(this, 'ApiLiveAlias', {
+      aliasName: 'live',
+      version: apiVersion,
+      provisionedConcurrentExecutions: 1,
+    });
+
     // Research worker Lambda — invoked by Step Functions, calls AgentCore
     const researchWorker = new lambda.Function(this, 'ResearchWorkerFunction', {
       functionName: 'ttobak-research-worker',
@@ -236,7 +244,7 @@ export class GatewayStack extends cdk.Stack {
     // Lambda integration for HTTP API (v1 payload for chi-lambda adapter compatibility)
     const apiIntegration = new apigatewayv2Integrations.HttpLambdaIntegration(
       'ApiIntegration',
-      this.apiFunction,
+      apiAlias,
       {
         payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_1_0,
       }
@@ -285,7 +293,7 @@ export class GatewayStack extends cdk.Stack {
       description: 'Keep API Lambda warm by invoking /api/health every 5 minutes',
       schedule: events.Schedule.expression('cron(0/5 0-9 ? * MON-FRI *)'),
     });
-    warmingRule.addTarget(new eventsTargets.LambdaFunction(this.apiFunction, {
+    warmingRule.addTarget(new eventsTargets.LambdaFunction(apiAlias, {
       event: events.RuleTargetInput.fromObject({
         version: '1.0',
         resource: '/api/health',
