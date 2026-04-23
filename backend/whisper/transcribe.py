@@ -9,10 +9,29 @@ from faster_whisper import WhisperModel
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 BUCKET = os.environ["BUCKET_NAME"]
 TABLE = os.environ["TABLE_NAME"]
+VOCAB_KEY = os.environ.get("VOCAB_KEY", "config/custom-vocabulary.txt")
 
 s3 = boto3.client("s3", region_name=REGION)
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 table = dynamodb.Table(TABLE)
+
+
+def _load_custom_vocab_prompt() -> str:
+    try:
+        resp = s3.get_object(Bucket=BUCKET, Key=VOCAB_KEY)
+        lines = resp["Body"].read().decode("utf-8").strip().split("\n")
+        terms = []
+        for line in lines[1:]:
+            cols = line.split("\t")
+            display = cols[2].strip() if len(cols) >= 3 else cols[0].strip()
+            if display:
+                terms.append(display)
+        prompt = " ".join(terms)
+        print(f"Custom vocab loaded: {len(terms)} terms")
+        return prompt
+    except Exception as e:
+        print(f"Custom vocab not available: {e}")
+        return ""
 
 
 def main():
@@ -28,19 +47,23 @@ def main():
     file_mb = os.path.getsize(local_path) / 1048576
     print(f"Audio: {file_mb:.1f} MB")
 
+    vocab_prompt = _load_custom_vocab_prompt()
+
     print("Loading Whisper large-v3 (GPU float16)...")
     model = WhisperModel("large-v3", device="cuda", compute_type="float16")
 
     print("Transcribing...")
     start = time.time()
-    segments, info = model.transcribe(
-        local_path,
+    transcribe_kwargs = dict(
         language="ko",
         beam_size=5,
         vad_filter=True,
         vad_parameters=dict(min_silence_duration_ms=500),
         word_timestamps=True,
     )
+    if vocab_prompt:
+        transcribe_kwargs["initial_prompt"] = vocab_prompt
+    segments, info = model.transcribe(local_path, **transcribe_kwargs)
 
     all_segments = []
     for seg in segments:
