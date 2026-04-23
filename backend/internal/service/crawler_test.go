@@ -129,6 +129,15 @@ func (m *mockCrawlerRepo) ListAllDocumentsByType(_ context.Context, docType stri
 	return docs[start:end], total, nil
 }
 
+func (m *mockCrawlerRepo) GetDocument(_ context.Context, sourceID, docHash string) (*model.CrawledDocument, error) {
+	for _, d := range m.documents[sourceID] {
+		if d.DocHash == docHash {
+			return &d, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockCrawlerRepo) NormalizeSourceID(name string) string {
 	return name // unused by service (service uses its own normalizeSourceID)
 }
