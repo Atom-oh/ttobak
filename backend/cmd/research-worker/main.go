@@ -94,23 +94,11 @@ func handler(ctx context.Context, event ResearchEvent) (ResearchResult, error) {
 		}
 	}
 
-	// Check if save_report was called (status should be "done" in DDB)
-	resp, _ := dynamoClient.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(tableName),
-		Key:       researchKey(event.ResearchID),
-	})
-	status := "error"
-	if resp != nil && resp.Item != nil {
-		if v, ok := resp.Item["status"].(*types.AttributeValueMemberS); ok {
-			status = v.Value
-		}
-	}
-	if status != "done" {
-		updateStatus(ctx, event.ResearchID, "error", "Agent completed without calling save_report")
-	}
-
-	log.Printf("Research %s final status: %s", event.ResearchID, status)
-	return ResearchResult{ResearchID: event.ResearchID, Status: status}, nil
+	// Agent runs in background inside AgentCore Runtime (5-45 min).
+	// We only confirm it was kicked off successfully. save_report tool
+	// writes the final result to DynamoDB when complete.
+	log.Printf("Research %s dispatched to AgentCore", event.ResearchID)
+	return ResearchResult{ResearchID: event.ResearchID, Status: "running"}, nil
 }
 
 func researchKey(researchID string) map[string]types.AttributeValue {
