@@ -11,8 +11,13 @@ import { Construct } from 'constructs';
 export interface WhisperStackProps extends cdk.StackProps {
   bucket: s3.IBucket;
   table: dynamodb.ITable;
-  vpc?: ec2.IVpc;
+  vpcId: string;
 }
+
+export const WHISPER_CLUSTER_NAME = 'ttobak-whisper';
+export const WHISPER_TASK_FAMILY = 'ttobak-whisper';
+export const WHISPER_CONTAINER_NAME = 'whisper';
+export const WHISPER_CAPACITY_PROVIDER = 'ttobak-whisper-spot';
 
 export class WhisperStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
@@ -22,16 +27,7 @@ export class WhisperStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: WhisperStackProps) {
     super(scope, id, props);
 
-    // Use existing VPC or create minimal one
-    const vpc = props.vpc ?? new ec2.Vpc(this, 'WhisperVpc', {
-      vpcName: 'ttobak-whisper-vpc',
-      maxAzs: 2,
-      natGateways: 1,
-      subnetConfiguration: [
-        { name: 'Public', subnetType: ec2.SubnetType.PUBLIC, cidrMask: 24 },
-        { name: 'Private', subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS, cidrMask: 24 },
-      ],
-    });
+    const vpc = ec2.Vpc.fromLookup(this, 'WhisperVpc', { vpcId: props.vpcId });
 
     // ECR repository for Whisper Docker image
     this.ecrRepository = new ecr.Repository(this, 'WhisperRepo', {
@@ -42,7 +38,7 @@ export class WhisperStack extends cdk.Stack {
 
     // ECS Cluster
     this.cluster = new ecs.Cluster(this, 'WhisperCluster', {
-      clusterName: 'ttobak-whisper',
+      clusterName: WHISPER_CLUSTER_NAME,
       vpc,
     });
 
@@ -73,7 +69,7 @@ export class WhisperStack extends cdk.Stack {
 
     // ECS Capacity Provider with managed scaling
     const capacityProvider = new ecs.AsgCapacityProvider(this, 'WhisperCapacityProvider', {
-      capacityProviderName: 'ttobak-whisper-spot',
+      capacityProviderName: WHISPER_CAPACITY_PROVIDER,
       autoScalingGroup: asg,
       enableManagedScaling: true,
       enableManagedTerminationProtection: false,
@@ -103,16 +99,16 @@ export class WhisperStack extends cdk.Stack {
 
     // EC2 Task Definition with GPU
     this.taskDefinition = new ecs.Ec2TaskDefinition(this, 'WhisperTaskDef', {
-      family: 'ttobak-whisper',
+      family: WHISPER_TASK_FAMILY,
       executionRole,
       taskRole,
       networkMode: ecs.NetworkMode.HOST,
     });
 
     this.taskDefinition.addContainer('whisper', {
-      containerName: 'whisper',
+      containerName: WHISPER_CONTAINER_NAME,
       image: ecs.ContainerImage.fromEcrRepository(this.ecrRepository, 'latest'),
-      memoryLimitMiB: 14336, // 14GB (g5.xlarge has 16GB RAM)
+      memoryLimitMiB: 12288, // 12GB (g5.xlarge has 16GB system RAM, reserve 4GB for OS/ECS agent)
       gpuCount: 1,
       environment: {
         BUCKET_NAME: props.bucket.bucketName,

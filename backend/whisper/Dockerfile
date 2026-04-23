@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip3 install --no-cache-dir faster-whisper boto3
 
 # Pre-download model into image (~3GB compressed)
-RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cpu', compute_type='int8')" && \
+RUN python3 -c "from faster_whisper import WhisperModel; WhisperModel('large-v3', device='cpu', compute_type='float16')" && \
     echo "Model cached"
 
 COPY transcribe.py /app/transcribe.py

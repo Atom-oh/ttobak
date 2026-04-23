@@ -12,6 +12,7 @@ import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { Construct } from 'constructs';
+import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME } from './whisper-stack';
 
 export interface GatewayStackProps extends cdk.StackProps {
   apiRole: iam.IRole;
@@ -126,9 +127,9 @@ export class GatewayStack extends cdk.Stack {
         BUCKET_NAME: props.bucket.bucketName,
         OUTPUT_BUCKET: props.bucket.bucketName,
         AWS_REGION_NAME: cdk.Aws.REGION,
-        WHISPER_CLUSTER: 'ttobak-whisper',
-        WHISPER_TASK_DEF: 'ttobak-whisper',
-        WHISPER_CONTAINER: 'whisper',
+        WHISPER_CLUSTER: WHISPER_CLUSTER_NAME,
+        WHISPER_TASK_DEF: WHISPER_TASK_FAMILY,
+        WHISPER_CONTAINER: WHISPER_CONTAINER_NAME,
       },
       timeout: cdk.Duration.minutes(5),
       memorySize: 512,

@@ -163,7 +163,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 }
 
 func startWhisperTask(ctx context.Context, meetingID, userID, audioKey string) error {
-	_, err := ecsClient.RunTask(ctx, &ecs.RunTaskInput{
+	result, err := ecsClient.RunTask(ctx, &ecs.RunTaskInput{
 		Cluster:        aws.String(whisperCluster),
 		TaskDefinition: aws.String(whisperTaskDef),
 		Count:          aws.Int32(1),
@@ -186,7 +186,17 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey string) e
 			},
 		},
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if len(result.Tasks) > 0 && result.Tasks[0].TaskArn != nil {
+		log.Printf("ECS task started: %s", *result.Tasks[0].TaskArn)
+	}
+	if len(result.Failures) > 0 {
+		log.Printf("ECS task placement failures: %v", result.Failures)
+		return fmt.Errorf("ECS task placement failed: %s", *result.Failures[0].Reason)
+	}
+	return nil
 }
 
 func main() {

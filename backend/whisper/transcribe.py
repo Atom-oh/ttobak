@@ -55,13 +55,17 @@ def main():
     print(f"Done: {len(transcript_text):,} chars in {elapsed:.1f}s")
 
     result = {
-        "engine": "whisper-large-v3-gpu",
-        "meetingId": meeting_id,
-        "language": info.language,
-        "language_probability": round(info.language_probability, 3),
-        "duration_seconds": round(elapsed, 1),
-        "segments": all_segments,
-        "transcript": transcript_text,
+        "results": {
+            "transcripts": [{"transcript": transcript_text}],
+        },
+        "status": "COMPLETED",
+        "whisper_metadata": {
+            "engine": "whisper-large-v3-gpu",
+            "language": info.language,
+            "language_probability": round(info.language_probability, 3),
+            "duration_seconds": round(elapsed, 1),
+            "segments": all_segments,
+        },
     }
 
     output_key = f"transcripts/{meeting_id}.json"
@@ -72,14 +76,7 @@ def main():
         ContentType="application/json",
     )
     print(f"Uploaded s3://{BUCKET}/{output_key}")
-
-    table.update_item(
-        Key={"PK": f"USER#{user_id}", "SK": f"MEETING#{meeting_id}"},
-        UpdateExpression="SET #s = :s",
-        ExpressionAttributeNames={"#s": "status"},
-        ExpressionAttributeValues={":s": "transcribing"},
-    )
-    print("Status updated to transcribing → transcript uploaded (summarize will trigger)")
+    print("Transcript uploaded — EventBridge will trigger summarize Lambda")
 
 
 if __name__ == "__main__":
