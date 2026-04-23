@@ -134,17 +134,14 @@ jobs:
           name: frontend-out
           path: frontend-out/
 
-      - name: Sync new files to S3 (no delete — avoids 404 during deploy)
-        run: aws s3 sync frontend-out/ "s3://${S3_BUCKET}/"
+      - name: Deploy to S3 (sync with delete — content-hash filenames ensure safe swap)
+        run: aws s3 sync frontend-out/ "s3://${S3_BUCKET}/" --delete
 
       - name: Invalidate CloudFront
         run: |
           aws cloudfront create-invalidation \
             --distribution-id "${CF_DISTRIBUTION}" \
             --paths "/*"
-
-      - name: Cleanup old files from S3
-        run: aws s3 sync frontend-out/ "s3://${S3_BUCKET}/" --delete
 
   notify:
     needs: [deploy-infra, deploy-frontend]
