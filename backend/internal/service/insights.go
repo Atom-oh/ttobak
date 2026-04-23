@@ -27,37 +27,45 @@ func NewInsightsService(repo *repository.CrawlerRepository, s3Client *s3.Client,
 // GetDocumentDetail reads metadata from DynamoDB and full content from S3.
 func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHash string) (*model.InsightDetailResponse, error) {
 	// Get metadata from DynamoDB
-	docs, _, _, err := s.repo.ListDocuments(ctx, sourceID, "", 1, nil)
+	allDocs, _, _, _ := s.repo.ListDocuments(ctx, sourceID, "", 200, nil)
 	var meta *model.CrawledDocument
-	for i := range docs {
-		if docs[i].DocHash == docHash {
-			meta = &docs[i]
+	for i := range allDocs {
+		if allDocs[i].DocHash == docHash {
+			meta = &allDocs[i]
 			break
 		}
 	}
-	// Fallback: query specifically
-	if meta == nil {
-		allDocs, _, _, _ := s.repo.ListDocuments(ctx, sourceID, "", 100, nil)
-		for i := range allDocs {
-			if allDocs[i].DocHash == docHash {
-				meta = &allDocs[i]
-				break
-			}
-		}
+
+	// Read content from S3 — prefer stored s3Key from metadata
+	var s3Key string
+	if meta != nil && meta.S3Key != "" {
+		s3Key = meta.S3Key
+	} else {
+		s3Key = fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash)
 	}
 
-	// Read content from S3
-	s3Key := fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash)
 	result, err := s.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.kbBucketName),
 		Key:    aws.String(s3Key),
 	})
 	if err != nil {
-		s3Key = fmt.Sprintf("shared/aws-docs/%s/%s.md", sourceID, docHash)
-		result, err = s.s3Client.GetObject(ctx, &s3.GetObjectInput{
-			Bucket: aws.String(s.kbBucketName),
-			Key:    aws.String(s3Key),
-		})
+		// Fallback paths
+		fallbacks := []string{
+			fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash),
+			fmt.Sprintf("shared/aws-docs/%s/%s.md", sourceID, docHash),
+		}
+		for _, fb := range fallbacks {
+			if fb == s3Key {
+				continue
+			}
+			result, err = s.s3Client.GetObject(ctx, &s3.GetObjectInput{
+				Bucket: aws.String(s.kbBucketName),
+				Key:    aws.String(fb),
+			})
+			if err == nil {
+				break
+			}
+		}
 		if err != nil {
 			return nil, fmt.Errorf("document not found: %w", err)
 		}

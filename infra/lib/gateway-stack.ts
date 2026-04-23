@@ -6,6 +6,8 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as apigatewayv2 from 'aws-cdk-lib/aws-apigatewayv2';
 import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
@@ -29,6 +31,7 @@ export interface GatewayStackProps extends cdk.StackProps {
   kmsKeyId?: string;
   knowledgeBaseId?: string;
   dataSourceId?: string;
+  agentCoreRuntimeArn?: string;
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
   originVerifySecret?: string;
@@ -68,6 +71,38 @@ export class GatewayStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
     });
+
+    // Research worker Lambda — invoked by Step Functions, calls AgentCore
+    const researchWorker = new lambda.Function(this, 'ResearchWorkerFunction', {
+      functionName: 'ttobak-research-worker',
+      runtime: lambda.Runtime.PROVIDED_AL2023,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'bootstrap',
+      code: lambda.Code.fromAsset('../backend/cmd/research-worker'),
+      role: props.apiRole as iam.Role,
+      environment: {
+        TABLE_NAME: props.table.tableName,
+        KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
+        AGENTCORE_RUNTIME_ID: props.agentCoreRuntimeArn || '',
+        AGENTCORE_ENDPOINT_NAME: 'ttobakResearchEndpoint',
+      },
+      timeout: cdk.Duration.minutes(15),
+      memorySize: 512,
+    });
+
+    // Research Step Functions workflow
+    const researchTask = new tasks.LambdaInvoke(this, 'InvokeResearchWorker', {
+      lambdaFunction: researchWorker,
+      outputPath: '$.Payload',
+    });
+
+    const researchSfn = new sfn.StateMachine(this, 'ResearchWorkflow', {
+      stateMachineName: 'ttobak-research-workflow',
+      definitionBody: sfn.DefinitionBody.fromChainable(researchTask),
+      timeout: cdk.Duration.minutes(20),
+    });
+
+    this.apiFunction.addEnvironment('RESEARCH_SFN_ARN', researchSfn.stateMachineArn);
 
     // Transcribe Lambda function - triggered by S3 events via EventBridge
     this.transcribeFunction = new lambda.Function(this, 'TranscribeFunction', {

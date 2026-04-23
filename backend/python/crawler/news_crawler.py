@@ -210,21 +210,30 @@ def _fetch_site_rss(feed_url: str, keyword_filter: str = '') -> list:
         return []
 
 
-def _generate_search_queries(source_name: str, news_queries: list) -> list:
-    """Generate diverse search queries from source name and explicit queries."""
-    queries = list(news_queries or [])
+def _generate_search_queries(source_name: str, keywords: list) -> list:
+    """Generate search queries by combining source name with keywords.
+
+    If keywords are provided, each becomes "{source_name} {keyword}".
+    The bare source name is always included as the first query.
+    Without keywords, default topics are appended automatically.
+    """
+    queries = []
 
     if source_name:
-        base_queries = [
-            source_name,
-            f'{source_name} IT',
-            f'{source_name} 클라우드',
-            f'{source_name} AI',
-            f'{source_name} 디지털전환',
-        ]
-        for q in base_queries:
-            if q not in queries:
-                queries.append(q)
+        queries.append(source_name)
+
+        if keywords:
+            for kw in keywords:
+                combined = f'{source_name} {kw}'
+                if combined not in queries:
+                    queries.append(combined)
+        else:
+            for topic in ['IT', '클라우드', 'AI', '디지털전환']:
+                queries.append(f'{source_name} {topic}')
+
+    for kw in (keywords or []):
+        if kw not in queries:
+            queries.append(kw)
 
     return queries
 
@@ -384,26 +393,28 @@ def _extract_source_name(title: str) -> str:
 
 
 def handler(event, context):
-    """Process news articles from multiple RSS sources.
+    """Process news articles — automatically searches all aggregators.
 
     Expected event:
       {
         "sourceId": "wooribank",
         "sourceName": "우리은행",
-        "newsQueries": ["우리은행 IT", "우리은행 클라우드"],
-        "customUrls": [{"url": "https://...", "title": "..."}],
-        "newsSources": ["google", "naver", "zdnet", "etnews"]
+        "newsQueries": ["AI", "클라우드", "디지털전환"],
+        "customUrls": [{"url": "https://...", "title": "..."}]
       }
+
+    The crawler always searches Google News + Naver News (aggregators that
+    cover all Korean outlets). newsQueries are interest keywords that get
+    combined with sourceName to form search queries.
     """
     source_id = event.get('sourceId', 'unknown')
     source_name = event.get('sourceName', '')
-    queries = event.get('newsQueries') or []
+    keywords = event.get('newsQueries') or []
     custom_urls = event.get('customUrls') or []
-    news_sources = event.get('newsSources') or ['google']
 
-    all_queries = _generate_search_queries(source_name, queries)
+    all_queries = _generate_search_queries(source_name, keywords)
     logger.info(f'News crawler: sourceId={source_id}, sourceName={source_name}, '
-                f'queries={all_queries}, sources={news_sources}, customUrls={len(custom_urls)}')
+                f'keywords={keywords}, queries={all_queries}, customUrls={len(custom_urls)}')
 
     docs_added = 0
     docs_updated = 0
@@ -423,33 +434,31 @@ def handler(event, context):
             logger.error(f'Article error: {error_msg}', exc_info=True)
             errors.append(error_msg)
 
-    # 1. Google News RSS
-    if 'google' in news_sources or not news_sources:
-        for query in all_queries:
-            articles = _search_google_news(query)
-            logger.info(f'Google News "{query}": {len(articles)} article(s)')
-            for article in articles:
-                _try_process(article['title'], article['url'],
-                             article.get('pubDate', ''), article.get('description', ''))
+    # 1. Google News (covers all Korean outlets: 조선일보, 중앙일보, ZDNet, etc.)
+    for query in all_queries:
+        articles = _search_google_news(query)
+        logger.info(f'Google News "{query}": {len(articles)} article(s)')
+        for article in articles:
+            _try_process(article['title'], article['url'],
+                         article.get('pubDate', ''), article.get('description', ''))
 
-    # 2. Naver News RSS
-    if 'naver' in news_sources:
-        for query in all_queries:
-            articles = _search_naver_news(query)
-            logger.info(f'Naver News "{query}": {len(articles)} article(s)')
-            for article in articles:
-                _try_process(article['title'], article['url'],
-                             article.get('pubDate', ''), article.get('description', ''))
+    # 2. Naver News (largest Korean news aggregator)
+    for query in all_queries:
+        articles = _search_naver_news(query)
+        logger.info(f'Naver News "{query}": {len(articles)} article(s)')
+        for article in articles:
+            _try_process(article['title'], article['url'],
+                         article.get('pubDate', ''), article.get('description', ''))
 
-    # 3. Site-specific RSS feeds (filtered by source name keyword)
-    for site_key, feed_url in SITE_RSS_FEEDS.items():
-        if site_key in news_sources or 'all' in news_sources:
-            keyword = source_name or (all_queries[0] if all_queries else '')
-            articles = _fetch_site_rss(feed_url, keyword)
-            logger.info(f'Site RSS {site_key} (filter="{keyword}"): {len(articles)} article(s)')
-            for article in articles:
-                _try_process(article['title'], article['url'],
-                             article.get('pubDate', ''), article.get('description', ''))
+    # 3. Site-specific RSS feeds (supplementary — catches articles aggregators may miss)
+    if source_name:
+        for site_key, feed_url in SITE_RSS_FEEDS.items():
+            articles = _fetch_site_rss(feed_url, source_name)
+            if articles:
+                logger.info(f'Site RSS {site_key} (filter="{source_name}"): {len(articles)} article(s)')
+                for article in articles:
+                    _try_process(article['title'], article['url'],
+                                 article.get('pubDate', ''), article.get('description', ''))
 
     # 4. Custom URLs
     for entry in custom_urls:

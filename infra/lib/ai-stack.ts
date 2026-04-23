@@ -92,13 +92,23 @@ export class AiStack extends cdk.Stack {
       })
     );
 
-    // Bedrock Agent invocation (for deep research)
+    // Step Functions StartExecution (for research pipeline)
     this.apiRole.addToPolicy(
       new iam.PolicyStatement({
-        sid: 'BedrockInvokeAgent',
+        sid: 'SfnStartResearch',
         effect: iam.Effect.ALLOW,
-        actions: ['bedrock:InvokeAgent'],
-        resources: [`arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:agent-alias/*`],
+        actions: ['states:StartExecution'],
+        resources: [`arn:aws:states:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:stateMachine:ttobak-research-workflow`],
+      })
+    );
+
+    // AgentCore invocation (for research worker Lambda)
+    this.apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'AgentCoreInvoke',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock-agentcore:InvokeAgentRuntime'],
+        resources: [`arn:aws:bedrock-agentcore:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:runtime/*`],
       })
     );
 

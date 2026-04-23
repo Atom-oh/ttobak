@@ -8,8 +8,8 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcore"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
@@ -88,8 +88,8 @@ func init() {
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
 	insightsHandler := handler.NewInsightsHandler(insightsService)
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
-	agentCoreClient := bedrockagentcore.NewFromConfig(cfg)
-	researchService := service.NewResearchService(researchRepo, s3Client, agentCoreClient, kbBucketName, os.Getenv("AGENTCORE_RUNTIME_ID"), os.Getenv("AGENTCORE_ENDPOINT_NAME"))
+	sfnClient := sfn.NewFromConfig(cfg)
+	researchService := service.NewResearchService(researchRepo, s3Client, sfnClient, kbBucketName, os.Getenv("RESEARCH_SFN_ARN"))
 	researchHandler := handler.NewResearchHandler(researchService)
 	chatHandler := handler.NewChatHandler(repo)
 	// Setup router

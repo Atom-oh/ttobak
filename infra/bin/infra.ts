@@ -94,6 +94,7 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   kmsKeyId: aiStack.kmsKey.keyId,
   legacyRole: aiStack.legacyRole,
   originVerifySecret,
+  agentCoreRuntimeArn: 'arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/ttobakDeepResearch-5vzwFf3Q5K',
 });
 gatewayStack.addDependency(authStack);
 gatewayStack.addDependency(storageStack);

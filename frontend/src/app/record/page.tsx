@@ -660,24 +660,24 @@ function RecordPageInner() {
         )}
       </main>
 
-      {/* Desktop Side Panel: Summary + QA during recording */}
+      {/* Desktop Side Panel: Q&A Hero + Summary during recording */}
       {session.isRecording && (
-        <aside className="hidden lg:flex w-80 shrink-0 border-l border-slate-200 dark:border-white/10 flex-col overflow-y-auto">
-          <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
+        <aside className="hidden lg:flex w-96 shrink-0 border-l border-slate-200 dark:border-white/10 flex-col">
+          <div className="flex-1 min-h-0 flex flex-col">
+            <LiveQAPanel
+              transcriptContext={session.transcriptContext}
+              onDetectedQuestionsChange={setDetectedCount}
+              serverDetectedQuestions={summary.detectedQuestions}
+              onAskedQuestion={summary.addAskedQuestion}
+            />
+          </div>
+          <div className="shrink-0 border-t border-slate-200 dark:border-white/10 max-h-[35%] overflow-y-auto">
             <LiveSummary
               summary={summary.liveSummary}
               isGenerating={summary.isGenerating}
               wordCount={session.totalWordCount}
               lastSummaryWordCount={summary.lastSummaryWordCount}
               summaryInterval={summaryInterval}
-            />
-          </div>
-          <div className="shrink-0 border-t border-slate-200 dark:border-white/10">
-            <LiveQAPanel
-              transcriptContext={session.transcriptContext}
-              onDetectedQuestionsChange={setDetectedCount}
-              serverDetectedQuestions={summary.detectedQuestions}
-              onAskedQuestion={summary.addAskedQuestion}
             />
           </div>
         </aside>

@@ -60,8 +60,9 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 		OutputBucketName: aws.String(s.outputBucket),
 		OutputKey:        aws.String(fmt.Sprintf("transcripts/%s.json", meetingID)),
 		Settings: &types.Settings{
-			ShowSpeakerLabels: aws.Bool(true),
-			MaxSpeakerLabels:  aws.Int32(10),
+			ShowSpeakerLabels:  aws.Bool(true),
+			MaxSpeakerLabels:   aws.Int32(10),
+			VocabularyName:     aws.String("ttobak-aws-tech-terms"),
 		},
 	}
 
