@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentcore"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -127,21 +128,27 @@ func handler(ctx context.Context, event ResearchEvent) (ResearchResult, error) {
 	return ResearchResult{ResearchID: event.ResearchID, Status: "done", WordCount: wordCount}, nil
 }
 
+func researchKey(researchID string) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: "RESEARCH#" + researchID},
+		"SK": &types.AttributeValueMemberS{Value: "CONFIG"},
+	}
+}
+
 func updateStatus(ctx context.Context, researchID, status, errMsg string) {
-	_, err := dynamoClient.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: "RESEARCH#" + researchID},
-			"SK": &types.AttributeValueMemberS{Value: "CONFIG"},
-		},
-		UpdateExpression: aws.String("SET #s = :s, errorMessage = :e"),
-		ExpressionAttributeNames: map[string]string{
-			"#s": "status",
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":s": &types.AttributeValueMemberS{Value: status},
-			":e": &types.AttributeValueMemberS{Value: errMsg},
-		},
+	update := expression.Set(expression.Name("status"), expression.Value(status)).
+		Set(expression.Name("errorMessage"), expression.Value(errMsg))
+	expr, err := expression.NewBuilder().WithUpdate(update).Build()
+	if err != nil {
+		log.Printf("Failed to build expression for research %s: %v", researchID, err)
+		return
+	}
+	_, err = dynamoClient.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(tableName),
+		Key:                       researchKey(researchID),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
 		log.Printf("Failed to update research %s status: %v", researchID, err)
@@ -150,21 +157,20 @@ func updateStatus(ctx context.Context, researchID, status, errMsg string) {
 
 func updateComplete(ctx context.Context, researchID string, wordCount int) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := dynamoClient.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: "RESEARCH#" + researchID},
-			"SK": &types.AttributeValueMemberS{Value: "CONFIG"},
-		},
-		UpdateExpression: aws.String("SET #s = :s, completedAt = :c, wordCount = :w"),
-		ExpressionAttributeNames: map[string]string{
-			"#s": "status",
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":s": &types.AttributeValueMemberS{Value: "done"},
-			":c": &types.AttributeValueMemberS{Value: now},
-			":w": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", wordCount)},
-		},
+	update := expression.Set(expression.Name("status"), expression.Value("done")).
+		Set(expression.Name("completedAt"), expression.Value(now)).
+		Set(expression.Name("wordCount"), expression.Value(wordCount))
+	expr, err := expression.NewBuilder().WithUpdate(update).Build()
+	if err != nil {
+		log.Printf("Failed to build expression for research %s: %v", researchID, err)
+		return
+	}
+	_, err = dynamoClient.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:                 aws.String(tableName),
+		Key:                       researchKey(researchID),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
 		log.Printf("Failed to update research %s completion: %v", researchID, err)

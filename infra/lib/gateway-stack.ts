@@ -32,6 +32,7 @@ export interface GatewayStackProps extends cdk.StackProps {
   knowledgeBaseId?: string;
   dataSourceId?: string;
   agentCoreRuntimeArn?: string;
+  researchWorkerRole?: iam.IRole;
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
   originVerifySecret?: string;
@@ -79,7 +80,7 @@ export class GatewayStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       handler: 'bootstrap',
       code: lambda.Code.fromAsset('../backend/cmd/research-worker'),
-      role: props.apiRole as iam.Role,
+      role: (props.researchWorkerRole || props.apiRole) as iam.Role,
       environment: {
         TABLE_NAME: props.table.tableName,
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',

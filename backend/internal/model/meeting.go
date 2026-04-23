@@ -104,6 +104,7 @@ type CrawlerSubscription struct {
 	SourceID    string   `dynamodbav:"sourceId" json:"sourceId"`
 	AWSServices []string `dynamodbav:"awsServices" json:"awsServices"`
 	NewsSources []string `dynamodbav:"newsSources" json:"newsSources"`
+	NewsQueries []string `dynamodbav:"newsQueries" json:"newsQueries"`
 	CustomUrls  []string `dynamodbav:"customUrls" json:"customUrls"`
 	AddedAt     string   `dynamodbav:"addedAt" json:"addedAt"`
 }

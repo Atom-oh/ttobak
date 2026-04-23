@@ -26,14 +26,9 @@ func NewInsightsService(repo *repository.CrawlerRepository, s3Client *s3.Client,
 
 // GetDocumentDetail reads metadata from DynamoDB and full content from S3.
 func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHash string) (*model.InsightDetailResponse, error) {
-	// Get metadata from DynamoDB
-	allDocs, _, _, _ := s.repo.ListDocuments(ctx, sourceID, "", 200, nil)
-	var meta *model.CrawledDocument
-	for i := range allDocs {
-		if allDocs[i].DocHash == docHash {
-			meta = &allDocs[i]
-			break
-		}
+	meta, err := s.repo.GetDocument(ctx, sourceID, docHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get document metadata: %w", err)
 	}
 
 	// Read content from S3 — prefer stored s3Key from metadata

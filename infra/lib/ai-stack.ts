@@ -9,6 +9,7 @@ export interface AiStackProps extends cdk.StackProps {
   bucket: s3.IBucket;
   table: dynamodb.ITable;
   kbBucket: s3.IBucket;
+  agentCoreRuntimeArn?: string;
 }
 
 export class AiStack extends cdk.Stack {
@@ -21,6 +22,7 @@ export class AiStack extends cdk.Stack {
   public readonly websocketRole: iam.Role;
   public readonly wsAuthorizerRole: iam.Role;
   public readonly crawlerRole: iam.Role;
+  public readonly researchWorkerRole: iam.Role;
   public readonly kmsKey: kms.Key;
   /** @deprecated Legacy shared role — kept for RealtimeStack backward compatibility */
   public readonly legacyRole: iam.Role;
@@ -103,14 +105,37 @@ export class AiStack extends cdk.Stack {
     );
 
     // AgentCore invocation (for research worker Lambda)
-    this.apiRole.addToPolicy(
-      new iam.PolicyStatement({
-        sid: 'AgentCoreInvoke',
-        effect: iam.Effect.ALLOW,
-        actions: ['bedrock-agentcore:InvokeAgentRuntime'],
-        resources: [`arn:aws:bedrock-agentcore:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:runtime/*`],
-      })
-    );
+    if (props.agentCoreRuntimeArn) {
+      this.apiRole.addToPolicy(
+        new iam.PolicyStatement({
+          sid: 'AgentCoreInvoke',
+          effect: iam.Effect.ALLOW,
+          actions: ['bedrock-agentcore:InvokeAgentRuntime'],
+          resources: [props.agentCoreRuntimeArn],
+        })
+      );
+    }
+
+    // Research Worker role — minimal permissions for AgentCore invocation
+    this.researchWorkerRole = new iam.Role(this, 'TtobakResearchWorkerRole', {
+      roleName: 'ttobak-research-worker-role',
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+      ],
+    });
+    props.table.grantReadWriteData(this.researchWorkerRole);
+    props.kbBucket.grantReadWrite(this.researchWorkerRole);
+    if (props.agentCoreRuntimeArn) {
+      this.researchWorkerRole.addToPolicy(
+        new iam.PolicyStatement({
+          sid: 'AgentCoreInvoke',
+          effect: iam.Effect.ALLOW,
+          actions: ['bedrock-agentcore:InvokeAgentRuntime'],
+          resources: [props.agentCoreRuntimeArn],
+        })
+      );
+    }
 
     // Translate (for live translation)
     this.apiRole.addToPolicy(

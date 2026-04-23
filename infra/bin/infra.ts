@@ -46,12 +46,15 @@ const knowledgeStack = new KnowledgeStack(app, 'TtobakKnowledgeStack', {
 knowledgeStack.addDependency(storageStack);
 
 // Stack 4: AI (IAM roles) - depends on Storage + Knowledge for bucket/table references
+const agentCoreRuntimeArn = 'arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/ttobakDeepResearch-5vzwFf3Q5K';
+
 const aiStack = new AiStack(app, 'TtobakAiStack', {
   env,
   description: 'Ttobak AI Meeting Assistant - AI Services (IAM roles)',
   bucket: storageStack.bucket,
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
+  agentCoreRuntimeArn,
 });
 aiStack.addDependency(storageStack);
 aiStack.addDependency(knowledgeStack);
@@ -94,7 +97,8 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   kmsKeyId: aiStack.kmsKey.keyId,
   legacyRole: aiStack.legacyRole,
   originVerifySecret,
-  agentCoreRuntimeArn: 'arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/ttobakDeepResearch-5vzwFf3Q5K',
+  agentCoreRuntimeArn,
+  researchWorkerRole: aiStack.researchWorkerRole,
 });
 gatewayStack.addDependency(authStack);
 gatewayStack.addDependency(storageStack);

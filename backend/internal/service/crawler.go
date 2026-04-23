@@ -21,6 +21,7 @@ type crawlerRepo interface {
 	DeleteSubscription(ctx context.Context, userID, sourceID string) error
 	ListUserSubscriptions(ctx context.Context, userID string) ([]model.CrawlerSubscription, error)
 	ListHistory(ctx context.Context, sourceID string, limit int32) ([]model.CrawlHistory, error)
+	GetDocument(ctx context.Context, sourceID, docHash string) (*model.CrawledDocument, error)
 	ListDocuments(ctx context.Context, sourceID, docType string, limit int32, lastKey map[string]types.AttributeValue) ([]model.CrawledDocument, map[string]types.AttributeValue, int, error)
 	ListAllDocumentsByType(ctx context.Context, docType string, limit int32, page int) ([]model.CrawledDocument, int, error)
 	NormalizeSourceID(name string) string
@@ -86,6 +87,7 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 		SourceID:    sourceID,
 		AWSServices: req.AWSServices,
 		NewsSources: req.NewsSources,
+		NewsQueries: req.NewsQueries,
 		CustomUrls:  req.CustomUrls,
 		AddedAt:     now,
 	}
@@ -138,6 +140,7 @@ func (s *CrawlerService) UpdateSource(ctx context.Context, userID, sourceID stri
 
 	sub.AWSServices = req.AWSServices
 	sub.NewsSources = req.NewsSources
+	sub.NewsQueries = req.NewsQueries
 	sub.CustomUrls = req.CustomUrls
 
 	if err := s.repo.PutSubscription(ctx, userID, sub); err != nil {
@@ -205,8 +208,7 @@ func (s *CrawlerService) rebuildSourceUnion(ctx context.Context, sourceID string
 		return nil
 	}
 
-	// Fetch each subscriber's subscription individually
-	var allAWS, allNewsSources, allURLs []string
+	var allAWS, allNewsSources, allNewsQueries, allURLs []string
 	for _, uid := range source.Subscribers {
 		sub, err := s.repo.GetSubscription(ctx, uid, sourceID)
 		if err != nil {
@@ -217,11 +219,13 @@ func (s *CrawlerService) rebuildSourceUnion(ctx context.Context, sourceID string
 		}
 		allAWS = union(allAWS, sub.AWSServices)
 		allNewsSources = union(allNewsSources, sub.NewsSources)
+		allNewsQueries = union(allNewsQueries, sub.NewsQueries)
 		allURLs = union(allURLs, sub.CustomUrls)
 	}
 
 	source.AWSServices = allAWS
 	source.NewsSources = allNewsSources
+	source.NewsQueries = allNewsQueries
 	source.CustomUrls = allURLs
 
 	if err := s.repo.PutSource(ctx, source); err != nil {

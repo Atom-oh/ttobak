@@ -301,6 +301,7 @@ type AddCrawlerSourceRequest struct {
 type UpdateCrawlerSourceRequest struct {
 	AWSServices []string `json:"awsServices"`
 	NewsSources []string `json:"newsSources"`
+	NewsQueries []string `json:"newsQueries,omitempty"`
 	CustomUrls  []string `json:"customUrls,omitempty"`
 }
 
