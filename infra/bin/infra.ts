@@ -9,6 +9,7 @@ import { KnowledgeStack } from '../lib/knowledge-stack';
 import { FrontendStack } from '../lib/frontend-stack';
 import { CrawlerStack } from '../lib/crawler-stack';
 import { ResearchAgentStack } from '../lib/research-agent-stack';
+import { WhisperStack } from '../lib/whisper-stack';
 
 const app = new cdk.App();
 
@@ -129,6 +130,16 @@ const researchAgentStack = new ResearchAgentStack(app, 'TtobakResearchAgentStack
 });
 researchAgentStack.addDependency(storageStack);
 researchAgentStack.addDependency(knowledgeStack);
+
+// Stack 7.8: Whisper (ECS GPU Spot, zero-scale) — uses existing FsiDemo VPC
+const whisperStack = new WhisperStack(app, 'TtobakWhisperStack', {
+  env,
+  description: 'Ttobak AI Meeting Assistant - Whisper STT (ECS GPU Spot)',
+  bucket: storageStack.bucket,
+  table: storageStack.table,
+  vpcId: app.node.tryGetContext('ttobak:whisperVpcId') || 'vpc-04e77172c67f19814',
+});
+whisperStack.addDependency(storageStack);
 
 // Stack 8: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth
 const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {

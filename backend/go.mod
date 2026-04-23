@@ -36,6 +36,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/bedrockagentcore v1.21.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider v1.60.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/dynamodbstreams v1.32.12 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ecs v1.79.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.11 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/endpoint-discovery v1.11.19 // indirect
