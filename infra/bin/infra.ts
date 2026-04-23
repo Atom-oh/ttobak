@@ -47,7 +47,7 @@ const knowledgeStack = new KnowledgeStack(app, 'TtobakKnowledgeStack', {
 knowledgeStack.addDependency(storageStack);
 
 // Stack 4: AI (IAM roles) - depends on Storage + Knowledge for bucket/table references
-const agentCoreRuntimeArn = 'arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/ttobakDeepResearch-5vzwFf3Q5K';
+const agentCoreRuntimeArn = 'arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/ttobakResearchContainer-o3qbV55ei6';
 
 const aiStack = new AiStack(app, 'TtobakAiStack', {
   env,

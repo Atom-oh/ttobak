@@ -25,7 +25,7 @@ env:
   CF_DISTRIBUTION: E3IFMH57E9UTB5
   RESEARCH_ECR_REPO: ttobak/research-agent
   WHISPER_ECR_REPO: ttobak-whisper
-  AGENTCORE_RUNTIME_ID: ttobakDeepResearch-5vzwFf3Q5K
+  AGENTCORE_RUNTIME_ID: ttobakResearchContainer-o3qbV55ei6
 
 jobs:
   detect-changes:
