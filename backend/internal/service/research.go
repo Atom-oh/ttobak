@@ -112,13 +112,16 @@ func (s *ResearchService) ListResearch(ctx context.Context, userId string) (*mod
 	return &model.ResearchListResponse{Research: items}, nil
 }
 
-func (s *ResearchService) GetResearchDetail(ctx context.Context, researchId string) (*model.ResearchResponse, error) {
+func (s *ResearchService) GetResearchDetail(ctx context.Context, researchId, userId string) (*model.ResearchResponse, error) {
 	research, err := s.repo.GetResearch(ctx, researchId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get research: %w", err)
 	}
 	if research == nil {
 		return nil, ErrNotFound
+	}
+	if research.UserID != userId {
+		return nil, ErrForbidden
 	}
 
 	resp := &model.ResearchResponse{Research: *research}
@@ -142,6 +145,9 @@ func (s *ResearchService) DeleteResearch(ctx context.Context, researchId, userId
 	}
 	if research == nil {
 		return ErrNotFound
+	}
+	if research.UserID != userId {
+		return ErrForbidden
 	}
 
 	if research.S3Key != "" {

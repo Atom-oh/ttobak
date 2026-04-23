@@ -71,18 +71,22 @@ func (h *ResearchHandler) ListResearch(w http.ResponseWriter, r *http.Request) {
 // GetResearchDetail handles GET /api/research/{researchId}
 func (h *ResearchHandler) GetResearchDetail(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
 	researchID := chi.URLParam(r, "researchId")
 
-	// Path traversal protection
 	if strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
 		return
 	}
 
-	result, err := h.researchService.GetResearchDetail(ctx, researchID)
+	result, err := h.researchService.GetResearchDetail(ctx, researchID, userID)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")

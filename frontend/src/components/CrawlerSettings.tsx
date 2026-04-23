@@ -538,6 +538,7 @@ export function CrawlerSettings() {
     await crawlerApi.updateSource(editingSource.source.sourceId, {
       awsServices: data.awsServices,
       newsSources: [],
+      newsQueries: data.newsQueries,
       customUrls: data.customUrls.length > 0 ? data.customUrls : undefined,
     });
     setSuccess('Source updated successfully');

@@ -127,8 +127,13 @@ def _strip_html_tags(text: str) -> str:
     return re.sub(r'<[^>]+>', '', text).strip()
 
 
+MAX_RSS_SIZE = 2_000_000
+
 def _parse_rss(xml_text: str, max_items: int = MAX_ARTICLES_PER_QUERY) -> list:
     articles = []
+    if len(xml_text) > MAX_RSS_SIZE:
+        logger.warning(f'RSS response too large ({len(xml_text)} chars), skipping')
+        return []
     try:
         root = ET.fromstring(xml_text)
         channel = root.find('channel')
@@ -269,9 +274,9 @@ def _summarize_and_tag(title: str, text: str, source_name: str = '') -> tuple:
         )
         response_text = resp['output']['message']['content'][0]['text']
 
-        json_match = re.search(r'\{[\s\S]*\}', response_text)
-        if json_match:
-            parsed = json.loads(json_match.group())
+        start_idx = response_text.find('{')
+        if start_idx >= 0:
+            parsed, _ = json.JSONDecoder().raw_decode(response_text, start_idx)
             summary = parsed.get('summary', '')
             tags = parsed.get('tags', [])
             if isinstance(tags, list):
