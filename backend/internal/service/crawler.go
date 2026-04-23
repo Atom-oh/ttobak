@@ -173,6 +173,7 @@ func (s *CrawlerService) Unsubscribe(ctx context.Context, userID, sourceID strin
 	if len(source.Subscribers) == 0 {
 		source.Status = "disabled"
 		source.AWSServices = nil
+		source.NewsSources = nil
 		source.NewsQueries = nil
 		source.CustomUrls = nil
 		if err := s.repo.PutSource(ctx, source); err != nil {

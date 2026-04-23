@@ -104,18 +104,6 @@ export class AiStack extends cdk.Stack {
       })
     );
 
-    // AgentCore invocation (for research worker Lambda)
-    if (props.agentCoreRuntimeArn) {
-      this.apiRole.addToPolicy(
-        new iam.PolicyStatement({
-          sid: 'AgentCoreInvoke',
-          effect: iam.Effect.ALLOW,
-          actions: ['bedrock-agentcore:InvokeAgentRuntime'],
-          resources: [props.agentCoreRuntimeArn],
-        })
-      );
-    }
-
     // Research Worker role — minimal permissions for AgentCore invocation
     this.researchWorkerRole = new iam.Role(this, 'TtobakResearchWorkerRole', {
       roleName: 'ttobak-research-worker-role',
