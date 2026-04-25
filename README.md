@@ -175,6 +175,16 @@ aws cloudfront create-invalidation --distribution-id {DIST_ID} --paths "/*"
 
 Push to `main` triggers automatic deployment via GitHub Actions. Manual trigger available via `workflow_dispatch`.
 
+**Required GitHub Repository Variables:**
+
+Set these before the first deployment. The frontend build embeds them at compile time.
+
+```bash
+gh variable set NEXT_PUBLIC_COGNITO_USER_POOL_ID --body "<Cognito User Pool ID>"
+gh variable set NEXT_PUBLIC_COGNITO_CLIENT_ID --body "<Cognito SPA Client ID>"
+gh variable set NEXT_PUBLIC_COGNITO_IDENTITY_POOL_ID --body "<Cognito Identity Pool ID>"
+```
+
 ## Architecture Decision Records
 
 | ADR | Title | Status |
@@ -362,6 +372,16 @@ aws cloudfront create-invalidation --distribution-id {DIST_ID} --paths "/*"
 ### CI/CD
 
 `main` 브랜치에 푸시하면 GitHub Actions가 자동 배포합니다. `workflow_dispatch`로 수동 트리거도 가능합니다.
+
+**필수 GitHub Repository Variables:**
+
+첫 배포 전에 설정해야 합니다. 프론트엔드 빌드 시 컴파일 타임에 embed됩니다.
+
+```bash
+gh variable set NEXT_PUBLIC_COGNITO_USER_POOL_ID --body "<Cognito User Pool ID>"
+gh variable set NEXT_PUBLIC_COGNITO_CLIENT_ID --body "<Cognito SPA Client ID>"
+gh variable set NEXT_PUBLIC_COGNITO_IDENTITY_POOL_ID --body "<Cognito Identity Pool ID>"
+```
 
 ## 아키텍처 결정 기록
 
