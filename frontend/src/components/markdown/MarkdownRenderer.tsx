@@ -10,6 +10,7 @@ import { createHeadingComponent } from './Heading';
 import { BlockQuote } from './BlockQuote';
 import { Table, THead, TBody, TR, TH, TD } from './DataTable';
 import { CodeBlock, InlineCode } from './CodeBlock';
+import { MermaidBlock } from './MermaidBlock';
 import { Callout } from './Callout';
 import { remarkCallout } from './remarkCallout';
 
@@ -45,6 +46,10 @@ const components: Components = {
 
   code(props: HTMLAttributes<HTMLElement> & { className?: string; children?: ReactNode }) {
     const { className, children, ...rest } = props;
+    const lang = className?.replace('language-', '');
+    if (lang === 'mermaid') {
+      return <MermaidBlock code={String(children).replace(/\n$/, '')} />;
+    }
     if (className?.startsWith('language-')) {
       return <CodeBlock className={className}>{children}</CodeBlock>;
     }
