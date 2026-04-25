@@ -19,22 +19,23 @@ on:
           - whisper
 
 env:
-  AWS_REGION: ap-northeast-2
-  AWS_ACCOUNT_ID: "180294183052"
-  S3_BUCKET: ttobak-site-180294183052-ap-northeast-2
-  CF_DISTRIBUTION: E3IFMH57E9UTB5
-  RESEARCH_ECR_REPO: ttobak/research-agent
-  WHISPER_ECR_REPO: ttobak-whisper
-  AGENTCORE_RUNTIME_ID: ttobakResearchContainer-o3qbV55ei6
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  S3_BUCKET: ${{ vars.S3_BUCKET }}
+  CF_DISTRIBUTION: ${{ vars.CF_DISTRIBUTION }}
+  RESEARCH_ECR_REPO: ${{ vars.RESEARCH_ECR_REPO }}
+  WHISPER_ECR_REPO: ${{ vars.WHISPER_ECR_REPO }}
+  AGENTCORE_RUNTIME_ID: ${{ vars.AGENTCORE_RUNTIME_ID }}
+  GO_BIN: /usr/local/go/bin/go
 
 jobs:
+  # ─── Change Detection ───────────────────────────────────────────
   detect-changes:
     runs-on: ttobak-x86
     outputs:
       backend: ${{ steps.changes.outputs.backend }}
       frontend: ${{ steps.changes.outputs.frontend }}
       infra: ${{ steps.changes.outputs.infra }}
-      crawler: ${{ steps.changes.outputs.crawler }}
       research_agent: ${{ steps.changes.outputs.research_agent }}
       whisper: ${{ steps.changes.outputs.whisper }}
     steps:
@@ -48,24 +49,30 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           DEPLOY_TARGET: ${{ github.event.inputs.deploy_target }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            echo "backend=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'backend' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-            echo "frontend=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'frontend' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-            echo "infra=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'infra' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-            echo "crawler=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'backend' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-            echo "research_agent=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'research-agent' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-            echo "whisper=$( [ "$DEPLOY_TARGET" = 'all' ] || [ "$DEPLOY_TARGET" = 'whisper' ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-          else
-            CHANGED=$(git diff --name-only HEAD~1 HEAD)
-            echo "backend=$(echo "$CHANGED" | grep -q '^backend/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-            echo "frontend=$(echo "$CHANGED" | grep -q '^frontend/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-            echo "infra=$(echo "$CHANGED" | grep -q '^infra/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-            echo "crawler=$(echo "$CHANGED" | grep -q '^backend/python/crawler/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-            echo "research_agent=$(echo "$CHANGED" | grep -q '^backend/python/research-agent/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-            echo "whisper=$(echo "$CHANGED" | grep -q '^backend/whisper/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          fi
+          detect() {
+            local name="$1" pattern="$2" targets="$3"
+            if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+              for t in $targets; do
+                if [ "$DEPLOY_TARGET" = "$t" ]; then echo "$name=true" >> "$GITHUB_OUTPUT"; return; fi
+              done
+              echo "$name=false" >> "$GITHUB_OUTPUT"
+            else
+              if echo "$CHANGED" | grep -q "$pattern"; then
+                echo "$name=true" >> "$GITHUB_OUTPUT"
+              else
+                echo "$name=false" >> "$GITHUB_OUTPUT"
+              fi
+            fi
+          }
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          detect backend       '^backend/'                      "all backend"
+          detect frontend      '^frontend/'                     "all frontend"
+          detect infra         '^infra/'                        "all infra backend"
+          detect research_agent '^backend/python/research-agent/' "all research-agent"
+          detect whisper       '^backend/whisper/'               "all whisper"
           cat "$GITHUB_OUTPUT"
 
+  # ─── Build: Go Lambda Binaries ──────────────────────────────────
   build-backend:
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true'
@@ -73,19 +80,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Go Lambda binaries (ARM64)
+      - name: Build Go Lambda binaries (ARM64 cross-compile)
         working-directory: backend
         run: |
           for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
             echo "Building $dir..."
-            GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
-            echo "  OK: $dir"
+            GOOS=linux GOARCH=arm64 $GO_BIN build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
           done
+          echo "All binaries built"
 
       - name: Run Go tests
         working-directory: backend
-        run: /usr/local/go/bin/go test ./internal/... -count=1
+        run: $GO_BIN test ./internal/... -count=1
 
+  # ─── Build: Frontend Static Export ──────────────────────────────
   build-frontend:
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true'
@@ -95,26 +103,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install and build
         working-directory: frontend
-        run: npm ci
+        run: npm ci && npm run build
 
-      - name: Build static export
-        working-directory: frontend
-        # Cognito IDs are loaded at runtime from /config.json (written to S3 by
-        # FrontendStack BucketDeployment) — no build-time env injection needed.
-        run: npm run build
-
-      - name: Upload build artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: frontend-out
           path: frontend/out/
           retention-days: 1
 
+  # ─── Build: Whisper Docker Image (amd64) ────────────────────────
+  build-whisper:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.whisper == 'true'
+    runs-on: ttobak-x86
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and push Whisper container
+        working-directory: backend/whisper
+        run: |
+          ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${WHISPER_ECR_REPO}"
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          docker build -t "${ECR_URI}:latest" -t "${ECR_URI}:${GITHUB_SHA::8}" .
+          docker push "${ECR_URI}:latest"
+          docker push "${ECR_URI}:${GITHUB_SHA::8}"
+
+  # ─── Deploy: CDK Infrastructure ─────────────────────────────────
   deploy-infra:
     needs: [detect-changes, build-backend]
-    if: always() && (needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.crawler == 'true')
+    if: always() && (needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.backend == 'true')
     runs-on: ttobak-x86
     steps:
       - uses: actions/checkout@v4
@@ -124,43 +145,21 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Build Go binaries if backend changed
-        if: needs.detect-changes.outputs.backend == 'true'
+      - name: Build Go binaries
         working-directory: backend
         run: |
           for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
-            GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
+            GOOS=linux GOARCH=arm64 $GO_BIN build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
           done
-
-      - name: Install CDK dependencies
-        working-directory: infra
-        run: npm ci
-
-      - name: CDK diff
-        working-directory: infra
-        run: npx cdk diff 2>&1 || true
 
       - name: CDK deploy
         working-directory: infra
-        run: npx cdk deploy --all --require-approval never
-
-  build-whisper:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.whisper == 'true'
-    runs-on: ttobak-x86
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build and push Whisper container (amd64 for g5.xlarge GPU)
-        working-directory: backend/whisper
         run: |
-          ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${WHISPER_ECR_REPO}"
-          aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-          docker build -t "${ECR_URI}:latest" -t "${ECR_URI}:${GITHUB_SHA::8}" .
-          docker push "${ECR_URI}:latest"
-          docker push "${ECR_URI}:${GITHUB_SHA::8}"
-          echo "Whisper image pushed: ${ECR_URI}:${GITHUB_SHA::8}"
+          npm ci
+          npx cdk diff 2>&1 || true
+          npx cdk deploy --all --require-approval never
 
+  # ─── Deploy: Research Agent (ARM64 native) ──────────────────────
   deploy-research-agent:
     needs: detect-changes
     if: needs.detect-changes.outputs.research_agent == 'true'
@@ -168,11 +167,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and push research agent container (ARM64)
+      - name: Build and push container
         working-directory: backend/python/research-agent
         run: |
           ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${RESEARCH_ECR_REPO}"
-          aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
           docker build -t "${ECR_URI}:latest" -t "${ECR_URI}:${GITHUB_SHA::8}" .
           docker push "${ECR_URI}:latest"
           docker push "${ECR_URI}:${GITHUB_SHA::8}"
@@ -185,51 +185,47 @@ jobs:
             --role-arn "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ttobak-agentcore-research-role" \
             --network-configuration '{"networkMode":"PUBLIC"}' \
             --agent-runtime-artifact "{\"containerConfiguration\":{\"containerUri\":\"${ECR_URI}\"}}"
-          echo "AgentCore runtime updated with image: ${ECR_URI}"
 
+  # ─── Deploy: Frontend to S3 + CloudFront ────────────────────────
   deploy-frontend:
     needs: [detect-changes, build-frontend, deploy-infra]
     if: always() && needs.detect-changes.outputs.frontend == 'true' && needs.build-frontend.result == 'success'
     runs-on: ttobak-x86
     steps:
-      - name: Download build artifact
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           name: frontend-out
           path: frontend-out/
 
-      - name: Deploy to S3 (sync with delete — content-hash filenames ensure safe swap)
-        # Exclude config.json — it's owned by FrontendStack BucketDeployment, not the static build
+      - name: Sync to S3
         run: aws s3 sync frontend-out/ "s3://${S3_BUCKET}/" --delete --exclude "config.json"
 
       - name: Invalidate CloudFront
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id "${CF_DISTRIBUTION}" \
-            --paths "/*"
+        run: aws cloudfront create-invalidation --distribution-id "${CF_DISTRIBUTION}" --paths "/*"
 
+  # ─── Notify ─────────────────────────────────────────────────────
   notify:
-    needs: [deploy-infra, deploy-frontend, deploy-research-agent, build-whisper]
+    needs: [build-backend, build-frontend, build-whisper, deploy-infra, deploy-frontend, deploy-research-agent]
     if: always()
     runs-on: ttobak-x86
     steps:
       - name: Summary
         env:
-          INFRA_RESULT: ${{ needs.deploy-infra.result }}
-          FRONTEND_RESULT: ${{ needs.deploy-frontend.result }}
-          RESEARCH_RESULT: ${{ needs.deploy-research-agent.result }}
-          WHISPER_RESULT: ${{ needs.build-whisper.result }}
-          REF_NAME: ${{ github.ref_name }}
-          SHA: ${{ github.sha }}
-          EVENT: ${{ github.event_name }}
+          BACKEND: ${{ needs.build-backend.result }}
+          FRONTEND: ${{ needs.deploy-frontend.result }}
+          INFRA: ${{ needs.deploy-infra.result }}
+          RESEARCH: ${{ needs.deploy-research-agent.result }}
+          WHISPER: ${{ needs.build-whisper.result }}
         run: |
           echo "## Deploy Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "| Component | Status |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-----------|--------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Infra | ${INFRA_RESULT:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Frontend | ${FRONTEND_RESULT:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Research Agent | ${RESEARCH_RESULT:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Whisper STT | ${WHISPER_RESULT:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Trigger | ${EVENT} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Branch | ${REF_NAME} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Commit | ${SHA} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Backend Build | ${BACKEND:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Infra (CDK) | ${INFRA:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Frontend | ${FRONTEND:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Research Agent | ${RESEARCH:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Whisper STT | ${WHISPER:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Trigger | ${{ github.event_name }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch | ${{ github.ref_name }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | ${{ github.sha }} |" >> "$GITHUB_STEP_SUMMARY"
