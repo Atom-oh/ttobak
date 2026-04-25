@@ -15,12 +15,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install tools
+      - name: Install AWS CLI
         run: |
           curl -s "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscli.zip
           unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin --update
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          apt-get update -qq && apt-get install -y -qq python3 gh 2>/dev/null || true
+
+      - name: Install gh CLI
+        run: |
+          GH_VERSION=$(curl -s https://api.github.com/repos/cli/cli/releases/latest | grep -o '"tag_name":"v[^"]*"' | head -1 | grep -o '[0-9.]*')
+          curl -sL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_arm64.tar.gz" -o /tmp/gh.tar.gz
+          tar -xzf /tmp/gh.tar.gz -C /tmp
+          cp /tmp/gh_${GH_VERSION}_linux_arm64/bin/gh $HOME/.local/bin/gh
+          chmod +x $HOME/.local/bin/gh
 
       - name: Get PR diff and info
         env:
@@ -30,6 +37,9 @@ jobs:
           gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
           gh pr view "$PR_NUMBER" --json title,body --jq '{title: .title, body: .body}' > /tmp/pr-info.json
           echo "Diff: $(wc -l < /tmp/pr-diff.txt) lines"
+
+      - name: Install Python dependencies
+        run: pip3 install --break-system-packages boto3 2>/dev/null || pip3 install boto3
 
       - name: Review with Bedrock Claude Opus 4.7
         run: |
