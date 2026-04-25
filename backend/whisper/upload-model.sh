@@ -17,7 +17,7 @@ print(path)
 
 echo "Model at: ${MODEL_DIR}"
 echo "Compressing..."
-tar -czf /tmp/model.tar.gz -C "$(dirname "$MODEL_DIR")" "$(basename "$MODEL_DIR")"
+tar -czhf /tmp/model.tar.gz -C "$MODEL_DIR" .
 SIZE=$(du -sh /tmp/model.tar.gz | cut -f1)
 echo "Archive: ${SIZE}"
 
