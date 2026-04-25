@@ -75,6 +75,23 @@ Structure: 4px left accent bar + tinted background (4% opacity) + icon + title +
 - Cells: proper padding, left-aligned
 - First column: medium weight (row identifier)
 
+### MermaidBlock Component
+Renders ` ```mermaid ` fenced code blocks as SVG diagrams.
+
+- **Library**: `mermaid` (lazy loaded via `next/dynamic`)
+- **Theme**: dark mode compatible (`theme: 'dark'` when `.dark` class present)
+- **Supported types**: graph, flowchart, sequenceDiagram, classDiagram, stateDiagram
+- **Fallback**: if rendering fails, show raw code block with Shiki
+- **Copy**: "Copy Mermaid" button for pasting into other tools
+- **Size**: auto-width, max-height 600px with scroll
+- **Integration**: `CodeBlock` checks `language === 'mermaid'` and delegates to `MermaidBlock`
+
+The Research Agent generates Mermaid diagrams for:
+- Network topology (VPC, Direct Connect, VPN)
+- Architecture diagrams (microservices, event-driven)
+- Data flow (pipeline stages)
+- Decision trees (process flows)
+
 ### BlockQuote Component
 - 3px left bar (cyan 40% opacity)
 - Background: cyan 3% opacity
@@ -141,6 +158,7 @@ Ensures drag-and-drop into Obsidian vault works immediately.
 | Package | Purpose | Size | Loading |
 |---------|---------|------|---------|
 | `shiki` | Syntax highlighting | ~2MB | Lazy (next/dynamic) |
+| `mermaid` | Diagram rendering | ~1.5MB | Lazy (next/dynamic) |
 | `react-markdown` | Markdown parsing | Existing | Eager |
 | `remark-gfm` | GFM tables/checkboxes | Existing | Eager |
 | `rehype-raw` | HTML in markdown | Existing | Eager |
@@ -155,6 +173,7 @@ Ensures drag-and-drop into Obsidian vault works immediately.
 - `frontend/src/components/markdown/CodeBlock.tsx`
 - `frontend/src/components/markdown/DataTable.tsx`
 - `frontend/src/components/markdown/BlockQuote.tsx`
+- `frontend/src/components/markdown/MermaidBlock.tsx`
 - `frontend/src/components/markdown/TOCSidebar.tsx`
 - `frontend/src/components/InsightsTableView.tsx`
 
