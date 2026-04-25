@@ -15,7 +15,7 @@ jobs:
   build-and-deploy:
     runs-on: ttobak-x86
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install AWS CLI
         run: |
