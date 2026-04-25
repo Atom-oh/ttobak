@@ -200,12 +200,22 @@ export interface CrawlHistory {
   duration: number;
 }
 
+export interface ChatMessage {
+  msgId: string;
+  role: 'user' | 'agent';
+  content: string;
+  action?: 'propose_structure' | 'ask_question' | 'approve' | 'request_subpage' | 'respond';
+  metadata?: string;
+  createdAt: string;
+}
+
 export interface Research {
   researchId: string;
   userId?: string;
   topic: string;
   mode: 'quick' | 'standard' | 'deep';
-  status: 'running' | 'done' | 'error';
+  status: 'planning' | 'approved' | 'running' | 'done' | 'error';
+  parentId?: string;
   createdAt: string;
   completedAt?: string;
   s3Key?: string;
