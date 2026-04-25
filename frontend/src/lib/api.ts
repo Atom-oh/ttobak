@@ -2,7 +2,7 @@
 
 import { getIdToken, refreshSession } from './auth';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
-import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, ChatMessage } from '@/types/meeting';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, ChatMessage, DictionaryTerm } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -352,5 +352,18 @@ export const researchChatApi = {
     api.post<{ messageId: string }>(`/api/research/${encodeURIComponent(researchId)}/chat`, data),
   listSubPages: (researchId: string) =>
     api.get<{ subpages: Research[] }>(`/api/research/${encodeURIComponent(researchId)}/subpages`),
+};
+
+// Dictionary API
+export const dictionaryApi = {
+  get: () =>
+    api.get<{ terms: DictionaryTerm[]; status: string }>('/api/settings/dictionary'),
+  update: (terms: DictionaryTerm[]) =>
+    api.put<{ terms: DictionaryTerm[]; status: string }>('/api/settings/dictionary', { terms }),
+  deleteTerm: (phrase: string) =>
+    apiFetch<{ status: string }>('/api/settings/dictionary/term', {
+      method: 'DELETE',
+      body: JSON.stringify({ phrase }),
+    }),
 };
 

@@ -236,3 +236,9 @@ export interface ChatSession {
   lastMessageAt: string;
   messageCount: number;
 }
+
+export interface DictionaryTerm {
+  phrase: string;
+  soundsLike: string;
+  displayAs: string;
+}
