@@ -80,7 +80,8 @@ function handler(event) {
   }
 
   // Dynamic route: /insights/{sourceId}/{docHash} → rewrite to /insights/_/_
-  if (uri.match(/^\\/insights\\/[^\\/]+\\/[^\\/]+/) && !uri.match(/^\\/insights\\/_\\/_/)) {
+  // Skip /insights/research/* (handled above)
+  if (uri.match(/^\\/insights\\/[^\\/]+\\/[^\\/]+/) && !uri.match(/^\\/insights\\/_\\/_/) && !uri.match(/^\\/insights\\/research\\//)) {
     uri = uri.replace(/^\\/insights\\/[^\\/]+\\/[^\\/\\.]+/, '/insights/_/_');
     request.uri = uri;
   }
