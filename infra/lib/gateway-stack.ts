@@ -94,7 +94,7 @@ export class GatewayStack extends cdk.Stack {
         TABLE_NAME: props.table.tableName,
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         AGENTCORE_RUNTIME_ID: props.agentCoreRuntimeArn || '',
-        AGENTCORE_ENDPOINT_NAME: 'ttobakResearchEndpoint',
+        AGENTCORE_ENDPOINT_NAME: 'DEFAULT',
       },
       timeout: cdk.Duration.minutes(15),
       memorySize: 512,
