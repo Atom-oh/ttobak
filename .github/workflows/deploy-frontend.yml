@@ -24,7 +24,6 @@ jobs:
           curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscli.zip
           unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin --update
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          aws --version
 
       - name: Build frontend
         working-directory: frontend
