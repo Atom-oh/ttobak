@@ -18,6 +18,24 @@ function formatDate(value: string | number): string {
   return date.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
+function buildFrontmatter(doc: CrawledDocument & { content: string }): string {
+  const date = doc.pubDate || (typeof doc.crawledAt === 'number'
+    ? new Date(doc.crawledAt * 1000).toISOString().split('T')[0]
+    : String(doc.crawledAt));
+  const tags = [...(doc.tags || []), ...(doc.awsServices || [])].filter(Boolean);
+  return [
+    '---',
+    `title: "${doc.title.replace(/"/g, '\\"')}"`,
+    `date: ${date}`,
+    tags.length > 0 ? `tags: [${tags.join(', ')}]` : null,
+    `source: ttobak-${doc.type}`,
+    `type: ${doc.type}`,
+    doc.url ? `url: ${doc.url}` : null,
+    '---',
+    '',
+  ].filter(Boolean).join('\n');
+}
+
 function stripS3Header(content: string): string {
   const lines = content.split('\n');
   let startIdx = 0;
@@ -38,9 +56,12 @@ export default function InsightDetailPage() {
   const pathname = usePathname();
   const { isLoading: authLoading, isAuthenticated } = useAuth();
   const contentRef = useRef<HTMLDivElement>(null);
+  const exportRef = useRef<HTMLDivElement>(null);
   const [doc, setDoc] = useState<(CrawledDocument & { content: string }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Extract sourceId and docHash from URL pathname (useParams returns '_' in static export)
   const { sourceId, docHash } = useMemo(() => {
@@ -59,6 +80,38 @@ export default function InsightDetailPage() {
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load article'))
       .finally(() => setLoading(false));
   }, [sourceId, docHash]);
+
+  // Click-outside to close export dropdown
+  useEffect(() => {
+    if (!exportOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (exportRef.current && !exportRef.current.contains(e.target as Node)) setExportOpen(false);
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [exportOpen]);
+
+  const handleCopyMarkdown = async () => {
+    if (!doc) return;
+    const md = buildFrontmatter(doc) + stripS3Header(doc.content);
+    await navigator.clipboard.writeText(md);
+    setCopied(true);
+    setTimeout(() => { setCopied(false); setExportOpen(false); }, 1500);
+  };
+
+  const handleDownloadMd = () => {
+    if (!doc) return;
+    const md = buildFrontmatter(doc) + stripS3Header(doc.content);
+    const slug = doc.title.replace(/[^a-zA-Z0-9가-힣\s-]/g, '').replace(/\s+/g, '-').slice(0, 60);
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${slug}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setExportOpen(false);
+  };
 
   if (authLoading) {
     return (
@@ -168,9 +221,9 @@ export default function InsightDetailPage() {
                   </div>
                 )}
 
-                {/* Original link */}
-                {doc.url && (
-                  <div className="mt-5 pt-4 border-t border-slate-100 dark:border-white/10">
+                {/* Original link + Export */}
+                <div className="mt-5 pt-4 border-t border-slate-100 dark:border-white/10 flex items-center gap-4 flex-wrap">
+                  {doc.url && (
                     <a
                       href={doc.url}
                       target="_blank"
@@ -180,8 +233,29 @@ export default function InsightDetailPage() {
                       <span className="material-symbols-outlined text-base">open_in_new</span>
                       View Original Article
                     </a>
+                  )}
+                  <div ref={exportRef} className="relative inline-block">
+                    <button
+                      onClick={() => setExportOpen(!exportOpen)}
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-600 dark:text-[#849396] hover:text-primary dark:hover:text-[#00E5FF] transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-base">download</span>
+                      Export
+                    </button>
+                    {exportOpen && (
+                      <div className="absolute left-0 top-full mt-2 w-48 bg-white dark:bg-[#1a1a24] border border-slate-200 dark:border-white/10 rounded-lg shadow-lg z-20 py-1">
+                        <button onClick={handleCopyMarkdown} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-[#bac9cc] hover:bg-slate-50 dark:hover:bg-white/5">
+                          <span className="material-symbols-outlined text-lg">{copied ? 'check' : 'content_copy'}</span>
+                          {copied ? 'Copied!' : 'Copy as Markdown'}
+                        </button>
+                        <button onClick={handleDownloadMd} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-[#bac9cc] hover:bg-slate-50 dark:hover:bg-white/5">
+                          <span className="material-symbols-outlined text-lg">download</span>
+                          Download .md
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
 
               {/* Briefing Content — unified view, strip S3 header metadata */}

@@ -24,6 +24,23 @@ const modeBadge: Record<string, { bg: string; text: string }> = {
   deep:     { bg: 'bg-purple-50 dark:bg-purple-500/10',   text: 'text-purple-700 dark:text-purple-400' },
 };
 
+function buildResearchFrontmatter(r: ResearchDetail): string {
+  const date = r.createdAt
+    ? new Date(r.createdAt).toISOString().split('T')[0]
+    : new Date().toISOString().split('T')[0];
+  return [
+    '---',
+    `title: "${r.topic.replace(/"/g, '\\"')}"`,
+    `date: ${date}`,
+    `source: ttobak-research`,
+    `type: research`,
+    `mode: ${r.mode}`,
+    r.sourceCount != null ? `sources: ${r.sourceCount}` : null,
+    '---',
+    '',
+  ].filter(Boolean).join('\n');
+}
+
 const statusBadge: Record<string, { bg: string; text: string; extra?: string }> = {
   running: { bg: 'bg-blue-50 dark:bg-blue-500/10',      text: 'text-blue-700 dark:text-blue-400', extra: 'animate-pulse' },
   done:    { bg: 'bg-emerald-50 dark:bg-emerald-500/10', text: 'text-emerald-700 dark:text-emerald-400' },
@@ -55,7 +72,8 @@ export default function ResearchDetailPage() {
 
   const handleCopyMarkdown = () => {
     if (!research?.content) return;
-    navigator.clipboard.writeText(research.content).then(() => {
+    const md = buildResearchFrontmatter(research) + research.content;
+    navigator.clipboard.writeText(md).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -63,11 +81,13 @@ export default function ResearchDetailPage() {
 
   const handleDownloadMarkdown = () => {
     if (!research?.content) return;
-    const blob = new Blob([research.content], { type: 'text/markdown' });
+    const md = buildResearchFrontmatter(research) + research.content;
+    const slug = research.topic.replace(/[^a-zA-Z0-9가-힣\s-]/g, '').replace(/\s+/g, '-').slice(0, 60);
+    const blob = new Blob([md], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `research-${research.researchId.slice(0, 8)}.md`;
+    a.download = `${slug}.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
