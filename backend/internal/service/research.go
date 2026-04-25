@@ -56,7 +56,7 @@ func (s *ResearchService) CreateResearch(ctx context.Context, userId string, req
 		UserID:     userId,
 		Topic:      req.Topic,
 		Mode:       req.Mode,
-		Status:     "running",
+		Status:     "planning",
 		CreatedAt:  now,
 		S3Key:      fmt.Sprintf("shared/research/%s.md", id),
 	}
@@ -70,14 +70,15 @@ func (s *ResearchService) CreateResearch(ctx context.Context, userId string, req
 			"researchId": id,
 			"userId":     userId,
 			"topic":      req.Topic,
-			"mode":       req.Mode,
+			"mode":       "plan",
 			"s3Key":      research.S3Key,
 		}
 		inputBytes, _ := json.Marshal(input)
 
+		execName := s.sfnExecutionName(id, "plan")
 		_, err := s.sfnClient.StartExecution(ctx, &sfn.StartExecutionInput{
 			StateMachineArn: aws.String(s.stateMachineArn),
-			Name:            aws.String("research-" + id[:16]),
+			Name:            aws.String(execName),
 			Input:           aws.String(string(inputBytes)),
 		})
 		if err != nil {
@@ -165,6 +166,104 @@ func (s *ResearchService) DeleteResearch(ctx context.Context, researchId, userId
 	}
 
 	return nil
+}
+
+// sfnExecutionName generates a unique SFN execution name: research-{id prefix}-{mode}-{random}
+func (s *ResearchService) sfnExecutionName(researchId, mode string) string {
+	prefix := researchId
+	if len(prefix) > 16 {
+		prefix = prefix[:16]
+	}
+	suffix := make([]byte, 4)
+	rand.Read(suffix)
+	return fmt.Sprintf("research-%s-%s-%s", prefix, mode, hex.EncodeToString(suffix))
+}
+
+// startSFN is a helper to start a Step Functions execution with the given input map.
+func (s *ResearchService) startSFN(ctx context.Context, researchId, mode string, extra map[string]string) error {
+	if s.sfnClient == nil || s.stateMachineArn == "" {
+		return fmt.Errorf("research SFN not configured")
+	}
+
+	input := map[string]string{
+		"researchId": researchId,
+		"mode":       mode,
+	}
+	for k, v := range extra {
+		input[k] = v
+	}
+	inputBytes, _ := json.Marshal(input)
+
+	execName := s.sfnExecutionName(researchId, mode)
+	_, err := s.sfnClient.StartExecution(ctx, &sfn.StartExecutionInput{
+		StateMachineArn: aws.String(s.stateMachineArn),
+		Name:            aws.String(execName),
+		Input:           aws.String(string(inputBytes)),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to start SFN (%s): %w", mode, err)
+	}
+	log.Printf("Started research SFN for %s mode=%s", researchId, mode)
+	return nil
+}
+
+// TriggerAgentRespond triggers the Agent to respond to a user's chat message.
+func (s *ResearchService) TriggerAgentRespond(ctx context.Context, researchId string) error {
+	return s.startSFN(ctx, researchId, "respond", nil)
+}
+
+// ApproveResearch changes status to "approved" and triggers execution.
+func (s *ResearchService) ApproveResearch(ctx context.Context, researchId string) error {
+	if err := s.repo.UpdateResearchFields(ctx, researchId, map[string]interface{}{
+		"status": "approved",
+	}); err != nil {
+		return fmt.Errorf("failed to update status to approved: %w", err)
+	}
+	return s.startSFN(ctx, researchId, "execute", nil)
+}
+
+// CreateSubPage creates a child research and triggers execution.
+func (s *ResearchService) CreateSubPage(ctx context.Context, userId, parentId, topic string) (*model.Research, error) {
+	id := generateID()
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	research := &model.Research{
+		ResearchID: id,
+		UserID:     userId,
+		Topic:      topic,
+		Mode:       "deep",
+		Status:     "running",
+		CreatedAt:  now,
+		S3Key:      fmt.Sprintf("shared/research/%s.md", id),
+		ParentID:   parentId,
+	}
+
+	if err := s.repo.CreateResearch(ctx, research); err != nil {
+		return nil, fmt.Errorf("failed to create sub-page: %w", err)
+	}
+
+	err := s.startSFN(ctx, id, "subpage", map[string]string{
+		"userId":   userId,
+		"topic":    topic,
+		"s3Key":    research.S3Key,
+		"parentId": parentId,
+	})
+	if err != nil {
+		log.Printf("Failed to start sub-page SFN for %s: %v", id, err)
+		s.repo.UpdateResearchFields(ctx, id, map[string]interface{}{
+			"status":       "error",
+			"errorMessage": fmt.Sprintf("Failed to start sub-page pipeline: %v", err),
+		})
+		research.Status = "error"
+		research.ErrorMessage = fmt.Sprintf("Failed to start sub-page pipeline: %v", err)
+	}
+
+	return research, nil
+}
+
+// ListSubPages returns child research items for a given parent.
+func (s *ResearchService) ListSubPages(ctx context.Context, userId, parentId string) ([]model.Research, error) {
+	return s.repo.ListSubPages(ctx, userId, parentId)
 }
 
 func (s *ResearchService) readS3Content(ctx context.Context, key string) (string, error) {
