@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { insightsApi, researchApi } from '@/lib/api';
 import type { CrawledDocument, Research } from '@/types/meeting';
 
@@ -22,7 +22,11 @@ function formatDate(value: string | number): string {
 
 export function InsightsList() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<TabType>('news');
+  const searchParams = useSearchParams();
+  const initialTab = (searchParams.get('tab') as TabType) || 'news';
+  const [activeTab, setActiveTab] = useState<TabType>(
+    ['news', 'tech', 'research'].includes(initialTab) ? initialTab : 'news'
+  );
   const [documents, setDocuments] = useState<CrawledDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -132,6 +136,7 @@ export function InsightsList() {
     setServiceFilter('');
     setSelectedTags([]);
     setSortBy('newest');
+    router.replace(`/insights?tab=${tab}`, { scroll: false });
   };
 
   const handleCreateResearch = async () => {
