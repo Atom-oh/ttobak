@@ -29,7 +29,7 @@ env:
 
 jobs:
   detect-changes:
-    runs-on: self-hosted
+    runs-on: ttobak-x86
     outputs:
       backend: ${{ steps.changes.outputs.backend }}
       frontend: ${{ steps.changes.outputs.frontend }}
@@ -69,7 +69,7 @@ jobs:
   build-backend:
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true'
-    runs-on: self-hosted
+    runs-on: ttobak-x86
     steps:
       - uses: actions/checkout@v4
 
@@ -89,7 +89,7 @@ jobs:
   build-frontend:
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true'
-    runs-on: self-hosted
+    runs-on: ttobak-x86
     container:
       image: node:22-slim
     steps:
@@ -115,7 +115,7 @@ jobs:
   deploy-infra:
     needs: [detect-changes, build-backend]
     if: always() && (needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.backend == 'true' || needs.detect-changes.outputs.crawler == 'true')
-    runs-on: self-hosted
+    runs-on: ttobak-x86
     steps:
       - uses: actions/checkout@v4
 
@@ -147,7 +147,7 @@ jobs:
   build-whisper:
     needs: detect-changes
     if: needs.detect-changes.outputs.whisper == 'true'
-    runs-on: self-hosted
+    runs-on: ttobak-x86
     steps:
       - uses: actions/checkout@v4
 
@@ -162,7 +162,7 @@ jobs:
   deploy-research-agent:
     needs: detect-changes
     if: needs.detect-changes.outputs.research_agent == 'true'
-    runs-on: self-hosted
+    runs-on: ttobak-x86
     steps:
       - uses: actions/checkout@v4
 
@@ -186,7 +186,7 @@ jobs:
   deploy-frontend:
     needs: [detect-changes, build-frontend, deploy-infra]
     if: always() && needs.detect-changes.outputs.frontend == 'true' && needs.build-frontend.result == 'success'
-    runs-on: self-hosted
+    runs-on: ttobak-x86
     steps:
       - name: Download build artifact
         uses: actions/download-artifact@v4
@@ -207,7 +207,7 @@ jobs:
   notify:
     needs: [deploy-infra, deploy-frontend, deploy-research-agent, build-whisper]
     if: always()
-    runs-on: self-hosted
+    runs-on: ttobak-x86
     steps:
       - name: Summary
         env:
