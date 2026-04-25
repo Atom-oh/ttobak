@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	"github.com/aws/aws-sdk-go-v2/service/translate"
 	"github.com/awslabs/aws-lambda-go-api-proxy/chi"
 	"github.com/go-chi/chi/v5"
@@ -40,6 +41,7 @@ func init() {
 	bedrockAgentClient := bedrockagent.NewFromConfig(cfg)
 	translateClient := translate.NewFromConfig(cfg)
 	bedrockRuntimeClient2 := bedrockruntime.NewFromConfig(cfg)
+	transcribeClient := transcribe.NewFromConfig(cfg)
 	kmsClient := kms.NewFromConfig(cfg)
 	// Get environment variables (per API spec: TABLE_NAME, BUCKET_NAME)
 	tableName := os.Getenv("TABLE_NAME")
@@ -80,6 +82,9 @@ func init() {
 		cryptoService = service.NewCryptoService(kmsClient, kmsKeyID)
 	}
 	settingsHandler := handler.NewSettingsHandler(repo, cryptoService)
+	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
+	dictService := service.NewDictionaryService(dictRepo, transcribeClient)
+	dictHandler := handler.NewDictionaryHandler(dictService)
 	translateHandler := handler.NewTranslateHandler(translateService)
 	summarizeLiveHandler := handler.NewSummarizeLiveHandler(bedrockRuntimeClient2)
 	crawlerRepo := repository.NewCrawlerRepository(dynamoClient, tableName)
@@ -166,6 +171,11 @@ func init() {
 
 		// Allowed domains management
 		r.Put("/api/settings/allowed-domains", settingsHandler.SaveAllowedDomains)
+
+		// Dictionary routes
+		r.Get("/api/settings/dictionary", dictHandler.GetDictionary)
+		r.Put("/api/settings/dictionary", dictHandler.UpdateDictionary)
+		r.Delete("/api/settings/dictionary/term", dictHandler.DeleteTerm)
 
 		// Translation route
 		r.Post("/api/translate", translateHandler.Translate)
