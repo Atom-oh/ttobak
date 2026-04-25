@@ -15,6 +15,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
       - name: Install tools
         run: |
           mkdir -p $HOME/.local/bin
