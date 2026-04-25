@@ -13,7 +13,7 @@ env:
 
 jobs:
   build-and-deploy:
-    runs-on: ttobak-whisper-x86
+    runs-on: ttobak-x86
     steps:
       - uses: actions/checkout@v6
 
