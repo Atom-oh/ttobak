@@ -21,7 +21,8 @@ jobs:
       - name: Install AWS CLI
         run: |
           curl -s "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscli.zip
-          unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --update 2>/dev/null || /tmp/aws/install
+          unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin --update
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           aws --version
 
       - name: Build Go Lambda binaries
