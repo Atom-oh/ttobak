@@ -1,4 +1,4 @@
-FROM --platform=linux/arm64 ghcr.io/astral-sh/uv:python3.11-bookworm-slim
+FROM --platform=linux/arm64 ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 WORKDIR /app
 
