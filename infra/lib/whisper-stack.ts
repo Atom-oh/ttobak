@@ -114,6 +114,7 @@ export class WhisperStack extends cdk.Stack {
         BUCKET_NAME: props.bucket.bucketName,
         TABLE_NAME: props.table.tableName,
         AWS_REGION: cdk.Aws.REGION,
+        VOCAB_KEY: 'config/custom-vocabulary.txt',
       },
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'whisper',

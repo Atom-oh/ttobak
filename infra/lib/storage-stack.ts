@@ -67,6 +67,20 @@ export class StorageStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // GSI4 for crawled document queries by type + date (avoids full table scan)
+    this.table.addGlobalSecondaryIndex({
+      indexName: 'GSI4',
+      partitionKey: {
+        name: 'GSI4PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI4SK',
+        type: dynamodb.AttributeType.NUMBER,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // S3 bucket for audio, images, and processed files
     this.bucket = new s3.Bucket(this, 'TtobakBucket', {
       bucketName: `ttobak-assets-${cdk.Aws.ACCOUNT_ID}`,

@@ -51,6 +51,14 @@ MAX_ARTICLES_PER_FEED = 3
 FETCH_TIMEOUT_SECONDS = 10
 MAX_CONTENT_LENGTH = 30000
 
+BLOCKED_URL_PATTERNS = [
+    'contents.premium.naver.com',
+    'premium.chosun.com',
+    'www.chosun.com/premium',
+    'paywalled.',
+]
+MIN_BODY_LENGTH = 100
+
 
 def _make_hash(url: str) -> str:
     return hashlib.sha256(f'news:{url}'.encode('utf-8')).hexdigest()[:16]
@@ -337,6 +345,7 @@ def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
 def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
                     pub_date: str, summary: str = '', source_name: str = '',
                     tags: list = None) -> None:
+    crawled_at = int(time.time())
     item = {
         'PK': f'CRAWLER#{source_id}',
         'SK': f'DOC#{doc_hash}',
@@ -344,10 +353,12 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
         'url': url,
         'title': title,
         'pubDate': pub_date,
-        'crawledAt': int(time.time()),
+        'crawledAt': crawled_at,
         'type': 'news',
         's3Key': f'shared/news/{source_id}/{doc_hash}.md',
         'inKB': True,
+        'GSI4PK': 'DOC#news',
+        'GSI4SK': crawled_at,
     }
     if summary:
         item['summary'] = summary
@@ -362,9 +373,18 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
 # Lambda handler
 # ---------------------------------------------------------------------------
 
+def _is_blocked_url(url: str) -> bool:
+    url_lower = url.lower()
+    return any(pattern in url_lower for pattern in BLOCKED_URL_PATTERNS)
+
+
 def _process_article(source_id: str, title: str, url: str,
                      pub_date: str, description: str = '',
                      crawler_source_name: str = '') -> bool:
+    if _is_blocked_url(url):
+        logger.info(f'Skipping paywalled/premium URL: {url}')
+        return False
+
     doc_hash = _make_hash(url)
 
     if _doc_exists(source_id, doc_hash):
@@ -378,10 +398,8 @@ def _process_article(source_id: str, title: str, url: str,
     except Exception as e:
         logger.info(f'Could not fetch article body: {e}')
 
-    if not text or len(text) < 50:
-        text = description or title
-    if not text or len(text) < 10:
-        logger.info(f'Skipping article with no content: {url}')
+    if not text or len(text) < MIN_BODY_LENGTH:
+        logger.info(f'Skipping article with insufficient body ({len(text or "")} chars): {title[:60]}')
         return False
 
     summary, tags = _summarize_and_tag(title, text, crawler_source_name)

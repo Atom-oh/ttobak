@@ -6,12 +6,45 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
+
+type docCache struct {
+	mu      sync.RWMutex
+	entries map[string]cacheEntry
+}
+
+type cacheEntry struct {
+	docs      []model.CrawledDocument
+	total     int
+	expiresAt time.Time
+}
+
+var scanCache = &docCache{entries: make(map[string]cacheEntry)}
+
+const cacheTTL = 30 * time.Second
+
+func (c *docCache) get(key string) ([]model.CrawledDocument, int, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	e, ok := c.entries[key]
+	if !ok || time.Now().After(e.expiresAt) {
+		return nil, 0, false
+	}
+	return e.docs, e.total, true
+}
+
+func (c *docCache) set(key string, docs []model.CrawledDocument, total int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[key] = cacheEntry{docs: docs, total: total, expiresAt: time.Now().Add(cacheTTL)}
+}
 
 // InsightsService handles document listing and insights for crawled content.
 type InsightsService struct {
@@ -152,22 +185,38 @@ func (s *InsightsService) listBySource(ctx context.Context, source, docType, ser
 }
 
 // scanAll scans all documents filtered by type with pagination.
+// Results are cached for 30 seconds to avoid repeated full-table scans.
 func (s *InsightsService) scanAll(ctx context.Context, docType string, tags []string, page, limit int) ([]model.CrawledDocument, int, error) {
 	if docType == "" {
 		docType = "blog"
 	}
 
-	docs, total, err := s.repo.ListAllDocumentsByType(ctx, docType, int32(limit), page-1)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to scan documents: %w", err)
+	cacheKey := "scan:" + docType
+	allDocs, total, hit := scanCache.get(cacheKey)
+	if !hit {
+		var err error
+		allDocs, total, err = s.repo.ListAllDocumentsByType(ctx, docType, 500, 0)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to scan documents: %w", err)
+		}
+		scanCache.set(cacheKey, allDocs, total)
 	}
 
+	docs := allDocs
 	if len(tags) > 0 {
 		docs = filterByTags(docs, tags)
 		total = len(docs)
 	}
 
-	return docs, total, nil
+	start := (page - 1) * limit
+	if start >= len(docs) {
+		return []model.CrawledDocument{}, total, nil
+	}
+	end := start + limit
+	if end > len(docs) {
+		end = len(docs)
+	}
+	return docs[start:end], total, nil
 }
 
 // filterByService filters documents that contain the specified AWS service.

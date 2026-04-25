@@ -31,11 +31,19 @@ infra/cdk.out.deploy/
 # Python packaging / AgentCore deploy
 backend/python/research-agent/package/
 backend/python/research-agent/deploy.zip
+backend/python/research-agent/deploy.zip.bak
 backend/python/research-agent/.venv/
+backend/python/research-agent/agentcore/.cli/
+backend/python/research-agent/agentcore/aws-targets.json
+backend/python/research-agent/Dockerfile.diag
+backend/python/research-agent/diag.py
 *.egg-info/
 dist/
 build/
 uv.lock
+
+# Claude Code
+.claude/scheduled_tasks.lock
 
 # OMC / Playwright
 .omc/
