@@ -6,9 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip3 install --no-cache-dir faster-whisper boto3
 
-# Pre-download model into image (~3GB compressed)
-RUN python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-large-v3')" && \
-    echo "Model cached"
+# Model is downloaded on first run (~3GB) and cached on ECS host volume.
+# Baking into the image requires 6GB+ build memory which exceeds ARC runner limits.
 
 COPY transcribe.py /app/transcribe.py
 WORKDIR /app
