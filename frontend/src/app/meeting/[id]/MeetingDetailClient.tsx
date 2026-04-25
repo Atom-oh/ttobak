@@ -383,8 +383,8 @@ function MeetingDetailContent() {
             <RecoveryBanner meetingId={meetingId} onRecovered={refetchMeeting} />
           )}
 
-          {/* Speaker Name Mapping */}
-          {meeting.status === 'done' && (
+          {/* Speaker Name Mapping — show when transcript exists (done or error with partial data) */}
+          {(meeting.status === 'done' || meeting.transcription) && (
             <SpeakerMapEditor
               transcription={meeting.transcription}
               content={meeting.content}
