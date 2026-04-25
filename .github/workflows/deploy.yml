@@ -99,6 +99,10 @@ jobs:
 
       - name: Build static export
         working-directory: frontend
+        env:
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.NEXT_PUBLIC_COGNITO_USER_POOL_ID }}
+          NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.NEXT_PUBLIC_COGNITO_CLIENT_ID }}
+          NEXT_PUBLIC_COGNITO_IDENTITY_POOL_ID: ${{ vars.NEXT_PUBLIC_COGNITO_IDENTITY_POOL_ID }}
         run: npm run build
 
       - name: Upload build artifact

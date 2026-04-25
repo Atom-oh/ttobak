@@ -331,18 +331,18 @@ EdgeAuthStack는 us-east-1에 배포되어야 합니다. CDK에서 cross-region 
 3. FrontendStack에서 SSM ParameterProvider로 ARN 조회
 
 ### Known Issue: "Both UserPoolId and ClientId are required"
-EdgeAuthStack은 AuthStack의 Cognito User Pool ID와 Client ID를 cross-region SSM reference로 받습니다. `cdk deploy --all`로 병렬 배포 시, AuthStack의 SSM export가 완료되기 전에 EdgeAuthStack이 배포되면 빈 문자열이 Lambda@Edge 코드에 embed되어 이 에러가 발생합니다.
+이 에러는 **프론트엔드 Cognito SDK**에서 발생합니다 (`frontend/src/lib/auth.ts`). Next.js 정적 빌드 시 `NEXT_PUBLIC_COGNITO_*` 환경변수가 없으면 빈 문자열이 빌드 결과물에 embed됩니다.
 
-**해결 방법:**
+**근본 원인:** GitHub Actions `build-frontend` job에서 `npm run build` 실행 시 Cognito 환경변수가 주입되지 않음. `.env.local`은 `.gitignore`에 포함되어 CI에 존재하지 않습니다.
+
+**해결 방법:** GitHub repository variables를 설정하고 deploy.yml에서 참조합니다.
 ```bash
-# 방법 1: AuthStack을 먼저 배포
-npx cdk deploy TtobakAuthStack && npx cdk deploy --all --require-approval never
-
-# 방법 2: 순차 배포 (느리지만 안전)
-npx cdk deploy --all --require-approval never --concurrency 1
+gh variable set NEXT_PUBLIC_COGNITO_USER_POOL_ID --body "<USER_POOL_ID>"
+gh variable set NEXT_PUBLIC_COGNITO_CLIENT_ID --body "<CLIENT_ID>"
+gh variable set NEXT_PUBLIC_COGNITO_IDENTITY_POOL_ID --body "<IDENTITY_POOL_ID>"
 ```
 
-**근본 원인:** Lambda@Edge는 환경변수를 지원하지 않아 Cognito 설정이 인라인 코드에 빌드 타임에 embed됩니다. CDK cross-region reference (SSM)의 전파 지연이 빈 값 embed를 유발합니다.
+deploy.yml의 `build-frontend` job에서 `${{ vars.NEXT_PUBLIC_COGNITO_* }}`로 주입합니다.
 
 ## 11. Configuration
 
