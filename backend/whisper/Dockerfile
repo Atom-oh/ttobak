@@ -6,8 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip3 install --no-cache-dir faster-whisper boto3
 
-# Model is downloaded on first run (~3GB) and cached on ECS host volume.
-# Baking into the image requires 6GB+ build memory which exceeds ARC runner limits.
+# Model is loaded from S3 at runtime (~30s same-region transfer).
+# Keeps image small (~2GB) and allows model updates without rebuild.
 
 COPY transcribe.py /app/transcribe.py
 WORKDIR /app

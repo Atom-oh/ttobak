@@ -10,10 +10,32 @@ REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
 BUCKET = os.environ["BUCKET_NAME"]
 TABLE = os.environ["TABLE_NAME"]
 VOCAB_KEY = os.environ.get("VOCAB_KEY", "config/custom-vocabulary.txt")
+MODEL_S3_KEY = os.environ.get("MODEL_S3_KEY", "models/faster-whisper-large-v3.tar.gz")
+MODEL_LOCAL_DIR = "/tmp/whisper-model"
 
 s3 = boto3.client("s3", region_name=REGION)
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 table = dynamodb.Table(TABLE)
+
+
+def _ensure_model() -> str:
+    if os.path.exists(os.path.join(MODEL_LOCAL_DIR, "model.bin")):
+        print("Model already cached locally")
+        return MODEL_LOCAL_DIR
+
+    print(f"Downloading model from s3://{BUCKET}/{MODEL_S3_KEY}")
+    start = time.time()
+    archive = "/tmp/model.tar.gz"
+    s3.download_file(BUCKET, MODEL_S3_KEY, archive)
+    os.makedirs(MODEL_LOCAL_DIR, exist_ok=True)
+
+    import tarfile
+    with tarfile.open(archive) as tar:
+        tar.extractall(MODEL_LOCAL_DIR)
+    os.remove(archive)
+    elapsed = time.time() - start
+    print(f"Model ready ({elapsed:.0f}s)")
+    return MODEL_LOCAL_DIR
 
 
 def _load_custom_vocab_prompt() -> str:
@@ -49,8 +71,9 @@ def main():
 
     vocab_prompt = _load_custom_vocab_prompt()
 
+    model_path = _ensure_model()
     print("Loading Whisper large-v3 (GPU float16)...")
-    model = WhisperModel("large-v3", device="cuda", compute_type="float16")
+    model = WhisperModel(model_path, device="cuda", compute_type="float16")
 
     print("Transcribing...")
     start = time.time()

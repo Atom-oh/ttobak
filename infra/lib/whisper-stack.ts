@@ -115,6 +115,7 @@ export class WhisperStack extends cdk.Stack {
         TABLE_NAME: props.table.tableName,
         AWS_REGION: cdk.Aws.REGION,
         VOCAB_KEY: 'config/custom-vocabulary.txt',
+        MODEL_S3_KEY: 'models/faster-whisper-large-v3.tar.gz',
       },
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'whisper',
