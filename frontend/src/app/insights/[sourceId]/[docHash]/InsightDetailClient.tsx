@@ -1,13 +1,11 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/components/auth/AuthProvider';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
-import rehypeSanitize from 'rehype-sanitize';
+import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
+import { TOCSidebar } from '@/components/markdown/TOCSidebar';
 import { insightsApi } from '@/lib/api';
 import type { CrawledDocument } from '@/types/meeting';
 
@@ -39,6 +37,7 @@ export default function InsightDetailPage() {
   const router = useRouter();
   const pathname = usePathname();
   const { isLoading: authLoading, isAuthenticated } = useAuth();
+  const contentRef = useRef<HTMLDivElement>(null);
   const [doc, setDoc] = useState<(CrawledDocument & { content: string }) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -186,14 +185,15 @@ export default function InsightDetailPage() {
               </div>
 
               {/* Briefing Content — unified view, strip S3 header metadata */}
-              <div className="glass-panel rounded-2xl p-6 lg:p-8">
-                <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-[#e4e1e9] uppercase tracking-wide mb-4">
-                  <span className="material-symbols-outlined text-primary dark:text-[#00E5FF] text-lg">auto_awesome</span>
-                  AI Briefing
-                </h2>
-                <div className="prose prose-sm dark:prose-invert max-w-none text-slate-700 dark:text-[#bac9cc] leading-relaxed break-words overflow-hidden [&_table]:text-xs [&_table]:border-collapse [&_table]:w-full [&_th]:bg-slate-100 [&_th]:dark:bg-white/5 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_td]:px-3 [&_td]:py-2 [&_th]:border [&_td]:border [&_th]:border-slate-200 [&_td]:border-slate-200 [&_th]:dark:border-white/10 [&_td]:dark:border-white/10 [&_blockquote]:border-l-4 [&_blockquote]:border-primary/30 [&_blockquote]:dark:border-[#00E5FF]/30 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-slate-500 [&_blockquote]:dark:text-[#849396] [&_code]:bg-slate-100 [&_code]:dark:bg-white/5 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_a]:text-primary [&_a]:dark:text-[#00E5FF] [&_a]:underline [&_a]:break-all [&_hr]:border-slate-200 [&_hr]:dark:border-white/10 [&_p]:overflow-hidden [&_p]:text-ellipsis">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]}>{stripS3Header(doc.content)}</ReactMarkdown>
+              <div className="flex gap-0">
+                <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 flex-1 min-w-0">
+                  <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-[#e4e1e9] uppercase tracking-wide mb-4">
+                    <span className="material-symbols-outlined text-primary dark:text-[#00E5FF] text-lg">auto_awesome</span>
+                    AI Briefing
+                  </h2>
+                  <MarkdownRenderer content={stripS3Header(doc.content)} />
                 </div>
+                <TOCSidebar contentRef={contentRef} />
               </div>
             </div>
           ) : null}
