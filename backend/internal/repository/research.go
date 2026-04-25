@@ -198,6 +198,24 @@ func (r *ResearchRepository) ListUserResearch(ctx context.Context, userId string
 	return researches, nil
 }
 
+// ListSubPages returns research items that have the given parentId
+// Filters the user's research list in-memory (suitable for small volumes)
+func (r *ResearchRepository) ListSubPages(ctx context.Context, userId, parentId string) ([]model.Research, error) {
+	all, err := r.ListUserResearch(ctx, userId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list user research for sub-pages: %w", err)
+	}
+
+	subPages := make([]model.Research, 0)
+	for _, res := range all {
+		if res.ParentID == parentId {
+			subPages = append(subPages, res)
+		}
+	}
+
+	return subPages, nil
+}
+
 // DeleteResearch deletes both the main record and the user index record
 func (r *ResearchRepository) DeleteResearch(ctx context.Context, researchId, userId string) error {
 	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
