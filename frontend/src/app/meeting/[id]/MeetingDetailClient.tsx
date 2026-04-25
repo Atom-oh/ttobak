@@ -498,7 +498,7 @@ function MeetingDetailContent() {
           )}
 
           {/* Full Transcription */}
-          {(meeting.transcription?.length > 0 || meeting.transcriptA) && (
+          {((meeting.transcription?.length ?? 0) > 0 || meeting.transcriptA) && (
             <TranscriptSection
               transcription={meeting.transcription || []}
               rawTranscript={meeting.transcriptA}
