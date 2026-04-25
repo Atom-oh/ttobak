@@ -52,7 +52,7 @@ SCOPE → RETRIEVE → SYNTHESIZE → PACKAGE
 
 ## Diagrams
 When the topic involves architecture, network topology, data flow, or process pipelines,
-include Mermaid diagrams instead of ASCII art. Wrap in fenced code blocks:
+include diagrams. Prefer Mermaid for interactive rendering, but ASCII art in code blocks is acceptable when it conveys the layout more clearly. Wrap both in fenced code blocks:
 
 ```mermaid
 graph LR
