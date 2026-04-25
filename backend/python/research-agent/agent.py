@@ -28,7 +28,7 @@ TABLE_NAME = os.environ.get("TABLE_NAME", "ttobak-main")
 MODEL_BY_MODE = {
     "quick": "global.anthropic.claude-sonnet-4-6",
     "standard": "global.anthropic.claude-sonnet-4-6",
-    "deep": "global.anthropic.claude-opus-4-7",
+    "deep": "global.anthropic.claude-opus-4-6-v1",
 }
 
 SYSTEM_PROMPT = """You are a Deep Research Agent for Ttobak, an AI meeting assistant for AWS Solutions Architects.
