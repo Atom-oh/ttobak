@@ -43,7 +43,7 @@ type ShareMeetingRequest struct {
 // PresignedURLRequest represents the request body for generating a presigned URL
 type PresignedURLRequest struct {
 	FileName  string `json:"fileName"`
-	FileType  string `json:"fileType"`            // audio/webm, audio/mp4, image/jpeg, image/png
+	FileType  string `json:"fileType"`            // audio/webm, audio/mp4, audio/x-m4a, image/jpeg, image/png
 	Category  string `json:"category"`            // "audio" or "image"
 	MeetingID string `json:"meetingId,omitempty"` // required for image uploads
 }

@@ -222,7 +222,7 @@ POST /api/upload/presigned
 Request:
 {
   "fileName": "recording.webm",
-  "fileType": "audio/webm",         // audio/webm | audio/mp4 | image/jpeg | image/png
+  "fileType": "audio/webm",         // audio/webm | audio/mp4 | audio/x-m4a | image/jpeg | image/png
   "category": "audio"               // "audio" | "image"
 }
 

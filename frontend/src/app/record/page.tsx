@@ -158,7 +158,10 @@ function RecordPageInner() {
     const meetingId = postRecording.serverMeetingId;
     if (!meetingId) return; // draft creation failed — skip checkpoint
     try {
-      const fileName = 'recording_progress.webm'; // fixed name → S3 overwrite
+      const ext = mimeType.includes('mp4') ? 'm4a'
+                : mimeType.includes('ogg') ? 'ogg'
+                : 'webm';
+      const fileName = `recording_progress.${ext}`; // fixed name → S3 overwrite
       const { uploadUrl } = await uploadsApi.getPresignedUrl({
         fileName,
         fileType: mimeType || 'audio/webm',

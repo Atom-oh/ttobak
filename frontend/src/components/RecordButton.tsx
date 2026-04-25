@@ -310,7 +310,11 @@ export function RecordButton({
   const handleUpload = async (blob: Blob) => {
     setRecordingState('uploading');
     try {
-      const fileName = `recording_${Date.now()}.webm`;
+      const mimeType = mediaRecorderRef.current?.mimeType || blob.type || 'audio/webm';
+      const ext = mimeType.includes('mp4') ? 'm4a'
+                : mimeType.includes('ogg') ? 'ogg'
+                : 'webm';
+      const fileName = `recording_${Date.now()}.${ext}`;
       const result = await uploadAudioBlob(blob, fileName);
       onRecordingComplete?.(result.url);
       setRecordingState('idle');
