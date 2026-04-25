@@ -1,0 +1,45 @@
+name: Deploy Research Agent
+
+on:
+  push:
+    branches: [main]
+    paths: ['backend/python/research-agent/**']
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  RESEARCH_ECR_REPO: ${{ vars.RESEARCH_ECR_REPO }}
+  AGENTCORE_RUNTIME_ID: ${{ vars.AGENTCORE_RUNTIME_ID }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ttobak-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+      - name: Build and push container
+        working-directory: backend/python/research-agent
+        env:
+          ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.RESEARCH_ECR_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t "${ECR_URI}:latest" -t "${ECR_URI}:${IMAGE_TAG::8}" .
+          docker push "${ECR_URI}:latest"
+          docker push "${ECR_URI}:${IMAGE_TAG::8}"
+
+      - name: Update AgentCore Runtime
+        env:
+          ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.RESEARCH_ECR_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          aws bedrock-agentcore-control update-agent-runtime \
+            --agent-runtime-id "${AGENTCORE_RUNTIME_ID}" \
+            --role-arn "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ttobak-agentcore-research-role" \
+            --network-configuration '{"networkMode":"PUBLIC"}' \
+            --agent-runtime-artifact "{\"containerConfiguration\":{\"containerUri\":\"${ECR_URI}:${IMAGE_TAG::8}\"}}"

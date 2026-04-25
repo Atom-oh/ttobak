@@ -1,0 +1,55 @@
+name: Deploy Whisper STT
+
+on:
+  push:
+    branches: [main]
+    paths: ['backend/whisper/**']
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  WHISPER_ECR_REPO: ${{ vars.WHISPER_ECR_REPO }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ttobak-x86
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+      - name: Build and push Docker image
+        working-directory: backend/whisper
+        env:
+          ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.WHISPER_ECR_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t "${ECR_URI}:latest" -t "${ECR_URI}:${IMAGE_TAG::8}" .
+          docker push "${ECR_URI}:latest"
+          docker push "${ECR_URI}:${IMAGE_TAG::8}"
+
+      - name: Update ECS task definition
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.WHISPER_ECR_REPO }}
+        run: |
+          TASK_DEF=$(aws ecs describe-task-definition --task-definition ttobak-whisper --region "${AWS_REGION}" --query 'taskDefinition' 2>/dev/null)
+          if [ -n "$TASK_DEF" ] && [ "$TASK_DEF" != "null" ]; then
+            NEW_DEF=$(echo "$TASK_DEF" | python3 -c "
+          import json, sys
+          td = json.load(sys.stdin)
+          for c in td['containerDefinitions']:
+              if c['name'] == 'whisper':
+                  c['image'] = '${ECR_URI}:${IMAGE_TAG::8}'
+          for k in ['taskDefinitionArn','revision','status','requiresAttributes','compatibilities','registeredAt','registeredBy']:
+              td.pop(k, None)
+          print(json.dumps(td))")
+            aws ecs register-task-definition --cli-input-json "$NEW_DEF" --region "${AWS_REGION}"
+            echo "Task definition updated with image: ${ECR_URI}:${IMAGE_TAG::8}"
+          else
+            echo "Task definition ttobak-whisper not found — will be created by CDK deploy"
+          fi

@@ -1,0 +1,36 @@
+name: Deploy Infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*']
+  workflow_dispatch:
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+
+jobs:
+  deploy:
+    runs-on: ttobak-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Go Lambda binaries
+        working-directory: backend
+        run: |
+          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
+            GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
+          done
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: CDK deploy
+        working-directory: infra
+        run: |
+          npm ci
+          npx cdk diff 2>&1 || true
+          npx cdk deploy --all --require-approval never

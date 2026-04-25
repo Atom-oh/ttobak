@@ -1,0 +1,46 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches: [main]
+    paths: ['frontend/**']
+  workflow_dispatch:
+
+env:
+  S3_BUCKET: ${{ vars.S3_BUCKET }}
+  CF_DISTRIBUTION: ${{ vars.CF_DISTRIBUTION }}
+
+jobs:
+  build:
+    runs-on: ttobak-x86
+    container:
+      image: node:22-slim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install and build
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-out
+          path: frontend/out/
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: ttobak-x86
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-out
+          path: frontend-out/
+
+      - name: Sync to S3
+        run: aws s3 sync frontend-out/ "s3://${S3_BUCKET}/" --delete --exclude "config.json"
+
+      - name: Invalidate CloudFront
+        run: aws cloudfront create-invalidation --distribution-id "${CF_DISTRIBUTION}" --paths "/*"

@@ -1,0 +1,25 @@
+name: Test Backend
+
+on:
+  push:
+    branches: [main]
+    paths: ['backend/cmd/**', 'backend/internal/**', 'backend/go.*']
+  pull_request:
+    paths: ['backend/cmd/**', 'backend/internal/**', 'backend/go.*']
+
+jobs:
+  test:
+    runs-on: ttobak-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build all Lambda binaries
+        working-directory: backend
+        run: |
+          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
+            GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
+          done
+
+      - name: Run tests
+        working-directory: backend
+        run: go test ./internal/... -count=1
