@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { insightsApi, researchApi } from '@/lib/api';
 import type { CrawledDocument, Research } from '@/types/meeting';
+import { InsightsTableView } from './InsightsTableView';
 
 type TabType = 'news' | 'tech' | 'research';
 
@@ -36,6 +37,7 @@ export function InsightsList() {
   const [serviceFilter, setServiceFilter] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState('newest');
+  const [viewMode, setViewMode] = useState<'card' | 'table'>('card');
   const limit = 20;
 
   // Research tab state
@@ -128,6 +130,13 @@ export function InsightsList() {
       }
     };
   }, [activeTab, researchJobs]);
+
+  // SSR-safe view mode persistence
+  useEffect(() => {
+    const saved = localStorage.getItem('insights-view') as 'card' | 'table';
+    if (saved === 'card' || saved === 'table') setViewMode(saved);
+  }, []);
+  useEffect(() => { localStorage.setItem('insights-view', viewMode); }, [viewMode]);
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
@@ -500,6 +509,20 @@ export function InsightsList() {
                 <option value="oldest">Oldest first</option>
                 <option value="title">Title A-Z</option>
               </select>
+              <div className="flex items-center gap-1 ml-2">
+                <button
+                  onClick={() => setViewMode('card')}
+                  className={`p-1.5 rounded-lg transition-colors ${viewMode === 'card' ? 'bg-white/10 text-[#00E5FF]' : 'text-[#849396] hover:text-[#bac9cc]'}`}
+                >
+                  <span className="material-symbols-outlined text-lg">grid_view</span>
+                </button>
+                <button
+                  onClick={() => setViewMode('table')}
+                  className={`p-1.5 rounded-lg transition-colors ${viewMode === 'table' ? 'bg-white/10 text-[#00E5FF]' : 'text-[#849396] hover:text-[#bac9cc]'}`}
+                >
+                  <span className="material-symbols-outlined text-lg">table_rows</span>
+                </button>
+              </div>
               {!loading && (
                 <span className="text-xs text-slate-500 dark:text-[#849396] ml-auto">
                   {totalCount} document{totalCount !== 1 ? 's' : ''}
@@ -577,6 +600,15 @@ export function InsightsList() {
                     : 'Subscribe to AWS services in Settings to see updates here.'}
               </p>
             </div>
+          ) : viewMode === 'table' ? (
+            <InsightsTableView
+              documents={documents}
+              totalCount={totalCount}
+              page={page}
+              limit={limit}
+              onTagClick={toggleTag}
+              selectedTags={selectedTags}
+            />
           ) : (
             <div className="space-y-4">
               {documents.map((doc, idx) => (

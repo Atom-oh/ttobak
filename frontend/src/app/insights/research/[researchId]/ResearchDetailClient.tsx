@@ -1,15 +1,42 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/components/auth/AuthProvider';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
-import rehypeSanitize from 'rehype-sanitize';
+import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
+import { TOCSidebar } from '@/components/markdown/TOCSidebar';
 import { researchApi } from '@/lib/api';
 import type { ResearchDetail } from '@/types/meeting';
+
+interface Section {
+  title: string;
+  content: string;
+}
+
+function splitByH2(markdown: string): Section[] {
+  const lines = markdown.split('\n');
+  const sections: Section[] = [];
+  let currentTitle = 'Overview';
+  let currentLines: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith('## ')) {
+      if (currentLines.length > 0 || sections.length === 0) {
+        sections.push({ title: currentTitle, content: currentLines.join('\n').trim() });
+      }
+      currentTitle = line.replace(/^##\s+/, '').trim();
+      currentLines = [];
+    } else {
+      currentLines.push(line);
+    }
+  }
+  if (currentLines.length > 0) {
+    sections.push({ title: currentTitle, content: currentLines.join('\n').trim() });
+  }
+
+  return sections.filter(s => s.content.length > 0);
+}
 
 function formatDate(value: string | number): string {
   if (!value) return '';
@@ -25,6 +52,23 @@ const modeBadge: Record<string, { bg: string; text: string }> = {
   standard: { bg: 'bg-blue-50 dark:bg-blue-500/10',      text: 'text-blue-700 dark:text-blue-400' },
   deep:     { bg: 'bg-purple-50 dark:bg-purple-500/10',   text: 'text-purple-700 dark:text-purple-400' },
 };
+
+function buildResearchFrontmatter(r: ResearchDetail): string {
+  const date = r.createdAt
+    ? new Date(r.createdAt).toISOString().split('T')[0]
+    : new Date().toISOString().split('T')[0];
+  return [
+    '---',
+    `title: "${r.topic.replace(/"/g, '\\"')}"`,
+    `date: ${date}`,
+    `source: ttobak-research`,
+    `type: research`,
+    `mode: ${r.mode}`,
+    r.sourceCount != null ? `sources: ${r.sourceCount}` : null,
+    '---',
+    '',
+  ].filter(Boolean).join('\n');
+}
 
 const statusBadge: Record<string, { bg: string; text: string; extra?: string }> = {
   running: { bg: 'bg-blue-50 dark:bg-blue-500/10',      text: 'text-blue-700 dark:text-blue-400', extra: 'animate-pulse' },
@@ -45,6 +89,17 @@ export default function ResearchDetailPage() {
   const exportRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [activeSection, setActiveSection] = useState<number | null>(null);
+
+  const sections = useMemo(
+    () => (research?.content ? splitByH2(research.content) : []),
+    [research?.content],
+  );
+
+  const scrollToTop = useCallback(() => {
+    contentRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -56,7 +111,8 @@ export default function ResearchDetailPage() {
 
   const handleCopyMarkdown = () => {
     if (!research?.content) return;
-    navigator.clipboard.writeText(research.content).then(() => {
+    const md = buildResearchFrontmatter(research) + research.content;
+    navigator.clipboard.writeText(md).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
@@ -64,11 +120,13 @@ export default function ResearchDetailPage() {
 
   const handleDownloadMarkdown = () => {
     if (!research?.content) return;
-    const blob = new Blob([research.content], { type: 'text/markdown' });
+    const md = buildResearchFrontmatter(research) + research.content;
+    const slug = research.topic.replace(/[^a-zA-Z0-9가-힣\s-]/g, '').replace(/\s+/g, '-').slice(0, 60);
+    const blob = new Blob([md], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `research-${research.researchId.slice(0, 8)}.md`;
+    a.download = `${slug}.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -308,15 +366,103 @@ export default function ResearchDetailPage() {
 
               {/* Content */}
               {research.content && (
-                <div className="glass-panel rounded-2xl p-6 lg:p-8">
-                  <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-[#e4e1e9] uppercase tracking-wide mb-4">
-                    <span className="material-symbols-outlined text-primary dark:text-[#00E5FF] text-lg">auto_awesome</span>
-                    Research Report
-                  </h2>
-                  <div className="prose prose-sm dark:prose-invert max-w-none text-slate-700 dark:text-[#bac9cc] leading-relaxed break-words overflow-hidden [&_table]:text-xs [&_table]:border-collapse [&_table]:w-full [&_th]:bg-slate-100 [&_th]:dark:bg-white/5 [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_td]:px-3 [&_td]:py-2 [&_th]:border [&_td]:border [&_th]:border-slate-200 [&_td]:border-slate-200 [&_th]:dark:border-white/10 [&_td]:dark:border-white/10 [&_blockquote]:border-l-4 [&_blockquote]:border-primary/30 [&_blockquote]:dark:border-[#00E5FF]/30 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-slate-500 [&_blockquote]:dark:text-[#849396] [&_code]:bg-slate-100 [&_code]:dark:bg-white/5 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs [&_a]:text-primary [&_a]:dark:text-[#00E5FF] [&_a]:underline [&_a]:break-all [&_hr]:border-slate-200 [&_hr]:dark:border-white/10 [&_p]:overflow-hidden [&_p]:text-ellipsis">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]}>{research.content}</ReactMarkdown>
-                  </div>
-                </div>
+                <>
+                  {/* Section list view — only for reports with >2 sections */}
+                  {activeSection === null && sections.length > 2 ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-sm font-semibold text-[#849396] uppercase tracking-wide">
+                          {sections.length} Sections
+                        </h3>
+                        <button
+                          onClick={() => setActiveSection(-1)}
+                          className="text-xs text-[#00E5FF] hover:underline"
+                        >
+                          Read full report
+                        </button>
+                      </div>
+                      {sections.map((section, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => setActiveSection(idx)}
+                          className="w-full text-left glass-panel rounded-xl p-4 hover:bg-white/[0.03] transition-colors group"
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-mono text-[#849396] bg-white/[0.05] px-2 py-0.5 rounded">
+                              {idx + 1}
+                            </span>
+                            <h4 className="text-base font-semibold text-[#e4e1e9] group-hover:text-[#00E5FF] transition-colors">
+                              {section.title}
+                            </h4>
+                          </div>
+                          <p className="text-xs text-[#849396] mt-2 ml-10 line-clamp-2">
+                            {section.content.replace(/[#*_`>\[\]]/g, '').slice(0, 150)}...
+                          </p>
+                          <span className="text-[10px] text-[#849396] ml-10 mt-1 block">
+                            {section.content.split(/\s+/).length} words
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : activeSection !== null && activeSection >= 0 ? (
+                    /* Section detail view */
+                    <div>
+                      <div className="flex items-center justify-between mb-6">
+                        <button
+                          onClick={() => setActiveSection(null)}
+                          className="text-xs text-[#849396] hover:text-[#00E5FF] flex items-center gap-1"
+                        >
+                          <span className="material-symbols-outlined text-sm">arrow_back</span>
+                          All sections
+                        </button>
+                        <span className="text-xs text-[#849396]">
+                          {activeSection + 1} / {sections.length}
+                        </span>
+                      </div>
+
+                      <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8">
+                        <MarkdownRenderer
+                          content={`## ${sections[activeSection].title}\n\n${sections[activeSection].content}`}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between mt-6">
+                        <button
+                          onClick={() => {
+                            setActiveSection(Math.max(0, activeSection - 1));
+                            scrollToTop();
+                          }}
+                          disabled={activeSection === 0}
+                          className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-[#bac9cc] border border-white/10 rounded-lg hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-lg">chevron_left</span>
+                          {activeSection > 0 ? sections[activeSection - 1].title : 'Previous'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setActiveSection(Math.min(sections.length - 1, activeSection + 1));
+                            scrollToTop();
+                          }}
+                          disabled={activeSection === sections.length - 1}
+                          className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-[#bac9cc] border border-white/10 rounded-lg hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {activeSection < sections.length - 1
+                            ? sections[activeSection + 1].title
+                            : 'Next'}
+                          <span className="material-symbols-outlined text-lg">chevron_right</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Full report view (activeSection === -1, or sections.length <= 2) */
+                    <div className="flex gap-0">
+                      <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 flex-1 min-w-0">
+                        <MarkdownRenderer content={research.content} />
+                      </div>
+                      <TOCSidebar contentRef={contentRef} />
+                    </div>
+                  )}
+                </>
               )}
             </div>
           ) : null}

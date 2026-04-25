@@ -1,0 +1,93 @@
+openapi: 3.0.3
+info:
+  title: Ttobak Research Agent (AgentCore Runtime)
+  description: |
+    Deep Research Agent running as a FastAPI container on AgentCore Runtime.
+    Receives research requests, runs Strands Agent with web_search/fetch_page/save_report tools,
+    and saves structured reports to S3 + DynamoDB.
+
+    This API is internal — called by the research-worker Lambda via AgentCore Runtime invoke,
+    not directly from the frontend.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: Container (AgentCore Runtime manages routing)
+
+paths:
+  /invocations:
+    post:
+      summary: Start a deep research job
+      description: |
+        Starts research in a background thread and returns immediately.
+        The agent uses Strands SDK to orchestrate web_search, fetch_page, and save_report tools.
+        Results are written to S3 and DynamoDB by the save_report tool.
+
+        Models:
+        - quick/standard: global.anthropic.claude-sonnet-4-6 (ap-northeast-2)
+        - deep: us.anthropic.claude-opus-4-7 (us-east-1)
+      tags: [AgentCore]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic, researchId]
+              properties:
+                topic:
+                  type: string
+                  description: Research topic in Korean or English
+                mode:
+                  type: string
+                  enum: [quick, standard, deep]
+                  default: standard
+                researchId:
+                  type: string
+                  description: Unique research job ID
+                input:
+                  type: object
+                  description: Alternative input format (AgentCore standard)
+                  properties:
+                    prompt: { type: string }
+      responses:
+        '200':
+          description: Research started (async)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [running]
+                  researchId:
+                    type: string
+        '400':
+          description: Missing topic or researchId
+
+  /ping:
+    get:
+      summary: Health check
+      description: |
+        Returns health status and last activity timestamp.
+        "HealthyBusy" when research threads are active.
+      tags: [AgentCore]
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [Healthy, HealthyBusy]
+                  time_of_last_update:
+                    type: integer
+                    description: Unix timestamp of last activity
+
+tags:
+  - name: AgentCore
+    description: Deep Research Agent (internal API)

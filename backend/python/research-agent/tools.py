@@ -155,6 +155,26 @@ def fetch_page(url: str) -> str:
         return json.dumps({"error": str(e), "url": url})
 
 
+def _split_sections(content: str) -> list[dict]:
+    """Split markdown content into sections by h2 headings."""
+    import re
+    sections = []
+    parts = re.split(r'^(## .+)$', content, flags=re.MULTILINE)
+
+    preamble = parts[0].strip()
+    if preamble:
+        sections.append({"title": "Overview", "slug": "overview", "body": preamble})
+
+    for i in range(1, len(parts), 2):
+        heading = parts[i].lstrip("# ").strip()
+        body = parts[i + 1].strip() if i + 1 < len(parts) else ""
+        slug = re.sub(r'[^\w가-힣-]', '', heading.lower().replace(' ', '-'))[:60]
+        slug = slug or f"section-{len(sections)}"
+        sections.append({"title": heading, "slug": slug, "body": f"## {heading}\n\n{body}"})
+
+    return sections
+
+
 @tool
 def save_report(research_id: str, content: str, summary: str, source_count: int, word_count: int) -> str:
     """Save the completed research report to S3 and update DynamoDB status to done.
@@ -169,22 +189,42 @@ def save_report(research_id: str, content: str, summary: str, source_count: int,
     if not research_id or not content:
         return json.dumps({"error": "research_id and content are required"})
 
+    s3 = _get_s3()
+    table = _get_table()
     s3_key = f"shared/research/{research_id}.md"
 
     try:
-        # Write to S3
-        _get_s3().put_object(
+        s3.put_object(
             Bucket=KB_BUCKET,
             Key=s3_key,
             Body=content.encode("utf-8"),
             ContentType="text/markdown; charset=utf-8",
         )
-        logger.info(f"Saved report to s3://{KB_BUCKET}/{s3_key}")
+        logger.info(f"Saved full report to s3://{KB_BUCKET}/{s3_key}")
 
-        # Update DynamoDB
-        _get_table().update_item(
+        sections = _split_sections(content)
+        section_meta = []
+        for idx, sec in enumerate(sections):
+            sec_key = f"shared/research/{research_id}/{sec['slug']}.md"
+            s3.put_object(
+                Bucket=KB_BUCKET,
+                Key=sec_key,
+                Body=sec["body"].encode("utf-8"),
+                ContentType="text/markdown; charset=utf-8",
+            )
+            section_meta.append({
+                "index": idx,
+                "title": sec["title"],
+                "slug": sec["slug"],
+                "s3Key": sec_key,
+                "wordCount": len(sec["body"].split()),
+            })
+
+        logger.info(f"Saved {len(sections)} sections for research {research_id}")
+
+        table.update_item(
             Key={"PK": f"RESEARCH#{research_id}", "SK": "CONFIG"},
-            UpdateExpression="SET #s = :s, completedAt = :c, s3Key = :k, sourceCount = :sc, wordCount = :wc, summary = :sm",
+            UpdateExpression="SET #s = :s, completedAt = :c, s3Key = :k, sourceCount = :sc, wordCount = :wc, summary = :sm, sections = :sec",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
                 ":s": "done",
@@ -193,11 +233,12 @@ def save_report(research_id: str, content: str, summary: str, source_count: int,
                 ":sc": source_count,
                 ":wc": word_count,
                 ":sm": summary[:1000],
+                ":sec": section_meta,
             },
         )
-        logger.info(f"Updated research {research_id} status to done")
+        logger.info(f"Updated research {research_id} status to done ({len(sections)} sections)")
 
-        return json.dumps({"status": "saved", "s3Key": s3_key})
+        return json.dumps({"status": "saved", "s3Key": s3_key, "sections": len(sections)})
     except Exception as e:
         logger.error(f"Save report failed: {e}", exc_info=True)
         return json.dumps({"error": str(e)})

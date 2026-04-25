@@ -75,6 +75,23 @@ Structure: 4px left accent bar + tinted background (4% opacity) + icon + title +
 - Cells: proper padding, left-aligned
 - First column: medium weight (row identifier)
 
+### MermaidBlock Component
+Renders ` ```mermaid ` fenced code blocks as SVG diagrams.
+
+- **Library**: `mermaid` (lazy loaded via `next/dynamic`)
+- **Theme**: dark mode compatible (`theme: 'dark'` when `.dark` class present)
+- **Supported types**: graph, flowchart, sequenceDiagram, classDiagram, stateDiagram
+- **Fallback**: if rendering fails, show raw code block with Shiki
+- **Copy**: "Copy Mermaid" button for pasting into other tools
+- **Size**: auto-width, max-height 600px with scroll
+- **Integration**: `CodeBlock` checks `language === 'mermaid'` and delegates to `MermaidBlock`
+
+The Research Agent generates Mermaid diagrams for:
+- Network topology (VPC, Direct Connect, VPN)
+- Architecture diagrams (microservices, event-driven)
+- Data flow (pipeline stages)
+- Decision trees (process flows)
+
 ### BlockQuote Component
 - 3px left bar (cyan 40% opacity)
 - Background: cyan 3% opacity
@@ -141,6 +158,7 @@ Ensures drag-and-drop into Obsidian vault works immediately.
 | Package | Purpose | Size | Loading |
 |---------|---------|------|---------|
 | `shiki` | Syntax highlighting | ~2MB | Lazy (next/dynamic) |
+| `mermaid` | Diagram rendering | ~1.5MB | Lazy (next/dynamic) |
 | `react-markdown` | Markdown parsing | Existing | Eager |
 | `remark-gfm` | GFM tables/checkboxes | Existing | Eager |
 | `rehype-raw` | HTML in markdown | Existing | Eager |
@@ -155,6 +173,7 @@ Ensures drag-and-drop into Obsidian vault works immediately.
 - `frontend/src/components/markdown/CodeBlock.tsx`
 - `frontend/src/components/markdown/DataTable.tsx`
 - `frontend/src/components/markdown/BlockQuote.tsx`
+- `frontend/src/components/markdown/MermaidBlock.tsx`
 - `frontend/src/components/markdown/TOCSidebar.tsx`
 - `frontend/src/components/InsightsTableView.tsx`
 
@@ -163,7 +182,39 @@ Ensures drag-and-drop into Obsidian vault works immediately.
 - `frontend/src/app/insights/[sourceId]/[docHash]/InsightDetailClient.tsx` — replace markdown rendering + add TOC + export
 - `frontend/src/app/insights/research/[researchId]/ResearchDetailClient.tsx` — same markdown upgrade
 
-## 7. Design Decisions
+## 7. Section Navigation (Deep Research)
+
+Deep Research reports (5,000-20,000 words) are split into navigable sections for Notion-like reading experience.
+
+### Data Model
+- `save_report` tool splits full markdown by `## ` headings
+- Each section saved as separate S3 file: `shared/research/{id}/{slug}.md`
+- Full report also saved: `shared/research/{id}.md` (for export)
+- DynamoDB `sections` attribute: `[{index, title, slug, s3Key, wordCount}, ...]`
+
+### Section List View (Research Detail)
+- Default view shows **section list** (not full report)
+- Each section: card with title, word count, first 2 lines preview
+- Click → section detail view
+- "View Full Report" button at top for full markdown view
+
+### Section Detail View
+- URL: `/insights/research/{id}?section={slug}`
+- Back to section list: breadcrumb `Research > {topic} > {section}`
+- Previous / Next navigation buttons at bottom
+- TOCSidebar shows h3 within the section
+
+### Section Links
+- Agent generates `[섹션제목](#slug)` links within the report
+- Frontend resolves to `?section={slug}` navigation
+- Cross-section references work as internal links
+
+### API Changes
+- `GET /api/research/{id}` returns `sections` metadata (no content)
+- `GET /api/research/{id}/sections/{slug}` returns section content from S3
+- Full content still available via existing `content` field
+
+## 8. Design Decisions
 
 - **Obsidian callout syntax** (`> [!type]`) chosen over custom markers for future Obsidian export compatibility
 - **Shiki over Prism.js** — better theme support, WASM-based, no CSS theme files needed

@@ -48,11 +48,28 @@ SCOPE → RETRIEVE → SYNTHESIZE → PACKAGE
 - Markdown with ## headings, tables, bullet points
 - Executive summary 200-400 words, sections 600-2000 words
 - Include source URLs
+- Use Obsidian-style callouts for key findings: `> [!summary]`, `> [!tip]`, `> [!warning]`, `> [!danger]`
+
+## Diagrams
+When the topic involves architecture, network topology, data flow, or process pipelines,
+include Mermaid diagrams instead of ASCII art. Wrap in fenced code blocks:
+
+```mermaid
+graph LR
+  A[Client] --> B[Load Balancer]
+  B --> C[Server]
+```
+
+Prefer these Mermaid diagram types:
+- `graph LR` or `graph TD` for architecture and network topology
+- `sequenceDiagram` for API call flows and protocol exchanges
+- `flowchart` for decision trees and process pipelines
+- `classDiagram` for data models and relationships
 
 ## Mode
-- quick: 5+ sources
-- standard: 8-12 sources
-- deep: 12-20 sources, maximum depth
+- quick: 5+ sources, 1-2 diagrams if relevant
+- standard: 8-12 sources, 2-3 diagrams
+- deep: 12-20 sources, 3-5 diagrams, maximum depth
 
 CRITICAL: You MUST call save_report at the end with the complete markdown report.
 """
