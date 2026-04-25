@@ -26,7 +26,6 @@ env:
   RESEARCH_ECR_REPO: ${{ vars.RESEARCH_ECR_REPO }}
   WHISPER_ECR_REPO: ${{ vars.WHISPER_ECR_REPO }}
   AGENTCORE_RUNTIME_ID: ${{ vars.AGENTCORE_RUNTIME_ID }}
-  GO_BIN: /usr/local/go/bin/go
 
 jobs:
   # ─── Change Detection ───────────────────────────────────────────
@@ -65,33 +64,39 @@ jobs:
             fi
           }
           CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
-          detect backend       '^backend/'                      "all backend"
-          detect frontend      '^frontend/'                     "all frontend"
-          detect infra         '^infra/'                        "all infra backend"
+          detect backend        '^backend/'                       "all backend"
+          detect frontend       '^frontend/'                      "all frontend"
+          detect infra          '^infra/'                         "all infra backend"
           detect research_agent '^backend/python/research-agent/' "all research-agent"
-          detect whisper       '^backend/whisper/'               "all whisper"
+          detect whisper        '^backend/whisper/'                "all whisper"
           cat "$GITHUB_OUTPUT"
 
-  # ─── Build: Go Lambda Binaries ──────────────────────────────────
+  # ─── Build: Go Lambda Binaries (ARM native) ─────────────────────
   build-backend:
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true'
-    runs-on: ttobak-x86
+    runs-on: ttobak-arm
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Go Lambda binaries (ARM64 cross-compile)
+      - name: Build Go Lambda binaries (ARM64 native)
         working-directory: backend
         run: |
           for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
             echo "Building $dir..."
-            GOOS=linux GOARCH=arm64 $GO_BIN build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
+            GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
           done
-          echo "All binaries built"
 
       - name: Run Go tests
         working-directory: backend
-        run: $GO_BIN test ./internal/... -count=1
+        run: go test ./internal/... -count=1
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-binaries
+          path: backend/cmd/*/bootstrap
+          retention-days: 1
 
   # ─── Build: Frontend Static Export ──────────────────────────────
   build-frontend:
@@ -114,7 +119,7 @@ jobs:
           path: frontend/out/
           retention-days: 1
 
-  # ─── Build: Whisper Docker Image (amd64) ────────────────────────
+  # ─── Build: Whisper Docker Image (amd64 native) ────────────────
   build-whisper:
     needs: detect-changes
     if: needs.detect-changes.outputs.whisper == 'true'
@@ -136,21 +141,29 @@ jobs:
   deploy-infra:
     needs: [detect-changes, build-backend]
     if: always() && (needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.backend == 'true')
-    runs-on: ttobak-x86
+    runs-on: ttobak-arm
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download backend binaries
+        if: needs.build-backend.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-binaries
+          path: backend/cmd/
+
+      - name: Build Go binaries (fallback if no artifact)
+        if: needs.build-backend.result != 'success'
+        working-directory: backend
+        run: |
+          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
+            GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
+          done
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-
-      - name: Build Go binaries
-        working-directory: backend
-        run: |
-          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
-            GOOS=linux GOARCH=arm64 $GO_BIN build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
-          done
 
       - name: CDK deploy
         working-directory: infra
@@ -211,21 +224,14 @@ jobs:
     runs-on: ttobak-x86
     steps:
       - name: Summary
-        env:
-          BACKEND: ${{ needs.build-backend.result }}
-          FRONTEND: ${{ needs.deploy-frontend.result }}
-          INFRA: ${{ needs.deploy-infra.result }}
-          RESEARCH: ${{ needs.deploy-research-agent.result }}
-          WHISPER: ${{ needs.build-whisper.result }}
         run: |
           echo "## Deploy Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "| Component | Status |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-----------|--------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Backend Build | ${BACKEND:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Infra (CDK) | ${INFRA:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Frontend | ${FRONTEND:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Research Agent | ${RESEARCH:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Whisper STT | ${WHISPER:-skipped} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Backend Build | ${{ needs.build-backend.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Infra (CDK) | ${{ needs.deploy-infra.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Frontend | ${{ needs.deploy-frontend.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Research Agent | ${{ needs.deploy-research-agent.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Whisper STT | ${{ needs.build-whisper.result || 'skipped' }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Trigger | ${{ github.event_name }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Branch | ${{ github.ref_name }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Commit | ${{ github.sha }} |" >> "$GITHUB_STEP_SUMMARY"
