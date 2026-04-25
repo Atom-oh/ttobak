@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { SttManager, type LiveSttProvider } from '@/lib/sttManager';
 import { countWords } from '@/lib/speechRecognition';
+import { getRuntimeConfig } from '@/lib/runtimeConfig';
 
 export interface TranscriptEntry {
   text: string;
@@ -46,12 +47,11 @@ interface UseRecordingSessionOptions {
   onProviderChange?: (provider: LiveSttProvider) => void;
 }
 
-// Transcribe Streaming config from env
-const TRANSCRIBE_CONFIG = {
-  region: process.env.NEXT_PUBLIC_AWS_REGION || 'ap-northeast-2',
-  identityPoolId: process.env.NEXT_PUBLIC_COGNITO_IDENTITY_POOL_ID || '',
-  userPoolId: process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID || '',
-};
+interface TranscribeConfig {
+  region: string;
+  identityPoolId: string;
+  userPoolId: string;
+}
 
 export function useRecordingSession({
   targetLang,
@@ -76,6 +76,23 @@ export function useRecordingSession({
   const targetLangRef = useRef(targetLang);
   const transcriptsRef = useRef(transcripts);
   const onTranscriptUpdateRef = useRef(onTranscriptUpdate);
+  const transcribeConfigRef = useRef<TranscribeConfig | null>(null);
+
+  // Load runtime Cognito config once (fetched from /config.json at startup)
+  useEffect(() => {
+    let cancelled = false;
+    getRuntimeConfig().then((cfg) => {
+      if (cancelled) return;
+      if (cfg.cognito.identityPoolId && cfg.cognito.userPoolId) {
+        transcribeConfigRef.current = {
+          region: cfg.cognito.region,
+          identityPoolId: cfg.cognito.identityPoolId,
+          userPoolId: cfg.cognito.userPoolId,
+        };
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // Keep refs in sync
   useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
@@ -138,7 +155,8 @@ export function useRecordingSession({
       }
     };
 
-    const hasTranscribeConfig = !!(TRANSCRIBE_CONFIG.identityPoolId && TRANSCRIBE_CONFIG.userPoolId);
+    const transcribeConfig = transcribeConfigRef.current;
+    const hasTranscribeConfig = !!transcribeConfig;
 
     const manager = new SttManager({
       callbacks: {
@@ -162,7 +180,7 @@ export function useRecordingSession({
       },
       targetLang: targetLangRef.current,
       translationEnabled,
-      transcribeStreamingConfig: hasTranscribeConfig ? TRANSCRIBE_CONFIG : undefined,
+      transcribeStreamingConfig: transcribeConfig ?? undefined,
       onProviderChange: (provider) => {
         setActiveProvider(provider);
         onProviderChange?.(provider);

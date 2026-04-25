@@ -330,19 +330,33 @@ EdgeAuthStack는 us-east-1에 배포되어야 합니다. CDK에서 cross-region 
 2. Lambda Version ARN을 SSM Parameter로 저장
 3. FrontendStack에서 SSM ParameterProvider로 ARN 조회
 
-### Known Issue: "Both UserPoolId and ClientId are required"
-이 에러는 **프론트엔드 Cognito SDK**에서 발생합니다 (`frontend/src/lib/auth.ts`). Next.js 정적 빌드 시 `NEXT_PUBLIC_COGNITO_*` 환경변수가 없으면 빈 문자열이 빌드 결과물에 embed됩니다.
+### Cognito Runtime Config (`/config.json`)
+Cognito ID 들은 **빌드 타임 embed가 아닌 런타임 fetch** 방식으로 로드됩니다. 빌드 결과물은 인프라에 독립적이며, 실제 배포된 Cognito 리소스와 항상 동기화됩니다.
 
-**근본 원인:** GitHub Actions `build-frontend` job에서 `npm run build` 실행 시 Cognito 환경변수가 주입되지 않음. `.env.local`은 `.gitignore`에 포함되어 CI에 존재하지 않습니다.
+**구성:**
+1. `FrontendStack` (`infra/lib/frontend-stack.ts`) 이 `s3deploy.BucketDeployment` 로 deploy 시점에 다음 형태의 `config.json` 을 S3 에 직접 업로드:
+   ```json
+   {
+     "cognito": {
+       "region": "ap-northeast-2",
+       "userPoolId": "<TtobakUserPoolId>",
+       "userPoolClientId": "<TtobakSpaClientId>",
+       "identityPoolId": "<TtobakIdentityPoolId>"
+     }
+   }
+   ```
+   값은 `AuthStack` cross-stack ref (`authStack.userPool.userPoolId` / `authStack.spaClient.userPoolClientId` / `authStack.identityPoolId`) 로 전달됩니다.
+2. `BucketDeployment` 옵션: `prune: false` (다른 파일 보존), `distribution + distributionPaths: ['/config.json']` (CloudFront 자동 invalidation), `CacheControl.noCache()` (stale 방지).
+3. 프론트엔드 `frontend/src/lib/runtimeConfig.ts` 가 startup 에 `/config.json` 을 fetch 해 `auth.ts` 와 `useRecordingSession.ts` 에 주입.
 
-**해결 방법:** GitHub repository variables를 설정하고 deploy.yml에서 참조합니다.
-```bash
-gh variable set NEXT_PUBLIC_COGNITO_USER_POOL_ID --body "<USER_POOL_ID>"
-gh variable set NEXT_PUBLIC_COGNITO_CLIENT_ID --body "<CLIENT_ID>"
-gh variable set NEXT_PUBLIC_COGNITO_IDENTITY_POOL_ID --body "<IDENTITY_POOL_ID>"
-```
+**중요 — `deploy.yml` 의 S3 sync 는 반드시 `--exclude "config.json"` 을 포함해야 합니다.** 그렇지 않으면 `--delete` 플래그가 CDK 가 쓴 `config.json` 을 매 배포마다 지웁니다.
 
-deploy.yml의 `build-frontend` job에서 `${{ vars.NEXT_PUBLIC_COGNITO_* }}`로 주입합니다.
+**로컬 dev fallback:** `npm run dev` 시 `/config.json` 이 없으므로 `frontend/.env.local` 의 `NEXT_PUBLIC_COGNITO_*` 가 fallback 으로 사용됩니다 (`runtimeConfig.ts` 의 `envFallback()` 참조).
+
+**디버깅 — "Both UserPoolId and ClientId are required" 가 다시 발생하면:**
+1. `curl https://<domain>/config.json` 으로 값이 채워졌는지 확인 — 비어있거나 404 면 BucketDeployment 가 실행되지 않았거나 sync 가 지운 것
+2. CloudFormation 콘솔에서 `TtobakFrontendStack` 의 `ConfigDeployment` Custom Resource 상태 확인
+3. `aws s3 ls s3://<bucket>/config.json` 으로 S3 에 실제 존재하는지 확인
 
 ## 11. Configuration
 

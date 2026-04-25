@@ -101,10 +101,8 @@ jobs:
 
       - name: Build static export
         working-directory: frontend
-        env:
-          NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ vars.NEXT_PUBLIC_COGNITO_USER_POOL_ID }}
-          NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ vars.NEXT_PUBLIC_COGNITO_CLIENT_ID }}
-          NEXT_PUBLIC_COGNITO_IDENTITY_POOL_ID: ${{ vars.NEXT_PUBLIC_COGNITO_IDENTITY_POOL_ID }}
+        # Cognito IDs are loaded at runtime from /config.json (written to S3 by
+        # FrontendStack BucketDeployment) — no build-time env injection needed.
         run: npm run build
 
       - name: Upload build artifact
@@ -192,7 +190,8 @@ jobs:
           path: frontend-out/
 
       - name: Deploy to S3 (sync with delete — content-hash filenames ensure safe swap)
-        run: aws s3 sync frontend-out/ "s3://${S3_BUCKET}/" --delete
+        # Exclude config.json — it's owned by FrontendStack BucketDeployment, not the static build
+        run: aws s3 sync frontend-out/ "s3://${S3_BUCKET}/" --delete --exclude "config.json"
 
       - name: Invalidate CloudFront
         run: |

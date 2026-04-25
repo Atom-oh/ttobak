@@ -141,7 +141,7 @@ const whisperStack = new WhisperStack(app, 'TtobakWhisperStack', {
 });
 whisperStack.addDependency(storageStack);
 
-// Stack 8: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth
+// Stack 8: Frontend (S3 + CloudFront) - depends on Gateway, EdgeAuth, Auth
 const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   env,
   crossRegionReferences: true,
@@ -149,9 +149,14 @@ const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   httpApiUrl: gatewayStack.httpApi.apiEndpoint,
   edgeFunctionVersion: edgeAuthStack.edgeFunction,
   originVerifySecret,
+  cognitoRegion: env.region as string,
+  userPoolId: authStack.userPool.userPoolId,
+  userPoolClientId: authStack.spaClient.userPoolClientId,
+  identityPoolId: authStack.identityPoolId,
 });
 frontendStack.addDependency(gatewayStack);
 frontendStack.addDependency(edgeAuthStack);
+frontendStack.addDependency(authStack);
 
 // Tags for all resources
 cdk.Tags.of(app).add('Project', 'Ttobak');
