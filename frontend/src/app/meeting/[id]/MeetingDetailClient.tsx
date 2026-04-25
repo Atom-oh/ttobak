@@ -405,6 +405,9 @@ function MeetingDetailContent() {
                   content={meeting.content}
                   summary={meeting.summary}
                   transcriptA={meeting.transcriptA}
+                  onSave={async (html) => {
+                    await meetingsApi.update(meeting.meetingId, { content: html });
+                  }}
                 />
               </div>
               <div className="lg:col-span-5">
