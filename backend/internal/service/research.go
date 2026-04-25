@@ -67,11 +67,12 @@ func (s *ResearchService) CreateResearch(ctx context.Context, userId string, req
 
 	if s.sfnClient != nil && s.stateMachineArn != "" {
 		input := map[string]string{
-			"researchId": id,
-			"userId":     userId,
-			"topic":      req.Topic,
-			"mode":       "plan",
-			"s3Key":      research.S3Key,
+			"researchId":  id,
+			"userId":      userId,
+			"topic":       req.Topic,
+			"mode":        "plan",
+			"qualityMode": req.Mode,
+			"s3Key":       research.S3Key,
 		}
 		inputBytes, _ := json.Marshal(input)
 
@@ -209,17 +210,41 @@ func (s *ResearchService) startSFN(ctx context.Context, researchId, mode string,
 
 // TriggerAgentRespond triggers the Agent to respond to a user's chat message.
 func (s *ResearchService) TriggerAgentRespond(ctx context.Context, researchId string) error {
-	return s.startSFN(ctx, researchId, "respond", nil)
+	research, err := s.repo.GetResearch(ctx, researchId)
+	if err != nil {
+		return fmt.Errorf("failed to get research: %w", err)
+	}
+	if research == nil {
+		return ErrNotFound
+	}
+	return s.startSFN(ctx, researchId, "respond", map[string]string{
+		"topic": research.Topic,
+	})
 }
 
 // ApproveResearch changes status to "approved" and triggers execution.
 func (s *ResearchService) ApproveResearch(ctx context.Context, researchId string) error {
-	if err := s.repo.UpdateResearchFields(ctx, researchId, map[string]interface{}{
-		"status": "approved",
-	}); err != nil {
-		return fmt.Errorf("failed to update status to approved: %w", err)
+	research, err := s.repo.GetResearch(ctx, researchId)
+	if err != nil {
+		return fmt.Errorf("failed to get research: %w", err)
 	}
-	return s.startSFN(ctx, researchId, "execute", nil)
+	if research == nil {
+		return ErrNotFound
+	}
+
+	if err := s.repo.UpdateResearchFields(ctx, researchId, map[string]interface{}{
+		"status": "running",
+	}); err != nil {
+		return fmt.Errorf("failed to update status to running: %w", err)
+	}
+
+	extra := map[string]string{
+		"userId":      research.UserID,
+		"topic":       research.Topic,
+		"s3Key":       research.S3Key,
+		"qualityMode": research.Mode,
+	}
+	return s.startSFN(ctx, researchId, "execute", extra)
 }
 
 // CreateSubPage creates a child research and triggers execution.
@@ -243,10 +268,11 @@ func (s *ResearchService) CreateSubPage(ctx context.Context, userId, parentId, t
 	}
 
 	err := s.startSFN(ctx, id, "subpage", map[string]string{
-		"userId":   userId,
-		"topic":    topic,
-		"s3Key":    research.S3Key,
-		"parentId": parentId,
+		"userId":      userId,
+		"topic":       topic,
+		"s3Key":       research.S3Key,
+		"parentId":    parentId,
+		"qualityMode": "deep",
 	})
 	if err != nil {
 		log.Printf("Failed to start sub-page SFN for %s: %v", id, err)
