@@ -90,7 +90,7 @@ func init() {
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
 	sfnClient := sfn.NewFromConfig(cfg)
 	researchService := service.NewResearchService(researchRepo, s3Client, sfnClient, kbBucketName, os.Getenv("RESEARCH_SFN_ARN"))
-	researchHandler := handler.NewResearchHandler(researchService)
+	researchHandler := handler.NewResearchHandler(researchService, notionService, repo)
 	chatHandler := handler.NewChatHandler(repo)
 	// Setup router
 	r := chi.NewRouter()
@@ -187,6 +187,7 @@ func init() {
 		r.Get("/api/research", researchHandler.ListResearch)
 		r.Get("/api/research/{researchId}", researchHandler.GetResearchDetail)
 		r.Delete("/api/research/{researchId}", researchHandler.DeleteResearch)
+		r.Post("/api/research/{researchId}/export", researchHandler.ExportResearch)
 
 		// Chat session routes
 		r.Get("/api/chat/sessions", chatHandler.ListSessions)

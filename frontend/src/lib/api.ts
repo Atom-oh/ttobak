@@ -242,6 +242,12 @@ export const exportApi = {
     api.get<{ filename: string; content: string }>(
       `/api/meetings/${meetingId}/export/obsidian`
     ),
+
+  researchToNotion: (researchId: string) =>
+    api.post<import('@/types/meeting').ExportResponse>(
+      `/api/research/${encodeURIComponent(researchId)}/export`,
+      { format: 'notion' }
+    ),
 };
 
 // Settings API
