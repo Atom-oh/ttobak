@@ -1,0 +1,796 @@
+openapi: 3.0.3
+info:
+  title: Ttobak API
+  description: AI Meeting Assistant for AWS Solutions Architects
+  version: 1.0.0
+  contact:
+    name: Junseok Oh
+    email: ojs0106@gmail.com
+
+servers:
+  - url: https://ttobak.atomai.click/api
+    description: Production (CloudFront)
+  - url: http://localhost:8080/api
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Cognito ID Token
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum: [BAD_REQUEST, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, INTERNAL_ERROR]
+            message:
+              type: string
+
+    Meeting:
+      type: object
+      properties:
+        meetingId:
+          type: string
+        title:
+          type: string
+        date:
+          type: string
+        status:
+          type: string
+          enum: [recording, uploaded, transcribing, summarizing, done, error]
+        sttProvider:
+          type: string
+          enum: [transcribe, nova-sonic, whisper]
+
+    MeetingDetail:
+      allOf:
+        - $ref: '#/components/schemas/Meeting'
+        - type: object
+          properties:
+            transcriptA:
+              type: string
+            transcriptB:
+              type: string
+            summary:
+              type: string
+            actionItems:
+              type: array
+              items:
+                type: object
+            tags:
+              type: array
+              items:
+                type: string
+
+    Research:
+      type: object
+      properties:
+        researchId:
+          type: string
+        topic:
+          type: string
+        mode:
+          type: string
+          enum: [quick, standard, deep]
+        status:
+          type: string
+          enum: [running, done, error]
+        createdAt:
+          type: string
+        completedAt:
+          type: string
+        sourceCount:
+          type: integer
+        wordCount:
+          type: integer
+        summary:
+          type: string
+        sections:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResearchSection'
+
+    ResearchSection:
+      type: object
+      properties:
+        index:
+          type: integer
+        title:
+          type: string
+        slug:
+          type: string
+        s3Key:
+          type: string
+        wordCount:
+          type: integer
+
+    ResearchDetail:
+      allOf:
+        - $ref: '#/components/schemas/Research'
+        - type: object
+          properties:
+            content:
+              type: string
+              description: Full markdown report content
+
+    CrawledDocument:
+      type: object
+      properties:
+        docHash:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+        source:
+          type: string
+        pubDate:
+          type: string
+        summary:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        awsServices:
+          type: array
+          items:
+            type: string
+
+    ExportResponse:
+      type: object
+      properties:
+        format:
+          type: string
+        url:
+          type: string
+        notionUrl:
+          type: string
+        filename:
+          type: string
+        content:
+          type: string
+
+paths:
+  # ─── Health ─────────────────────────────────────────────
+  /health:
+    get:
+      summary: Health check
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: OK
+
+  # ─── Auth ───────────────────────────────────────────────
+  /auth/allowed-domains:
+    get:
+      summary: Get allowed email domains for signup
+      tags: [Auth]
+      security: []
+      responses:
+        '200':
+          description: Domain list
+
+  # ─── Meetings ──────────────────────────────────────────
+  /meetings:
+    get:
+      summary: List user meetings
+      tags: [Meetings]
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+      responses:
+        '200':
+          description: Meeting list
+    post:
+      summary: Create a meeting
+      tags: [Meetings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                sttProvider: { type: string, enum: [transcribe, nova-sonic, whisper] }
+      responses:
+        '201':
+          description: Created
+
+  /meetings/{meetingId}:
+    get:
+      summary: Get meeting detail
+      tags: [Meetings]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Meeting detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeetingDetail'
+    put:
+      summary: Update meeting
+      tags: [Meetings]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Updated
+    delete:
+      summary: Delete meeting
+      tags: [Meetings]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Deleted
+
+  /meetings/{meetingId}/audio:
+    get:
+      summary: Get presigned audio URL
+      tags: [Meetings]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Audio URL
+
+  /meetings/{meetingId}/recover:
+    post:
+      summary: Recover stuck meeting (re-trigger pipeline)
+      tags: [Meetings]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Recovery triggered
+
+  /meetings/{meetingId}/transcript:
+    put:
+      summary: Select transcript version (A or B)
+      tags: [Meetings]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Transcript selected
+
+  /meetings/{meetingId}/speakers:
+    put:
+      summary: Update speaker labels
+      tags: [Meetings]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Speakers updated
+
+  /meetings/{meetingId}/summarize:
+    post:
+      summary: Trigger live summary during recording
+      tags: [Meetings]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Summary generated
+
+  # ─── Sharing ───────────────────────────────────────────
+  /meetings/{meetingId}/share:
+    post:
+      summary: Share meeting with another user
+      tags: [Sharing]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Shared
+
+  /meetings/{meetingId}/share/{userId}:
+    delete:
+      summary: Revoke share
+      tags: [Sharing]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: userId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Revoked
+
+  /users/search:
+    get:
+      summary: Search users (for sharing)
+      tags: [Sharing]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: User list
+
+  # ─── Upload ────────────────────────────────────────────
+  /upload/presigned:
+    post:
+      summary: Get presigned URL for file upload
+      tags: [Upload]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                meetingId: { type: string }
+                filename: { type: string }
+                contentType: { type: string }
+                category: { type: string, enum: [audio, images] }
+      responses:
+        '200':
+          description: Presigned URL
+
+  /upload/complete:
+    post:
+      summary: Notify upload completion (triggers EventBridge)
+      tags: [Upload]
+      responses:
+        '200':
+          description: Upload registered
+
+  # ─── Export ────────────────────────────────────────────
+  /meetings/{meetingId}/export:
+    post:
+      summary: Export meeting (PDF, Notion, Obsidian)
+      tags: [Export]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format: { type: string, enum: [pdf, notion, obsidian] }
+      responses:
+        '200':
+          description: Export result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportResponse'
+
+  /meetings/{meetingId}/export/obsidian:
+    get:
+      summary: Export meeting as Obsidian markdown
+      tags: [Export]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Obsidian markdown
+
+  # ─── Knowledge Base ────────────────────────────────────
+  /kb/upload:
+    post:
+      summary: Get presigned URL for KB file upload
+      tags: [Knowledge Base]
+      responses:
+        '200':
+          description: Presigned URL
+
+  /kb/sync:
+    post:
+      summary: Trigger KB ingestion
+      tags: [Knowledge Base]
+      responses:
+        '200':
+          description: Ingestion started
+
+  /kb/copy-attachment:
+    post:
+      summary: Copy meeting attachment to KB
+      tags: [Knowledge Base]
+      responses:
+        '200':
+          description: Copied
+
+  /kb/files:
+    get:
+      summary: List KB files
+      tags: [Knowledge Base]
+      responses:
+        '200':
+          description: File list
+
+  /kb/files/{fileId}:
+    delete:
+      summary: Delete KB file
+      tags: [Knowledge Base]
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Deleted
+
+  # ─── Settings ──────────────────────────────────────────
+  /settings/integrations:
+    get:
+      summary: Get integration settings (Notion, etc.)
+      tags: [Settings]
+      responses:
+        '200':
+          description: Integration config
+
+  /settings/integrations/notion:
+    put:
+      summary: Save Notion API key
+      tags: [Settings]
+      responses:
+        '200':
+          description: Saved
+    delete:
+      summary: Delete Notion API key
+      tags: [Settings]
+      responses:
+        '204':
+          description: Deleted
+
+  /settings/allowed-domains:
+    put:
+      summary: Update allowed email domains
+      tags: [Settings]
+      responses:
+        '200':
+          description: Updated
+
+  # ─── Translate ─────────────────────────────────────────
+  /translate:
+    post:
+      summary: Translate text (Amazon Translate)
+      tags: [Translate]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: { type: string }
+                sourceLang: { type: string }
+                targetLang: { type: string }
+      responses:
+        '200':
+          description: Translated text
+
+  # ─── Crawler ───────────────────────────────────────────
+  /crawler/sources:
+    get:
+      summary: List crawler sources (subscribed companies/topics)
+      tags: [Crawler]
+      responses:
+        '200':
+          description: Source list
+    post:
+      summary: Add crawler source
+      tags: [Crawler]
+      responses:
+        '201':
+          description: Created
+
+  /crawler/sources/{sourceId}:
+    put:
+      summary: Update crawler source
+      tags: [Crawler]
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Updated
+    delete:
+      summary: Unsubscribe from crawler source
+      tags: [Crawler]
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Unsubscribed
+
+  /crawler/sources/{sourceId}/history:
+    get:
+      summary: Get crawl history for a source
+      tags: [Crawler]
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Crawl history
+
+  # ─── Insights ──────────────────────────────────────────
+  /insights:
+    get:
+      summary: List crawled documents (news, tech articles)
+      tags: [Insights]
+      parameters:
+        - name: type
+          in: query
+          schema: { type: string, enum: [news, tech] }
+        - name: source
+          in: query
+          schema: { type: string }
+        - name: service
+          in: query
+          schema: { type: string }
+        - name: tags
+          in: query
+          schema: { type: array, items: { type: string } }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [newest, oldest] }
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20 }
+      responses:
+        '200':
+          description: Document list
+
+  /insights/{sourceId}/{docHash}:
+    get:
+      summary: Get document content (from S3)
+      tags: [Insights]
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: docHash
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Document with content
+
+  # ─── Research ──────────────────────────────────────────
+  /research:
+    get:
+      summary: List research jobs
+      tags: [Research]
+      responses:
+        '200':
+          description: Research list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  research:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Research'
+    post:
+      summary: Create research job (triggers AgentCore Deep Research)
+      tags: [Research]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic, mode]
+              properties:
+                topic: { type: string }
+                mode: { type: string, enum: [quick, standard, deep] }
+      responses:
+        '201':
+          description: Research created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Research'
+
+  /research/{researchId}:
+    get:
+      summary: Get research detail with full content
+      tags: [Research]
+      parameters:
+        - name: researchId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Research detail (includes content from S3 and sections metadata)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResearchDetail'
+    delete:
+      summary: Delete research job
+      tags: [Research]
+      parameters:
+        - name: researchId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Deleted
+
+  /research/{researchId}/export:
+    post:
+      summary: Export research to Notion
+      tags: [Research]
+      parameters:
+        - name: researchId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                format: { type: string, enum: [notion] }
+      responses:
+        '200':
+          description: Export result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportResponse'
+
+  /research/{researchId}/sections/{slug}:
+    get:
+      summary: Get research section content (planned)
+      tags: [Research]
+      description: Returns markdown content for a specific section of a research report. Section slugs are provided in the sections array of the research detail response.
+      parameters:
+        - name: researchId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Section markdown content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  title: { type: string }
+                  slug: { type: string }
+                  content: { type: string }
+                  index: { type: integer }
+                  prevSlug: { type: string }
+                  nextSlug: { type: string }
+
+  # ─── Chat ──────────────────────────────────────────────
+  /chat/sessions:
+    get:
+      summary: List chat sessions
+      tags: [Chat]
+      responses:
+        '200':
+          description: Session list
+
+  /chat/sessions/{sessionId}:
+    delete:
+      summary: Delete chat session
+      tags: [Chat]
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204':
+          description: Deleted
+
+tags:
+  - name: System
+    description: Health and status
+  - name: Auth
+    description: Authentication and signup
+  - name: Meetings
+    description: Meeting CRUD and pipeline
+  - name: Sharing
+    description: Meeting sharing between users
+  - name: Upload
+    description: File upload (audio, images)
+  - name: Export
+    description: Meeting and research export (PDF, Notion, Obsidian)
+  - name: Knowledge Base
+    description: RAG knowledge base management
+  - name: Settings
+    description: User settings and integrations
+  - name: Translate
+    description: Real-time translation
+  - name: Crawler
+    description: News and tech article crawler
+  - name: Insights
+    description: Crawled document browsing
+  - name: Research
+    description: Deep Research Agent (AgentCore)
+  - name: Chat
+    description: Cross-meeting chat assistant
