@@ -182,7 +182,39 @@ Ensures drag-and-drop into Obsidian vault works immediately.
 - `frontend/src/app/insights/[sourceId]/[docHash]/InsightDetailClient.tsx` — replace markdown rendering + add TOC + export
 - `frontend/src/app/insights/research/[researchId]/ResearchDetailClient.tsx` — same markdown upgrade
 
-## 7. Design Decisions
+## 7. Section Navigation (Deep Research)
+
+Deep Research reports (5,000-20,000 words) are split into navigable sections for Notion-like reading experience.
+
+### Data Model
+- `save_report` tool splits full markdown by `## ` headings
+- Each section saved as separate S3 file: `shared/research/{id}/{slug}.md`
+- Full report also saved: `shared/research/{id}.md` (for export)
+- DynamoDB `sections` attribute: `[{index, title, slug, s3Key, wordCount}, ...]`
+
+### Section List View (Research Detail)
+- Default view shows **section list** (not full report)
+- Each section: card with title, word count, first 2 lines preview
+- Click → section detail view
+- "View Full Report" button at top for full markdown view
+
+### Section Detail View
+- URL: `/insights/research/{id}?section={slug}`
+- Back to section list: breadcrumb `Research > {topic} > {section}`
+- Previous / Next navigation buttons at bottom
+- TOCSidebar shows h3 within the section
+
+### Section Links
+- Agent generates `[섹션제목](#slug)` links within the report
+- Frontend resolves to `?section={slug}` navigation
+- Cross-section references work as internal links
+
+### API Changes
+- `GET /api/research/{id}` returns `sections` metadata (no content)
+- `GET /api/research/{id}/sections/{slug}` returns section content from S3
+- Full content still available via existing `content` field
+
+## 8. Design Decisions
 
 - **Obsidian callout syntax** (`> [!type]`) chosen over custom markers for future Obsidian export compatibility
 - **Shiki over Prism.js** — better theme support, WASM-based, no CSS theme files needed
