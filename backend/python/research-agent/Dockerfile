@@ -1,14 +1,12 @@
-FROM python:3.11-slim
+FROM --platform=linux/arm64 ghcr.io/astral-sh/uv:python3.11-bookworm-slim
 
 WORKDIR /app
 
 COPY requirements-container.txt .
-RUN pip install --no-cache-dir -r requirements-container.txt
+RUN uv pip install --system --no-cache -r requirements-container.txt
 
 COPY agent.py tools.py ./
 
-RUN python -m compileall -q /app 2>/dev/null || true
-
 EXPOSE 8080
 
-CMD ["python", "-u", "agent.py"]
+CMD ["uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8080"]

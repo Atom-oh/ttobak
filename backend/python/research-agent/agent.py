@@ -1,19 +1,23 @@
 """Ttobak Deep Research Agent — AgentCore Runtime (Container).
 
-Runs agent in background thread so AgentCore Runtime invoke returns immediately.
-Deep research takes 5-45 min, but AgentCore HTTP response has ~5 min timeout.
-save_report tool writes final result to S3 + DynamoDB when done.
+FastAPI server following official AgentCore container contract:
+- POST /invocations — agent interaction
+- GET /ping — health check
+- Port 8080, ARM64
+
+Research runs in background thread — AgentCore HTTP has ~5min timeout
+but research takes 5-45min. save_report tool writes result to DynamoDB.
 """
 
 import logging
 import os
 import threading
+import time
+from datetime import datetime
 
-from bedrock_agentcore.runtime import BedrockAgentCoreApp
-from strands import Agent
-from strands.models.bedrock import BedrockModel
-
-from tools import fetch_page, save_report, web_search
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Dict, Any, Optional
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("research-agent")
@@ -53,14 +57,20 @@ SCOPE → RETRIEVE → SYNTHESIZE → PACKAGE
 CRITICAL: You MUST call save_report at the end with the complete markdown report.
 """
 
-app = BedrockAgentCoreApp()
+app = FastAPI(title="Ttobak Research Agent", version="1.0.0")
 
-_agents: dict[str, Agent] = {}
+_agents: dict = {}
+_last_activity = time.time()
 
 
-def _get_agent(mode: str) -> Agent:
+def _get_agent(mode: str):
     if mode in _agents:
         return _agents[mode]
+
+    from strands import Agent
+    from strands.models.bedrock import BedrockModel
+    from tools import web_search, fetch_page, save_report
+
     model_id = MODEL_BY_MODE.get(mode, MODEL_BY_MODE["standard"])
     logger.info(f"Building agent mode={mode} model={model_id}")
     agent = Agent(
@@ -82,10 +92,12 @@ def _mark_error(research_id: str, msg: str) -> None:
             ExpressionAttributeValues={":s": "error", ":e": msg[:500]},
         )
     except Exception as e:
-        logger.error(f"Failed to mark error in DDB: {e}")
+        logger.error(f"Failed to mark error: {e}")
 
 
 def _run_research(topic: str, mode: str, research_id: str) -> None:
+    global _last_activity
+    _last_activity = time.time()
     prompt = (
         f"Research ID: {research_id}\n"
         f"Mode: {mode}\n"
@@ -96,25 +108,33 @@ def _run_research(topic: str, mode: str, research_id: str) -> None:
     try:
         logger.info(f"[{research_id}] starting agent mode={mode}")
         _get_agent(mode)(prompt)
+        _last_activity = time.time()
         logger.info(f"[{research_id}] agent finished")
     except Exception as e:
         logger.error(f"[{research_id}] agent failed: {e}", exc_info=True)
         _mark_error(research_id, str(e))
+    finally:
+        _last_activity = time.time()
 
 
-@app.entrypoint
-def handle(payload: dict) -> dict:
-    topic = (payload or {}).get("topic", "")
-    mode = (payload or {}).get("mode", "standard")
-    research_id = (payload or {}).get("researchId", "")
+class InvocationRequest(BaseModel):
+    topic: str = ""
+    mode: str = "standard"
+    researchId: str = ""
+    input: Optional[Dict[str, Any]] = None
+
+
+@app.post("/invocations")
+async def invoke(request: InvocationRequest):
+    topic = request.topic or (request.input or {}).get("prompt", "")
+    mode = request.mode
+    research_id = request.researchId
 
     if not topic or not research_id:
-        return {"error": "topic and researchId required"}
+        raise HTTPException(status_code=400, detail="topic and researchId required")
 
     logger.info(f"Received research id={research_id} mode={mode} topic={topic[:80]}")
 
-    # Fire and forget — AgentCore Runtime HTTP response times out at ~5 min,
-    # but research takes 5-45 min. save_report tool writes the result.
     threading.Thread(
         target=_run_research,
         args=(topic, mode, research_id),
@@ -124,5 +144,14 @@ def handle(payload: dict) -> dict:
     return {"status": "running", "researchId": research_id}
 
 
+@app.get("/ping")
+async def ping():
+    return {
+        "status": "HealthyBusy" if threading.active_count() > 2 else "Healthy",
+        "time_of_last_update": int(_last_activity),
+    }
+
+
 if __name__ == "__main__":
-    app.run()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
