@@ -405,6 +405,9 @@ function MeetingDetailContent() {
                   content={meeting.content}
                   summary={meeting.summary}
                   transcriptA={meeting.transcriptA}
+                  onSave={async (html) => {
+                    await meetingsApi.update(meeting.meetingId, { content: html });
+                  }}
                 />
               </div>
               <div className="lg:col-span-5">
@@ -495,8 +498,14 @@ function MeetingDetailContent() {
           )}
 
           {/* Full Transcription */}
-          {meeting.transcription && meeting.transcription.length > 0 && (
-            <TranscriptSection transcription={meeting.transcription} />
+          {((meeting.transcription?.length ?? 0) > 0 || meeting.transcriptA) && (
+            <TranscriptSection
+              transcription={meeting.transcription || []}
+              rawTranscript={meeting.transcriptA}
+              onSaveRawTranscript={async (text) => {
+                await meetingsApi.update(meeting.meetingId, { transcriptA: text });
+              }}
+            />
           )}
 
           {/* Inline Q&A - mobile only */}

@@ -74,6 +74,12 @@ export default function SettingsPage() {
             <IntegrationSettings />
           </section>
 
+          {/* Custom Dictionary Section */}
+          <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+            <h3 className="section-header mb-4">Custom Dictionary</h3>
+            <CustomDictionary />
+          </section>
+
           {/* Crawler Sources Section */}
           <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
             <h3 className="section-header mb-4">Crawler Sources</h3>
