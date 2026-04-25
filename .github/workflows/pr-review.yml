@@ -1,0 +1,88 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+
+jobs:
+  review:
+    runs-on: ttobak-arm
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff and info
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
+          gh pr view "$PR_NUMBER" --json title,body --jq '{title: .title, body: .body}' > /tmp/pr-info.json
+          echo "Diff: $(wc -l < /tmp/pr-diff.txt) lines"
+
+      - name: Review with Bedrock Claude Opus 4.7
+        run: |
+          python3 << 'SCRIPT'
+          import json, boto3
+
+          bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
+
+          with open('/tmp/pr-diff.txt') as f:
+              diff = f.read()[:80000]
+          with open('/tmp/pr-info.json') as f:
+              pr_info = json.load(f)
+
+          prompt = f"""You are a senior code reviewer for Ttobak, a Korean AI meeting assistant.
+          Tech stack: Go Lambda (ARM64), Next.js 16 static SPA, CDK TypeScript, Python Lambda, DynamoDB single-table.
+
+          Review this PR and provide:
+          1. **Summary** — what this PR does (2-3 sentences)
+          2. **Issues** — bugs, security risks, logic errors (CRITICAL/MAJOR/MINOR)
+          3. **Suggestions** — improvements, best practices
+          4. **Verdict** — LGTM / Changes Requested
+
+          Rules:
+          - Focus on actual bugs and security, not style preferences
+          - Check: Go error handling, IAM scope, injection risks, no public resources
+          - Be concise. Write in Korean with English technical terms.
+
+          PR Title: {pr_info.get('title', '')}
+
+          Diff:
+          ```diff
+          {diff}
+          ```"""
+
+          resp = bedrock.converse(
+              modelId='us.anthropic.claude-opus-4-7-20250425',
+              messages=[{'role': 'user', 'content': [{'text': prompt}]}],
+              inferenceConfig={'maxTokens': 4000, 'temperature': 0.2},
+          )
+          review = resp['output']['message']['content'][0]['text']
+
+          with open('/tmp/review.md', 'w') as f:
+              f.write(review)
+          print(f"Review generated: {len(review)} chars")
+          SCRIPT
+
+      - name: Post review comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo "## AI Code Review (Claude Opus 4.7)"
+            echo ""
+            cat /tmp/review.md
+            echo ""
+            echo "---"
+            echo "_Automated review by Bedrock Claude Opus 4.7_"
+          } > /tmp/comment.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
