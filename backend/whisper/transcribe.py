@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import time
+import unicodedata
 
 import boto3
 from faster_whisper import WhisperModel
@@ -57,7 +58,7 @@ def _load_custom_vocab_prompt() -> str:
 
 
 def main():
-    audio_key = os.environ["AUDIO_KEY"]
+    audio_key = unicodedata.normalize("NFD", os.environ["AUDIO_KEY"])
     meeting_id = os.environ["MEETING_ID"]
     user_id = os.environ["USER_ID"]
 
