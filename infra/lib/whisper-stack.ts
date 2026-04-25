@@ -54,16 +54,19 @@ export class WhisperStack extends cdk.Stack {
     const asg = new autoscaling.AutoScalingGroup(this, 'WhisperAsg', {
       autoScalingGroupName: 'ttobak-whisper-asg',
       vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+        availabilityZones: ['ap-northeast-2a', 'ap-northeast-2c', 'ap-northeast-2d'],
+      },
       instanceType: new ec2.InstanceType('g5.xlarge'),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2(
         ecs.AmiHardwareType.GPU,
       ),
       securityGroup: instanceSg,
       minCapacity: 0,
-      maxCapacity: 2,
+      maxCapacity: 5,
       desiredCapacity: 0,
-      spotPrice: '0.50',
+      spotPrice: '1.10',
       newInstancesProtectedFromScaleIn: false,
     });
 
