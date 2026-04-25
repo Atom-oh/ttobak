@@ -20,7 +20,11 @@ function getUserPool(): Promise<CognitoUserPool> {
         UserPoolId: cfg.cognito.userPoolId,
         ClientId: cfg.cognito.userPoolClientId,
       });
-    })();
+    })().catch((e) => {
+      // Drop the cached rejection so the next call can retry once /config.json is fixed
+      userPoolPromise = null;
+      throw e;
+    });
   }
   return userPoolPromise;
 }
