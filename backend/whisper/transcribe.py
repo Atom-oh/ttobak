@@ -57,10 +57,25 @@ def _load_custom_vocab_prompt() -> str:
         return ""
 
 
+def _find_audio_key(user_id, meeting_id):
+    """Find the audio file by listing the S3 prefix (avoids Unicode normalization issues)."""
+    prefix = f"audio/{user_id}/{meeting_id}/"
+    resp = s3.list_objects_v2(Bucket=BUCKET, Prefix=prefix)
+    for obj in resp.get("Contents", []):
+        key = obj["Key"]
+        if "recording_progress" in key or "checkpoint" in key:
+            continue
+        if obj["Size"] > 10000:
+            return key
+    return None
+
+
 def main():
-    audio_key = unicodedata.normalize("NFD", os.environ["AUDIO_KEY"])
     meeting_id = os.environ["MEETING_ID"]
     user_id = os.environ["USER_ID"]
+    audio_key = os.environ.get("AUDIO_KEY") or _find_audio_key(user_id, meeting_id)
+    if not audio_key:
+        raise RuntimeError(f"No audio file found for meeting {meeting_id}")
 
     ext = audio_key.rsplit(".", 1)[-1]
     local_path = f"/tmp/audio.{ext}"
