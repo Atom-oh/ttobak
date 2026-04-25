@@ -498,8 +498,14 @@ function MeetingDetailContent() {
           )}
 
           {/* Full Transcription */}
-          {meeting.transcription && meeting.transcription.length > 0 && (
-            <TranscriptSection transcription={meeting.transcription} />
+          {(meeting.transcription?.length > 0 || meeting.transcriptA) && (
+            <TranscriptSection
+              transcription={meeting.transcription || []}
+              rawTranscript={meeting.transcriptA}
+              onSaveRawTranscript={async (text) => {
+                await meetingsApi.update(meeting.meetingId, { transcriptA: text });
+              }}
+            />
           )}
 
           {/* Inline Q&A - mobile only */}
