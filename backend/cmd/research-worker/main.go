@@ -121,13 +121,6 @@ func updateStatus(ctx context.Context, researchID, status, errMsg string) {
 	})
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func main() {
 	lambda.Start(handler)
 }
