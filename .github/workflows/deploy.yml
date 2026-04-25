@@ -162,7 +162,7 @@ jobs:
   deploy-research-agent:
     needs: detect-changes
     if: needs.detect-changes.outputs.research_agent == 'true'
-    runs-on: ttobak-x86
+    runs-on: ttobak-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -171,7 +171,9 @@ jobs:
         run: |
           ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${RESEARCH_ECR_REPO}"
           aws ecr get-login-password --region "${AWS_REGION}" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-          docker buildx build --platform linux/arm64 -t "${ECR_URI}:latest" -t "${ECR_URI}:${GITHUB_SHA::8}" --push .
+          docker build -t "${ECR_URI}:latest" -t "${ECR_URI}:${GITHUB_SHA::8}" .
+          docker push "${ECR_URI}:latest"
+          docker push "${ECR_URI}:${GITHUB_SHA::8}"
 
       - name: Update AgentCore Runtime
         run: |
