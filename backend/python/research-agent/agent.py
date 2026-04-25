@@ -28,7 +28,7 @@ TABLE_NAME = os.environ.get("TABLE_NAME", "ttobak-main")
 MODEL_BY_MODE = {
     "quick": "global.anthropic.claude-sonnet-4-6",
     "standard": "global.anthropic.claude-sonnet-4-6",
-    "deep": "global.anthropic.claude-opus-4-6-v1",
+    "deep": "us.anthropic.claude-opus-4-7",
 }
 
 SYSTEM_PROMPT = """You are a Deep Research Agent for Ttobak, an AI meeting assistant for AWS Solutions Architects.
@@ -80,8 +80,9 @@ def _get_agent(mode: str):
         connect_timeout=10,
         retries={"max_attempts": 2},
     )
+    model_region = "us-east-1" if model_id.startswith("us.") else REGION
     agent = Agent(
-        model=BedrockModel(model_id=model_id, region_name=REGION, boto_client_config=bedrock_config),
+        model=BedrockModel(model_id=model_id, region_name=model_region, boto_client_config=bedrock_config),
         system_prompt=SYSTEM_PROMPT,
         tools=[web_search, fetch_page, save_report],
     )
