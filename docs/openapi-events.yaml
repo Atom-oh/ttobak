@@ -1,0 +1,240 @@
+openapi: 3.0.3
+info:
+  title: Ttobak Event-Driven Lambdas
+  description: |
+    Internal event-driven Lambda functions triggered by EventBridge and Step Functions.
+    These are not HTTP APIs — they process S3 events, DynamoDB streams, and Step Functions tasks.
+
+    This document describes the event schemas for each Lambda.
+  version: 1.0.0
+
+components:
+  schemas:
+    EventBridgeS3Event:
+      type: object
+      description: S3 Object Created event via EventBridge
+      properties:
+        source:
+          type: string
+          enum: [aws.s3]
+        detail-type:
+          type: string
+          enum: [Object Created]
+        detail:
+          type: object
+          properties:
+            bucket:
+              type: object
+              properties:
+                name: { type: string }
+            object:
+              type: object
+              properties:
+                key: { type: string }
+                size: { type: integer }
+
+    ImageUploadEvent:
+      type: object
+      description: Custom event from upload/complete API
+      properties:
+        source:
+          type: string
+          enum: [ttobak.upload]
+        detail-type:
+          type: string
+          enum: [ImageUploadCompleted]
+        detail:
+          type: object
+          properties:
+            meetingId: { type: string }
+            userId: { type: string }
+            bucket: { type: string }
+            key: { type: string }
+
+    ResearchWorkerEvent:
+      type: object
+      description: Step Functions task input for research-worker Lambda
+      properties:
+        researchId: { type: string }
+        topic: { type: string }
+        mode:
+          type: string
+          enum: [quick, standard, deep]
+        userId: { type: string }
+
+    CrawlerOrchestratorEvent:
+      type: object
+      description: Step Functions input for crawler orchestrator
+      properties:
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              sourceId: { type: string }
+              sourceName: { type: string }
+              newsQueries:
+                type: array
+                items: { type: string }
+              awsServices:
+                type: array
+                items: { type: string }
+
+    NewsCrawlerEvent:
+      type: object
+      description: Step Functions task input for news crawler
+      properties:
+        sourceId: { type: string }
+        sourceName: { type: string }
+        newsQueries:
+          type: array
+          items: { type: string }
+        customUrls:
+          type: array
+          items:
+            type: object
+            properties:
+              url: { type: string }
+              title: { type: string }
+
+    TechCrawlerEvent:
+      type: object
+      description: Step Functions task input for tech crawler
+      properties:
+        sourceId: { type: string }
+        awsServices:
+          type: array
+          items: { type: string }
+
+paths:
+  # ─── EventBridge-triggered Lambdas ────────────────────
+  /ttobak-transcribe:
+    post:
+      summary: "Transcribe Lambda (EventBridge: audio/ S3 upload)"
+      description: |
+        Triggered by S3 Object Created event (prefix: audio/).
+        Starts AWS Transcribe job or ECS Whisper GPU task based on sttProvider.
+        Output: transcript JSON to S3 transcripts/ prefix.
+      tags: [EventBridge Lambdas]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventBridgeS3Event'
+      responses:
+        '200':
+          description: Transcription job started
+
+  /ttobak-summarize:
+    post:
+      summary: "Summarize Lambda (EventBridge: transcripts/ S3 upload)"
+      description: |
+        Triggered by S3 Object Created event (prefix: transcripts/).
+        Reads transcript, calls Bedrock Claude Sonnet 4.6 for summary + action items.
+        Updates DynamoDB meeting record. Exports to KB bucket for RAG.
+      tags: [EventBridge Lambdas]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventBridgeS3Event'
+      responses:
+        '200':
+          description: Summary generated
+
+  /ttobak-process-image:
+    post:
+      summary: "Process Image Lambda (EventBridge: custom upload event)"
+      description: |
+        Triggered by custom EventBridge event (source: ttobak.upload, type: ImageUploadCompleted).
+        Calls Bedrock Vision to analyze uploaded images (meeting screenshots, whiteboards).
+      tags: [EventBridge Lambdas]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImageUploadEvent'
+      responses:
+        '200':
+          description: Image processed
+
+  # ─── Step Functions Lambdas ────────────────────────────
+  /ttobak-research-worker:
+    post:
+      summary: Research Worker Lambda (Step Functions task)
+      description: |
+        Invokes AgentCore Runtime with research parameters.
+        Fire-and-forget — the AgentCore container runs the research asynchronously.
+      tags: [Step Functions Lambdas]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResearchWorkerEvent'
+      responses:
+        '200':
+          description: AgentCore invoked
+
+  /ttobak-crawler-orchestrator:
+    post:
+      summary: Crawler Orchestrator (Step Functions)
+      description: |
+        Reads crawler sources from DynamoDB, dispatches to news-crawler and tech-crawler
+        in parallel via Step Functions Map state.
+      tags: [Step Functions Lambdas]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CrawlerOrchestratorEvent'
+      responses:
+        '200':
+          description: Crawlers dispatched
+
+  /ttobak-news-crawler:
+    post:
+      summary: News Crawler Lambda
+      description: |
+        Searches Google News RSS + Naver News RSS for each source.
+        Fetches articles, generates summaries via Bedrock, stores in S3 + DynamoDB.
+        Filters paywalled URLs and requires 100+ chars body.
+      tags: [Step Functions Lambdas]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewsCrawlerEvent'
+      responses:
+        '200':
+          description: Articles crawled
+
+  /ttobak-tech-crawler:
+    post:
+      summary: Tech Crawler Lambda
+      description: |
+        Fetches AWS What's New RSS, AWS Blog RSS for specified services.
+        Generates summaries and auto-tags via Bedrock.
+      tags: [Step Functions Lambdas]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TechCrawlerEvent'
+      responses:
+        '200':
+          description: Tech articles crawled
+
+  /ttobak-ingest-trigger:
+    post:
+      summary: KB Ingest Trigger Lambda
+      description: Triggers Bedrock KB ingestion after crawler writes to S3.
+      tags: [Step Functions Lambdas]
+      responses:
+        '200':
+          description: Ingestion triggered
+
+tags:
+  - name: EventBridge Lambdas
+    description: S3 event-triggered processing pipeline
+  - name: Step Functions Lambdas
+    description: Orchestrated workflow tasks (crawler, research)

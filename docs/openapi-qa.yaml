@@ -1,0 +1,144 @@
+openapi: 3.0.3
+info:
+  title: Ttobak QA API
+  description: |
+    RAG-based Q&A Lambda (Python). Handles meeting-specific and cross-meeting questions
+    using Bedrock Converse API with tool use (KB Retrieve, AWS Docs, Transcript search).
+    Also supports WebSocket streaming via async invocation.
+  version: 1.0.0
+
+servers:
+  - url: https://ttobak.atomai.click/api/qa
+    description: Production (via CloudFront + API Gateway)
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    QAResponse:
+      type: object
+      properties:
+        answer:
+          type: string
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              title: { type: string }
+              url: { type: string }
+              score: { type: number }
+        suggestedQuestions:
+          type: array
+          items: { type: string }
+        sessionId:
+          type: string
+
+paths:
+  /ask:
+    post:
+      summary: Ask a question (cross-meeting RAG)
+      description: |
+        Uses Bedrock Converse API (Sonnet 4.6) with tool use:
+        - kb_search: Bedrock Knowledge Base retrieval
+        - aws_docs_search: AWS documentation search
+        - meeting_transcript: Search meeting transcripts
+        Supports optional sessionId for conversation continuity.
+      tags: [QA]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question:
+                  type: string
+                  description: User question in Korean or English
+                context:
+                  type: string
+                  description: Optional additional context
+                meetingId:
+                  type: string
+                  description: Scope to specific meeting
+                sessionId:
+                  type: string
+                  description: Chat session ID for conversation continuity
+      responses:
+        '200':
+          description: Answer with sources
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QAResponse'
+
+  /meeting/{meetingId}:
+    post:
+      summary: Ask a question scoped to a specific meeting
+      tags: [QA]
+      parameters:
+        - name: meetingId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question: { type: string }
+      responses:
+        '200':
+          description: Meeting-scoped answer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QAResponse'
+
+  /detect-questions:
+    post:
+      summary: Detect suggested questions from transcript
+      description: |
+        Uses Qwen 3 32B to analyze transcript and suggest relevant questions.
+        Called after transcription completes to populate suggested questions UI.
+      tags: [QA]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                transcript:
+                  type: string
+                previousQuestions:
+                  type: array
+                  items: { type: string }
+                summary:
+                  type: string
+      responses:
+        '200':
+          description: Suggested questions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  questions:
+                    type: array
+                    items: { type: string }
+
+tags:
+  - name: QA
+    description: RAG Q&A with Bedrock Converse + tool use
