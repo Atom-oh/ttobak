@@ -12,6 +12,9 @@ jobs:
     runs-on: ttobak-arm
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
 
       - name: Build all Lambda binaries
         working-directory: backend

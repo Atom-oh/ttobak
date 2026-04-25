@@ -11,36 +11,26 @@ env:
   CF_DISTRIBUTION: ${{ vars.CF_DISTRIBUTION }}
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ttobak-x86
-    container:
-      image: node:24-slim
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
 
-      - name: Install and build
+      - name: Install AWS CLI
+        run: |
+          curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscli.zip
+          unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --update 2>/dev/null || /tmp/aws/install
+          aws --version
+
+      - name: Build frontend
         working-directory: frontend
         run: npm ci && npm run build
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-out
-          path: frontend/out/
-          retention-days: 1
-
-  deploy:
-    needs: build
-    runs-on: ttobak-x86
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-out
-          path: frontend-out/
-
       - name: Sync to S3
-        run: aws s3 sync frontend-out/ "s3://${S3_BUCKET}/" --delete --exclude "config.json"
+        run: aws s3 sync frontend/out/ "s3://${S3_BUCKET}/" --delete --exclude "config.json"
 
       - name: Invalidate CloudFront
         run: aws cloudfront create-invalidation --distribution-id "${CF_DISTRIBUTION}" --paths "/*"
