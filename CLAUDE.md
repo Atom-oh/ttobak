@@ -114,8 +114,10 @@ CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE
 
 - **Go binary path**: Use `/usr/local/go/bin/go` (not just `go`)
 - **API Gateway payload format**: Must be v1.0 for chi-lambda adapter compatibility (v2.0 breaks routing)
+- **Lambda@Edge "Both UserPoolId and ClientId are required"**: EdgeAuthStack (us-east-1) receives Cognito IDs from AuthStack (ap-northeast-2) via CDK cross-region SSM references. When deploying with `--all`, if AuthStack's SSM exports haven't propagated before EdgeAuthStack deploys, the Lambda code gets empty strings. **Fix**: Always deploy AuthStack first (`npx cdk deploy TtobakAuthStack`), then deploy the rest. Or use `npx cdk deploy --all --concurrency 1` to force sequential deployment. The Cognito IDs are embedded in Lambda@Edge inline code at deploy time — they are NOT runtime env vars.
 - **Lambda@Edge**: Deployed to us-east-1 via EdgeAuthStack with `crossRegionReferences: true`; Node.js runtime only (Go not supported for Lambda@Edge)
 - **CDK cross-stack tokens**: Use `Fn.split`/`Fn.select` for cross-stack string manipulation, not JS string methods
+- **CloudWatch LogGroup names**: `aws/*` prefix is reserved by AWS. Use `/ttobak/*` prefix for custom log groups (e.g. `/ttobak/agentcore/spans`, not `aws/spans`).
 - **OpenSearch Serverless**: Data access policies require exact IAM role ARN principals (no wildcards). Out-of-band AOSS policy changes cause CloudFormation version conflicts — revert before deploying
 - **Next.js static export**: `output: 'export'` only in production; local dev uses normal SSR for dynamic routes
 - **Bedrock models**: Claude Opus 4.6 for summarize/vision, Claude Haiku for fast translation/detection

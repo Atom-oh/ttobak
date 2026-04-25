@@ -4,6 +4,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
 const RESEARCH_SYSTEM_PROMPT = `You are a Deep Research Agent for Ttobak, an AI meeting assistant for AWS Solutions Architects.
@@ -84,6 +85,13 @@ export interface ResearchAgentStackProps extends cdk.StackProps {
 export class ResearchAgentStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ResearchAgentStackProps) {
     super(scope, id, props);
+
+    // ==================== AgentCore Observability Log Group ====================
+    new logs.LogGroup(this, 'AgentCoreSpansLogGroup', {
+      logGroupName: '/ttobak/agentcore/spans',
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
 
     // Bedrock model ARNs
     const bedrockModelResources = [
