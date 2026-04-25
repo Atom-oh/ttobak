@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -32,10 +33,25 @@ func NewResearchChatHandler(chatRepo *repository.ChatRepository, researchSvc *se
 // ListMessages handles GET /api/research/{researchId}/chat
 func (h *ResearchChatHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
 	researchID := chi.URLParam(r, "researchId")
 
 	if strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
+		return
+	}
+
+	// Verify ownership before returning messages
+	if _, err := h.researchSvc.GetResearchDetail(ctx, researchID, userID); err != nil {
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "failed to verify research ownership")
 		return
 	}
 
@@ -70,6 +86,11 @@ func (h *ResearchChatHandler) SendMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if len(req.Content) > 10000 {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "content too long")
+		return
+	}
+
 	// Generate message ID (16 bytes hex)
 	idBytes := make([]byte, 16)
 	if _, err := rand.Read(idBytes); err != nil {
@@ -97,9 +118,9 @@ func (h *ResearchChatHandler) SendMessage(w http.ResponseWriter, r *http.Request
 	var actionErr error
 	switch req.Action {
 	case "", "chat":
-		actionErr = h.researchSvc.TriggerAgentRespond(ctx, researchID)
+		actionErr = h.researchSvc.TriggerAgentRespond(ctx, researchID, userID)
 	case "approve":
-		actionErr = h.researchSvc.ApproveResearch(ctx, researchID)
+		actionErr = h.researchSvc.ApproveResearch(ctx, researchID, userID)
 	case "request_subpage":
 		_, actionErr = h.researchSvc.CreateSubPage(ctx, userID, researchID, req.Content)
 	default:
@@ -108,6 +129,14 @@ func (h *ResearchChatHandler) SendMessage(w http.ResponseWriter, r *http.Request
 	}
 
 	if actionErr != nil {
+		if errors.Is(actionErr, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		if errors.Is(actionErr, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
 		// Log but don't fail — the message was saved successfully
 		// The SFN trigger is async; caller can retry
 		writeJSON(w, http.StatusAccepted, map[string]interface{}{

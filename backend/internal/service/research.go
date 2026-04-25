@@ -209,13 +209,16 @@ func (s *ResearchService) startSFN(ctx context.Context, researchId, mode string,
 }
 
 // TriggerAgentRespond triggers the Agent to respond to a user's chat message.
-func (s *ResearchService) TriggerAgentRespond(ctx context.Context, researchId string) error {
+func (s *ResearchService) TriggerAgentRespond(ctx context.Context, researchId, userId string) error {
 	research, err := s.repo.GetResearch(ctx, researchId)
 	if err != nil {
 		return fmt.Errorf("failed to get research: %w", err)
 	}
 	if research == nil {
 		return ErrNotFound
+	}
+	if research.UserID != userId {
+		return ErrForbidden
 	}
 	return s.startSFN(ctx, researchId, "respond", map[string]string{
 		"topic": research.Topic,
@@ -223,13 +226,19 @@ func (s *ResearchService) TriggerAgentRespond(ctx context.Context, researchId st
 }
 
 // ApproveResearch changes status to "approved" and triggers execution.
-func (s *ResearchService) ApproveResearch(ctx context.Context, researchId string) error {
+func (s *ResearchService) ApproveResearch(ctx context.Context, researchId, userId string) error {
 	research, err := s.repo.GetResearch(ctx, researchId)
 	if err != nil {
 		return fmt.Errorf("failed to get research: %w", err)
 	}
 	if research == nil {
 		return ErrNotFound
+	}
+	if research.UserID != userId {
+		return ErrForbidden
+	}
+	if research.Status != "planning" {
+		return fmt.Errorf("research status is %s, expected planning", research.Status)
 	}
 
 	if err := s.repo.UpdateResearchFields(ctx, researchId, map[string]interface{}{
@@ -249,6 +258,21 @@ func (s *ResearchService) ApproveResearch(ctx context.Context, researchId string
 
 // CreateSubPage creates a child research and triggers execution.
 func (s *ResearchService) CreateSubPage(ctx context.Context, userId, parentId, topic string) (*model.Research, error) {
+	// Verify parent research exists, is owned by user, and is done
+	parent, err := s.repo.GetResearch(ctx, parentId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get parent research: %w", err)
+	}
+	if parent == nil {
+		return nil, ErrNotFound
+	}
+	if parent.UserID != userId {
+		return nil, ErrForbidden
+	}
+	if parent.Status != "done" {
+		return nil, fmt.Errorf("parent research status is %s, expected done", parent.Status)
+	}
+
 	id := generateID()
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -267,7 +291,7 @@ func (s *ResearchService) CreateSubPage(ctx context.Context, userId, parentId, t
 		return nil, fmt.Errorf("failed to create sub-page: %w", err)
 	}
 
-	err := s.startSFN(ctx, id, "subpage", map[string]string{
+	err = s.startSFN(ctx, id, "subpage", map[string]string{
 		"userId":      userId,
 		"topic":       topic,
 		"s3Key":       research.S3Key,
