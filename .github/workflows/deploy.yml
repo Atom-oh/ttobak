@@ -119,6 +119,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Build Go binaries if backend changed
         if: needs.detect-changes.outputs.backend == 'true'
         working-directory: backend
