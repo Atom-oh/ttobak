@@ -90,6 +90,8 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: self-hosted
+    container:
+      image: node:22-slim
     steps:
       - uses: actions/checkout@v4
 
