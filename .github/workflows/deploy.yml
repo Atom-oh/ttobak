@@ -91,13 +91,6 @@ jobs:
         working-directory: backend
         run: go test ./internal/... -count=1
 
-      - name: Upload binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: lambda-binaries
-          path: backend/cmd/*/bootstrap
-          retention-days: 1
-
   # ─── Build: Frontend Static Export ──────────────────────────────
   build-frontend:
     needs: detect-changes
@@ -145,15 +138,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download backend binaries
-        if: needs.build-backend.result == 'success'
-        uses: actions/download-artifact@v4
-        with:
-          name: lambda-binaries
-          path: backend/cmd/
-
-      - name: Build Go binaries (fallback if no artifact)
-        if: needs.build-backend.result != 'success'
+      - name: Build Go binaries
         working-directory: backend
         run: |
           for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
