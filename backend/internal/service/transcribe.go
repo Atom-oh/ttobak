@@ -37,8 +37,9 @@ func NewTranscribeService(
 	}
 }
 
-// StartTranscriptionJob starts an AWS Transcribe job for the given audio file
-func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID, bucket, key string) (string, error) {
+// StartTranscriptionJob starts an AWS Transcribe job for the given audio file.
+// An optional vocabularyName can be passed to use a custom vocabulary (pass "" for default).
+func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID, bucket, key string, vocabularyName ...string) (string, error) {
 	// Determine media format from key
 	mediaFormat := s.getMediaFormat(key)
 	if mediaFormat == "" {
@@ -60,9 +61,9 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 		OutputBucketName: aws.String(s.outputBucket),
 		OutputKey:        aws.String(fmt.Sprintf("transcripts/%s.json", meetingID)),
 		Settings: &types.Settings{
-			ShowSpeakerLabels:  aws.Bool(true),
-			MaxSpeakerLabels:   aws.Int32(10),
-			VocabularyName:     aws.String("ttobak-aws-tech-terms"),
+			ShowSpeakerLabels: aws.Bool(true),
+			MaxSpeakerLabels:  aws.Int32(10),
+			VocabularyName:    aws.String(s.resolveVocabularyName(vocabularyName...)),
 		},
 	}
 
@@ -199,6 +200,15 @@ func (s *TranscribeService) updateMeetingStatus(ctx context.Context, meetingID, 
 
 	meeting.Status = status
 	return s.repo.UpdateMeeting(ctx, meeting)
+}
+
+// resolveVocabularyName returns the vocabulary name to use for transcription.
+// If a custom name is provided, it is used; otherwise the default base vocabulary is used.
+func (s *TranscribeService) resolveVocabularyName(vocabularyName ...string) string {
+	if len(vocabularyName) > 0 && vocabularyName[0] != "" {
+		return vocabularyName[0]
+	}
+	return "ttobak-aws-tech-terms"
 }
 
 // ExtractMeetingIDFromAudioKey extracts the meeting ID from an S3 key

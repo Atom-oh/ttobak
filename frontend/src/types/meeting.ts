@@ -219,6 +219,12 @@ export interface ResearchDetail extends Research {
   content?: string;
 }
 
+export interface DictionaryTerm {
+  phrase: string;
+  soundsLike: string;
+  displayAs: string;
+}
+
 export interface ChatSession {
   sessionId: string;
   title: string;

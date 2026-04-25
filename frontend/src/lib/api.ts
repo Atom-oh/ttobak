@@ -2,7 +2,7 @@
 
 import { getIdToken, refreshSession } from './auth';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
-import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail } from '@/types/meeting';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -331,6 +331,12 @@ export const insightsApi = {
   },
   getDetail: (sourceId: string, docHash: string) =>
     api.get<CrawledDocument & { content: string }>(`/api/insights/${encodeURIComponent(sourceId)}/${encodeURIComponent(docHash)}`),
+};
+
+// Dictionary API
+export const dictionaryApi = {
+  get: () => api.get<{ terms: DictionaryTerm[]; status: string }>('/api/settings/dictionary'),
+  update: (terms: DictionaryTerm[]) => api.put<{ terms: DictionaryTerm[]; status: string }>('/api/settings/dictionary', { terms }),
 };
 
 // Research API
