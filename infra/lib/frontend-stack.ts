@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
@@ -10,6 +11,10 @@ export interface FrontendStackProps extends cdk.StackProps {
   httpApiUrl: string;
   edgeFunctionVersion: lambda.IVersion;
   originVerifySecret?: string;
+  cognitoRegion: string;
+  userPoolId: string;
+  userPoolClientId: string;
+  identityPoolId: string;
 }
 
 export class FrontendStack extends cdk.Stack {
@@ -158,5 +163,25 @@ function handler(event) {
       exportName: 'TtobakCloudFrontUrl',
     });
 
+    // Runtime config.json — Cognito/API IDs resolved at deploy time, fetched by the
+    // browser at startup. Decouples the static build bundle from infrastructure IDs
+    // so `npm run build` no longer needs NEXT_PUBLIC_COGNITO_* env vars.
+    new s3deploy.BucketDeployment(this, 'ConfigDeployment', {
+      destinationBucket: this.siteBucket,
+      sources: [
+        s3deploy.Source.jsonData('config.json', {
+          cognito: {
+            region: props.cognitoRegion,
+            userPoolId: props.userPoolId,
+            userPoolClientId: props.userPoolClientId,
+            identityPoolId: props.identityPoolId,
+          },
+        }),
+      ],
+      prune: false,
+      distribution: this.distribution,
+      distributionPaths: ['/config.json'],
+      cacheControl: [s3deploy.CacheControl.noCache()],
+    });
   }
 }

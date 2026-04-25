@@ -8,19 +8,21 @@ import {
   CognitoUserSession,
   CognitoRefreshToken,
 } from 'amazon-cognito-identity-js';
+import { getRuntimeConfig } from './runtimeConfig';
 
-const poolData = {
-  UserPoolId: process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID || '',
-  ClientId: process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID || '',
-};
+let userPoolPromise: Promise<CognitoUserPool> | null = null;
 
-let userPool: CognitoUserPool | null = null;
-
-function getUserPool(): CognitoUserPool {
-  if (!userPool) {
-    userPool = new CognitoUserPool(poolData);
+function getUserPool(): Promise<CognitoUserPool> {
+  if (!userPoolPromise) {
+    userPoolPromise = (async () => {
+      const cfg = await getRuntimeConfig();
+      return new CognitoUserPool({
+        UserPoolId: cfg.cognito.userPoolId,
+        ClientId: cfg.cognito.userPoolClientId,
+      });
+    })();
   }
-  return userPool;
+  return userPoolPromise;
 }
 
 export interface AuthUser {
@@ -34,6 +36,7 @@ export async function signUp(
   password: string,
   name?: string
 ): Promise<void> {
+  const pool = await getUserPool();
   return new Promise((resolve, reject) => {
     const attributeList: CognitoUserAttribute[] = [];
 
@@ -47,7 +50,7 @@ export async function signUp(
       );
     }
 
-    getUserPool().signUp(email, password, attributeList, [], (err) => {
+    pool.signUp(email, password, attributeList, [], (err) => {
       if (err) {
         reject(err);
         return;
@@ -61,10 +64,11 @@ export async function confirmSignUp(
   email: string,
   code: string
 ): Promise<void> {
+  const pool = await getUserPool();
   return new Promise((resolve, reject) => {
     const cognitoUser = new CognitoUser({
       Username: email,
-      Pool: getUserPool(),
+      Pool: pool,
     });
 
     cognitoUser.confirmRegistration(code, true, (err) => {
@@ -81,6 +85,7 @@ export async function signIn(
   email: string,
   password: string
 ): Promise<AuthUser> {
+  const pool = await getUserPool();
   return new Promise((resolve, reject) => {
     const authDetails = new AuthenticationDetails({
       Username: email,
@@ -89,7 +94,7 @@ export async function signIn(
 
     const cognitoUser = new CognitoUser({
       Username: email,
-      Pool: getUserPool(),
+      Pool: pool,
     });
 
     cognitoUser.authenticateUser(authDetails, {
@@ -118,7 +123,8 @@ export async function signIn(
 }
 
 export async function signOut(): Promise<void> {
-  const cognitoUser = getUserPool().getCurrentUser();
+  const pool = await getUserPool();
+  const cognitoUser = pool.getCurrentUser();
 
   if (cognitoUser) {
     cognitoUser.signOut();
@@ -130,8 +136,9 @@ export async function signOut(): Promise<void> {
 }
 
 export async function getCurrentUser(): Promise<AuthUser | null> {
+  const pool = await getUserPool();
   return new Promise((resolve) => {
-    const cognitoUser = getUserPool().getCurrentUser();
+    const cognitoUser = pool.getCurrentUser();
 
     if (!cognitoUser) {
       resolve(null);
@@ -168,8 +175,9 @@ export function getIdToken(): string | null {
 }
 
 export async function refreshSession(): Promise<string | null> {
+  const pool = await getUserPool();
   return new Promise((resolve) => {
-    const cognitoUser = getUserPool().getCurrentUser();
+    const cognitoUser = pool.getCurrentUser();
 
     if (!cognitoUser) {
       resolve(null);
@@ -219,10 +227,11 @@ function fallbackGetSession(
 }
 
 export async function forgotPassword(email: string): Promise<void> {
+  const pool = await getUserPool();
   return new Promise((resolve, reject) => {
     const cognitoUser = new CognitoUser({
       Username: email,
-      Pool: getUserPool(),
+      Pool: pool,
     });
 
     cognitoUser.forgotPassword({
@@ -237,10 +246,11 @@ export async function confirmForgotPassword(
   code: string,
   newPassword: string
 ): Promise<void> {
+  const pool = await getUserPool();
   return new Promise((resolve, reject) => {
     const cognitoUser = new CognitoUser({
       Username: email,
-      Pool: getUserPool(),
+      Pool: pool,
     });
 
     cognitoUser.confirmPassword(code, newPassword, {

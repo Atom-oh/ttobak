@@ -175,15 +175,9 @@ aws cloudfront create-invalidation --distribution-id {DIST_ID} --paths "/*"
 
 Push to `main` triggers automatic deployment via GitHub Actions. Manual trigger available via `workflow_dispatch`.
 
-**Required GitHub Repository Variables:**
+**Cognito configuration is runtime-loaded** — no GitHub repo variables needed. `FrontendStack` writes `config.json` (with UserPoolId / SPA ClientId / IdentityPoolId) to S3 at deploy time via CDK `BucketDeployment`, and the frontend fetches it on startup. The static build bundle is infra-agnostic.
 
-Set these before the first deployment. The frontend build embeds them at compile time.
-
-```bash
-gh variable set NEXT_PUBLIC_COGNITO_USER_POOL_ID --body "<Cognito User Pool ID>"
-gh variable set NEXT_PUBLIC_COGNITO_CLIENT_ID --body "<Cognito SPA Client ID>"
-gh variable set NEXT_PUBLIC_COGNITO_IDENTITY_POOL_ID --body "<Cognito Identity Pool ID>"
-```
+For local development (`npm run dev`), populate `frontend/.env.local` with `NEXT_PUBLIC_COGNITO_*` values as a fallback when `/config.json` is not present.
 
 ## Architecture Decision Records
 
@@ -373,15 +367,9 @@ aws cloudfront create-invalidation --distribution-id {DIST_ID} --paths "/*"
 
 `main` 브랜치에 푸시하면 GitHub Actions가 자동 배포합니다. `workflow_dispatch`로 수동 트리거도 가능합니다.
 
-**필수 GitHub Repository Variables:**
+**Cognito 설정은 런타임 로드** — GitHub repo variables 설정 불필요합니다. `FrontendStack` 이 배포 시점에 CDK `BucketDeployment` 로 UserPoolId / SPA ClientId / IdentityPoolId 가 담긴 `config.json` 을 S3 에 직접 업로드하고, 프론트엔드가 기동 시 이를 fetch 합니다. 정적 빌드 결과물은 인프라에 독립적입니다.
 
-첫 배포 전에 설정해야 합니다. 프론트엔드 빌드 시 컴파일 타임에 embed됩니다.
-
-```bash
-gh variable set NEXT_PUBLIC_COGNITO_USER_POOL_ID --body "<Cognito User Pool ID>"
-gh variable set NEXT_PUBLIC_COGNITO_CLIENT_ID --body "<Cognito SPA Client ID>"
-gh variable set NEXT_PUBLIC_COGNITO_IDENTITY_POOL_ID --body "<Cognito Identity Pool ID>"
-```
+로컬 개발(`npm run dev`) 시에는 `/config.json` 이 없으므로 `frontend/.env.local` 에 `NEXT_PUBLIC_COGNITO_*` 값을 넣어 fallback 으로 사용합니다.
 
 ## 아키텍처 결정 기록
 
