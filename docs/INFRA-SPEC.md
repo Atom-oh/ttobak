@@ -330,6 +330,20 @@ EdgeAuthStack는 us-east-1에 배포되어야 합니다. CDK에서 cross-region 
 2. Lambda Version ARN을 SSM Parameter로 저장
 3. FrontendStack에서 SSM ParameterProvider로 ARN 조회
 
+### Known Issue: "Both UserPoolId and ClientId are required"
+EdgeAuthStack은 AuthStack의 Cognito User Pool ID와 Client ID를 cross-region SSM reference로 받습니다. `cdk deploy --all`로 병렬 배포 시, AuthStack의 SSM export가 완료되기 전에 EdgeAuthStack이 배포되면 빈 문자열이 Lambda@Edge 코드에 embed되어 이 에러가 발생합니다.
+
+**해결 방법:**
+```bash
+# 방법 1: AuthStack을 먼저 배포
+npx cdk deploy TtobakAuthStack && npx cdk deploy --all --require-approval never
+
+# 방법 2: 순차 배포 (느리지만 안전)
+npx cdk deploy --all --require-approval never --concurrency 1
+```
+
+**근본 원인:** Lambda@Edge는 환경변수를 지원하지 않아 Cognito 설정이 인라인 코드에 빌드 타임에 embed됩니다. CDK cross-region reference (SSM)의 전파 지연이 빈 값 embed를 유발합니다.
+
 ## 11. Configuration
 
 ### cdk.json context

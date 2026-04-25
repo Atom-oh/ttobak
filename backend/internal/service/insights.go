@@ -46,6 +46,12 @@ func (c *docCache) set(key string, docs []model.CrawledDocument, total int) {
 	c.entries[key] = cacheEntry{docs: docs, total: total, expiresAt: time.Now().Add(cacheTTL)}
 }
 
+func (c *docCache) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = make(map[string]cacheEntry)
+}
+
 // InsightsService handles document listing and insights for crawled content.
 type InsightsService struct {
 	repo         crawlerRepo
@@ -144,10 +150,13 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 		return nil, err
 	}
 
-	sortDocuments(docs, sortBy)
+	// Copy before sorting to avoid mutating cached slice
+	sorted := make([]model.CrawledDocument, len(docs))
+	copy(sorted, docs)
+	sortDocuments(sorted, sortBy)
 
 	return &model.InsightsResponse{
-		Documents:  docs,
+		Documents:  sorted,
 		TotalCount: totalCount,
 		Page:       page,
 		Limit:      limit,

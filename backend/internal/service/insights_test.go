@@ -8,6 +8,7 @@ import (
 )
 
 func TestListInsights_WithSourceFilter(t *testing.T) {
+	scanCache.clear()
 	repo := newMockCrawlerRepo()
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
@@ -19,7 +20,7 @@ func TestListInsights_WithSourceFilter(t *testing.T) {
 		{DocHash: "doc3", Type: "announcement", Title: "EC2 Launch", Source: "aws-blog", AWSServices: []string{"ec2"}},
 	}
 
-	resp, err := svc.ListInsights(ctx, "blog", "aws-blog", "", nil, 1, 20)
+	resp, err := svc.ListInsights(ctx, "blog", "aws-blog", "", nil, "", 1, 20)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -38,6 +39,7 @@ func TestListInsights_WithSourceFilter(t *testing.T) {
 }
 
 func TestListInsights_WithSourceAndServiceFilter(t *testing.T) {
+	scanCache.clear()
 	repo := newMockCrawlerRepo()
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
@@ -48,7 +50,7 @@ func TestListInsights_WithSourceAndServiceFilter(t *testing.T) {
 		{DocHash: "doc3", Type: "blog", Title: "Lambda Tips", Source: "aws-blog", AWSServices: []string{"lambda", "dynamodb"}},
 	}
 
-	resp, err := svc.ListInsights(ctx, "blog", "aws-blog", "lambda", nil, 1, 20)
+	resp, err := svc.ListInsights(ctx, "blog", "aws-blog", "lambda", nil, "", 1, 20)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -73,6 +75,7 @@ func TestListInsights_WithSourceAndServiceFilter(t *testing.T) {
 }
 
 func TestListInsights_CrossSourceByType(t *testing.T) {
+	scanCache.clear()
 	repo := newMockCrawlerRepo()
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
@@ -86,7 +89,7 @@ func TestListInsights_CrossSourceByType(t *testing.T) {
 	}
 
 	// No source filter => scans all documents by type
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, 1, 20)
+	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", 1, 20)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -102,6 +105,7 @@ func TestListInsights_CrossSourceByType(t *testing.T) {
 }
 
 func TestListInsights_CrossSource_DefaultType(t *testing.T) {
+	scanCache.clear()
 	repo := newMockCrawlerRepo()
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
@@ -112,7 +116,7 @@ func TestListInsights_CrossSource_DefaultType(t *testing.T) {
 	}
 
 	// Empty type => defaults to "blog" in scanAll
-	resp, err := svc.ListInsights(ctx, "", "", "", nil, 1, 20)
+	resp, err := svc.ListInsights(ctx, "", "", "", nil, "", 1, 20)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -124,6 +128,7 @@ func TestListInsights_CrossSource_DefaultType(t *testing.T) {
 }
 
 func TestListInsights_PaginationDefaults(t *testing.T) {
+	scanCache.clear()
 	repo := newMockCrawlerRepo()
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
@@ -133,7 +138,7 @@ func TestListInsights_PaginationDefaults(t *testing.T) {
 	}
 
 	// page=0 and limit=0 should default to page=1, limit=20
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, 0, 0)
+	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", 0, 0)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -147,6 +152,7 @@ func TestListInsights_PaginationDefaults(t *testing.T) {
 }
 
 func TestListInsights_PaginationDefaults_Negative(t *testing.T) {
+	scanCache.clear()
 	repo := newMockCrawlerRepo()
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
@@ -154,7 +160,7 @@ func TestListInsights_PaginationDefaults_Negative(t *testing.T) {
 	repo.allDocuments = []model.CrawledDocument{}
 
 	// Negative values should also default
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, -5, -10)
+	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", -5, -10)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -168,6 +174,7 @@ func TestListInsights_PaginationDefaults_Negative(t *testing.T) {
 }
 
 func TestListInsights_LimitCap(t *testing.T) {
+	scanCache.clear()
 	repo := newMockCrawlerRepo()
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
@@ -175,7 +182,7 @@ func TestListInsights_LimitCap(t *testing.T) {
 	repo.allDocuments = []model.CrawledDocument{}
 
 	// limit > 50 should be capped to 50
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, 1, 100)
+	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", 1, 100)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -186,6 +193,7 @@ func TestListInsights_LimitCap(t *testing.T) {
 }
 
 func TestListInsights_LimitCapBoundary(t *testing.T) {
+	scanCache.clear()
 	repo := newMockCrawlerRepo()
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
@@ -193,7 +201,7 @@ func TestListInsights_LimitCapBoundary(t *testing.T) {
 	repo.allDocuments = []model.CrawledDocument{}
 
 	// limit = 50 should stay at 50 (boundary)
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, 1, 50)
+	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", 1, 50)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -203,7 +211,7 @@ func TestListInsights_LimitCapBoundary(t *testing.T) {
 	}
 
 	// limit = 51 should be capped
-	resp, err = svc.ListInsights(ctx, "blog", "", "", nil, 1, 51)
+	resp, err = svc.ListInsights(ctx, "blog", "", "", nil, "", 1, 51)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
@@ -214,6 +222,7 @@ func TestListInsights_LimitCapBoundary(t *testing.T) {
 }
 
 func TestListInsights_Pagination(t *testing.T) {
+	scanCache.clear()
 	repo := newMockCrawlerRepo()
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
@@ -230,7 +239,7 @@ func TestListInsights_Pagination(t *testing.T) {
 	}
 
 	// Page 1, limit 2 => first 2 docs
-	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, 1, 2)
+	resp, err := svc.ListInsights(ctx, "blog", "", "", nil, "", 1, 2)
 	if err != nil {
 		t.Fatalf("ListInsights page 1 returned error: %v", err)
 	}
@@ -243,7 +252,7 @@ func TestListInsights_Pagination(t *testing.T) {
 	}
 
 	// Page 3, limit 2 => last 1 doc
-	resp, err = svc.ListInsights(ctx, "blog", "", "", nil, 3, 2)
+	resp, err = svc.ListInsights(ctx, "blog", "", "", nil, "", 3, 2)
 	if err != nil {
 		t.Fatalf("ListInsights page 3 returned error: %v", err)
 	}
@@ -253,7 +262,7 @@ func TestListInsights_Pagination(t *testing.T) {
 	}
 
 	// Page 4, limit 2 => 0 docs (past the end)
-	resp, err = svc.ListInsights(ctx, "blog", "", "", nil, 4, 2)
+	resp, err = svc.ListInsights(ctx, "blog", "", "", nil, "", 4, 2)
 	if err != nil {
 		t.Fatalf("ListInsights page 4 returned error: %v", err)
 	}
@@ -264,11 +273,12 @@ func TestListInsights_Pagination(t *testing.T) {
 }
 
 func TestListInsights_EmptyResult(t *testing.T) {
+	scanCache.clear()
 	repo := newMockCrawlerRepo()
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
 
-	resp, err := svc.ListInsights(ctx, "blog", "nonexistent", "", nil, 1, 20)
+	resp, err := svc.ListInsights(ctx, "blog", "nonexistent", "", nil, "", 1, 20)
 	if err != nil {
 		t.Fatalf("ListInsights returned error: %v", err)
 	}
