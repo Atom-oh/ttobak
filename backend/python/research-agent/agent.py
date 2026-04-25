@@ -69,12 +69,18 @@ def _get_agent(mode: str):
 
     from strands import Agent
     from strands.models.bedrock import BedrockModel
+    from botocore.config import Config as BotoConfig
     from tools import web_search, fetch_page, save_report
 
     model_id = MODEL_BY_MODE.get(mode, MODEL_BY_MODE["standard"])
     logger.info(f"Building agent mode={mode} model={model_id}")
+    boto_config = BotoConfig(
+        read_timeout=300,
+        connect_timeout=10,
+        retries={"max_attempts": 5, "mode": "adaptive"},
+    )
     agent = Agent(
-        model=BedrockModel(model_id=model_id, region_name=REGION),
+        model=BedrockModel(model_id=model_id, region_name=REGION, boto_client_config=boto_config),
         system_prompt=SYSTEM_PROMPT,
         tools=[web_search, fetch_page, save_report],
     )
