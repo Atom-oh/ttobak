@@ -80,7 +80,11 @@ Prefer these Mermaid diagram types:
 - standard: 8-12 sources, 2-3 diagrams
 - deep: 12-20 sources, 3-5 diagrams, maximum depth
 
-CRITICAL: You MUST call save_report at the end with the complete markdown report.
+IMPORTANT RULES:
+- Do NOT use emojis anywhere in the report (no ✅, 🚀, 💡, ⚠️, etc.)
+- Do NOT include conversational messages like "보고서 작성 완료" or "추가로 필요하시면" — the report content goes into save_report, not chat
+- MUST call save_report at the end with the complete markdown report
+- After calling save_report, do NOT output any additional text
 """
 
 PLAN_PROMPT = """You are a research planning assistant for Ttobak, an AI meeting assistant for AWS Solutions Architects.
