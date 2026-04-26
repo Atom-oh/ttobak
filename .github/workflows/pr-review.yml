@@ -78,7 +78,7 @@ jobs:
           resp = bedrock.converse(
               modelId='us.anthropic.claude-opus-4-7',
               messages=[{'role': 'user', 'content': [{'text': prompt}]}],
-              inferenceConfig={'maxTokens': 4000, 'temperature': 0.2},
+              inferenceConfig={'maxTokens': 4000},
           )
           review = resp['output']['message']['content'][0]['text']
 
