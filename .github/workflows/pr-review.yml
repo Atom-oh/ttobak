@@ -66,20 +66,46 @@ jobs:
           - Read CLAUDE.md to understand project conventions
           - Check Go error handling, IAM scope, injection risks, no public resources
           - Be concise. Write in Korean with English technical terms.
-          - Output ONLY the review markdown, no preamble." --output-format text > /tmp/review.md
+          - Output ONLY the review markdown, no preamble.
+          - IMPORTANT: The very last line of your output MUST be exactly one of:
+            VERDICT: PASS
+            VERDICT: FAIL
+          Use FAIL if there are any CRITICAL or MAJOR issues. Use PASS otherwise." --output-format text > /tmp/review.md
 
           echo "Review generated: $(wc -c < /tmp/review.md) bytes"
+
+      - name: Check for blocking issues
+        id: gate
+        run: |
+          VERDICT_LINE=$(tail -5 /tmp/review.md | grep -i "^VERDICT:" | tail -1)
+          echo "Verdict line: $VERDICT_LINE"
+          if echo "$VERDICT_LINE" | grep -qi "FAIL"; then
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            echo "reason=$VERDICT_LINE" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+            echo "reason=No blocking issues" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Post review comment
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
+          GATE_RESULT: ${{ steps.gate.outputs.result }}
         run: |
           MARKER="<!-- bedrock-pr-review -->"
+          if [ "$GATE_RESULT" = "fail" ]; then
+            STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
+          else
+            STATUS_BADGE="**Status: PASSED** — No blocking issues found"
+          fi
+          sed -i '/^VERDICT:/d' /tmp/review.md
           {
             echo "$MARKER"
             echo "## AI Code Review (Claude Code + Opus 4.7)"
+            echo ""
+            echo "$STATUS_BADGE"
             echo ""
             cat /tmp/review.md
             echo ""
@@ -92,3 +118,9 @@ jobs:
             gh api "repos/$REPO/issues/comments/$EXISTING" -X DELETE 2>/dev/null || true
           fi
           gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+
+      - name: Fail if CRITICAL or MAJOR
+        if: steps.gate.outputs.result == 'fail'
+        run: |
+          echo "AI Review failed: ${{ steps.gate.outputs.reason }}"
+          exit 1
