@@ -57,8 +57,28 @@ def _load_custom_vocab_prompt() -> str:
         return ""
 
 
+def _resolve_s3_key(raw_key: str) -> str:
+    """Try NFC/NFD variants to find the actual S3 key.
+
+    S3 stores keys as uploaded bytes. Browser uploads use NFC (composed),
+    macOS/iOS may use NFD (decomposed). Try the raw key first, then variants.
+    """
+    from botocore.exceptions import ClientError
+    for candidate in (raw_key,
+                      unicodedata.normalize("NFC", raw_key),
+                      unicodedata.normalize("NFD", raw_key)):
+        try:
+            s3.head_object(Bucket=BUCKET, Key=candidate)
+            if candidate != raw_key:
+                print(f"S3 key resolved via normalization: {raw_key!r} → {candidate!r}")
+            return candidate
+        except ClientError:
+            continue
+    return raw_key
+
+
 def main():
-    audio_key = unicodedata.normalize("NFD", os.environ["AUDIO_KEY"])
+    audio_key = _resolve_s3_key(os.environ["AUDIO_KEY"])
     meeting_id = os.environ["MEETING_ID"]
     user_id = os.environ["USER_ID"]
 
