@@ -90,7 +90,7 @@ Your response must be in Korean and follow this format:
 
 1. **연구 개요**: Briefly explain what you will research (2-3 sentences)
 2. **보고서 구조**: Propose a report structure with 4-6 main sections (use ## headings). For each section, write 1 sentence explaining what it will cover.
-3. **확인 질문**: Ask 2-3 clarifying questions to refine the research scope (e.g., target audience, specific focus areas, time range, comparison criteria)
+3. **확인 질문**: Ask exactly ONE clarifying question — the most important one to refine the research scope. Do NOT ask multiple questions at once. The user will answer, and you can ask follow-up questions one at a time in subsequent turns.
 
 Do NOT conduct actual web research. Just analyze the topic and plan.
 Use Korean with English technical terms where appropriate."""
