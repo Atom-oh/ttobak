@@ -141,7 +141,7 @@ export function InsightsList() {
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
     setPage(1);
-    setCrawlerFilter('');
+    setSourceFilter('');
     setServiceFilter('');
     setSelectedTags([]);
     setSortBy('newest');
@@ -470,7 +470,7 @@ export function InsightsList() {
             {/* Crawler source / Service dropdown + count */}
             <div className="flex items-center gap-3 flex-wrap">
               {/* Crawler source filter (customer) — shown on news & tech tabs */}
-              {(activeTab as string) !== 'research' && uniqueCrawlerSources.length > 0 && (
+              {activeTab !== 'research' && uniqueCrawlerSources.length > 0 && (
                 <select
                   value={crawlerFilter}
                   onChange={(e) => {
