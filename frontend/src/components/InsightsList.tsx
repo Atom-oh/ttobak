@@ -33,7 +33,7 @@ export function InsightsList() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
-  const [sourceFilter, setSourceFilter] = useState('');
+  const [crawlerFilter, setCrawlerFilter] = useState('');
   const [serviceFilter, setServiceFilter] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState('newest');
@@ -59,8 +59,8 @@ export function InsightsList() {
         page,
         limit,
       };
-      if (activeTab === 'news' && sourceFilter) {
-        params.source = sourceFilter;
+      if (crawlerFilter) {
+        params.source = crawlerFilter;
       }
       if (activeTab === 'tech' && serviceFilter) {
         params.service = serviceFilter;
@@ -81,7 +81,7 @@ export function InsightsList() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, page, sourceFilter, serviceFilter, selectedTags, sortBy, limit]);
+  }, [activeTab, page, crawlerFilter, serviceFilter, selectedTags, sortBy, limit]);
 
   const fetchResearchJobs = useCallback(async () => {
     try {
@@ -176,7 +176,13 @@ export function InsightsList() {
     setPage(1);
   };
 
-  // Collect unique sources from current results
+  // Collect unique crawler sources (customer names) from current results
+  const uniqueCrawlerSources = useMemo(() => {
+    const sources = new Set(documents.map((d) => d.sourceId).filter(Boolean));
+    return Array.from(sources).sort();
+  }, [documents]);
+
+  // Collect unique news outlets from current results
   const uniqueSources = useMemo(() => {
     const sources = new Set(documents.map((d) => d.source).filter(Boolean));
     return Array.from(sources).sort();
@@ -461,21 +467,22 @@ export function InsightsList() {
         <>
           {/* Filters */}
           <div className="space-y-3">
-            {/* Source/Service dropdown + count */}
-            <div className="flex items-center gap-3">
-              {activeTab === 'news' && uniqueSources.length > 0 && (
+            {/* Crawler source / Service dropdown + count */}
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* Crawler source filter (customer) — shown on news & tech tabs */}
+              {activeTab !== 'research' && uniqueCrawlerSources.length > 0 && (
                 <select
-                  value={sourceFilter}
+                  value={crawlerFilter}
                   onChange={(e) => {
-                    setSourceFilter(e.target.value);
+                    setCrawlerFilter(e.target.value);
                     setPage(1);
                   }}
                   className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
                 >
-                  <option value="">All Sources</option>
-                  {uniqueSources.map((source) => (
-                    <option key={source} value={source}>
-                      {source}
+                  <option value="">All Customers</option>
+                  {uniqueCrawlerSources.map((src) => (
+                    <option key={src} value={src}>
+                      {src}
                     </option>
                   ))}
                 </select>
