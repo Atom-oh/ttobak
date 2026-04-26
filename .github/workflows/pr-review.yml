@@ -6,7 +6,7 @@ on:
 
 jobs:
   review:
-    runs-on: ttobak-arm
+    runs-on: ttobak-claude-arm
     permissions:
       pull-requests: write
       contents: read
@@ -19,18 +19,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
-      - name: Install Claude Code
-        run: |
-          curl -fsSL https://claude.ai/install.sh | bash
-          echo "$HOME/.claude/bin" >> "$GITHUB_PATH"
-
-      - name: Install gh CLI
-        run: |
-          mkdir -p $HOME/.local/bin
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          curl -sL "https://github.com/cli/cli/releases/download/v2.74.0/gh_2.74.0_linux_arm64.tar.gz" -o /tmp/gh.tar.gz
-          tar -xzf /tmp/gh.tar.gz -C /tmp && cp /tmp/gh_2.74.0_linux_arm64/bin/gh $HOME/.local/bin/gh
 
       - name: Get PR diff
         env:
