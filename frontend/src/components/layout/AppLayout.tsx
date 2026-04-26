@@ -25,7 +25,7 @@ export function AppLayout({ activePath, children, showMobileNav = true, breadcru
       <main className="flex-1 flex flex-col min-h-0 overflow-x-hidden overflow-y-auto">
         {/* Desktop Header - hidden on mobile */}
         <div className="hidden lg:block">
-          <DesktopHeader breadcrumbs={breadcrumbs} isRecording={isRecording} />
+          <DesktopHeader activePath={activePath} breadcrumbs={breadcrumbs} isRecording={isRecording} />
         </div>
 
         {/* Page Content */}

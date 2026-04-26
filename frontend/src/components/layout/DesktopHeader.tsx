@@ -2,25 +2,44 @@
 
 import { useState } from 'react';
 
+const pathLabels: Record<string, string> = {
+  '/': 'Meetings',
+  '/chat': 'Assistant',
+  '/files': 'Files',
+  '/kb': 'Knowledge Base',
+  '/insights': 'Insights',
+  '/settings': 'Settings',
+  '/record': 'Recording',
+  '/profile': 'Profile',
+};
+
 interface DesktopHeaderProps {
+  activePath?: string;
   breadcrumbs?: { label: string; href?: string }[];
   isRecording?: boolean;
 }
 
-export function DesktopHeader({ breadcrumbs = [{ label: 'Workspace' }, { label: 'Meetings' }], isRecording }: DesktopHeaderProps) {
+export function DesktopHeader({ activePath, breadcrumbs, isRecording }: DesktopHeaderProps) {
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Dynamic routes (e.g. /meeting/[id]) pass explicit breadcrumbs;
+  // static routes resolve automatically from pathLabels.
+  const resolvedBreadcrumbs = breadcrumbs || [
+    { label: 'Workspace' },
+    { label: (activePath && pathLabels[activePath]) || 'Meetings' },
+  ];
 
   return (
     <header className="h-16 border-b border-slate-200 dark:border-white/5 bg-white/80 dark:bg-transparent backdrop-blur-md dark:backdrop-blur-xl flex items-center justify-between px-8 shrink-0">
       {/* Breadcrumbs */}
       <div className="flex items-center gap-3">
         <nav className="flex items-center gap-2 text-slate-500 dark:text-[#8B8D98] text-sm">
-          {breadcrumbs.map((crumb, index) => (
+          {resolvedBreadcrumbs.map((crumb, index) => (
             <span key={index} className="flex items-center gap-2">
               {index > 0 && (
                 <span className="material-symbols-outlined text-xs">chevron_right</span>
               )}
-              {index === breadcrumbs.length - 1 ? (
+              {index === resolvedBreadcrumbs.length - 1 ? (
                 <span className="text-slate-900 dark:text-text-main font-semibold">{crumb.label}</span>
               ) : (
                 <span>{crumb.label}</span>
