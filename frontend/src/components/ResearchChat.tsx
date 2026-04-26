@@ -110,11 +110,13 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const autoResize = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 150) + 'px';
   };
 
   const si = statusIndicator[status] || statusIndicator.planning;
@@ -199,6 +201,17 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Running state banner */}
+      {(status === 'running' || status === 'approved') && (
+        <div className="mx-4 mb-2 flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-500/10 border border-blue-500/20">
+          <div className="animate-spin rounded-full h-5 w-5 border-2 border-[#00E5FF] border-t-transparent flex-shrink-0" />
+          <div>
+            <p className="text-sm font-medium text-[#e4e1e9]">리서치가 진행 중입니다</p>
+            <p className="text-xs text-[#849396] mt-0.5">이 페이지를 닫아도 백그라운드에서 계속 진행됩니다. 완료되면 Insights에서 확인할 수 있습니다.</p>
+          </div>
+        </div>
+      )}
+
       {/* Sub-page quick action */}
       {status === 'done' && (
         <div className="px-5 pb-2">
@@ -215,24 +228,25 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
 
       {/* Input */}
       <div className="p-4 border-t border-white/10">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={textareaRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
+            onChange={(e) => { setInput(e.target.value); autoResize(); }}
             disabled={inputDisabled}
+            rows={1}
             placeholder={
               status === 'running' ? '리서치 진행 중...'
                 : status === 'approved' ? '리서치 시작 대기 중...'
-                : '질문이나 수정사항을 입력하세요...'
+                : '질문이나 수정사항을 입력하세요... (Enter로 줄바꿈)'
             }
-            className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2.5 text-sm text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50"
+            className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2.5 text-sm text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50 resize-none overflow-hidden"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || sending || inputDisabled}
-            className="p-2.5 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors"
+            title="전송 (Tab → Enter)"
+            className="p-2.5 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors flex-shrink-0"
           >
             <span className="material-symbols-outlined text-lg">send</span>
           </button>
