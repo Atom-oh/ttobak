@@ -152,11 +152,11 @@ export function InsightsList() {
     if (!researchTopic.trim()) return;
     try {
       setCreating(true);
-      await researchApi.create({ topic: researchTopic.trim(), mode: researchMode });
+      const created = await researchApi.create({ topic: researchTopic.trim(), mode: researchMode });
       setShowNewResearch(false);
       setResearchTopic('');
       setResearchMode('standard');
-      await fetchResearchJobs();
+      router.push(`/insights/research/${created.researchId}`);
     } catch (err) {
       setResearchError(err instanceof Error ? err.message : 'Failed to create research');
     } finally {
@@ -316,9 +316,9 @@ export function InsightsList() {
                 return (
                   <div
                     key={r.researchId}
-                    onClick={() => r.status === 'done' && router.push(`/insights/research/${r.researchId}`)}
+                    onClick={() => r.status !== 'error' && router.push(`/insights/research/${r.researchId}`)}
                     className={`glass-panel rounded-xl p-5 transition-shadow hover:shadow-lg dark:hover:shadow-[0_0_20px_rgba(0,229,255,0.06)] ${
-                      r.status === 'done' ? 'cursor-pointer' : ''
+                      r.status !== 'error' ? 'cursor-pointer' : ''
                     }`}
                   >
                     <h3 className="text-base font-semibold text-slate-900 dark:text-[#e4e1e9] leading-snug line-clamp-2">
