@@ -186,6 +186,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
               </span>
             </div>
           </div>
+          )
         ))}
 
         {!autoScroll && messages.length > 0 && (
