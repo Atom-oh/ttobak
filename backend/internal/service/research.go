@@ -179,6 +179,7 @@ func (s *ResearchService) sfnExecutionName(researchId, mode string) string {
 	if _, err := rand.Read(suffix); err != nil {
 		suffix = []byte(fmt.Sprintf("%04d", time.Now().UnixNano()%10000))
 	}
+	rand.Read(suffix)
 	return fmt.Sprintf("research-%s-%s-%s", prefix, mode, hex.EncodeToString(suffix))
 }
 
@@ -243,10 +244,10 @@ func (s *ResearchService) ApproveResearch(ctx context.Context, researchId, userI
 		return fmt.Errorf("research status is %s, expected planning", research.Status)
 	}
 
-	if err := s.repo.UpdateResearchFieldsConditional(ctx, researchId, map[string]interface{}{
+	if err := s.repo.UpdateResearchFields(ctx, researchId, map[string]interface{}{
 		"status": "running",
-	}, "planning"); err != nil {
-		return fmt.Errorf("failed to update status to running (may be concurrent approve): %w", err)
+	}); err != nil {
+		return fmt.Errorf("failed to update status to running: %w", err)
 	}
 
 	extra := map[string]string{

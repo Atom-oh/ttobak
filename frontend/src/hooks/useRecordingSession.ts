@@ -51,6 +51,7 @@ interface TranscribeConfig {
   region: string;
   identityPoolId: string;
   userPoolId: string;
+  vocabularyName?: string;
 }
 
 export function useRecordingSession({
@@ -81,13 +82,24 @@ export function useRecordingSession({
   // Load runtime Cognito config once (fetched from /config.json at startup)
   useEffect(() => {
     let cancelled = false;
-    getRuntimeConfig().then((cfg) => {
+    getRuntimeConfig().then(async (cfg) => {
       if (cancelled) return;
       if (cfg.cognito.identityPoolId && cfg.cognito.userPoolId) {
+        let vocabularyName: string | undefined;
+        try {
+          const { dictionaryApi } = await import('@/lib/api');
+          const dict = await dictionaryApi.get();
+          if (dict.status === 'READY' && dict.vocabularyName) {
+            vocabularyName = dict.vocabularyName;
+          }
+        } catch {
+          // Dictionary not available — proceed without custom vocabulary
+        }
         transcribeConfigRef.current = {
           region: cfg.cognito.region,
           identityPoolId: cfg.cognito.identityPoolId,
           userPoolId: cfg.cognito.userPoolId,
+          vocabularyName,
         };
       }
     });

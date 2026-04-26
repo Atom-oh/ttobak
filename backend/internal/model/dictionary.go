@@ -35,6 +35,7 @@ type DeleteTermRequest struct {
 
 // DictionaryResponse represents the API response for dictionary operations
 type DictionaryResponse struct {
-	Terms  []DictionaryTerm `json:"terms"`
-	Status string           `json:"status"`
+	Terms          []DictionaryTerm `json:"terms"`
+	Status         string           `json:"status"`
+	VocabularyName string           `json:"vocabularyName,omitempty"`
 }
