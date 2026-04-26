@@ -48,8 +48,9 @@ func (s *DictionaryService) GetDictionary(ctx context.Context, userID string) (*
 	}
 
 	return &model.DictionaryResponse{
-		Terms:  terms,
-		Status: dict.VocabularyStatus,
+		Terms:          terms,
+		Status:         dict.VocabularyStatus,
+		VocabularyName: dict.VocabularyName,
 	}, nil
 }
 

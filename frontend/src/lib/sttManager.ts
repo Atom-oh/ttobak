@@ -22,6 +22,7 @@ export interface SttManagerConfig {
     region: string;
     identityPoolId: string;
     userPoolId: string;
+    vocabularyName?: string;
   };
   onProviderChange?: (provider: LiveSttProvider) => void;
 }
@@ -79,6 +80,7 @@ export class SttManager {
       multiLanguage: true,
       languageOptions: 'ko-KR,en-US',
       preferredLanguage: 'ko-KR',
+      vocabularyName: tsConfig.vocabularyName,
       onTranscript: (text, isFinal, detectedLang) => {
         if (detectedLang) {
           this.lastDetectedLang = detectedLang.substring(0, 2);
