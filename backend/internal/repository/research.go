@@ -13,6 +13,9 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
+// ErrConditionFailed is returned when a conditional DynamoDB update fails (race condition).
+var ErrConditionFailed = errors.New("conditional check failed")
+
 // ResearchRepository provides DynamoDB operations for research entities
 type ResearchRepository struct {
 	client    *dynamodb.Client
@@ -157,7 +160,7 @@ func (r *ResearchRepository) UpdateResearchFieldsConditional(ctx context.Context
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException
 		if errors.As(err, &ccfe) {
-			return fmt.Errorf("status mismatch (concurrent update): %w", err)
+			return fmt.Errorf("%w: expected status %q", ErrConditionFailed, expectedStatus)
 		}
 		return fmt.Errorf("conditional update failed: %w", err)
 	}

@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"errors"
 	"io"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -247,7 +247,7 @@ func (s *ResearchService) ApproveResearch(ctx context.Context, researchId, userI
 	if err := s.repo.UpdateResearchFieldsConditional(ctx, researchId, map[string]interface{}{
 		"status": "running",
 	}, "planning"); err != nil {
-		if strings.Contains(err.Error(), "status mismatch") {
+		if errors.Is(err, repository.ErrConditionFailed) {
 			return ErrStatusMismatch
 		}
 		return fmt.Errorf("failed to update status to running: %w", err)
