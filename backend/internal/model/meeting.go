@@ -152,6 +152,7 @@ type Research struct {
 	WordCount    int    `dynamodbav:"wordCount,omitempty" json:"wordCount,omitempty"`
 	Summary      string `dynamodbav:"summary,omitempty" json:"summary,omitempty"`
 	ErrorMessage string `dynamodbav:"errorMessage,omitempty" json:"errorMessage,omitempty"`
+	ParentID     string `dynamodbav:"parentId,omitempty" json:"parentId,omitempty"`
 }
 
 // MeetingStatus constants

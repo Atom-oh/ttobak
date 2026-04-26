@@ -15,6 +15,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
       - name: Install tools
         run: |
           mkdir -p $HOME/.local/bin
@@ -74,7 +78,7 @@ jobs:
           resp = bedrock.converse(
               modelId='us.anthropic.claude-opus-4-7',
               messages=[{'role': 'user', 'content': [{'text': prompt}]}],
-              inferenceConfig={'maxTokens': 4000, 'temperature': 0.2},
+              inferenceConfig={'maxTokens': 4000},
           )
           review = resp['output']['message']['content'][0]['text']
 

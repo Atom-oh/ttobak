@@ -24,6 +24,7 @@ import (
 
 var (
 	transcribeService *service.TranscribeService
+	dictService       *service.DictionaryService
 	repo              *repository.DynamoDBRepository
 	ecsClient         *ecs.Client
 	whisperCluster    string
@@ -52,6 +53,9 @@ func init() {
 
 	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, outputBucket)
 	transcribeService = service.NewTranscribeService(transcribeClient, s3Client, repo, outputBucket)
+
+	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
+	dictService = service.NewDictionaryService(dictRepo, transcribeClient)
 
 	ecsClient = ecs.NewFromConfig(cfg)
 	whisperCluster = os.Getenv("WHISPER_CLUSTER")
@@ -131,22 +135,47 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		userID = parts[1]
 	}
 
+	// Look up user's custom vocabulary for Transcribe
+	var customVocab string
+	if userID != "" {
+		if vocab, vocabErr := dictService.GetVocabularyForTranscription(ctx, userID); vocabErr == nil && vocab != "" {
+			customVocab = vocab
+			log.Printf("Using custom vocabulary %s for user %s", vocab, userID)
+		}
+	}
+
 	var jobName string
 	switch sttProvider {
 	case "whisper":
 		if whisperCluster == "" || whisperTaskDef == "" {
 			log.Printf("Whisper not configured, falling back to Transcribe")
-			jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key)
+			jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key, customVocab)
 		} else {
 			log.Printf("Using Whisper GPU for meeting: %s", meetingID)
-			err = startWhisperTask(ctx, meetingID, userID, key)
+			// Build initial_prompt from user's custom dictionary for Whisper
+			var initialPrompt string
+			if userID != "" {
+				if dict, dictErr := dictService.GetDictionary(ctx, userID); dictErr == nil && dict != nil && len(dict.Terms) > 0 {
+					var phrases []string
+					for _, t := range dict.Terms {
+						display := t.DisplayAs
+						if display == "" {
+							display = t.Phrase
+						}
+						phrases = append(phrases, display)
+					}
+					initialPrompt = strings.Join(phrases, ", ")
+					log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
+				}
+			}
+			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt)
 			jobName = "whisper-ecs-" + meetingID
 		}
 	case "nova-sonic":
 		log.Printf("Using Nova Sonic transcription for meeting: %s", meetingID)
 		jobName, err = transcribeService.StartNovaSonicTranscription(ctx, meetingID, bucket, key)
 	default:
-		jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key)
+		jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key, customVocab)
 	}
 	if err != nil {
 		log.Printf("Failed to start transcription job: %v", err)
@@ -162,7 +191,18 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	return nil
 }
 
-func startWhisperTask(ctx context.Context, meetingID, userID, audioKey string) error {
+func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt string) error {
+	envOverrides := []ecsTypes.KeyValuePair{
+		{Name: aws.String("AUDIO_KEY"), Value: aws.String(audioKey)},
+		{Name: aws.String("MEETING_ID"), Value: aws.String(meetingID)},
+		{Name: aws.String("USER_ID"), Value: aws.String(userID)},
+	}
+	if initialPrompt != "" {
+		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{
+			Name: aws.String("INITIAL_PROMPT"), Value: aws.String(initialPrompt),
+		})
+	}
+
 	result, err := ecsClient.RunTask(ctx, &ecs.RunTaskInput{
 		Cluster:        aws.String(whisperCluster),
 		TaskDefinition: aws.String(whisperTaskDef),
@@ -176,12 +216,8 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey string) e
 		Overrides: &ecsTypes.TaskOverride{
 			ContainerOverrides: []ecsTypes.ContainerOverride{
 				{
-					Name: aws.String(whisperContainer),
-					Environment: []ecsTypes.KeyValuePair{
-						{Name: aws.String("AUDIO_KEY"), Value: aws.String(audioKey)},
-						{Name: aws.String("MEETING_ID"), Value: aws.String(meetingID)},
-						{Name: aws.String("USER_ID"), Value: aws.String(userID)},
-					},
+					Name:        aws.String(whisperContainer),
+					Environment: envOverrides,
 				},
 			},
 		},
