@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -240,12 +241,15 @@ func (s *ResearchService) ApproveResearch(ctx context.Context, researchId, userI
 		return ErrForbidden
 	}
 	if research.Status != "planning" {
-		return fmt.Errorf("research status is %s, expected planning", research.Status)
+		return fmt.Errorf("research status is %s, expected planning: %w", research.Status, ErrStatusMismatch)
 	}
 
-	if err := s.repo.UpdateResearchFields(ctx, researchId, map[string]interface{}{
+	if err := s.repo.UpdateResearchFieldsConditional(ctx, researchId, map[string]interface{}{
 		"status": "running",
-	}); err != nil {
+	}, "planning"); err != nil {
+		if strings.Contains(err.Error(), "status mismatch") {
+			return ErrStatusMismatch
+		}
 		return fmt.Errorf("failed to update status to running: %w", err)
 	}
 
