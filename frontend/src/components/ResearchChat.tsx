@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { researchChatApi } from '@/lib/api';
@@ -30,7 +30,6 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevMessageCount = useRef(0);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const fetchMessages = useCallback(async () => {
     try {
@@ -40,11 +39,6 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
       // silently ignore polling errors
     }
   }, [researchId]);
-
-  const hasProposal = useMemo(
-    () => messages.some(m => m.action === 'propose_structure'),
-    [messages],
-  );
 
   useEffect(() => {
     fetchMessages();
@@ -116,25 +110,18 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
     }
   };
 
-  const autoResize = useCallback(() => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const autoResize = () => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 150) + 'px';
-  }, []);
-
-  useEffect(() => { autoResize(); }, [input, autoResize]);
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
   };
 
   const si = statusIndicator[status] || statusIndicator.planning;
   const inputDisabled = status === 'running' || status === 'approved';
-  const isFullWidth = ['planning', 'running', 'approved'].includes(status);
+  const isFullWidth = status === 'planning';
 
   return (
     <div className={`flex flex-col bg-[#0e0e13] border-l border-white/10 h-full ${isFullWidth ? 'w-full' : 'w-[400px] flex-shrink-0'}`}>
@@ -184,9 +171,14 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
               )}
 
               {msg.action === 'propose_structure' && status === 'planning' && (
-                <div className="mt-3 text-xs text-[#849396]/60 text-center">
-                  하단의 &quot;연구 시작&quot; 버튼으로 진행할 수 있습니다
-                </div>
+                <button
+                  onClick={handleApprove}
+                  disabled={sending}
+                  className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#00E5FF] text-[#0e0e13] text-sm font-semibold hover:bg-[#00E5FF]/80 disabled:opacity-50 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-base">check_circle</span>
+                  이 구조로 진행
+                </button>
               )}
 
               <span className="block text-[10px] text-[#849396]/40 mt-2">
@@ -211,29 +203,12 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
 
       {/* Running state banner */}
       {(status === 'running' || status === 'approved') && (
-        <div className="mx-5 mb-2 flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-500/10 border border-blue-500/20">
+        <div className="mx-4 mb-2 flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-500/10 border border-blue-500/20">
           <div className="animate-spin rounded-full h-5 w-5 border-2 border-[#00E5FF] border-t-transparent flex-shrink-0" />
           <div>
             <p className="text-sm font-medium text-[#e4e1e9]">리서치가 진행 중입니다</p>
             <p className="text-xs text-[#849396] mt-0.5">이 페이지를 닫아도 백그라운드에서 계속 진행됩니다. 완료되면 Insights에서 확인할 수 있습니다.</p>
           </div>
-        </div>
-      )}
-
-      {/* Persistent approve button during planning */}
-      {status === 'planning' && hasProposal && (
-        <div className="px-5 pb-2">
-          <button
-            onClick={handleApprove}
-            disabled={sending}
-            className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#00E5FF] text-[#0e0e13] text-sm font-bold hover:bg-[#00E5FF]/80 disabled:opacity-50 transition-colors shadow-lg shadow-[#00E5FF]/20"
-          >
-            <span className="material-symbols-outlined text-base">rocket_launch</span>
-            연구 시작
-          </button>
-          <p className="text-[10px] text-[#849396]/50 text-center mt-1.5">
-            질문이 더 있으면 아래에 입력하세요
-          </p>
         </div>
       )}
 
@@ -257,21 +232,20 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
           <textarea
             ref={textareaRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
+            onChange={(e) => { setInput(e.target.value); autoResize(); }}
             disabled={inputDisabled}
             rows={1}
             placeholder={
               status === 'running' ? '리서치 진행 중...'
                 : status === 'approved' ? '리서치 시작 대기 중...'
-                : '질문이나 수정사항을 입력하세요... (Shift+Enter로 줄바꿈)'
+                : '질문이나 수정사항을 입력하세요... (Enter로 줄바꿈)'
             }
             className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2.5 text-sm text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50 resize-none overflow-hidden"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || sending || inputDisabled}
-            title="전송 (Enter)"
+            title="전송 (Tab → Enter)"
             className="p-2.5 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors flex-shrink-0"
           >
             <span className="material-symbols-outlined text-lg">send</span>
