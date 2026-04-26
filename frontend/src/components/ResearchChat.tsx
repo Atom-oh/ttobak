@@ -30,6 +30,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const prevMessageCount = useRef(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const fetchMessages = useCallback(async () => {
     try {
@@ -110,18 +111,25 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
     }
   };
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const autoResize = () => {
+  const autoResize = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 150) + 'px';
+  }, []);
+
+  useEffect(() => { autoResize(); }, [input, autoResize]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
   };
 
   const si = statusIndicator[status] || statusIndicator.planning;
   const inputDisabled = status === 'running' || status === 'approved';
-  const isFullWidth = status === 'planning';
+  const isFullWidth = ['planning', 'running', 'approved'].includes(status);
 
   return (
     <div className={`flex flex-col bg-[#0e0e13] border-l border-white/10 h-full ${isFullWidth ? 'w-full' : 'w-[400px] flex-shrink-0'}`}>
@@ -204,7 +212,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
 
       {/* Running state banner */}
       {(status === 'running' || status === 'approved') && (
-        <div className="mx-4 mb-2 flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-500/10 border border-blue-500/20">
+        <div className="mx-5 mb-2 flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-500/10 border border-blue-500/20">
           <div className="animate-spin rounded-full h-5 w-5 border-2 border-[#00E5FF] border-t-transparent flex-shrink-0" />
           <div>
             <p className="text-sm font-medium text-[#e4e1e9]">리서치가 진행 중입니다</p>
@@ -233,20 +241,21 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
           <textarea
             ref={textareaRef}
             value={input}
-            onChange={(e) => { setInput(e.target.value); autoResize(); }}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
             disabled={inputDisabled}
             rows={1}
             placeholder={
               status === 'running' ? '리서치 진행 중...'
                 : status === 'approved' ? '리서치 시작 대기 중...'
-                : '질문이나 수정사항을 입력하세요... (Enter로 줄바꿈)'
+                : '질문이나 수정사항을 입력하세요... (Shift+Enter로 줄바꿈)'
             }
             className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2.5 text-sm text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50 resize-none overflow-hidden"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || sending || inputDisabled}
-            title="전송 (Tab → Enter)"
+            title="전송 (Enter)"
             className="p-2.5 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors flex-shrink-0"
           >
             <span className="material-symbols-outlined text-lg">send</span>
