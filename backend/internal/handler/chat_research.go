@@ -151,6 +151,10 @@ func (h *ResearchChatHandler) SendMessage(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
 			return
 		}
+		if errors.Is(actionErr, service.ErrStatusMismatch) {
+			writeError(w, http.StatusConflict, "CONFLICT", "Research status has changed (already approved or no longer in planning)")
+			return
+		}
 		// Log but don't fail — the message was saved successfully
 		// The SFN trigger is async; caller can retry
 		writeJSON(w, http.StatusAccepted, map[string]interface{}{

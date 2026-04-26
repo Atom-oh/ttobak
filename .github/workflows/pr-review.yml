@@ -10,27 +10,29 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
+    env:
+      ANTHROPIC_MODEL: us.anthropic.claude-opus-4-7
+      CLAUDE_CODE_USE_BEDROCK: 1
+      ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
+      AWS_REGION: us-east-1
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.claude/bin" >> "$GITHUB_PATH"
 
-      - name: Install tools
+      - name: Install gh CLI
         run: |
           mkdir -p $HOME/.local/bin
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          # AWS CLI
-          curl -s "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscli.zip
-          unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin --update
-          # gh CLI (pinned version)
           curl -sL "https://github.com/cli/cli/releases/download/v2.74.0/gh_2.74.0_linux_arm64.tar.gz" -o /tmp/gh.tar.gz
           tar -xzf /tmp/gh.tar.gz -C /tmp && cp /tmp/gh_2.74.0_linux_arm64/bin/gh $HOME/.local/bin/gh
 
-      - name: Get PR diff and info
+      - name: Get PR diff
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -39,65 +41,54 @@ jobs:
           gh pr view "$PR_NUMBER" --json title,body --jq '{title: .title, body: .body}' > /tmp/pr-info.json
           echo "Diff: $(wc -l < /tmp/pr-diff.txt) lines"
 
-      - name: Install Python dependencies
-        run: pip3 install --break-system-packages boto3 2>/dev/null || pip3 install boto3
-
-      - name: Review with Bedrock Claude Opus 4.7
+      - name: Review with Claude Code
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          python3 << 'SCRIPT'
-          import json, boto3
+          PR_TITLE=$(cat /tmp/pr-info.json | python3 -c "import json,sys; print(json.load(sys.stdin).get('title',''))" 2>/dev/null || echo "")
+          DIFF=$(head -3000 /tmp/pr-diff.txt)
 
-          bedrock = boto3.client('bedrock-runtime', region_name='us-east-1')
+          claude -p "You are reviewing PR #${PR_NUMBER}: ${PR_TITLE}
 
-          with open('/tmp/pr-diff.txt') as f:
-              diff = f.read()[:80000]
-          with open('/tmp/pr-info.json') as f:
-              pr_info = json.load(f)
+          Read CLAUDE.md for project context. Then review this diff:
 
-          prompt = f"""You are a senior code reviewer for Ttobak, a Korean AI meeting assistant.
-          Tech stack: Go Lambda (ARM64), Next.js 16 static SPA, CDK TypeScript, Python Lambda, DynamoDB single-table.
+          \`\`\`diff
+          ${DIFF}
+          \`\`\`
 
-          Review this PR and provide:
+          Provide:
           1. **Summary** — what this PR does (2-3 sentences)
           2. **Issues** — bugs, security risks, logic errors (CRITICAL/MAJOR/MINOR)
-          3. **Suggestions** — improvements, best practices
+          3. **Suggestions** — improvements
           4. **Verdict** — LGTM / Changes Requested
 
           Rules:
-          - Focus on actual bugs and security, not style preferences
-          - Check: Go error handling, IAM scope, injection risks, no public resources
+          - Read CLAUDE.md to understand project conventions
+          - Check Go error handling, IAM scope, injection risks, no public resources
           - Be concise. Write in Korean with English technical terms.
+          - Output ONLY the review markdown, no preamble." --output-format text > /tmp/review.md
 
-          PR Title: {pr_info.get('title', '')}
-
-          Diff:
-          ```diff
-          {diff}
-          ```"""
-
-          resp = bedrock.converse(
-              modelId='us.anthropic.claude-opus-4-7',
-              messages=[{'role': 'user', 'content': [{'text': prompt}]}],
-              inferenceConfig={'maxTokens': 4000},
-          )
-          review = resp['output']['message']['content'][0]['text']
-
-          with open('/tmp/review.md', 'w') as f:
-              f.write(review)
-          print(f"Review generated: {len(review)} chars")
-          SCRIPT
+          echo "Review generated: $(wc -c < /tmp/review.md) bytes"
 
       - name: Post review comment
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
+          MARKER="<!-- bedrock-pr-review -->"
           {
-            echo "## AI Code Review (Claude Opus 4.7)"
+            echo "$MARKER"
+            echo "## AI Code Review (Claude Code + Opus 4.7)"
             echo ""
             cat /tmp/review.md
             echo ""
             echo "---"
-            echo "_Automated review by Bedrock Claude Opus 4.7_"
+            echo "_Automated review by Claude Code CLI with Bedrock Opus 4.7_"
           } > /tmp/comment.md
+          EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq '.[] | select(.body | contains("<!-- bedrock-pr-review -->")) | .id' 2>/dev/null | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api "repos/$REPO/issues/comments/$EXISTING" -X DELETE 2>/dev/null || true
+          fi
           gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
