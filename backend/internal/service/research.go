@@ -179,7 +179,6 @@ func (s *ResearchService) sfnExecutionName(researchId, mode string) string {
 	if _, err := rand.Read(suffix); err != nil {
 		suffix = []byte(fmt.Sprintf("%04d", time.Now().UnixNano()%10000))
 	}
-	rand.Read(suffix)
 	return fmt.Sprintf("research-%s-%s-%s", prefix, mode, hex.EncodeToString(suffix))
 }
 

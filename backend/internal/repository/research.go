@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -154,6 +155,10 @@ func (r *ResearchRepository) UpdateResearchFieldsConditional(ctx context.Context
 		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("status mismatch (concurrent update): %w", err)
+		}
 		return fmt.Errorf("conditional update failed: %w", err)
 	}
 	return nil
