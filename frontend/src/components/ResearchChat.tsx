@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { researchChatApi } from '@/lib/api';
 import type { ChatMessage } from '@/types/meeting';
 
 interface ResearchChatProps {
   researchId: string;
-  status: string; // planning | approved | running | done | error
+  status: string;
   onApprove: () => void;
   onSubPageCreated: () => void;
 }
@@ -23,8 +25,11 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const prevMessageCount = useRef(0);
 
   const fetchMessages = useCallback(async () => {
     try {
@@ -35,34 +40,39 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
     }
   }, [researchId]);
 
-  // Poll messages during planning/approved, stop when done
   useEffect(() => {
     fetchMessages();
-
     if (status === 'planning' || status === 'approved' || status === 'running') {
       pollRef.current = setInterval(fetchMessages, 3000);
     }
-
     return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     };
   }, [fetchMessages, status]);
 
-  // Auto-scroll to bottom on new messages
+  // Scroll only when new messages arrive AND user hasn't scrolled up
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (messages.length > prevMessageCount.current && autoScroll) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+    prevMessageCount.current = messages.length;
+  }, [messages, autoScroll]);
+
+  // Detect if user scrolled up
+  const handleScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+    setAutoScroll(isAtBottom);
+  };
 
   const handleSend = async () => {
     if (!input.trim() || sending) return;
     const text = input.trim();
     setInput('');
     setSending(true);
+    setAutoScroll(true);
 
-    // Optimistically add user message
     setMessages(prev => [...prev, {
       msgId: `temp-${Date.now()}`,
       role: 'user',
@@ -72,10 +82,8 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
 
     try {
       await researchChatApi.sendMessage(researchId, { content: text });
-      // Refresh to get agent response
       setTimeout(fetchMessages, 1000);
     } catch {
-      // Remove optimistic message on error
       setMessages(prev => prev.filter(m => !m.msgId.startsWith('temp-')));
     } finally {
       setSending(false);
@@ -111,11 +119,12 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
 
   const si = statusIndicator[status] || statusIndicator.planning;
   const inputDisabled = status === 'running' || status === 'approved';
+  const isFullWidth = status === 'planning';
 
   return (
-    <div className="w-[360px] flex-shrink-0 flex flex-col bg-[#0e0e13] border-l border-white/10 h-full">
+    <div className={`flex flex-col bg-[#0e0e13] border-l border-white/10 h-full ${isFullWidth ? 'w-full' : 'w-[400px] flex-shrink-0'}`}>
       {/* Header */}
-      <div className="px-4 py-3 border-b border-white/10">
+      <div className="px-5 py-3 border-b border-white/10">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-[#e4e1e9]">Research Assistant</h3>
           <div className="flex items-center gap-2">
@@ -126,12 +135,16 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-5 space-y-4"
+      >
         {messages.length === 0 && (
-          <div className="text-center py-8">
-            <span className="material-symbols-outlined text-3xl text-[#849396]/50">forum</span>
-            <p className="text-xs text-[#849396] mt-2">
-              {status === 'planning' ? '에이전트가 구조를 제안할 예정입니다...' : '메시지가 없습니다'}
+          <div className="text-center py-12">
+            <span className="material-symbols-outlined text-4xl text-[#849396]/30">forum</span>
+            <p className="text-sm text-[#849396] mt-3">
+              {status === 'planning' ? '에이전트가 연구 계획을 작성 중입니다...' : '메시지가 없습니다'}
             </p>
           </div>
         )}
@@ -139,37 +152,56 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
         {messages.map((msg) => (
           <div key={msg.msgId} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div
-              className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
+              className={`rounded-xl px-4 py-3 ${
+                isFullWidth ? 'max-w-[700px]' : 'max-w-[90%]'
+              } ${
                 msg.role === 'user'
-                  ? 'bg-[#00E5FF]/15 text-[#e4e1e9]'
-                  : 'bg-white/[0.05] text-[#bac9cc]'
+                  ? 'bg-[#00E5FF]/10 text-[#e4e1e9]'
+                  : 'bg-white/[0.04] text-[#bac9cc]'
               }`}
             >
-              <div className="whitespace-pre-wrap break-words">{msg.content}</div>
-              {/* Approve button for propose_structure messages */}
+              {msg.role === 'agent' ? (
+                <div className="prose prose-sm prose-invert max-w-none [&_h1]:text-lg [&_h1]:font-bold [&_h1]:mb-2 [&_h2]:text-base [&_h2]:font-bold [&_h2]:mt-4 [&_h2]:mb-2 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1 [&_p]:text-sm [&_p]:leading-relaxed [&_p]:mb-2 [&_li]:text-sm [&_li]:leading-relaxed [&_strong]:text-[#e4e1e9] [&_ul]:pl-4 [&_ol]:pl-4 [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_hr]:border-white/10 [&_hr]:my-3">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                </div>
+              ) : (
+                <div className="text-sm whitespace-pre-wrap break-words">{msg.content}</div>
+              )}
+
               {msg.action === 'propose_structure' && status === 'planning' && (
                 <button
                   onClick={handleApprove}
                   disabled={sending}
-                  className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#00E5FF] text-[#0e0e13] text-xs font-semibold hover:bg-[#00E5FF]/80 disabled:opacity-50 transition-colors"
+                  className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#00E5FF] text-[#0e0e13] text-sm font-semibold hover:bg-[#00E5FF]/80 disabled:opacity-50 transition-colors"
                 >
-                  <span className="material-symbols-outlined text-sm">check_circle</span>
+                  <span className="material-symbols-outlined text-base">check_circle</span>
                   이 구조로 진행
                 </button>
               )}
-              <span className="block text-[10px] text-[#849396]/60 mt-1">
+
+              <span className="block text-[10px] text-[#849396]/40 mt-2">
                 {new Date(msg.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
               </span>
             </div>
           </div>
         ))}
 
+        {!autoScroll && messages.length > 0 && (
+          <button
+            onClick={() => { setAutoScroll(true); messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }}
+            className="sticky bottom-2 mx-auto flex items-center gap-1 px-3 py-1 rounded-full bg-[#00E5FF]/20 text-[#00E5FF] text-xs font-medium hover:bg-[#00E5FF]/30 transition-colors"
+          >
+            <span className="material-symbols-outlined text-sm">arrow_downward</span>
+            최신 메시지
+          </button>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Sub-page quick action (when done) */}
+      {/* Sub-page quick action */}
       {status === 'done' && (
-        <div className="px-4 pb-2">
+        <div className="px-5 pb-2">
           <button
             onClick={() => handleRequestSubPage('추가 하위 페이지')}
             disabled={sending}
@@ -182,7 +214,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
       )}
 
       {/* Input */}
-      <div className="p-3 border-t border-white/10">
+      <div className="p-4 border-t border-white/10">
         <div className="flex items-center gap-2">
           <input
             type="text"
@@ -193,14 +225,14 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
             placeholder={
               status === 'running' ? '리서치 진행 중...'
                 : status === 'approved' ? '리서치 시작 대기 중...'
-                : '메시지를 입력하세요...'
+                : '질문이나 수정사항을 입력하세요...'
             }
-            className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2 text-sm text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50"
+            className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2.5 text-sm text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || sending || inputDisabled}
-            className="p-2 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors"
+            className="p-2.5 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors"
           >
             <span className="material-symbols-outlined text-lg">send</span>
           </button>
