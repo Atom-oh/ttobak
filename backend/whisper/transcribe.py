@@ -72,6 +72,15 @@ def main():
 
     vocab_prompt = _load_custom_vocab_prompt()
 
+    # Merge with INITIAL_PROMPT env var (user's custom dictionary from DynamoDB)
+    env_prompt = os.environ.get("INITIAL_PROMPT", "").strip()
+    if env_prompt:
+        print(f"INITIAL_PROMPT from env: {len(env_prompt.split(','))} terms")
+        if vocab_prompt:
+            vocab_prompt = f"{vocab_prompt} {env_prompt}"
+        else:
+            vocab_prompt = env_prompt
+
     model_path = _ensure_model()
     print("Loading Whisper large-v3 (GPU float16)...")
     model = WhisperModel(model_path, device="cuda", compute_type="float16")
