@@ -75,6 +75,20 @@ func (h *ResearchChatHandler) SendMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Verify ownership before saving message
+	if _, err := h.researchSvc.GetResearchDetail(ctx, researchID, userID); err != nil {
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "failed to verify ownership")
+		return
+	}
+
 	var req model.SendChatMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
