@@ -141,12 +141,14 @@ func handleAgentMode(ctx context.Context, event ResearchEvent, agentMode string)
 
 	// For plan/respond: agent runs synchronously inside AgentCore (~10-30s).
 	// For execute/subpage: agent runs in background (5-45 min), save_report writes result.
-	status := "running"
-	if agentMode == "plan" || agentMode == "respond" {
-		status = agentMode + "ned" // "planned" or "responded"
-		if agentMode == "respond" {
-			status = "responded"
-		}
+	var status string
+	switch agentMode {
+	case "plan":
+		status = "planned"
+	case "respond":
+		status = "responded"
+	default:
+		status = "running"
 	}
 
 	log.Printf("Research %s mode=%s dispatched to AgentCore", event.ResearchID, agentMode)

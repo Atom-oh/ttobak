@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"errors"
 	"io"
 	"log"
 	"time"
@@ -176,7 +177,9 @@ func (s *ResearchService) sfnExecutionName(researchId, mode string) string {
 		prefix = prefix[:16]
 	}
 	suffix := make([]byte, 4)
-	rand.Read(suffix)
+	if _, err := rand.Read(suffix); err != nil {
+		suffix = []byte(fmt.Sprintf("%04d", time.Now().UnixNano()%10000))
+	}
 	return fmt.Sprintf("research-%s-%s-%s", prefix, mode, hex.EncodeToString(suffix))
 }
 
@@ -238,12 +241,15 @@ func (s *ResearchService) ApproveResearch(ctx context.Context, researchId, userI
 		return ErrForbidden
 	}
 	if research.Status != "planning" {
-		return fmt.Errorf("research status is %s, expected planning", research.Status)
+		return fmt.Errorf("research status is %s, expected planning: %w", research.Status, ErrStatusMismatch)
 	}
 
-	if err := s.repo.UpdateResearchFields(ctx, researchId, map[string]interface{}{
+	if err := s.repo.UpdateResearchFieldsConditional(ctx, researchId, map[string]interface{}{
 		"status": "running",
-	}); err != nil {
+	}, "planning"); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return ErrStatusMismatch
+		}
 		return fmt.Errorf("failed to update status to running: %w", err)
 	}
 

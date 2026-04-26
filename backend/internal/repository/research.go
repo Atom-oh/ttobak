@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -11,6 +12,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
 )
+
+// ErrConditionFailed is returned when a conditional DynamoDB update fails (race condition).
+var ErrConditionFailed = errors.New("conditional check failed")
 
 // ResearchRepository provides DynamoDB operations for research entities
 type ResearchRepository struct {
@@ -117,6 +121,50 @@ func (r *ResearchRepository) GetResearch(ctx context.Context, researchId string)
 	}
 
 	return &item.Research, nil
+}
+
+// UpdateResearchFieldsConditional updates fields only if current status matches expectedStatus.
+func (r *ResearchRepository) UpdateResearchFieldsConditional(ctx context.Context, researchId string, fields map[string]interface{}, expectedStatus string) error {
+	if len(fields) == 0 {
+		return nil
+	}
+
+	var updateBuilder expression.UpdateBuilder
+	first := true
+	for k, v := range fields {
+		if first {
+			updateBuilder = expression.Set(expression.Name(k), expression.Value(v))
+			first = false
+		} else {
+			updateBuilder = updateBuilder.Set(expression.Name(k), expression.Value(v))
+		}
+	}
+
+	cond := expression.Name("status").Equal(expression.Value(expectedStatus))
+	expr, err := expression.NewBuilder().WithUpdate(updateBuilder).WithCondition(cond).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build conditional expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchId},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		},
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: expected status %q", ErrConditionFailed, expectedStatus)
+		}
+		return fmt.Errorf("conditional update failed: %w", err)
+	}
+	return nil
 }
 
 // UpdateResearchFields performs a partial update on a research record
