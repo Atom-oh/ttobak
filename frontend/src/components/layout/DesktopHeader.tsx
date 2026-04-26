@@ -22,8 +22,8 @@ interface DesktopHeaderProps {
 export function DesktopHeader({ activePath, breadcrumbs, isRecording }: DesktopHeaderProps) {
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Dynamic routes (e.g. /meeting/[id]) pass explicit breadcrumbs;
-  // static routes resolve automatically from pathLabels.
+  // Pages without explicit breadcrumbs resolve from pathLabels via activePath.
+  // Dynamic detail pages (e.g. /meeting/[id]) currently inherit their parent label.
   const resolvedBreadcrumbs = breadcrumbs || [
     { label: 'Workspace' },
     { label: (activePath && pathLabels[activePath]) || 'Meetings' },
