@@ -335,8 +335,8 @@ export const insightsApi = {
 
 // Dictionary API
 export const dictionaryApi = {
-  get: () => api.get<{ terms: DictionaryTerm[]; status: string }>('/api/settings/dictionary'),
-  update: (terms: DictionaryTerm[]) => api.put<{ terms: DictionaryTerm[]; status: string }>('/api/settings/dictionary', { terms }),
+  get: () => api.get<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>('/api/settings/dictionary'),
+  update: (terms: DictionaryTerm[]) => api.put<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>('/api/settings/dictionary', { terms }),
 };
 
 // Research API
