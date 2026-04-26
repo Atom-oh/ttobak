@@ -110,11 +110,13 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const autoResize = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 150) + 'px';
   };
 
   const si = statusIndicator[status] || statusIndicator.planning;
@@ -215,24 +217,25 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
 
       {/* Input */}
       <div className="p-4 border-t border-white/10">
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={textareaRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
+            onChange={(e) => { setInput(e.target.value); autoResize(); }}
             disabled={inputDisabled}
+            rows={1}
             placeholder={
               status === 'running' ? '리서치 진행 중...'
                 : status === 'approved' ? '리서치 시작 대기 중...'
-                : '질문이나 수정사항을 입력하세요...'
+                : '질문이나 수정사항을 입력하세요... (Enter로 줄바꿈)'
             }
-            className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2.5 text-sm text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50"
+            className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2.5 text-sm text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50 resize-none overflow-hidden"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || sending || inputDisabled}
-            className="p-2.5 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors"
+            title="전송 (Tab → Enter)"
+            className="p-2.5 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors flex-shrink-0"
           >
             <span className="material-symbols-outlined text-lg">send</span>
           </button>
