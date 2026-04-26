@@ -532,7 +532,7 @@ export default function ResearchDetailPage() {
         {research && (research.mode === 'deep' || ['planning', 'running', 'approved'].includes(research.status)) && (
           <>
             {/* Chat toggle button (desktop, when chat is closed and not planning) */}
-            {!chatOpen && research.status === 'done' && (
+            {!chatOpen && ['done', 'error'].includes(research.status) && (
               <button
                 onClick={() => setChatOpen(true)}
                 className="hidden lg:flex items-center justify-center w-10 h-10 rounded-full bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 transition-colors self-start mt-4 mr-2 flex-shrink-0"
