@@ -20,11 +20,14 @@ interface DesktopHeaderProps {
 }
 
 export function DesktopHeader({ activePath, breadcrumbs, isRecording }: DesktopHeaderProps) {
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Dynamic routes (e.g. /meeting/[id]) pass explicit breadcrumbs;
+  // static routes resolve automatically from pathLabels.
   const resolvedBreadcrumbs = breadcrumbs || [
     { label: 'Workspace' },
     { label: (activePath && pathLabels[activePath]) || 'Meetings' },
   ];
-  const [searchQuery, setSearchQuery] = useState('');
 
   return (
     <header className="h-16 border-b border-slate-200 dark:border-white/5 bg-white/80 dark:bg-transparent backdrop-blur-md dark:backdrop-blur-xl flex items-center justify-between px-8 shrink-0">
