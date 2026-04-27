@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { researchChatApi } from '@/lib/api';
@@ -26,7 +26,6 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [hasProposal, setHasProposal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -36,15 +35,16 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
   const fetchMessages = useCallback(async () => {
     try {
       const data = await researchChatApi.listMessages(researchId);
-      const msgs = data.messages || [];
-      setMessages(msgs);
-      if (!hasProposal && msgs.some(m => m.action === 'propose_structure')) {
-        setHasProposal(true);
-      }
+      setMessages(data.messages || []);
     } catch {
       // silently ignore polling errors
     }
-  }, [researchId, hasProposal]);
+  }, [researchId]);
+
+  const hasProposal = useMemo(
+    () => messages.some(m => m.action === 'propose_structure'),
+    [messages],
+  );
 
   useEffect(() => {
     fetchMessages();
@@ -185,7 +185,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
 
               {msg.action === 'propose_structure' && status === 'planning' && (
                 <div className="mt-3 text-xs text-[#849396]/60 text-center">
-                  ↓ 아래 &quot;연구 시작&quot; 버튼으로 진행할 수 있습니다
+                  하단의 &quot;연구 시작&quot; 버튼으로 진행할 수 있습니다
                 </div>
               )}
 
