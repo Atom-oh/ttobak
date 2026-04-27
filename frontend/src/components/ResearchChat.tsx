@@ -26,6 +26,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [hasProposal, setHasProposal] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -35,11 +36,15 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
   const fetchMessages = useCallback(async () => {
     try {
       const data = await researchChatApi.listMessages(researchId);
-      setMessages(data.messages || []);
+      const msgs = data.messages || [];
+      setMessages(msgs);
+      if (!hasProposal && msgs.some(m => m.action === 'propose_structure')) {
+        setHasProposal(true);
+      }
     } catch {
       // silently ignore polling errors
     }
-  }, [researchId]);
+  }, [researchId, hasProposal]);
 
   useEffect(() => {
     fetchMessages();
@@ -216,7 +221,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
       )}
 
       {/* Persistent approve button during planning */}
-      {status === 'planning' && messages.some(m => m.action === 'propose_structure') && (
+      {status === 'planning' && hasProposal && (
         <div className="px-5 pb-2">
           <button
             onClick={handleApprove}
