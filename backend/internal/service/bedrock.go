@@ -185,6 +185,20 @@ Use bullet points and checkboxes. Include timestamps where available.`
 		}
 	}
 
+	// Include screenshot analysis results if available
+	attachments, _ := s.repo.ListAttachments(ctx, meetingID)
+	if len(attachments) > 0 {
+		var sb strings.Builder
+		for _, att := range attachments {
+			if att.ProcessedContent != "" {
+				sb.WriteString(fmt.Sprintf("\n### 첨부 이미지: %s\n%s\n", att.FileName, att.ProcessedContent))
+			}
+		}
+		if sb.Len() > 0 {
+			userPrompt += "\n\n---\n\n아래는 회의 중 캡처된 화면/슬라이드의 AI 분석 결과입니다. 이 내용도 회의록에 자연스럽게 통합해주세요:\n" + sb.String()
+		}
+	}
+
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
 		MaxTokens:        4096,

@@ -18,6 +18,23 @@ import { SpeakerMapEditor } from '@/components/meeting/SpeakerMapEditor';
 import { meetingsApi } from '@/lib/api';
 import type { Meeting, MeetingDetail, ActionItem, SharedUser } from '@/types/meeting';
 
+/** Map backend attachment response to frontend Attachment type */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeAttachments(raw: any[]): import('@/types/meeting').Attachment[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  return raw.map((att) => ({
+    id: att.attachmentId || att.id || '',
+    name: att.fileName || att.name || 'Untitled',
+    type: att.type === 'photo' || att.type === 'screenshot' ? 'image' as const : att.type,
+    url: att.url || '',
+    processedContent: att.processedContent,
+    size: att.fileSize || att.size,
+    mimeType: att.mimeType,
+    status: att.status,
+    createdAt: att.createdAt || '',
+  }));
+}
+
 /** Normalize action items from API — handles legacy `done` field and missing `id` */
 function normalizeActionItems(raw: unknown): ActionItem[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
@@ -245,6 +262,8 @@ function MeetingDetailContent() {
         const data = await meetingsApi.get(meetingId);
         const detail = data as MeetingDetail;
         detail.actionItems = normalizeActionItems(detail.actionItems);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        detail.attachments = normalizeAttachments((data as any).attachments);
         setMeeting(detail);
       } catch (err) {
         console.error('Failed to fetch meeting:', err);
@@ -261,6 +280,8 @@ function MeetingDetailContent() {
       const data = await meetingsApi.get(meetingId);
       const detail = data as MeetingDetail;
       detail.actionItems = normalizeActionItems(detail.actionItems);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      detail.attachments = normalizeAttachments((data as any).attachments);
       setMeeting(detail);
     } catch (err) {
       console.error('Failed to refetch meeting:', err);
@@ -287,6 +308,8 @@ function MeetingDetailContent() {
         const data = await meetingsApi.get(meeting.meetingId);
         const detail = data as MeetingDetail;
         detail.actionItems = normalizeActionItems(detail.actionItems);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        detail.attachments = normalizeAttachments((data as any).attachments);
         setMeeting(detail);
         if (data.status === 'done' || data.status === 'error') {
           clearInterval(interval);
