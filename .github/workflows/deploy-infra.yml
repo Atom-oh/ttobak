@@ -6,6 +6,9 @@ on:
     paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ttobak-arm
