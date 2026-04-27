@@ -66,9 +66,12 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 			ShowSpeakerLabels: aws.Bool(true),
 			MaxSpeakerLabels:  aws.Int32(10),
 		},
-		LanguageIdSettings: map[string]types.LanguageIdSettings{
+	}
+
+	if resolvedVocab != "" {
+		input.LanguageIdSettings = map[string]types.LanguageIdSettings{
 			"ko-KR": {VocabularyName: aws.String(resolvedVocab)},
-		},
+		}
 	}
 
 	_, err := s.transcribeClient.StartTranscriptionJob(ctx, input)

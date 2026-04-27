@@ -68,6 +68,14 @@ func (s *DictionaryService) GetDictionary(ctx context.Context, userID string) (*
 					log.Printf("failed to sync vocabulary status for user %s: %v", userID, saveErr)
 				}
 			}
+		} else if isVocabularyNotFoundError(err) {
+			status = "FAILED"
+			dict.VocabularyStatus = status
+			if saveErr := s.repo.SaveDictionary(ctx, dict); saveErr != nil {
+				log.Printf("failed to persist FAILED status for user %s: %v", userID, saveErr)
+			}
+		} else {
+			log.Printf("failed to get vocabulary status for user %s: %v", userID, err)
 		}
 	}
 
