@@ -12,7 +12,7 @@ npm run lint      # ESLint
 
 ## Structure
 
-- `src/app/` — App Router pages (record, meeting/[id], kb, files, settings, profile)
+- `src/app/` — App Router pages (record, meeting/[id], kb, files, settings, profile, chat, insights, insights/research/[researchId], insights/[sourceId]/[docHash])
 - `src/components/` — React components
   - `auth/` — LoginForm, SignUpForm, AuthProvider (Cognito)
   - `layout/` — Sidebar, DesktopHeader, MobileNav, AppLayout
@@ -20,7 +20,8 @@ npm run lint      # ESLint
   - `qa/` — QAChatMessage, QAEmptyState, QASuggestedQuestions
   - `record/` — RecordingConfig, PostRecordingBanner
   - `ui/` — Skeleton
-  - Root: RecordButton, LiveTranscript, LiveSummary, MeetingList, AudioPlayer, etc.
+  - `markdown/` — MarkdownRenderer, CodeBlock, Heading, BlockQuote, DataTable, Callout, MermaidBlock, TOCSidebar, remarkCallout
+  - Root: RecordButton, LiveTranscript, LiveSummary, MeetingList, AudioPlayer, CustomDictionary, InsightsList, InsightsTableView, ResearchChat, LiveQAPanel, etc.
 - `src/lib/` — Utilities
   - `api.ts` — apiFetch wrapper with Bearer token + refresh
   - `auth.ts` — Cognito SDK (signUp, login, refresh, getCurrentUser)
@@ -30,6 +31,7 @@ npm run lint      # ESLint
   - `transcribeClient.ts` — Server-side transcription API calls
   - `upload.ts` — S3 presigned URL upload
   - `device.ts` — Audio input device enumeration
+  - `websocket.ts` — RealtimeWebSocket for streaming QA
 - `src/hooks/` — Custom hooks
   - `useRecordingSession` — MediaRecorder + chunk upload orchestration
   - `useLiveSummary` — Polls /api/meetings/{id}/summary during recording

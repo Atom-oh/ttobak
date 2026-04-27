@@ -1,13 +1,16 @@
 # Infrastructure Module
 
-AWS CDK TypeScript — 7 stacks for the full Ttobak deployment.
+AWS CDK TypeScript — 10 stacks for the full Ttobak deployment.
 
 ## Stack Order
-Auth + Storage (parallel) → AI → Knowledge → EdgeAuth (us-east-1) → Gateway → Frontend
+Storage → Auth → AI → Knowledge → EdgeAuth (us-east-1) → Gateway → Crawler → ResearchAgent → Whisper → Frontend
 
 ## Structure
 - `bin/infra.ts` — Stack instantiation and dependency wiring
 - `lib/*-stack.ts` — Individual stack definitions
+- `lib/crawler-stack.ts` — Step Functions crawler pipeline
+- `lib/research-agent-stack.ts` — Bedrock AgentCore research agent
+- `lib/whisper-stack.ts` — ECS Spot GPU Whisper STT batch
 - `test/` — Jest tests (currently skeleton)
 
 ## Conventions

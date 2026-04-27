@@ -9,8 +9,8 @@ Ttobak (또박) is a Korean AI meeting assistant: record audio → STT (A/B: AWS
 ## Build Commands
 
 ```bash
-# Go Lambda binaries (ARM64 cross-compile, all 5 functions)
-cd backend && for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
+# Go Lambda binaries (ARM64 cross-compile, all 8 functions)
+cd backend && for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/websocket cmd/ws-authorizer cmd/research-worker; do
   GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o $dir/bootstrap ./$dir
 done
 
@@ -23,7 +23,7 @@ cd frontend && npm run dev       # local dev server
 cd frontend && npm run lint      # eslint
 
 # CDK
-cd infra && npx cdk synth        # synthesize all 7 stacks
+cd infra && npx cdk synth        # synthesize all 10 stacks
 cd infra && npx cdk deploy --all # deploy everything
 cd infra && npm test             # jest tests
 
@@ -49,12 +49,12 @@ transcripts/ upload → EventBridge → ttobak-summarize → Bedrock Claude → 
 images/ upload → EventBridge → ttobak-process-image → Bedrock Vision → DynamoDB
 ```
 
-### CDK Stack Dependency Order (7 stacks)
-Auth + Storage (parallel) → AI → Knowledge → EdgeAuth (us-east-1) → Gateway → Frontend
+### CDK Stack Dependency Order (10 stacks)
+Storage → Auth → AI → Knowledge → EdgeAuth (us-east-1) → Gateway → Crawler → ResearchAgent → Whisper → Frontend
 
 ### Backend (Go)
 
-5 Lambda entry points in `backend/cmd/{api,transcribe,summarize,process-image,kb}/main.go`. `api` uses chi router + `aws-lambda-go-api-proxy` (payload v1.0). Q&A (`/api/qa/*`) is a separate Python Lambda (`backend/python/qa/`). Shared code in `backend/internal/` (handler, service, repository, model, middleware). Service layer uses sentinel errors (`ErrForbidden`, `ErrNotFound`) for typed error handling.
+8 Lambda entry points in `backend/cmd/{api,transcribe,summarize,process-image,kb,websocket,ws-authorizer,research-worker}/main.go`. `api` uses chi router + `aws-lambda-go-api-proxy` (payload v1.0). Q&A (`/api/qa/*`) is a separate Python Lambda (`backend/python/qa/`). WebSocket handler (`/cmd/websocket`) for real-time QA streaming. WS authorizer (`/cmd/ws-authorizer`) for Cognito JWT validation on WebSocket $connect. Research worker (`/cmd/research-worker`) for AgentCore Runtime. Shared code in `backend/internal/` (handler, service, repository, model, middleware). Service layer uses sentinel errors (`ErrForbidden`, `ErrNotFound`) for typed error handling.
 
 ### DynamoDB & S3
 Table `ttobak-main`, single-table design. Key schema and GSIs in `backend/internal/model/meeting.go`. S3 keys: `{audio|images|transcripts}/{userId|meetingId}/...`
@@ -124,6 +124,7 @@ CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE
 - **STT**: Three engines available — Browser Web Speech API (free, Korean-only), client-side AWS Transcribe Streaming (`@aws-sdk/client-transcribe-streaming` in browser via `sttManager.ts`), and server-side AWS Transcribe/Nova Sonic (async after upload). `liveSttProvider` controls live engine; `sttProvider` controls which engine the transcribe Lambda uses post-upload.
 - **Auto-expiry**: GetMeeting handler auto-marks stuck `transcribing`/`summarizing` status as `error` after 30 minutes. Long audio files rarely exceed this but be aware when debugging.
 - **Sentinel errors**: `service.ErrForbidden` and `service.ErrNotFound` enable typed error handling in handlers via `errors.Is()`
+- **Whisper GPU**: ECS Spot g5.xlarge for batch transcription (ADR-009). Korean filenames need NFD normalization or S3 prefix listing due to macOS/iOS upload encoding.
 
 ## Auto-Sync Rules
 

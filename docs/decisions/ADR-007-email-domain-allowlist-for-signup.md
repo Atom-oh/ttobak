@@ -10,7 +10,7 @@
 # English
 
 ## Status
-Proposed
+Accepted
 
 ## Context
 
@@ -113,7 +113,7 @@ PUT  /api/settings/allowed-domains (auth)   -> { domains: string[] }
 # 한국어
 
 ## 상태
-제안됨
+승인됨
 
 ## 배경
 
