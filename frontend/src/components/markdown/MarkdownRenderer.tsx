@@ -50,7 +50,9 @@ const components: Components = {
     if (lang === 'mermaid') {
       return <MermaidBlock code={String(children).replace(/\n$/, '')} />;
     }
-    if (className?.startsWith('language-')) {
+    const text = String(children ?? '');
+    const isBlock = className?.startsWith('language-') || text.includes('\n');
+    if (isBlock) {
       return <CodeBlock className={className}>{children}</CodeBlock>;
     }
     return <InlineCode>{children}</InlineCode>;
