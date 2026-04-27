@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: deploy-frontend
+  cancel-in-progress: true
+
 env:
   S3_BUCKET: ${{ vars.S3_BUCKET }}
   CF_DISTRIBUTION: ${{ vars.CF_DISTRIBUTION }}
