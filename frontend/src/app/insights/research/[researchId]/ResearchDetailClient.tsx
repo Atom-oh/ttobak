@@ -283,8 +283,8 @@ export default function ResearchDetailPage() {
       </header>
 
       <div className="flex flex-1 min-h-0">
-        {/* Main content area — hidden during planning (chat-only) */}
-        <div className={`flex-1 overflow-y-auto pb-24 lg:pb-8 ${research?.status === 'planning' ? 'hidden' : ''}`}>
+        {/* Main content area — hidden during planning/running (chat-only until report ready) */}
+        <div className={`flex-1 overflow-y-auto pb-24 lg:pb-8 ${research?.status === 'planning' || research?.status === 'running' || research?.status === 'approved' ? 'hidden' : ''}`}>
           <div className="p-4 lg:px-16 lg:pt-10 lg:pb-8 max-w-4xl w-full">
 
             {/* Back button (desktop) */}
@@ -529,10 +529,10 @@ export default function ResearchDetailPage() {
         </div>
 
         {/* Chat panel — show for deep mode or planning status */}
-        {research && (research.mode === 'deep' || research.status === 'planning') && (
+        {research && (research.mode === 'deep' || ['planning', 'running', 'approved'].includes(research.status)) && (
           <>
             {/* Chat toggle button (desktop, when chat is closed and not planning) */}
-            {!chatOpen && research.status !== 'planning' && (
+            {!chatOpen && ['done', 'error'].includes(research.status) && (
               <button
                 onClick={() => setChatOpen(true)}
                 className="hidden lg:flex items-center justify-center w-10 h-10 rounded-full bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 transition-colors self-start mt-4 mr-2 flex-shrink-0"
@@ -544,9 +544,9 @@ export default function ResearchDetailPage() {
 
             {/* Chat panel */}
             <div className={`hidden lg:flex flex-shrink-0 ${
-              research.status === 'planning' ? 'flex-1' : chatOpen ? '' : 'w-0 overflow-hidden'
+              ['planning', 'running', 'approved'].includes(research.status) ? 'flex-1' : chatOpen ? '' : 'w-0 overflow-hidden'
             }`}>
-              <div className={`relative ${research.status === 'planning' ? 'w-full' : 'w-[360px]'}`}>
+              <div className={`relative ${['planning', 'running', 'approved'].includes(research.status) ? 'w-full' : 'w-[360px]'}`}>
                 {research.status !== 'planning' && chatOpen && (
                   <button
                     onClick={() => setChatOpen(false)}

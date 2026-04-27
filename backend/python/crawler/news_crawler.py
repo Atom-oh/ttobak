@@ -244,10 +244,6 @@ def _generate_search_queries(source_name: str, keywords: list) -> list:
             for topic in ['IT', '클라우드', 'AI', '디지털전환']:
                 queries.append(f'{source_name} {topic}')
 
-    for kw in (keywords or []):
-        if kw not in queries:
-            queries.append(kw)
-
     return queries
 
 
@@ -360,10 +356,12 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
         'GSI4PK': 'DOC#news',
         'GSI4SK': crawled_at,
     }
+    item['sourceId'] = source_id
     if summary:
         item['summary'] = summary
     if source_name:
         item['source'] = source_name
+        item['sourceName'] = source_name
     if tags:
         item['tags'] = tags
     table.put_item(Item=item)
