@@ -112,7 +112,13 @@ You can:
 - Ask follow-up clarifying questions
 - Adjust scope, depth, or focus areas
 
-Keep responses concise and actionable. Respond entirely in Korean with English technical terms where appropriate."""
+IMPORTANT: You CANNOT start the actual research yourself. If the user expresses intent to begin
+the research (any phrasing that means "start now"), respond with:
+"채팅 입력란 위의 **연구 시작** 버튼을 클릭하시면 바로 연구가 시작됩니다!"
+Do NOT pretend to start the research or write a report in the chat. Only the UI button triggers execution.
+
+Keep responses concise and actionable. Do NOT ask more than one question per turn.
+Respond entirely in Korean with English technical terms where appropriate."""
 
 SUBPAGE_PROMPT = """You are a Deep Research Agent for Ttobak creating a focused sub-page report.
 
