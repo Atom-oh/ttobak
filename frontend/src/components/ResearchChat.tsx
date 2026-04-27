@@ -46,11 +46,6 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
     [messages],
   );
 
-  const hasProposal = useMemo(
-    () => messages.some(m => m.action === 'propose_structure'),
-    [messages],
-  );
-
   useEffect(() => {
     fetchMessages();
     if (status === 'planning' || status === 'approved' || status === 'running') {

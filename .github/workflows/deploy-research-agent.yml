@@ -6,6 +6,9 @@ on:
     paths: ['backend/python/research-agent/**']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
