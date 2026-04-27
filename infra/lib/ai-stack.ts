@@ -168,6 +168,21 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // Transcribe Vocabulary management (custom dictionary feature)
+    this.apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'TranscribeVocabulary',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'transcribe:CreateVocabulary',
+          'transcribe:UpdateVocabulary',
+          'transcribe:GetVocabulary',
+          'transcribe:DeleteVocabulary',
+        ],
+        resources: ['*'],
+      })
+    );
+
     // KMS Encrypt/Decrypt (for Notion API key encryption)
     this.kmsKey.grantEncryptDecrypt(this.apiRole);
 
@@ -191,6 +206,7 @@ export class AiStack extends cdk.Stack {
           'transcribe:GetTranscriptionJob',
           'transcribe:ListTranscriptionJobs',
           'transcribe:DeleteTranscriptionJob',
+          'transcribe:GetVocabulary',
         ],
         resources: ['*'],
       })
