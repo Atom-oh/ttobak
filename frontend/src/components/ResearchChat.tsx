@@ -185,7 +185,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
 
               {msg.action === 'propose_structure' && status === 'planning' && (
                 <div className="mt-3 text-xs text-[#849396]/60 text-center">
-                  하단의 &quot;연구 시작&quot; 버튼으로 진행할 수 있습니다
+                  ↓ 아래 &quot;연구 시작&quot; 버튼으로 진행할 수 있습니다
                 </div>
               )}
 
@@ -221,7 +221,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
       )}
 
       {/* Persistent approve button during planning */}
-      {status === 'planning' && hasProposal && (
+      {status === 'planning' && messages.some(m => m.action === 'propose_structure') && (
         <div className="px-5 pb-2">
           <button
             onClick={handleApprove}
