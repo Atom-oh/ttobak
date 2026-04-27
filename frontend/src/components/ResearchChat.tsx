@@ -179,14 +179,9 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
               )}
 
               {msg.action === 'propose_structure' && status === 'planning' && (
-                <button
-                  onClick={handleApprove}
-                  disabled={sending}
-                  className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#00E5FF] text-[#0e0e13] text-sm font-semibold hover:bg-[#00E5FF]/80 disabled:opacity-50 transition-colors"
-                >
-                  <span className="material-symbols-outlined text-base">check_circle</span>
-                  이 구조로 진행
-                </button>
+                <div className="mt-3 text-xs text-[#849396]/60 text-center">
+                  ↓ 아래 &quot;연구 시작&quot; 버튼으로 진행할 수 있습니다
+                </div>
               )}
 
               <span className="block text-[10px] text-[#849396]/40 mt-2">
@@ -217,6 +212,23 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
             <p className="text-sm font-medium text-[#e4e1e9]">리서치가 진행 중입니다</p>
             <p className="text-xs text-[#849396] mt-0.5">이 페이지를 닫아도 백그라운드에서 계속 진행됩니다. 완료되면 Insights에서 확인할 수 있습니다.</p>
           </div>
+        </div>
+      )}
+
+      {/* Persistent approve button during planning */}
+      {status === 'planning' && messages.some(m => m.action === 'propose_structure') && (
+        <div className="px-5 pb-2">
+          <button
+            onClick={handleApprove}
+            disabled={sending}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#00E5FF] text-[#0e0e13] text-sm font-bold hover:bg-[#00E5FF]/80 disabled:opacity-50 transition-colors shadow-lg shadow-[#00E5FF]/20"
+          >
+            <span className="material-symbols-outlined text-base">rocket_launch</span>
+            연구 시작
+          </button>
+          <p className="text-[10px] text-[#849396]/50 text-center mt-1.5">
+            질문이 더 있으면 아래에 입력하세요
+          </p>
         </div>
       )}
 
