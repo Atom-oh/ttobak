@@ -2,14 +2,17 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	transcribeTypes "github.com/aws/aws-sdk-go-v2/service/transcribe/types"
+	smithy "github.com/aws/smithy-go"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -47,15 +50,36 @@ func (s *DictionaryService) GetDictionary(ctx context.Context, userID string) (*
 		terms = []model.DictionaryTerm{}
 	}
 
+	status := dict.VocabularyStatus
+	if status == "PENDING" && dict.VocabularyName != "" && s.transcribeClient != nil {
+		result, err := s.transcribeClient.GetVocabulary(ctx, &transcribe.GetVocabularyInput{
+			VocabularyName: aws.String(dict.VocabularyName),
+		})
+		if err == nil {
+			switch result.VocabularyState {
+			case transcribeTypes.VocabularyStateReady:
+				status = "READY"
+			case transcribeTypes.VocabularyStateFailed:
+				status = "FAILED"
+			}
+			if status != dict.VocabularyStatus {
+				dict.VocabularyStatus = status
+				if saveErr := s.repo.SaveDictionary(ctx, dict); saveErr != nil {
+					log.Printf("failed to sync vocabulary status for user %s: %v", userID, saveErr)
+				}
+			}
+		}
+	}
+
 	return &model.DictionaryResponse{
 		Terms:  terms,
-		Status: dict.VocabularyStatus,
+		Status: status,
 	}, nil
 }
 
 // UpdateDictionary updates a user's custom dictionary and triggers vocabulary build
 func (s *DictionaryService) UpdateDictionary(ctx context.Context, userID string, terms []model.DictionaryTerm) (*model.DictionaryResponse, error) {
-	vocabName := fmt.Sprintf("ttobak-vocab-%s", truncateID(userID, 8))
+	vocabName := fmt.Sprintf("ttobak-vocab-%s", vocabSuffix(userID))
 
 	dict := &model.UserDictionary{
 		PK:               model.PrefixUser + userID,
@@ -78,7 +102,9 @@ func (s *DictionaryService) UpdateDictionary(ctx context.Context, userID string,
 			log.Printf("failed to build vocabulary for user %s: %v", userID, err)
 			// Update status to FAILED
 			dict.VocabularyStatus = "FAILED"
-			s.repo.SaveDictionary(ctx, dict)
+			if saveErr := s.repo.SaveDictionary(ctx, dict); saveErr != nil {
+				log.Printf("failed to persist FAILED status for user %s: %v", userID, saveErr)
+			}
 			return &model.DictionaryResponse{
 				Terms:  terms,
 				Status: "FAILED",
@@ -217,17 +243,18 @@ func (s *DictionaryService) deleteTranscribeVocabulary(ctx context.Context, voca
 	}
 }
 
-// isVocabularyNotFoundError checks if the error is a "vocabulary not found" error
 func isVocabularyNotFoundError(err error) bool {
-	return strings.Contains(err.Error(), "NotFoundException") ||
-		strings.Contains(err.Error(), "BadRequestException") ||
-		strings.Contains(err.Error(), "not found")
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		code := apiErr.ErrorCode()
+		return code == "NotFoundException" || code == "BadRequestException"
+	}
+	return false
 }
 
-// truncateID returns the first n characters of an ID
-func truncateID(id string, n int) string {
-	if len(id) <= n {
-		return id
-	}
-	return id[:n]
+// vocabSuffix returns a collision-resistant suffix for vocabulary naming.
+// Uses SHA-256 truncated to 16 hex chars (64 bits) — birthday collision at ~4 billion users.
+func vocabSuffix(userID string) string {
+	h := sha256.Sum256([]byte(userID))
+	return hex.EncodeToString(h[:8])
 }

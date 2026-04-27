@@ -50,6 +50,8 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 	jobName := fmt.Sprintf("ttobak-%s-%d", meetingID, time.Now().Unix())
 	mediaURI := fmt.Sprintf("s3://%s/%s", bucket, key)
 
+	resolvedVocab := s.resolveVocabularyName(vocabularyName...)
+
 	input := &transcribe.StartTranscriptionJobInput{
 		TranscriptionJobName:      aws.String(jobName),
 		IdentifyMultipleLanguages: aws.Bool(true),
@@ -63,7 +65,9 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 		Settings: &types.Settings{
 			ShowSpeakerLabels: aws.Bool(true),
 			MaxSpeakerLabels:  aws.Int32(10),
-			VocabularyName:    aws.String(s.resolveVocabularyName(vocabularyName...)),
+		},
+		LanguageIdSettings: map[string]types.LanguageIdSettings{
+			"ko-KR": {VocabularyName: aws.String(resolvedVocab)},
 		},
 	}
 
