@@ -216,13 +216,12 @@ func (r *DynamoDBRepository) GetMeeting(ctx context.Context, userID, meetingID s
 	return &meeting, nil
 }
 
-// GetMeetingByID retrieves a meeting by meetingID using GSI3
+// GetMeetingByID retrieves a meeting by meetingID using GSI3 (PK=meetingId, SK=entityType)
 // This is used for internal operations where we know the meetingID but not the owner
 func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error) {
-	// Query GSI3 where meetingId = meetingID, filter for entityType = MEETING
-	keyEx := expression.Key("meetingId").Equal(expression.Value(meetingID))
-	filterEx := expression.Name("entityType").Equal(expression.Value("MEETING"))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).WithFilter(filterEx).Build()
+	keyEx := expression.Key("meetingId").Equal(expression.Value(meetingID)).
+		And(expression.Key("entityType").Equal(expression.Value("MEETING")))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
@@ -231,9 +230,9 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 		TableName:                 aws.String(r.tableName),
 		IndexName:                 aws.String("GSI3"),
 		KeyConditionExpression:    expr.KeyCondition(),
-		FilterExpression:          expr.Filter(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		Limit:                     aws.Int32(1),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to query for meeting: %w", err)
