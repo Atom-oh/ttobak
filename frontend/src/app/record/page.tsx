@@ -12,7 +12,7 @@ import { RecordingTabs } from '@/components/RecordingTabs';
 import { TranslationView } from '@/components/TranslationView';
 import { LiveSummary } from '@/components/LiveSummary';
 import { LiveQAPanel } from '@/components/LiveQAPanel';
-import { RecordingConfig, SttProviderSelector, LiveSttSelector } from '@/components/record/RecordingConfig';
+import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingConfig';
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { supportsTabAudioCapture } from '@/lib/device';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
@@ -40,7 +40,6 @@ function RecordPageInner() {
 
   // Config state
   const [meetingTitle, setMeetingTitle] = useState('');
-  const [sttProvider, setSttProvider] = useState<'transcribe' | 'nova-sonic'>('transcribe');
   const [summaryInterval, setSummaryInterval] = useState(50);
   const [translationEnabled, setTranslationEnabled] = useState(false);
   const [targetLang, setTargetLang] = useState('en');
@@ -83,7 +82,6 @@ function RecordPageInner() {
 
   const postRecording = usePostRecording({
     meetingTitle,
-    sttProvider,
   });
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
@@ -245,7 +243,7 @@ function RecordPageInner() {
     setUploadProgress('미팅 생성 중...');
     try {
       const title = meetingTitle || file.name.replace(/\.[^.]+$/, '');
-      const meeting = await meetingsApi.create({ title, sttProvider });
+      const meeting = await meetingsApi.create({ title });
       const meetingId = meeting.meetingId;
 
       setUploadProgress('음성 파일 업로드 중...');
@@ -344,11 +342,6 @@ function RecordPageInner() {
                 className="text-2xl font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-slate-900 dark:text-gray-100 dark:font-[var(--font-headline)] placeholder:text-slate-400 w-full"
               />
             </div>
-            <SttProviderSelector
-              sttProvider={sttProvider}
-              onSttProviderChange={setSttProvider}
-              isRecording={false}
-            />
             {uploadProgress ? (
               <div className="flex flex-col items-center gap-3 py-8">
                 <div className="animate-spin rounded-full h-10 w-10 border-2 border-primary border-t-transparent" />
@@ -447,11 +440,6 @@ function RecordPageInner() {
                 Record 버튼을 누르면 공유할 탭을 선택할 수 있습니다
               </div>
             )}
-            <SttProviderSelector
-              sttProvider={sttProvider}
-              onSttProviderChange={setSttProvider}
-              isRecording={session.isRecording}
-            />
             <LiveSttSelector
               liveSttProvider={liveSttProvider}
               onLiveSttProviderChange={setLiveSttProvider}
