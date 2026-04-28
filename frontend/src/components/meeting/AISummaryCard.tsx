@@ -20,6 +20,10 @@ function markdownToHtml(md: string): string {
     .replace(/\n/g, '<br/>');
 }
 
+function isHtml(text: string): boolean {
+  return /^\s*<[a-z][\s\S]*>/i.test(text);
+}
+
 interface AISummaryCardProps {
   content?: string;
   summary?: string;
@@ -29,6 +33,7 @@ interface AISummaryCardProps {
 
 export function AISummaryCard({ content, summary, transcriptA, onSave }: AISummaryCardProps) {
   const rawText = content || summary || '';
+  const contentIsHtml = isHtml(rawText);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -71,14 +76,20 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
 
       {editing ? (
         <MeetingEditor
-          content={markdownToHtml(rawText)}
+          content={contentIsHtml ? rawText : markdownToHtml(rawText)}
           onAutoSave={handleAutoSave}
           autoSaveDelay={3000}
         />
       ) : rawText ? (
-        <div className="ai-summary-prose">
-          <MarkdownRenderer content={rawText} />
-        </div>
+        contentIsHtml ? (
+          /* Content is TipTap-generated HTML (trusted — from our own editor, not user-supplied raw HTML) */
+          <div className="ai-summary-prose prose prose-sm dark:prose-invert max-w-none text-slate-600 dark:text-[#BAC9CC] leading-relaxed"
+            dangerouslySetInnerHTML={{ __html: rawText }} />
+        ) : (
+          <div className="ai-summary-prose">
+            <MarkdownRenderer content={rawText} />
+          </div>
+        )
       ) : (
         <div className="text-slate-600 dark:text-[#BAC9CC] dark:font-[var(--font-body)] leading-relaxed">요약이 없습니다.</div>
       )}
