@@ -26,7 +26,7 @@ Ttobak is an AI-powered meeting assistant built for AWS Solutions Architects. Re
 - **Microphone recording** with real-time captions (Web Speech API / AWS Transcribe Streaming)
 - **Tab Audio capture** for Google Meet via Chrome `getDisplayMedia` API
 - **Audio file upload** (m4a, mp3, wav, webm) for post-meeting transcription
-- **A/B STT comparison** with AWS Transcribe and Nova Sonic
+- **Whisper GPU batch transcription** — ECS g5.xlarge Spot with faster-whisper-large-v3 for high-accuracy post-recording STT
 - **Real-time translation** during recording (6 languages via Amazon Translate)
 
 ### AI Analysis
@@ -49,7 +49,7 @@ Ttobak is an AI-powered meeting assistant built for AWS Solutions Architects. Re
 
 ### Infrastructure
 - **CI/CD** — GitHub Actions with self-hosted runner on EC2
-- **9 CDK stacks** — fully automated infrastructure deployment
+- **10 CDK stacks** — fully automated infrastructure deployment
 - **CloudFront + Lambda@Edge** — JWT auth at edge, S3 OAC for static content
 
 ## Architecture
@@ -61,9 +61,14 @@ CloudFront (ttobak.atomai.click)
   +-- HTTP API Gateway --> ttobak-api Lambda (Go, chi router)
 
 Event-Driven Pipeline:
-  audio/ upload --> EventBridge --> ttobak-transcribe --> AWS Transcribe
+  audio/ upload --> EventBridge --> ttobak-transcribe Lambda
+    --> Whisper ECS (g5.xlarge GPU Spot, faster-whisper-large-v3)
+    --> transcripts/ S3
   transcripts/ --> EventBridge --> ttobak-summarize --> Bedrock Claude --> DynamoDB
   images/ --> EventBridge --> ttobak-process-image --> Bedrock Vision
+
+Real-Time STT (browser):
+  Microphone --> AWS Transcribe Streaming (via @aws-sdk/client-transcribe-streaming)
 
 Crawler Pipeline:
   EventBridge (daily) --> Step Functions --> TechCrawler + NewsCrawler --> S3 KB --> Bedrock KB
@@ -79,7 +84,7 @@ QA Pipeline:
 
 ```
 Auth + Storage (parallel)
-  --> AI --> Knowledge --> EdgeAuth (us-east-1) --> Gateway --> Crawler --> ResearchAgent --> Frontend
+  --> AI --> Whisper --> Knowledge --> EdgeAuth (us-east-1) --> Gateway --> Crawler --> ResearchAgent --> Frontend
 ```
 
 | Stack | Purpose |
@@ -87,6 +92,7 @@ Auth + Storage (parallel)
 | AuthStack | Cognito User Pool, SPA Client, Identity Pool |
 | StorageStack | DynamoDB (single-table), S3 assets bucket |
 | AiStack | IAM roles for all Lambda functions |
+| WhisperStack | ECS Cluster, g5.xlarge Spot ASG (0-10), GPU task definition, ECR repo |
 | KnowledgeStack | OpenSearch Serverless, Bedrock KB, KB S3 bucket |
 | EdgeAuthStack | Lambda@Edge JWT validation (us-east-1) |
 | GatewayStack | API Gateway, 8 Lambda functions, EventBridge rules, WebSocket API |
@@ -106,8 +112,9 @@ Auth + Storage (parallel)
 | Storage | S3 + CloudFront OAC |
 | AI/ML | Bedrock Claude Sonnet 4.6, Claude Haiku 4.5, Qwen 3 32B |
 | Knowledge | Bedrock KB + OpenSearch Serverless |
-| STT | AWS Transcribe Streaming, Web Speech API |
-| IaC | AWS CDK (TypeScript), 9 stacks |
+| STT (real-time) | AWS Transcribe Streaming (browser), Web Speech API |
+| STT (batch) | Whisper large-v3 on ECS GPU Spot (g5.xlarge) |
+| IaC | AWS CDK (TypeScript), 10 stacks |
 | CI/CD | GitHub Actions + self-hosted runner |
 
 ## Project Structure
@@ -120,14 +127,16 @@ ttobak/
 |   +-- python/qa/               # Q&A Lambda (Bedrock Converse + RAG)
 |   +-- python/crawler/          # News + Tech crawler Lambdas
 |   +-- python/research-tools/   # Deep Research tool Lambdas
+|   +-- whisper/                 # Whisper Docker image (GPU inference)
 +-- frontend/
 |   +-- src/app/                 # Next.js App Router pages
 |   +-- src/components/          # React components
 |   +-- src/hooks/               # Custom hooks (recording, STT, devices)
 |   +-- src/lib/                 # API client, auth, upload, STT manager
 +-- infra/
-|   +-- bin/infra.ts             # CDK app (9 stacks)
+|   +-- bin/infra.ts             # CDK app (10 stacks)
 |   +-- lib/                     # CDK stack definitions
++-- scripts/                     # Operational scripts (whisper-rebatch, etc.)
 +-- mcp-server/                  # Claude Code MCP server (OAuth PKCE)
 +-- docs/
 |   +-- decisions/               # Architecture Decision Records (ADR-001~007)
@@ -162,7 +171,7 @@ done
 ### Deploy
 
 ```bash
-# Infrastructure (all 9 stacks)
+# Infrastructure (all 10 stacks)
 cd infra && npm install && npx cdk deploy --all
 
 # Frontend
@@ -218,7 +227,7 @@ Ttobak(또박)은 AWS Solutions Architect를 위한 AI 미팅 어시스턴트입
 - **마이크 녹음** — 실시간 자막 지원 (Web Speech API / AWS Transcribe Streaming)
 - **탭 오디오 캡처** — Chrome `getDisplayMedia`로 Google Meet 오디오 녹음
 - **오디오 파일 업로드** — m4a, mp3, wav, webm 파일로 후처리 전사
-- **A/B STT 비교** — AWS Transcribe와 Nova Sonic 동시 변환, 결과 비교
+- **Whisper GPU 배치 전사** — ECS g5.xlarge Spot에서 faster-whisper-large-v3로 고정밀 후처리 STT
 - **실시간 번역** — 녹음 중 Amazon Translate로 6개 언어 번역
 
 ### AI 분석
@@ -241,7 +250,7 @@ Ttobak(또박)은 AWS Solutions Architect를 위한 AI 미팅 어시스턴트입
 
 ### 인프라
 - **CI/CD** — GitHub Actions + EC2 self-hosted runner 자동 배포
-- **9개 CDK 스택** — 완전 자동화된 인프라 배포
+- **10개 CDK 스택** — 완전 자동화된 인프라 배포
 - **CloudFront + Lambda@Edge** — 엣지에서 JWT 인증, S3 OAC로 정적 콘텐츠 제공
 
 ## 아키텍처
@@ -253,9 +262,14 @@ CloudFront (ttobak.atomai.click)
   +-- HTTP API Gateway --> ttobak-api Lambda (Go, chi 라우터)
 
 이벤트 기반 파이프라인:
-  audio/ 업로드 --> EventBridge --> ttobak-transcribe --> AWS Transcribe
+  audio/ 업로드 --> EventBridge --> ttobak-transcribe Lambda
+    --> Whisper ECS (g5.xlarge GPU Spot, faster-whisper-large-v3)
+    --> transcripts/ S3
   transcripts/ --> EventBridge --> ttobak-summarize --> Bedrock Claude --> DynamoDB
   images/ --> EventBridge --> ttobak-process-image --> Bedrock Vision
+
+실시간 STT (브라우저):
+  마이크 --> AWS Transcribe Streaming (@aws-sdk/client-transcribe-streaming)
 
 크롤러 파이프라인:
   EventBridge (매일) --> Step Functions --> TechCrawler + NewsCrawler --> S3 KB --> Bedrock KB
@@ -271,7 +285,7 @@ QA 파이프라인:
 
 ```
 Auth + Storage (병렬)
-  --> AI --> Knowledge --> EdgeAuth (us-east-1) --> Gateway --> Crawler --> ResearchAgent --> Frontend
+  --> AI --> Whisper --> Knowledge --> EdgeAuth (us-east-1) --> Gateway --> Crawler --> ResearchAgent --> Frontend
 ```
 
 | 스택 | 용도 |
@@ -279,6 +293,7 @@ Auth + Storage (병렬)
 | AuthStack | Cognito User Pool, SPA 클라이언트, Identity Pool |
 | StorageStack | DynamoDB (Single-Table), S3 에셋 버킷 |
 | AiStack | 모든 Lambda 함수용 IAM 역할 |
+| WhisperStack | ECS 클러스터, g5.xlarge Spot ASG (0-10), GPU 태스크 정의, ECR 레포 |
 | KnowledgeStack | OpenSearch Serverless, Bedrock KB, KB S3 버킷 |
 | EdgeAuthStack | Lambda@Edge JWT 검증 (us-east-1) |
 | GatewayStack | API Gateway, 8개 Lambda, EventBridge 규칙, WebSocket API |
@@ -298,8 +313,9 @@ Auth + Storage (병렬)
 | 스토리지 | S3 + CloudFront OAC |
 | AI/ML | Bedrock Claude Sonnet 4.6, Claude Haiku 4.5, Qwen 3 32B |
 | 지식베이스 | Bedrock KB + OpenSearch Serverless |
-| STT | AWS Transcribe Streaming, Web Speech API |
-| IaC | AWS CDK (TypeScript), 9개 스택 |
+| STT (실시간) | AWS Transcribe Streaming (브라우저), Web Speech API |
+| STT (배치) | Whisper large-v3 on ECS GPU Spot (g5.xlarge) |
+| IaC | AWS CDK (TypeScript), 10개 스택 |
 | CI/CD | GitHub Actions + self-hosted runner |
 
 ## 프로젝트 구조
@@ -312,14 +328,16 @@ ttobak/
 |   +-- python/qa/               # QA Lambda (Bedrock Converse + RAG)
 |   +-- python/crawler/          # 뉴스 + 기술 문서 크롤러 Lambda
 |   +-- python/research-tools/   # 딥 리서치 도구 Lambda
+|   +-- whisper/                 # Whisper Docker 이미지 (GPU 추론)
 +-- frontend/
 |   +-- src/app/                 # Next.js App Router 페이지
 |   +-- src/components/          # React 컴포넌트
 |   +-- src/hooks/               # 커스텀 훅 (녹음, STT, 디바이스)
 |   +-- src/lib/                 # API 클라이언트, 인증, 업로드, STT 매니저
 +-- infra/
-|   +-- bin/infra.ts             # CDK 앱 (9개 스택)
+|   +-- bin/infra.ts             # CDK 앱 (10개 스택)
 |   +-- lib/                     # CDK 스택 정의
++-- scripts/                     # 운영 스크립트 (whisper-rebatch 등)
 +-- mcp-server/                  # Claude Code MCP 서버 (OAuth PKCE)
 +-- docs/
 |   +-- decisions/               # 아키텍처 결정 기록 (ADR-001~007)
@@ -354,7 +372,7 @@ done
 ### 배포
 
 ```bash
-# 인프라 (9개 스택 전체)
+# 인프라 (10개 스택 전체)
 cd infra && npm install && npx cdk deploy --all
 
 # 프론트엔드

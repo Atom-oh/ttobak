@@ -123,7 +123,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		log.Printf("Failed to get meeting record: %v", err)
 	}
 
-	sttProvider := "transcribe"
+	sttProvider := "whisper"
 	if meeting != nil && meeting.SttProvider != "" {
 		sttProvider = meeting.SttProvider
 	}
