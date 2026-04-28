@@ -345,6 +345,12 @@ func (s *BedrockService) refineSequential(ctx context.Context, chunks [][]Whispe
 	return allRefined
 }
 
+// refineParallel processes chunks concurrently (max 4) to stay within Lambda timeout.
+// Trade-off: all parallel chunks receive only the first chunk's tail as speaker hint,
+// so speaker labels may diverge in later chunks. This is acceptable because:
+// 1. Sonnet infers speakers from conversational flow within each chunk
+// 2. The summary (Opus) re-identifies speakers from the full refined transcript
+// 3. Sequential mode (≤5 chunks, ~25 min) covers most meetings with full consistency
 func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperSegment) []RefinedSegment {
 	type chunkResult struct {
 		index    int
