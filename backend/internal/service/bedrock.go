@@ -18,10 +18,10 @@ import (
 
 // Model IDs for different use cases (cost optimization)
 var (
-	// ClaudeOpusModelID is for complex tasks (Q&A with tools, image analysis)
+	// ClaudeOpusModelID is for complex tasks (Q&A with tools, summarization, image analysis)
 	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-4-6-v1")
-	// ClaudeSonnetModelID is for summarization (final meeting summary)
-	ClaudeSonnetModelID = getEnvOrDefault("BEDROCK_SUMMARIZE_MODEL_ID", "global.anthropic.claude-sonnet-4-6")
+	// ClaudeSonnetModelID is for transcript refinement and mid-tier tasks
+	ClaudeSonnetModelID = getEnvOrDefault("BEDROCK_SONNET_MODEL_ID", "global.anthropic.claude-sonnet-4-6")
 	// ClaudeHaikuModelID is for live summary (fast, low-cost incremental updates)
 	ClaudeHaikuModelID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 )
@@ -222,8 +222,7 @@ Use bullet points and checkboxes. Include timestamps where available.`
 		},
 	}
 
-	// Use Sonnet for summarization (cost optimization)
-	content, err := s.invokeClaudeModelWithID(ctx, request, ClaudeSonnetModelID)
+	content, err := s.invokeClaudeModelWithID(ctx, request, ClaudeOpusModelID)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
@@ -256,6 +255,131 @@ Use bullet points and checkboxes. Include timestamps where available.`
 	}
 
 	return content, nil
+}
+
+// WhisperSegment represents a timestamped text segment from Whisper output
+type WhisperSegment struct {
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Text  string  `json:"text"`
+}
+
+// RefinedSegment represents a cleaned-up transcript segment with inferred speaker turns
+type RefinedSegment struct {
+	Speaker   string  `json:"speaker"`
+	Text      string  `json:"text"`
+	StartTime float64 `json:"startTime"`
+	EndTime   float64 `json:"endTime"`
+}
+
+// RefineTranscript takes raw Whisper segments and uses Sonnet to clean up:
+// merge fragmented sentences, fix misrecognized words, remove hallucinations, infer speaker turns.
+func (s *BedrockService) RefineTranscript(ctx context.Context, segments []WhisperSegment) (string, []RefinedSegment, error) {
+	if len(segments) == 0 {
+		return "", nil, fmt.Errorf("no segments to refine")
+	}
+
+	chunks := chunkWhisperSegments(segments, 600) // ~10 min per chunk
+	var allRefined []RefinedSegment
+
+	for i, chunk := range chunks {
+		refined, err := s.refineChunk(ctx, chunk, i, len(chunks))
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to refine chunk %d/%d: %w", i+1, len(chunks), err)
+		}
+		allRefined = append(allRefined, refined...)
+	}
+
+	// Build full transcript text from refined segments
+	var sb strings.Builder
+	prevSpeaker := ""
+	for _, seg := range allRefined {
+		if seg.Speaker != prevSpeaker {
+			if sb.Len() > 0 {
+				sb.WriteString("\n\n")
+			}
+			sb.WriteString(fmt.Sprintf("[%s]\n", seg.Speaker))
+			prevSpeaker = seg.Speaker
+		} else {
+			sb.WriteString(" ")
+		}
+		sb.WriteString(seg.Text)
+	}
+
+	return sb.String(), allRefined, nil
+}
+
+func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int) ([]RefinedSegment, error) {
+	var sb strings.Builder
+	for _, seg := range segments {
+		sb.WriteString(fmt.Sprintf("[%.1f-%.1f] %s\n", seg.Start, seg.End, seg.Text))
+	}
+
+	systemPrompt := `You are a Korean meeting transcript editor. You receive raw Whisper STT segments with timestamps and must produce clean, readable transcript segments.
+
+Your tasks:
+1. **Merge fragmented sentences**: Whisper often splits one speaker's continuous speech into many short fragments. Merge them into natural sentence units.
+2. **Fix misrecognized words**: Correct obvious STT errors (e.g. "상침" → "상세" or "상위", "아키드" → "아키텍트", "채우해" → "셰어해"). Use surrounding context to infer correct words.
+3. **Remove hallucinations**: Whisper sometimes repeats words/phrases (e.g. "법인으로 법인으로 법인으로"). Keep only one instance.
+4. **Infer speaker turns**: Based on conversation flow (questions/answers, topic shifts, turn-taking cues), assign speaker labels like "화자A", "화자B", etc. Be consistent across the transcript.
+5. **Preserve timestamps**: Each output segment should have the start time of its first source segment and end time of its last source segment.
+6. **Remove filler words**: Clean up meaningless fillers ("음", "어", "그") but keep discourse markers that carry meaning.
+
+Output ONLY a JSON array. Each element: {"speaker":"화자A","text":"정제된 문장","startTime":0.0,"endTime":6.5}
+Do NOT include any text outside the JSON array. No markdown fences.`
+
+	userPrompt := fmt.Sprintf("다음은 Whisper STT 원본 세그먼트입니다 (파트 %d/%d). 위 규칙에 따라 정제해주세요:\n\n%s", chunkIdx+1, totalChunks, sb.String())
+
+	request := ClaudeRequest{
+		AnthropicVersion: "bedrock-2023-05-31",
+		MaxTokens:        8192,
+		Messages: []ClaudeMessage{
+			{
+				Role:    "user",
+				Content: []ContentBlock{{Type: "text", Text: userPrompt}},
+			},
+		},
+		System: systemPrompt,
+	}
+
+	result, err := s.invokeClaudeModelWithID(ctx, request, ClaudeSonnetModelID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to invoke model: %w", err)
+	}
+
+	result = stripCodeFences(result)
+
+	var refined []RefinedSegment
+	if err := json.Unmarshal([]byte(result), &refined); err != nil {
+		return nil, fmt.Errorf("failed to parse refined segments: %w (response: %.200s)", err, result)
+	}
+
+	return refined, nil
+}
+
+// chunkWhisperSegments splits segments into time-based chunks (~chunkSeconds each)
+func chunkWhisperSegments(segments []WhisperSegment, chunkSeconds float64) [][]WhisperSegment {
+	if len(segments) == 0 {
+		return nil
+	}
+
+	var chunks [][]WhisperSegment
+	var current []WhisperSegment
+	chunkStart := segments[0].Start
+
+	for _, seg := range segments {
+		if len(current) > 0 && seg.Start-chunkStart >= chunkSeconds {
+			chunks = append(chunks, current)
+			current = nil
+			chunkStart = seg.Start
+		}
+		current = append(current, seg)
+	}
+	if len(current) > 0 {
+		chunks = append(chunks, current)
+	}
+
+	return chunks
 }
 
 // AnalyzeImage analyzes an image using Claude Vision

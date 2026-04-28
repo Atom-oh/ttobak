@@ -84,7 +84,16 @@ type TranscribeResult struct {
 		SpeakerLabels *SpeakerLabels `json:"speaker_labels,omitempty"`
 		Items         []TranscribeItem `json:"items,omitempty"`
 	} `json:"results"`
-	Status string `json:"status"`
+	Status          string          `json:"status"`
+	WhisperMetadata *WhisperMetadata `json:"whisper_metadata,omitempty"`
+}
+
+// WhisperMetadata represents the Whisper-specific metadata in transcript JSON
+type WhisperMetadata struct {
+	Engine              string                   `json:"engine"`
+	Language            string                   `json:"language"`
+	DurationSeconds     float64                  `json:"duration_seconds"`
+	Segments            []service.WhisperSegment `json:"segments"`
 }
 
 // SpeakerLabels represents the speaker diarization results
@@ -161,11 +170,32 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	isNova := strings.Contains(key, "-nova.json")
 
 	// Download and parse transcript
-	transcript, segments, err := downloadAndParseTranscript(ctx, bucket, key)
+	transcript, segments, whisperSegments, err := downloadAndParseTranscript(ctx, bucket, key)
 	if err != nil {
 		log.Printf("Failed to parse transcript: %v", err)
 		setMeetingError(ctx, meetingID)
 		return nil
+	}
+
+	// Refine Whisper transcript using Sonnet if Whisper segments are available
+	if len(whisperSegments) > 0 && len(segments) == 0 {
+		log.Printf("Refining %d Whisper segments for meeting %s", len(whisperSegments), meetingID)
+		refinedText, refinedSegs, refineErr := bedrockService.RefineTranscript(ctx, whisperSegments)
+		if refineErr != nil {
+			log.Printf("Failed to refine transcript (using raw): %v", refineErr)
+		} else {
+			transcript = refinedText
+			segments = make([]TranscriptSegmentOut, len(refinedSegs))
+			for i, rs := range refinedSegs {
+				segments[i] = TranscriptSegmentOut{
+					Speaker:   rs.Speaker,
+					Text:      rs.Text,
+					StartTime: rs.StartTime,
+					EndTime:   rs.EndTime,
+				}
+			}
+			log.Printf("Refined transcript: %d segments -> %d clean segments", len(whisperSegments), len(refinedSegs))
+		}
 	}
 
 	// Update meeting with transcript and speaker segments (atomic partial update)
@@ -259,34 +289,39 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	return nil
 }
 
-func downloadAndParseTranscript(ctx context.Context, bucket, key string) (string, []TranscriptSegmentOut, error) {
+func downloadAndParseTranscript(ctx context.Context, bucket, key string) (string, []TranscriptSegmentOut, []service.WhisperSegment, error) {
 	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to download transcript: %w", err)
+		return "", nil, nil, fmt.Errorf("failed to download transcript: %w", err)
 	}
 	defer result.Body.Close()
 
 	data, err := io.ReadAll(result.Body)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to read transcript: %w", err)
+		return "", nil, nil, fmt.Errorf("failed to read transcript: %w", err)
 	}
 
 	var transcribeResult TranscribeResult
 	if err := json.Unmarshal(data, &transcribeResult); err != nil {
-		return "", nil, fmt.Errorf("failed to parse transcript JSON: %w", err)
+		return "", nil, nil, fmt.Errorf("failed to parse transcript JSON: %w", err)
 	}
 
 	if len(transcribeResult.Results.Transcripts) == 0 {
-		return "", nil, fmt.Errorf("no transcript found in result")
+		return "", nil, nil, fmt.Errorf("no transcript found in result")
 	}
 
 	transcript := transcribeResult.Results.Transcripts[0].Transcript
 	segments := extractSpeakerSegments(&transcribeResult)
 
-	return transcript, segments, nil
+	var whisperSegments []service.WhisperSegment
+	if transcribeResult.WhisperMetadata != nil && len(transcribeResult.WhisperMetadata.Segments) > 0 {
+		whisperSegments = transcribeResult.WhisperMetadata.Segments
+	}
+
+	return transcript, segments, whisperSegments, nil
 }
 
 // extractSpeakerSegments builds speaker-labeled segments from Transcribe output
