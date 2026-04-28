@@ -544,7 +544,7 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 			expression.Name("title"), expression.Name("date"),
 			expression.Name("status"), expression.Name("participants"),
 			expression.Name("tags"), expression.Name("createdAt"),
-			expression.Name("updatedAt"), expression.Name("content"),
+			expression.Name("updatedAt"),
 			expression.Name("sttProvider"), expression.Name("speakerMap"),
 			expression.Name("entityType"), expression.Name("GSI1PK"),
 			expression.Name("GSI1SK"), expression.Name("audioKey"),
@@ -613,16 +613,19 @@ func encodeCursor(key map[string]types.AttributeValue) string {
 }
 
 // decodeCursor deserializes a base64 cursor string back to a DynamoDB ExclusiveStartKey.
+// All keys are assumed to be string-typed (PK/SK).
 func decodeCursor(cursor string) map[string]types.AttributeValue {
 	if cursor == "" {
 		return nil
 	}
 	decoded, err := base64.StdEncoding.DecodeString(cursor)
 	if err != nil {
+		log.Printf("decodeCursor: invalid base64: %v", err)
 		return nil
 	}
 	var simple map[string]string
 	if err := json.Unmarshal(decoded, &simple); err != nil {
+		log.Printf("decodeCursor: invalid JSON: %v", err)
 		return nil
 	}
 	result := make(map[string]types.AttributeValue, len(simple))

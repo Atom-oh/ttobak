@@ -221,15 +221,16 @@ Use bullet points and checkboxes. Include timestamps where available.`
 
 	// Append inline image references for processed attachments.
 	// Frontend resolves attachment:// URLs to presigned S3 URLs at render time.
-	if len(attachments) > 0 {
+	if len(attachments) > 0 && !strings.Contains(content, "## 첨부 이미지") {
 		var imgSection strings.Builder
 		for _, att := range attachments {
 			if att.Status != model.AttachStatusDone || att.ProcessedContent == "" {
 				continue
 			}
+			safeName := strings.NewReplacer("]", "\\]", ")", "\\)", "\n", " ").Replace(att.FileName)
 			imgSection.WriteString(fmt.Sprintf(
 				"\n### %s\n![%s](attachment://%s)\n",
-				att.FileName, att.FileName, att.AttachmentID,
+				safeName, safeName, att.AttachmentID,
 			))
 		}
 		if imgSection.Len() > 0 {
