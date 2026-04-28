@@ -38,7 +38,7 @@ function normalizeAttachments(raw: any[]): import('@/types/meeting').Attachment[
 /** Replace attachment:// URLs in content with presigned download URLs */
 function resolveAttachmentUrls(content: string, attachments?: import('@/types/meeting').Attachment[]): string {
   if (!content || !attachments?.length) return content;
-  return content.replace(/attachment:\/\/([a-f0-9-]+)/g, (match, id) => {
+  return content.replace(/attachment:\/\/([a-f0-9-]+)/gi, (match, id) => {
     const att = attachments.find((a) => a.id === id);
     return att?.url || match;
   });

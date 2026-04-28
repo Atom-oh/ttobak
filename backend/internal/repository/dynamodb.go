@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -516,7 +517,7 @@ type ListMeetingsResult struct {
 }
 
 // ListMeetings lists meetings for a user with pagination.
-// Uses ProjectionExpression to exclude large fields (content, transcripts)
+// Uses ProjectionExpression to exclude large fields (transcripts, actionItems, notes)
 // and avoid DynamoDB's 1MB per-query response size limit.
 func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetingsParams) (*ListMeetingsResult, error) {
 	if params.Limit == 0 {
@@ -593,15 +594,21 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 }
 
 // encodeCursor serializes a DynamoDB ExclusiveStartKey to a base64 cursor string.
-// Stores values as plain strings so decodeCursor can reconstruct AttributeValue types.
+// Only string-typed attributes (PK/SK) are supported; non-string types are logged and skipped.
 func encodeCursor(key map[string]types.AttributeValue) string {
 	simple := make(map[string]string, len(key))
 	for k, v := range key {
 		if s, ok := v.(*types.AttributeValueMemberS); ok {
 			simple[k] = s.Value
+		} else {
+			log.Printf("encodeCursor: unsupported attribute type for key %q: %T", k, v)
 		}
 	}
-	b, _ := json.Marshal(simple)
+	b, err := json.Marshal(simple)
+	if err != nil {
+		log.Printf("encodeCursor: json.Marshal failed: %v", err)
+		return ""
+	}
 	return base64.StdEncoding.EncodeToString(b)
 }
 
