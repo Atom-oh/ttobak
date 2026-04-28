@@ -2,7 +2,7 @@
 
 import { getIdToken, refreshSession } from './auth';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
-import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm } from '@/types/meeting';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -335,8 +335,8 @@ export const insightsApi = {
 
 // Dictionary API
 export const dictionaryApi = {
-  get: () => api.get<{ terms: DictionaryTerm[]; status: string }>('/api/settings/dictionary'),
-  update: (terms: DictionaryTerm[]) => api.put<{ terms: DictionaryTerm[]; status: string }>('/api/settings/dictionary', { terms }),
+  get: () => api.get<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>('/api/settings/dictionary'),
+  update: (terms: DictionaryTerm[]) => api.put<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>('/api/settings/dictionary', { terms }),
 };
 
 // Research API
@@ -349,5 +349,14 @@ export const researchApi = {
     api.get<ResearchDetail>(`/api/research/${encodeURIComponent(researchId)}`),
   delete: (researchId: string) =>
     api.delete(`/api/research/${encodeURIComponent(researchId)}`),
+};
+
+export const researchChatApi = {
+  listMessages: (researchId: string) =>
+    api.get<{ messages: ChatMessage[] }>(`/api/research/${encodeURIComponent(researchId)}/chat`),
+  sendMessage: (researchId: string, data: { content: string; action?: string }) =>
+    api.post<ChatMessage>(`/api/research/${encodeURIComponent(researchId)}/chat`, data),
+  listSubPages: (researchId: string) =>
+    api.get<{ subpages: Research[] }>(`/api/research/${encodeURIComponent(researchId)}/pages`),
 };
 
