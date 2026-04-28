@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 
@@ -274,23 +275,39 @@ type RefinedSegment struct {
 
 // RefineTranscript takes raw Whisper segments and uses Sonnet to clean up:
 // merge fragmented sentences, fix misrecognized words, remove hallucinations, infer speaker turns.
+// Processes in ~5-min chunks with speaker context carried across chunks for label consistency.
+// Per-chunk failures fall back to raw segments rather than discarding the entire result.
 func (s *BedrockService) RefineTranscript(ctx context.Context, segments []WhisperSegment) (string, []RefinedSegment, error) {
 	if len(segments) == 0 {
 		return "", nil, fmt.Errorf("no segments to refine")
 	}
 
-	chunks := chunkWhisperSegments(segments, 600) // ~10 min per chunk
+	chunks := chunkWhisperSegments(segments, 300)
 	var allRefined []RefinedSegment
+	var prevChunkTail []RefinedSegment
 
 	for i, chunk := range chunks {
-		refined, err := s.refineChunk(ctx, chunk, i, len(chunks))
+		refined, err := s.refineChunk(ctx, chunk, i, len(chunks), prevChunkTail)
 		if err != nil {
-			return "", nil, fmt.Errorf("failed to refine chunk %d/%d: %w", i+1, len(chunks), err)
+			log.Printf("Chunk %d/%d refinement failed, using raw segments: %v", i+1, len(chunks), err)
+			for _, seg := range chunk {
+				allRefined = append(allRefined, RefinedSegment{
+					Speaker:   "화자",
+					Text:      seg.Text,
+					StartTime: seg.Start,
+					EndTime:   seg.End,
+				})
+			}
+			continue
 		}
 		allRefined = append(allRefined, refined...)
+		if len(refined) >= 3 {
+			prevChunkTail = refined[len(refined)-3:]
+		} else {
+			prevChunkTail = refined
+		}
 	}
 
-	// Build full transcript text from refined segments
 	var sb strings.Builder
 	prevSpeaker := ""
 	for _, seg := range allRefined {
@@ -309,7 +326,7 @@ func (s *BedrockService) RefineTranscript(ctx context.Context, segments []Whispe
 	return sb.String(), allRefined, nil
 }
 
-func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int) ([]RefinedSegment, error) {
+func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int, prevTail []RefinedSegment) ([]RefinedSegment, error) {
 	var sb strings.Builder
 	for _, seg := range segments {
 		sb.WriteString(fmt.Sprintf("[%.1f-%.1f] %s\n", seg.Start, seg.End, seg.Text))
@@ -321,18 +338,29 @@ Your tasks:
 1. **Merge fragmented sentences**: Whisper often splits one speaker's continuous speech into many short fragments. Merge them into natural sentence units.
 2. **Fix misrecognized words**: Correct obvious STT errors (e.g. "상침" → "상세" or "상위", "아키드" → "아키텍트", "채우해" → "셰어해"). Use surrounding context to infer correct words.
 3. **Remove hallucinations**: Whisper sometimes repeats words/phrases (e.g. "법인으로 법인으로 법인으로"). Keep only one instance.
-4. **Infer speaker turns**: Based on conversation flow (questions/answers, topic shifts, turn-taking cues), assign speaker labels like "화자A", "화자B", etc. Be consistent across the transcript.
+4. **Infer speaker turns**: Based on conversation flow (questions/answers, topic shifts, turn-taking cues), assign speaker labels like "화자A", "화자B", etc. Be consistent across the transcript. If previous context is provided, reuse the same speaker labels for the same speakers.
 5. **Preserve timestamps**: Each output segment should have the start time of its first source segment and end time of its last source segment.
 6. **Remove filler words**: Clean up meaningless fillers ("음", "어", "그") but keep discourse markers that carry meaning.
 
 Output ONLY a JSON array. Each element: {"speaker":"화자A","text":"정제된 문장","startTime":0.0,"endTime":6.5}
 Do NOT include any text outside the JSON array. No markdown fences.`
 
-	userPrompt := fmt.Sprintf("다음은 Whisper STT 원본 세그먼트입니다 (파트 %d/%d). 위 규칙에 따라 정제해주세요:\n\n%s", chunkIdx+1, totalChunks, sb.String())
+	var userPrompt string
+	if len(prevTail) > 0 {
+		var ctx strings.Builder
+		ctx.WriteString("이전 파트의 마지막 발화 (화자 라벨 참고용, 출력에 포함하지 마세요):\n")
+		for _, seg := range prevTail {
+			ctx.WriteString(fmt.Sprintf("  %s: %s\n", seg.Speaker, seg.Text))
+		}
+		ctx.WriteString("\n")
+		userPrompt = fmt.Sprintf("%s다음은 Whisper STT 원본 세그먼트입니다 (파트 %d/%d). 위 규칙에 따라 정제해주세요:\n\n%s", ctx.String(), chunkIdx+1, totalChunks, sb.String())
+	} else {
+		userPrompt = fmt.Sprintf("다음은 Whisper STT 원본 세그먼트입니다 (파트 %d/%d). 위 규칙에 따라 정제해주세요:\n\n%s", chunkIdx+1, totalChunks, sb.String())
+	}
 
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
-		MaxTokens:        8192,
+		MaxTokens:        16384,
 		Messages: []ClaudeMessage{
 			{
 				Role:    "user",
@@ -347,7 +375,7 @@ Do NOT include any text outside the JSON array. No markdown fences.`
 		return nil, fmt.Errorf("failed to invoke model: %w", err)
 	}
 
-	result = stripCodeFences(result)
+	result = extractJSONArray(result)
 
 	var refined []RefinedSegment
 	if err := json.Unmarshal([]byte(result), &refined); err != nil {
@@ -355,6 +383,18 @@ Do NOT include any text outside the JSON array. No markdown fences.`
 	}
 
 	return refined, nil
+}
+
+// extractJSONArray extracts the first JSON array from a string,
+// handling cases where the model wraps output in code fences or adds explanatory text.
+func extractJSONArray(s string) string {
+	s = stripCodeFences(s)
+	start := strings.Index(s, "[")
+	end := strings.LastIndex(s, "]")
+	if start >= 0 && end > start {
+		return s[start : end+1]
+	}
+	return s
 }
 
 // chunkWhisperSegments splits segments into time-based chunks (~chunkSeconds each)
