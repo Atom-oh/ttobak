@@ -139,7 +139,7 @@ ttobak/
 +-- scripts/                     # Operational scripts (whisper-rebatch, etc.)
 +-- mcp-server/                  # Claude Code MCP server (OAuth PKCE)
 +-- docs/
-|   +-- decisions/               # Architecture Decision Records (ADR-001~007)
+|   +-- decisions/               # Architecture Decision Records (ADR-001~011)
 |   +-- superpowers/specs/       # Design specifications
 |   +-- superpowers/plans/       # Implementation plans
 +-- .github/workflows/           # CI/CD pipeline
@@ -199,6 +199,10 @@ For local development (`npm run dev`), populate `frontend/.env.local` with `NEXT
 | [ADR-005](docs/decisions/ADR-005-multi-language-auto-detection-for-stt.md) | Multi-Language Auto Detection for STT | Accepted |
 | [ADR-006](docs/decisions/ADR-006-tab-audio-capture-and-tauri-mac-app.md) | Tab Audio Capture + Tauri Mac App | Accepted |
 | [ADR-007](docs/decisions/ADR-007-email-domain-allowlist-for-signup.md) | Email Domain Allowlist for Signup | Accepted |
+| [ADR-008](docs/decisions/ADR-008-custom-dictionary-for-stt-accuracy.md) | Custom Dictionary for STT Accuracy | Proposed (implementation pending) |
+| [ADR-009](docs/decisions/ADR-009-whisper-gpu-ecs-spot-zero-scale.md) | Whisper GPU on ECS Spot with Zero-Scale | Accepted |
+| [ADR-010](docs/decisions/ADR-010-insights-obsidian-style-markdown-rendering.md) | Obsidian-style Rich Markdown Rendering for Insights | Accepted |
+| [ADR-011](docs/decisions/ADR-011-interactive-deep-research.md) | Interactive Deep Research with Conversational Planning | Accepted |
 
 ## License
 
@@ -340,7 +344,7 @@ ttobak/
 +-- scripts/                     # 운영 스크립트 (whisper-rebatch 등)
 +-- mcp-server/                  # Claude Code MCP 서버 (OAuth PKCE)
 +-- docs/
-|   +-- decisions/               # 아키텍처 결정 기록 (ADR-001~007)
+|   +-- decisions/               # 아키텍처 결정 기록 (ADR-001~011)
 |   +-- superpowers/specs/       # 설계 명세
 |   +-- superpowers/plans/       # 구현 계획
 +-- .github/workflows/           # CI/CD 파이프라인
@@ -400,6 +404,10 @@ aws cloudfront create-invalidation --distribution-id {DIST_ID} --paths "/*"
 | [ADR-005](docs/decisions/ADR-005-multi-language-auto-detection-for-stt.md) | STT 다국어 자동 감지 | 승인됨 |
 | [ADR-006](docs/decisions/ADR-006-tab-audio-capture-and-tauri-mac-app.md) | 탭 오디오 캡처 + Tauri Mac App | 승인됨 |
 | [ADR-007](docs/decisions/ADR-007-email-domain-allowlist-for-signup.md) | 회원가입 이메일 도메인 허용 목록 | 승인됨 |
+| [ADR-008](docs/decisions/ADR-008-custom-dictionary-for-stt-accuracy.md) | STT 정확도 향상을 위한 커스텀 사전 | 제안됨 (구현 대기) |
+| [ADR-009](docs/decisions/ADR-009-whisper-gpu-ecs-spot-zero-scale.md) | Whisper GPU ECS Spot Zero-Scale 도입 | 승인됨 |
+| [ADR-010](docs/decisions/ADR-010-insights-obsidian-style-markdown-rendering.md) | Insights Obsidian 스타일 리치 마크다운 렌더링 | 승인됨 |
+| [ADR-011](docs/decisions/ADR-011-interactive-deep-research.md) | 대화형 계획 수립 기반 인터랙티브 딥 리서치 | 승인됨 |
 
 ## 라이선스
 
