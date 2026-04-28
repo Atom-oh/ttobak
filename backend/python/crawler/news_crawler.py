@@ -34,20 +34,22 @@ table = dynamodb.Table(TABLE_NAME)
 s3 = boto3.client('s3')
 bedrock = boto3.client('bedrock-runtime')
 
-# RSS sources
+# RSS sources (Google News as fallback only — returns JS redirect URLs)
 GOOGLE_NEWS_RSS = 'https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko'
-NAVER_NEWS_RSS = 'https://news.search.naver.com/search.naver?where=rss&query={query}'
 
-# Site-specific RSS feeds (Korean tech/business news)
+# Primary: site-specific RSS feeds that return direct article URLs
 SITE_RSS_FEEDS = {
-    'zdnet': 'https://zdnet.co.kr/rss/newsall.xml',
     'etnews': 'https://rss.etnews.com/Section901.xml',
-    'itchosun': 'https://it.chosun.com/rss/it_all_rss.xml',
-    'bloter': 'https://www.bloter.net/feed',
+    'hankyung': 'https://www.hankyung.com/feed/it',
+    'mk': 'https://www.mk.co.kr/rss/50300009/',
+    'sedaily': 'https://www.sedaily.com/RSS/IT',
+    'byline': 'https://byline.network/feed/',
+    'aitimes': 'https://www.aitimes.com/rss/allArticle.xml',
+    'techm': 'https://www.techm.kr/rss/allArticle.xml',
 }
 
 MAX_ARTICLES_PER_QUERY = 5
-MAX_ARTICLES_PER_FEED = 3
+MAX_ARTICLES_PER_FEED = 5
 FETCH_TIMEOUT_SECONDS = 10
 MAX_CONTENT_LENGTH = 30000
 
@@ -197,15 +199,8 @@ def _search_google_news(query: str) -> list:
         return []
 
 
-def _search_naver_news(query: str) -> list:
-    encoded = quote_plus(query)
-    rss_url = NAVER_NEWS_RSS.format(query=encoded)
-    try:
-        xml_text = _fetch_url(rss_url)
-        return _parse_rss(xml_text, max_items=MAX_ARTICLES_PER_QUERY)
-    except Exception as e:
-        logger.warning(f'Naver News RSS failed for "{query}": {e}')
-        return []
+def _is_google_news_redirect(url: str) -> bool:
+    return 'news.google.com/' in url
 
 
 def _fetch_site_rss(feed_url: str, keyword_filter: str = '') -> list:
@@ -223,20 +218,25 @@ def _fetch_site_rss(feed_url: str, keyword_filter: str = '') -> list:
         return []
 
 
+KNOWN_OUTLET_NAMES = {
+    'google', 'naver', 'google news', 'naver news', 'zdnet korea',
+    'it chosun', 'bloter', 'etnews', 'byline', 'techm', 'aitimes',
+}
+
+
 def _generate_search_queries(source_name: str, keywords: list) -> list:
     """Generate search queries by combining source name with keywords.
 
-    If keywords are provided, each becomes "{source_name} {keyword}".
-    The bare source name is always included as the first query.
-    Without keywords, default topics are appended automatically.
+    Filters out news outlet names that were incorrectly stored as keywords.
     """
     queries = []
+    valid_keywords = [kw for kw in keywords if kw.lower() not in KNOWN_OUTLET_NAMES]
 
     if source_name:
         queries.append(source_name)
 
-        if keywords:
-            for kw in keywords:
+        if valid_keywords:
+            for kw in valid_keywords:
                 combined = f'{source_name} {kw}'
                 if combined not in queries:
                     queries.append(combined)
@@ -414,7 +414,7 @@ def _extract_source_name(title: str) -> str:
 
 
 def handler(event, context):
-    """Process news articles — automatically searches all aggregators.
+    """Process news articles from site RSS feeds and Google News.
 
     Expected event:
       {
@@ -424,9 +424,8 @@ def handler(event, context):
         "customUrls": [{"url": "https://...", "title": "..."}]
       }
 
-    The crawler always searches Google News + Naver News (aggregators that
-    cover all Korean outlets). newsQueries are interest keywords that get
-    combined with sourceName to form search queries.
+    Primary: site-specific RSS feeds (direct URLs, reliable).
+    Fallback: Google News RSS (skip articles with unresolvable redirect URLs).
     """
     source_id = event.get('sourceId', 'unknown')
     source_name = event.get('sourceName', '')
@@ -446,6 +445,9 @@ def handler(event, context):
         nonlocal docs_added
         if url in seen_urls:
             return
+        if _is_google_news_redirect(url):
+            logger.debug(f'Skipping Google News redirect URL: {url[:80]}')
+            return
         seen_urls.add(url)
         try:
             if _process_article(source_id, title, url, pub_date, description, source_name):
@@ -455,7 +457,17 @@ def handler(event, context):
             logger.error(f'Article error: {error_msg}', exc_info=True)
             errors.append(error_msg)
 
-    # 1. Google News (covers all Korean outlets: 조선일보, 중앙일보, ZDNet, etc.)
+    # 1. Site RSS feeds (primary — direct article URLs, always reliable)
+    for site_key, feed_url in SITE_RSS_FEEDS.items():
+        keyword_filter = source_name if source_name else ''
+        articles = _fetch_site_rss(feed_url, keyword_filter)
+        if articles:
+            logger.info(f'Site RSS {site_key} (filter="{keyword_filter}"): {len(articles)} article(s)')
+            for article in articles:
+                _try_process(article['title'], article['url'],
+                             article.get('pubDate', ''), article.get('description', ''))
+
+    # 2. Google News (fallback — redirect URLs are skipped)
     for query in all_queries:
         articles = _search_google_news(query)
         logger.info(f'Google News "{query}": {len(articles)} article(s)')
@@ -463,25 +475,7 @@ def handler(event, context):
             _try_process(article['title'], article['url'],
                          article.get('pubDate', ''), article.get('description', ''))
 
-    # 2. Naver News (largest Korean news aggregator)
-    for query in all_queries:
-        articles = _search_naver_news(query)
-        logger.info(f'Naver News "{query}": {len(articles)} article(s)')
-        for article in articles:
-            _try_process(article['title'], article['url'],
-                         article.get('pubDate', ''), article.get('description', ''))
-
-    # 3. Site-specific RSS feeds (supplementary — catches articles aggregators may miss)
-    if source_name:
-        for site_key, feed_url in SITE_RSS_FEEDS.items():
-            articles = _fetch_site_rss(feed_url, source_name)
-            if articles:
-                logger.info(f'Site RSS {site_key} (filter="{source_name}"): {len(articles)} article(s)')
-                for article in articles:
-                    _try_process(article['title'], article['url'],
-                                 article.get('pubDate', ''), article.get('description', ''))
-
-    # 4. Custom URLs
+    # 3. Custom URLs
     for entry in custom_urls:
         url = entry.get('url', '')
         title = entry.get('title', url)
