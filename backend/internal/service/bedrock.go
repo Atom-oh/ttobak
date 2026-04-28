@@ -347,13 +347,13 @@ Do NOT include any text outside the JSON array. No markdown fences.`
 
 	var userPrompt string
 	if len(prevTail) > 0 {
-		var ctx strings.Builder
-		ctx.WriteString("이전 파트의 마지막 발화 (화자 라벨 참고용, 출력에 포함하지 마세요):\n")
+		var hint strings.Builder
+		hint.WriteString("이전 파트의 마지막 발화 (화자 라벨 참고용, 출력에 포함하지 마세요):\n")
 		for _, seg := range prevTail {
-			ctx.WriteString(fmt.Sprintf("  %s: %s\n", seg.Speaker, seg.Text))
+			hint.WriteString(fmt.Sprintf("  %s: %s\n", seg.Speaker, seg.Text))
 		}
-		ctx.WriteString("\n")
-		userPrompt = fmt.Sprintf("%s다음은 Whisper STT 원본 세그먼트입니다 (파트 %d/%d). 위 규칙에 따라 정제해주세요:\n\n%s", ctx.String(), chunkIdx+1, totalChunks, sb.String())
+		hint.WriteString("\n")
+		userPrompt = fmt.Sprintf("%s다음은 Whisper STT 원본 세그먼트입니다 (파트 %d/%d). 위 규칙에 따라 정제해주세요:\n\n%s", hint.String(), chunkIdx+1, totalChunks, sb.String())
 	} else {
 		userPrompt = fmt.Sprintf("다음은 Whisper STT 원본 세그먼트입니다 (파트 %d/%d). 위 규칙에 따라 정제해주세요:\n\n%s", chunkIdx+1, totalChunks, sb.String())
 	}
