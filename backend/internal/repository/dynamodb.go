@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -241,6 +242,10 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 
 	if len(result.Items) == 0 {
 		return nil, nil
+	}
+
+	if len(result.Items) > 1 {
+		log.Printf("GetMeetingByID: GSI3 returned %d items for meetingId=%s, expected 1", len(result.Items), meetingID)
 	}
 
 	var meeting model.Meeting
