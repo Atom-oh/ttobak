@@ -122,6 +122,7 @@ type AttachmentResponse struct {
 	AttachmentID     string `json:"attachmentId"`
 	OriginalKey      string `json:"originalKey"`
 	ProcessedKey     string `json:"processedKey,omitempty"`
+	URL              string `json:"url,omitempty"`
 	Type             string `json:"type"` // photo, screenshot, diagram, whiteboard, document, video, audio_file
 	Status           string `json:"status"`
 	Description      string `json:"description,omitempty"`

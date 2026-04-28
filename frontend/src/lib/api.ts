@@ -355,8 +355,7 @@ export const researchChatApi = {
   listMessages: (researchId: string) =>
     api.get<{ messages: ChatMessage[] }>(`/api/research/${encodeURIComponent(researchId)}/chat`),
   sendMessage: (researchId: string, data: { content: string; action?: string }) =>
-    api.post<ChatMessage>(`/api/research/${encodeURIComponent(researchId)}/chat`, data),
+    api.post<{ messageId: string }>(`/api/research/${encodeURIComponent(researchId)}/chat`, data),
   listSubPages: (researchId: string) =>
-    api.get<{ subpages: Research[] }>(`/api/research/${encodeURIComponent(researchId)}/pages`),
+    api.get<{ subpages: Research[] }>(`/api/research/${encodeURIComponent(researchId)}/subpages`),
 };
-

@@ -54,6 +54,7 @@ export interface Attachment {
   thumbnailUrl?: string;
   originalUrl?: string;
   processedUrl?: string;
+  processedContent?: string;
   size?: number;
   mimeType?: string;
   status?: string;
