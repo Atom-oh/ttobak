@@ -24,7 +24,7 @@ const customSchema = {
       'data-callout-title',
       'className',
     ],
-    img: [...(defaultSchema.attributes?.img ?? []), 'src', 'alt', 'loading'],
+    img: [...(defaultSchema.attributes?.img ?? []), 'loading'],
   },
 };
 

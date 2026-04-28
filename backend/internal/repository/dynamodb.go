@@ -517,8 +517,9 @@ type ListMeetingsResult struct {
 }
 
 // ListMeetings lists meetings for a user with pagination.
-// Uses ProjectionExpression to exclude large fields (transcripts, actionItems, notes)
-// and avoid DynamoDB's 1MB per-query response size limit.
+// Uses ProjectionExpression to exclude transcript fields (transcriptA/B, transcriptSegments)
+// and other large fields (actionItems, notes) to stay within DynamoDB's 1MB per-query limit.
+// content IS included because ToMeetingListItem uses it for the 200-char summary preview.
 func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetingsParams) (*ListMeetingsResult, error) {
 	if params.Limit == 0 {
 		params.Limit = 20
@@ -544,7 +545,7 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 			expression.Name("title"), expression.Name("date"),
 			expression.Name("status"), expression.Name("participants"),
 			expression.Name("tags"), expression.Name("createdAt"),
-			expression.Name("updatedAt"),
+			expression.Name("updatedAt"), expression.Name("content"),
 			expression.Name("sttProvider"), expression.Name("speakerMap"),
 			expression.Name("entityType"), expression.Name("GSI1PK"),
 			expression.Name("GSI1SK"), expression.Name("audioKey"),
