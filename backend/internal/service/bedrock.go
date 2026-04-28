@@ -219,8 +219,24 @@ Use bullet points and checkboxes. Include timestamps where available.`
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	// Atomic partial update — only set content and status to avoid clobbering
-	// concurrent writes to other fields (e.g., audioKey from CompleteUpload)
+	// Append inline image references for processed attachments.
+	// Frontend resolves attachment:// URLs to presigned S3 URLs at render time.
+	if len(attachments) > 0 {
+		var imgSection strings.Builder
+		for _, att := range attachments {
+			if att.Status != model.AttachStatusDone || att.ProcessedContent == "" {
+				continue
+			}
+			imgSection.WriteString(fmt.Sprintf(
+				"\n### %s\n![%s](attachment://%s)\n",
+				att.FileName, att.FileName, att.AttachmentID,
+			))
+		}
+		if imgSection.Len() > 0 {
+			content += "\n\n---\n\n## 첨부 이미지\n" + imgSection.String()
+		}
+	}
+
 	if err := s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
 		"content": content,
 		"status":  model.StatusDone,
