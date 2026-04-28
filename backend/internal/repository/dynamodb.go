@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -515,7 +516,10 @@ type ListMeetingsResult struct {
 	NextCursor *string
 }
 
-// ListMeetings lists meetings for a user with pagination
+// ListMeetings lists meetings for a user with pagination.
+// Uses ProjectionExpression to exclude transcript fields (transcriptA/B, transcriptSegments)
+// and other large fields (actionItems, notes) to stay within DynamoDB's 1MB per-query limit.
+// content IS included because ToMeetingListItem uses it for the 200-char summary preview.
 func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetingsParams) (*ListMeetingsResult, error) {
 	if params.Limit == 0 {
 		params.Limit = 20
@@ -523,17 +527,9 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 
 	result := &ListMeetingsResult{}
 
-	// Decode cursor if provided
-	var exclusiveStartKey map[string]types.AttributeValue
-	if params.Cursor != "" {
-		decoded, err := base64.StdEncoding.DecodeString(params.Cursor)
-		if err == nil {
-			json.Unmarshal(decoded, &exclusiveStartKey)
-		}
-	}
+	exclusiveStartKey := decodeCursor(params.Cursor)
 
 	if params.Tab == "shared" {
-		// Query only shared meetings
 		shares, nextCursor, err := r.listSharesForUserPaginated(ctx, params.UserID, params.Limit, exclusiveStartKey)
 		if err != nil {
 			return nil, err
@@ -541,10 +537,24 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 		result.Shares = shares
 		result.NextCursor = nextCursor
 	} else {
-		// Query owned meetings
 		keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixUser + params.UserID)).
 			And(expression.Key("SK").BeginsWith(model.PrefixMeeting))
-		expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+		proj := expression.NamesList(
+			expression.Name("PK"), expression.Name("SK"),
+			expression.Name("meetingId"), expression.Name("userId"),
+			expression.Name("title"), expression.Name("date"),
+			expression.Name("status"), expression.Name("participants"),
+			expression.Name("tags"), expression.Name("createdAt"),
+			expression.Name("updatedAt"), expression.Name("content"),
+			expression.Name("sttProvider"), expression.Name("speakerMap"),
+			expression.Name("entityType"), expression.Name("GSI1PK"),
+			expression.Name("GSI1SK"), expression.Name("audioKey"),
+			expression.Name("selectedTranscript"), expression.Name("duration"),
+		)
+		expr, err := expression.NewBuilder().
+			WithKeyCondition(keyEx).
+			WithProjection(proj).
+			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to build expression: %w", err)
 		}
@@ -552,11 +562,12 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 		queryResult, err := r.client.Query(ctx, &dynamodb.QueryInput{
 			TableName:                 aws.String(r.tableName),
 			KeyConditionExpression:    expr.KeyCondition(),
+			ProjectionExpression:      expr.Projection(),
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
 			Limit:                     aws.Int32(params.Limit),
 			ExclusiveStartKey:         exclusiveStartKey,
-			ScanIndexForward:          aws.Bool(false), // newest first
+			ScanIndexForward:          aws.Bool(false),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to query meetings: %w", err)
@@ -566,14 +577,11 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 			return nil, fmt.Errorf("failed to unmarshal meetings: %w", err)
 		}
 
-		// Encode next cursor
 		if queryResult.LastEvaluatedKey != nil {
-			cursorBytes, _ := json.Marshal(queryResult.LastEvaluatedKey)
-			cursor := base64.StdEncoding.EncodeToString(cursorBytes)
+			cursor := encodeCursor(queryResult.LastEvaluatedKey)
 			result.NextCursor = &cursor
 		}
 
-		// Also get shared meetings if tab is "all"
 		if params.Tab != "shared" {
 			shares, err := r.ListSharesForUser(ctx, params.UserID)
 			if err != nil {
@@ -584,6 +592,48 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 	}
 
 	return result, nil
+}
+
+// encodeCursor serializes a DynamoDB ExclusiveStartKey to a base64 cursor string.
+// Only string-typed attributes (PK/SK) are supported; non-string types are logged and skipped.
+func encodeCursor(key map[string]types.AttributeValue) string {
+	simple := make(map[string]string, len(key))
+	for k, v := range key {
+		if s, ok := v.(*types.AttributeValueMemberS); ok {
+			simple[k] = s.Value
+		} else {
+			log.Printf("encodeCursor: unsupported attribute type for key %q: %T", k, v)
+		}
+	}
+	b, err := json.Marshal(simple)
+	if err != nil {
+		log.Printf("encodeCursor: json.Marshal failed: %v", err)
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// decodeCursor deserializes a base64 cursor string back to a DynamoDB ExclusiveStartKey.
+// All keys are assumed to be string-typed (PK/SK).
+func decodeCursor(cursor string) map[string]types.AttributeValue {
+	if cursor == "" {
+		return nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		log.Printf("decodeCursor: invalid base64: %v", err)
+		return nil
+	}
+	var simple map[string]string
+	if err := json.Unmarshal(decoded, &simple); err != nil {
+		log.Printf("decodeCursor: invalid JSON: %v", err)
+		return nil
+	}
+	result := make(map[string]types.AttributeValue, len(simple))
+	for k, v := range simple {
+		result[k] = &types.AttributeValueMemberS{Value: v}
+	}
+	return result
 }
 
 func (r *DynamoDBRepository) listSharesForUserPaginated(ctx context.Context, userID string, limit int32, exclusiveStartKey map[string]types.AttributeValue) ([]model.Share, *string, error) {
@@ -613,8 +663,7 @@ func (r *DynamoDBRepository) listSharesForUserPaginated(ctx context.Context, use
 
 	var nextCursor *string
 	if result.LastEvaluatedKey != nil {
-		cursorBytes, _ := json.Marshal(result.LastEvaluatedKey)
-		cursor := base64.StdEncoding.EncodeToString(cursorBytes)
+		cursor := encodeCursor(result.LastEvaluatedKey)
 		nextCursor = &cursor
 	}
 

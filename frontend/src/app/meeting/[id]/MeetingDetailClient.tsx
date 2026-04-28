@@ -35,6 +35,15 @@ function normalizeAttachments(raw: any[]): import('@/types/meeting').Attachment[
   }));
 }
 
+/** Replace attachment:// URLs in content with presigned download URLs */
+function resolveAttachmentUrls(content: string, attachments?: import('@/types/meeting').Attachment[]): string {
+  if (!content || !attachments?.length) return content;
+  return content.replace(/attachment:\/\/([a-f0-9-]+)/gi, (match, id) => {
+    const att = attachments.find((a) => a.id === id);
+    return att?.url || match;
+  });
+}
+
 /** Normalize action items from API — handles legacy `done` field and missing `id` */
 function normalizeActionItems(raw: unknown): ActionItem[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
@@ -425,7 +434,7 @@ function MeetingDetailContent() {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-12">
               <div className="lg:col-span-7">
                 <AISummaryCard
-                  content={meeting.content}
+                  content={resolveAttachmentUrls(meeting.content || '', meeting.attachments)}
                   summary={meeting.summary}
                   transcriptA={meeting.transcriptA}
                   onSave={async (html) => {

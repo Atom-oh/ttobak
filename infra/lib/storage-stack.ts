@@ -58,7 +58,6 @@ export class StorageStack extends cdk.Stack {
     });
 
     // GSI3 for direct meeting lookup by meetingId + entityType
-    // Sort key enables key condition (no FilterExpression) for exact 1-item lookups
     this.table.addGlobalSecondaryIndex({
       indexName: 'GSI3',
       partitionKey: {

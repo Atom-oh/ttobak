@@ -114,6 +114,15 @@ type speakerSegment struct {
 	EndTime   float64 `json:"endTime"`
 }
 
+var mdEscaper = strings.NewReplacer(
+	"[", "\\[", "]", "\\]",
+	"(", "\\(", ")", "\\)",
+	"!", "\\!", "`", "\\`",
+	"\\", "\\\\", "\n", " ",
+)
+
+func sanitizeMarkdownText(s string) string { return mdEscaper.Replace(s) }
+
 // SummarizeTranscript generates meeting notes (content) from the transcript using Claude.
 // When userID is provided, uses strongly-consistent base table read instead of GSI.
 func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID string, userID ...string) (string, error) {
@@ -219,8 +228,26 @@ Use bullet points and checkboxes. Include timestamps where available.`
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	// Atomic partial update — only set content and status to avoid clobbering
-	// concurrent writes to other fields (e.g., audioKey from CompleteUpload)
+	// Append inline image references for processed attachments.
+	// Frontend resolves attachment:// URLs to presigned S3 URLs at render time.
+	const attachmentSentinel = "<!-- ttobak:attachments -->"
+	if len(attachments) > 0 && !strings.Contains(content, attachmentSentinel) {
+		var imgSection strings.Builder
+		for _, att := range attachments {
+			if att.Status != model.AttachStatusDone || att.ProcessedContent == "" {
+				continue
+			}
+			safeName := sanitizeMarkdownText(att.FileName)
+			imgSection.WriteString(fmt.Sprintf(
+				"\n### %s\n![%s](attachment://%s)\n",
+				safeName, safeName, att.AttachmentID,
+			))
+		}
+		if imgSection.Len() > 0 {
+			content += "\n\n---\n\n" + attachmentSentinel + "\n## 첨부 이미지\n" + imgSection.String()
+		}
+	}
+
 	if err := s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
 		"content": content,
 		"status":  model.StatusDone,
