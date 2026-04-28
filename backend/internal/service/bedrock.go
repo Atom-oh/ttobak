@@ -325,9 +325,14 @@ func (s *BedrockService) refineSequential(ctx context.Context, chunks [][]Whispe
 
 	for i, chunk := range chunks {
 		refined, err := s.refineChunk(ctx, chunk, i, len(chunks), prevChunkTail)
-		if err != nil {
-			log.Printf("Chunk %d/%d refinement failed, using raw segments: %v", i+1, len(chunks), err)
-			allRefined = append(allRefined, rawFallbackSegments(chunk)...)
+		if err != nil || len(refined) == 0 {
+			if err != nil {
+				log.Printf("Chunk %d/%d refinement failed, using raw segments: %v", i+1, len(chunks), err)
+			} else {
+				log.Printf("Chunk %d/%d returned empty result, using raw segments", i+1, len(chunks))
+			}
+			lastSpeaker := lastSpeakerLabel(allRefined)
+			allRefined = append(allRefined, rawFallbackSegments(chunk, lastSpeaker)...)
 			continue
 		}
 		allRefined = append(allRefined, refined...)
@@ -346,25 +351,44 @@ func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperS
 		segments []RefinedSegment
 	}
 
-	results := make([][]RefinedSegment, len(chunks))
-	sem := make(chan struct{}, 4)
-	done := make(chan chunkResult, len(chunks))
+	// Run first chunk synchronously to establish baseline speaker labels
+	firstResult, err := s.refineChunk(ctx, chunks[0], 0, len(chunks), nil)
+	if err != nil || len(firstResult) == 0 {
+		if err != nil {
+			log.Printf("Chunk 1/%d refinement failed, using raw: %v", len(chunks), err)
+		}
+		firstResult = rawFallbackSegments(chunks[0], "화자A")
+	}
+	var firstTail []RefinedSegment
+	if len(firstResult) >= 3 {
+		firstTail = firstResult[len(firstResult)-3:]
+	} else {
+		firstTail = firstResult
+	}
 
-	for i, chunk := range chunks {
+	results := make([][]RefinedSegment, len(chunks))
+	results[0] = firstResult
+
+	sem := make(chan struct{}, 4)
+	done := make(chan chunkResult, len(chunks)-1)
+
+	for i := 1; i < len(chunks); i++ {
 		sem <- struct{}{}
-		go func(idx int, c []WhisperSegment) {
+		go func(idx int, c []WhisperSegment, tail []RefinedSegment) {
 			defer func() { <-sem }()
-			refined, err := s.refineChunk(ctx, c, idx, len(chunks), nil)
-			if err != nil {
-				log.Printf("Chunk %d/%d refinement failed (parallel), using raw: %v", idx+1, len(chunks), err)
-				done <- chunkResult{index: idx, segments: rawFallbackSegments(c)}
+			refined, err := s.refineChunk(ctx, c, idx, len(chunks), tail)
+			if err != nil || len(refined) == 0 {
+				if err != nil {
+					log.Printf("Chunk %d/%d refinement failed (parallel), using raw: %v", idx+1, len(chunks), err)
+				}
+				done <- chunkResult{index: idx, segments: rawFallbackSegments(c, lastSpeakerLabel(tail))}
 				return
 			}
 			done <- chunkResult{index: idx, segments: refined}
-		}(i, chunk)
+		}(i, chunks[i], firstTail)
 	}
 
-	for range chunks {
+	for i := 1; i < len(chunks); i++ {
 		r := <-done
 		results[r.index] = r.segments
 	}
@@ -376,17 +400,27 @@ func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperS
 	return allRefined
 }
 
-func rawFallbackSegments(chunk []WhisperSegment) []RefinedSegment {
+func rawFallbackSegments(chunk []WhisperSegment, speaker string) []RefinedSegment {
+	if speaker == "" {
+		speaker = "화자A"
+	}
 	segments := make([]RefinedSegment, len(chunk))
 	for i, seg := range chunk {
 		segments[i] = RefinedSegment{
-			Speaker:   "화자",
+			Speaker:   speaker,
 			Text:      seg.Text,
 			StartTime: seg.Start,
 			EndTime:   seg.End,
 		}
 	}
 	return segments
+}
+
+func lastSpeakerLabel(segments []RefinedSegment) string {
+	if len(segments) == 0 {
+		return "화자A"
+	}
+	return segments[len(segments)-1].Speaker
 }
 
 func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int, prevTail []RefinedSegment) ([]RefinedSegment, error) {
