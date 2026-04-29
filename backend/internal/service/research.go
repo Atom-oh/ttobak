@@ -171,6 +171,10 @@ func (s *ResearchService) GetResearchDetail(ctx context.Context, researchId, use
 		}
 	}
 
+	if research.TrashedAt != "" && !isOwner {
+		return nil, ErrNotFound
+	}
+
 	resp := &model.ResearchResponse{Research: *research}
 
 	if research.Status == "done" && research.S3Key != "" {

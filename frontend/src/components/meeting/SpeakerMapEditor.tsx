@@ -34,7 +34,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
 
   const [mapping, setMapping] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
-    speakers.forEach((s) => { init[s] = ''; });
+    speakers.forEach((s) => { init[s] = existingSpeakerMap?.[s] || ''; });
     return init;
   });
   const [saving, setSaving] = useState(false);
