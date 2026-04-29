@@ -124,26 +124,42 @@ func (s *ResearchService) ListResearch(ctx context.Context, userId string, inclu
 		items = filtered
 	}
 
-	// Include research shared with this user
+	// Include research shared with this user (BatchGetItem to avoid N+1)
 	if s.mainRepo != nil {
 		shares, err := s.mainRepo.ListSharesForUser(ctx, userId)
 		if err != nil {
 			log.Printf("warn: failed to list shared research for %s: %v", userId, err)
 		} else {
+			var researchShares []model.Share
 			for _, share := range shares {
-				if share.EntityType != "RESEARCH_SHARE" {
-					continue
+				if share.EntityType == "RESEARCH_SHARE" {
+					researchShares = append(researchShares, share)
 				}
-				research, err := s.repo.GetResearch(ctx, share.MeetingID)
-				if err != nil || research == nil {
-					continue
+			}
+			if len(researchShares) > 0 {
+				ids := make([]string, len(researchShares))
+				for i, share := range researchShares {
+					ids[i] = share.MeetingID
 				}
-				if !includeTrashed && research.TrashedAt != "" {
-					continue
+				sharedResearch, err := s.repo.BatchGetResearch(ctx, ids)
+				if err != nil {
+					log.Printf("warn: failed to batch get shared research: %v", err)
+				} else {
+					shareByID := make(map[string]model.Share, len(researchShares))
+					for _, share := range researchShares {
+						shareByID[share.MeetingID] = share
+					}
+					for _, r := range sharedResearch {
+						if !includeTrashed && r.TrashedAt != "" {
+							continue
+						}
+						r.IsShared = true
+						if sh, ok := shareByID[r.ResearchID]; ok {
+							r.SharedBy = sh.OwnerEmail
+						}
+						items = append(items, r)
+					}
 				}
-				research.IsShared = true
-				research.SharedBy = share.OwnerEmail
-				items = append(items, *research)
 			}
 		}
 	}

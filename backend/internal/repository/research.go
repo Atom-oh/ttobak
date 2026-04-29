@@ -247,6 +247,41 @@ func (r *ResearchRepository) ListUserResearch(ctx context.Context, userId string
 	return researches, nil
 }
 
+// BatchGetResearch retrieves multiple research items by ID using BatchGetItem
+func (r *ResearchRepository) BatchGetResearch(ctx context.Context, researchIds []string) ([]model.Research, error) {
+	if len(researchIds) == 0 {
+		return nil, nil
+	}
+
+	keys := make([]map[string]types.AttributeValue, len(researchIds))
+	for i, id := range researchIds {
+		keys[i] = map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + id},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		}
+	}
+
+	result, err := r.client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
+		RequestItems: map[string]types.KeysAndAttributes{
+			r.tableName: {Keys: keys},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch get research: %w", err)
+	}
+
+	items := result.Responses[r.tableName]
+	researches := make([]model.Research, 0, len(items))
+	for _, item := range items {
+		var ri researchItem
+		if err := attributevalue.UnmarshalMap(item, &ri); err != nil {
+			continue
+		}
+		researches = append(researches, ri.Research)
+	}
+	return researches, nil
+}
+
 // ListSubPages returns research items that have the given parentId
 // Filters the user's research list in-memory (suitable for small volumes)
 func (r *ResearchRepository) ListSubPages(ctx context.Context, userId, parentId string) ([]model.Research, error) {
@@ -289,7 +324,7 @@ func (r *ResearchRepository) RemoveResearchField(ctx context.Context, researchId
 	return nil
 }
 
-// DeleteResearch deletes both the main record and the user index record
+// DeleteResearch deletes the main record, user index, and all associated share records
 func (r *ResearchRepository) DeleteResearch(ctx context.Context, researchId, userId string) error {
 	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
@@ -317,7 +352,45 @@ func (r *ResearchRepository) DeleteResearch(ctx context.Context, researchId, use
 		return fmt.Errorf("failed to delete research: %w", err)
 	}
 
+	r.cleanupResearchShares(ctx, researchId)
 	return nil
+}
+
+func (r *ResearchRepository) cleanupResearchShares(ctx context.Context, researchId string) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixResearch + researchId)).
+		And(expression.Key("SK").BeginsWith("SHARE_TO#"))
+	expr, _ := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+
+	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ProjectionExpression:      aws.String("PK, SK, sharedToId"),
+	})
+	if err != nil {
+		return
+	}
+
+	for _, item := range result.Items {
+		sharedToID := ""
+		if v, ok := item["sharedToId"].(*types.AttributeValueMemberS); ok {
+			sharedToID = v.Value
+		}
+		r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(r.tableName),
+			Key:       map[string]types.AttributeValue{"PK": item["PK"], "SK": item["SK"]},
+		})
+		if sharedToID != "" {
+			r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
+					"SK": &types.AttributeValueMemberS{Value: "SHARED#" + researchId},
+				},
+			})
+		}
+	}
 }
 
 // CreateResearchShare creates share records for a research (both recipient and entity lookup)
