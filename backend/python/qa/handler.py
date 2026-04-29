@@ -38,6 +38,12 @@ def create_research_from_chat(user_id, topic, mode):
     import secrets
     from datetime import datetime, timezone
 
+    if not topic or not topic.strip():
+        return {"error": "topic is required"}
+    topic = topic.strip()[:500]
+    if mode not in ("quick", "standard", "deep"):
+        mode = "standard"
+
     research_id = secrets.token_hex(16)
     now = datetime.now(timezone.utc).isoformat()
     s3_key = f"shared/research/{research_id}.md"

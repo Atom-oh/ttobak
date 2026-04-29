@@ -400,7 +400,8 @@ export function InsightsList() {
                               const detail = await researchApi.getDetail(r.researchId);
                               if (!detail.content) return;
                               const { parse } = await import('marked');
-                              const rendered = await parse(detail.content);
+                              const DOMPurify = (await import('dompurify')).default;
+                              const rendered = DOMPurify.sanitize(await parse(detail.content));
                               const title = r.topic.replace(/</g, '&lt;');
                               const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.7;color:#1a1a1a}h1,h2,h3{margin-top:1.5em}pre{background:#f5f5f5;padding:12px;border-radius:6px;overflow-x:auto}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}</style></head><body>${rendered}</body></html>`;
                               const blob = new Blob([fullHtml], { type: 'text/html' });

@@ -127,7 +127,9 @@ func (s *ResearchService) ListResearch(ctx context.Context, userId string, inclu
 	// Include research shared with this user
 	if s.mainRepo != nil {
 		shares, err := s.mainRepo.ListSharesForUser(ctx, userId)
-		if err == nil {
+		if err != nil {
+			log.Printf("warn: failed to list shared research for %s: %v", userId, err)
+		} else {
 			for _, share := range shares {
 				if share.EntityType != "RESEARCH_SHARE" {
 					continue
@@ -420,11 +422,11 @@ func (s *ResearchService) ShareResearchByEmail(ctx context.Context, ownerID, own
 		return nil, err
 	}
 	if targetUser == nil {
-		return nil, fmt.Errorf("user not found")
+		return nil, ErrUserNotFound
 	}
 
 	if ownerID == targetUser.UserID {
-		return nil, fmt.Errorf("cannot share with yourself")
+		return nil, ErrSelfShare
 	}
 
 	return s.repo.CreateResearchShare(ctx, researchId, ownerID, ownerEmail, targetUser.UserID, targetEmail, permission)

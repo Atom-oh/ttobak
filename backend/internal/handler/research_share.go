@@ -2,7 +2,9 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
@@ -24,8 +26,8 @@ func (h *ResearchShareHandler) ShareResearch(w http.ResponseWriter, r *http.Requ
 	userEmail := middleware.GetUserEmail(ctx)
 	researchID := chi.URLParam(r, "researchId")
 
-	if researchID == "" {
-		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Research ID is required")
+	if researchID == "" || strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
 		return
 	}
 
@@ -51,23 +53,24 @@ func (h *ResearchShareHandler) ShareResearch(w http.ResponseWriter, r *http.Requ
 
 	share, err := h.researchService.ShareResearchByEmail(ctx, userID, userEmail, researchID, req.Email, req.Permission)
 	if err != nil {
-		switch err.Error() {
-		case "forbidden":
+		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only owner can share")
 			return
-		case "not found":
+		}
+		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
 			return
-		case "user not found":
+		}
+		if errors.Is(err, service.ErrUserNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "User not found")
 			return
-		case "cannot share with yourself":
+		}
+		if errors.Is(err, service.ErrSelfShare) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Cannot share with yourself")
 			return
-		default:
-			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
-			return
 		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
 	}
 
 	response := model.SharedWithResponse{
@@ -87,8 +90,8 @@ func (h *ResearchShareHandler) RevokeResearchShare(w http.ResponseWriter, r *htt
 	researchID := chi.URLParam(r, "researchId")
 	sharedToID := chi.URLParam(r, "userId")
 
-	if researchID == "" {
-		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Research ID is required")
+	if researchID == "" || strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
 		return
 	}
 
@@ -99,17 +102,16 @@ func (h *ResearchShareHandler) RevokeResearchShare(w http.ResponseWriter, r *htt
 
 	err := h.researchService.RevokeResearchShare(ctx, ownerID, researchID, sharedToID)
 	if err != nil {
-		switch err.Error() {
-		case "forbidden":
+		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only owner can revoke share")
 			return
-		case "not found":
+		}
+		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
 			return
-		default:
-			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
-			return
 		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
