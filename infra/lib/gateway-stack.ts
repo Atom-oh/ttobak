@@ -113,8 +113,6 @@ export class GatewayStack extends cdk.Stack {
     });
 
     this.apiFunction.addEnvironment('RESEARCH_SFN_ARN', researchSfn.stateMachineArn);
-    this.qaFunction.addEnvironment('RESEARCH_SFN_ARN', researchSfn.stateMachineArn);
-    researchSfn.grantStartExecution(this.qaFunction);
 
     // Transcribe Lambda function - triggered by S3 events via EventBridge
     this.transcribeFunction = new lambda.Function(this, 'TranscribeFunction', {
@@ -236,6 +234,8 @@ export class GatewayStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,
     });
+
+    this.qaFunction.addEnvironment('RESEARCH_SFN_ARN', researchSfn.stateMachineArn);
 
     // JWT Authorizer for Cognito
     const jwtAuthorizer = new apigatewayv2Authorizers.HttpJwtAuthorizer(
