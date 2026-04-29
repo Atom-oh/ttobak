@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -264,6 +265,30 @@ func (r *ResearchRepository) ListSubPages(ctx context.Context, userId, parentId 
 	return subPages, nil
 }
 
+// RemoveResearchField removes a single attribute from a research record
+func (r *ResearchRepository) RemoveResearchField(ctx context.Context, researchId, fieldName string) error {
+	update := expression.Remove(expression.Name(fieldName))
+	expr, err := expression.NewBuilder().WithUpdate(update).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build remove expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchId},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		},
+		UpdateExpression:         expr.Update(),
+		ExpressionAttributeNames: expr.Names(),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove field %s: %w", fieldName, err)
+	}
+
+	return nil
+}
+
 // DeleteResearch deletes both the main record and the user index record
 func (r *ResearchRepository) DeleteResearch(ctx context.Context, researchId, userId string) error {
 	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
@@ -293,4 +318,136 @@ func (r *ResearchRepository) DeleteResearch(ctx context.Context, researchId, use
 	}
 
 	return nil
+}
+
+// CreateResearchShare creates share records for a research (both recipient and entity lookup)
+func (r *ResearchRepository) CreateResearchShare(ctx context.Context, researchID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error) {
+	now := time.Now().UTC()
+
+	shareForRecipient := &model.Share{
+		PK:         model.PrefixUser + sharedToID,
+		SK:         model.PrefixShare + researchID,
+		MeetingID:  researchID,
+		OwnerID:    ownerID,
+		OwnerEmail: ownerEmail,
+		SharedToID: sharedToID,
+		Email:      email,
+		Permission: permission,
+		CreatedAt:  now,
+		EntityType: "RESEARCH_SHARE",
+	}
+
+	item1, err := attributevalue.MarshalMap(shareForRecipient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal share: %w", err)
+	}
+
+	shareForResearch := &model.Share{
+		PK:         model.PrefixResearch + researchID,
+		SK:         model.PrefixShareTo + sharedToID,
+		MeetingID:  researchID,
+		OwnerID:    ownerID,
+		OwnerEmail: ownerEmail,
+		SharedToID: sharedToID,
+		Email:      email,
+		Permission: permission,
+		CreatedAt:  now,
+		EntityType: "RESEARCH_SHARE",
+	}
+
+	item2, err := attributevalue.MarshalMap(shareForResearch)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal share: %w", err)
+	}
+
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: item1}},
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: item2}},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create research share: %w", err)
+	}
+
+	return shareForRecipient, nil
+}
+
+// GetResearchShare retrieves a share record for a research
+func (r *ResearchRepository) GetResearchShare(ctx context.Context, sharedToID, researchID string) (*model.Share, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixShare + researchID},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get research share: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+
+	var share model.Share
+	if err := attributevalue.UnmarshalMap(result.Item, &share); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal share: %w", err)
+	}
+	return &share, nil
+}
+
+// DeleteResearchShare deletes both share records for a research
+func (r *ResearchRepository) DeleteResearchShare(ctx context.Context, sharedToID, researchID string) error {
+	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixShare + researchID},
+					},
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixShareTo + sharedToID},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete research share: %w", err)
+	}
+	return nil
+}
+
+// ListSharesForResearch lists all shares for a research
+func (r *ResearchRepository) ListSharesForResearch(ctx context.Context, researchID string) ([]model.Share, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixResearch + researchID)).
+		And(expression.Key("SK").BeginsWith(model.PrefixShareTo))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build expression: %w", err)
+	}
+
+	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to query research shares: %w", err)
+	}
+
+	var shares []model.Share
+	if err := attributevalue.UnmarshalListOfMaps(result.Items, &shares); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal shares: %w", err)
+	}
+	return shares, nil
 }

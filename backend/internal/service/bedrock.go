@@ -363,14 +363,11 @@ func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperS
 		if err != nil {
 			log.Printf("Chunk 1/%d refinement failed, using raw: %v", len(chunks), err)
 		}
-		firstResult = rawFallbackSegments(chunks[0], "화자A")
+		firstResult = rawFallbackSegments(chunks[0], "spk_0")
 	}
-	var firstTail []RefinedSegment
-	if len(firstResult) >= 3 {
-		firstTail = firstResult[len(firstResult)-3:]
-	} else {
-		firstTail = firstResult
-	}
+	// Build a tail that includes at least one segment per unique speaker from chunk 1,
+	// plus the last 3 segments for continuity context
+	firstTail := buildSpeakerHintTail(firstResult)
 
 	results := make([][]RefinedSegment, len(chunks))
 	results[0] = firstResult
@@ -424,9 +421,34 @@ func rawFallbackSegments(chunk []WhisperSegment, speaker string) []RefinedSegmen
 
 func lastSpeakerLabel(segments []RefinedSegment) string {
 	if len(segments) == 0 {
-		return "화자A"
+		return "spk_0"
 	}
 	return segments[len(segments)-1].Speaker
+}
+
+func buildSpeakerHintTail(segments []RefinedSegment) []RefinedSegment {
+	if len(segments) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var hints []RefinedSegment
+	for _, seg := range segments {
+		if !seen[seg.Speaker] {
+			seen[seg.Speaker] = true
+			hints = append(hints, seg)
+		}
+	}
+	tail := segments
+	if len(segments) > 3 {
+		tail = segments[len(segments)-3:]
+	}
+	for _, t := range tail {
+		if !seen[t.Speaker+"_tail"] {
+			seen[t.Speaker+"_tail"] = true
+			hints = append(hints, t)
+		}
+	}
+	return hints
 }
 
 func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int, prevTail []RefinedSegment) ([]RefinedSegment, error) {
@@ -441,16 +463,28 @@ Your tasks:
 1. **Merge fragmented sentences**: Whisper often splits one speaker's continuous speech into many short fragments. Merge them into natural sentence units.
 2. **Fix misrecognized words**: Correct obvious STT errors (e.g. "상침" → "상세" or "상위", "아키드" → "아키텍트", "채우해" → "셰어해"). Use surrounding context to infer correct words.
 3. **Remove hallucinations**: Whisper sometimes repeats words/phrases (e.g. "법인으로 법인으로 법인으로"). Keep only one instance.
-4. **Infer speaker turns**: Based on conversation flow (questions/answers, topic shifts, turn-taking cues), assign speaker labels like "화자A", "화자B", etc. Be consistent across the transcript. If previous context is provided, reuse the same speaker labels for the same speakers.
+4. **Infer speaker turns**: Based on conversation flow, assign speaker labels "spk_0", "spk_1", "spk_2", "spk_3", "spk_4", "spk_5", etc.
+   - **Meetings typically have 3-8 participants.** Do NOT assume only 2-3 speakers. Pay close attention to: different speaking styles, distinct viewpoints, question-answer patterns, self-introductions, role references, and turn-taking pauses.
+   - **When uncertain, prefer splitting into a new speaker over merging.** It is better to over-estimate speaker count than to conflate different people into one label.
+   - If previous context is provided, reuse the same speaker labels for the same speakers.
 5. **Preserve timestamps**: Each output segment should have the start time of its first source segment and end time of its last source segment.
 6. **Remove filler words**: Clean up meaningless fillers ("음", "어", "그") but keep discourse markers that carry meaning.
 
-Output ONLY a JSON array. Each element: {"speaker":"화자A","text":"정제된 문장","startTime":0.0,"endTime":6.5}
+Output ONLY a JSON array. Each element: {"speaker":"spk_0","text":"정제된 문장","startTime":0.0,"endTime":6.5}
 Do NOT include any text outside the JSON array. No markdown fences.`
 
 	var userPrompt string
 	if len(prevTail) > 0 {
 		var hint strings.Builder
+		speakerSet := make(map[string]bool)
+		for _, seg := range prevTail {
+			speakerSet[seg.Speaker] = true
+		}
+		speakers := make([]string, 0, len(speakerSet))
+		for s := range speakerSet {
+			speakers = append(speakers, s)
+		}
+		hint.WriteString(fmt.Sprintf("이전 파트에서 확인된 화자: %s\n", strings.Join(speakers, ", ")))
 		hint.WriteString("이전 파트의 마지막 발화 (화자 라벨 참고용, 출력에 포함하지 마세요):\n")
 		for _, seg := range prevTail {
 			hint.WriteString(fmt.Sprintf("  %s: %s\n", seg.Speaker, seg.Text))

@@ -224,10 +224,14 @@ export interface Research {
   wordCount?: number;
   summary?: string;
   errorMessage?: string;
+  trashedAt?: string;
+  isShared?: boolean;
+  sharedBy?: string;
 }
 
 export interface ResearchDetail extends Research {
   content?: string;
+  shares?: SharedUser[];
 }
 
 export interface DictionaryTerm {

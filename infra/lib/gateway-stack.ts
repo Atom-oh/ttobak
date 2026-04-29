@@ -113,6 +113,8 @@ export class GatewayStack extends cdk.Stack {
     });
 
     this.apiFunction.addEnvironment('RESEARCH_SFN_ARN', researchSfn.stateMachineArn);
+    this.qaFunction.addEnvironment('RESEARCH_SFN_ARN', researchSfn.stateMachineArn);
+    researchSfn.grantStartExecution(this.qaFunction);
 
     // Transcribe Lambda function - triggered by S3 events via EventBridge
     this.transcribeFunction = new lambda.Function(this, 'TranscribeFunction', {
@@ -227,7 +229,7 @@ export class GatewayStack extends cdk.Stack {
         KB_ID: props.knowledgeBaseId || '',
         BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
         DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
-        MAX_TOOL_ROUNDS: '3',
+        MAX_TOOL_ROUNDS: '5',
         KB_CACHE_TTL_SECONDS: '600',
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
       },

@@ -87,6 +87,37 @@ TOOL_DEFINITIONS = [
                 }
             }
         }
+    },
+    {
+        "toolSpec": {
+            "name": "get_meeting_detail",
+            "description": "특정 미팅의 상세 내용(AI 요약, 트랜스크립트)을 가져옵니다. list_meetings에서 얻은 meetingId를 사용하세요. 미팅 내용에 대해 질문받았을 때 반드시 이 도구를 사용하세요.",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": {
+                        "meetingId": {"type": "string", "description": "미팅 ID (list_meetings 결과에서 확인)"}
+                    },
+                    "required": ["meetingId"]
+                }
+            }
+        }
+    },
+    {
+        "toolSpec": {
+            "name": "start_research",
+            "description": "사용자가 특정 주제에 대해 심층 리서치를 요청할 때 사용합니다. Deep Research를 시작하고 결과 페이지 링크를 반환합니다.",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string", "description": "리서치 주제 (구체적일수록 좋은 결과)"},
+                        "mode": {"type": "string", "description": "리서치 모드: quick (빠른 요약), standard (기본), deep (심층 분석)", "enum": ["quick", "standard", "deep"], "default": "standard"}
+                    },
+                    "required": ["topic"]
+                }
+            }
+        }
     }
 ]
 
@@ -131,6 +162,37 @@ def execute_tool(tool_name, tool_input, context):
                 limit=tool_input.get("limit"),
             )
             return format_meetings_results(meetings), []
+        elif tool_name == "get_meeting_detail":
+            user_id = context.get("user_id")
+            if not user_id:
+                return "사용자 인증 정보가 없습니다.", []
+            meeting_id = tool_input.get("meetingId", "")
+            load_fn = context.get("load_meeting_context")
+            if not load_fn:
+                return "미팅 상세 조회 기능을 사용할 수 없습니다.", []
+            content, err = load_fn(user_id, meeting_id)
+            if err:
+                return f"미팅 조회 실패: {err.get('message', 'unknown error')}", []
+            if not content:
+                return "미팅 내용이 비어있습니다.", []
+            max_len = 6000
+            if len(content) > max_len:
+                content = content[:max_len] + f"\n\n... (총 {len(content)}자 중 {max_len}자까지 표시)"
+            return content, []
+        elif tool_name == "start_research":
+            user_id = context.get("user_id")
+            if not user_id:
+                return "사용자 인증 정보가 없습니다.", []
+            create_fn = context.get("create_research")
+            if not create_fn:
+                return "리서치 기능을 사용할 수 없습니다.", []
+            topic = tool_input.get("topic", "")
+            mode = tool_input.get("mode", "standard")
+            result = create_fn(user_id, topic, mode)
+            if result.get("error"):
+                return f"리서치 생성 실패: {result['error']}", []
+            rid = result.get("researchId", "")
+            return f"리서치가 시작되었습니다!\n\n- **주제**: {topic}\n- **모드**: {mode}\n- **리서치 ID**: {rid}\n- **확인 링크**: /insights/research/{rid}\n\n리서치가 완료되면 Insights 페이지에서 확인하실 수 있습니다.", []
         else:
             return f"Unknown tool: {tool_name}", []
     except Exception as e:

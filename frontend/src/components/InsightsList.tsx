@@ -371,22 +371,50 @@ export function InsightsList() {
                         {r.errorMessage}
                       </p>
                     )}
-                    {/* Delete button for error/done jobs */}
-                    {(r.status === 'error' || r.status === 'done') && (
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          if (!confirm('Delete this research?')) return;
-                          try {
-                            await researchApi.delete(r.researchId);
-                            await fetchResearchJobs();
-                          } catch {}
-                        }}
-                        className="mt-2 flex items-center gap-1 text-xs text-red-500 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 transition-colors"
-                      >
-                        <span className="material-symbols-outlined text-sm">delete</span>
-                        Delete
-                      </button>
+                    {r.status === 'done' && (
+                      <div className="flex items-center gap-2 mt-3">
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              const detail = await researchApi.getDetail(r.researchId);
+                              if (!detail.content) return;
+                              const slug = r.topic.replace(/[^a-zA-Z0-9가-힣\s-]/g, '').replace(/\s+/g, '-').slice(0, 60);
+                              const blob = new Blob([detail.content], { type: 'text/markdown' });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url; a.download = `${slug}.md`;
+                              document.body.appendChild(a); a.click();
+                              document.body.removeChild(a); URL.revokeObjectURL(url);
+                            } catch {}
+                          }}
+                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-[#849396] hover:text-primary dark:hover:text-[#00E5FF] transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-sm">description</span>
+                          MD
+                        </button>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              const detail = await researchApi.getDetail(r.researchId);
+                              if (!detail.content) return;
+                              const { parse } = await import('marked');
+                              const rendered = await parse(detail.content);
+                              const title = r.topic.replace(/</g, '&lt;');
+                              const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.7;color:#1a1a1a}h1,h2,h3{margin-top:1.5em}pre{background:#f5f5f5;padding:12px;border-radius:6px;overflow-x:auto}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}</style></head><body>${rendered}</body></html>`;
+                              const blob = new Blob([fullHtml], { type: 'text/html' });
+                              const url = URL.createObjectURL(blob);
+                              const printWin = window.open(url, '_blank');
+                              if (printWin) printWin.onload = () => { printWin.print(); URL.revokeObjectURL(url); };
+                            } catch {}
+                          }}
+                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-[#849396] hover:text-primary dark:hover:text-[#00E5FF] transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-sm">picture_as_pdf</span>
+                          PDF
+                        </button>
+                      </div>
                     )}
                   </div>
                 );

@@ -19,16 +19,18 @@ import (
 )
 
 type ResearchService struct {
-	repo           *repository.ResearchRepository
-	s3Client       *s3.Client
-	sfnClient      *sfn.Client
-	kbBucketName   string
+	repo            *repository.ResearchRepository
+	mainRepo        *repository.DynamoDBRepository
+	s3Client        *s3.Client
+	sfnClient       *sfn.Client
+	kbBucketName    string
 	stateMachineArn string
 }
 
-func NewResearchService(repo *repository.ResearchRepository, s3Client *s3.Client, sfnClient *sfn.Client, kbBucketName, stateMachineArn string) *ResearchService {
+func NewResearchService(repo *repository.ResearchRepository, mainRepo *repository.DynamoDBRepository, s3Client *s3.Client, sfnClient *sfn.Client, kbBucketName, stateMachineArn string) *ResearchService {
 	return &ResearchService{
 		repo:            repo,
+		mainRepo:        mainRepo,
 		s3Client:        s3Client,
 		sfnClient:       sfnClient,
 		kbBucketName:    kbBucketName,
@@ -107,11 +109,43 @@ func (s *ResearchService) CreateResearch(ctx context.Context, userId string, req
 	return research, nil
 }
 
-func (s *ResearchService) ListResearch(ctx context.Context, userId string) (*model.ResearchListResponse, error) {
+func (s *ResearchService) ListResearch(ctx context.Context, userId string, includeTrashed bool) (*model.ResearchListResponse, error) {
 	items, err := s.repo.ListUserResearch(ctx, userId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list research: %w", err)
 	}
+	if !includeTrashed {
+		filtered := make([]model.Research, 0, len(items))
+		for _, r := range items {
+			if r.TrashedAt == "" {
+				filtered = append(filtered, r)
+			}
+		}
+		items = filtered
+	}
+
+	// Include research shared with this user
+	if s.mainRepo != nil {
+		shares, err := s.mainRepo.ListSharesForUser(ctx, userId)
+		if err == nil {
+			for _, share := range shares {
+				if share.EntityType != "RESEARCH_SHARE" {
+					continue
+				}
+				research, err := s.repo.GetResearch(ctx, share.MeetingID)
+				if err != nil || research == nil {
+					continue
+				}
+				if !includeTrashed && research.TrashedAt != "" {
+					continue
+				}
+				research.IsShared = true
+				research.SharedBy = share.OwnerEmail
+				items = append(items, *research)
+			}
+		}
+	}
+
 	return &model.ResearchListResponse{Research: items}, nil
 }
 
@@ -123,8 +157,16 @@ func (s *ResearchService) GetResearchDetail(ctx context.Context, researchId, use
 	if research == nil {
 		return nil, ErrNotFound
 	}
-	if research.UserID != userId {
-		return nil, ErrForbidden
+
+	isOwner := research.UserID == userId
+	if !isOwner {
+		share, err := s.repo.GetResearchShare(ctx, userId, researchId)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check share: %w", err)
+		}
+		if share == nil {
+			return nil, ErrForbidden
+		}
 	}
 
 	resp := &model.ResearchResponse{Research: *research}
@@ -138,10 +180,25 @@ func (s *ResearchService) GetResearchDetail(ctx context.Context, researchId, use
 		}
 	}
 
+	if isOwner {
+		shares, _ := s.repo.ListSharesForResearch(ctx, researchId)
+		if len(shares) > 0 {
+			shareResponses := make([]model.ShareResponse, len(shares))
+			for i, sh := range shares {
+				shareResponses[i] = model.ShareResponse{
+					UserID:     sh.SharedToID,
+					Email:      sh.Email,
+					Permission: sh.Permission,
+				}
+			}
+			resp.Shares = shareResponses
+		}
+	}
+
 	return resp, nil
 }
 
-func (s *ResearchService) DeleteResearch(ctx context.Context, researchId, userId string) error {
+func (s *ResearchService) TrashResearch(ctx context.Context, researchId, userId string) error {
 	research, err := s.repo.GetResearch(ctx, researchId)
 	if err != nil {
 		return fmt.Errorf("failed to get research: %w", err)
@@ -153,21 +210,27 @@ func (s *ResearchService) DeleteResearch(ctx context.Context, researchId, userId
 		return ErrForbidden
 	}
 
-	if research.S3Key != "" {
-		_, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-			Bucket: &s.kbBucketName,
-			Key:    &research.S3Key,
-		})
-		if err != nil {
-			fmt.Printf("warn: failed to delete research S3 object %s: %v\n", research.S3Key, err)
-		}
+	return s.repo.UpdateResearchFields(ctx, researchId, map[string]interface{}{
+		"trashedAt": time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func (s *ResearchService) RestoreResearch(ctx context.Context, researchId, userId string) error {
+	research, err := s.repo.GetResearch(ctx, researchId)
+	if err != nil {
+		return fmt.Errorf("failed to get research: %w", err)
+	}
+	if research == nil {
+		return ErrNotFound
+	}
+	if research.UserID != userId {
+		return ErrForbidden
+	}
+	if research.TrashedAt == "" {
+		return nil
 	}
 
-	if err := s.repo.DeleteResearch(ctx, researchId, userId); err != nil {
-		return fmt.Errorf("failed to delete research: %w", err)
-	}
-
-	return nil
+	return s.repo.RemoveResearchField(ctx, researchId, "trashedAt")
 }
 
 // sfnExecutionName generates a unique SFN execution name: research-{id prefix}-{mode}-{random}
@@ -337,4 +400,48 @@ func (s *ResearchService) readS3Content(ctx context.Context, key string) (string
 		return "", fmt.Errorf("read body: %w", err)
 	}
 	return string(data), nil
+}
+
+// ShareResearchByEmail shares a research with a user identified by email
+func (s *ResearchService) ShareResearchByEmail(ctx context.Context, ownerID, ownerEmail, researchId, targetEmail, permission string) (*model.Share, error) {
+	research, err := s.repo.GetResearch(ctx, researchId)
+	if err != nil {
+		return nil, err
+	}
+	if research == nil {
+		return nil, ErrNotFound
+	}
+	if research.UserID != ownerID {
+		return nil, ErrForbidden
+	}
+
+	targetUser, err := s.mainRepo.GetUserByEmail(ctx, targetEmail)
+	if err != nil {
+		return nil, err
+	}
+	if targetUser == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	if ownerID == targetUser.UserID {
+		return nil, fmt.Errorf("cannot share with yourself")
+	}
+
+	return s.repo.CreateResearchShare(ctx, researchId, ownerID, ownerEmail, targetUser.UserID, targetEmail, permission)
+}
+
+// RevokeResearchShare revokes a research share (owner only)
+func (s *ResearchService) RevokeResearchShare(ctx context.Context, ownerID, researchId, sharedToID string) error {
+	research, err := s.repo.GetResearch(ctx, researchId)
+	if err != nil {
+		return err
+	}
+	if research == nil {
+		return ErrNotFound
+	}
+	if research.UserID != ownerID {
+		return ErrForbidden
+	}
+
+	return s.repo.DeleteResearchShare(ctx, sharedToID, researchId)
 }
