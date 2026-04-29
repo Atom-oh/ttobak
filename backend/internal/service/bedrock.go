@@ -938,6 +938,90 @@ Rules:
 	return validated, nil
 }
 
+// ExtractSentiment classifies overall meeting tone using Claude Haiku.
+// Returns one of "positive" / "neutral" / "negative", or "" when the transcript
+// is missing or the model output cannot be classified.
+//
+// When userID is provided, uses a strongly-consistent base table read instead of GSI,
+// matching ExtractTags above.
+func (s *BedrockService) ExtractSentiment(ctx context.Context, meetingID string, userID ...string) (string, error) {
+	var meeting *model.Meeting
+	var err error
+	if len(userID) > 0 && userID[0] != "" {
+		meeting, err = s.repo.GetMeeting(ctx, userID[0], meetingID)
+	} else {
+		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get meeting: %w", err)
+	}
+	if meeting == nil {
+		return "", fmt.Errorf("meeting not found: %s", meetingID)
+	}
+
+	transcript := meeting.TranscriptA
+	if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
+		transcript = meeting.TranscriptB
+	} else if transcript == "" && meeting.TranscriptB != "" {
+		transcript = meeting.TranscriptB
+	}
+	if transcript == "" {
+		return "", nil
+	}
+
+	systemPrompt := `You classify the overall tone of a meeting transcript.
+
+Output exactly one of these three words and nothing else: positive, neutral, negative.
+
+- positive: collaborative, constructive, optimistic, celebratory, friendly
+- neutral: informational, status-update, balanced, factual
+- negative: tense, blocked, frustrated, contentious, escalating
+
+Output the single word, lowercase, no punctuation, no quotes, no explanation.`
+
+	userPrompt := fmt.Sprintf("Classify the overall tone of this meeting transcript:\n\n%s", transcript)
+
+	if meeting.TranscriptSegments != "" {
+		var segments []speakerSegment
+		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Classify the overall tone of this speaker-labeled meeting transcript:\n\n")
+			for _, seg := range segments {
+				sb.WriteString(fmt.Sprintf("[%s] %s\n", seg.Speaker, seg.Text))
+			}
+			userPrompt = sb.String()
+		}
+	}
+
+	request := ClaudeRequest{
+		AnthropicVersion: "bedrock-2023-05-31",
+		MaxTokens:        16,
+		System:           systemPrompt,
+		Messages: []ClaudeMessage{
+			{
+				Role: "user",
+				Content: []ContentBlock{
+					{Type: "text", Text: userPrompt},
+				},
+			},
+		},
+	}
+
+	response, err := s.invokeClaudeModelWithID(ctx, request, ClaudeHaikuModelID)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract sentiment: %w", err)
+	}
+
+	cleaned := strings.ToLower(strings.TrimSpace(stripCodeFences(response)))
+	cleaned = strings.Trim(cleaned, ".,!?\"' ")
+	switch cleaned {
+	case "positive", "neutral", "negative":
+		return cleaned, nil
+	default:
+		return "", nil
+	}
+}
+
 // getImageMediaType determines the media type from the file key
 func (s *BedrockService) getImageMediaType(key string) string {
 	lower := strings.ToLower(key)

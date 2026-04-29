@@ -267,8 +267,23 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 				}
 			}
 
+			// Extract overall sentiment using Haiku (fast, cheap). Non-fatal — dashboard
+			// gracefully handles missing sentiment as "neutral".
+			sentiment, err := bedrockService.ExtractSentiment(ctx, meetingID, meeting.UserID)
+			if err != nil {
+				log.Printf("Failed to extract sentiment (non-fatal): %v", err)
+			} else if sentiment != "" {
+				if err := repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
+					"sentiment": sentiment,
+				}); err != nil {
+					log.Printf("Failed to save sentiment: %v", err)
+				} else {
+					log.Printf("Extracted sentiment for meeting %s: %s", meetingID, sentiment)
+				}
+			}
+
 			// KB Export: generate meeting context document and upload to KB bucket
-			// Re-fetch meeting to get the latest state (summary, action items, tags now saved)
+			// Re-fetch meeting to get the latest state (summary, action items, tags, sentiment now saved)
 			updatedMeeting, err := repo.GetMeeting(ctx, meeting.UserID, meetingID)
 			if err != nil {
 				log.Printf("Failed to re-fetch meeting for KB export (non-fatal): %v", err)

@@ -23,6 +23,7 @@ type Meeting struct {
 	SpeakerMap         map[string]string `dynamodbav:"speakerMap,omitempty"`         // spk_0 -> "김팀장" mapping
 	Participants       []string          `dynamodbav:"participants,omitempty"`
 	Tags               []string  `dynamodbav:"tags,omitempty"`
+	Sentiment          string    `dynamodbav:"sentiment,omitempty"` // "positive", "neutral", "negative" — extracted by summarize Lambda
 	Status             string    `dynamodbav:"status"` // recording, transcribing, summarizing, done, error
 	CreatedAt          time.Time `dynamodbav:"createdAt"`
 	UpdatedAt          time.Time `dynamodbav:"updatedAt"`

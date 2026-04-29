@@ -149,6 +149,45 @@ export default function HomePage() {
     return <AuthScreen />;
   }
 
+  // Aggregate sentiment + tag stats across loaded meetings for the dashboard cards.
+  const sentimentCounts = meetings.reduce<Record<string, number>>((acc, m) => {
+    if (m.sentiment) acc[m.sentiment] = (acc[m.sentiment] || 0) + 1;
+    return acc;
+  }, {});
+  const dominantSentiment = Object.entries(sentimentCounts).sort((a, b) => b[1] - a[1])[0]?.[0] as
+    | 'positive'
+    | 'neutral'
+    | 'negative'
+    | undefined;
+  const moodLabel = dominantSentiment
+    ? dominantSentiment.charAt(0).toUpperCase() + dominantSentiment.slice(1)
+    : '—';
+  const moodIcon =
+    dominantSentiment === 'positive'
+      ? 'trending_up'
+      : dominantSentiment === 'negative'
+      ? 'trending_down'
+      : dominantSentiment === 'neutral'
+      ? 'trending_flat'
+      : 'help_outline';
+  const moodAccent =
+    dominantSentiment === 'positive'
+      ? 'text-[#00E5FF]'
+      : dominantSentiment === 'negative'
+      ? 'text-[#B026FF]'
+      : 'text-[#849396]';
+
+  const tagCounts = meetings
+    .flatMap((m) => m.tags ?? [])
+    .reduce<Record<string, number>>((acc, t) => {
+      acc[t] = (acc[t] || 0) + 1;
+      return acc;
+    }, {});
+  const topTags = Object.entries(tagCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([t]) => t);
+
   return (
     <AppLayout activePath="/">
       {/* Mobile Header */}
@@ -216,30 +255,42 @@ export default function HomePage() {
           </div>
 
           {/* Stats Row */}
-          <div className="grid grid-cols-3 gap-4 mb-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
+            {/* Activity */}
             <div className="glass-panel rounded-xl p-5">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#849396] mb-2">Total Airtime</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[#849396] mb-2">Activity</p>
               <p className="font-[var(--font-headline)] text-2xl font-bold text-[#e4e1e9]">
                 {meetings.length > 0
                   ? `${(meetings.reduce((sum, m) => sum + (m.duration || 0), 0) / 3600).toFixed(1)} Hrs`
                   : '0.0 Hrs'}
               </p>
+              <p className="font-[var(--font-body)] text-xs text-[#bac9cc] mt-1 tracking-wide">
+                Total airtime · {meetings.length} meeting{meetings.length !== 1 ? 's' : ''}
+              </p>
             </div>
+
+            {/* Insights */}
             <div className="glass-panel rounded-xl p-5">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#849396] mb-2">Sentiments</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[#849396] mb-2">Insights</p>
               <div className="flex items-center gap-2">
-                <p className="font-[var(--font-headline)] text-2xl font-bold text-[#e4e1e9]">Positive</p>
-                <span className="material-symbols-outlined text-[#00E5FF] text-xl">trending_up</span>
+                <p className={`font-[var(--font-headline)] text-2xl font-bold ${dominantSentiment ? moodAccent : 'text-[#e4e1e9]'}`}>
+                  {moodLabel}
+                </p>
+                <span className={`material-symbols-outlined text-xl ${moodAccent}`}>{moodIcon}</span>
               </div>
-            </div>
-            <div className="glass-panel rounded-xl p-5">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#849396] mb-2">Neural Engine Status</p>
-              <div className="flex items-center gap-2">
-                <span className="relative flex size-2.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full size-2.5 bg-green-500" />
-                </span>
-                <p className="font-[var(--font-headline)] text-lg font-bold text-[#e4e1e9]">Active & Syncing</p>
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {topTags.length > 0 ? (
+                  topTags.map((t) => (
+                    <span
+                      key={t}
+                      className="px-2 py-0.5 rounded-full bg-[#00E5FF]/10 text-[#00E5FF] text-xs font-[var(--font-body)]"
+                    >
+                      {t}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-xs text-[#849396]">No tags yet</span>
+                )}
               </div>
             </div>
           </div>
