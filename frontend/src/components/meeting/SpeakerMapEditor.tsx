@@ -9,24 +9,28 @@ interface SpeakerMapEditorProps {
   onSave: (speakerMap: Record<string, string>) => Promise<void>;
 }
 
+const UNMAPPED_PATTERN = /^(spk_\d+|화자[A-Z])$/;
+
+function speakerSortKey(label: string): number {
+  if (label.startsWith('spk_')) return parseInt(label.replace('spk_', ''));
+  if (label.startsWith('화자') && label.length === 3) return label.charCodeAt(2) - 'A'.charCodeAt(0) + 1000;
+  return 2000;
+}
+
 export function SpeakerMapEditor({ transcription, content, speakerMap: existingSpeakerMap, onSave }: SpeakerMapEditorProps) {
   const speakers = useMemo(() => {
     const labels = new Set<string>();
-    // From transcript segments (always has spk_N labels)
     transcription?.forEach((seg) => {
-      if (seg.speaker && /^spk_\d+$/.test(seg.speaker)) labels.add(seg.speaker);
+      if (seg.speaker) labels.add(seg.speaker);
     });
-    // From content text (fallback)
     if (labels.size === 0 && content) {
-      const matches = content.match(/spk_\d+/g);
+      const matches = content.match(/(?:spk_\d+|화자[A-Z])/g);
       matches?.forEach((m) => labels.add(m));
     }
-    return Array.from(labels).sort((a, b) => {
-      const numA = parseInt(a.replace('spk_', ''));
-      const numB = parseInt(b.replace('spk_', ''));
-      return numA - numB;
-    });
+    return Array.from(labels).sort((a, b) => speakerSortKey(a) - speakerSortKey(b));
   }, [transcription, content]);
+
+  const hasUnmapped = speakers.some((s) => UNMAPPED_PATTERN.test(s));
 
   const [mapping, setMapping] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
@@ -38,7 +42,6 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
 
   if (speakers.length === 0) return null;
 
-  const allMapped = existingSpeakerMap && speakers.every((s) => existingSpeakerMap[s]);
   const hasAnyName = Object.values(mapping).some((v) => v.trim());
 
   const handleSave = async () => {
@@ -59,30 +62,24 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
   const speakerColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1'];
 
   return (
-    <div className={`rounded-xl p-4 mb-6 ${allMapped
-      ? 'bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10'
-      : 'bg-amber-50 dark:bg-[#1a1520] border border-amber-200 dark:border-amber-900/30'
+    <div className={`rounded-xl p-4 mb-6 ${hasUnmapped
+      ? 'bg-amber-50 dark:bg-[#1a1520] border border-amber-200 dark:border-amber-900/30'
+      : 'bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10'
     }`}>
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-2 w-full text-left"
       >
-        <span className={`material-symbols-outlined ${allMapped ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}>
-          {allMapped ? 'group' : 'person_edit'}
+        <span className={`material-symbols-outlined ${hasUnmapped ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}`}>
+          {hasUnmapped ? 'person_edit' : 'group'}
         </span>
-        <span className={`font-semibold text-sm ${allMapped ? 'text-slate-700 dark:text-slate-300' : 'text-amber-800 dark:text-amber-300'}`}>
-          {allMapped ? '참석자' : '화자 이름 설정'}
+        <span className={`font-semibold text-sm ${hasUnmapped ? 'text-amber-800 dark:text-amber-300' : 'text-slate-700 dark:text-slate-300'}`}>
+          {hasUnmapped ? '화자 이름 설정' : '참석자'}
         </span>
-        {allMapped ? (
-          <span className="text-xs text-slate-500 dark:text-slate-400 ml-1">
-            {speakers.map((s) => existingSpeakerMap?.[s] || s).join(', ')}
-          </span>
-        ) : (
-          <span className="text-xs text-amber-600 dark:text-amber-400/70 ml-1">
-            ({speakers.length}명의 화자)
-          </span>
-        )}
-        <span className={`material-symbols-outlined text-sm ml-auto ${allMapped ? 'text-slate-400' : 'text-amber-500'}`}>
+        <span className="text-xs text-slate-500 dark:text-slate-400 ml-1 truncate">
+          {speakers.length}명 · {speakers.map((s) => existingSpeakerMap?.[s] || s).join(', ')}
+        </span>
+        <span className={`material-symbols-outlined text-sm ml-auto flex-shrink-0 ${hasUnmapped ? 'text-amber-500' : 'text-slate-400'}`}>
           {isOpen ? 'expand_less' : 'expand_more'}
         </span>
       </button>
@@ -90,7 +87,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
       {isOpen && (
         <div className="mt-4 space-y-3">
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            화자 라벨에 실제 이름을 입력하면 요약, 트랜스크립트, 액션 아이템에서 일괄 변경됩니다.
+            화자 이름을 입력하면 요약, 트랜스크립트, 액션 아이템에서 일괄 변경됩니다.
           </p>
           {speakers.map((label, i) => (
             <div key={label} className="flex items-center gap-3">
@@ -100,13 +97,13 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
               >
                 {i + 1}
               </div>
-              <span className="text-sm font-mono text-slate-500 dark:text-slate-400 w-14 shrink-0">{label}</span>
+              <span className="text-sm font-mono text-slate-500 dark:text-slate-400 w-20 shrink-0 truncate">{label}</span>
               <span className="text-slate-400">→</span>
               <input
                 type="text"
                 value={mapping[label] || ''}
                 onChange={(e) => setMapping({ ...mapping, [label]: e.target.value })}
-                placeholder={existingSpeakerMap?.[label] || '이름 입력...'}
+                placeholder={existingSpeakerMap?.[label] || '새 이름 입력...'}
                 className="flex-1 text-sm px-3 py-1.5 border border-slate-200 dark:border-white/10 rounded-lg bg-white dark:bg-white/5 text-slate-900 dark:text-white placeholder:text-slate-400 focus:ring-2 focus:ring-primary/20 outline-none"
               />
             </div>

@@ -227,13 +227,15 @@ export class GatewayStack extends cdk.Stack {
         KB_ID: props.knowledgeBaseId || '',
         BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
         DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
-        MAX_TOOL_ROUNDS: '3',
+        MAX_TOOL_ROUNDS: '5',
         KB_CACHE_TTL_SECONDS: '600',
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
       },
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,
     });
+
+    this.qaFunction.addEnvironment('RESEARCH_SFN_ARN', researchSfn.stateMachineArn);
 
     // JWT Authorizer for Cognito
     const jwtAuthorizer = new apigatewayv2Authorizers.HttpJwtAuthorizer(

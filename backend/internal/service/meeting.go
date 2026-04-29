@@ -21,6 +21,8 @@ var (
 	ErrForbidden      = errors.New("forbidden")
 	ErrNotFound       = errors.New("not found")
 	ErrStatusMismatch = errors.New("status mismatch")
+	ErrUserNotFound   = errors.New("user not found")
+	ErrSelfShare      = errors.New("cannot share with yourself")
 )
 
 // meetingRepo defines the repository methods used by MeetingService.

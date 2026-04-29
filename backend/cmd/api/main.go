@@ -94,8 +94,9 @@ func init() {
 	insightsHandler := handler.NewInsightsHandler(insightsService)
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
 	sfnClient := sfn.NewFromConfig(cfg)
-	researchService := service.NewResearchService(researchRepo, s3Client, sfnClient, kbBucketName, os.Getenv("RESEARCH_SFN_ARN"))
+	researchService := service.NewResearchService(researchRepo, repo, s3Client, sfnClient, kbBucketName, os.Getenv("RESEARCH_SFN_ARN"))
 	researchHandler := handler.NewResearchHandler(researchService, notionService, repo)
+	researchShareHandler := handler.NewResearchShareHandler(researchService)
 	chatHandler := handler.NewChatHandler(repo)
 	researchChatRepo := repository.NewChatRepository(dynamoClient, tableName)
 	researchChatHandler := handler.NewResearchChatHandler(researchChatRepo, researchService)
@@ -199,7 +200,10 @@ func init() {
 		r.Get("/api/research", researchHandler.ListResearch)
 		r.Get("/api/research/{researchId}", researchHandler.GetResearchDetail)
 		r.Delete("/api/research/{researchId}", researchHandler.DeleteResearch)
+		r.Post("/api/research/{researchId}/restore", researchHandler.RestoreResearch)
 		r.Post("/api/research/{researchId}/export", researchHandler.ExportResearch)
+		r.Post("/api/research/{researchId}/share", researchShareHandler.ShareResearch)
+		r.Delete("/api/research/{researchId}/share/{userId}", researchShareHandler.RevokeResearchShare)
 
 		// Research chat routes
 		r.Get("/api/research/{researchId}/chat", researchChatHandler.ListMessages)

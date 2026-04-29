@@ -9,37 +9,8 @@ import { TOCSidebar } from '@/components/markdown/TOCSidebar';
 import { researchApi, researchChatApi } from '@/lib/api';
 import { ResearchChat } from '@/components/ResearchChat';
 import { ResearchPageTree } from '@/components/ResearchPageTree';
-import type { Research, ResearchDetail } from '@/types/meeting';
-
-
-interface Section {
-  title: string;
-  content: string;
-}
-
-function splitByH2(markdown: string): Section[] {
-  const lines = markdown.split('\n');
-  const sections: Section[] = [];
-  let currentTitle = 'Overview';
-  let currentLines: string[] = [];
-
-  for (const line of lines) {
-    if (line.startsWith('## ')) {
-      if (currentLines.length > 0 || sections.length === 0) {
-        sections.push({ title: currentTitle, content: currentLines.join('\n').trim() });
-      }
-      currentTitle = line.replace(/^##\s+/, '').trim();
-      currentLines = [];
-    } else {
-      currentLines.push(line);
-    }
-  }
-  if (currentLines.length > 0) {
-    sections.push({ title: currentTitle, content: currentLines.join('\n').trim() });
-  }
-
-  return sections.filter(s => s.content.length > 0);
-}
+import { ShareButton } from '@/components/ShareButton';
+import type { Research, ResearchDetail, SharedUser } from '@/types/meeting';
 
 function formatDate(value: string | number): string {
   if (!value) return '';
@@ -105,20 +76,11 @@ export default function ResearchDetailPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const [activeSection, setActiveSection] = useState<number | null>(null);
   const [subpages, setSubpages] = useState<Research[]>([]);
   const [activePageId, setActivePageId] = useState('');
   const [activeContent, setActiveContent] = useState<ResearchDetail | null>(null);
   const [chatOpen, setChatOpen] = useState(true);
 
-  const sections = useMemo(
-    () => (research?.content ? splitByH2(research.content) : []),
-    [research?.content],
-  );
-
-  const scrollToTop = useCallback(() => {
-    contentRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -151,6 +113,17 @@ export default function ResearchDetailPage() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     setExportOpen(false);
+  };
+
+  const handleTrash = async () => {
+    if (!research) return;
+    if (!confirm('휴지통에 넣으시겠습니까? 나중에 복구할 수 있습니다.')) return;
+    try {
+      await researchApi.trash(research.researchId);
+      router.push('/insights?tab=research');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to trash research');
+    }
   };
 
   const handleExportNotion = async () => {
@@ -312,7 +285,7 @@ export default function ResearchDetailPage() {
                   mainResearch={research}
                   subpages={subpages}
                   activePageId={activePageId}
-                  onPageSelect={(id) => { setActivePageId(id); setActiveSection(null); }}
+                  onPageSelect={(id) => setActivePageId(id)}
                   onAddSubPage={() => setChatOpen(true)}
                 />
 
@@ -334,13 +307,35 @@ export default function ResearchDetailPage() {
                     </span>
                   </div>
 
-                  {/* Topic + Export */}
+                  {/* Topic + Export + Share */}
                   <div className="flex items-start justify-between gap-4">
                     <h1 className="text-2xl lg:text-3xl font-bold text-slate-900 dark:text-[#e4e1e9] leading-tight">
                       {(activeContent || research).topic}
                     </h1>
                     {research.status === 'done' && displayContent && (
-                      <div ref={exportRef} className="relative flex-shrink-0">
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {!research.isShared && (
+                          <ShareButton
+                            entityId={research.researchId}
+                            sharedWith={research.shares}
+                            shareApi={researchApi.share}
+                            unshareApi={researchApi.unshare}
+                            label="Share research"
+                            onShare={(shared: SharedUser) => {
+                              setResearch((prev) => prev ? {
+                                ...prev,
+                                shares: [...(prev.shares || []), shared],
+                              } : prev);
+                            }}
+                            onUnshare={(userId: string) => {
+                              setResearch((prev) => prev ? {
+                                ...prev,
+                                shares: (prev.shares || []).filter((s) => s.userId !== userId),
+                              } : prev);
+                            }}
+                          />
+                        )}
+                        <div ref={exportRef} className="relative">
                         <button
                           onClick={() => setExportOpen(!exportOpen)}
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-sm font-semibold text-slate-600 dark:text-[#bac9cc] hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
@@ -362,8 +357,14 @@ export default function ResearchDetailPage() {
                               <span className="material-symbols-outlined text-lg text-slate-400">open_in_new</span>
                               Notion
                             </button>
+                            <div className="my-1 border-t border-slate-200 dark:border-white/10" />
+                            <button onClick={handleTrash} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 text-sm text-red-500 dark:text-red-400">
+                              <span className="material-symbols-outlined text-lg">delete</span>
+                              휴지통에 넣기
+                            </button>
                           </div>
                         )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -415,113 +416,29 @@ export default function ResearchDetailPage() {
                   <div className="glass-panel rounded-2xl p-6 border border-red-200 dark:border-red-500/20">
                     <div className="flex items-start gap-3">
                       <span className="material-symbols-outlined text-red-500 text-xl mt-0.5">error</span>
-                      <div>
+                      <div className="flex-1">
                         <p className="text-sm font-semibold text-red-700 dark:text-red-400 mb-1">Research Failed</p>
                         <p className="text-sm text-red-600 dark:text-red-300">{research.errorMessage}</p>
                       </div>
+                      <button
+                        onClick={handleTrash}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors flex-shrink-0"
+                      >
+                        <span className="material-symbols-outlined text-sm">delete</span>
+                        휴지통
+                      </button>
                     </div>
                   </div>
                 )}
 
-                {/* Content */}
+                {/* Content — continuous document with TOC sidebar */}
                 {displayContent && (
-                  <>
-                    {/* Section list view — only for main research reports with >2 sections */}
-                    {activeSection === null && sections.length > 2 && !activeContent ? (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between mb-4">
-                          <h3 className="text-sm font-semibold text-[#849396] uppercase tracking-wide">
-                            {sections.length} Sections
-                          </h3>
-                          <button
-                            onClick={() => setActiveSection(-1)}
-                            className="text-xs text-[#00E5FF] hover:underline"
-                          >
-                            Read full report
-                          </button>
-                        </div>
-                        {sections.map((section, idx) => (
-                          <button
-                            key={idx}
-                            onClick={() => setActiveSection(idx)}
-                            className="w-full text-left glass-panel rounded-xl p-4 hover:bg-white/[0.03] transition-colors group"
-                          >
-                            <div className="flex items-center gap-3">
-                              <span className="text-xs font-mono text-[#849396] bg-white/[0.05] px-2 py-0.5 rounded">
-                                {idx + 1}
-                              </span>
-                              <h4 className="text-base font-semibold text-[#e4e1e9] group-hover:text-[#00E5FF] transition-colors">
-                                {section.title}
-                              </h4>
-                            </div>
-                            <p className="text-xs text-[#849396] mt-2 ml-10 line-clamp-2">
-                              {section.content.replace(/[#*_`>\[\]]/g, '').slice(0, 150)}...
-                            </p>
-                            <span className="text-[10px] text-[#849396] ml-10 mt-1 block">
-                              {section.content.split(/\s+/).length} words
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : activeSection !== null && activeSection >= 0 && !activeContent ? (
-                      /* Section detail view */
-                      <div>
-                        <div className="flex items-center justify-between mb-6">
-                          <button
-                            onClick={() => setActiveSection(null)}
-                            className="text-xs text-[#849396] hover:text-[#00E5FF] flex items-center gap-1"
-                          >
-                            <span className="material-symbols-outlined text-sm">arrow_back</span>
-                            All sections
-                          </button>
-                          <span className="text-xs text-[#849396]">
-                            {activeSection + 1} / {sections.length}
-                          </span>
-                        </div>
-
-                        <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8">
-                          <MarkdownRenderer
-                            content={`## ${sections[activeSection].title}\n\n${sections[activeSection].content}`}
-                          />
-                        </div>
-
-                        <div className="flex items-center justify-between mt-6">
-                          <button
-                            onClick={() => {
-                              setActiveSection(Math.max(0, activeSection - 1));
-                              scrollToTop();
-                            }}
-                            disabled={activeSection === 0}
-                            className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-[#bac9cc] border border-white/10 rounded-lg hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                          >
-                            <span className="material-symbols-outlined text-lg">chevron_left</span>
-                            {activeSection > 0 ? sections[activeSection - 1].title : 'Previous'}
-                          </button>
-                          <button
-                            onClick={() => {
-                              setActiveSection(Math.min(sections.length - 1, activeSection + 1));
-                              scrollToTop();
-                            }}
-                            disabled={activeSection === sections.length - 1}
-                            className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-[#bac9cc] border border-white/10 rounded-lg hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                          >
-                            {activeSection < sections.length - 1
-                              ? sections[activeSection + 1].title
-                              : 'Next'}
-                            <span className="material-symbols-outlined text-lg">chevron_right</span>
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      /* Full report view (activeSection === -1, sections.length <= 2, or sub-page) */
-                      <div className="flex gap-0">
-                        <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 flex-1 min-w-0">
-                          <MarkdownRenderer content={displayContent} />
-                        </div>
-                        <TOCSidebar contentRef={contentRef} />
-                      </div>
-                    )}
-                  </>
+                  <div className="flex gap-0">
+                    <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 flex-1 min-w-0">
+                      <MarkdownRenderer content={displayContent} />
+                    </div>
+                    <TOCSidebar contentRef={contentRef} />
+                  </div>
                 )}
               </div>
             ) : null}

@@ -30,6 +30,65 @@ dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
 BUCKET_NAME = os.environ.get('BUCKET_NAME', 'ttobak-assets')
 ORIGIN_VERIFY_SECRET = os.environ.get('ORIGIN_VERIFY_SECRET', '')
+RESEARCH_SFN_ARN = os.environ.get('RESEARCH_SFN_ARN', '')
+
+
+def create_research_from_chat(user_id, topic, mode):
+    """Create a research job from the chat assistant. Mirrors Go CreateResearch logic."""
+    import secrets
+    from datetime import datetime, timezone
+
+    if not topic or not topic.strip():
+        return {"error": "topic is required"}
+    topic = topic.strip()[:500]
+    if mode not in ("quick", "standard", "deep"):
+        mode = "standard"
+
+    research_id = secrets.token_hex(16)
+    now = datetime.now(timezone.utc).isoformat()
+    s3_key = f"shared/research/{research_id}.md"
+
+    try:
+        ddb_client = boto3.client('dynamodb')
+        ddb_client.transact_write_items(TransactItems=[
+            {"Put": {"TableName": TABLE_NAME, "Item": {
+                "PK": {"S": f"RESEARCH#{research_id}"}, "SK": {"S": "CONFIG"},
+                "entityType": {"S": "RESEARCH"},
+                "researchId": {"S": research_id}, "userId": {"S": user_id},
+                "topic": {"S": topic}, "mode": {"S": mode},
+                "status": {"S": "planning"}, "createdAt": {"S": now}, "s3Key": {"S": s3_key},
+            }}},
+            {"Put": {"TableName": TABLE_NAME, "Item": {
+                "PK": {"S": f"USER#{user_id}"}, "SK": {"S": f"RESEARCH#{research_id}"},
+                "entityType": {"S": "RESEARCH_INDEX"}, "researchId": {"S": research_id},
+            }}},
+        ])
+    except Exception as e:
+        logger.error(f"Failed to create research in DynamoDB: {e}")
+        return {"error": str(e)}
+
+    if RESEARCH_SFN_ARN:
+        try:
+            sfn_client = boto3.client('stepfunctions')
+            sfn_input = json.dumps({
+                "researchId": research_id, "userId": user_id,
+                "topic": topic, "mode": "plan", "qualityMode": mode, "s3Key": s3_key,
+            })
+            exec_name = f"research-{research_id[:8]}-plan-{secrets.token_hex(4)}"
+            sfn_client.start_execution(
+                stateMachineArn=RESEARCH_SFN_ARN, name=exec_name, input=sfn_input,
+            )
+        except Exception as e:
+            logger.error(f"Failed to start research SFN: {e}")
+            table.update_item(
+                Key={"PK": f"RESEARCH#{research_id}", "SK": "CONFIG"},
+                UpdateExpression="SET #s = :s, errorMessage = :e",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":s": "error", ":e": f"Failed to start: {e}"},
+            )
+            return {"error": str(e)}
+
+    return {"researchId": research_id}
 
 
 def resolve_s3_ref(value):
@@ -391,6 +450,8 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
         "transcript": transcript or "",
         "retrieve_from_kb": lambda q, n=5: retrieve_from_kb(q, n, user_id=user_id),
         "list_meetings": list_meetings_for_user,
+        "load_meeting_context": load_meeting_context,
+        "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
         "user_id": user_id,
     }
     tools_used = []
@@ -726,6 +787,8 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         "transcript": transcript or "",
         "retrieve_from_kb": lambda q, n=5: retrieve_from_kb(q, n, user_id=user_id),
         "list_meetings": list_meetings_for_user,
+        "load_meeting_context": load_meeting_context,
+        "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
         "user_id": user_id,
     }
     tools_used = []

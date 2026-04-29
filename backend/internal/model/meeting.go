@@ -153,6 +153,9 @@ type Research struct {
 	Summary      string `dynamodbav:"summary,omitempty" json:"summary,omitempty"`
 	ErrorMessage string `dynamodbav:"errorMessage,omitempty" json:"errorMessage,omitempty"`
 	ParentID     string `dynamodbav:"parentId,omitempty" json:"parentId,omitempty"`
+	TrashedAt    string `dynamodbav:"trashedAt,omitempty" json:"trashedAt,omitempty"`
+	IsShared     bool   `dynamodbav:"-" json:"isShared,omitempty"`
+	SharedBy     string `dynamodbav:"-" json:"sharedBy,omitempty"`
 }
 
 // MeetingStatus constants

@@ -405,6 +405,15 @@ export class AiStack extends cdk.Stack {
       resources: ['*'],
     }));
 
+    this.qaRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'StartResearchSfn',
+        effect: iam.Effect.ALLOW,
+        actions: ['states:StartExecution'],
+        resources: [`arn:aws:states:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:stateMachine:ttobak-research-workflow`],
+      })
+    );
+
     // QA role also needs ManageConnections for streaming answers back to WebSocket
     this.qaRole.addToPolicy(
       new iam.PolicyStatement({

@@ -345,7 +345,8 @@ type CreateResearchRequest struct {
 // ResearchResponse represents a single research task in API responses
 type ResearchResponse struct {
 	Research
-	Content string `json:"content,omitempty"`
+	Content string          `json:"content,omitempty"`
+	Shares  []ShareResponse `json:"shares,omitempty"`
 }
 
 // ResearchListResponse represents the response for listing research tasks
