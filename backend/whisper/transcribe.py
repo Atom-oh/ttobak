@@ -107,7 +107,8 @@ def main():
     if not audio_key:
         raise RuntimeError(f"No audio file found for meeting {meeting_id}")
 
-    ext = audio_key.rsplit(".", 1)[-1] if "." in audio_key.rsplit("/", 1)[-1] else "bin"
+    basename = audio_key.rsplit("/", 1)[-1]
+    ext = basename.rsplit(".", 1)[-1] if "." in basename else "bin"
     local_path = f"/tmp/audio.{ext}"
 
     print(f"Downloading s3://{BUCKET}/{audio_key}")

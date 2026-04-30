@@ -291,9 +291,10 @@ def _run_research(topic: str, mode: str, research_id: str) -> None:
         f"Conduct research following the {mode} pipeline. "
         f"Call save_report with researchId='{research_id}' when the report is complete."
     )
+    agent = _get_agent(mode)
     try:
         logger.info(f"[{research_id}] starting research mode={mode}")
-        _get_agent(mode)(prompt)
+        agent(prompt)
         _last_activity = time.time()
         logger.info(f"[{research_id}] research finished")
     except Exception as e:
@@ -301,7 +302,9 @@ def _run_research(topic: str, mode: str, research_id: str) -> None:
         if isinstance(e, MaxTokensReachedException):
             logger.warning(f"[{research_id}] max_tokens reached, attempting to save partial report")
             try:
-                _get_agent(mode)(
+                # Reuse the same agent instance so conversation history (research findings
+                # accumulated before the token limit hit) remains in context for save_report.
+                agent(
                     f"You hit the token limit. Immediately call save_report with researchId='{research_id}' "
                     f"using whatever content you have so far. Do not do any more research."
                 )
