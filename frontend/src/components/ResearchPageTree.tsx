@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useRef, useEffect } from 'react';
 import type { Research } from '@/types/meeting';
 
 interface ResearchPageTreeProps {
@@ -7,7 +8,8 @@ interface ResearchPageTreeProps {
   subpages: Research[];
   activePageId: string;
   onPageSelect: (researchId: string) => void;
-  onAddSubPage: () => void;
+  onAddSubPage: (topic: string) => void;
+  addingSubPage?: boolean;
 }
 
 const statusColors: Record<string, string> = {
@@ -34,11 +36,27 @@ export function ResearchPageTree({
   activePageId,
   onPageSelect,
   onAddSubPage,
+  addingSubPage,
 }: ResearchPageTreeProps) {
-  // Only show if there are sub-pages or status is done
+  const [showInput, setShowInput] = useState(false);
+  const [topic, setTopic] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (showInput) inputRef.current?.focus();
+  }, [showInput]);
+
   if (subpages.length === 0 && mainResearch.status !== 'done') {
     return null;
   }
+
+  const handleSubmit = () => {
+    const trimmed = topic.trim();
+    if (!trimmed) return;
+    onAddSubPage(trimmed);
+    setTopic('');
+    setShowInput(false);
+  };
 
   const isMainActive = activePageId === mainResearch.researchId;
 
@@ -93,15 +111,46 @@ export function ResearchPageTree({
           </div>
         )}
 
-        {/* Add sub-page button (only when done) */}
+        {/* Add sub-page */}
         {mainResearch.status === 'done' && (
-          <button
-            onClick={onAddSubPage}
-            className="w-full flex items-center gap-2 px-3 py-1.5 ml-3 rounded-lg text-[#849396] hover:text-[#00E5FF] hover:bg-white/[0.03] transition-colors"
-          >
-            <span className="material-symbols-outlined text-sm">add</span>
-            <span className="text-xs">Add sub-page</span>
-          </button>
+          showInput ? (
+            <div className="ml-3 pl-2 flex items-center gap-1.5 mt-1">
+              <input
+                ref={inputRef}
+                type="text"
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSubmit();
+                  if (e.key === 'Escape') { setShowInput(false); setTopic(''); }
+                }}
+                placeholder="하위 주제 입력..."
+                disabled={addingSubPage}
+                className="flex-1 min-w-0 bg-white/[0.05] border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50"
+              />
+              <button
+                onClick={handleSubmit}
+                disabled={!topic.trim() || addingSubPage}
+                className="p-1.5 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors flex-shrink-0"
+              >
+                <span className="material-symbols-outlined text-sm">{addingSubPage ? 'hourglass_empty' : 'send'}</span>
+              </button>
+              <button
+                onClick={() => { setShowInput(false); setTopic(''); }}
+                className="p-1.5 rounded-lg text-[#849396] hover:text-[#e4e1e9] hover:bg-white/[0.03] transition-colors flex-shrink-0"
+              >
+                <span className="material-symbols-outlined text-sm">close</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowInput(true)}
+              className="w-full flex items-center gap-2 px-3 py-1.5 ml-3 rounded-lg text-[#849396] hover:text-[#00E5FF] hover:bg-white/[0.03] transition-colors"
+            >
+              <span className="material-symbols-outlined text-sm">add</span>
+              <span className="text-xs">Add sub-page</span>
+            </button>
+          )
         )}
       </div>
     </div>
