@@ -35,36 +35,32 @@ DAILY_RESEARCH_LIMIT = 5
 
 
 def check_research_limit(user_id):
-    """Check if user has exceeded daily research creation limit. Returns True if allowed."""
-    from boto3.dynamodb.conditions import Key
+    """Check if user has exceeded daily research creation limit using an atomic counter."""
     from datetime import datetime, timezone
     today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    counter_pk = f"USER#{user_id}"
+    counter_sk = f"RESEARCH_DAILY#{today}"
     try:
-        resp = table.query(
-            KeyConditionExpression=Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('RESEARCH#'),
-            Select='COUNT',
+        resp = table.update_item(
+            Key={"PK": counter_pk, "SK": counter_sk},
+            UpdateExpression="SET #c = if_not_exists(#c, :zero) + :one, #ttl = :ttl",
+            ExpressionAttributeNames={"#c": "count", "#ttl": "TTL"},
+            ExpressionAttributeValues={
+                ":zero": 0, ":one": 1,
+                ":ttl": int(time.time()) + 172800,
+            },
+            ReturnValues="UPDATED_NEW",
         )
-        count = resp.get('Count', 0)
-        if count < DAILY_RESEARCH_LIMIT:
-            return True
-        resp2 = table.query(
-            KeyConditionExpression=Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('RESEARCH#'),
-            ProjectionExpression='researchId',
-        )
-        today_count = 0
-        for item in resp2.get('Items', []):
-            rid = item.get('researchId', '')
-            if rid:
-                try:
-                    r = table.get_item(
-                        Key={'PK': f'RESEARCH#{rid}', 'SK': 'CONFIG'},
-                        ProjectionExpression='createdAt',
-                    ).get('Item', {})
-                    if r.get('createdAt', '').startswith(today):
-                        today_count += 1
-                except Exception:
-                    pass
-        return today_count < DAILY_RESEARCH_LIMIT
+        current = int(resp.get("Attributes", {}).get("count", 1))
+        if current > DAILY_RESEARCH_LIMIT:
+            table.update_item(
+                Key={"PK": counter_pk, "SK": counter_sk},
+                UpdateExpression="SET #c = #c - :one",
+                ExpressionAttributeNames={"#c": "count"},
+                ExpressionAttributeValues={":one": 1},
+            )
+            return False
+        return True
     except Exception as e:
         logger.warning(f"Failed to check research limit for {user_id}: {e}")
         return True
@@ -73,8 +69,14 @@ def check_research_limit(user_id):
 def create_research_from_chat(user_id, topic, mode):
     """Create a research job from the chat assistant.
 
-    TODO: This duplicates Go ResearchService.CreateResearch (PK/SK schema, SFN input).
-    Ideally call Go API internally to maintain single source of truth.
+    SCHEMA SYNC: Must match Go ResearchService.CreateResearch exactly:
+    - PK: RESEARCH#{id}, SK: CONFIG, entityType: RESEARCH
+    - PK: USER#{userId}, SK: RESEARCH#{id}, entityType: RESEARCH_INDEX
+    - SFN input keys: researchId, userId, topic, mode, qualityMode, s3Key
+    - s3Key format: shared/research/{id}.md
+    Last synced with Go: 2026-04-29 (PR #59)
+
+    TODO: Replace with internal Go API call to eliminate schema duplication.
     """
     import secrets
     from datetime import datetime, timezone
