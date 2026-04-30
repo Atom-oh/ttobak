@@ -225,17 +225,20 @@ mod macos {
                 return;
             }
 
-            // Extract interleaved f32 PCM from the CMSampleBuffer audio data.
-            // The exact accessor may vary by crate version — audio_buffer_list()
-            // is the standard Core Media wrapper.
+            // SCStreamConfiguration requests f32 interleaved PCM at 48 kHz stereo.
+            // Guard: skip buffers that don't align to 4-byte f32 frames.
             let Some(list) = sample.audio_buffer_list() else {
                 return;
             };
             let samples_f32: Vec<f32> = list
                 .iter()
                 .flat_map(|buf| {
-                    buf.data()
-                        .chunks_exact(4)
+                    let data = buf.data();
+                    if data.len() % 4 != 0 {
+                        log::warn!("unexpected audio buffer size {}, skipping", data.len());
+                        return Vec::new();
+                    }
+                    data.chunks_exact(4)
                         .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
                         .collect::<Vec<_>>()
                 })

@@ -320,6 +320,8 @@ export function RecordButton({
     }
 
     // Native system-audio stop → read bytes via IPC → Blob → upload → cleanup
+    // On failure, WAV is intentionally preserved on disk — system audio is
+    // irreplaceable and the user may recover the file from the temp directory.
     if (nativeTempPathRef.current) {
       const tempPath = nativeTempPathRef.current;
       nativeTempPathRef.current = null;

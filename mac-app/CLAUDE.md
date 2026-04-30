@@ -65,8 +65,8 @@ running inside Tauri.
   `SCShareableContent::current()`.
 - `excludes_current_process_audio = true` keeps the app's own UI sounds out of
   the recording. Don't disable this without a reason.
-- The `screencapturekit` crate's API has been moving (0.2 → 0.3 series).
-  Pinned to `0.3` in Cargo.toml; if the build breaks after a `cargo update`,
+- The `screencapturekit` crate's API has been moving across versions.
+  Pinned to `1` in Cargo.toml; if the build breaks after a `cargo update`,
   the only call sites that need adjustment are inside `audio.rs::macos`.
 
 ## Definitely NOT in this module
