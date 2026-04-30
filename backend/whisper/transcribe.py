@@ -62,12 +62,15 @@ def _load_custom_vocab_prompt() -> str:
 
 
 def _audio_key_exists(key: str) -> bool:
-    """Verify the given S3 key exists. Returns False on any 4xx (e.g., Unicode mismatch)."""
+    """Verify the given S3 key exists. Returns False only on 404; re-raises auth/throttle errors."""
     try:
         s3.head_object(Bucket=BUCKET, Key=key)
         return True
-    except ClientError:
-        return False
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
 
 
 def _find_audio_key(user_id: str, meeting_id: str) -> str | None:
@@ -104,7 +107,7 @@ def main():
     if not audio_key:
         raise RuntimeError(f"No audio file found for meeting {meeting_id}")
 
-    ext = audio_key.rsplit(".", 1)[-1]
+    ext = audio_key.rsplit(".", 1)[-1] if "." in audio_key.rsplit("/", 1)[-1] else "bin"
     local_path = f"/tmp/audio.{ext}"
 
     print(f"Downloading s3://{BUCKET}/{audio_key}")
