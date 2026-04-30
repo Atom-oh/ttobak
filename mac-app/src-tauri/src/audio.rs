@@ -228,17 +228,14 @@ mod macos {
             // Extract interleaved f32 PCM from the CMSampleBuffer audio data.
             // The exact accessor may vary by crate version — audio_buffer_list()
             // is the standard Core Media wrapper.
-            let samples_f32: Vec<f32> = match sample.audio_buffer_list() {
-                Ok(list) => list
-                    .buffers()
-                    .iter()
-                    .flat_map(|b| b.as_f32_slice().to_vec())
-                    .collect(),
-                Err(e) => {
-                    log::warn!("audio buffer list error: {e:?}");
-                    return;
-                }
+            let Some(list) = sample.audio_buffer_list() else {
+                return;
             };
+            let samples_f32: Vec<f32> = list
+                .buffers()
+                .iter()
+                .flat_map(|b| b.as_f32_slice().to_vec())
+                .collect();
 
             let mut guard = self.writer.lock().expect("writer poisoned");
             let Some(w) = guard.as_mut() else { return };

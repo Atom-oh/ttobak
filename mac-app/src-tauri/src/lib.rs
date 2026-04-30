@@ -3,14 +3,9 @@
 //! Tauri commands exposed to the WebView:
 //! - `start_recording(meeting_id)` — begin system-audio capture into a temp WAV
 //! - `stop_recording()` — finalize WAV and return the absolute file path
-//! - `get_recording_asset_url(path)` — return an asset: URL for the WAV (path-validated)
+//! - `read_recording_bytes(path)` — return WAV bytes via IPC binary response (path-validated)
 //! - `cleanup_recording(path)` — delete a temp WAV file after successful upload
 //! - `recording_status()` — current capture state for the UI
-//!
-//! Auth is intentionally NOT handled here: the Tauri WebView loads the existing
-//! Ttobak SPA (`ttobak.atomai.click`), which already runs the Cognito flow via
-//! `amazon-cognito-identity-js`. The frontend detects `window.__TAURI_INTERNALS__`
-//! and switches the recording path to the native commands below.
 
 mod audio;
 mod error;
@@ -19,12 +14,12 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use parking_lot::Mutex;
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::State;
+use tauri::ipc::Response;
 
 use crate::audio::AudioRecorder;
 use crate::error::AppError;
 
-/// Shared, thread-safe handle to the audio recorder + recorded path whitelist.
 pub struct RecorderState {
     pub recorder: Mutex<AudioRecorder>,
     pub recorded_paths: Mutex<HashSet<PathBuf>>,
@@ -50,7 +45,6 @@ pub struct StatusResponse {
 }
 
 fn allowed_dir() -> PathBuf {
-    // Canonicalize temp_dir to resolve macOS /tmp → /private/tmp symlink
     let base = std::fs::canonicalize(std::env::temp_dir())
         .unwrap_or_else(|_| std::env::temp_dir());
     base.join("ttobak-mac")
@@ -80,7 +74,6 @@ async fn start_recording(
 ) -> Result<StartResponse, AppError> {
     let mut rec = state.recorder.lock();
     let path = rec.start(&meeting_id)?;
-    // Canonicalize to match validate_recording_path (resolves /tmp → /private/tmp on macOS)
     let canonical = std::fs::canonicalize(&path).unwrap_or(path);
     state.recorded_paths.lock().insert(canonical.clone());
     Ok(StartResponse {
@@ -111,15 +104,14 @@ fn recording_status(state: State<'_, RecorderState>) -> StatusResponse {
 }
 
 #[tauri::command]
-fn get_recording_asset_url(
+fn read_recording_bytes(
     path: String,
-    app_handle: tauri::AppHandle,
     state: State<'_, RecorderState>,
-) -> Result<String, AppError> {
+) -> Result<Response, AppError> {
     let canonical = validate_recording_path(&path, &state.recorded_paths.lock())?;
-    let url = app_handle.convert_file_src(canonical)
-        .map_err(|e| AppError::Io(format!("convert_file_src: {e}")))?;
-    Ok(url)
+    let bytes = std::fs::read(&canonical)
+        .map_err(|e| AppError::Io(format!("read {}: {e}", canonical.display())))?;
+    Ok(Response::new(bytes))
 }
 
 #[tauri::command]
@@ -149,7 +141,7 @@ pub fn run() {
             start_recording,
             stop_recording,
             recording_status,
-            get_recording_asset_url,
+            read_recording_bytes,
             cleanup_recording,
         ])
         .setup(|app| {

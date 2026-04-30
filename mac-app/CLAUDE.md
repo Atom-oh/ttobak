@@ -51,7 +51,7 @@ src-tauri/
 | `start_recording`        | `meeting_id: string`| `{ temp_path }`                              |
 | `stop_recording`         | —                   | `{ temp_path, duration_ms, byte_size }`      |
 | `recording_status`       | —                   | `{ recording, temp_path?, elapsed_ms }`      |
-| `get_recording_asset_url`| `path: string`      | `asset://` URL for the WAV                   |
+| `read_recording_bytes`   | `path: string`      | WAV bytes via IPC binary (ArrayBuffer)       |
 | `cleanup_recording`      | `path: string`      | deletes temp WAV after upload                |
 
 The frontend integration PR adds an `isDesktop` (`__TAURI_INTERNALS__`) check

@@ -52,8 +52,8 @@ export function getNativeRecordingStatus(): Promise<TauriStatusResponse> {
   return invoke<TauriStatusResponse>('recording_status');
 }
 
-export function getRecordingAssetUrl(path: string): Promise<string> {
-  return invoke<string>('get_recording_asset_url', { path });
+export function readRecordingBytes(path: string): Promise<ArrayBuffer> {
+  return invoke<ArrayBuffer>('read_recording_bytes', { path });
 }
 
 export function cleanupRecording(path: string): Promise<void> {
