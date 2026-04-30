@@ -294,8 +294,12 @@ func (r *ResearchRepository) BatchGetResearch(ctx context.Context, researchIds [
 			if unprocessed, ok := result.UnprocessedKeys[r.tableName]; ok && len(unprocessed.Keys) > 0 {
 				pending = unprocessed.Keys
 			} else {
+				pending = nil
 				break
 			}
+		}
+		if len(pending) > 0 {
+			log.Printf("warn: BatchGetResearch had %d unprocessed keys after retries", len(pending))
 		}
 	}
 
@@ -385,17 +389,24 @@ func (r *ResearchRepository) cleanupResearchShares(ctx context.Context, research
 		return
 	}
 
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
-		TableName:                 aws.String(r.tableName),
-		KeyConditionExpression:    expr.KeyCondition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-		ProjectionExpression:      aws.String("PK, SK, sharedToId"),
-	})
-	if err != nil {
-		log.Printf("warn: failed to query share records for research %s: %v", researchId, err)
-		return
-	}
+	var lastKey map[string]types.AttributeValue
+	for {
+		input := &dynamodb.QueryInput{
+			TableName:                 aws.String(r.tableName),
+			KeyConditionExpression:    expr.KeyCondition(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ProjectionExpression:      aws.String("PK, SK, sharedToId"),
+		}
+		if lastKey != nil {
+			input.ExclusiveStartKey = lastKey
+		}
+
+		result, err := r.client.Query(ctx, input)
+		if err != nil {
+			log.Printf("warn: failed to query share records for research %s: %v", researchId, err)
+			return
+		}
 
 	for _, item := range result.Items {
 		sharedToID := ""
@@ -419,6 +430,12 @@ func (r *ResearchRepository) cleanupResearchShares(ctx context.Context, research
 				log.Printf("warn: failed to delete recipient share record for user %s research %s: %v", sharedToID, researchId, err)
 			}
 		}
+	}
+
+	lastKey = result.LastEvaluatedKey
+	if lastKey == nil {
+		break
+	}
 	}
 }
 
