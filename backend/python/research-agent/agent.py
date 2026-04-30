@@ -186,7 +186,12 @@ def _get_agent(mode: str, system_prompt: str = RESEARCH_SYSTEM_PROMPT, tools=Non
     )
     model_region = "us-east-1" if model_id.startswith("us.") else REGION
     agent = Agent(
-        model=BedrockModel(model_id=model_id, region_name=model_region, boto_client_config=boto_config),
+        model=BedrockModel(
+            model_id=model_id,
+            region_name=model_region,
+            boto_client_config=boto_config,
+            max_tokens=16384,
+        ),
         system_prompt=system_prompt,
         tools=tools,
     )
@@ -292,6 +297,18 @@ def _run_research(topic: str, mode: str, research_id: str) -> None:
         _last_activity = time.time()
         logger.info(f"[{research_id}] research finished")
     except Exception as e:
+        from strands.types.exceptions import MaxTokensReachedException
+        if isinstance(e, MaxTokensReachedException):
+            logger.warning(f"[{research_id}] max_tokens reached, attempting to save partial report")
+            try:
+                _get_agent(mode)(
+                    f"You hit the token limit. Immediately call save_report with researchId='{research_id}' "
+                    f"using whatever content you have so far. Do not do any more research."
+                )
+                logger.info(f"[{research_id}] partial report saved after max_tokens")
+                return
+            except Exception as retry_err:
+                logger.error(f"[{research_id}] partial save also failed: {retry_err}")
         logger.error(f"[{research_id}] research failed: {e}", exc_info=True)
         _mark_error(research_id, str(e))
     finally:
