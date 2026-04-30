@@ -74,6 +74,18 @@ export async function uploadAudioBlob(
   return uploadToS3(file, 'audio', onProgress);
 }
 
+export async function uploadWavBytes(
+  bytes: number[] | Uint8Array,
+  meetingId: string,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<UploadResult> {
+  const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const blob = new Blob([uint8.buffer as ArrayBuffer], { type: 'audio/wav' });
+  const fileName = `recording_${Date.now()}.wav`;
+  const file = new File([blob], fileName, { type: 'audio/wav' });
+  return uploadToS3(file, 'audio', onProgress, meetingId);
+}
+
 export async function uploadImage(
   file: File,
   onProgress?: (progress: UploadProgress) => void
