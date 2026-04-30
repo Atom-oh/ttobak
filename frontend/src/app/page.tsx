@@ -161,7 +161,7 @@ export default function HomePage() {
     | undefined;
   const moodLabel = dominantSentiment
     ? dominantSentiment.charAt(0).toUpperCase() + dominantSentiment.slice(1)
-    : '—';
+    : 'Not enough data';
   const moodIcon =
     dominantSentiment === 'positive'
       ? 'trending_up'

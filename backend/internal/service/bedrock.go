@@ -993,17 +993,7 @@ func (s *BedrockService) ExtractSentiment(ctx context.Context, meetingID string,
 		return "", fmt.Errorf("meeting not found: %s", meetingID)
 	}
 
-	transcript := meeting.TranscriptA
-	if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-	} else if transcript == "" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-	}
-	if transcript == "" {
-		return "", nil
-	}
-
-	systemPrompt := `You classify the overall tone of a meeting transcript.
+	systemPrompt := `You classify the overall tone of a meeting.
 
 Output exactly one of these three words and nothing else: positive, neutral, negative.
 
@@ -1013,17 +1003,47 @@ Output exactly one of these three words and nothing else: positive, neutral, neg
 
 Output the single word, lowercase, no punctuation, no quotes, no explanation.`
 
-	userPrompt := fmt.Sprintf("Classify the overall tone of this meeting transcript:\n\n%s", transcript)
-
-	if meeting.TranscriptSegments != "" {
-		var segments []speakerSegment
-		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
-			var sb strings.Builder
-			sb.WriteString("Classify the overall tone of this speaker-labeled meeting transcript:\n\n")
-			for _, seg := range segments {
-				sb.WriteString(fmt.Sprintf("[%s] %s\n", seg.Speaker, seg.Text))
+	// Prefer the already-generated summary (and action items) as input — they are
+	// short, structured, and capture the meeting's tone well enough for a 3-class
+	// classification. This cuts Haiku token cost and latency by ~10–100x vs sending
+	// the raw transcript. We only fall back to the transcript when summary is
+	// missing (e.g. SummarizeTranscript failed earlier in the pipeline).
+	var userPrompt string
+	if strings.TrimSpace(meeting.Content) != "" {
+		var sb strings.Builder
+		sb.WriteString("Classify the overall tone of this meeting based on its summary")
+		if meeting.ActionItems != "" && meeting.ActionItems != "[]" {
+			sb.WriteString(" and action items")
+		}
+		sb.WriteString(":\n\n## Summary\n")
+		sb.WriteString(meeting.Content)
+		if meeting.ActionItems != "" && meeting.ActionItems != "[]" {
+			sb.WriteString("\n\n## Action Items (JSON)\n")
+			sb.WriteString(meeting.ActionItems)
+		}
+		userPrompt = sb.String()
+	} else {
+		// Fallback path: summary not yet generated — use transcript directly.
+		transcript := meeting.TranscriptA
+		if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
+			transcript = meeting.TranscriptB
+		} else if transcript == "" && meeting.TranscriptB != "" {
+			transcript = meeting.TranscriptB
+		}
+		if transcript == "" {
+			return "", nil
+		}
+		userPrompt = fmt.Sprintf("Classify the overall tone of this meeting transcript:\n\n%s", transcript)
+		if meeting.TranscriptSegments != "" {
+			var segments []speakerSegment
+			if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
+				var sb strings.Builder
+				sb.WriteString("Classify the overall tone of this speaker-labeled meeting transcript:\n\n")
+				for _, seg := range segments {
+					sb.WriteString(fmt.Sprintf("[%s] %s\n", seg.Speaker, seg.Text))
+				}
+				userPrompt = sb.String()
 			}
-			userPrompt = sb.String()
 		}
 	}
 
