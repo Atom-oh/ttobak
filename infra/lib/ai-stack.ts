@@ -4,6 +4,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import { Construct } from 'constructs';
+import { RESEARCH_SFN_NAME } from './gateway-stack';
 
 export interface AiStackProps extends cdk.StackProps {
   bucket: s3.IBucket;
@@ -100,7 +101,7 @@ export class AiStack extends cdk.Stack {
         sid: 'SfnStartResearch',
         effect: iam.Effect.ALLOW,
         actions: ['states:StartExecution'],
-        resources: [`arn:aws:states:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:stateMachine:ttobak-research-workflow`],
+        resources: [`arn:aws:states:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:stateMachine:${RESEARCH_SFN_NAME}`],
       })
     );
 
@@ -404,6 +405,15 @@ export class AiStack extends cdk.Stack {
       actions: ['bedrock:StartIngestionJob'],
       resources: ['*'],
     }));
+
+    this.qaRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'StartResearchSfn',
+        effect: iam.Effect.ALLOW,
+        actions: ['states:StartExecution'],
+        resources: [`arn:aws:states:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:stateMachine:${RESEARCH_SFN_NAME}`],
+      })
+    );
 
     // QA role also needs ManageConnections for streaming answers back to WebSocket
     this.qaRole.addToPolicy(

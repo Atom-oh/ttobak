@@ -63,8 +63,9 @@ func (h *ResearchHandler) CreateResearch(w http.ResponseWriter, r *http.Request)
 func (h *ResearchHandler) ListResearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := middleware.GetUserID(ctx)
+	includeTrashed := r.URL.Query().Get("trashed") == "true"
 
-	result, err := h.researchService.ListResearch(ctx, userID)
+	result, err := h.researchService.ListResearch(ctx, userID, includeTrashed)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
 		return
@@ -101,22 +102,53 @@ func (h *ResearchHandler) GetResearchDetail(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, result)
 }
 
-// DeleteResearch handles DELETE /api/research/{researchId}
+// DeleteResearch handles DELETE /api/research/{researchId} — soft delete (moves to trash)
 func (h *ResearchHandler) DeleteResearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := middleware.GetUserID(ctx)
 	researchID := chi.URLParam(r, "researchId")
 
-	// Path traversal protection
 	if strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
 		return
 	}
 
-	err := h.researchService.DeleteResearch(ctx, researchID, userID)
+	err := h.researchService.TrashResearch(ctx, researchID, userID)
 	if err != nil {
 		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// RestoreResearch handles POST /api/research/{researchId}/restore
+func (h *ResearchHandler) RestoreResearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	researchID := chi.URLParam(r, "researchId")
+
+	if strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
+		return
+	}
+
+	err := h.researchService.RestoreResearch(ctx, researchID, userID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")

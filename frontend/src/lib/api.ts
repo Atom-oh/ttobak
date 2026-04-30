@@ -347,8 +347,14 @@ export const researchApi = {
     api.get<{ research: Research[] }>('/api/research'),
   getDetail: (researchId: string) =>
     api.get<ResearchDetail>(`/api/research/${encodeURIComponent(researchId)}`),
-  delete: (researchId: string) =>
+  trash: (researchId: string) =>
     api.delete(`/api/research/${encodeURIComponent(researchId)}`),
+  restore: (researchId: string) =>
+    api.post(`/api/research/${encodeURIComponent(researchId)}/restore`, {}),
+  share: (researchId: string, data: { email: string; permission: 'read' | 'edit' }) =>
+    api.post<{ sharedWith: { userId: string; email: string; permission: string } }>(`/api/research/${encodeURIComponent(researchId)}/share`, data),
+  unshare: (researchId: string, userId: string) =>
+    api.delete(`/api/research/${encodeURIComponent(researchId)}/share/${userId}`),
 };
 
 export const researchChatApi = {

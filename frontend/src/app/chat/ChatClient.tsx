@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { qaApi, chatApi } from '@/lib/api';
+import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
 import { QAChatMessage } from '@/components/qa';
 import type { ChatSession } from '@/types/meeting';
@@ -27,11 +28,10 @@ const suggestedQuestions = [
   'EKS 관련 논의 요약해줘',
 ];
 
-const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
-
 export function ChatClient() {
   const router = useRouter();
   const { user, isLoading, isAuthenticated } = useAuth();
+  const [wsUrl, setWsUrl] = useState(process.env.NEXT_PUBLIC_WEBSOCKET_URL || '');
 
   const [question, setQuestion] = useState('');
   const [chatHistory, setChatHistory] = useState<ChatEntry[]>([]);
@@ -60,6 +60,10 @@ export function ChatClient() {
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const sessionsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    getRuntimeConfig().then(cfg => { if (cfg.wsUrl) setWsUrl(cfg.wsUrl); });
+  }, []);
 
   // Auth guard
   useEffect(() => {
@@ -149,10 +153,10 @@ export function ChatClient() {
   }, []);
 
   const ensureWebSocket = useCallback(async (): Promise<RealtimeWebSocket | null> => {
-    if (!WS_URL) return null;
+    if (!wsUrl) return null;
     if (wsRef.current?.isConnected) return wsRef.current;
 
-    const ws = new RealtimeWebSocket(WS_URL, handleStreamMessage, () => {
+    const ws = new RealtimeWebSocket(wsUrl, handleStreamMessage, () => {
       wsRef.current = null;
     });
     try {
@@ -162,7 +166,7 @@ export function ChatClient() {
     } catch {
       return null;
     }
-  }, [handleStreamMessage]);
+  }, [wsUrl, handleStreamMessage]);
 
   // Cleanup WebSocket on unmount
   useEffect(() => {
