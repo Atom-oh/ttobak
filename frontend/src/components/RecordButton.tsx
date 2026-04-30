@@ -335,13 +335,14 @@ export function RecordButton({
         const fileName = `recording_${Date.now()}.wav`;
         const file = new File([blob], fileName, { type: 'audio/wav' });
         const result = await uploadToS3(file, 'audio', undefined, meetingId);
-        await cleanupRecording(tempPath);
         onRecordingComplete?.(result.url);
         setRecordingState('idle');
         setElapsedTime(0);
       } catch (err) {
         onError?.(err instanceof Error ? err.message : 'Native recording upload failed');
         setRecordingState('idle');
+      } finally {
+        await cleanupRecording(tempPath).catch(() => {});
       }
       return;
     }
