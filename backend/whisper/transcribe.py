@@ -2,7 +2,6 @@ import json
 import os
 import sys
 import time
-import unicodedata
 
 import boto3
 from botocore.exceptions import ClientError
