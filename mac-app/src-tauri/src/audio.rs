@@ -234,12 +234,10 @@ mod macos {
             let samples_f32: Vec<f32> = list
                 .iter()
                 .flat_map(|buf| {
-                    let data = buf.data();
-                    let count = data.len() / std::mem::size_of::<f32>();
-                    let slice = unsafe {
-                        std::slice::from_raw_parts(data.as_ptr() as *const f32, count)
-                    };
-                    slice.to_vec()
+                    buf.data()
+                        .chunks_exact(4)
+                        .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+                        .collect::<Vec<_>>()
                 })
                 .collect();
 
