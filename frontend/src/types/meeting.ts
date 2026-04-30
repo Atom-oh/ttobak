@@ -9,6 +9,7 @@ export interface Meeting {
   duration?: number;
   status: 'recording' | 'transcribing' | 'summarizing' | 'done' | 'error';
   tags?: string[];
+  sentiment?: 'positive' | 'neutral' | 'negative';
   participants?: Participant[];
   summary?: string;
   actionItems?: ActionItem[];
