@@ -33,7 +33,7 @@ npm run build        # release .app + .dmg under src-tauri/target/release/bundle
 ```
 src/index.html        # offline fallback (Tauri normally loads the live SPA URL)
 src-tauri/
-  Cargo.toml          # screencapturekit, hound, tauri 2, parking_lot, tokio
+  Cargo.toml          # screencapturekit 1.x, hound, tauri 2, parking_lot, tokio
   tauri.conf.json     # window points at ttobak.atomai.click
   Info.plist          # NSScreenCaptureUsageDescription, NSMicrophoneUsageDescription
   Entitlements.plist  # audio-input, network-client; sandbox OFF

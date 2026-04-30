@@ -133,28 +133,16 @@ fn recording_path(meeting_id: &str) -> Result<PathBuf, AppError> {
 mod macos {
     //! ScreenCaptureKit-backed audio capture.
     //!
-    //! API surface verified against `screencapturekit = "0.3"`. If the crate's
-    //! API has shifted, the call sites below are the only places that need
-    //! adjustment — the recorder lifecycle (`start` / `stop`) is stable.
+    //! API surface targets `screencapturekit = "1"` (1.x series).
 
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
 
     use hound::{SampleFormat, WavSpec, WavWriter};
-    use screencapturekit::{
-        cm_sample_buffer::CMSampleBuffer,
-        sc_content_filter::{InitParams, SCContentFilter},
-        sc_error_handler::StreamErrorHandler,
-        sc_output_handler::{SCStreamOutputType, StreamOutput},
-        sc_shareable_content::SCShareableContent,
-        sc_stream::SCStream,
-        sc_stream_configuration::SCStreamConfiguration,
-    };
+    use screencapturekit::prelude::*;
 
     use crate::error::AppError;
 
-    /// Output sample rate written to disk. ScreenCaptureKit emits 48 kHz by
-    /// default; we keep the same to avoid resampling cost.
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
 
@@ -176,29 +164,28 @@ mod macos {
                 .map_err(|e| AppError::Io(format!("create wav: {e}")))?;
             let writer = Arc::new(Mutex::new(Some(writer)));
 
-            // Pick the main display as a "filter" target — SCStream requires a
-            // display, but with `captures_audio = true` we only consume the
-            // audio output and ignore video frames.
-            let content = SCShareableContent::current();
+            let content = SCShareableContent::get()
+                .map_err(|e| AppError::Backend(format!("SCShareableContent::get: {e:?}")))?;
             let display = content
-                .displays
+                .displays()
                 .into_iter()
                 .next()
                 .ok_or_else(|| AppError::Backend("no display available".into()))?;
 
-            let filter = SCContentFilter::new(InitParams::Display(display));
+            let filter = SCContentFilter::create()
+                .with_display(&display)
+                .with_excluding_windows(&[])
+                .build();
 
-            let mut config = SCStreamConfiguration::default();
-            config.captures_audio = true;
-            config.excludes_current_process_audio = true;
-            config.sample_rate = SAMPLE_RATE as i32;
-            config.channel_count = CHANNELS as i32;
+            let config = SCStreamConfiguration::new()
+                .with_captures_audio(true)
+                .with_excludes_current_process_audio(true)
+                .with_sample_rate(SAMPLE_RATE as i32)
+                .with_channel_count(CHANNELS as i32);
 
-            let mut stream = SCStream::new(filter, config, ErrorHandler);
-            stream.add_output(
-                AudioOutput {
-                    writer: Arc::clone(&writer),
-                },
+            let mut stream = SCStream::new(&filter, &config);
+            stream.add_output_handler(
+                AudioOutput { writer: Arc::clone(&writer) },
                 SCStreamOutputType::Audio,
             );
 
@@ -218,7 +205,6 @@ mod macos {
                 .stop_capture()
                 .map_err(|e| AppError::Backend(format!("stop_capture: {e:?}")))?;
 
-            // Finalize WAV header.
             if let Some(w) = self.writer.lock().expect("writer poisoned").take() {
                 w.finalize()
                     .map_err(|e| AppError::Io(format!("finalize wav: {e}")))?;
@@ -229,26 +215,19 @@ mod macos {
         }
     }
 
-    struct ErrorHandler;
-    impl StreamErrorHandler for ErrorHandler {
-        fn on_error(&self) {
-            log::error!("ScreenCaptureKit stream error");
-        }
-    }
-
     struct AudioOutput {
         writer: Arc<Mutex<Option<WavWriter<std::io::BufWriter<std::fs::File>>>>>,
     }
 
-    impl StreamOutput for AudioOutput {
+    impl SCStreamOutputTrait for AudioOutput {
         fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
             if !matches!(of_type, SCStreamOutputType::Audio) {
                 return;
             }
 
-            // CMSampleBuffer → interleaved f32 PCM. The exact accessor is
-            // crate-version dependent; this branch is the most likely target
-            // when iterating on a Mac dev box.
+            // Extract interleaved f32 PCM from the CMSampleBuffer audio data.
+            // The exact accessor may vary by crate version — audio_buffer_list()
+            // is the standard Core Media wrapper.
             let samples_f32: Vec<f32> = match sample.audio_buffer_list() {
                 Ok(list) => list
                     .buffers()
