@@ -38,6 +38,7 @@ native commands for audio capture.
 |                       stop_recording()                     |
 |                       recording_status()                   |
 |                       read_recording_bytes(path)           |
+|                       cleanup_recording(path)              |
 +------------------------------------------------------------+
 ```
 
@@ -45,29 +46,31 @@ Auth is delegated to the existing SPA inside the WebView — no token storage in
 Rust, no duplicate OAuth flow. The app is, conceptually, "Ttobak SPA + native
 audio capture command".
 
-## Prerequisites (Mac dev box)
+## System requirements
+
+| Requirement | Minimum |
+|---|---|
+| macOS | 13.0 (Ventura) |
+| Xcode CLT | `xcode-select --install` |
+| Rust | stable (latest) |
+| Node.js | 18+ |
+| Internet | required — WebView loads the live SPA |
+
+## Quick start
 
 ```bash
-# Rust toolchain
+# 1. Clone & checkout
+git clone git@github.com:Atom-oh/ttobak.git && cd ttobak
+git checkout fix/remove-section-splitting   # or main once merged
+
+# 2. Install Rust (skip if already installed)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
-# Tauri CLI (via npm)
+# 3. Install dependencies & run dev mode
 cd mac-app
 npm install
-```
-
-Xcode Command Line Tools must be installed:
-
-```bash
-xcode-select --install
-```
-
-## Develop
-
-```bash
-cd mac-app
-npm run dev          # opens a Tauri window pointed at https://ttobak.atomai.click
+npm run dev          # opens a Tauri window at https://ttobak.atomai.click
 ```
 
 The first time the app records, macOS will prompt for **Screen Recording** and
@@ -78,7 +81,7 @@ ScreenCaptureKit gate, regardless of the fact that we only consume audio.
 
 ```bash
 cd mac-app
-npm run build                   # release, universal binary if both targets installed
+npm run build
 # Result: src-tauri/target/release/bundle/{macos/Ttobak.app, dmg/Ttobak_0.1.0_*.dmg}
 ```
 
@@ -86,6 +89,18 @@ For a quick local debug build (faster, larger):
 
 ```bash
 npm run build:debug
+```
+
+### Running an unsigned build
+
+Without code signing, macOS Gatekeeper will block the app. To run locally:
+
+```bash
+# Option 1: Remove quarantine attribute
+xattr -cr /path/to/Ttobak.app
+
+# Option 2: Allow in System Settings
+#   System Settings → Privacy & Security → "Ttobak was blocked" → Open Anyway
 ```
 
 ### Code signing & notarization
@@ -106,24 +121,22 @@ The scaffold ships unsigned. For distribution:
 - `Entitlements.plist` enables `device.audio-input` and disables the App
   Sandbox (ScreenCaptureKit + arbitrary file system writes for recordings).
 
-## Frontend integration (separate PR)
+## Frontend integration
 
-The existing SPA needs a small change to use native capture when running inside
-Tauri:
+The SPA detects Tauri via `isTauri()` (`frontend/src/lib/tauri.ts`) and routes
+the record button through native commands:
 
 ```ts
-// frontend/src/lib/desktop.ts (proposed)
-export const isDesktop = typeof window !== "undefined"
-  && "__TAURI_INTERNALS__" in window;
-
-export async function startNativeRecording(meetingId: string) {
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<{ tempPath: string }>("start_recording", { meetingId });
-}
+// frontend/src/lib/tauri.ts
+export const isTauri = () => "__TAURI_INTERNALS__" in window;
+export function startNativeRecording(meetingId: string): Promise<StartResponse>;
+export function stopNativeRecording(): Promise<StopResponse>;
+export function readRecordingBytes(path: string): Promise<ArrayBuffer>;
+export function cleanupRecording(path: string): Promise<void>;
 ```
 
-The recording component picks `startNativeRecording` over `getUserMedia` when
-`isDesktop` is true.
+`RecordButton` picks `startNativeRecording` over `getUserMedia` when
+`audioSource === 'system'` (only shown when `isTauri()` is true).
 
 ## Project layout
 
