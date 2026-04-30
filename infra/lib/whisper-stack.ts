@@ -64,7 +64,7 @@ export class WhisperStack extends cdk.Stack {
       ),
       securityGroup: instanceSg,
       minCapacity: 0,
-      maxCapacity: 5,
+      maxCapacity: 10,
       desiredCapacity: 0,
       spotPrice: '1.10',
       newInstancesProtectedFromScaleIn: false,
@@ -77,7 +77,7 @@ export class WhisperStack extends cdk.Stack {
       enableManagedScaling: true,
       enableManagedTerminationProtection: false,
       minimumScalingStepSize: 1,
-      maximumScalingStepSize: 1,
+      maximumScalingStepSize: 2,
       targetCapacityPercent: 100,
     });
 

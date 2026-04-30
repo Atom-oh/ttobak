@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Ttobak (또박) is a Korean AI meeting assistant: record audio → STT (A/B: AWS Transcribe vs Nova Sonic) → Bedrock Claude summary → Notion-style editor. The frontend is a Next.js 16 static SPA deployed to S3/CloudFront; the backend is Go Lambda functions behind API Gateway; infrastructure is CDK TypeScript.
+Ttobak (또박) is a Korean AI meeting assistant: record audio → real-time STT (AWS Transcribe Streaming in browser) → batch STT (Whisper ECS GPU Spot) → Bedrock Claude summary → Notion-style editor. The frontend is a Next.js 16 static SPA deployed to S3/CloudFront; the backend is Go Lambda functions behind API Gateway; infrastructure is CDK TypeScript.
 
 ## Build Commands
 
@@ -23,7 +23,7 @@ cd frontend && npm run dev       # local dev server
 cd frontend && npm run lint      # eslint
 
 # CDK
-cd infra && npx cdk synth        # synthesize all 7 stacks
+cd infra && npx cdk synth        # synthesize all 10 stacks
 cd infra && npx cdk deploy --all # deploy everything
 cd infra && npm test             # jest tests
 
@@ -44,13 +44,18 @@ CloudFront (d2olomx8td8txt.cloudfront.net)
 
 ### Event-Driven Pipeline
 ```
-audio/ upload → EventBridge → ttobak-transcribe → AWS Transcribe + Nova Sonic → transcripts/ S3
+audio/ upload → EventBridge → ttobak-transcribe → Whisper ECS (GPU Spot g5.xlarge) → transcripts/ S3
 transcripts/ upload → EventBridge → ttobak-summarize → Bedrock Claude → DynamoDB
 images/ upload → EventBridge → ttobak-process-image → Bedrock Vision → DynamoDB
 ```
 
-### CDK Stack Dependency Order (7 stacks)
-Auth + Storage (parallel) → AI → Knowledge → EdgeAuth (us-east-1) → Gateway → Frontend
+### Real-Time STT (browser)
+```
+Microphone → AWS Transcribe Streaming (via @aws-sdk/client-transcribe-streaming in browser)
+```
+
+### CDK Stack Dependency Order (10 stacks)
+Auth + Storage (parallel) → AI → Whisper → Knowledge → EdgeAuth (us-east-1) → Gateway → Frontend
 
 ### Backend (Go)
 
@@ -121,7 +126,7 @@ CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE
 - **OpenSearch Serverless**: Data access policies require exact IAM role ARN principals (no wildcards). Out-of-band AOSS policy changes cause CloudFormation version conflicts — revert before deploying
 - **Next.js static export**: `output: 'export'` only in production; local dev uses normal SSR for dynamic routes
 - **Bedrock models**: Claude Opus 4.6 for summarize/vision, Claude Haiku for fast translation/detection
-- **STT**: Three engines available — Browser Web Speech API (free, Korean-only), client-side AWS Transcribe Streaming (`@aws-sdk/client-transcribe-streaming` in browser via `sttManager.ts`), and server-side AWS Transcribe/Nova Sonic (async after upload). `liveSttProvider` controls live engine; `sttProvider` controls which engine the transcribe Lambda uses post-upload.
+- **STT dual architecture**: Real-time uses browser Web Speech API (free, Korean-only) or AWS Transcribe Streaming (`@aws-sdk/client-transcribe-streaming` in browser via `sttManager.ts`). Batch post-upload always uses Whisper ECS GPU Spot (faster-whisper-large-v3 on g5.xlarge). The transcribe Lambda defaults to `sttProvider: "whisper"` and falls back to AWS Transcribe if Whisper cluster is not configured. `liveSttProvider` controls the real-time engine in the browser.
 - **Auto-expiry**: GetMeeting handler auto-marks stuck `transcribing`/`summarizing` status as `error` after 30 minutes. Long audio files rarely exceed this but be aware when debugging.
 - **Sentinel errors**: `service.ErrForbidden` and `service.ErrNotFound` enable typed error handling in handlers via `errors.Is()`
 

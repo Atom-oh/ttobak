@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 
@@ -18,10 +19,10 @@ import (
 
 // Model IDs for different use cases (cost optimization)
 var (
-	// ClaudeOpusModelID is for complex tasks (Q&A with tools, image analysis)
+	// ClaudeOpusModelID is for complex tasks (Q&A with tools, summarization, image analysis)
 	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-4-6-v1")
-	// ClaudeSonnetModelID is for summarization (final meeting summary)
-	ClaudeSonnetModelID = getEnvOrDefault("BEDROCK_SUMMARIZE_MODEL_ID", "global.anthropic.claude-sonnet-4-6")
+	// ClaudeSonnetModelID is for transcript refinement and mid-tier tasks
+	ClaudeSonnetModelID = getEnvOrDefaultChain("global.anthropic.claude-sonnet-4-6", "BEDROCK_SONNET_MODEL_ID", "BEDROCK_SUMMARIZE_MODEL_ID")
 	// ClaudeHaikuModelID is for live summary (fast, low-cost incremental updates)
 	ClaudeHaikuModelID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 )
@@ -41,6 +42,15 @@ func stripCodeFences(s string) string {
 func getEnvOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getEnvOrDefaultChain(fallback string, keys ...string) string {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
 	}
 	return fallback
 }
@@ -114,6 +124,15 @@ type speakerSegment struct {
 	EndTime   float64 `json:"endTime"`
 }
 
+var mdEscaper = strings.NewReplacer(
+	"[", "\\[", "]", "\\]",
+	"(", "\\(", ")", "\\)",
+	"!", "\\!", "`", "\\`",
+	"\\", "\\\\", "\n", " ",
+)
+
+func sanitizeMarkdownText(s string) string { return mdEscaper.Replace(s) }
+
 // SummarizeTranscript generates meeting notes (content) from the transcript using Claude.
 // When userID is provided, uses strongly-consistent base table read instead of GSI.
 func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID string, userID ...string) (string, error) {
@@ -185,6 +204,20 @@ Use bullet points and checkboxes. Include timestamps where available.`
 		}
 	}
 
+	// Include screenshot analysis results if available
+	attachments, _ := s.repo.ListAttachments(ctx, meetingID)
+	if len(attachments) > 0 {
+		var sb strings.Builder
+		for _, att := range attachments {
+			if att.ProcessedContent != "" {
+				sb.WriteString(fmt.Sprintf("\n### 첨부 이미지: %s\n%s\n", att.FileName, att.ProcessedContent))
+			}
+		}
+		if sb.Len() > 0 {
+			userPrompt += "\n\n---\n\n아래는 회의 중 캡처된 화면/슬라이드의 AI 분석 결과입니다. 이 내용도 회의록에 자연스럽게 통합해주세요:\n" + sb.String()
+		}
+	}
+
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
 		MaxTokens:        4096,
@@ -199,14 +232,31 @@ Use bullet points and checkboxes. Include timestamps where available.`
 		},
 	}
 
-	// Use Sonnet for summarization (cost optimization)
-	content, err := s.invokeClaudeModelWithID(ctx, request, ClaudeSonnetModelID)
+	content, err := s.invokeClaudeModelWithID(ctx, request, ClaudeOpusModelID)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
 
-	// Atomic partial update — only set content and status to avoid clobbering
-	// concurrent writes to other fields (e.g., audioKey from CompleteUpload)
+	// Append inline image references for processed attachments.
+	// Frontend resolves attachment:// URLs to presigned S3 URLs at render time.
+	const attachmentSentinel = "<!-- ttobak:attachments -->"
+	if len(attachments) > 0 && !strings.Contains(content, attachmentSentinel) {
+		var imgSection strings.Builder
+		for _, att := range attachments {
+			if att.Status != model.AttachStatusDone || att.ProcessedContent == "" {
+				continue
+			}
+			safeName := sanitizeMarkdownText(att.FileName)
+			imgSection.WriteString(fmt.Sprintf(
+				"\n### %s\n![%s](attachment://%s)\n",
+				safeName, safeName, att.AttachmentID,
+			))
+		}
+		if imgSection.Len() > 0 {
+			content += "\n\n---\n\n" + attachmentSentinel + "\n## 첨부 이미지\n" + imgSection.String()
+		}
+	}
+
 	if err := s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
 		"content": content,
 		"status":  model.StatusDone,
@@ -215,6 +265,298 @@ Use bullet points and checkboxes. Include timestamps where available.`
 	}
 
 	return content, nil
+}
+
+// WhisperSegment represents a timestamped text segment from Whisper output
+type WhisperSegment struct {
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+	Text  string  `json:"text"`
+}
+
+// RefinedSegment represents a cleaned-up transcript segment with inferred speaker turns
+type RefinedSegment struct {
+	Speaker   string  `json:"speaker"`
+	Text      string  `json:"text"`
+	StartTime float64 `json:"startTime"`
+	EndTime   float64 `json:"endTime"`
+}
+
+// RefineTranscript takes raw Whisper segments and uses Sonnet to clean up:
+// merge fragmented sentences, fix misrecognized words, remove hallucinations, infer speaker turns.
+// Short meetings (≤5 chunks) run sequentially with speaker context for label consistency.
+// Long meetings (>5 chunks) run in parallel batches of 4 to stay within Lambda timeout.
+// Per-chunk failures fall back to raw segments rather than discarding the entire result.
+func (s *BedrockService) RefineTranscript(ctx context.Context, segments []WhisperSegment) (string, []RefinedSegment, error) {
+	if len(segments) == 0 {
+		return "", nil, fmt.Errorf("no segments to refine")
+	}
+
+	chunks := chunkWhisperSegments(segments, 300)
+
+	var allRefined []RefinedSegment
+	if len(chunks) <= 5 {
+		allRefined = s.refineSequential(ctx, chunks)
+	} else {
+		allRefined = s.refineParallel(ctx, chunks)
+	}
+
+	var sb strings.Builder
+	prevSpeaker := ""
+	for _, seg := range allRefined {
+		if seg.Speaker != prevSpeaker {
+			if sb.Len() > 0 {
+				sb.WriteString("\n\n")
+			}
+			sb.WriteString(fmt.Sprintf("[%s]\n", seg.Speaker))
+			prevSpeaker = seg.Speaker
+		} else {
+			sb.WriteString(" ")
+		}
+		sb.WriteString(seg.Text)
+	}
+
+	return sb.String(), allRefined, nil
+}
+
+func (s *BedrockService) refineSequential(ctx context.Context, chunks [][]WhisperSegment) []RefinedSegment {
+	var allRefined []RefinedSegment
+	var prevChunkTail []RefinedSegment
+
+	for i, chunk := range chunks {
+		refined, err := s.refineChunk(ctx, chunk, i, len(chunks), prevChunkTail)
+		if err != nil || len(refined) == 0 {
+			if err != nil {
+				log.Printf("Chunk %d/%d refinement failed, using raw segments: %v", i+1, len(chunks), err)
+			} else {
+				log.Printf("Chunk %d/%d returned empty result, using raw segments", i+1, len(chunks))
+			}
+			lastSpeaker := lastSpeakerLabel(allRefined)
+			allRefined = append(allRefined, rawFallbackSegments(chunk, lastSpeaker)...)
+			continue
+		}
+		allRefined = append(allRefined, refined...)
+		if len(refined) >= 3 {
+			prevChunkTail = refined[len(refined)-3:]
+		} else {
+			prevChunkTail = refined
+		}
+	}
+	return allRefined
+}
+
+// refineParallel processes chunks concurrently (max 4) to stay within Lambda timeout.
+// Trade-off: all parallel chunks receive only the first chunk's tail as speaker hint,
+// so speaker labels may diverge in later chunks. This is acceptable because:
+// 1. Sonnet infers speakers from conversational flow within each chunk
+// 2. The summary (Opus) re-identifies speakers from the full refined transcript
+// 3. Sequential mode (≤5 chunks, ~25 min) covers most meetings with full consistency
+func (s *BedrockService) refineParallel(ctx context.Context, chunks [][]WhisperSegment) []RefinedSegment {
+	type chunkResult struct {
+		index    int
+		segments []RefinedSegment
+	}
+
+	// Run first chunk synchronously to establish baseline speaker labels
+	firstResult, err := s.refineChunk(ctx, chunks[0], 0, len(chunks), nil)
+	if err != nil || len(firstResult) == 0 {
+		if err != nil {
+			log.Printf("Chunk 1/%d refinement failed, using raw: %v", len(chunks), err)
+		}
+		firstResult = rawFallbackSegments(chunks[0], "spk_0")
+	}
+	// Build a tail that includes at least one segment per unique speaker from chunk 1,
+	// plus the last 3 segments for continuity context
+	firstTail := buildSpeakerHintTail(firstResult)
+
+	results := make([][]RefinedSegment, len(chunks))
+	results[0] = firstResult
+
+	sem := make(chan struct{}, 4)
+	done := make(chan chunkResult, len(chunks)-1)
+
+	for i := 1; i < len(chunks); i++ {
+		sem <- struct{}{}
+		go func(idx int, c []WhisperSegment, tail []RefinedSegment) {
+			defer func() { <-sem }()
+			refined, err := s.refineChunk(ctx, c, idx, len(chunks), tail)
+			if err != nil || len(refined) == 0 {
+				if err != nil {
+					log.Printf("Chunk %d/%d refinement failed (parallel), using raw: %v", idx+1, len(chunks), err)
+				}
+				done <- chunkResult{index: idx, segments: rawFallbackSegments(c, lastSpeakerLabel(tail))}
+				return
+			}
+			done <- chunkResult{index: idx, segments: refined}
+		}(i, chunks[i], firstTail)
+	}
+
+	for i := 1; i < len(chunks); i++ {
+		r := <-done
+		results[r.index] = r.segments
+	}
+
+	var allRefined []RefinedSegment
+	for _, segs := range results {
+		allRefined = append(allRefined, segs...)
+	}
+	return allRefined
+}
+
+func rawFallbackSegments(chunk []WhisperSegment, speaker string) []RefinedSegment {
+	if speaker == "" {
+		speaker = "화자A"
+	}
+	segments := make([]RefinedSegment, len(chunk))
+	for i, seg := range chunk {
+		segments[i] = RefinedSegment{
+			Speaker:   speaker,
+			Text:      seg.Text,
+			StartTime: seg.Start,
+			EndTime:   seg.End,
+		}
+	}
+	return segments
+}
+
+func lastSpeakerLabel(segments []RefinedSegment) string {
+	if len(segments) == 0 {
+		return "spk_0"
+	}
+	return segments[len(segments)-1].Speaker
+}
+
+func buildSpeakerHintTail(segments []RefinedSegment) []RefinedSegment {
+	if len(segments) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var hints []RefinedSegment
+	for _, seg := range segments {
+		if !seen[seg.Speaker] {
+			seen[seg.Speaker] = true
+			hints = append(hints, seg)
+		}
+	}
+	tail := segments
+	if len(segments) > 3 {
+		tail = segments[len(segments)-3:]
+	}
+	for _, t := range tail {
+		if !seen[t.Speaker+"_tail"] {
+			seen[t.Speaker+"_tail"] = true
+			hints = append(hints, t)
+		}
+	}
+	return hints
+}
+
+func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int, prevTail []RefinedSegment) ([]RefinedSegment, error) {
+	var sb strings.Builder
+	for _, seg := range segments {
+		sb.WriteString(fmt.Sprintf("[%.1f-%.1f] %s\n", seg.Start, seg.End, seg.Text))
+	}
+
+	systemPrompt := `You are a Korean meeting transcript editor. You receive raw Whisper STT segments with timestamps and must produce clean, readable transcript segments.
+
+Your tasks:
+1. **Merge fragmented sentences**: Whisper often splits one speaker's continuous speech into many short fragments. Merge them into natural sentence units.
+2. **Fix misrecognized words**: Correct obvious STT errors (e.g. "상침" → "상세" or "상위", "아키드" → "아키텍트", "채우해" → "셰어해"). Use surrounding context to infer correct words.
+3. **Remove hallucinations**: Whisper sometimes repeats words/phrases (e.g. "법인으로 법인으로 법인으로"). Keep only one instance.
+4. **Infer speaker turns**: Based on conversation flow, assign speaker labels "spk_0", "spk_1", "spk_2", "spk_3", "spk_4", "spk_5", etc.
+   - **Meetings typically have 3-8 participants.** Do NOT assume only 2-3 speakers. Pay close attention to: different speaking styles, distinct viewpoints, question-answer patterns, self-introductions, role references, and turn-taking pauses.
+   - **When uncertain, prefer splitting into a new speaker over merging.** It is better to over-estimate speaker count than to conflate different people into one label.
+   - If previous context is provided, reuse the same speaker labels for the same speakers.
+5. **Preserve timestamps**: Each output segment should have the start time of its first source segment and end time of its last source segment.
+6. **Remove filler words**: Clean up meaningless fillers ("음", "어", "그") but keep discourse markers that carry meaning.
+
+Output ONLY a JSON array. Each element: {"speaker":"spk_0","text":"정제된 문장","startTime":0.0,"endTime":6.5}
+Do NOT include any text outside the JSON array. No markdown fences.`
+
+	var userPrompt string
+	if len(prevTail) > 0 {
+		var hint strings.Builder
+		speakerSet := make(map[string]bool)
+		for _, seg := range prevTail {
+			speakerSet[seg.Speaker] = true
+		}
+		speakers := make([]string, 0, len(speakerSet))
+		for s := range speakerSet {
+			speakers = append(speakers, s)
+		}
+		hint.WriteString(fmt.Sprintf("이전 파트에서 확인된 화자: %s\n", strings.Join(speakers, ", ")))
+		hint.WriteString("이전 파트의 마지막 발화 (화자 라벨 참고용, 출력에 포함하지 마세요):\n")
+		for _, seg := range prevTail {
+			hint.WriteString(fmt.Sprintf("  %s: %s\n", seg.Speaker, seg.Text))
+		}
+		hint.WriteString("\n")
+		userPrompt = fmt.Sprintf("%s다음은 Whisper STT 원본 세그먼트입니다 (파트 %d/%d). 위 규칙에 따라 정제해주세요:\n\n%s", hint.String(), chunkIdx+1, totalChunks, sb.String())
+	} else {
+		userPrompt = fmt.Sprintf("다음은 Whisper STT 원본 세그먼트입니다 (파트 %d/%d). 위 규칙에 따라 정제해주세요:\n\n%s", chunkIdx+1, totalChunks, sb.String())
+	}
+
+	request := ClaudeRequest{
+		AnthropicVersion: "bedrock-2023-05-31",
+		MaxTokens:        16384,
+		Messages: []ClaudeMessage{
+			{
+				Role:    "user",
+				Content: []ContentBlock{{Type: "text", Text: userPrompt}},
+			},
+		},
+		System: systemPrompt,
+	}
+
+	result, err := s.invokeClaudeModelWithID(ctx, request, ClaudeSonnetModelID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to invoke model: %w", err)
+	}
+
+	result = extractJSONArray(result)
+
+	var refined []RefinedSegment
+	if err := json.Unmarshal([]byte(result), &refined); err != nil {
+		return nil, fmt.Errorf("failed to parse refined segments: %w (response: %.200s)", err, result)
+	}
+
+	return refined, nil
+}
+
+// extractJSONArray extracts the first JSON array from a string,
+// handling cases where the model wraps output in code fences or adds explanatory text.
+func extractJSONArray(s string) string {
+	s = stripCodeFences(s)
+	start := strings.Index(s, "[")
+	end := strings.LastIndex(s, "]")
+	if start >= 0 && end > start {
+		return s[start : end+1]
+	}
+	return s
+}
+
+// chunkWhisperSegments splits segments into time-based chunks (~chunkSeconds each)
+func chunkWhisperSegments(segments []WhisperSegment, chunkSeconds float64) [][]WhisperSegment {
+	if len(segments) == 0 {
+		return nil
+	}
+
+	var chunks [][]WhisperSegment
+	var current []WhisperSegment
+	chunkStart := segments[0].Start
+
+	for _, seg := range segments {
+		if len(current) > 0 && seg.Start-chunkStart >= chunkSeconds {
+			chunks = append(chunks, current)
+			current = nil
+			chunkStart = seg.Start
+		}
+		current = append(current, seg)
+	}
+	if len(current) > 0 {
+		chunks = append(chunks, current)
+	}
+
+	return chunks
 }
 
 // AnalyzeImage analyzes an image using Claude Vision

@@ -2,7 +2,7 @@
 
 import { getIdToken, refreshSession } from './auth';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
-import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail } from '@/types/meeting';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -333,6 +333,12 @@ export const insightsApi = {
     api.get<CrawledDocument & { content: string }>(`/api/insights/${encodeURIComponent(sourceId)}/${encodeURIComponent(docHash)}`),
 };
 
+// Dictionary API
+export const dictionaryApi = {
+  get: () => api.get<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>('/api/settings/dictionary'),
+  update: (terms: DictionaryTerm[]) => api.put<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>('/api/settings/dictionary', { terms }),
+};
+
 // Research API
 export const researchApi = {
   create: (data: { topic: string; mode: string }) =>
@@ -341,7 +347,21 @@ export const researchApi = {
     api.get<{ research: Research[] }>('/api/research'),
   getDetail: (researchId: string) =>
     api.get<ResearchDetail>(`/api/research/${encodeURIComponent(researchId)}`),
-  delete: (researchId: string) =>
+  trash: (researchId: string) =>
     api.delete(`/api/research/${encodeURIComponent(researchId)}`),
+  restore: (researchId: string) =>
+    api.post(`/api/research/${encodeURIComponent(researchId)}/restore`, {}),
+  share: (researchId: string, data: { email: string; permission: 'read' | 'edit' }) =>
+    api.post<{ sharedWith: { userId: string; email: string; permission: string } }>(`/api/research/${encodeURIComponent(researchId)}/share`, data),
+  unshare: (researchId: string, userId: string) =>
+    api.delete(`/api/research/${encodeURIComponent(researchId)}/share/${userId}`),
 };
 
+export const researchChatApi = {
+  listMessages: (researchId: string) =>
+    api.get<{ messages: ChatMessage[] }>(`/api/research/${encodeURIComponent(researchId)}/chat`),
+  sendMessage: (researchId: string, data: { content: string; action?: string }) =>
+    api.post<{ messageId: string }>(`/api/research/${encodeURIComponent(researchId)}/chat`, data),
+  listSubPages: (researchId: string) =>
+    api.get<{ subpages: Research[] }>(`/api/research/${encodeURIComponent(researchId)}/subpages`),
+};

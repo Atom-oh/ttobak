@@ -7,6 +7,9 @@ on:
   pull_request:
     paths: ['backend/cmd/**', 'backend/internal/**', 'backend/go.*']
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ttobak-arm

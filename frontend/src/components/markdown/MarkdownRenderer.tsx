@@ -24,6 +24,7 @@ const customSchema = {
       'data-callout-title',
       'className',
     ],
+    img: [...(defaultSchema.attributes?.img ?? []), 'loading'],
   },
 };
 
@@ -50,7 +51,9 @@ const components: Components = {
     if (lang === 'mermaid') {
       return <MermaidBlock code={String(children).replace(/\n$/, '')} />;
     }
-    if (className?.startsWith('language-')) {
+    const text = String(children ?? '');
+    const isBlock = className?.startsWith('language-') || text.includes('\n');
+    if (isBlock) {
       return <CodeBlock className={className}>{children}</CodeBlock>;
     }
     return <InlineCode>{children}</InlineCode>;
@@ -111,6 +114,16 @@ const components: Components = {
 
   em({ children }: { children?: ReactNode }) {
     return <em className="italic text-slate-500 dark:text-[#849396]">{children}</em>;
+  },
+
+  img(props: React.ImgHTMLAttributes<HTMLImageElement>) {
+    return (
+      <img
+        {...props}
+        loading="lazy"
+        className="rounded-xl border border-slate-200 dark:border-white/10 shadow-sm my-4 max-w-full h-auto max-h-[400px] object-contain"
+      />
+    );
   },
 };
 

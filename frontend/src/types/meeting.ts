@@ -54,6 +54,7 @@ export interface Attachment {
   thumbnailUrl?: string;
   originalUrl?: string;
   processedUrl?: string;
+  processedContent?: string;
   size?: number;
   mimeType?: string;
   status?: string;
@@ -200,12 +201,22 @@ export interface CrawlHistory {
   duration: number;
 }
 
+export interface ChatMessage {
+  msgId: string;
+  role: 'user' | 'agent';
+  content: string;
+  action?: 'propose_structure' | 'ask_question' | 'approve' | 'request_subpage' | 'respond';
+  metadata?: string;
+  createdAt: string;
+}
+
 export interface Research {
   researchId: string;
   userId?: string;
   topic: string;
   mode: 'quick' | 'standard' | 'deep';
-  status: 'running' | 'done' | 'error';
+  status: 'planning' | 'approved' | 'running' | 'done' | 'error';
+  parentId?: string;
   createdAt: string;
   completedAt?: string;
   s3Key?: string;
@@ -213,10 +224,20 @@ export interface Research {
   wordCount?: number;
   summary?: string;
   errorMessage?: string;
+  trashedAt?: string;
+  isShared?: boolean;
+  sharedBy?: string;
 }
 
 export interface ResearchDetail extends Research {
   content?: string;
+  shares?: SharedUser[];
+}
+
+export interface DictionaryTerm {
+  phrase: string;
+  soundsLike: string;
+  displayAs: string;
 }
 
 export interface ChatSession {
@@ -225,4 +246,10 @@ export interface ChatSession {
   createdAt: string;
   lastMessageAt: string;
   messageCount: number;
+}
+
+export interface DictionaryTerm {
+  phrase: string;
+  soundsLike: string;
+  displayAs: string;
 }

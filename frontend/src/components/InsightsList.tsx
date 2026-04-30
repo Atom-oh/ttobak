@@ -33,7 +33,7 @@ export function InsightsList() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
-  const [sourceFilter, setSourceFilter] = useState('');
+  const [crawlerFilter, setCrawlerFilter] = useState('');
   const [serviceFilter, setServiceFilter] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState('newest');
@@ -59,8 +59,8 @@ export function InsightsList() {
         page,
         limit,
       };
-      if (activeTab === 'news' && sourceFilter) {
-        params.source = sourceFilter;
+      if (crawlerFilter) {
+        params.source = crawlerFilter;
       }
       if (activeTab === 'tech' && serviceFilter) {
         params.service = serviceFilter;
@@ -81,7 +81,7 @@ export function InsightsList() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, page, sourceFilter, serviceFilter, selectedTags, sortBy, limit]);
+  }, [activeTab, page, crawlerFilter, serviceFilter, selectedTags, sortBy, limit]);
 
   const fetchResearchJobs = useCallback(async () => {
     try {
@@ -141,7 +141,7 @@ export function InsightsList() {
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
     setPage(1);
-    setSourceFilter('');
+    setCrawlerFilter('');
     setServiceFilter('');
     setSelectedTags([]);
     setSortBy('newest');
@@ -152,11 +152,11 @@ export function InsightsList() {
     if (!researchTopic.trim()) return;
     try {
       setCreating(true);
-      await researchApi.create({ topic: researchTopic.trim(), mode: researchMode });
+      const created = await researchApi.create({ topic: researchTopic.trim(), mode: researchMode });
       setShowNewResearch(false);
       setResearchTopic('');
       setResearchMode('standard');
-      await fetchResearchJobs();
+      router.push(`/insights/research/${created.researchId}`);
     } catch (err) {
       setResearchError(err instanceof Error ? err.message : 'Failed to create research');
     } finally {
@@ -176,7 +176,13 @@ export function InsightsList() {
     setPage(1);
   };
 
-  // Collect unique sources from current results
+  // Collect unique crawler sources (customer names) from current results
+  const uniqueCrawlerSources = useMemo(() => {
+    const sources = new Set(documents.map((d) => d.sourceId).filter(Boolean));
+    return Array.from(sources).sort();
+  }, [documents]);
+
+  // Collect unique news outlets from current results
   const uniqueSources = useMemo(() => {
     const sources = new Set(documents.map((d) => d.source).filter(Boolean));
     return Array.from(sources).sort();
@@ -316,9 +322,9 @@ export function InsightsList() {
                 return (
                   <div
                     key={r.researchId}
-                    onClick={() => r.status === 'done' && router.push(`/insights/research/${r.researchId}`)}
+                    onClick={() => r.status !== 'error' && router.push(`/insights/research/${r.researchId}`)}
                     className={`glass-panel rounded-xl p-5 transition-shadow hover:shadow-lg dark:hover:shadow-[0_0_20px_rgba(0,229,255,0.06)] ${
-                      r.status === 'done' ? 'cursor-pointer' : ''
+                      r.status !== 'error' ? 'cursor-pointer' : ''
                     }`}
                   >
                     <h3 className="text-base font-semibold text-slate-900 dark:text-[#e4e1e9] leading-snug line-clamp-2">
@@ -365,22 +371,51 @@ export function InsightsList() {
                         {r.errorMessage}
                       </p>
                     )}
-                    {/* Delete button for error/done jobs */}
-                    {(r.status === 'error' || r.status === 'done') && (
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          if (!confirm('Delete this research?')) return;
-                          try {
-                            await researchApi.delete(r.researchId);
-                            await fetchResearchJobs();
-                          } catch {}
-                        }}
-                        className="mt-2 flex items-center gap-1 text-xs text-red-500 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 transition-colors"
-                      >
-                        <span className="material-symbols-outlined text-sm">delete</span>
-                        Delete
-                      </button>
+                    {r.status === 'done' && (
+                      <div className="flex items-center gap-2 mt-3">
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              const detail = await researchApi.getDetail(r.researchId);
+                              if (!detail.content) return;
+                              const slug = r.topic.replace(/[^a-zA-Z0-9가-힣\s-]/g, '').replace(/\s+/g, '-').slice(0, 60);
+                              const blob = new Blob([detail.content], { type: 'text/markdown' });
+                              const url = URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url; a.download = `${slug}.md`;
+                              document.body.appendChild(a); a.click();
+                              document.body.removeChild(a); URL.revokeObjectURL(url);
+                            } catch {}
+                          }}
+                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-[#849396] hover:text-primary dark:hover:text-[#00E5FF] transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-sm">description</span>
+                          MD
+                        </button>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try {
+                              const detail = await researchApi.getDetail(r.researchId);
+                              if (!detail.content) return;
+                              const { parse } = await import('marked');
+                              const DOMPurify = (await import('dompurify')).default;
+                              const rendered = DOMPurify.sanitize(await parse(detail.content));
+                              const title = r.topic.replace(/</g, '&lt;');
+                              const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.7;color:#1a1a1a}h1,h2,h3{margin-top:1.5em}pre{background:#f5f5f5;padding:12px;border-radius:6px;overflow-x:auto}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;text-align:left}</style></head><body>${rendered}</body></html>`;
+                              const blob = new Blob([fullHtml], { type: 'text/html' });
+                              const url = URL.createObjectURL(blob);
+                              const printWin = window.open(url, '_blank');
+                              if (printWin) printWin.onload = () => { printWin.print(); URL.revokeObjectURL(url); };
+                            } catch {}
+                          }}
+                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-[#849396] hover:text-primary dark:hover:text-[#00E5FF] transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-sm">picture_as_pdf</span>
+                          PDF
+                        </button>
+                      </div>
                     )}
                   </div>
                 );
@@ -461,21 +496,22 @@ export function InsightsList() {
         <>
           {/* Filters */}
           <div className="space-y-3">
-            {/* Source/Service dropdown + count */}
-            <div className="flex items-center gap-3">
-              {activeTab === 'news' && uniqueSources.length > 0 && (
+            {/* Crawler source / Service dropdown + count */}
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* Crawler source filter (customer) — shown on news & tech tabs */}
+              {(activeTab as string) !== 'research' && uniqueCrawlerSources.length > 0 && (
                 <select
-                  value={sourceFilter}
+                  value={crawlerFilter}
                   onChange={(e) => {
-                    setSourceFilter(e.target.value);
+                    setCrawlerFilter(e.target.value);
                     setPage(1);
                   }}
                   className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
                 >
-                  <option value="">All Sources</option>
-                  {uniqueSources.map((source) => (
-                    <option key={source} value={source}>
-                      {source}
+                  <option value="">All Customers</option>
+                  {uniqueCrawlerSources.map((src) => (
+                    <option key={src} value={src}>
+                      {src}
                     </option>
                   ))}
                 </select>

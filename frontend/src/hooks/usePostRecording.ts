@@ -28,12 +28,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 interface UsePostRecordingOptions {
   meetingTitle: string;
-  sttProvider: 'transcribe' | 'nova-sonic';
 }
 
 export function usePostRecording({
   meetingTitle,
-  sttProvider,
 }: UsePostRecordingOptions) {
   const router = useRouter();
   const [step, setStep] = useState<PostRecordingStep | null>(null);
@@ -49,7 +47,6 @@ export function usePostRecording({
       const result = await withTimeout(
         meetingsApi.create({
           title: meetingTitle || formatDefaultTitle(new Date()),
-          sttProvider,
           status: 'recording',
         }),
         15000, 'Create draft meeting',
@@ -60,7 +57,7 @@ export function usePostRecording({
       console.error('Failed to create draft meeting:', err);
       return null;
     }
-  }, [meetingTitle, sttProvider]);
+  }, [meetingTitle]);
 
   /** Resume the save+upload flow after notes step */
   const resumeUploadFlow = useCallback(async (blob: Blob, mimeType: string) => {
@@ -80,7 +77,7 @@ export function usePostRecording({
         // Fallback: draft creation failed, create meeting now
         setStep('creating');
         const result = await withTimeout(
-          meetingsApi.create({ title: meetingTitle || formatDefaultTitle(new Date()), sttProvider }),
+          meetingsApi.create({ title: meetingTitle || formatDefaultTitle(new Date()) }),
           15000, 'Create meeting',
         );
         meetingId = result.meetingId;
@@ -125,7 +122,7 @@ export function usePostRecording({
       setErrorMessage(err instanceof Error ? err.message : 'Failed to process recording');
       setStep('error');
     }
-  }, [meetingTitle, sttProvider, router, serverMeetingId]);
+  }, [meetingTitle, router, serverMeetingId]);
 
   /** Called when recording blob is ready — pause for notes input */
   const handleBlobReady = useCallback(async (blob: Blob, mimeType: string) => {

@@ -27,6 +27,7 @@ export interface TranscribeStreamingConfig {
   multiLanguage?: boolean;
   languageOptions?: string;
   preferredLanguage?: string;
+  vocabularyName?: string;
   onTranscript: (text: string, isFinal: boolean, languageCode?: string) => void;
   onError: (error: string) => void;
 }
@@ -138,6 +139,10 @@ export class TranscribeStreamingSession {
         commandInput.PreferredLanguage = (this.config.preferredLanguage || 'ko-KR') as StartStreamTranscriptionCommandInput['PreferredLanguage'];
       } else {
         commandInput.LanguageCode = (this.config.languageCode || 'ko-KR') as StartStreamTranscriptionCommandInput['LanguageCode'];
+      }
+
+      if (this.config.vocabularyName) {
+        commandInput.VocabularyName = this.config.vocabularyName;
       }
 
       const command = new StartStreamTranscriptionCommand(commandInput);

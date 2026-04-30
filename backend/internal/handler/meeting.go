@@ -157,6 +157,18 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Generate presigned download URLs for image attachments
+	if h.uploadService != nil {
+		for i := range result.Attachments {
+			att := &result.Attachments[i]
+			if att.OriginalKey != "" {
+				if url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, att.OriginalKey); err == nil {
+					att.URL = url
+				}
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, result)
 }
 

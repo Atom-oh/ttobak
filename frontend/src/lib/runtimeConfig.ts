@@ -7,6 +7,7 @@ export interface RuntimeConfig {
     userPoolClientId: string;
     identityPoolId: string;
   };
+  wsUrl?: string;
 }
 
 let cached: Promise<RuntimeConfig> | null = null;

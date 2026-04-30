@@ -1,5 +1,8 @@
 'use client';
 
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+
 const TOOL_LABELS: Record<string, { label: string; color: string }> = {
   search_knowledge_base: { label: 'KB 검색', color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' },
   search_aws_docs: { label: 'AWS Docs', color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
@@ -62,10 +65,10 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
             </div>
           ) : (
             <>
-              <p className="text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
-                {answer}
+              <div className="text-sm text-slate-700 dark:text-slate-300 prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-2 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5 prose-table:my-2 prose-pre:my-2 prose-hr:my-2 prose-th:border prose-th:border-slate-300 dark:prose-th:border-slate-600 prose-th:px-2 prose-th:py-1 prose-td:border prose-td:border-slate-200 dark:prose-td:border-slate-700 prose-td:px-2 prose-td:py-1">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>
                 {isStreaming && <span className="inline-block w-0.5 h-4 ml-0.5 bg-primary animate-pulse align-middle" />}
-              </p>
+              </div>
 
               {/* Tool badges */}
               {toolsUsed && toolsUsed.length > 0 && (

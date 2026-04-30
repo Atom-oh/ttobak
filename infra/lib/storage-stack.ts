@@ -57,11 +57,15 @@ export class StorageStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // GSI3 for direct meeting lookup by meetingId (avoids full table scan)
+    // GSI3 for direct meeting lookup by meetingId + entityType
     this.table.addGlobalSecondaryIndex({
       indexName: 'GSI3',
       partitionKey: {
         name: 'meetingId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'entityType',
         type: dynamodb.AttributeType.STRING,
       },
       projectionType: dynamodb.ProjectionType.ALL,

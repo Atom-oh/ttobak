@@ -18,6 +18,32 @@ import { SpeakerMapEditor } from '@/components/meeting/SpeakerMapEditor';
 import { meetingsApi } from '@/lib/api';
 import type { Meeting, MeetingDetail, ActionItem, SharedUser } from '@/types/meeting';
 
+/** Map backend attachment response to frontend Attachment type */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeAttachments(raw: any[]): import('@/types/meeting').Attachment[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+  return raw.map((att) => ({
+    id: att.attachmentId || att.id || '',
+    name: att.fileName || att.name || 'Untitled',
+    type: att.type === 'photo' || att.type === 'screenshot' ? 'image' as const : att.type,
+    url: att.url || '',
+    processedContent: att.processedContent,
+    size: att.fileSize || att.size,
+    mimeType: att.mimeType,
+    status: att.status,
+    createdAt: att.createdAt || '',
+  }));
+}
+
+/** Replace attachment:// URLs in content with presigned download URLs */
+function resolveAttachmentUrls(content: string, attachments?: import('@/types/meeting').Attachment[]): string {
+  if (!content || !attachments?.length) return content;
+  return content.replace(/attachment:\/\/([a-f0-9-]+)/gi, (match, id) => {
+    const att = attachments.find((a) => a.id === id);
+    return att?.url || match;
+  });
+}
+
 /** Normalize action items from API — handles legacy `done` field and missing `id` */
 function normalizeActionItems(raw: unknown): ActionItem[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
@@ -245,6 +271,8 @@ function MeetingDetailContent() {
         const data = await meetingsApi.get(meetingId);
         const detail = data as MeetingDetail;
         detail.actionItems = normalizeActionItems(detail.actionItems);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        detail.attachments = normalizeAttachments((data as any).attachments);
         setMeeting(detail);
       } catch (err) {
         console.error('Failed to fetch meeting:', err);
@@ -261,6 +289,8 @@ function MeetingDetailContent() {
       const data = await meetingsApi.get(meetingId);
       const detail = data as MeetingDetail;
       detail.actionItems = normalizeActionItems(detail.actionItems);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      detail.attachments = normalizeAttachments((data as any).attachments);
       setMeeting(detail);
     } catch (err) {
       console.error('Failed to refetch meeting:', err);
@@ -287,6 +317,8 @@ function MeetingDetailContent() {
         const data = await meetingsApi.get(meeting.meetingId);
         const detail = data as MeetingDetail;
         detail.actionItems = normalizeActionItems(detail.actionItems);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        detail.attachments = normalizeAttachments((data as any).attachments);
         setMeeting(detail);
         if (data.status === 'done' || data.status === 'error') {
           clearInterval(interval);
@@ -383,8 +415,8 @@ function MeetingDetailContent() {
             <RecoveryBanner meetingId={meetingId} onRecovered={refetchMeeting} />
           )}
 
-          {/* Speaker Name Mapping */}
-          {meeting.status === 'done' && (
+          {/* Speaker Name Mapping — show when transcript exists (done or error with partial data) */}
+          {(meeting.status === 'done' || meeting.transcription) && (
             <SpeakerMapEditor
               transcription={meeting.transcription}
               content={meeting.content}
@@ -402,9 +434,12 @@ function MeetingDetailContent() {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-12">
               <div className="lg:col-span-7">
                 <AISummaryCard
-                  content={meeting.content}
+                  content={resolveAttachmentUrls(meeting.content || '', meeting.attachments)}
                   summary={meeting.summary}
                   transcriptA={meeting.transcriptA}
+                  onSave={async (html) => {
+                    await meetingsApi.update(meeting.meetingId, { content: html });
+                  }}
                 />
               </div>
               <div className="lg:col-span-5">
@@ -495,8 +530,14 @@ function MeetingDetailContent() {
           )}
 
           {/* Full Transcription */}
-          {meeting.transcription && meeting.transcription.length > 0 && (
-            <TranscriptSection transcription={meeting.transcription} />
+          {((meeting.transcription?.length ?? 0) > 0 || meeting.transcriptA) && (
+            <TranscriptSection
+              transcription={meeting.transcription || []}
+              rawTranscript={meeting.transcriptA}
+              onSaveRawTranscript={async (text) => {
+                await meetingsApi.update(meeting.meetingId, { transcriptA: text });
+              }}
+            />
           )}
 
           {/* Inline Q&A - mobile only */}

@@ -5,6 +5,17 @@ import { usersApi, meetingsApi } from '@/lib/api';
 import type { User, SharedUser } from '@/types/meeting';
 
 interface ShareButtonProps {
+  entityId: string;
+  sharedWith?: SharedUser[];
+  onShare?: (user: SharedUser) => void;
+  onUnshare?: (userId: string) => void;
+  shareApi: (id: string, data: { email: string; permission: 'read' | 'edit' }) => Promise<unknown>;
+  unshareApi: (id: string, userId: string) => Promise<unknown>;
+  label?: string;
+}
+
+// Backwards-compatible wrapper for meetings
+interface MeetingShareButtonProps {
   meetingId: string;
   sharedWith?: SharedUser[];
   onShare?: (user: SharedUser) => void;
@@ -13,11 +24,33 @@ interface ShareButtonProps {
 
 const EMPTY_SHARED: SharedUser[] = [];
 
-export function ShareButton({
+export function MeetingShareButton({
   meetingId,
   sharedWith = EMPTY_SHARED,
   onShare,
   onUnshare,
+}: MeetingShareButtonProps) {
+  return (
+    <ShareButton
+      entityId={meetingId}
+      sharedWith={sharedWith}
+      onShare={onShare}
+      onUnshare={onUnshare}
+      shareApi={meetingsApi.share}
+      unshareApi={meetingsApi.unshare}
+      label="Share meeting"
+    />
+  );
+}
+
+export function ShareButton({
+  entityId,
+  sharedWith = EMPTY_SHARED,
+  onShare,
+  onUnshare,
+  shareApi,
+  unshareApi,
+  label = 'Share',
 }: ShareButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -28,7 +61,6 @@ export function ShareButton({
   const modalRef = useRef<HTMLDivElement>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Close on outside click
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (modalRef.current && !modalRef.current.contains(event.target as Node)) {
@@ -44,7 +76,6 @@ export function ShareButton({
     };
   }, [isOpen]);
 
-  // Search users with debounce
   useEffect(() => {
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
@@ -59,7 +90,6 @@ export function ShareButton({
     searchTimeoutRef.current = setTimeout(async () => {
       try {
         const { users } = await usersApi.search(searchQuery);
-        // Filter out already shared users
         const filtered = users.filter(
           (u) => !sharedWith.some((s) => s.userId === u.userId)
         );
@@ -81,7 +111,7 @@ export function ShareButton({
   const handleShare = async (user: User) => {
     setIsSharing(true);
     try {
-      await meetingsApi.share(meetingId, {
+      await shareApi(entityId, {
         email: user.email,
         permission: selectedPermission,
       });
@@ -103,7 +133,7 @@ export function ShareButton({
 
   const handleUnshare = async (userId: string) => {
     try {
-      await meetingsApi.unshare(meetingId, userId);
+      await unshareApi(entityId, userId);
       onUnshare?.(userId);
     } catch (err) {
       console.error('Failed to unshare:', err);
@@ -131,9 +161,8 @@ export function ShareButton({
           className="absolute right-0 top-full mt-2 w-80 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50"
         >
           <div className="p-4 border-b border-slate-200 dark:border-slate-700">
-            <h3 className="font-bold text-slate-900 dark:text-white mb-3">Share meeting</h3>
+            <h3 className="font-bold text-slate-900 dark:text-white mb-3">{label}</h3>
 
-            {/* Search Input */}
             <div className="relative">
               <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-lg">
                 search
@@ -147,7 +176,6 @@ export function ShareButton({
               />
             </div>
 
-            {/* Permission Toggle */}
             <div className="flex gap-2 mt-3">
               <button
                 onClick={() => setSelectedPermission('read')}
@@ -172,14 +200,12 @@ export function ShareButton({
             </div>
           </div>
 
-          {/* Search Hint */}
           {searchQuery.length > 0 && searchQuery.length < 2 && (
             <div className="px-4 py-3 text-center text-slate-400 text-sm">
               2글자 이상 입력해주세요
             </div>
           )}
 
-          {/* Search Results */}
           {searchQuery.length >= 2 && (
             <div className="max-h-48 overflow-y-auto">
               {isSearching ? (
@@ -216,7 +242,6 @@ export function ShareButton({
             </div>
           )}
 
-          {/* Currently Shared With */}
           {sharedWith.length > 0 && (
             <div className="border-t border-slate-200 dark:border-slate-700">
               <p className="px-4 py-2 text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -251,7 +276,6 @@ export function ShareButton({
             </div>
           )}
 
-          {/* Close Button */}
           <div className="p-3 border-t border-slate-200 dark:border-slate-700">
             <button
               onClick={() => setIsOpen(false)}

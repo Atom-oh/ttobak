@@ -122,6 +122,7 @@ type AttachmentResponse struct {
 	AttachmentID     string `json:"attachmentId"`
 	OriginalKey      string `json:"originalKey"`
 	ProcessedKey     string `json:"processedKey,omitempty"`
+	URL              string `json:"url,omitempty"`
 	Type             string `json:"type"` // photo, screenshot, diagram, whiteboard, document, video, audio_file
 	Status           string `json:"status"`
 	Description      string `json:"description,omitempty"`
@@ -344,7 +345,8 @@ type CreateResearchRequest struct {
 // ResearchResponse represents a single research task in API responses
 type ResearchResponse struct {
 	Research
-	Content string `json:"content,omitempty"`
+	Content string          `json:"content,omitempty"`
+	Shares  []ShareResponse `json:"shares,omitempty"`
 }
 
 // ResearchListResponse represents the response for listing research tasks

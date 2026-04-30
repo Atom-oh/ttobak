@@ -6,6 +6,13 @@ on:
     paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-infra
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ttobak-arm

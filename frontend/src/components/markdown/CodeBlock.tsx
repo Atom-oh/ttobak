@@ -49,7 +49,7 @@ export function CodeBlock({ className, children }: CodeBlockProps) {
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <div className="p-4 overflow-x-auto text-sm leading-relaxed [&>pre]:!bg-transparent [&>pre]:!m-0 [&>pre]:!p-0">
+      <div className="p-4 overflow-x-auto text-sm leading-snug font-mono [&>pre]:!bg-transparent [&>pre]:!m-0 [&>pre]:!p-0">
         {html ? (
           <div dangerouslySetInnerHTML={{ __html: html }} />
         ) : (

@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ExportMenu } from '@/components/ExportMenu';
-import { ShareButton } from '@/components/ShareButton';
+import { MeetingShareButton } from '@/components/ShareButton';
 import { meetingsApi } from '@/lib/api';
 import type { MeetingDetail, SharedUser } from '@/types/meeting';
 
@@ -159,7 +159,7 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange }: Me
           <div className="flex items-center gap-2">
             <DesktopDeleteButton meetingId={meeting.meetingId} />
             <ExportMenu meetingId={meeting.meetingId} />
-            <ShareButton
+            <MeetingShareButton
               meetingId={meeting.meetingId}
               sharedWith={meeting.sharedWith}
               onShare={onShare}

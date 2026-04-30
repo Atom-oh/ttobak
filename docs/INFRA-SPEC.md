@@ -8,10 +8,11 @@
 TtobakApp (bin/ttobak.ts)
 ├── AuthStack           - Cognito User Pool + App Client
 ├── StorageStack        - DynamoDB + S3
+├── AiStack             - Transcribe/Nova Sonic/Bedrock IAM
+├── WhisperStack        - ECS Cluster + GPU Spot ASG + ECR
+├── KnowledgeStack      - Bedrock KB + OpenSearch Serverless
 ├── EdgeAuthStack       - Lambda@Edge (us-east-1, JWT 검증)
 ├── GatewayStack        - API Gateway HTTP + WebSocket + Lambda
-├── KnowledgeStack      - Bedrock KB + OpenSearch Serverless
-├── AiStack             - Transcribe/Nova Sonic/Bedrock IAM
 └── FrontendStack       - S3 + CloudFront (depends: EdgeAuth, Gateway)
 ```
 
@@ -248,7 +249,52 @@ TtobakApp (bin/ttobak.ts)
 - `KnowledgeBaseId`, `KnowledgeBaseArn`
 - `CollectionEndpoint`, `CollectionArn`
 
-## 7. AiStack
+## 7. WhisperStack
+
+Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-transcribe` Lambda가 ECS 태스크를 실행하여 faster-whisper-large-v3 모델로 고정밀 전사를 수행.
+
+### ECS Cluster
+- **Name**: `ttobak-whisper`
+- **VPC**: 기존 VPC 참조 (vpcId prop)
+
+### ECR Repository
+- **Name**: `ttobak-whisper`
+- **Lifecycle**: 최근 5개 이미지만 유지
+- **Removal policy**: RETAIN
+
+### Auto Scaling Group
+- **Name**: `ttobak-whisper-asg`
+- **Instance type**: g5.xlarge (NVIDIA A10G GPU, 16GB VRAM)
+- **AMI**: ECS-optimized Amazon Linux 2 (GPU)
+- **Spot price**: $1.10
+- **Capacity**: min=0, max=10, desired=0 (zero-scale)
+- **Subnets**: Private with egress (ap-northeast-2a, 2c, 2d)
+- **Security group**: Egress only (no inbound)
+
+### ECS Capacity Provider
+- **Name**: `ttobak-whisper-spot`
+- **Managed scaling**: ENABLED (target 100%)
+- **Managed termination protection**: disabled
+- **Scaling step**: min=1, max=2
+
+### Task Definition
+- **Family**: `ttobak-whisper`
+- **Network mode**: HOST
+- **Container**: `whisper`
+  - Image: ECR `ttobak-whisper:latest`
+  - Memory: 12,288 MiB (12GB, reserve 4GB for OS/ECS agent)
+  - GPU: 1
+  - Environment: `BUCKET_NAME`, `TABLE_NAME`, `AWS_REGION`, `VOCAB_KEY`, `MODEL_S3_KEY`
+  - Logging: CloudWatch (`whisper` prefix)
+
+### IAM Roles
+- **Execution role**: `ttobak-whisper-execution-role` (ECS task execution policy)
+- **Task role**: `ttobak-whisper-task-role` (S3 read/write, DynamoDB read/write)
+
+### Outputs
+- `ClusterArn`, `TaskDefinitionArn`, `EcrRepoUri`, `VpcId`
+
+## 8. AiStack
 
 ### IAM Policies (Lambda에 부여)
 - **Transcribe**: `transcribe:StartTranscriptionJob`, `transcribe:GetTranscriptionJob`
@@ -259,7 +305,7 @@ TtobakApp (bin/ttobak.ts)
 - **OpenSearch Serverless**: `aoss:APIAccessAll` on collection
 - **S3**: read from `audio/`, `images/`, `kb/`; write to `processed/`, `transcripts/`
 
-## 8. FrontendStack
+## 9. FrontendStack
 
 ### S3 Bucket (Static Site)
 - Static website hosting: NOT enabled (CloudFront OAC 사용)
@@ -295,7 +341,7 @@ TtobakApp (bin/ttobak.ts)
 - `DistributionId`, `DistributionDomainName`
 - `FrontendBucketName`
 
-## 9. Cross-Stack References
+## 10. Cross-Stack References
 
 ```
 AuthStack.userPool → GatewayStack (WebSocket Authorizer)
@@ -311,7 +357,7 @@ KnowledgeStack.kbId → GatewayStack (API Lambda, KB Lambda)
 KnowledgeStack.collectionEndpoint → GatewayStack (KB Lambda)
 ```
 
-## 10. Deployment Order
+## 11. Deployment Order
 
 ```
 1. AuthStack (no dependencies)
@@ -320,8 +366,9 @@ KnowledgeStack.collectionEndpoint → GatewayStack (KB Lambda)
 3. EdgeAuthStack (depends: AuthStack) - us-east-1에 배포
 4. KnowledgeStack (depends: StorageStack)
 5. AiStack (depends: StorageStack)
-6. GatewayStack (depends: AuthStack, StorageStack, KnowledgeStack, AiStack)
-7. FrontendStack (depends: EdgeAuthStack, GatewayStack)
+6. WhisperStack (depends: StorageStack) - ECS GPU Spot 클러스터
+7. GatewayStack (depends: AuthStack, StorageStack, KnowledgeStack, AiStack)
+8. FrontendStack (depends: EdgeAuthStack, GatewayStack)
 ```
 
 ### Multi-Region Deployment Note
@@ -358,7 +405,7 @@ Cognito ID 들은 **빌드 타임 embed가 아닌 런타임 fetch** 방식으로
 2. CloudFormation 콘솔에서 `TtobakFrontendStack` 의 `ConfigDeployment` Custom Resource 상태 확인
 3. `aws s3 ls s3://<bucket>/config.json` 으로 S3 에 실제 존재하는지 확인
 
-## 11. Configuration
+## 12. Configuration
 
 ### cdk.json context
 ```json
@@ -376,7 +423,7 @@ Cognito ID 들은 **빌드 타임 embed가 아닌 런타임 fetch** 방식으로
 - `CDK_DEFAULT_REGION` (ap-northeast-2 recommended for Korean users)
 - `CDK_EDGE_REGION` (us-east-1 for Lambda@Edge)
 
-## 12. Review Notes & Decisions
+## 13. Review Notes & Decisions
 
 ### 2026-03-05: Initial Review
 

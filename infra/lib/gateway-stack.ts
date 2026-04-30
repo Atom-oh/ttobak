@@ -14,6 +14,8 @@ import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorize
 import { Construct } from 'constructs';
 import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME } from './whisper-stack';
 
+export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
+
 export interface GatewayStackProps extends cdk.StackProps {
   apiRole: iam.IRole;
   transcribeRole: iam.IRole;
@@ -107,7 +109,7 @@ export class GatewayStack extends cdk.Stack {
     });
 
     const researchSfn = new sfn.StateMachine(this, 'ResearchWorkflow', {
-      stateMachineName: 'ttobak-research-workflow',
+      stateMachineName: RESEARCH_SFN_NAME,
       definitionBody: sfn.DefinitionBody.fromChainable(researchTask),
       timeout: cdk.Duration.minutes(20),
     });
@@ -167,13 +169,14 @@ export class GatewayStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-4-6-v1',
+        BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         KB_ID: props.knowledgeBaseId || '',
         DATA_SOURCE_ID: props.dataSourceId || '',
         AWS_REGION_NAME: cdk.Aws.REGION,
       },
-      timeout: cdk.Duration.minutes(2),
+      timeout: cdk.Duration.minutes(10),
       memorySize: 512,
     });
 
@@ -226,13 +229,15 @@ export class GatewayStack extends cdk.Stack {
         KB_ID: props.knowledgeBaseId || '',
         BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
         DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
-        MAX_TOOL_ROUNDS: '3',
+        MAX_TOOL_ROUNDS: '5',
         KB_CACHE_TTL_SECONDS: '600',
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
       },
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,
     });
+
+    this.qaFunction.addEnvironment('RESEARCH_SFN_ARN', researchSfn.stateMachineArn);
 
     // JWT Authorizer for Cognito
     const jwtAuthorizer = new apigatewayv2Authorizers.HttpJwtAuthorizer(
