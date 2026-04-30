@@ -34,7 +34,11 @@ RESEARCH_SFN_ARN = os.environ.get('RESEARCH_SFN_ARN', '')
 
 
 def create_research_from_chat(user_id, topic, mode):
-    """Create a research job from the chat assistant. Mirrors Go CreateResearch logic."""
+    """Create a research job from the chat assistant.
+
+    TODO: This duplicates Go ResearchService.CreateResearch (PK/SK schema, SFN input).
+    Ideally call Go API internally to maintain single source of truth.
+    """
     import secrets
     from datetime import datetime, timezone
 
@@ -65,7 +69,7 @@ def create_research_from_chat(user_id, topic, mode):
         ])
     except Exception as e:
         logger.error(f"Failed to create research in DynamoDB: {e}")
-        return {"error": str(e)}
+        return {"error": "Failed to create research"}
 
     if RESEARCH_SFN_ARN:
         try:
@@ -80,13 +84,16 @@ def create_research_from_chat(user_id, topic, mode):
             )
         except Exception as e:
             logger.error(f"Failed to start research SFN: {e}")
-            table.update_item(
-                Key={"PK": f"RESEARCH#{research_id}", "SK": "CONFIG"},
-                UpdateExpression="SET #s = :s, errorMessage = :e",
-                ExpressionAttributeNames={"#s": "status"},
-                ExpressionAttributeValues={":s": "error", ":e": f"Failed to start: {e}"},
-            )
-            return {"error": str(e)}
+            try:
+                table.update_item(
+                    Key={"PK": f"RESEARCH#{research_id}", "SK": "CONFIG"},
+                    UpdateExpression="SET #s = :s, errorMessage = :e",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={":s": "error", ":e": "Research pipeline failed to start"},
+                )
+            except Exception as update_err:
+                logger.error(f"Failed to update research status after SFN failure: {update_err}")
+            return {"error": "Failed to start research pipeline"}
 
     return {"researchId": research_id}
 
