@@ -285,6 +285,7 @@ func (r *ResearchRepository) BatchGetResearch(ctx context.Context, researchIds [
 			for _, item := range result.Responses[r.tableName] {
 				var ri researchItem
 				if err := attributevalue.UnmarshalMap(item, &ri); err != nil {
+					log.Printf("warn: failed to unmarshal research item: %v", err)
 					continue
 				}
 				researches = append(researches, ri.Research)

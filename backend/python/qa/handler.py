@@ -31,6 +31,43 @@ table = dynamodb.Table(TABLE_NAME)
 BUCKET_NAME = os.environ.get('BUCKET_NAME', 'ttobak-assets')
 ORIGIN_VERIFY_SECRET = os.environ.get('ORIGIN_VERIFY_SECRET', '')
 RESEARCH_SFN_ARN = os.environ.get('RESEARCH_SFN_ARN', '')
+DAILY_RESEARCH_LIMIT = 5
+
+
+def check_research_limit(user_id):
+    """Check if user has exceeded daily research creation limit. Returns True if allowed."""
+    from boto3.dynamodb.conditions import Key
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    try:
+        resp = table.query(
+            KeyConditionExpression=Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('RESEARCH#'),
+            Select='COUNT',
+        )
+        count = resp.get('Count', 0)
+        if count < DAILY_RESEARCH_LIMIT:
+            return True
+        resp2 = table.query(
+            KeyConditionExpression=Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('RESEARCH#'),
+            ProjectionExpression='researchId',
+        )
+        today_count = 0
+        for item in resp2.get('Items', []):
+            rid = item.get('researchId', '')
+            if rid:
+                try:
+                    r = table.get_item(
+                        Key={'PK': f'RESEARCH#{rid}', 'SK': 'CONFIG'},
+                        ProjectionExpression='createdAt',
+                    ).get('Item', {})
+                    if r.get('createdAt', '').startswith(today):
+                        today_count += 1
+                except Exception:
+                    pass
+        return today_count < DAILY_RESEARCH_LIMIT
+    except Exception as e:
+        logger.warning(f"Failed to check research limit for {user_id}: {e}")
+        return True
 
 
 def create_research_from_chat(user_id, topic, mode):
@@ -459,6 +496,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
         "list_meetings": list_meetings_for_user,
         "load_meeting_context": load_meeting_context,
         "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
+        "check_research_limit": check_research_limit,
         "user_id": user_id,
     }
     tools_used = []
@@ -796,6 +834,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         "list_meetings": list_meetings_for_user,
         "load_meeting_context": load_meeting_context,
         "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
+        "check_research_limit": check_research_limit,
         "user_id": user_id,
     }
     tools_used = []
