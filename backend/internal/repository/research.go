@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -247,38 +248,61 @@ func (r *ResearchRepository) ListUserResearch(ctx context.Context, userId string
 	return researches, nil
 }
 
-// BatchGetResearch retrieves multiple research items by ID using BatchGetItem
+// BatchGetResearch retrieves multiple research items by ID using BatchGetItem.
+// Handles DynamoDB's 100-item limit per request and retries UnprocessedKeys.
 func (r *ResearchRepository) BatchGetResearch(ctx context.Context, researchIds []string) ([]model.Research, error) {
 	if len(researchIds) == 0 {
 		return nil, nil
 	}
 
-	keys := make([]map[string]types.AttributeValue, len(researchIds))
+	allKeys := make([]map[string]types.AttributeValue, len(researchIds))
 	for i, id := range researchIds {
-		keys[i] = map[string]types.AttributeValue{
+		allKeys[i] = map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + id},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
 		}
 	}
 
-	result, err := r.client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
-		RequestItems: map[string]types.KeysAndAttributes{
-			r.tableName: {Keys: keys},
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to batch get research: %w", err)
+	var researches []model.Research
+
+	for start := 0; start < len(allKeys); start += 100 {
+		end := start + 100
+		if end > len(allKeys) {
+			end = len(allKeys)
+		}
+		pending := allKeys[start:end]
+
+		for attempt := 0; attempt < 3 && len(pending) > 0; attempt++ {
+			result, err := r.client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
+				RequestItems: map[string]types.KeysAndAttributes{
+					r.tableName: {Keys: pending},
+				},
+			})
+			if err != nil {
+				return researches, fmt.Errorf("failed to batch get research: %w", err)
+			}
+
+			for _, item := range result.Responses[r.tableName] {
+				var ri researchItem
+				if err := attributevalue.UnmarshalMap(item, &ri); err != nil {
+					log.Printf("warn: failed to unmarshal research item: %v", err)
+					continue
+				}
+				researches = append(researches, ri.Research)
+			}
+
+			if unprocessed, ok := result.UnprocessedKeys[r.tableName]; ok && len(unprocessed.Keys) > 0 {
+				pending = unprocessed.Keys
+			} else {
+				pending = nil
+				break
+			}
+		}
+		if len(pending) > 0 {
+			log.Printf("warn: BatchGetResearch had %d unprocessed keys after retries", len(pending))
+		}
 	}
 
-	items := result.Responses[r.tableName]
-	researches := make([]model.Research, 0, len(items))
-	for _, item := range items {
-		var ri researchItem
-		if err := attributevalue.UnmarshalMap(item, &ri); err != nil {
-			continue
-		}
-		researches = append(researches, ri.Research)
-	}
 	return researches, nil
 }
 
@@ -359,37 +383,59 @@ func (r *ResearchRepository) DeleteResearch(ctx context.Context, researchId, use
 func (r *ResearchRepository) cleanupResearchShares(ctx context.Context, researchId string) {
 	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixResearch + researchId)).
 		And(expression.Key("SK").BeginsWith("SHARE_TO#"))
-	expr, _ := expression.NewBuilder().WithKeyCondition(keyEx).Build()
-
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
-		TableName:                 aws.String(r.tableName),
-		KeyConditionExpression:    expr.KeyCondition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-		ProjectionExpression:      aws.String("PK, SK, sharedToId"),
-	})
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
 	if err != nil {
+		log.Printf("warn: failed to build cleanup expression for research %s: %v", researchId, err)
 		return
 	}
+
+	var lastKey map[string]types.AttributeValue
+	for {
+		input := &dynamodb.QueryInput{
+			TableName:                 aws.String(r.tableName),
+			KeyConditionExpression:    expr.KeyCondition(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+			ProjectionExpression:      aws.String("PK, SK, sharedToId"),
+		}
+		if lastKey != nil {
+			input.ExclusiveStartKey = lastKey
+		}
+
+		result, err := r.client.Query(ctx, input)
+		if err != nil {
+			log.Printf("warn: failed to query share records for research %s: %v", researchId, err)
+			return
+		}
 
 	for _, item := range result.Items {
 		sharedToID := ""
 		if v, ok := item["sharedToId"].(*types.AttributeValueMemberS); ok {
 			sharedToID = v.Value
 		}
-		r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 			TableName: aws.String(r.tableName),
 			Key:       map[string]types.AttributeValue{"PK": item["PK"], "SK": item["SK"]},
-		})
+		}); err != nil {
+			log.Printf("warn: failed to delete share record for research %s: %v", researchId, err)
+		}
 		if sharedToID != "" {
-			r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 				TableName: aws.String(r.tableName),
 				Key: map[string]types.AttributeValue{
 					"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
 					"SK": &types.AttributeValueMemberS{Value: "SHARED#" + researchId},
 				},
-			})
+			}); err != nil {
+				log.Printf("warn: failed to delete recipient share record for user %s research %s: %v", sharedToID, researchId, err)
+			}
 		}
+	}
+
+	lastKey = result.LastEvaluatedKey
+	if lastKey == nil {
+		break
+	}
 	}
 }
 

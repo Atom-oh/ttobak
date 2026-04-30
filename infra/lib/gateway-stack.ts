@@ -14,6 +14,8 @@ import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorize
 import { Construct } from 'constructs';
 import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME } from './whisper-stack';
 
+export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
+
 export interface GatewayStackProps extends cdk.StackProps {
   apiRole: iam.IRole;
   transcribeRole: iam.IRole;
@@ -107,7 +109,7 @@ export class GatewayStack extends cdk.Stack {
     });
 
     const researchSfn = new sfn.StateMachine(this, 'ResearchWorkflow', {
-      stateMachineName: 'ttobak-research-workflow',
+      stateMachineName: RESEARCH_SFN_NAME,
       definitionBody: sfn.DefinitionBody.fromChainable(researchTask),
       timeout: cdk.Duration.minutes(20),
     });

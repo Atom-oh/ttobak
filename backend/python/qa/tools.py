@@ -186,6 +186,9 @@ def execute_tool(tool_name, tool_input, context):
             create_fn = context.get("create_research")
             if not create_fn:
                 return "리서치 기능을 사용할 수 없습니다.", []
+            check_fn = context.get("check_research_limit")
+            if check_fn and not check_fn(user_id):
+                return "일일 리서치 생성 한도(5건)에 도달했습니다. 내일 다시 시도해주세요.", []
             topic = tool_input.get("topic", "")
             mode = tool_input.get("mode", "standard")
             result = create_fn(user_id, topic, mode)
