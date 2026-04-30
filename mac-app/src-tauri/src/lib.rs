@@ -17,8 +17,6 @@ mod error;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
-
 use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{Manager, State};
@@ -52,9 +50,10 @@ pub struct StatusResponse {
 }
 
 fn allowed_dir() -> PathBuf {
-    let mut dir = std::env::temp_dir();
-    dir.push("ttobak-mac");
-    dir
+    // Canonicalize temp_dir to resolve macOS /tmp → /private/tmp symlink
+    let base = std::fs::canonicalize(std::env::temp_dir())
+        .unwrap_or_else(|_| std::env::temp_dir());
+    base.join("ttobak-mac")
 }
 
 fn validate_recording_path(path: &str, recorded_paths: &HashSet<PathBuf>) -> Result<PathBuf, AppError> {
@@ -81,9 +80,11 @@ async fn start_recording(
 ) -> Result<StartResponse, AppError> {
     let mut rec = state.recorder.lock();
     let path = rec.start(&meeting_id)?;
-    state.recorded_paths.lock().insert(path.clone());
+    // Canonicalize to match validate_recording_path (resolves /tmp → /private/tmp on macOS)
+    let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+    state.recorded_paths.lock().insert(canonical.clone());
     Ok(StartResponse {
-        temp_path: path.to_string_lossy().into_owned(),
+        temp_path: canonical.to_string_lossy().into_owned(),
     })
 }
 
