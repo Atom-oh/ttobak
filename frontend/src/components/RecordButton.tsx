@@ -2,8 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { isIOS, getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
-import { uploadAudioBlob, uploadWavBytes } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, readNativeRecordingBytes } from '@/lib/tauri';
+import { uploadAudioBlob, uploadToS3 } from '@/lib/upload';
+import { isTauri, startNativeRecording, stopNativeRecording, getRecordingAssetUrl, cleanupRecording } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 interface RecordButtonProps {
@@ -321,7 +321,7 @@ export function RecordButton({
       checkpointTimerRef.current = null;
     }
 
-    // Native system-audio stop → read WAV → upload
+    // Native system-audio stop → asset URL → fetch blob → upload → cleanup
     if (nativeTempPathRef.current) {
       const tempPath = nativeTempPathRef.current;
       nativeTempPathRef.current = null;
@@ -329,8 +329,13 @@ export function RecordButton({
       try {
         await stopNativeRecording();
         setRecordingState('uploading');
-        const bytes = await readNativeRecordingBytes(tempPath);
-        const result = await uploadWavBytes(bytes, meetingId);
+        const assetUrl = await getRecordingAssetUrl(tempPath);
+        const response = await fetch(assetUrl);
+        const blob = await response.blob();
+        const fileName = `recording_${Date.now()}.wav`;
+        const file = new File([blob], fileName, { type: 'audio/wav' });
+        const result = await uploadToS3(file, 'audio', undefined, meetingId);
+        await cleanupRecording(tempPath);
         onRecordingComplete?.(result.url);
         setRecordingState('idle');
         setElapsedTime(0);
