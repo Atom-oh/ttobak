@@ -232,9 +232,15 @@ mod macos {
                 return;
             };
             let samples_f32: Vec<f32> = list
-                .buffers()
                 .iter()
-                .flat_map(|b| b.as_f32_slice().to_vec())
+                .flat_map(|buf| {
+                    let data = buf.data();
+                    let count = data.len() / std::mem::size_of::<f32>();
+                    let slice = unsafe {
+                        std::slice::from_raw_parts(data.as_ptr() as *const f32, count)
+                    };
+                    slice.to_vec()
+                })
                 .collect();
 
             let mut guard = self.writer.lock().expect("writer poisoned");
