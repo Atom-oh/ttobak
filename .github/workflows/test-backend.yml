@@ -3,9 +3,19 @@ name: Test Backend
 on:
   push:
     branches: [main]
-    paths: ['backend/cmd/**', 'backend/internal/**', 'backend/go.*']
+    paths:
+      - 'backend/cmd/**'
+      - 'backend/internal/**'
+      - 'backend/go.*'
+      - 'backend/whisper/**'
+      - 'backend/python/**'
   pull_request:
-    paths: ['backend/cmd/**', 'backend/internal/**', 'backend/go.*']
+    paths:
+      - 'backend/cmd/**'
+      - 'backend/internal/**'
+      - 'backend/go.*'
+      - 'backend/whisper/**'
+      - 'backend/python/**'
 
 permissions:
   contents: read

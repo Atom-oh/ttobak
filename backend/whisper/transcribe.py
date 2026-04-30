@@ -2,9 +2,9 @@ import json
 import os
 import sys
 import time
-import unicodedata
 
 import boto3
+from botocore.exceptions import ClientError
 from faster_whisper import WhisperModel
 
 REGION = os.environ.get("AWS_REGION", "ap-northeast-2")
@@ -13,6 +13,10 @@ TABLE = os.environ["TABLE_NAME"]
 VOCAB_KEY = os.environ.get("VOCAB_KEY", "config/custom-vocabulary.txt")
 MODEL_S3_KEY = os.environ.get("MODEL_S3_KEY", "models/faster-whisper-large-v3.tar.gz")
 MODEL_LOCAL_DIR = "/tmp/whisper-model"
+
+# Audio discovery filters — exclude empty/placeholder uploads and progress/checkpoint sidecars.
+MIN_AUDIO_SIZE_BYTES = 1024
+SKIP_KEY_SUBSTRINGS = ("recording_progress", "checkpoint")
 
 s3 = boto3.client("s3", region_name=REGION)
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
@@ -57,32 +61,54 @@ def _load_custom_vocab_prompt() -> str:
         return ""
 
 
-def _resolve_s3_key(raw_key: str) -> str:
-    """Try NFC/NFD variants to find the actual S3 key.
+def _audio_key_exists(key: str) -> bool:
+    """Verify the given S3 key exists. Returns False only on 404; re-raises auth/throttle errors."""
+    try:
+        s3.head_object(Bucket=BUCKET, Key=key)
+        return True
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
 
-    S3 stores keys as uploaded bytes. Browser uploads use NFC (composed),
-    macOS/iOS may use NFD (decomposed). Try the raw key first, then variants.
+
+def _find_audio_key(user_id: str, meeting_id: str) -> str | None:
+    """Find the audio file by listing the S3 prefix (avoids Unicode normalization issues).
+
+    Uses a paginator to handle prefixes with >1000 objects, and picks the most
+    recently modified valid candidate so re-recordings supersede older uploads.
     """
-    from botocore.exceptions import ClientError
-    for candidate in (raw_key,
-                      unicodedata.normalize("NFC", raw_key),
-                      unicodedata.normalize("NFD", raw_key)):
-        try:
-            s3.head_object(Bucket=BUCKET, Key=candidate)
-            if candidate != raw_key:
-                print(f"S3 key resolved via normalization: {raw_key!r} → {candidate!r}")
-            return candidate
-        except ClientError:
-            continue
-    return raw_key
+    prefix = f"audio/{user_id}/{meeting_id}/"
+    paginator = s3.get_paginator("list_objects_v2")
+    candidates = []
+    for page in paginator.paginate(Bucket=BUCKET, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if any(p in key for p in SKIP_KEY_SUBSTRINGS):
+                continue
+            if obj["Size"] < MIN_AUDIO_SIZE_BYTES:
+                continue
+            candidates.append(obj)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda o: o["LastModified"])["Key"]
 
 
 def main():
-    audio_key = _resolve_s3_key(os.environ["AUDIO_KEY"])
     meeting_id = os.environ["MEETING_ID"]
     user_id = os.environ["USER_ID"]
+    audio_key = os.environ.get("AUDIO_KEY")
+    if audio_key and not _audio_key_exists(audio_key):
+        print(f"AUDIO_KEY {audio_key!r} not found in S3 (likely Unicode mismatch); falling back to prefix scan")
+        audio_key = None
+    if not audio_key:
+        audio_key = _find_audio_key(user_id, meeting_id)
+    if not audio_key:
+        raise RuntimeError(f"No audio file found for meeting {meeting_id}")
 
-    ext = audio_key.rsplit(".", 1)[-1]
+    basename = audio_key.rsplit("/", 1)[-1]
+    ext = basename.rsplit(".", 1)[-1] if "." in basename else "bin"
     local_path = f"/tmp/audio.{ext}"
 
     print(f"Downloading s3://{BUCKET}/{audio_key}")
