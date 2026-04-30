@@ -244,7 +244,13 @@ export default function ResearchDetailPage() {
     setAddingSubPage(true);
     try {
       await researchChatApi.sendMessage(researchId, { content: topic, action: 'request_subpage' });
-      setTimeout(fetchSubPages, 1500);
+      const prev = subpages.length;
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        const data = await researchChatApi.listSubPages(researchId);
+        setSubpages(data.subpages || []);
+        if ((data.subpages || []).length > prev) break;
+      }
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to create sub-page');
     } finally {

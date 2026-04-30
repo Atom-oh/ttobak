@@ -323,9 +323,9 @@ export function RecordButton({
     if (nativeTempPathRef.current) {
       const tempPath = nativeTempPathRef.current;
       nativeTempPathRef.current = null;
-      onRecordingStop?.();
       try {
         await stopNativeRecording();
+        onRecordingStop?.();
         setRecordingState('uploading');
         const buffer = await readRecordingBytes(tempPath);
         const blob = new Blob([buffer], { type: 'audio/wav' });
