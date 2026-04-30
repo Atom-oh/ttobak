@@ -322,7 +322,6 @@ export function RecordButton({
     // Native system-audio stop → read bytes via IPC → Blob → upload → cleanup
     if (nativeTempPathRef.current) {
       const tempPath = nativeTempPathRef.current;
-      nativeTempPathRef.current = null;
       onRecordingStop?.();
       try {
         await stopNativeRecording();
@@ -332,6 +331,7 @@ export function RecordButton({
         const fileName = `recording_${Date.now()}.wav`;
         const file = new File([blob], fileName, { type: 'audio/wav' });
         const result = await uploadToS3(file, 'audio', undefined, meetingId);
+        nativeTempPathRef.current = null;
         await cleanupRecording(tempPath).catch(() => {});
         onRecordingComplete?.(result.url);
         setRecordingState('idle');

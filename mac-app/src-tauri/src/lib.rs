@@ -3,8 +3,8 @@
 //! Tauri commands exposed to the WebView:
 //! - `start_recording(meeting_id)` — begin system-audio capture into a temp WAV
 //! - `stop_recording()` — finalize WAV and return the absolute file path
-//! - `read_recording_bytes(path)` — return WAV bytes via IPC binary response (path-validated)
-//! - `cleanup_recording(path)` — delete a temp WAV file after successful upload
+//! - `read_recording_bytes(path)` — return WAV bytes via IPC binary response (whitelist-gated)
+//! - `cleanup_recording(path)` — delete a temp WAV file and revoke whitelist entry
 //! - `recording_status()` — current capture state for the UI
 
 mod audio;
@@ -111,26 +111,19 @@ fn read_recording_bytes(
     let canonical = validate_recording_path(&path, &state.recorded_paths.lock())?;
     let bytes = std::fs::read(&canonical)
         .map_err(|e| AppError::Io(format!("read {}: {e}", canonical.display())))?;
-    // One-shot: revoke read access after first successful read
-    state.recorded_paths.lock().remove(&canonical);
     Ok(Response::new(bytes))
 }
 
 #[tauri::command]
 async fn cleanup_recording(
     path: String,
+    state: State<'_, RecorderState>,
 ) -> Result<(), AppError> {
-    // Validate path is within allowed dir (whitelist already consumed by read_recording_bytes)
-    let canonical = std::fs::canonicalize(&path)
-        .map_err(|e| AppError::Io(format!("canonicalize {path}: {e}")))?;
-    if !canonical.starts_with(&allowed_dir()) {
-        return Err(AppError::Permission(
-            "path is outside the recording directory".into(),
-        ));
-    }
+    let canonical = validate_recording_path(&path, &state.recorded_paths.lock())?;
     tokio::fs::remove_file(&canonical)
         .await
         .map_err(|e| AppError::Io(format!("remove {}: {e}", canonical.display())))?;
+    state.recorded_paths.lock().remove(&canonical);
     log::info!("cleaned up recording: {}", canonical.display());
     Ok(())
 }
