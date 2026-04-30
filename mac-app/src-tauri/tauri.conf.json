@@ -29,7 +29,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' https://ttobak.atomai.click https://*.cloudfront.net; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://ttobak.atomai.click; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://ttobak.atomai.click https://*.amazonaws.com https://*.cloudfront.net wss://*.amazonaws.com; img-src 'self' data: blob: https:; media-src 'self' blob: asset:",
+      "csp": "default-src 'self' https://ttobak.atomai.click https://*.cloudfront.net; script-src 'self' 'unsafe-inline' https://ttobak.atomai.click; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://ttobak.atomai.click https://*.amazonaws.com https://*.cloudfront.net wss://*.amazonaws.com; img-src 'self' data: blob: https:; media-src 'self' blob: asset:",
       "dangerousDisableAssetCspModification": false
     },
     "macOSPrivateApi": false

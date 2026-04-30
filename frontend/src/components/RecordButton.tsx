@@ -159,8 +159,6 @@ export function RecordButton({
         setRecordingState('recording');
         setElapsedTime(0);
         onPermissionGranted?.();
-        // Fake stream-less start notification (no waveform, no live STT)
-        onRecordingStart?.(new MediaStream());
         timerRef.current = setInterval(() => {
           setElapsedTime((prev) => prev + 1);
         }, 1000);
