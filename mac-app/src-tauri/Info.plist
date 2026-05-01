@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Ttobak needs microphone access to record your voice during meetings.</string>
+
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Ttobak needs screen recording permission to capture system audio (other participants&apos; voices) from desktop meeting apps such as Zoom and Teams. Only audio is captured; no video is recorded.</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+</dict>
+</plist>

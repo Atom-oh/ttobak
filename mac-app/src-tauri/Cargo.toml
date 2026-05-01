@@ -1,0 +1,32 @@
+[package]
+name = "ttobak-mac"
+version = "0.1.0"
+description = "Ttobak Mac App — system audio capture for desktop meetings"
+authors = ["Ttobak"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "ttobak_mac_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+log = "0.4"
+env_logger = "0.11"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+parking_lot = "0.12"
+hound = "3.5"
+
+# macOS-only system audio capture via ScreenCaptureKit
+[target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = "1"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

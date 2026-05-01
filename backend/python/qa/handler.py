@@ -620,6 +620,15 @@ def load_meeting_context(user_id, meeting_id):
             Key={'PK': f'USER#{user_id}', 'SK': f'MEETING#{meeting_id}'}
         )
         item = result.get('Item')
+        # Shared meeting: look up ownerId from the share record
+        if not item:
+            for s in _list_shared_meetings(user_id):
+                if s['meetingId'] == meeting_id:
+                    result = table.get_item(
+                        Key={'PK': f"USER#{s['ownerId']}", 'SK': f'MEETING#{meeting_id}'}
+                    )
+                    item = result.get('Item')
+                    break
         if not item:
             return None, {'code': 'NOT_FOUND', 'message': 'Meeting not found', 'status': 404}
         parts = []

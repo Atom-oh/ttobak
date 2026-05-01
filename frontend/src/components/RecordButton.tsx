@@ -2,7 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { isIOS, getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
-import { uploadAudioBlob } from '@/lib/upload';
+import { uploadAudioBlob, uploadToS3 } from '@/lib/upload';
+import { isTauri, startNativeRecording, stopNativeRecording, readRecordingBytes, cleanupRecording } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 interface RecordButtonProps {
@@ -20,7 +21,7 @@ interface RecordButtonProps {
   onCaptureImage?: (file: File) => void;
   onAnalyserReady?: (analyser: AnalyserNode | null) => void;
   onCheckpoint?: (blob: Blob, mimeType: string) => void;
-  audioSource?: 'mic' | 'tab';
+  audioSource?: 'mic' | 'tab' | 'system';
 }
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'uploading';
@@ -70,6 +71,7 @@ export function RecordButton({
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const barsContainerRef = useRef<HTMLDivElement>(null);
   const [showCamera, setShowCamera] = useState(false);
+  const nativeTempPathRef = useRef<string | null>(null);
 
   const useNativeCapture = isIOS() || !supportsMediaRecorder();
 
@@ -147,6 +149,24 @@ export function RecordButton({
   const startRecording = async () => {
     // Clean up any leftover resources from a previous recording
     cleanupAudioResources();
+
+    // Tauri native system-audio capture — no MediaStream, no live STT
+    if (audioSource === 'system' && isTauri()) {
+      try {
+        const resp = await startNativeRecording(meetingId);
+        nativeTempPathRef.current = resp.temp_path;
+        isRecordingRef.current = true;
+        setRecordingState('recording');
+        setElapsedTime(0);
+        onPermissionGranted?.();
+        timerRef.current = setInterval(() => {
+          setElapsedTime((prev) => prev + 1);
+        }, 1000);
+      } catch (err) {
+        onError?.(err instanceof Error ? err.message : 'Native recording failed');
+      }
+      return;
+    }
 
     let stream: MediaStream | null = null;
     try {
@@ -288,7 +308,7 @@ export function RecordButton({
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = async () => {
     isRecordingRef.current = false;
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -298,8 +318,34 @@ export function RecordButton({
       clearInterval(checkpointTimerRef.current);
       checkpointTimerRef.current = null;
     }
+
+    // Native system-audio stop → read bytes via IPC → Blob → upload → cleanup
+    // On failure, WAV is intentionally preserved on disk — system audio is
+    // irreplaceable and the user may recover the file from the temp directory.
+    if (nativeTempPathRef.current) {
+      const tempPath = nativeTempPathRef.current;
+      nativeTempPathRef.current = null;
+      try {
+        await stopNativeRecording();
+        onRecordingStop?.();
+        setRecordingState('uploading');
+        const buffer = await readRecordingBytes(tempPath);
+        const blob = new Blob([buffer], { type: 'audio/wav' });
+        const fileName = `recording_${Date.now()}.wav`;
+        const file = new File([blob], fileName, { type: 'audio/wav' });
+        const result = await uploadToS3(file, 'audio', undefined, meetingId);
+        await cleanupRecording(tempPath).catch(() => {});
+        onRecordingComplete?.(result.url);
+        setRecordingState('idle');
+        setElapsedTime(0);
+      } catch (err) {
+        onError?.(err instanceof Error ? err.message : 'Native recording upload failed');
+        setRecordingState('idle');
+      }
+      return;
+    }
+
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      // onstop handler will call cleanupAudioResources
       mediaRecorderRef.current.stop();
     } else {
       cleanupAudioResources();

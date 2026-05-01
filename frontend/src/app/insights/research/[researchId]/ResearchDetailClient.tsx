@@ -80,6 +80,7 @@ export default function ResearchDetailPage() {
   const [activePageId, setActivePageId] = useState('');
   const [activeContent, setActiveContent] = useState<ResearchDetail | null>(null);
   const [chatOpen, setChatOpen] = useState(true);
+  const [addingSubPage, setAddingSubPage] = useState(false);
 
 
   useEffect(() => {
@@ -239,6 +240,24 @@ export default function ResearchDetailPage() {
     return null;
   }
 
+  const handleAddSubPage = async (topic: string) => {
+    setAddingSubPage(true);
+    try {
+      await researchChatApi.sendMessage(researchId, { content: topic, action: 'request_subpage' });
+      const prev = subpages.length;
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        const data = await researchChatApi.listSubPages(researchId);
+        setSubpages(data.subpages || []);
+        if ((data.subpages || []).length > prev) break;
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to create sub-page');
+    } finally {
+      setAddingSubPage(false);
+    }
+  };
+
   const mb = research ? modeBadge[research.mode] || modeBadge.standard : modeBadge.standard;
   const sb = research ? statusBadge[research.status] || statusBadge.running : statusBadge.running;
   const displayContent = activeContent?.content || research?.content;
@@ -286,7 +305,8 @@ export default function ResearchDetailPage() {
                   subpages={subpages}
                   activePageId={activePageId}
                   onPageSelect={(id) => setActivePageId(id)}
-                  onAddSubPage={() => setChatOpen(true)}
+                  onAddSubPage={handleAddSubPage}
+                  addingSubPage={addingSubPage}
                 />
 
                 {/* Header Card */}

@@ -6,6 +6,61 @@ import remarkGfm from 'remark-gfm';
 import { researchChatApi } from '@/lib/api';
 import type { ChatMessage } from '@/types/meeting';
 
+function SubPageInput({ onSubmit, disabled }: { onSubmit: (topic: string) => void; disabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [topic, setTopic] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open]);
+
+  const handleSubmit = () => {
+    const trimmed = topic.trim();
+    if (!trimmed) return;
+    onSubmit(trimmed);
+    setTopic('');
+    setOpen(false);
+  };
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-[#00E5FF]/30 text-[#00E5FF] text-xs font-semibold hover:bg-[#00E5FF]/10 disabled:opacity-50 transition-colors"
+      >
+        <span className="material-symbols-outlined text-sm">add_circle</span>
+        하위 페이지 추가
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        ref={inputRef}
+        type="text"
+        value={topic}
+        onChange={(e) => setTopic(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') handleSubmit();
+          if (e.key === 'Escape') { setOpen(false); setTopic(''); }
+        }}
+        disabled={disabled}
+        placeholder="하위 주제 입력..."
+        className="flex-1 min-w-0 bg-white/[0.05] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50"
+      />
+      <button
+        onClick={handleSubmit}
+        disabled={!topic.trim() || disabled}
+        className="p-2 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors"
+      >
+        <span className="material-symbols-outlined text-sm">send</span>
+      </button>
+    </div>
+  );
+}
+
 interface ResearchChatProps {
   researchId: string;
   status: string;
@@ -202,14 +257,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
       {/* Sub-page quick action */}
       {status === 'done' && (
         <div className="px-5 pb-2">
-          <button
-            onClick={() => handleRequestSubPage('추가 하위 페이지')}
-            disabled={sending}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-[#00E5FF]/30 text-[#00E5FF] text-xs font-semibold hover:bg-[#00E5FF]/10 disabled:opacity-50 transition-colors"
-          >
-            <span className="material-symbols-outlined text-sm">add_circle</span>
-            하위 페이지 추가
-          </button>
+          <SubPageInput onSubmit={handleRequestSubPage} disabled={sending} />
         </div>
       )}
 

@@ -1,0 +1,15 @@
+{
+  "name": "ttobak-mac",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ttobak Mac App — Tauri 2 wrapper around the Ttobak SPA with native system-audio capture (ScreenCaptureKit).",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:debug": "tauri build --debug"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

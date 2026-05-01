@@ -3,7 +3,7 @@ name: Deploy Infrastructure
 on:
   push:
     branches: [main]
-    paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*']
+    paths: ['infra/**', 'backend/cmd/**', 'backend/internal/**', 'backend/go.*', 'backend/python/qa/**']
   workflow_dispatch:
 
 permissions:
