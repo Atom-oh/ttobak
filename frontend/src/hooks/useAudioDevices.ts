@@ -12,6 +12,7 @@ export function useAudioDevices() {
   });
 
   const enumerate = useCallback(async () => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices) return;
     try {
       const allDevices = await navigator.mediaDevices.enumerateDevices();
       setDevices(allDevices.filter((d) => d.kind === 'audioinput'));
@@ -21,6 +22,7 @@ export function useAudioDevices() {
   }, []);
 
   useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices) return;
     enumerate();
     navigator.mediaDevices.addEventListener('devicechange', enumerate);
     return () => {

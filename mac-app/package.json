@@ -7,7 +7,10 @@
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
-    "build:debug": "tauri build --debug"
+    "build:debug": "tauri build --debug",
+    "sign": "bash scripts/sign.sh",
+    "build:signed": "tauri build && bash scripts/sign.sh",
+    "build:signed:debug": "tauri build --debug && bash scripts/sign.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

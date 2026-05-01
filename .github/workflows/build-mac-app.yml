@@ -54,6 +54,14 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: npm run build -- --target "$TARGET" --verbose
 
+      # Tauri's default ad-hoc signing skips `codesign --entitlements`, so the
+      # Entitlements.plist sits inside the bundle but isn't actually applied.
+      # Without this step, the released .app silently fails to prompt for mic
+      # / screen-recording permissions on first launch.
+      - name: Re-sign with entitlements
+        working-directory: mac-app
+        run: bash scripts/sign.sh
+
       - name: Upload bundle
         if: always()
         uses: actions/upload-artifact@v4

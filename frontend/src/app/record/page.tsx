@@ -459,7 +459,7 @@ function RecordPageInner() {
             {audioSource === 'system' && !session.isRecording && (
               <div className="flex items-center gap-2 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300">
                 <span className="material-symbols-outlined text-base">speaker</span>
-                Zoom, Teams 등 데스크탑 앱의 시스템 오디오를 캡처합니다 (실시간 자막 미지원)
+                Zoom·Teams 데스크탑 앱과 Chrome의 Zoom Web·Google Meet 등 시스템 오디오를 모두 캡처합니다 (실시간 자막 미지원)
               </div>
             )}
             <LiveSttSelector

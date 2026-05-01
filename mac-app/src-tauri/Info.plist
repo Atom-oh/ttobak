@@ -5,6 +5,9 @@
     <key>NSMicrophoneUsageDescription</key>
     <string>Ttobak needs microphone access to record your voice during meetings.</string>
 
+    <key>NSCameraUsageDescription</key>
+    <string>Ttobak uses the camera to capture whiteboards and meeting materials as attachments.</string>
+
     <key>NSScreenCaptureUsageDescription</key>
     <string>Ttobak needs screen recording permission to capture system audio (other participants&apos; voices) from desktop meeting apps such as Zoom and Teams. Only audio is captured; no video is recorded.</string>
 
