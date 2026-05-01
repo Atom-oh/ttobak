@@ -176,9 +176,9 @@ Chrome's process output, so the meeting audio comes through.
   `network.client`; disables the App Sandbox (needed for ScreenCaptureKit +
   arbitrary file system writes for the WAV temp file).
 - **These plists are inert without `codesign --entitlements`.** That step
-  lives in `scripts/sign.sh` and is wired into `npm run build:signed` and
-  the CI workflow `.github/workflows/build-mac-app.yml`. See "Build with
-  embedded entitlements" above.
+  lives in `scripts/sign.sh` and is wired into `npm run build:signed`. See
+  "Build with embedded entitlements" above. Builds happen locally on a
+  developer Mac (no CI for this module).
 
 ## Frontend integration
 

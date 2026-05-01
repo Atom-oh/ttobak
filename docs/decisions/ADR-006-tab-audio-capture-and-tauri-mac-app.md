@@ -89,13 +89,19 @@ Tauri was chosen over Electron because:
 ## Post-Implementation Updates
 
 1. **Sub-project 1 (Tab Audio) completed**: `getDisplayMedia` tab audio capture is implemented in `RecordButton.tsx` and `device.ts`. Users can capture Google Meet tab audio on Chrome/Edge. Audio source selector on the Record page lets users choose between Microphone and Tab Audio modes.
-2. **Sub-project 2 (Tauri Mac App) deferred**: After evaluating the clamshell mode use case, the Tauri Mac App was deprioritized. The primary use case (recording in meetings without opening a laptop) is better served by recording on an iPhone and uploading via the existing file upload flow. The web app's upload mode (`/record?mode=upload`) already supports this.
-3. **ADR-001 superseded**: ADR-001 (original system audio proposal) has been marked as superseded by this ADR.
+2. **Sub-project 2 (Tauri Mac App) reactivated and delivered**: The earlier deferral (in favor of iPhone-record-and-upload) was reversed once the clamshell-mode + Zoom desktop combination came up in real use — `getDisplayMedia` cannot capture Zoom desktop app audio on macOS, and iPhone uploads are too high-friction for that scenario. The Mac app now lives in `mac-app/` as a Tauri 2 + Rust wrapper around the existing SPA, with system-audio capture via ScreenCaptureKit (`mac-app/src-tauri/src/audio.rs`) exposed to the WebView through `start_recording` / `stop_recording` / `read_recording_bytes` / `cleanup_recording` Tauri commands. The frontend gates the "System Audio" source on `isTauri()` (`frontend/src/lib/tauri.ts`).
+3. **iPhone upload path retained as a complement, not a replacement**: `/record?mode=upload` is still the right answer when the laptop isn't present at all (phone-only field recording). The Mac app and the upload path cover different scenarios and both stay supported.
+4. **Mac app distribution is local-build only**: Tauri 2's default ad-hoc signing skips `codesign --entitlements`, which silently breaks mic / screen-recording prompts. `mac-app/scripts/sign.sh` (wired into `npm run build:signed`) re-signs the bundle with the Entitlements.plist explicitly. There is no CI for the Mac module — builds happen on a developer Mac and the `.app` is shared out-of-band.
+5. **ADR-001 superseded**: ADR-001 (original system audio proposal) has been marked as superseded by this ADR.
 
 ## References
 - `docs/superpowers/specs/2026-04-20-tab-audio-capture-design.md` -- Sub-project 1 design spec
-- `frontend/src/components/RecordButton.tsx` -- Tab audio capture implementation (`getDisplayMedia`)
+- `frontend/src/components/RecordButton.tsx` -- Tab audio + system audio dispatch
 - `frontend/src/lib/device.ts` -- `supportsTabAudioCapture()` capability check
+- `frontend/src/lib/tauri.ts` -- `isTauri()` gate + `invoke()` wrappers for native commands
+- `mac-app/` -- Tauri 2 Mac app (Sub-project 2)
+- `mac-app/src-tauri/src/audio.rs` -- ScreenCaptureKit recorder
+- `mac-app/scripts/sign.sh` -- post-build `codesign --entitlements` step
 - `docs/decisions/ADR-001-system-audio-capture-for-remote-meetings.md` -- Superseded by this ADR
 - `docs/decisions/ADR-003-mcp-server-for-external-meeting-access.md` -- OAuth PKCE pattern reusable for Mac App auth
 - [MDN getDisplayMedia](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia)
@@ -188,12 +194,18 @@ Electron 대신 Tauri를 선택한 이유:
 ## 구현 후 업데이트
 
 1. **서브프로젝트 1 (탭 오디오) 완료**: `getDisplayMedia` 탭 오디오 캡처가 `RecordButton.tsx`와 `device.ts`에 구현되었습니다. 사용자가 Chrome/Edge에서 Google Meet 탭 오디오를 캡처할 수 있습니다. Record 페이지의 오디오 소스 선택기로 마이크와 탭 오디오 모드를 선택할 수 있습니다.
-2. **서브프로젝트 2 (Tauri Mac App) 보류**: 클램쉘 모드 사용 사례를 평가한 후, Tauri Mac App의 우선순위가 낮아졌습니다. 주요 사용 사례(노트북을 열지 않고 미팅 녹음)는 iPhone으로 녹음하고 기존 파일 업로드 플로우를 통해 업로드하는 것이 더 적합합니다. 웹 앱의 업로드 모드(`/record?mode=upload`)가 이미 이를 지원합니다.
-3. **ADR-001 대체됨**: ADR-001(원래 시스템 오디오 제안)이 이 ADR에 의해 대체됨으로 표시되었습니다.
+2. **서브프로젝트 2 (Tauri Mac App) 재활성화 및 구현 완료**: 클램쉘 모드 + Zoom 데스크탑 앱 조합이 실사용에서 다시 떠오르며 이전의 보류 결정을 뒤집었습니다 — `getDisplayMedia`로는 macOS에서 Zoom 데스크탑 앱 오디오를 캡처할 수 없고, 그 시나리오에 대해 iPhone 업로드는 마찰이 너무 큽니다. Mac 앱은 `mac-app/`에 Tauri 2 + Rust 래퍼로 구현되어 있으며, ScreenCaptureKit 기반 시스템 오디오 캡처(`mac-app/src-tauri/src/audio.rs`)를 `start_recording` / `stop_recording` / `read_recording_bytes` / `cleanup_recording` Tauri 커맨드로 WebView에 노출합니다. 프론트엔드는 `isTauri()`(`frontend/src/lib/tauri.ts`)로 "System Audio" 소스를 게이트합니다.
+3. **iPhone 업로드 경로는 대체가 아닌 보완으로 유지**: `/record?mode=upload`는 노트북 자체가 부재한 상황(폰만 들고 외부 미팅)에서 여전히 정답입니다. Mac 앱과 업로드 경로는 서로 다른 시나리오를 담당하며 둘 다 계속 지원됩니다.
+4. **Mac 앱은 로컬 빌드 전용**: Tauri 2의 기본 ad-hoc 서명이 `codesign --entitlements`를 건너뛰어 mic / 화면 녹화 권한 프롬프트를 조용히 무력화합니다. `mac-app/scripts/sign.sh`(`npm run build:signed`로 연결)가 Entitlements.plist를 명시적으로 임베드합니다. Mac 모듈에 대한 CI는 없으며, 빌드는 개발자 Mac에서 수행하고 `.app`은 별도로 공유합니다.
+5. **ADR-001 대체됨**: ADR-001(원래 시스템 오디오 제안)이 이 ADR에 의해 대체됨으로 표시되었습니다.
 
 ## 참고 자료
 - `docs/superpowers/specs/2026-04-20-tab-audio-capture-design.md` -- 서브프로젝트 1 설계 명세
-- `frontend/src/components/RecordButton.tsx` -- 탭 오디오 캡처 구현 (`getDisplayMedia`)
+- `frontend/src/components/RecordButton.tsx` -- 탭 오디오 + 시스템 오디오 디스패치
+- `frontend/src/lib/tauri.ts` -- `isTauri()` 게이트 및 네이티브 커맨드 `invoke()` 래퍼
+- `mac-app/` -- Tauri 2 Mac 앱 (서브프로젝트 2)
+- `mac-app/src-tauri/src/audio.rs` -- ScreenCaptureKit 레코더
+- `mac-app/scripts/sign.sh` -- 빌드 후 `codesign --entitlements` 스텝
 - `frontend/src/lib/device.ts` -- `supportsTabAudioCapture()` 기능 확인
 - `docs/decisions/ADR-001-system-audio-capture-for-remote-meetings.md` -- 이 ADR에 의해 대체됨
 - `docs/decisions/ADR-003-mcp-server-for-external-meeting-access.md` -- Mac App 인증에 재사용 가능한 OAuth PKCE 패턴

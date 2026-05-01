@@ -6,8 +6,9 @@ the Ttobak SPA. Implements **Sub-project 2** of [ADR-006](../docs/decisions/ADR-
 ## Build only on macOS
 
 `screencapturekit`, `core-foundation`, `objc2-foundation` only build on Darwin.
-Linux/Windows `cargo check` will fail at link time. CI builds run on
-`macos-14` (`.github/workflows/build-mac-app.yml`).
+Linux/Windows `cargo check` will fail at link time. **No CI** — the Mac app is
+built and signed locally on a developer Mac (Tauri's ad-hoc signing requires
+the Apple toolchain on macOS).
 
 ```bash
 cd mac-app
@@ -28,9 +29,6 @@ Always use `npm run build:signed` (or `npm run sign` after `npm run build`).
 That runs `scripts/sign.sh` which does
 `codesign --force --deep --sign - --entitlements Entitlements.plist <app>`
 and verifies `audio-input` is embedded.
-
-CI does this automatically (`.github/workflows/build-mac-app.yml` has a
-"Re-sign with entitlements" step).
 
 If permissions still don't prompt after a signed build, the macOS TCC cache
 is sticking on a previous denial — `tccutil reset Microphone click.atomai.ttobak.mac`
