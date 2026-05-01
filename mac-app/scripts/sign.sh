@@ -29,9 +29,16 @@ if [[ ! -f "$ENTITLEMENTS" ]]; then
   exit 1
 fi
 
-# Find every .app bundle under target/.../bundle/macos/ (handles both the
-# default `target/release` layout and per-target `target/<triple>/release`).
-mapfile -t APPS < <(find "$SRC_TAURI/target" -path "*/bundle/macos/*.app" -prune -type d 2>/dev/null)
+# Find every .app bundle under target/.../bundle/macos/.
+# Use shell globbing instead of `mapfile` because macOS ships bash 3.2
+# (no `mapfile`, no readarray). Covers both the default `target/release`
+# layout and per-target `target/<triple>/release` (cross-arch builds).
+shopt -s nullglob
+APPS=(
+  "$SRC_TAURI"/target/release/bundle/macos/*.app
+  "$SRC_TAURI"/target/*/release/bundle/macos/*.app
+)
+shopt -u nullglob
 
 if [[ ${#APPS[@]} -eq 0 ]]; then
   echo "error: no .app bundles found under $SRC_TAURI/target/*/bundle/macos/" >&2
