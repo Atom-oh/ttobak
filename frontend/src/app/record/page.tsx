@@ -136,21 +136,31 @@ function RecordPageInner() {
   if (!isAuthenticated && !session.isRecording) { router.push('/'); return null; }
 
   // --- Handlers ---
-  const handleRecordingStart = async (stream: MediaStream) => {
-    if (audioSource === 'tab') {
+  const handleRecordingStart = async (stream: MediaStream | null) => {
+    if (stream && audioSource === 'tab') {
       const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
       setTabSharingLabel(label);
     }
     summary.reset();
-    // Create draft meeting immediately for crash recovery
+    // Create draft meeting immediately so the post-recording flow has a
+    // server meetingId to attach the audio to. This is required for both
+    // browser (mic/tab) and Tauri native (system audio) modes — without it,
+    // the meeting stays stuck in 'recording' status with no linked audioKey.
     await postRecording.createDraftMeeting();
-    session.startSession(() => {
-      previewStreamRef.current?.getTracks().forEach((t) => t.stop());
-      previewStreamRef.current = null;
-      previewCtxRef.current?.close().catch(() => {});
-      previewCtxRef.current = null;
-      setPreviewAnalyser(null);
-    }, stream);
+    if (stream) {
+      // Browser modes (mic/tab): start live STT session with the MediaStream.
+      session.startSession(() => {
+        previewStreamRef.current?.getTracks().forEach((t) => t.stop());
+        previewStreamRef.current = null;
+        previewCtxRef.current?.close().catch(() => {});
+        previewCtxRef.current = null;
+        setPreviewAnalyser(null);
+      }, stream);
+    }
+    // Native (system audio): no MediaStream, no live STT — capture happens
+    // in Rust via ScreenCaptureKit. RecordButton manages timer + state on
+    // its own. session.isRecording stays false, so LiveTranscript / LiveQAPanel
+    // are not rendered (correctly — there is no live transcript to render).
   };
 
   const handleCheckpoint = async (blob: Blob, mimeType: string) => {
@@ -457,9 +467,14 @@ function RecordPageInner() {
               </div>
             )}
             {audioSource === 'system' && !session.isRecording && (
-              <div className="flex items-center gap-2 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300">
-                <span className="material-symbols-outlined text-base">speaker</span>
-                Zoom·Teams 데스크탑 앱과 Chrome의 Zoom Web·Google Meet 등 시스템 오디오를 모두 캡처합니다 (실시간 자막 미지원)
+              <div className="flex flex-col gap-1 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-base">speaker</span>
+                  Zoom·Teams 데스크탑 앱과 Chrome의 Zoom Web·Google Meet 등 시스템 오디오를 캡처합니다 (실시간 자막 미지원)
+                </div>
+                <div className="text-xs text-purple-600/80 dark:text-purple-300/70 ml-6">
+                  ⚠️ 다른 참가자 음성만 녹음됩니다 — 본인 마이크는 별도로 잡지 않습니다
+                </div>
               </div>
             )}
             <LiveSttSelector

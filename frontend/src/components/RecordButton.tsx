@@ -13,7 +13,7 @@ interface RecordButtonProps {
   onRecordingComplete?: (audioUrl: string) => void;
   onBlobReady?: (blob: Blob, mimeType: string) => void;
   onError?: (error: string) => void;
-  onRecordingStart?: (stream: MediaStream) => void;
+  onRecordingStart?: (stream: MediaStream | null) => void;
   onRecordingPause?: () => void;
   onRecordingResume?: () => void;
   onRecordingStop?: () => void;
@@ -150,9 +150,17 @@ export function RecordButton({
     // Clean up any leftover resources from a previous recording
     cleanupAudioResources();
 
-    // Tauri native system-audio capture — no MediaStream, no live STT
+    // Tauri native system-audio capture — no MediaStream, no live STT.
+    // Trigger onRecordingStart(null) so the parent can createDraftMeeting,
+    // then start native capture. On stop we route the blob through onBlobReady
+    // so the normal post-recording flow updates status -> 'transcribing' and
+    // uploads under the server meetingId (not the client temp ID).
     if (audioSource === 'system' && isTauri()) {
       try {
+        // Fire onRecordingStart first so parent creates the draft meeting.
+        // Note: native capture has no MediaStream — pass null.
+        onRecordingStart?.(null);
+
         const resp = await startNativeRecording(meetingId);
         nativeTempPathRef.current = resp.temp_path;
         isRecordingRef.current = true;
@@ -319,9 +327,15 @@ export function RecordButton({
       checkpointTimerRef.current = null;
     }
 
-    // Native system-audio stop → read bytes via IPC → Blob → upload → cleanup
-    // On failure, WAV is intentionally preserved on disk — system audio is
-    // irreplaceable and the user may recover the file from the temp directory.
+    // Native system-audio stop → read bytes via IPC → route through the
+    // standard post-recording flow (onBlobReady → notes → resumeUploadFlow).
+    // This ensures meeting status transitions 'recording' -> 'transcribing'
+    // and the upload uses the server meetingId, not the client temp ID.
+    //
+    // On failure (read/cleanup throws), nativeTempPathRef is already cleared
+    // but the WAV file is intentionally preserved on disk — system audio is
+    // irreplaceable; the user can recover it from /tmp/ttobak-mac/ manually
+    // and upload via /record?mode=upload.
     if (nativeTempPathRef.current) {
       const tempPath = nativeTempPathRef.current;
       nativeTempPathRef.current = null;
@@ -331,13 +345,26 @@ export function RecordButton({
         setRecordingState('uploading');
         const buffer = await readRecordingBytes(tempPath);
         const blob = new Blob([buffer], { type: 'audio/wav' });
-        const fileName = `recording_${Date.now()}.wav`;
-        const file = new File([blob], fileName, { type: 'audio/wav' });
-        const result = await uploadToS3(file, 'audio', undefined, meetingId);
-        await cleanupRecording(tempPath).catch(() => {});
-        onRecordingComplete?.(result.url);
-        setRecordingState('idle');
-        setElapsedTime(0);
+
+        if (onBlobReady) {
+          // Standard flow — parent handles notes step + upload + status update.
+          // Cleanup the temp WAV after the blob is in memory.
+          await cleanupRecording(tempPath).catch(() => {});
+          setRecordingState('idle');
+          setElapsedTime(0);
+          onBlobReady(blob, 'audio/wav');
+        } else {
+          // Fallback (should not happen — record/page.tsx always provides
+          // onBlobReady): one-shot direct upload with whatever meetingId we
+          // have, then call onRecordingComplete (legacy iOS-style path).
+          const fileName = `recording_${Date.now()}.wav`;
+          const file = new File([blob], fileName, { type: 'audio/wav' });
+          const result = await uploadToS3(file, 'audio', undefined, meetingId);
+          await cleanupRecording(tempPath).catch(() => {});
+          onRecordingComplete?.(result.url);
+          setRecordingState('idle');
+          setElapsedTime(0);
+        }
       } catch (err) {
         onError?.(err instanceof Error ? err.message : 'Native recording upload failed');
         setRecordingState('idle');
