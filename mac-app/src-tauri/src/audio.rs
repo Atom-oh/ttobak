@@ -136,6 +136,7 @@ mod macos {
     //! API surface targets `screencapturekit = "1"` (1.x series).
 
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
 
     use hound::{SampleFormat, WavSpec, WavWriter};
@@ -150,6 +151,15 @@ mod macos {
         stream: SCStream,
         writer: Arc<Mutex<Option<WavWriter<std::io::BufWriter<std::fs::File>>>>>,
         path: PathBuf,
+        /// Counts SCStream audio callbacks; used at stop() to detect silent
+        /// failures where ScreenCaptureKit reports `start_capture` success
+        /// but never delivers a single buffer (e.g. TCC denial after start,
+        /// content filter excluding all sources, etc.).
+        callbacks: Arc<AtomicU64>,
+        /// Total i16 samples written to the WAV writer. Useful sanity check
+        /// against `callbacks` — non-zero callbacks but zero samples means
+        /// the format-conversion path rejected every buffer.
+        samples_written: Arc<AtomicU64>,
     }
 
     impl Backend {
@@ -183,9 +193,17 @@ mod macos {
                 .with_sample_rate(SAMPLE_RATE as i32)
                 .with_channel_count(CHANNELS as i32);
 
+            let callbacks = Arc::new(AtomicU64::new(0));
+            let samples_written = Arc::new(AtomicU64::new(0));
+
             let mut stream = SCStream::new(&filter, &config);
             stream.add_output_handler(
-                AudioOutput { writer: Arc::clone(&writer) },
+                AudioOutput {
+                    writer: Arc::clone(&writer),
+                    callbacks: Arc::clone(&callbacks),
+                    samples_written: Arc::clone(&samples_written),
+                    logged_first: Arc::new(AtomicU64::new(0)),
+                },
                 SCStreamOutputType::Audio,
             );
 
@@ -193,10 +211,18 @@ mod macos {
                 .start_capture()
                 .map_err(|e| AppError::Backend(format!("start_capture: {e:?}")))?;
 
+            log::info!(
+                "SCStream started — sample_rate={SAMPLE_RATE}Hz channels={CHANNELS} \
+                 excludes_current_process_audio=true path={}",
+                path.display()
+            );
+
             Ok(Self {
                 stream,
                 writer,
                 path: path.to_path_buf(),
+                callbacks,
+                samples_written,
             })
         }
 
@@ -210,13 +236,42 @@ mod macos {
                     .map_err(|e| AppError::Io(format!("finalize wav: {e}")))?;
             }
 
-            log::info!("stopped capture, wrote {}", self.path.display());
+            let cb = self.callbacks.load(Ordering::Relaxed);
+            let sw = self.samples_written.load(Ordering::Relaxed);
+            let bytes = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+            log::info!(
+                "stopped capture: callbacks={cb} samples_written={sw} wav_bytes={bytes} path={}",
+                self.path.display()
+            );
+
+            // Hard fail loud rather than silently shipping a 44-byte empty WAV
+            // header. The frontend will surface this through `onError`.
+            if cb == 0 {
+                return Err(AppError::Backend(
+                    "ScreenCaptureKit delivered zero audio callbacks — likely a Screen \
+                     Recording permission issue or an empty content filter. Reset TCC \
+                     (`tccutil reset ScreenCapture click.atomai.ttobak.mac`) and relaunch."
+                        .into(),
+                ));
+            }
+            if sw == 0 {
+                return Err(AppError::Backend(format!(
+                    "ScreenCaptureKit delivered {cb} callbacks but no samples were written — \
+                     audio buffer format probably is not f32 interleaved as assumed. Check \
+                     the format-description log on the first callback and update audio.rs."
+                )));
+            }
             Ok(())
         }
     }
 
     struct AudioOutput {
         writer: Arc<Mutex<Option<WavWriter<std::io::BufWriter<std::fs::File>>>>>,
+        callbacks: Arc<AtomicU64>,
+        samples_written: Arc<AtomicU64>,
+        /// Tracks whether we have logged the first buffer's metadata. Cheap
+        /// AtomicU64 instead of `Once` so we can keep `AudioOutput: Send`.
+        logged_first: Arc<AtomicU64>,
     }
 
     impl SCStreamOutputTrait for AudioOutput {
@@ -225,11 +280,29 @@ mod macos {
                 return;
             }
 
+            self.callbacks.fetch_add(1, Ordering::Relaxed);
+
             // SCStreamConfiguration requests f32 interleaved PCM at 48 kHz stereo.
             // Guard: skip buffers that don't align to 4-byte f32 frames.
             let Some(list) = sample.audio_buffer_list() else {
+                log::warn!("audio callback delivered no audio_buffer_list");
                 return;
             };
+
+            // Log the first buffer's shape so we can confirm the f32 assumption
+            // against actual ScreenCaptureKit output. If the user later sees
+            // a "non-empty callbacks but zero samples" error, this log narrows
+            // it to a format-conversion bug.
+            if self.logged_first.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+                let buf_count = list.iter().count();
+                let total_bytes: usize = list.iter().map(|b| b.data().len()).sum();
+                log::info!(
+                    "first audio buffer: buffer_count={buf_count} total_bytes={total_bytes} \
+                     (assuming f32 interleaved → frames={})",
+                    total_bytes / (CHANNELS as usize * 4)
+                );
+            }
+
             let samples_f32: Vec<f32> = list
                 .iter()
                 .flat_map(|buf| {
@@ -246,6 +319,7 @@ mod macos {
 
             let mut guard = self.writer.lock().expect("writer poisoned");
             let Some(w) = guard.as_mut() else { return };
+            let mut written = 0u64;
             for s in samples_f32 {
                 let clamped = s.clamp(-1.0, 1.0);
                 let i16_val = (clamped * i16::MAX as f32) as i16;
@@ -253,7 +327,9 @@ mod macos {
                     log::warn!("wav write error: {e}");
                     break;
                 }
+                written += 1;
             }
+            self.samples_written.fetch_add(written, Ordering::Relaxed);
         }
     }
 }

@@ -1,8 +1,8 @@
 [package]
 name = "ttobak-mac"
 version = "0.1.0"
-description = "Ttobak Mac App — system audio capture for desktop meetings"
-authors = ["Ttobak"]
+description = "TTOBAK Mac App — system audio capture for desktop meetings"
+authors = ["TTOBAK"]
 edition = "2021"
 rust-version = "1.77"
 
