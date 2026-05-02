@@ -1,4 +1,4 @@
-# Ttobak Mac App
+# TTOBAK Mac App
 
 Native macOS desktop app for **system audio capture** (Zoom, Teams, etc.) using
 [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit).
@@ -15,14 +15,14 @@ Browser `getDisplayMedia` can capture audio from a *Chrome tab* (used for Google
 Meet) but cannot reach **desktop app** audio — Zoom and Teams run outside the
 browser, and macOS does not let browser pages tap system audio without a
 virtual driver. ScreenCaptureKit (macOS 13+) is the official, sandboxable API
-for this. Tauri wraps the existing Ttobak SPA in a native window and exposes
+for this. Tauri wraps the existing TTOBAK SPA in a native window and exposes
 native commands for audio capture.
 
 ## Architecture
 
 ```
 +------------------------------------------------------------+
-|  Ttobak Mac App (Tauri 2)                                  |
+|  TTOBAK Mac App (Tauri 2)                                  |
 |                                                            |
 |  +-- WKWebView --> https://ttobak.atomai.click             |
 |  |   (existing Next.js SPA, full Cognito SPA login)        |
@@ -43,7 +43,7 @@ native commands for audio capture.
 ```
 
 Auth is delegated to the existing SPA inside the WebView — no token storage in
-Rust, no duplicate OAuth flow. The app is, conceptually, "Ttobak SPA + native
+Rust, no duplicate OAuth flow. The app is, conceptually, "TTOBAK SPA + native
 audio capture command".
 
 ## System requirements
@@ -82,7 +82,7 @@ ScreenCaptureKit gate, regardless of the fact that we only consume audio.
 ```bash
 cd mac-app
 npm run build
-# Result: src-tauri/target/release/bundle/{macos/Ttobak.app, dmg/Ttobak_0.1.0_*.dmg}
+# Result: src-tauri/target/release/bundle/{macos/TTOBAK.app, dmg/TTOBAK_0.1.0_*.dmg}
 ```
 
 For a quick local debug build (faster, larger):
@@ -122,10 +122,10 @@ Without code signing, macOS Gatekeeper will block the app. To run locally:
 
 ```bash
 # Option 1: Remove quarantine attribute (already done by scripts/sign.sh)
-xattr -cr /path/to/Ttobak.app
+xattr -cr /path/to/TTOBAK.app
 
 # Option 2: Allow in System Settings
-#   System Settings → Privacy & Security → "Ttobak was blocked" → Open Anyway
+#   System Settings → Privacy & Security → "TTOBAK was blocked" → Open Anyway
 ```
 
 ### Resetting permissions (when prompts don't appear)

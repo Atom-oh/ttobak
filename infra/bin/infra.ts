@@ -28,13 +28,13 @@ const usEast1Env = {
 // Stack 1: Storage first (Auth now depends on it for Pre Sign-Up Lambda DynamoDB access)
 const storageStack = new StorageStack(app, 'TtobakStorageStack', {
   env,
-  description: 'Ttobak AI Meeting Assistant - Storage (DynamoDB + S3)',
+  description: 'TTOBAK AI Meeting Assistant - Storage (DynamoDB + S3)',
 });
 
 // Stack 2: Auth (depends on Storage for Pre Sign-Up Lambda's DynamoDB table access)
 const authStack = new AuthStack(app, 'TtobakAuthStack', {
   env,
-  description: 'Ttobak AI Meeting Assistant - Authentication (Cognito)',
+  description: 'TTOBAK AI Meeting Assistant - Authentication (Cognito)',
   table: storageStack.table,
 });
 authStack.addDependency(storageStack);
@@ -42,7 +42,7 @@ authStack.addDependency(storageStack);
 // Stack 3: Knowledge Base (OpenSearch Serverless + Bedrock KB)
 const knowledgeStack = new KnowledgeStack(app, 'TtobakKnowledgeStack', {
   env,
-  description: 'Ttobak AI Meeting Assistant - Knowledge Base (OpenSearch + Bedrock)',
+  description: 'TTOBAK AI Meeting Assistant - Knowledge Base (OpenSearch + Bedrock)',
 });
 knowledgeStack.addDependency(storageStack);
 
@@ -51,7 +51,7 @@ const agentCoreRuntimeArn = 'arn:aws:bedrock-agentcore:ap-northeast-2:1802941830
 
 const aiStack = new AiStack(app, 'TtobakAiStack', {
   env,
-  description: 'Ttobak AI Meeting Assistant - AI Services (IAM roles)',
+  description: 'TTOBAK AI Meeting Assistant - AI Services (IAM roles)',
   bucket: storageStack.bucket,
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
@@ -64,7 +64,7 @@ aiStack.addDependency(knowledgeStack);
 const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
   env: usEast1Env,
   crossRegionReferences: true,
-  description: 'Ttobak AI Meeting Assistant - Edge Auth (Lambda@Edge)',
+  description: 'TTOBAK AI Meeting Assistant - Edge Auth (Lambda@Edge)',
   userPoolId: authStack.userPool.userPoolId,
   userPoolClientId: authStack.spaClient.userPoolClientId,
   cognitoRegion: env.region as string,
@@ -78,7 +78,7 @@ const originVerifySecret = app.node.tryGetContext('ttobak:originVerifySecret') |
 // Stack 6: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge
 const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   env,
-  description: 'Ttobak AI Meeting Assistant - Gateway (API Gateway + Lambda)',
+  description: 'TTOBAK AI Meeting Assistant - Gateway (API Gateway + Lambda)',
   userPool: authStack.userPool,
   userPoolClient: authStack.userPoolClient,
   spaClient: authStack.spaClient,
@@ -109,7 +109,7 @@ gatewayStack.addDependency(knowledgeStack);
 // Stack 7.5: Crawler (Step Functions + Lambda) - depends on AI, Storage, Knowledge
 const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {
   env,
-  description: 'Ttobak AI Meeting Assistant - Crawler (Step Functions + Lambda)',
+  description: 'TTOBAK AI Meeting Assistant - Crawler (Step Functions + Lambda)',
   crawlerRole: aiStack.crawlerRole,
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
@@ -123,7 +123,7 @@ crawlerStack.addDependency(knowledgeStack);
 // Stack 7.75: Research Agent (Bedrock Agent + tool Lambdas)
 const researchAgentStack = new ResearchAgentStack(app, 'TtobakResearchAgentStack', {
   env,
-  description: 'Ttobak AI Meeting Assistant - Research Agent (Bedrock Agent)',
+  description: 'TTOBAK AI Meeting Assistant - Research Agent (Bedrock Agent)',
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
   knowledgeBaseId: knowledgeStack.knowledgeBaseId,
@@ -134,7 +134,7 @@ researchAgentStack.addDependency(knowledgeStack);
 // Stack 7.8: Whisper (ECS GPU Spot, zero-scale) — uses existing FsiDemo VPC
 const whisperStack = new WhisperStack(app, 'TtobakWhisperStack', {
   env,
-  description: 'Ttobak AI Meeting Assistant - Whisper STT (ECS GPU Spot)',
+  description: 'TTOBAK AI Meeting Assistant - Whisper STT (ECS GPU Spot)',
   bucket: storageStack.bucket,
   table: storageStack.table,
   vpcId: app.node.tryGetContext('ttobak:whisperVpcId') || 'vpc-04e77172c67f19814',
@@ -145,7 +145,7 @@ whisperStack.addDependency(storageStack);
 const frontendStack = new FrontendStack(app, 'TtobakFrontendStack', {
   env,
   crossRegionReferences: true,
-  description: 'Ttobak AI Meeting Assistant - Frontend (S3 + CloudFront)',
+  description: 'TTOBAK AI Meeting Assistant - Frontend (S3 + CloudFront)',
   httpApiUrl: gatewayStack.httpApi.apiEndpoint,
   edgeFunctionVersion: edgeAuthStack.edgeFunction,
   originVerifySecret,
@@ -159,7 +159,7 @@ frontendStack.addDependency(edgeAuthStack);
 frontendStack.addDependency(authStack);
 
 // Tags for all resources
-cdk.Tags.of(app).add('Project', 'Ttobak');
+cdk.Tags.of(app).add('Project', 'TTOBAK');
 cdk.Tags.of(app).add('Environment', 'Development');
 cdk.Tags.of(app).add('ManagedBy', 'CDK');
 

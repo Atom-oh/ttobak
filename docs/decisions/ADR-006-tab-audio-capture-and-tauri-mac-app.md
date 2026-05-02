@@ -14,7 +14,7 @@ Accepted
 
 ## Context
 
-Ttobak currently records audio exclusively through the browser's `getUserMedia` API, which captures only the local microphone input. Solutions Architects frequently join customer meetings via Google Meet (browser-based) and Zoom (desktop app), but cannot record these meetings through Ttobak without manually holding a phone to the speaker or asking for a recording file after the meeting.
+TTOBAK currently records audio exclusively through the browser's `getUserMedia` API, which captures only the local microphone input. Solutions Architects frequently join customer meetings via Google Meet (browser-based) and Zoom (desktop app), but cannot record these meetings through TTOBAK without manually holding a phone to the speaker or asking for a recording file after the meeting.
 
 Two distinct capture scenarios exist:
 1. **Browser-based meetings (Google Meet)**: The meeting runs in a Chrome tab, and Chrome's `getDisplayMedia` API can capture that tab's audio output, which includes all participants' voices.
@@ -119,7 +119,7 @@ Tauri was chosen over Electron because:
 
 ## 배경
 
-Ttobak은 현재 브라우저의 `getUserMedia` API를 통해서만 오디오를 녹음하며, 이는 로컬 마이크 입력만 캡처합니다. Solutions Architect는 고객 미팅에 Google Meet(브라우저 기반)과 Zoom(데스크탑 앱)으로 자주 참여하지만, 직접 스피커에 폰을 대거나 미팅 후 녹음 파일을 요청하지 않고는 Ttobak으로 이러한 미팅을 녹음할 수 없습니다.
+TTOBAK은 현재 브라우저의 `getUserMedia` API를 통해서만 오디오를 녹음하며, 이는 로컬 마이크 입력만 캡처합니다. Solutions Architect는 고객 미팅에 Google Meet(브라우저 기반)과 Zoom(데스크탑 앱)으로 자주 참여하지만, 직접 스피커에 폰을 대거나 미팅 후 녹음 파일을 요청하지 않고는 TTOBAK으로 이러한 미팅을 녹음할 수 없습니다.
 
 두 가지 별도의 캡처 시나리오가 존재합니다:
 1. **브라우저 기반 미팅 (Google Meet)**: 미팅이 Chrome 탭에서 실행되며, Chrome의 `getDisplayMedia` API로 해당 탭의 오디오 출력(모든 참가자의 음성 포함)을 캡처할 수 있습니다.

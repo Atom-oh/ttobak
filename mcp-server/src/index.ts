@@ -32,7 +32,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'ttobak_login',
       description:
-        'Authenticate with Ttobak. Opens browser for Cognito login. Call once per session.',
+        'Authenticate with TTOBAK. Opens browser for Cognito login. Call once per session.',
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {
@@ -94,7 +94,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       case 'ttobak_login': {
         await auth.getIdToken();
-        return text('Authenticated successfully with Ttobak.');
+        return text('Authenticated successfully with TTOBAK.');
       }
 
       case 'ttobak_status': {
@@ -155,7 +155,7 @@ function error(message: string) {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('Ttobak MCP server running');
+  console.error('TTOBAK MCP server running');
 }
 
 main().catch((e) => {

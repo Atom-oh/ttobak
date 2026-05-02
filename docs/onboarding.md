@@ -1,4 +1,4 @@
-# Ttobak Onboarding Guide
+# TTOBAK Onboarding Guide
 
 ## Prerequisites
 

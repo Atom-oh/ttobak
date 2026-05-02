@@ -1,4 +1,4 @@
-# Ttobak (또박)
+# TTOBAK (또박)
 
 <a href="#english"><img src="https://img.shields.io/badge/lang-English-blue.svg" alt="English"></a>
 <a href="#korean"><img src="https://img.shields.io/badge/lang-한국어-red.svg" alt="Korean"></a>
@@ -16,7 +16,7 @@ AI Meeting Assistant for AWS Solutions Architects | AWS SA를 위한 AI 미팅 �
 
 ## Overview
 
-Ttobak is an AI-powered meeting assistant built for AWS Solutions Architects. Record meetings, get real-time transcription and translation, generate AI summaries, and access customer intelligence through automated news crawling and deep research.
+TTOBAK is an AI-powered meeting assistant built for AWS Solutions Architects. Record meetings, get real-time transcription and translation, generate AI summaries, and access customer intelligence through automated news crawling and deep research.
 
 **Live**: [ttobak.atomai.click](https://ttobak.atomai.click)
 
@@ -221,7 +221,7 @@ Private - Internal use only.
 
 ## 개요
 
-Ttobak(또박)은 AWS Solutions Architect를 위한 AI 미팅 어시스턴트입니다. 미팅을 녹음하고, 실시간 전사 및 번역을 제공하며, AI 요약을 생성하고, 자동화된 뉴스 크롤링과 딥 리서치를 통해 고객 인텔리전스에 접근할 수 있습니다.
+TTOBAK(또박)은 AWS Solutions Architect를 위한 AI 미팅 어시스턴트입니다. 미팅을 녹음하고, 실시간 전사 및 번역을 제공하며, AI 요약을 생성하고, 자동화된 뉴스 크롤링과 딥 리서치를 통해 고객 인텔리전스에 접근할 수 있습니다.
 
 **Live**: [ttobak.atomai.click](https://ttobak.atomai.click)
 

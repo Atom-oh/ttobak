@@ -14,7 +14,7 @@ Accepted
 
 ## Context
 
-Ttobak serves AWS Solutions Architects who prepare for and follow up on customer meetings. The current Knowledge Base contains only meeting-generated documents (auto-exported summaries) and user-uploaded files. The QA Lambda has a real-time `search_aws_docs` tool, but it performs keyword-based search against the public AWS docs API without semantic understanding.
+TTOBAK serves AWS Solutions Architects who prepare for and follow up on customer meetings. The current Knowledge Base contains only meeting-generated documents (auto-exported summaries) and user-uploaded files. The QA Lambda has a real-time `search_aws_docs` tool, but it performs keyword-based search against the public AWS docs API without semantic understanding.
 
 SAs need richer context for effective customer engagement:
 1. **AWS documentation** specific to the customer's tech stack (e.g., EKS best practices for a customer running Kubernetes) should be pre-embedded in the KB for semantic RAG retrieval
@@ -115,7 +115,7 @@ The following enhancements were added after the initial implementation:
 
 ## 배경
 
-Ttobak은 고객 미팅을 준비하고 후속 조치를 하는 AWS Solutions Architect를 지원합니다. 현재 Knowledge Base에는 미팅에서 생성된 문서(자동 내보낸 요약)와 사용자가 업로드한 파일만 포함되어 있습니다. QA Lambda에 실시간 `search_aws_docs` 도구가 있지만, 시맨틱 이해 없이 공개 AWS 문서 API에 대한 키워드 기반 검색을 수행합니다.
+TTOBAK은 고객 미팅을 준비하고 후속 조치를 하는 AWS Solutions Architect를 지원합니다. 현재 Knowledge Base에는 미팅에서 생성된 문서(자동 내보낸 요약)와 사용자가 업로드한 파일만 포함되어 있습니다. QA Lambda에 실시간 `search_aws_docs` 도구가 있지만, 시맨틱 이해 없이 공개 AWS 문서 API에 대한 키워드 기반 검색을 수행합니다.
 
 SA는 효과적인 고객 대응을 위해 더 풍부한 컨텍스트가 필요합니다:
 1. **고객사 기술 스택에 맞는 AWS 문서** (예: Kubernetes를 운영하는 고객을 위한 EKS 모범 사례)를 시맨틱 RAG 검색을 위해 KB에 사전 임베딩해야 합니다

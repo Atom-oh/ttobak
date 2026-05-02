@@ -2,7 +2,7 @@
 
 ## Overview
 
-Enhance Ttobak's AI capabilities for AWS Solutions Architects by adding automated crawling of AWS documentation and customer news/articles into the shared Knowledge Base. Crawled content is browsable via a new Insights page (News + Tech tabs) and enriches QA RAG responses.
+Enhance TTOBAK's AI capabilities for AWS Solutions Architects by adding automated crawling of AWS documentation and customer news/articles into the shared Knowledge Base. Crawled content is browsable via a new Insights page (News + Tech tabs) and enriches QA RAG responses.
 
 ## Requirements
 

@@ -14,7 +14,7 @@ Proposed
 
 ## Context
 
-Ttobak is currently open to any user with a valid email address. Cognito User Pool accepts signups from any domain, and there is no Pre Sign-Up Lambda trigger to filter registrations. For enterprise or team deployments, administrators need the ability to restrict signups to specific email domains (e.g., `amazon.com`, `samsung.com`) so that only authorized members of an organization can create accounts.
+TTOBAK is currently open to any user with a valid email address. Cognito User Pool accepts signups from any domain, and there is no Pre Sign-Up Lambda trigger to filter registrations. For enterprise or team deployments, administrators need the ability to restrict signups to specific email domains (e.g., `amazon.com`, `samsung.com`) so that only authorized members of an organization can create accounts.
 
 The restriction must support multiple domains (array), be configurable at runtime without redeployment, and provide clear error messages to users whose domain is not allowed.
 
@@ -117,7 +117,7 @@ PUT  /api/settings/allowed-domains (auth)   -> { domains: string[] }
 
 ## 배경
 
-현재 Ttobak은 유효한 이메일 주소만 있으면 누구나 가입할 수 있습니다. Cognito User Pool은 모든 도메인의 가입을 허용하며, 가입을 필터링하는 Pre Sign-Up Lambda 트리거가 설정되어 있지 않습니다. 기업 또는 팀 배포 환경에서는 관리자가 특정 이메일 도메인(예: `amazon.com`, `samsung.com`)으로 가입을 제한하여 조직의 인가된 구성원만 계정을 생성할 수 있어야 합니다.
+현재 TTOBAK은 유효한 이메일 주소만 있으면 누구나 가입할 수 있습니다. Cognito User Pool은 모든 도메인의 가입을 허용하며, 가입을 필터링하는 Pre Sign-Up Lambda 트리거가 설정되어 있지 않습니다. 기업 또는 팀 배포 환경에서는 관리자가 특정 이메일 도메인(예: `amazon.com`, `samsung.com`)으로 가입을 제한하여 조직의 인가된 구성원만 계정을 생성할 수 있어야 합니다.
 
 이 제한은 여러 도메인을 배열로 지원해야 하고, 재배포 없이 런타임에 설정 가능해야 하며, 허용되지 않는 도메인의 사용자에게 명확한 오류 메시지를 제공해야 합니다.
 

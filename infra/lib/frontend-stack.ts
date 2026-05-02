@@ -109,7 +109,7 @@ function handler(event) {
     this.distribution = new cloudfront.Distribution(this, 'TtobakDistribution', {
       domainNames: [this.node.tryGetContext('ttobak:domainName')],
       certificate,
-      comment: 'Ttobak AI Meeting Assistant',
+      comment: 'TTOBAK AI Meeting Assistant',
       defaultRootObject: 'index.html',
       defaultBehavior: {
         origin: s3Origin,

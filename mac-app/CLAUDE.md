@@ -1,7 +1,7 @@
 # Mac App Module
 
 Tauri 2 + Rust desktop wrapper that adds native macOS system-audio capture to
-the Ttobak SPA. Implements **Sub-project 2** of [ADR-006](../docs/decisions/ADR-006-tab-audio-capture-and-tauri-mac-app.md).
+the TTOBAK SPA. Implements **Sub-project 2** of [ADR-006](../docs/decisions/ADR-006-tab-audio-capture-and-tauri-mac-app.md).
 
 ## Build only on macOS
 

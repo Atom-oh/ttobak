@@ -1,4 +1,4 @@
-# Ttobak - Infrastructure Specification
+# TTOBAK - Infrastructure Specification
 
 > CDK 스택 상세 설계 (v2 - API Gateway + Lambda@Edge 아키텍처)
 

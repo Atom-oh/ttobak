@@ -1160,7 +1160,7 @@ import { CrawlerStack } from '../lib/crawler-stack';
 // After gatewayStack definition:
 const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {
   env,
-  description: 'Ttobak AI Meeting Assistant - Crawler (Step Functions + Lambda)',
+  description: 'TTOBAK AI Meeting Assistant - Crawler (Step Functions + Lambda)',
   crawlerRole: aiStack.crawlerRole,
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
@@ -1302,7 +1302,7 @@ def process_doc(source_id, service_name, url):
         return 'skipped'
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Ttobak-Crawler/1.0'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'TTOBAK-Crawler/1.0'})
         with urllib.request.urlopen(req, timeout=15) as resp:
             html = resp.read().decode('utf-8', errors='ignore')
     except Exception:
@@ -1433,7 +1433,7 @@ def search_google_news(query):
 
 def fetch_rss(url):
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Ttobak-Crawler/1.0'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'TTOBAK-Crawler/1.0'})
         with urllib.request.urlopen(req, timeout=10) as resp:
             xml_data = resp.read()
         root = ET.fromstring(xml_data)
@@ -1467,7 +1467,7 @@ def process_article(source_id, article):
         return False
 
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Ttobak-Crawler/1.0'})
+        req = urllib.request.Request(url, headers={'User-Agent': 'TTOBAK-Crawler/1.0'})
         with urllib.request.urlopen(req, timeout=10) as resp:
             html = resp.read().decode('utf-8', errors='ignore')
     except Exception:

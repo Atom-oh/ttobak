@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Ttobak (또박) is a Korean AI meeting assistant: record audio → real-time STT (AWS Transcribe Streaming in browser) → batch STT (Whisper ECS GPU Spot) → Bedrock Claude summary → Notion-style editor. The frontend is a Next.js 16 static SPA deployed to S3/CloudFront; the backend is Go Lambda functions behind API Gateway; infrastructure is CDK TypeScript.
+TTOBAK (또박) is a Korean AI meeting assistant: record audio → real-time STT (AWS Transcribe Streaming in browser) → batch STT (Whisper ECS GPU Spot) → Bedrock Claude summary → Notion-style editor. The frontend is a Next.js 16 static SPA deployed to S3/CloudFront; the backend is Go Lambda functions behind API Gateway; infrastructure is CDK TypeScript.
 
 ## Build Commands
 

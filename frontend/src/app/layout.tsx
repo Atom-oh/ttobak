@@ -22,7 +22,7 @@ const outfit = Outfit({
 });
 
 export const metadata: Metadata = {
-  title: 'Ttobak - AI Meeting Assistant',
+  title: 'TTOBAK - AI Meeting Assistant',
   description: 'Record, transcribe, and summarize your meetings with AI',
   manifest: '/manifest.json',
   icons: {

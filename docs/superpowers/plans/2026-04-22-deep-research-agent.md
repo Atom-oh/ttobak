@@ -523,7 +523,7 @@ import { ResearchAgentStack } from '../lib/research-agent-stack';
 
 const researchAgentStack = new ResearchAgentStack(app, 'TtobakResearchAgentStack', {
   env,
-  description: 'Ttobak AI Meeting Assistant - Research Agent (Bedrock Agent)',
+  description: 'TTOBAK AI Meeting Assistant - Research Agent (Bedrock Agent)',
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
   knowledgeBaseId: knowledgeStack.knowledgeBaseId,

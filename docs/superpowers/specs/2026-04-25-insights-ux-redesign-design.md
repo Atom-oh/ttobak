@@ -1,4 +1,4 @@
-# Ttobak Insights UX Redesign — Design Spec
+# TTOBAK Insights UX Redesign — Design Spec
 
 **Date:** 2026-04-25
 **Status:** Approved

@@ -1,6 +1,6 @@
 {
-  "name": "Ttobak - AI Meeting Assistant",
-  "short_name": "Ttobak",
+  "name": "TTOBAK - AI Meeting Assistant",
+  "short_name": "TTOBAK",
   "description": "Record, transcribe, and summarize your meetings with AI",
   "start_url": "/",
   "display": "standalone",

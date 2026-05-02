@@ -17,7 +17,7 @@ When reviewing a meeting summary, users often want to verify or revisit the orig
 
 Notion's meeting notes solve this by linking each summary item to the specific conversation segment it was derived from. Clicking a summary bullet scrolls the user directly to that part of the transcript, providing instant context.
 
-Ttobak already has the building blocks: `TranscriptSegment` objects carry `id`, `startTime`, `endTime`, and `timestamp` fields. The frontend renders both a summary section (`AISummaryCard`) and a transcript section (`TranscriptSection`) on the same page. What is missing is the linkage between them.
+TTOBAK already has the building blocks: `TranscriptSegment` objects carry `id`, `startTime`, `endTime`, and `timestamp` fields. The frontend renders both a summary section (`AISummaryCard`) and a transcript section (`TranscriptSection`) on the same page. What is missing is the linkage between them.
 
 ## Options Considered
 

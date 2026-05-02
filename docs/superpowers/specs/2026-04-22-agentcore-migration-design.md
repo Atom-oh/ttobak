@@ -85,7 +85,7 @@ from tools import web_search, fetch_page, save_report, search_kb
 
 app = BedrockAgentCoreApp()
 
-RESEARCH_SYSTEM_PROMPT = """You are a Deep Research Agent for Ttobak...
+RESEARCH_SYSTEM_PROMPT = """You are a Deep Research Agent for TTOBAK...
 [8-phase pipeline instructions — same as current CfnAgent instruction]
 """
 

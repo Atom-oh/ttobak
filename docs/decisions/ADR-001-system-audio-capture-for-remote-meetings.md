@@ -14,9 +14,9 @@ Superseded by [ADR-006](ADR-006-tab-audio-capture-and-tauri-mac-app.md)
 
 ## Context
 
-Ttobak currently records audio exclusively through the browser's `getUserMedia({ audio })` API, which captures only the local microphone input. When a user is in a Zoom, Google Meet, or Microsoft Teams call, the remote participants' audio is routed through the system audio output (speakers/headphones) and is **not captured** by the microphone stream.
+TTOBAK currently records audio exclusively through the browser's `getUserMedia({ audio })` API, which captures only the local microphone input. When a user is in a Zoom, Google Meet, or Microsoft Teams call, the remote participants' audio is routed through the system audio output (speakers/headphones) and is **not captured** by the microphone stream.
 
-This is a significant limitation because the primary use case for Ttobak --- meeting note-taking --- often involves multi-party video conferences where the user needs a complete transcript of **all participants**, not just themselves.
+This is a significant limitation because the primary use case for TTOBAK --- meeting note-taking --- often involves multi-party video conferences where the user needs a complete transcript of **all participants**, not just themselves.
 
 ### Technical Background
 
@@ -68,10 +68,10 @@ const mediaRecorder = new MediaRecorder(dest.stream, { mimeType });
 
 ### Option 2: Virtual Audio Device (User-Configured Loopback)
 
-Instruct users to install a virtual audio loopback driver (e.g., BlackHole on macOS, VB-Cable on Windows) that routes system output back as a virtual microphone input. The user then selects this virtual device in Ttobak's microphone selector.
+Instruct users to install a virtual audio loopback driver (e.g., BlackHole on macOS, VB-Cable on Windows) that routes system output back as a virtual microphone input. The user then selects this virtual device in TTOBAK's microphone selector.
 
 - **Pros**:
-  - No code changes required in Ttobak (the existing `getUserMedia` + device selector already supports this)
+  - No code changes required in TTOBAK (the existing `getUserMedia` + device selector already supports this)
   - Captures all system audio at the OS level
   - Works with any conferencing application
 - **Cons**:
@@ -156,7 +156,7 @@ Rationale:
 | Safari 16+ | Partial | No | Audio capture not supported in all contexts |
 
 ### Future Considerations
-- Consider Zoom Meeting SDK integration if Ttobak targets enterprise users who primarily use Zoom
+- Consider Zoom Meeting SDK integration if TTOBAK targets enterprise users who primarily use Zoom
 - Evaluate Web Audio API `AudioWorklet` for real-time noise/notification filtering on the system audio track
 - Investigate `MediaStreamTrack` APIs for speaker diarization hints when multiple audio sources are available
 
@@ -178,9 +178,9 @@ Rationale:
 
 ## 배경
 
-Ttobak은 현재 브라우저의 `getUserMedia({ audio })` API를 통해 로컬 마이크 입력만 녹음합니다. 사용자가 Zoom, Google Meet, Microsoft Teams 통화 중일 때, 상대방의 음성은 시스템 오디오 출력(스피커/이어폰)으로 전달되기 때문에 마이크 스트림으로는 **캡처되지 않습니다**.
+TTOBAK은 현재 브라우저의 `getUserMedia({ audio })` API를 통해 로컬 마이크 입력만 녹음합니다. 사용자가 Zoom, Google Meet, Microsoft Teams 통화 중일 때, 상대방의 음성은 시스템 오디오 출력(스피커/이어폰)으로 전달되기 때문에 마이크 스트림으로는 **캡처되지 않습니다**.
 
-이것은 중요한 제약사항입니다. Ttobak의 주요 사용 사례인 회의록 작성에서는 본인뿐만 아니라 **모든 참가자**의 완전한 트랜스크립트가 필요하기 때문입니다.
+이것은 중요한 제약사항입니다. TTOBAK의 주요 사용 사례인 회의록 작성에서는 본인뿐만 아니라 **모든 참가자**의 완전한 트랜스크립트가 필요하기 때문입니다.
 
 ### 기술적 배경
 
@@ -232,10 +232,10 @@ const mediaRecorder = new MediaRecorder(dest.stream, { mimeType });
 
 ### 옵션 2: 가상 오디오 장치 (사용자 설정 루프백)
 
-사용자에게 가상 오디오 루프백 드라이버(macOS의 BlackHole, Windows의 VB-Cable 등)를 설치하도록 안내하여, 시스템 출력을 가상 마이크 입력으로 라우팅합니다. 사용자는 Ttobak의 마이크 선택기에서 이 가상 장치를 선택합니다.
+사용자에게 가상 오디오 루프백 드라이버(macOS의 BlackHole, Windows의 VB-Cable 등)를 설치하도록 안내하여, 시스템 출력을 가상 마이크 입력으로 라우팅합니다. 사용자는 TTOBAK의 마이크 선택기에서 이 가상 장치를 선택합니다.
 
 - **장점**:
-  - Ttobak에 코드 변경이 필요 없습니다 (기존 `getUserMedia` + 장치 선택기가 이미 지원)
+  - TTOBAK에 코드 변경이 필요 없습니다 (기존 `getUserMedia` + 장치 선택기가 이미 지원)
   - OS 수준에서 모든 시스템 오디오를 캡처합니다
   - 모든 화상회의 애플리케이션에서 동작합니다
 - **단점**:
@@ -320,7 +320,7 @@ const mediaRecorder = new MediaRecorder(dest.stream, { mimeType });
 | Safari 16+ | 부분 지원 | 미지원 | 모든 컨텍스트에서 오디오 캡처가 지원되지 않음 |
 
 ### 향후 고려사항
-- Ttobak이 주로 Zoom을 사용하는 기업 사용자를 대상으로 하는 경우 Zoom Meeting SDK 통합을 고려합니다
+- TTOBAK이 주로 Zoom을 사용하는 기업 사용자를 대상으로 하는 경우 Zoom Meeting SDK 통합을 고려합니다
 - 시스템 오디오 트랙에서 실시간 노이즈/알림 필터링을 위한 Web Audio API `AudioWorklet` 평가가 필요합니다
 - 여러 오디오 소스가 있을 때 화자 분리 힌트를 위한 `MediaStreamTrack` API를 조사합니다
 

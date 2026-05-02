@@ -188,7 +188,7 @@ export function IntegrationSettings() {
                   </div>
                   <div className="flex items-start gap-2">
                     <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 dark:bg-[#00E5FF]/10 flex items-center justify-center text-[10px] font-bold text-primary dark:text-[#00E5FF]">2</span>
-                    <span><strong>&quot;New integration&quot;</strong> 클릭 → 이름 입력 (예: Ttobak) → 워크스페이스 선택</span>
+                    <span><strong>&quot;New integration&quot;</strong> 클릭 → 이름 입력 (예: TTOBAK) → 워크스페이스 선택</span>
                   </div>
                   <div className="flex items-start gap-2">
                     <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 dark:bg-[#00E5FF]/10 flex items-center justify-center text-[10px] font-bold text-primary dark:text-[#00E5FF]">3</span>

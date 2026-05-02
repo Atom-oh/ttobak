@@ -149,8 +149,8 @@ None. Zero backend changes required.
 When `getDisplayMedia({audio: true})` is called and user selects a Chrome tab:
 - Audio track contains ALL audio output of that tab (e.g., all participants in Google Meet)
 - User's own microphone is NOT included (the user's mic goes through Meet directly to other participants)
-- If user mutes in Meet, their voice stops being sent to others but has no effect on Ttobak capture
-- Tab audio continues even if Ttobak tab is in background
+- If user mutes in Meet, their voice stops being sent to others but has no effect on TTOBAK capture
+- Tab audio continues even if TTOBAK tab is in background
 
 ### video: false Gotcha
 

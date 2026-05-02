@@ -11,7 +11,7 @@
 
 ### 시스템 개요
 
-Ttobak(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에서 오디오를 녹음하고, 실시간 음성 인식(Web Speech API / AWS Transcribe Streaming)과 후처리 배치 STT(기본: Whisper GPU on ECS Spot, 폴백: AWS Transcribe)로 텍스트를 추출한 후, Bedrock Claude로 요약을 생성합니다. Next.js 16 정적 SPA → CloudFront → API Gateway → Go Lambda → DynamoDB/S3 아키텍처입니다.
+TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에서 오디오를 녹음하고, 실시간 음성 인식(Web Speech API / AWS Transcribe Streaming)과 후처리 배치 STT(기본: Whisper GPU on ECS Spot, 폴백: AWS Transcribe)로 텍스트를 추출한 후, Bedrock Claude로 요약을 생성합니다. Next.js 16 정적 SPA → CloudFront → API Gateway → Go Lambda → DynamoDB/S3 아키텍처입니다.
 
 ### 컴포넌트 레이어
 
@@ -146,7 +146,7 @@ Ttobak(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 
 ### System Overview
 
-Ttobak is a Korean AI meeting assistant. It records audio in the browser, extracts text via real-time speech recognition (Web Speech API / AWS Transcribe Streaming) and post-recording batch STT (default: Whisper GPU on ECS Spot; fallback: AWS Transcribe), then generates summaries with Bedrock Claude. Architecture: Next.js 16 static SPA → CloudFront → API Gateway → Go Lambda → DynamoDB/S3.
+TTOBAK is a Korean AI meeting assistant. It records audio in the browser, extracts text via real-time speech recognition (Web Speech API / AWS Transcribe Streaming) and post-recording batch STT (default: Whisper GPU on ECS Spot; fallback: AWS Transcribe), then generates summaries with Bedrock Claude. Architecture: Next.js 16 static SPA → CloudFront → API Gateway → Go Lambda → DynamoDB/S3.
 
 ### Components by Layer
 

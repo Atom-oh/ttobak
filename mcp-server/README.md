@@ -1,4 +1,4 @@
-# Ttobak MCP Server — Claude Code Integration Guide
+# TTOBAK MCP Server — Claude Code Integration Guide
 
 <a href="#english"><img src="https://img.shields.io/badge/lang-English-blue.svg" alt="English"></a>
 <a href="#korean"><img src="https://img.shields.io/badge/lang-한국어-red.svg" alt="Korean"></a>
@@ -11,10 +11,10 @@
 
 ### What This Does
 
-A local MCP (Model Context Protocol) server that gives Claude Code direct access to your Ttobak meeting data. Once connected, Claude can list meetings, read summaries/transcripts, and answer questions about your meetings using natural language.
+A local MCP (Model Context Protocol) server that gives Claude Code direct access to your TTOBAK meeting data. Once connected, Claude can list meetings, read summaries/transcripts, and answer questions about your meetings using natural language.
 
 ```
-Claude Code  ──stdio──>  Ttobak MCP Server  ──HTTPS──>  CloudFront  ──>  API Gateway  ──>  Lambda
+Claude Code  ──stdio──>  TTOBAK MCP Server  ──HTTPS──>  CloudFront  ──>  API Gateway  ──>  Lambda
                               │
                          ~/.ttobak/tokens.json
                          (Cognito OAuth PKCE)
@@ -24,7 +24,7 @@ Claude Code  ──stdio──>  Ttobak MCP Server  ──HTTPS──>  CloudFro
 
 - Node.js 18+
 - AWS credentials (for initial setup script only)
-- A Ttobak account (Cognito user)
+- A TTOBAK account (Cognito user)
 
 ---
 
@@ -113,14 +113,14 @@ claude mcp get ttobak    # Check ttobak server details
 
 ### Authentication
 
-The first time you use any Ttobak tool, the MCP server will open your browser for Cognito login.
+The first time you use any TTOBAK tool, the MCP server will open your browser for Cognito login.
 
 ```
 1. Claude Code calls ttobak_login (or any data tool)
 2. Browser opens → Cognito Hosted UI login page
 3. You enter email + password
 4. Browser redirects to localhost:9876/callback
-5. Page shows "Ttobak MCP Authenticated"
+5. Page shows "TTOBAK MCP Authenticated"
 6. Close browser tab → back to Claude Code
 7. Token saved to ~/.ttobak/tokens.json (30-day refresh)
 ```
@@ -139,33 +139,33 @@ Use the ttobak_login tool to authenticate.
 
 | Tool | Description | Example Prompt |
 |------|-------------|----------------|
-| `ttobak_login` | Authenticate via browser | "Log in to Ttobak" |
-| `ttobak_status` | Check auth status and config | "Check Ttobak connection status" |
+| `ttobak_login` | Authenticate via browser | "Log in to TTOBAK" |
+| `ttobak_status` | Check auth status and config | "Check TTOBAK connection status" |
 | `ttobak_list_meetings` | List meetings (paginated) | "Show my recent meetings" |
 | `ttobak_get_meeting` | Full meeting detail | "Get the details of meeting X" |
 | `ttobak_ask` | RAG Q&A across meetings | "What decisions were made about the API redesign?" |
-| `ttobak_logout` | Clear stored tokens | "Log out of Ttobak" |
+| `ttobak_logout` | Clear stored tokens | "Log out of TTOBAK" |
 
 ### Usage Examples
 
 **Daily briefing:**
 ```
-List my Ttobak meetings from this week and summarize the key decisions.
+List my TTOBAK meetings from this week and summarize the key decisions.
 ```
 
 **Deep dive into a specific meeting:**
 ```
-Get meeting abc123 from Ttobak and list all action items with owners.
+Get meeting abc123 from TTOBAK and list all action items with owners.
 ```
 
 **Cross-meeting analysis:**
 ```
-Ask Ttobak: "What topics came up in multiple meetings this month?"
+Ask TTOBAK: "What topics came up in multiple meetings this month?"
 ```
 
 **Pre-meeting prep:**
 ```
-Get the last 3 meetings with the design team from Ttobak
+Get the last 3 meetings with the design team from TTOBAK
 and brief me on open issues.
 ```
 
@@ -203,10 +203,10 @@ rm -rf mcp-server/
 
 ### 개요
 
-Claude Code에서 Ttobak 미팅 데이터에 직접 접근할 수 있는 로컬 MCP (Model Context Protocol) 서버입니다. 연결하면 Claude가 미팅 목록 조회, 요약/트랜스크립트 읽기, 자연어로 미팅에 대한 질문을 할 수 있습니다.
+Claude Code에서 TTOBAK 미팅 데이터에 직접 접근할 수 있는 로컬 MCP (Model Context Protocol) 서버입니다. 연결하면 Claude가 미팅 목록 조회, 요약/트랜스크립트 읽기, 자연어로 미팅에 대한 질문을 할 수 있습니다.
 
 ```
-Claude Code  ──stdio──>  Ttobak MCP Server  ──HTTPS──>  CloudFront  ──>  API Gateway  ──>  Lambda
+Claude Code  ──stdio──>  TTOBAK MCP Server  ──HTTPS──>  CloudFront  ──>  API Gateway  ──>  Lambda
                               │
                          ~/.ttobak/tokens.json
                          (Cognito OAuth PKCE)
@@ -216,7 +216,7 @@ Claude Code  ──stdio──>  Ttobak MCP Server  ──HTTPS──>  CloudFro
 
 - Node.js 18+
 - AWS 자격 증명 (초기 설정 스크립트에만 필요)
-- Ttobak 계정 (Cognito 사용자)
+- TTOBAK 계정 (Cognito 사용자)
 
 ---
 
@@ -305,14 +305,14 @@ claude mcp get ttobak    # ttobak 서버 상세 정보
 
 ### 인증
 
-Ttobak 도구를 처음 사용할 때 MCP 서버가 브라우저를 열어 Cognito 로그인을 진행합니다.
+TTOBAK 도구를 처음 사용할 때 MCP 서버가 브라우저를 열어 Cognito 로그인을 진행합니다.
 
 ```
 1. Claude Code가 ttobak_login 호출 (또는 데이터 도구 호출 시 자동)
 2. 브라우저 열림 → Cognito Hosted UI 로그인 페이지
 3. 이메일 + 비밀번호 입력
 4. 브라우저가 localhost:9876/callback으로 리다이렉트
-5. "Ttobak MCP Authenticated" 페이지 표시
+5. "TTOBAK MCP Authenticated" 페이지 표시
 6. 브라우저 탭 닫기 → Claude Code로 복귀
 7. 토큰이 ~/.ttobak/tokens.json에 저장 (30일 리프레시)
 ```
@@ -322,7 +322,7 @@ Ttobak 도구를 처음 사용할 때 MCP 서버가 브라우저를 열어 Cogni
 명시적으로 로그인을 트리거하려면:
 
 ```
-Ttobak에 로그인해줘
+TTOBAK에 로그인해줘
 ```
 
 ---
@@ -331,33 +331,33 @@ Ttobak에 로그인해줘
 
 | 도구 | 설명 | 예시 프롬프트 |
 |------|------|---------------|
-| `ttobak_login` | 브라우저를 통한 인증 | "Ttobak에 로그인해줘" |
-| `ttobak_status` | 인증 상태 및 설정 확인 | "Ttobak 연결 상태 확인해줘" |
+| `ttobak_login` | 브라우저를 통한 인증 | "TTOBAK에 로그인해줘" |
+| `ttobak_status` | 인증 상태 및 설정 확인 | "TTOBAK 연결 상태 확인해줘" |
 | `ttobak_list_meetings` | 미팅 목록 조회 (페이지네이션) | "최근 미팅 목록 보여줘" |
 | `ttobak_get_meeting` | 미팅 상세 정보 | "미팅 X의 상세 내용을 가져와줘" |
 | `ttobak_ask` | 미팅 기반 RAG Q&A | "API 재설계에 대해 어떤 결정이 있었어?" |
-| `ttobak_logout` | 저장된 토큰 삭제 | "Ttobak에서 로그아웃해줘" |
+| `ttobak_logout` | 저장된 토큰 삭제 | "TTOBAK에서 로그아웃해줘" |
 
 ### 사용 예시
 
 **일일 브리핑:**
 ```
-이번 주 Ttobak 미팅을 조회하고 주요 결정 사항을 요약해줘.
+이번 주 TTOBAK 미팅을 조회하고 주요 결정 사항을 요약해줘.
 ```
 
 **특정 미팅 심층 분석:**
 ```
-Ttobak에서 미팅 abc123을 가져와서 담당자별 액션 아이템을 정리해줘.
+TTOBAK에서 미팅 abc123을 가져와서 담당자별 액션 아이템을 정리해줘.
 ```
 
 **교차 미팅 분석:**
 ```
-Ttobak에 물어봐: "이번 달 여러 미팅에서 반복적으로 나온 주제가 뭐야?"
+TTOBAK에 물어봐: "이번 달 여러 미팅에서 반복적으로 나온 주제가 뭐야?"
 ```
 
 **미팅 사전 준비:**
 ```
-Ttobak에서 디자인 팀과의 최근 3개 미팅을 가져와서
+TTOBAK에서 디자인 팀과의 최근 3개 미팅을 가져와서
 미해결 이슈를 브리핑해줘.
 ```
 
