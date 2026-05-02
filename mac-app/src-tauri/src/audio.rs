@@ -57,7 +57,12 @@ impl AudioRecorder {
         }
     }
 
-    pub fn start(&mut self, meeting_id: &str) -> Result<PathBuf, AppError> {
+    pub fn start(
+        &mut self,
+        meeting_id: &str,
+        #[cfg(target_os = "macos")] app: tauri::AppHandle,
+        #[cfg(not(target_os = "macos"))] _app: tauri::AppHandle,
+    ) -> Result<PathBuf, AppError> {
         if self.inner.is_some() {
             return Err(AppError::AlreadyRunning);
         }
@@ -66,7 +71,7 @@ impl AudioRecorder {
 
         #[cfg(target_os = "macos")]
         {
-            let backend = macos::Backend::start(&path)?;
+            let backend = macos::Backend::start(&path, app)?;
             self.inner = Some(RecordingHandle {
                 path: path.clone(),
                 started_at: Instant::now(),
@@ -138,11 +143,18 @@ mod macos {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use hound::{SampleFormat, WavSpec, WavWriter};
     use screencapturekit::prelude::*;
+    use tauri::{AppHandle, Emitter};
 
     use crate::error::AppError;
+
+    /// Throttle for the `native-audio-level` event. ScreenCaptureKit delivers
+    /// audio buffers at ~50 Hz (1024 frames at 48 kHz). 33 ms ≈ 30 Hz which is
+    /// fast enough for a smooth meter and avoids spamming the IPC bridge.
+    const LEVEL_EMIT_INTERVAL_MS: u64 = 33;
 
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
@@ -163,7 +175,7 @@ mod macos {
     }
 
     impl Backend {
-        pub fn start(path: &Path) -> Result<Self, AppError> {
+        pub fn start(path: &Path, app: AppHandle) -> Result<Self, AppError> {
             let spec = WavSpec {
                 channels: CHANNELS,
                 sample_rate: SAMPLE_RATE,
@@ -203,6 +215,8 @@ mod macos {
                     callbacks: Arc::clone(&callbacks),
                     samples_written: Arc::clone(&samples_written),
                     logged_first: Arc::new(AtomicU64::new(0)),
+                    app,
+                    last_emit_ms: Arc::new(AtomicU64::new(0)),
                 },
                 SCStreamOutputType::Audio,
             );
@@ -272,6 +286,11 @@ mod macos {
         /// Tracks whether we have logged the first buffer's metadata. Cheap
         /// AtomicU64 instead of `Once` so we can keep `AudioOutput: Send`.
         logged_first: Arc<AtomicU64>,
+        /// Used to emit `native-audio-level` events to the WebView so the UI
+        /// can show a real meter in System Audio mode (where we have no
+        /// MediaStream / AnalyserNode on the JS side).
+        app: AppHandle,
+        last_emit_ms: Arc<AtomicU64>,
     }
 
     impl SCStreamOutputTrait for AudioOutput {
@@ -317,6 +336,15 @@ mod macos {
                 })
                 .collect();
 
+            // RMS over this buffer for the level meter event. Computed once,
+            // before we move samples_f32 into the writer loop.
+            let rms = if samples_f32.is_empty() {
+                0.0
+            } else {
+                let sum_sq: f32 = samples_f32.iter().map(|s| s * s).sum();
+                (sum_sq / samples_f32.len() as f32).sqrt()
+            };
+
             let mut guard = self.writer.lock().expect("writer poisoned");
             let Some(w) = guard.as_mut() else { return };
             let mut written = 0u64;
@@ -329,7 +357,23 @@ mod macos {
                 }
                 written += 1;
             }
+            drop(guard);
             self.samples_written.fetch_add(written, Ordering::Relaxed);
+
+            // Throttled level emit (~30 Hz). Buffers arrive faster than the UI
+            // needs to redraw; bouncing every callback over IPC is wasteful.
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let last = self.last_emit_ms.load(Ordering::Relaxed);
+            if now_ms.saturating_sub(last) >= LEVEL_EMIT_INTERVAL_MS {
+                self.last_emit_ms.store(now_ms, Ordering::Relaxed);
+                // Map RMS (typical speech ≈ 0.01–0.3 in normalized float) to
+                // a 0–1 meter range. Clamp to avoid >1 spikes from clipping.
+                let level = (rms / 0.25).min(1.0);
+                let _ = self.app.emit("native-audio-level", level);
+            }
         }
     }
 }

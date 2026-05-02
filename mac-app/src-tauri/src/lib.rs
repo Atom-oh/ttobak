@@ -1,4 +1,4 @@
-//! Ttobak Mac App library entry point.
+//! TTOBAK Mac App library entry point.
 //!
 //! Tauri commands exposed to the WebView:
 //! - `start_recording(meeting_id)` — begin system-audio capture into a temp WAV
@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use parking_lot::Mutex;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 use tauri::ipc::Response;
 
 use crate::audio::AudioRecorder;
@@ -71,9 +71,10 @@ fn validate_recording_path(path: &str, recorded_paths: &HashSet<PathBuf>) -> Res
 async fn start_recording(
     meeting_id: String,
     state: State<'_, RecorderState>,
+    app: AppHandle,
 ) -> Result<StartResponse, AppError> {
     let mut rec = state.recorder.lock();
-    let path = rec.start(&meeting_id)?;
+    let path = rec.start(&meeting_id, app)?;
     let canonical = std::fs::canonicalize(&path).unwrap_or(path);
     state.recorded_paths.lock().insert(canonical.clone());
     Ok(StartResponse {

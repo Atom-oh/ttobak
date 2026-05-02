@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { isIOS, getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob, uploadToS3 } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, readRecordingBytes, cleanupRecording } from '@/lib/tauri';
+import { isTauri, startNativeRecording, stopNativeRecording, readRecordingBytes, cleanupRecording, onNativeAudioLevel } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 interface RecordButtonProps {
@@ -72,6 +72,8 @@ export function RecordButton({
   const barsContainerRef = useRef<HTMLDivElement>(null);
   const [showCamera, setShowCamera] = useState(false);
   const nativeTempPathRef = useRef<string | null>(null);
+  const nativeLevelRef = useRef(0);
+  const nativeUnlistenRef = useRef<(() => void) | null>(null);
 
   const useNativeCapture = isIOS() || !supportsMediaRecorder();
 
@@ -115,13 +117,15 @@ export function RecordButton({
       if (timerRef.current) clearInterval(timerRef.current);
       if (checkpointTimerRef.current) clearInterval(checkpointTimerRef.current);
       cleanupAudioResources();
+      nativeUnlistenRef.current?.();
+      nativeUnlistenRef.current = null;
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
     };
   }, [cleanupAudioResources]);
 
-  // Drive PC waveform bars from real AnalyserNode frequency data
+  // Drive PC waveform bars from real AnalyserNode frequency data (browser modes)
   useEffect(() => {
     if (state !== 'recording' || !analyserRef.current || !barsContainerRef.current) return;
     const analyser = analyserRef.current;
@@ -146,6 +150,39 @@ export function RecordButton({
     return () => cancelAnimationFrame(frameId);
   }, [state]);
 
+  // Drive PC waveform bars from native ScreenCaptureKit RMS levels (System mode).
+  // The Rust side has no FFT, only a single 0–1 RMS value per ~33 ms tick.
+  // Render that as a moving "scope" — shift bars left and push the latest
+  // level on the right, so any captured audio shows visible motion. Lights up
+  // ONLY when there's no AnalyserNode (native mode) and we're recording.
+  useEffect(() => {
+    if (state !== 'recording' || analyserRef.current || !barsContainerRef.current) return;
+    if (!isTauri() || audioSource !== 'system') return;
+    const container = barsContainerRef.current;
+    let frameId: number;
+    // Internal history buffer of recent levels — one slot per bar
+    const history: number[] = [];
+    const draw = () => {
+      const bars = container.children;
+      const barCount = bars.length;
+      if (!barCount) { frameId = requestAnimationFrame(draw); return; }
+      // Push latest, trim to barCount
+      history.push(nativeLevelRef.current);
+      while (history.length > barCount) history.shift();
+      // Render: oldest sample on the left, newest on the right
+      const offset = barCount - history.length;
+      for (let i = 0; i < barCount; i++) {
+        const idx = i - offset;
+        const value = idx >= 0 ? history[idx] : 0;
+        const height = Math.max(3, value * 32);
+        (bars[i] as HTMLElement).style.height = `${height}px`;
+      }
+      frameId = requestAnimationFrame(draw);
+    };
+    frameId = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frameId);
+  }, [state, audioSource]);
+
   const startRecording = async () => {
     // Clean up any leftover resources from a previous recording
     cleanupAudioResources();
@@ -161,6 +198,15 @@ export function RecordButton({
         // Note: native capture has no MediaStream — pass null.
         onRecordingStart?.(null);
 
+        // Subscribe to the native audio level event before starting the
+        // capture so we don't miss the first samples. The Rust side emits
+        // ~30 Hz RMS values in [0, 1].
+        nativeLevelRef.current = 0;
+        nativeUnlistenRef.current?.();
+        nativeUnlistenRef.current = onNativeAudioLevel((level) => {
+          nativeLevelRef.current = level;
+        });
+
         const resp = await startNativeRecording(meetingId);
         nativeTempPathRef.current = resp.temp_path;
         isRecordingRef.current = true;
@@ -171,6 +217,8 @@ export function RecordButton({
           setElapsedTime((prev) => prev + 1);
         }, 1000);
       } catch (err) {
+        nativeUnlistenRef.current?.();
+        nativeUnlistenRef.current = null;
         onError?.(err instanceof Error ? err.message : 'Native recording failed');
       }
       return;
@@ -339,6 +387,11 @@ export function RecordButton({
     if (nativeTempPathRef.current) {
       const tempPath = nativeTempPathRef.current;
       nativeTempPathRef.current = null;
+      // Stop receiving level events first; the Rust side won't emit any more
+      // after stop_capture, but unsubscribe defensively.
+      nativeUnlistenRef.current?.();
+      nativeUnlistenRef.current = null;
+      nativeLevelRef.current = 0;
       try {
         await stopNativeRecording();
         onRecordingStop?.();
