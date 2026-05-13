@@ -14,7 +14,7 @@ Accepted
 
 ## Context
 
-Ttobak currently has no CI/CD pipeline. All deployments are performed manually from a developer's local machine:
+TTOBAK currently has no CI/CD pipeline. All deployments are performed manually from a developer's local machine:
 
 1. **Backend**: Build 5 Go Lambda binaries (`GOOS=linux GOARCH=arm64`), then `cdk deploy`
 2. **Frontend**: `npm run build` to generate static export, then `aws s3 sync` + CloudFront invalidation
@@ -212,7 +212,7 @@ on:
 
 ## 배경
 
-Ttobak에는 현재 CI/CD 파이프라인이 없습니다. 모든 배포가 개발자의 로컬 머신에서 수동으로 수행됩니다:
+TTOBAK에는 현재 CI/CD 파이프라인이 없습니다. 모든 배포가 개발자의 로컬 머신에서 수동으로 수행됩니다:
 
 1. **백엔드**: 5개 Go Lambda 바이너리 빌드 (`GOOS=linux GOARCH=arm64`), 이후 `cdk deploy`
 2. **프론트엔드**: `npm run build`로 정적 내보내기 생성, 이후 `aws s3 sync` + CloudFront 무효화

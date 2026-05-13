@@ -252,7 +252,7 @@ export class GatewayStack extends cdk.Stack {
     // HTTP API (ttobak-api)
     this.httpApi = new apigatewayv2.HttpApi(this, 'TtobakHttpApi', {
       apiName: 'ttobak-api',
-      description: 'Ttobak HTTP API',
+      description: 'TTOBAK HTTP API',
       corsPreflight: {
         allowOrigins: [
           `https://${scope.node.tryGetContext('ttobak:cloudfrontDomain')}`,
@@ -440,7 +440,7 @@ export class GatewayStack extends cdk.Stack {
     // WebSocket API
     this.websocketApi = new apigatewayv2.WebSocketApi(this, 'TtobakWebSocketApi', {
       apiName: 'ttobak-realtime',
-      description: 'Ttobak WebSocket API for live QA streaming',
+      description: 'TTOBAK WebSocket API for live QA streaming',
       connectRouteOptions: {
         integration: new apigatewayv2Integrations.WebSocketLambdaIntegration(
           'WsConnectIntegration',

@@ -1,6 +1,6 @@
 # Backend Module
 
-Go Lambda functions for the Ttobak API. ARM64 cross-compiled, deployed via CDK.
+Go Lambda functions for the TTOBAK API. ARM64 cross-compiled, deployed via CDK.
 
 ## Structure
 - `cmd/` — 5 Lambda entry points (api, transcribe, summarize, process-image, kb)

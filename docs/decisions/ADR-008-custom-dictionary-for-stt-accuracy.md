@@ -14,7 +14,7 @@ Proposed
 
 ## Context
 
-Ttobak is used by AWS Solutions Architects in meetings that involve highly specialized terminology: AWS service names (SageMaker, EKS, LoRA, RAG), customer-specific product names, Korean business jargon, and mixed Korean-English technical terms. Standard STT engines often misrecognize these terms because they fall outside general-purpose language models.
+TTOBAK is used by AWS Solutions Architects in meetings that involve highly specialized terminology: AWS service names (SageMaker, EKS, LoRA, RAG), customer-specific product names, Korean business jargon, and mixed Korean-English technical terms. Standard STT engines often misrecognize these terms because they fall outside general-purpose language models.
 
 A static Custom Vocabulary (`ttobak-aws-tech-terms`, 30 AWS/tech terms) was added to AWS Transcribe in commit `9f45d3f`, which improved recognition of common AWS terms. However, this vocabulary is hardcoded in the backend and cannot be customized per user or per customer context. Solutions Architects working with different customers need different terminology sets (e.g., banking terms for Hana Bank, insurance terms for Samsung Life).
 
@@ -41,7 +41,7 @@ Pass domain-specific terms as the `initial_prompt` parameter to Whisper. The pro
 A single dictionary managed at the organization level (not per-user). All users in an organization share the same vocabulary.
 
 - **Pros**: Simpler management; one vocabulary per org; consistent terminology across team
-- **Cons**: Ttobak is currently single-user; over-engineering for current scale; different SAs may work with different customers needing different terms; no personalization
+- **Cons**: TTOBAK is currently single-user; over-engineering for current scale; different SAs may work with different customers needing different terms; no personalization
 
 ## Decision
 
@@ -85,7 +85,7 @@ DELETE /api/settings/dictionary/term  -> { phrase: string }
 
 ### Auto-Extraction from Insights & Research
 
-Ttobak already crawls AWS documentation, customer news, and generates deep research reports (ADR-004, ResearchAgentStack). These documents contain domain-specific terminology that can seed the custom dictionary automatically:
+TTOBAK already crawls AWS documentation, customer news, and generates deep research reports (ADR-004, ResearchAgentStack). These documents contain domain-specific terminology that can seed the custom dictionary automatically:
 
 ```
 Crawler/Research pipeline
@@ -144,7 +144,7 @@ A "Custom Dictionary" section in the Settings page:
 
 ## 배경
 
-Ttobak은 고도로 전문화된 용어가 포함된 미팅에서 AWS Solutions Architect가 사용합니다: AWS 서비스 이름(SageMaker, EKS, LoRA, RAG), 고객사 고유 제품명, 한국어 비즈니스 용어, 한영 혼합 기술 용어 등. 표준 STT 엔진은 이러한 용어가 범용 언어 모델 범위 밖이기 때문에 자주 오인식합니다.
+TTOBAK은 고도로 전문화된 용어가 포함된 미팅에서 AWS Solutions Architect가 사용합니다: AWS 서비스 이름(SageMaker, EKS, LoRA, RAG), 고객사 고유 제품명, 한국어 비즈니스 용어, 한영 혼합 기술 용어 등. 표준 STT 엔진은 이러한 용어가 범용 언어 모델 범위 밖이기 때문에 자주 오인식합니다.
 
 정적 Custom Vocabulary(`ttobak-aws-tech-terms`, 30개 AWS/기술 용어)가 커밋 `9f45d3f`에서 AWS Transcribe에 추가되어 일반적인 AWS 용어 인식이 개선되었습니다. 하지만 이 어휘집은 백엔드에 하드코딩되어 있어 사용자별 또는 고객 컨텍스트별로 커스터마이징할 수 없습니다. 다른 고객사를 담당하는 SA는 서로 다른 용어 세트가 필요합니다 (예: 하나은행 담당은 금융 용어, 삼성생명 담당은 보험 용어).
 
@@ -171,7 +171,7 @@ Ttobak은 고도로 전문화된 용어가 포함된 미팅에서 AWS Solutions 
 사용자별이 아닌 조직 레벨에서 관리되는 단일 사전. 조직 내 모든 사용자가 동일한 어휘를 공유합니다.
 
 - **장점**: 관리 단순; 조직당 하나의 어휘; 팀 내 일관된 용어
-- **단점**: Ttobak은 현재 단일 사용자; 현재 규모에 과잉 설계; 다른 SA가 다른 고객을 담당하면 다른 용어 필요; 개인화 불가
+- **단점**: TTOBAK은 현재 단일 사용자; 현재 규모에 과잉 설계; 다른 SA가 다른 고객을 담당하면 다른 용어 필요; 개인화 불가
 
 ## 결정
 
@@ -215,7 +215,7 @@ DELETE /api/settings/dictionary/term  -> { phrase: string }
 
 ### Insights/Research에서 자동 추출
 
-Ttobak은 이미 AWS 문서, 고객사 뉴스를 크롤링하고 딥 리서치 보고서를 생성합니다 (ADR-004, ResearchAgentStack). 이 문서들에는 사용자 사전을 자동으로 시드할 수 있는 도메인 특화 용어가 포함되어 있습니다:
+TTOBAK은 이미 AWS 문서, 고객사 뉴스를 크롤링하고 딥 리서치 보고서를 생성합니다 (ADR-004, ResearchAgentStack). 이 문서들에는 사용자 사전을 자동으로 시드할 수 있는 도메인 특화 용어가 포함되어 있습니다:
 
 ```
 크롤러/리서치 파이프라인

@@ -7,7 +7,7 @@ import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
-const RESEARCH_SYSTEM_PROMPT = `You are a Deep Research Agent for Ttobak, an AI meeting assistant for AWS Solutions Architects.
+const RESEARCH_SYSTEM_PROMPT = `You are a Deep Research Agent for TTOBAK, an AI meeting assistant for AWS Solutions Architects.
 
 Your task is to perform comprehensive multi-source research on a given topic and produce a structured, citation-backed report in Korean.
 
@@ -104,7 +104,7 @@ export class ResearchAgentStack extends cdk.Stack {
     const agentRole = new iam.Role(this, 'ResearchAgentRole', {
       roleName: 'ttobak-research-agent-role',
       assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
-      description: 'Role for Ttobak Deep Research Bedrock Agent',
+      description: 'Role for TTOBAK Deep Research Bedrock Agent',
     });
 
     // Bedrock InvokeModel (Sonnet + all Claude models)

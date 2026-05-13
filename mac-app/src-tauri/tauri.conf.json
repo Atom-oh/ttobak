@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2.0.0",
-  "productName": "Ttobak",
+  "productName": "TTOBAK",
   "version": "0.1.0",
   "identifier": "click.atomai.ttobak.mac",
   "build": {
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Ttobak",
+        "title": "TTOBAK",
         "width": 1280,
         "height": 800,
         "minWidth": 960,
@@ -43,8 +43,8 @@
       "icons/128x128@2x.png"
     ],
     "category": "Productivity",
-    "shortDescription": "Ttobak — record desktop meetings with system audio",
-    "longDescription": "Ttobak Mac App captures system audio from desktop meetings (Zoom, Teams) using macOS ScreenCaptureKit and uploads recordings to the Ttobak meeting workspace.",
+    "shortDescription": "TTOBAK — record desktop meetings with system audio",
+    "longDescription": "TTOBAK Mac App captures system audio from desktop meetings (Zoom, Teams) using macOS ScreenCaptureKit and uploads recordings to the TTOBAK meeting workspace.",
     "macOS": {
       "minimumSystemVersion": "13.0",
       "entitlements": "Entitlements.plist",

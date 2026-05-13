@@ -70,7 +70,7 @@ export function McpGuide() {
 
       {/* Summary */}
       <p className="text-sm text-slate-600 dark:text-[#bac9cc] mb-4">
-        Connect your local Claude Code to Ttobak so it can list meetings, read summaries, and answer questions about your meeting history.
+        Connect your local Claude Code to TTOBAK so it can list meetings, read summaries, and answer questions about your meeting history.
       </p>
 
       {/* Toggle */}
@@ -115,7 +115,7 @@ export function McpGuide() {
               <h4 className="text-sm font-semibold text-slate-900 dark:text-[#e4e1e9]">Register with Claude Code</h4>
             </div>
             <p className="text-xs text-slate-500 dark:text-[#849396] ml-8">
-              Run this command in your terminal to add the Ttobak MCP server.
+              Run this command in your terminal to add the TTOBAK MCP server.
             </p>
             <div className="ml-8">
               <CodeBlock>{`claude mcp add --transport stdio --scope user -e TTOBAK_COGNITO_DOMAIN="https://ttobak-auth-180294183052.auth.ap-northeast-2.amazoncognito.com" -e TTOBAK_CLIENT_ID="33rh85mv6l9n7tn3s5h16prfdr" -e TTOBAK_API_URL="https://ttobak.atomai.click" ttobak -- node ~/.ttobak/server.mjs`}</CodeBlock>
@@ -132,7 +132,7 @@ export function McpGuide() {
               Restart Claude Code, then ask it to log in. A browser window opens for Cognito login. Tokens auto-refresh for 30 days.
             </p>
             <div className="ml-8">
-              <CodeBlock>Ttobak에 로그인해줘</CodeBlock>
+              <CodeBlock>TTOBAK에 로그인해줘</CodeBlock>
             </div>
           </div>
 
@@ -188,9 +188,9 @@ export function McpGuide() {
             </h4>
             <div className="space-y-2">
               {[
-                'List my Ttobak meetings from this week and summarize key decisions.',
+                'List my TTOBAK meetings from this week and summarize key decisions.',
                 'Get meeting abc123 and list all action items with owners.',
-                'Ask Ttobak: What topics came up in multiple meetings this month?',
+                'Ask TTOBAK: What topics came up in multiple meetings this month?',
               ].map((prompt) => (
                 <div key={prompt} className="flex items-center gap-2">
                   <div className="flex-1 px-3 py-2 bg-slate-50 dark:bg-[#0e0e13] dark:border dark:border-white/10 rounded-lg text-xs text-slate-600 dark:text-[#bac9cc]">

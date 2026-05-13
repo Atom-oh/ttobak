@@ -1,20 +1,38 @@
 # Mac App Module
 
 Tauri 2 + Rust desktop wrapper that adds native macOS system-audio capture to
-the Ttobak SPA. Implements **Sub-project 2** of [ADR-006](../docs/decisions/ADR-006-tab-audio-capture-and-tauri-mac-app.md).
+the TTOBAK SPA. Implements **Sub-project 2** of [ADR-006](../docs/decisions/ADR-006-tab-audio-capture-and-tauri-mac-app.md).
 
 ## Build only on macOS
 
 `screencapturekit`, `core-foundation`, `objc2-foundation` only build on Darwin.
-Linux/Windows `cargo check` will fail at link time. CI builds run on
-`macos-14` (`.github/workflows/build-mac-app.yml`).
+Linux/Windows `cargo check` will fail at link time. **No CI** — the Mac app is
+built and signed locally on a developer Mac (Tauri's ad-hoc signing requires
+the Apple toolchain on macOS).
 
 ```bash
 cd mac-app
 npm install
 npm run dev          # tauri dev — opens window at https://ttobak.atomai.click
-npm run build        # release .app + .dmg under src-tauri/target/release/bundle/
+npm run build:signed # release + codesign --entitlements (see "Critical: signing" below)
 ```
+
+## Critical: signing
+
+**`npm run build` alone produces a broken bundle.** Tauri 2's default ad-hoc
+signing skips `codesign --entitlements`, so `Entitlements.plist` is shipped
+but never applied to the binary. Symptom: app launches, never prompts for
+mic / screen recording, `navigator.mediaDevices` is undefined inside WKWebView,
+and the recording flow fails.
+
+Always use `npm run build:signed` (or `npm run sign` after `npm run build`).
+That runs `scripts/sign.sh` which does
+`codesign --force --deep --sign - --entitlements Entitlements.plist <app>`
+and verifies `audio-input` is embedded.
+
+If permissions still don't prompt after a signed build, the macOS TCC cache
+is sticking on a previous denial — `tccutil reset Microphone click.atomai.ttobak.mac`
+(plus `Camera`, `ScreenCapture`).
 
 ## Architecture decisions
 
@@ -35,8 +53,8 @@ src/index.html        # offline fallback (Tauri normally loads the live SPA URL)
 src-tauri/
   Cargo.toml          # screencapturekit 1.x, hound, tauri 2, parking_lot, tokio
   tauri.conf.json     # window points at ttobak.atomai.click
-  Info.plist          # NSScreenCaptureUsageDescription, NSMicrophoneUsageDescription
-  Entitlements.plist  # audio-input, network-client; sandbox OFF
+  Info.plist          # NSMicrophoneUsageDescription, NSCameraUsageDescription, NSScreenCaptureUsageDescription
+  Entitlements.plist  # device.audio-input, device.camera, network.client; sandbox OFF
   src/
     main.rs           # entrypoint
     lib.rs            # Tauri command surface

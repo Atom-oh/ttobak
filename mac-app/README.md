@@ -1,4 +1,4 @@
-# Ttobak Mac App
+# TTOBAK Mac App
 
 Native macOS desktop app for **system audio capture** (Zoom, Teams, etc.) using
 [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit).
@@ -15,14 +15,14 @@ Browser `getDisplayMedia` can capture audio from a *Chrome tab* (used for Google
 Meet) but cannot reach **desktop app** audio — Zoom and Teams run outside the
 browser, and macOS does not let browser pages tap system audio without a
 virtual driver. ScreenCaptureKit (macOS 13+) is the official, sandboxable API
-for this. Tauri wraps the existing Ttobak SPA in a native window and exposes
+for this. Tauri wraps the existing TTOBAK SPA in a native window and exposes
 native commands for audio capture.
 
 ## Architecture
 
 ```
 +------------------------------------------------------------+
-|  Ttobak Mac App (Tauri 2)                                  |
+|  TTOBAK Mac App (Tauri 2)                                  |
 |                                                            |
 |  +-- WKWebView --> https://ttobak.atomai.click             |
 |  |   (existing Next.js SPA, full Cognito SPA login)        |
@@ -43,7 +43,7 @@ native commands for audio capture.
 ```
 
 Auth is delegated to the existing SPA inside the WebView — no token storage in
-Rust, no duplicate OAuth flow. The app is, conceptually, "Ttobak SPA + native
+Rust, no duplicate OAuth flow. The app is, conceptually, "TTOBAK SPA + native
 audio capture command".
 
 ## System requirements
@@ -82,7 +82,7 @@ ScreenCaptureKit gate, regardless of the fact that we only consume audio.
 ```bash
 cd mac-app
 npm run build
-# Result: src-tauri/target/release/bundle/{macos/Ttobak.app, dmg/Ttobak_0.1.0_*.dmg}
+# Result: src-tauri/target/release/bundle/{macos/TTOBAK.app, dmg/TTOBAK_0.1.0_*.dmg}
 ```
 
 For a quick local debug build (faster, larger):
@@ -91,17 +91,57 @@ For a quick local debug build (faster, larger):
 npm run build:debug
 ```
 
+### Build with embedded entitlements (required for mic / screen-recording)
+
+**Always build via `build:signed`** for any artifact a real user will run.
+Tauri's default ad-hoc signing only runs through the linker and **never invokes
+`codesign --entitlements`**, so the Entitlements.plist sits inside the bundle
+but isn't actually applied to the binary. The visible symptom: the .app launches
+fine but never prompts for Microphone or Screen Recording, and `getUserMedia` /
+`mediaDevices` come back undefined inside the WebView. (The frontend defensively
+guards against this in `useAudioDevices.ts`, but the recording UI still won't
+work without entitlements.)
+
+```bash
+cd mac-app
+npm run build:signed         # tauri build + scripts/sign.sh re-sign
+# or if you already built:
+npm run sign
+```
+
+`scripts/sign.sh` does:
+
+1. Find every `.app` under `src-tauri/target/.../bundle/macos/`
+2. `codesign --force --deep --sign - --entitlements Entitlements.plist`
+3. Verify `audio-input` actually shows up in `codesign -d --entitlements`
+4. `xattr -cr` to strip quarantine for friction-free first launch
+
 ### Running an unsigned build
 
 Without code signing, macOS Gatekeeper will block the app. To run locally:
 
 ```bash
-# Option 1: Remove quarantine attribute
-xattr -cr /path/to/Ttobak.app
+# Option 1: Remove quarantine attribute (already done by scripts/sign.sh)
+xattr -cr /path/to/TTOBAK.app
 
 # Option 2: Allow in System Settings
-#   System Settings → Privacy & Security → "Ttobak was blocked" → Open Anyway
+#   System Settings → Privacy & Security → "TTOBAK was blocked" → Open Anyway
 ```
+
+### Resetting permissions (when prompts don't appear)
+
+macOS TCC caches denials by bundle ID. If you previously ran the app before
+the entitlements were embedded, the cache is stuck on "denied" and no prompt
+will reappear. Reset and relaunch:
+
+```bash
+tccutil reset Microphone    click.atomai.ttobak.mac
+tccutil reset Camera        click.atomai.ttobak.mac
+tccutil reset ScreenCapture click.atomai.ttobak.mac
+```
+
+Or remove the app from System Settings → Privacy & Security → Microphone /
+Camera / Screen Recording, then relaunch.
 
 ### Code signing & notarization
 
@@ -113,13 +153,32 @@ The scaffold ships unsigned. For distribution:
    [Tauri signing docs](https://tauri.app/v2/distribute/sign/macos/)) and run
    `npm run build` — Tauri handles `codesign` + `notarytool` automatically.
 
+## Audio source matrix
+
+The SPA exposes three audio sources; the Mac app affects which ones are useful:
+
+| Source | Browser | Mac app | Captures |
+|---|---|---|---|
+| **Mic** (default) | ✓ | ✓ | Internal + external mics via `enumerateDevices` |
+| **Tab Audio** | Chrome/Edge only | ✗ (WKWebView no `getDisplayMedia` for tabs) | Single Chrome tab's audio |
+| **System** | ✗ | ✓ | Everything macOS plays — Zoom/Teams desktop apps **and** Chrome's Zoom Web / Google Meet / browser audio |
+
+For a Zoom Web or Google Meet meeting running in a separate Chrome window
+alongside the Mac app, **use System Audio mode**. ScreenCaptureKit captures
+Chrome's process output, so the meeting audio comes through.
+
 ## Capabilities & entitlements
 
-- `Info.plist` declares `NSMicrophoneUsageDescription` and
-  `NSScreenCaptureUsageDescription` strings — both are required by macOS to
-  show the permission prompts.
-- `Entitlements.plist` enables `device.audio-input` and disables the App
-  Sandbox (ScreenCaptureKit + arbitrary file system writes for recordings).
+- `Info.plist` declares `NSMicrophoneUsageDescription`,
+  `NSCameraUsageDescription`, and `NSScreenCaptureUsageDescription` — all
+  required by macOS to show the corresponding permission prompts.
+- `Entitlements.plist` enables `device.audio-input`, `device.camera`, and
+  `network.client`; disables the App Sandbox (needed for ScreenCaptureKit +
+  arbitrary file system writes for the WAV temp file).
+- **These plists are inert without `codesign --entitlements`.** That step
+  lives in `scripts/sign.sh` and is wired into `npm run build:signed`. See
+  "Build with embedded entitlements" above. Builds happen locally on a
+  developer Mac (no CI for this module).
 
 ## Frontend integration
 
@@ -142,7 +201,9 @@ export function cleanupRecording(path: string): Promise<void>;
 
 ```
 mac-app/
-├── package.json              # Tauri CLI wrapper
+├── package.json              # Tauri CLI wrapper + build:signed script
+├── scripts/
+│   └── sign.sh               # post-build codesign --entitlements step
 ├── src/                      # Fallback HTML loaded if frontendDist is used
 │   └── index.html
 └── src-tauri/

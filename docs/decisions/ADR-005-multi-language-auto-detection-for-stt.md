@@ -13,7 +13,7 @@
 Accepted
 
 ## Context
-Ttobak is used in Korean enterprise environments where meetings frequently switch between Korean and English. Technical discussions involve English terms (AWS services, architecture patterns, code references), and meetings with international participants are conducted in mixed languages.
+TTOBAK is used in Korean enterprise environments where meetings frequently switch between Korean and English. Technical discussions involve English terms (AWS services, architecture patterns, code references), and meetings with international participants are conducted in mixed languages.
 
 The previous implementation hardcoded `LanguageCode: ko-KR` across all STT paths:
 - Web Speech API (live): `lang = 'ko-KR'` in constructor
@@ -72,7 +72,7 @@ Implementation scope:
 승인됨
 
 ## 배경
-Ttobak은 한국 기업 환경에서 사용되며, 미팅 중 한국어와 영어 간 전환이 빈번합니다. 기술 논의에서 영어 용어(AWS 서비스, 아키텍처 패턴, 코드 참조)가 사용되고, 국제 참석자가 있는 미팅은 혼합 언어로 진행됩니다.
+TTOBAK은 한국 기업 환경에서 사용되며, 미팅 중 한국어와 영어 간 전환이 빈번합니다. 기술 논의에서 영어 용어(AWS 서비스, 아키텍처 패턴, 코드 참조)가 사용되고, 국제 참석자가 있는 미팅은 혼합 언어로 진행됩니다.
 
 이전 구현은 모든 STT 경로에서 `LanguageCode: ko-KR`을 하드코딩했습니다:
 - Web Speech API (실시간): 생성자에서 `lang = 'ko-KR'`

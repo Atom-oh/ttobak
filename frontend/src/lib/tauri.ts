@@ -1,8 +1,18 @@
 'use client';
 
+interface TauriEvent<T> {
+  payload: T;
+}
+
 interface TauriGlobal {
   core: {
     invoke: <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+  };
+  event: {
+    listen: <T>(
+      eventName: string,
+      handler: (event: TauriEvent<T>) => void,
+    ) => Promise<() => void>;
   };
 }
 
@@ -58,4 +68,34 @@ export function readRecordingBytes(path: string): Promise<ArrayBuffer> {
 
 export function cleanupRecording(path: string): Promise<void> {
   return invoke<void>('cleanup_recording', { path });
+}
+
+/**
+ * Subscribe to the `native-audio-level` event emitted from `audio.rs` while
+ * a System Audio recording is in progress. Payload is a normalized 0–1 RMS
+ * value (~30 Hz). Returns a teardown function. Safe to call when not running
+ * inside Tauri — returns a no-op unsubscriber.
+ */
+export function onNativeAudioLevel(handler: (level: number) => void): () => void {
+  if (typeof window === 'undefined' || !window.__TAURI__?.event?.listen) {
+    return () => {};
+  }
+  let unlisten: (() => void) | null = null;
+  let cancelled = false;
+  window.__TAURI__.event
+    .listen<number>('native-audio-level', (event) => handler(event.payload))
+    .then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    })
+    .catch(() => {
+      // listen() may reject if Tauri internals aren't ready yet — best effort
+    });
+  return () => {
+    cancelled = true;
+    unlisten?.();
+  };
 }

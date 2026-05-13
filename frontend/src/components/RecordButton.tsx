@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { isIOS, getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob, uploadToS3 } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, readRecordingBytes, cleanupRecording } from '@/lib/tauri';
+import { isTauri, startNativeRecording, stopNativeRecording, readRecordingBytes, cleanupRecording, onNativeAudioLevel } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 interface RecordButtonProps {
@@ -13,7 +13,7 @@ interface RecordButtonProps {
   onRecordingComplete?: (audioUrl: string) => void;
   onBlobReady?: (blob: Blob, mimeType: string) => void;
   onError?: (error: string) => void;
-  onRecordingStart?: (stream: MediaStream) => void;
+  onRecordingStart?: (stream: MediaStream | null) => void;
   onRecordingPause?: () => void;
   onRecordingResume?: () => void;
   onRecordingStop?: () => void;
@@ -72,6 +72,8 @@ export function RecordButton({
   const barsContainerRef = useRef<HTMLDivElement>(null);
   const [showCamera, setShowCamera] = useState(false);
   const nativeTempPathRef = useRef<string | null>(null);
+  const nativeLevelRef = useRef(0);
+  const nativeUnlistenRef = useRef<(() => void) | null>(null);
 
   const useNativeCapture = isIOS() || !supportsMediaRecorder();
 
@@ -115,13 +117,15 @@ export function RecordButton({
       if (timerRef.current) clearInterval(timerRef.current);
       if (checkpointTimerRef.current) clearInterval(checkpointTimerRef.current);
       cleanupAudioResources();
+      nativeUnlistenRef.current?.();
+      nativeUnlistenRef.current = null;
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
     };
   }, [cleanupAudioResources]);
 
-  // Drive PC waveform bars from real AnalyserNode frequency data
+  // Drive PC waveform bars from real AnalyserNode frequency data (browser modes)
   useEffect(() => {
     if (state !== 'recording' || !analyserRef.current || !barsContainerRef.current) return;
     const analyser = analyserRef.current;
@@ -146,13 +150,63 @@ export function RecordButton({
     return () => cancelAnimationFrame(frameId);
   }, [state]);
 
+  // Drive PC waveform bars from native ScreenCaptureKit RMS levels (System mode).
+  // The Rust side has no FFT, only a single 0–1 RMS value per ~33 ms tick.
+  // Render that as a moving "scope" — shift bars left and push the latest
+  // level on the right, so any captured audio shows visible motion. Lights up
+  // ONLY when there's no AnalyserNode (native mode) and we're recording.
+  useEffect(() => {
+    if (state !== 'recording' || analyserRef.current || !barsContainerRef.current) return;
+    if (!isTauri() || audioSource !== 'system') return;
+    const container = barsContainerRef.current;
+    let frameId: number;
+    // Internal history buffer of recent levels — one slot per bar
+    const history: number[] = [];
+    const draw = () => {
+      const bars = container.children;
+      const barCount = bars.length;
+      if (!barCount) { frameId = requestAnimationFrame(draw); return; }
+      // Push latest, trim to barCount
+      history.push(nativeLevelRef.current);
+      while (history.length > barCount) history.shift();
+      // Render: oldest sample on the left, newest on the right
+      const offset = barCount - history.length;
+      for (let i = 0; i < barCount; i++) {
+        const idx = i - offset;
+        const value = idx >= 0 ? history[idx] : 0;
+        const height = Math.max(3, value * 32);
+        (bars[i] as HTMLElement).style.height = `${height}px`;
+      }
+      frameId = requestAnimationFrame(draw);
+    };
+    frameId = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frameId);
+  }, [state, audioSource]);
+
   const startRecording = async () => {
     // Clean up any leftover resources from a previous recording
     cleanupAudioResources();
 
-    // Tauri native system-audio capture — no MediaStream, no live STT
+    // Tauri native system-audio capture — no MediaStream, no live STT.
+    // Trigger onRecordingStart(null) so the parent can createDraftMeeting,
+    // then start native capture. On stop we route the blob through onBlobReady
+    // so the normal post-recording flow updates status -> 'transcribing' and
+    // uploads under the server meetingId (not the client temp ID).
     if (audioSource === 'system' && isTauri()) {
       try {
+        // Fire onRecordingStart first so parent creates the draft meeting.
+        // Note: native capture has no MediaStream — pass null.
+        onRecordingStart?.(null);
+
+        // Subscribe to the native audio level event before starting the
+        // capture so we don't miss the first samples. The Rust side emits
+        // ~30 Hz RMS values in [0, 1].
+        nativeLevelRef.current = 0;
+        nativeUnlistenRef.current?.();
+        nativeUnlistenRef.current = onNativeAudioLevel((level) => {
+          nativeLevelRef.current = level;
+        });
+
         const resp = await startNativeRecording(meetingId);
         nativeTempPathRef.current = resp.temp_path;
         isRecordingRef.current = true;
@@ -163,6 +217,8 @@ export function RecordButton({
           setElapsedTime((prev) => prev + 1);
         }, 1000);
       } catch (err) {
+        nativeUnlistenRef.current?.();
+        nativeUnlistenRef.current = null;
         onError?.(err instanceof Error ? err.message : 'Native recording failed');
       }
       return;
@@ -319,25 +375,49 @@ export function RecordButton({
       checkpointTimerRef.current = null;
     }
 
-    // Native system-audio stop → read bytes via IPC → Blob → upload → cleanup
-    // On failure, WAV is intentionally preserved on disk — system audio is
-    // irreplaceable and the user may recover the file from the temp directory.
+    // Native system-audio stop → read bytes via IPC → route through the
+    // standard post-recording flow (onBlobReady → notes → resumeUploadFlow).
+    // This ensures meeting status transitions 'recording' -> 'transcribing'
+    // and the upload uses the server meetingId, not the client temp ID.
+    //
+    // On failure (read/cleanup throws), nativeTempPathRef is already cleared
+    // but the WAV file is intentionally preserved on disk — system audio is
+    // irreplaceable; the user can recover it from /tmp/ttobak-mac/ manually
+    // and upload via /record?mode=upload.
     if (nativeTempPathRef.current) {
       const tempPath = nativeTempPathRef.current;
       nativeTempPathRef.current = null;
+      // Stop receiving level events first; the Rust side won't emit any more
+      // after stop_capture, but unsubscribe defensively.
+      nativeUnlistenRef.current?.();
+      nativeUnlistenRef.current = null;
+      nativeLevelRef.current = 0;
       try {
         await stopNativeRecording();
         onRecordingStop?.();
         setRecordingState('uploading');
         const buffer = await readRecordingBytes(tempPath);
         const blob = new Blob([buffer], { type: 'audio/wav' });
-        const fileName = `recording_${Date.now()}.wav`;
-        const file = new File([blob], fileName, { type: 'audio/wav' });
-        const result = await uploadToS3(file, 'audio', undefined, meetingId);
-        await cleanupRecording(tempPath).catch(() => {});
-        onRecordingComplete?.(result.url);
-        setRecordingState('idle');
-        setElapsedTime(0);
+
+        if (onBlobReady) {
+          // Standard flow — parent handles notes step + upload + status update.
+          // Cleanup the temp WAV after the blob is in memory.
+          await cleanupRecording(tempPath).catch(() => {});
+          setRecordingState('idle');
+          setElapsedTime(0);
+          onBlobReady(blob, 'audio/wav');
+        } else {
+          // Fallback (should not happen — record/page.tsx always provides
+          // onBlobReady): one-shot direct upload with whatever meetingId we
+          // have, then call onRecordingComplete (legacy iOS-style path).
+          const fileName = `recording_${Date.now()}.wav`;
+          const file = new File([blob], fileName, { type: 'audio/wav' });
+          const result = await uploadToS3(file, 'audio', undefined, meetingId);
+          await cleanupRecording(tempPath).catch(() => {});
+          onRecordingComplete?.(result.url);
+          setRecordingState('idle');
+          setElapsedTime(0);
+        }
       } catch (err) {
         onError?.(err instanceof Error ? err.message : 'Native recording upload failed');
         setRecordingState('idle');

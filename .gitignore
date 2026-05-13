@@ -54,7 +54,12 @@ review/*.png
 *.png
 *.jpg
 *.jpeg
+*.mov
+*.mp4
 !frontend/public/**
 !frontend/src/app/**
 !docs/**
 .playwright-mcp/
+
+# Codex CLI session state
+.codex/

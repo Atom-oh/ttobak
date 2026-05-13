@@ -13,7 +13,7 @@
 Accepted
 
 ## Context
-Ttobak uses speech-to-text (STT) to convert meeting recordings into transcripts. The current engine is AWS Transcribe, which scored 3.5/10 in a 3-way benchmark on Korean-English mixed technical meetings (AWS SA meetings with Korean banks). Key problems:
+TTOBAK uses speech-to-text (STT) to convert meeting recordings into transcripts. The current engine is AWS Transcribe, which scored 3.5/10 in a 3-way benchmark on Korean-English mixed technical meetings (AWS SA meetings with Korean banks). Key problems:
 
 - AWS service names misrecognized: `SageMaker` becomes `세일즈 메이커`, `EKS` becomes `ks`/`ets`, `GPU` becomes `pu`/`gpo`
 - English abbreviations rendered as broken Korean phonetic transcriptions
@@ -104,7 +104,7 @@ Key design decisions:
 승인됨
 
 ## 배경
-또박(Ttobak)은 회의 녹음을 텍스트로 변환하기 위해 음성인식(STT)을 사용합니다. 현재 엔진은 AWS Transcribe이며, 한영 혼용 기술 회의(AWS SA의 한국 은행 미팅)에서 3-Way 벤치마크 결과 3.5/10점을 받았습니다. 주요 문제점:
+또박(TTOBAK)은 회의 녹음을 텍스트로 변환하기 위해 음성인식(STT)을 사용합니다. 현재 엔진은 AWS Transcribe이며, 한영 혼용 기술 회의(AWS SA의 한국 은행 미팅)에서 3-Way 벤치마크 결과 3.5/10점을 받았습니다. 주요 문제점:
 
 - AWS 서비스명 오인식: `SageMaker`가 `세일즈 메이커`로, `EKS`가 `ks`/`ets`로, `GPU`가 `pu`/`gpo`로 변환
 - 영어 약어가 깨진 한국어 음차로 출력

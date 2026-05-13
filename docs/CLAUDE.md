@@ -1,6 +1,6 @@
 # Documentation Module
 
-Project documentation for Ttobak.
+Project documentation for TTOBAK.
 
 ## Files
 - `PRD.md` — Product Requirements Document

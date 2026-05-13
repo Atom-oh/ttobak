@@ -1,6 +1,6 @@
 # Infrastructure Module
 
-AWS CDK TypeScript — 7 stacks for the full Ttobak deployment.
+AWS CDK TypeScript — 7 stacks for the full TTOBAK deployment.
 
 ## Stack Order
 Auth + Storage (parallel) → AI → Knowledge → EdgeAuth (us-east-1) → Gateway → Frontend

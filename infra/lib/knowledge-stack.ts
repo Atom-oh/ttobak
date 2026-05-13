@@ -130,7 +130,7 @@ export class KnowledgeStack extends cdk.Stack {
       properties: {
         Name: collectionName,
         Type: 'VECTORSEARCH',
-        Description: 'Ttobak Knowledge Base vector store',
+        Description: 'TTOBAK Knowledge Base vector store',
       },
     });
 
@@ -186,7 +186,7 @@ export class KnowledgeStack extends cdk.Stack {
       type: 'AWS::Bedrock::KnowledgeBase',
       properties: {
         Name: 'ttobak-knowledge-base',
-        Description: 'Ttobak meeting knowledge base with RAG',
+        Description: 'TTOBAK meeting knowledge base with RAG',
         RoleArn: bedrockKbRole.roleArn,
         KnowledgeBaseConfiguration: {
           Type: 'VECTOR',
@@ -221,7 +221,7 @@ export class KnowledgeStack extends cdk.Stack {
       properties: {
         KnowledgeBaseId: this.knowledgeBaseId,
         Name: 'ttobak-kb-s3-source',
-        Description: 'S3 data source for Ttobak KB documents',
+        Description: 'S3 data source for TTOBAK KB documents',
         DataSourceConfiguration: {
           Type: 'S3',
           S3Configuration: {

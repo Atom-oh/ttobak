@@ -107,7 +107,7 @@ export class CognitoAuth {
 
     const url = `${this.config.cognitoDomain}/oauth2/authorize?${params}`;
 
-    console.error(`\nOpening browser for Ttobak login...\n  ${url}\n`);
+    console.error(`\nOpening browser for TTOBAK login...\n  ${url}\n`);
     openBrowser(url);
 
     const code = await this.waitForCallback(state);
@@ -141,7 +141,7 @@ export class CognitoAuth {
         }
 
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(html('Ttobak MCP Authenticated', 'You can close this window and return to Claude Code.'));
+        res.end(html('TTOBAK MCP Authenticated', 'You can close this window and return to Claude Code.'));
         server.close();
         resolve(code);
       });

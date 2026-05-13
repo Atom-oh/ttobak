@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Redesign the Ttobak frontend to match the design sample, improve Live Q&A intuitiveness, add audio player, refactor the record page, and polish global design consistency.
+**Goal:** Redesign the TTOBAK frontend to match the design sample, improve Live Q&A intuitiveness, add audio player, refactor the record page, and polish global design consistency.
 
 **Architecture:** Component-first approach — extract reusable UI primitives, then compose into page layouts. Each task produces a working, visually testable change. Design sample (`design_sample/meeting-note-pc.html`) is the north star for Meeting Detail page.
 

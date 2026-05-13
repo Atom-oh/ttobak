@@ -711,7 +711,7 @@ export function ChatClient() {
               <span className="material-symbols-outlined text-white text-lg">smart_toy</span>
             </div>
             <div>
-              <h1 className="text-sm font-bold text-slate-900 dark:text-white">Ttobak Assistant</h1>
+              <h1 className="text-sm font-bold text-slate-900 dark:text-white">TTOBAK Assistant</h1>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">미팅 데이터 기반 AI 어시스턴트</p>
             </div>
           </div>

@@ -3,10 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Ttobak needs microphone access to record your voice during meetings.</string>
+    <string>TTOBAK needs microphone access to record your voice during meetings.</string>
+
+    <key>NSCameraUsageDescription</key>
+    <string>TTOBAK uses the camera to capture whiteboards and meeting materials as attachments.</string>
 
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Ttobak needs screen recording permission to capture system audio (other participants&apos; voices) from desktop meeting apps such as Zoom and Teams. Only audio is captured; no video is recorded.</string>
+    <string>TTOBAK needs screen recording permission to capture system audio (other participants&apos; voices) from desktop meeting apps such as Zoom and Teams. Only audio is captured; no video is recorded.</string>
 
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>

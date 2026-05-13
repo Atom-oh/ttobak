@@ -1,4 +1,4 @@
-# Ttobak 프로젝트 3-모델 코드/아키텍처 리뷰
+# TTOBAK 프로젝트 3-모델 코드/아키텍처 리뷰
 
 > 리뷰 일시: 2026-03-25
 > 리뷰어: Claude Opus (Architect), Gemini 2.5 Pro, OpenAI Codex (gpt-5.4)

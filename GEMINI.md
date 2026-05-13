@@ -1,9 +1,9 @@
-# GEMINI.md - Ttobak (또박) Project Context
+# GEMINI.md - TTOBAK (또박) Project Context
 
-This file provides essential context and instructions for AI agents working on the Ttobak project.
+This file provides essential context and instructions for AI agents working on the TTOBAK project.
 
 ## Project Overview
-Ttobak is an AI-powered meeting assistant that automates the workflow of recording, transcribing, summarizing, and organizing meeting notes.
+TTOBAK is an AI-powered meeting assistant that automates the workflow of recording, transcribing, summarizing, and organizing meeting notes.
 
 - **Purpose**: Help users focus on meetings while AI handles documentation.
 - **Key Features**:

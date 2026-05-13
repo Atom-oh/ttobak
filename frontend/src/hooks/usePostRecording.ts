@@ -95,7 +95,8 @@ export function usePostRecording({
       // Upload final audio
       setStep('uploading');
       const resolvedMime = mimeType || 'audio/webm';
-      const ext = resolvedMime.includes('mp4') ? 'm4a'
+      const ext = resolvedMime.includes('wav') ? 'wav'
+                : resolvedMime.includes('mp4') ? 'm4a'
                 : resolvedMime.includes('ogg') ? 'ogg'
                 : 'webm';
       const fileName = `recording_${Date.now()}.${ext}`;

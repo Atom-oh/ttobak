@@ -1,6 +1,6 @@
-# Ttobak 아키텍처 리뷰 보고서
+# TTOBAK 아키텍처 리뷰 보고서
 
-**프로젝트**: Ttobak (또박) — 한국어 AI 미팅 어시스턴트
+**프로젝트**: TTOBAK (또박) — 한국어 AI 미팅 어시스턴트
 **작성일**: 2026-03-24
 **분석 범위**: STT 파이프라인, 실시간 처리, 요약, 데이터 아키텍처, 비용, 보안
 
@@ -280,7 +280,7 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 
 ## 7. 결론
 
-Ttobak의 아키텍처는 이벤트 기반 설계와 점진적 향상(Web Speech → ECS Whisper) 패턴이 잘 설계되어 있으나, 다음 3가지 핵심 이슈를 우선 해결해야 합니다:
+TTOBAK의 아키텍처는 이벤트 기반 설계와 점진적 향상(Web Speech → ECS Whisper) 패턴이 잘 설계되어 있으나, 다음 3가지 핵심 이슈를 우선 해결해야 합니다:
 
 1. **DynamoDB 테이블 스캔** — 사용자 증가 시 비용/성능 병목
 2. **모델 비용 과다** — Opus→Sonnet/Haiku 교체로 70% 즉시 절감
@@ -290,4 +290,4 @@ Ttobak의 아키텍처는 이벤트 기반 설계와 점진적 향상(Web Speech
 
 ---
 
-*Ttobak 아키텍처 리뷰 — 2026-03-24*
+*TTOBAK 아키텍처 리뷰 — 2026-03-24*

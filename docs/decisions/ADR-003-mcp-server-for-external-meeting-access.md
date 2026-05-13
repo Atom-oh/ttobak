@@ -14,7 +14,7 @@ Accepted
 
 ## Context
 
-Ttobak stores meeting notes (recordings, transcripts, summaries, action items) behind a Cognito-authenticated API served through CloudFront. There is a need to access this data programmatically from a local Claude Code instance for pre-meeting briefings and cross-meeting analysis.
+TTOBAK stores meeting notes (recordings, transcripts, summaries, action items) behind a Cognito-authenticated API served through CloudFront. There is a need to access this data programmatically from a local Claude Code instance for pre-meeting briefings and cross-meeting analysis.
 
 Requirements:
 - Authenticated access to the existing REST API
@@ -111,7 +111,7 @@ Option 4 was rejected because it requires coordinated changes across three auth 
 
 ## 배경
 
-Ttobak은 미팅 노트(녹음, 트랜스크립트, 요약, 액션 아이템)를 Cognito 인증 기반 API 뒤에 저장하며, CloudFront를 통해 서비스합니다. 로컬 Claude Code 인스턴스에서 이 데이터에 프로그래밍 방식으로 접근하여 미팅 전 브리핑 및 교차 미팅 분석을 수행할 필요가 있습니다.
+TTOBAK은 미팅 노트(녹음, 트랜스크립트, 요약, 액션 아이템)를 Cognito 인증 기반 API 뒤에 저장하며, CloudFront를 통해 서비스합니다. 로컬 Claude Code 인스턴스에서 이 데이터에 프로그래밍 방식으로 접근하여 미팅 전 브리핑 및 교차 미팅 분석을 수행할 필요가 있습니다.
 
 요구사항:
 - 기존 REST API에 대한 인증된 접근

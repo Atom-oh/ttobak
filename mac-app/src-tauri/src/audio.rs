@@ -57,7 +57,12 @@ impl AudioRecorder {
         }
     }
 
-    pub fn start(&mut self, meeting_id: &str) -> Result<PathBuf, AppError> {
+    pub fn start(
+        &mut self,
+        meeting_id: &str,
+        #[cfg(target_os = "macos")] app: tauri::AppHandle,
+        #[cfg(not(target_os = "macos"))] _app: tauri::AppHandle,
+    ) -> Result<PathBuf, AppError> {
         if self.inner.is_some() {
             return Err(AppError::AlreadyRunning);
         }
@@ -66,7 +71,7 @@ impl AudioRecorder {
 
         #[cfg(target_os = "macos")]
         {
-            let backend = macos::Backend::start(&path)?;
+            let backend = macos::Backend::start(&path, app)?;
             self.inner = Some(RecordingHandle {
                 path: path.clone(),
                 started_at: Instant::now(),
@@ -136,12 +141,20 @@ mod macos {
     //! API surface targets `screencapturekit = "1"` (1.x series).
 
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use hound::{SampleFormat, WavSpec, WavWriter};
     use screencapturekit::prelude::*;
+    use tauri::{AppHandle, Emitter};
 
     use crate::error::AppError;
+
+    /// Throttle for the `native-audio-level` event. ScreenCaptureKit delivers
+    /// audio buffers at ~50 Hz (1024 frames at 48 kHz). 33 ms ≈ 30 Hz which is
+    /// fast enough for a smooth meter and avoids spamming the IPC bridge.
+    const LEVEL_EMIT_INTERVAL_MS: u64 = 33;
 
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
@@ -150,10 +163,19 @@ mod macos {
         stream: SCStream,
         writer: Arc<Mutex<Option<WavWriter<std::io::BufWriter<std::fs::File>>>>>,
         path: PathBuf,
+        /// Counts SCStream audio callbacks; used at stop() to detect silent
+        /// failures where ScreenCaptureKit reports `start_capture` success
+        /// but never delivers a single buffer (e.g. TCC denial after start,
+        /// content filter excluding all sources, etc.).
+        callbacks: Arc<AtomicU64>,
+        /// Total i16 samples written to the WAV writer. Useful sanity check
+        /// against `callbacks` — non-zero callbacks but zero samples means
+        /// the format-conversion path rejected every buffer.
+        samples_written: Arc<AtomicU64>,
     }
 
     impl Backend {
-        pub fn start(path: &Path) -> Result<Self, AppError> {
+        pub fn start(path: &Path, app: AppHandle) -> Result<Self, AppError> {
             let spec = WavSpec {
                 channels: CHANNELS,
                 sample_rate: SAMPLE_RATE,
@@ -183,9 +205,19 @@ mod macos {
                 .with_sample_rate(SAMPLE_RATE as i32)
                 .with_channel_count(CHANNELS as i32);
 
+            let callbacks = Arc::new(AtomicU64::new(0));
+            let samples_written = Arc::new(AtomicU64::new(0));
+
             let mut stream = SCStream::new(&filter, &config);
             stream.add_output_handler(
-                AudioOutput { writer: Arc::clone(&writer) },
+                AudioOutput {
+                    writer: Arc::clone(&writer),
+                    callbacks: Arc::clone(&callbacks),
+                    samples_written: Arc::clone(&samples_written),
+                    logged_first: Arc::new(AtomicU64::new(0)),
+                    app,
+                    last_emit_ms: Arc::new(AtomicU64::new(0)),
+                },
                 SCStreamOutputType::Audio,
             );
 
@@ -193,10 +225,18 @@ mod macos {
                 .start_capture()
                 .map_err(|e| AppError::Backend(format!("start_capture: {e:?}")))?;
 
+            log::info!(
+                "SCStream started — sample_rate={SAMPLE_RATE}Hz channels={CHANNELS} \
+                 excludes_current_process_audio=true path={}",
+                path.display()
+            );
+
             Ok(Self {
                 stream,
                 writer,
                 path: path.to_path_buf(),
+                callbacks,
+                samples_written,
             })
         }
 
@@ -210,13 +250,47 @@ mod macos {
                     .map_err(|e| AppError::Io(format!("finalize wav: {e}")))?;
             }
 
-            log::info!("stopped capture, wrote {}", self.path.display());
+            let cb = self.callbacks.load(Ordering::Relaxed);
+            let sw = self.samples_written.load(Ordering::Relaxed);
+            let bytes = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+            log::info!(
+                "stopped capture: callbacks={cb} samples_written={sw} wav_bytes={bytes} path={}",
+                self.path.display()
+            );
+
+            // Hard fail loud rather than silently shipping a 44-byte empty WAV
+            // header. The frontend will surface this through `onError`.
+            if cb == 0 {
+                return Err(AppError::Backend(
+                    "ScreenCaptureKit delivered zero audio callbacks — likely a Screen \
+                     Recording permission issue or an empty content filter. Reset TCC \
+                     (`tccutil reset ScreenCapture click.atomai.ttobak.mac`) and relaunch."
+                        .into(),
+                ));
+            }
+            if sw == 0 {
+                return Err(AppError::Backend(format!(
+                    "ScreenCaptureKit delivered {cb} callbacks but no samples were written — \
+                     audio buffer format probably is not f32 interleaved as assumed. Check \
+                     the format-description log on the first callback and update audio.rs."
+                )));
+            }
             Ok(())
         }
     }
 
     struct AudioOutput {
         writer: Arc<Mutex<Option<WavWriter<std::io::BufWriter<std::fs::File>>>>>,
+        callbacks: Arc<AtomicU64>,
+        samples_written: Arc<AtomicU64>,
+        /// Tracks whether we have logged the first buffer's metadata. Cheap
+        /// AtomicU64 instead of `Once` so we can keep `AudioOutput: Send`.
+        logged_first: Arc<AtomicU64>,
+        /// Used to emit `native-audio-level` events to the WebView so the UI
+        /// can show a real meter in System Audio mode (where we have no
+        /// MediaStream / AnalyserNode on the JS side).
+        app: AppHandle,
+        last_emit_ms: Arc<AtomicU64>,
     }
 
     impl SCStreamOutputTrait for AudioOutput {
@@ -225,11 +299,29 @@ mod macos {
                 return;
             }
 
+            self.callbacks.fetch_add(1, Ordering::Relaxed);
+
             // SCStreamConfiguration requests f32 interleaved PCM at 48 kHz stereo.
             // Guard: skip buffers that don't align to 4-byte f32 frames.
             let Some(list) = sample.audio_buffer_list() else {
+                log::warn!("audio callback delivered no audio_buffer_list");
                 return;
             };
+
+            // Log the first buffer's shape so we can confirm the f32 assumption
+            // against actual ScreenCaptureKit output. If the user later sees
+            // a "non-empty callbacks but zero samples" error, this log narrows
+            // it to a format-conversion bug.
+            if self.logged_first.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+                let buf_count = list.iter().count();
+                let total_bytes: usize = list.iter().map(|b| b.data().len()).sum();
+                log::info!(
+                    "first audio buffer: buffer_count={buf_count} total_bytes={total_bytes} \
+                     (assuming f32 interleaved → frames={})",
+                    total_bytes / (CHANNELS as usize * 4)
+                );
+            }
+
             let samples_f32: Vec<f32> = list
                 .iter()
                 .flat_map(|buf| {
@@ -244,8 +336,18 @@ mod macos {
                 })
                 .collect();
 
+            // RMS over this buffer for the level meter event. Computed once,
+            // before we move samples_f32 into the writer loop.
+            let rms = if samples_f32.is_empty() {
+                0.0
+            } else {
+                let sum_sq: f32 = samples_f32.iter().map(|s| s * s).sum();
+                (sum_sq / samples_f32.len() as f32).sqrt()
+            };
+
             let mut guard = self.writer.lock().expect("writer poisoned");
             let Some(w) = guard.as_mut() else { return };
+            let mut written = 0u64;
             for s in samples_f32 {
                 let clamped = s.clamp(-1.0, 1.0);
                 let i16_val = (clamped * i16::MAX as f32) as i16;
@@ -253,6 +355,24 @@ mod macos {
                     log::warn!("wav write error: {e}");
                     break;
                 }
+                written += 1;
+            }
+            drop(guard);
+            self.samples_written.fetch_add(written, Ordering::Relaxed);
+
+            // Throttled level emit (~30 Hz). Buffers arrive faster than the UI
+            // needs to redraw; bouncing every callback over IPC is wasteful.
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let last = self.last_emit_ms.load(Ordering::Relaxed);
+            if now_ms.saturating_sub(last) >= LEVEL_EMIT_INTERVAL_MS {
+                self.last_emit_ms.store(now_ms, Ordering::Relaxed);
+                // Map RMS (typical speech ≈ 0.01–0.3 in normalized float) to
+                // a 0–1 meter range. Clamp to avoid >1 spikes from clipping.
+                let level = (rms / 0.25).min(1.0);
+                let _ = self.app.emit("native-audio-level", level);
             }
         }
     }

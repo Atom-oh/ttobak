@@ -1,4 +1,4 @@
-# Ttobak - API Specification
+# TTOBAK - API Specification
 
 > Backend REST API 상세 명세
 

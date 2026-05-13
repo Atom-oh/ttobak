@@ -1,4 +1,4 @@
-# Ttobak - Design Specification
+# TTOBAK - Design Specification
 
 > design_sample/ HTML 파일에서 추출한 정확한 디자인 시스템
 

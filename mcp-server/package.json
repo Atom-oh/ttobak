@@ -1,7 +1,7 @@
 {
   "name": "ttobak-mcp",
   "version": "1.0.0",
-  "description": "Ttobak MCP server for Claude Code — meeting data access with Cognito OAuth PKCE",
+  "description": "TTOBAK MCP server for Claude Code — meeting data access with Cognito OAuth PKCE",
   "type": "module",
   "scripts": {
     "build": "tsc",

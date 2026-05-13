@@ -272,7 +272,7 @@ export function ChatClient() {
         <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-slate-200 dark:border-white/10 bg-white dark:bg-[#0e0e13]">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-primary text-2xl">smart_toy</span>
-            <h1 className="text-lg font-semibold text-slate-900 dark:text-white">Ttobak Assistant</h1>
+            <h1 className="text-lg font-semibold text-slate-900 dark:text-white">TTOBAK Assistant</h1>
           </div>
           <div className="flex items-center gap-2">
             {/* Session dropdown */}
