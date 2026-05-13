@@ -133,6 +133,9 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-009: Whisper GPU ECS Spot Zero-Scale](decisions/ADR-009-whisper-gpu-ecs-spot-zero-scale.md) — AWS Transcribe → Whisper GPU 전환, 품질 2배·비용 36배 절감 (승인됨)
 - [ADR-010: Insights Obsidian 스타일 마크다운 렌더링](decisions/ADR-010-insights-obsidian-style-markdown-rendering.md) (승인됨)
 - [ADR-011: 대화형 계획 수립 기반 인터랙티브 딥 리서치](decisions/ADR-011-interactive-deep-research.md) (승인됨)
+- [ADR-012: 미팅 조회를 위한 GSI3 정렬 키 추가](decisions/ADR-012-gsi3-sort-key-for-meeting-lookup.md) (승인됨)
+- [ADR-013: 요약-트랜스크립트 딥 링크](decisions/ADR-013-summary-to-transcript-deep-links.md) (승인됨)
+- [ADR-014: 멀티파일 오디오 업로드 및 후속 미팅 링크](decisions/ADR-014-multi-file-audio-and-linked-meetings.md) (제안됨)
 
 ### 운영
 
@@ -216,6 +219,9 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-009: Whisper GPU ECS Spot Zero-Scale](decisions/ADR-009-whisper-gpu-ecs-spot-zero-scale.md) — Migrate from AWS Transcribe to Whisper GPU; 2× quality, 36× cost reduction (Accepted)
 - [ADR-010: Obsidian-style Rich Markdown Rendering for Insights](decisions/ADR-010-insights-obsidian-style-markdown-rendering.md) (Accepted)
 - [ADR-011: Interactive Deep Research with Conversational Planning](decisions/ADR-011-interactive-deep-research.md) (Accepted)
+- [ADR-012: Add entityType Sort Key to GSI3 for Meeting Lookup](decisions/ADR-012-gsi3-sort-key-for-meeting-lookup.md) (Accepted)
+- [ADR-013: Summary-to-Transcript Deep Links](decisions/ADR-013-summary-to-transcript-deep-links.md) (Accepted)
+- [ADR-014: Multi-File Audio Upload and Linked Meetings](decisions/ADR-014-multi-file-audio-and-linked-meetings.md) (Proposed)
 
 ### Operations
 

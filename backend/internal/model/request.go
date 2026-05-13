@@ -7,10 +7,11 @@ import (
 
 // CreateMeetingRequest represents the request body for creating a meeting
 type CreateMeetingRequest struct {
-	Title        string   `json:"title"`
-	Date         string   `json:"date"`                   // ISO 8601 format
-	Participants []string `json:"participants,omitempty"`
-	SttProvider  string   `json:"sttProvider,omitempty"`  // "transcribe" or "nova-sonic"
+	Title            string   `json:"title"`
+	Date             string   `json:"date"`                           // ISO 8601 format
+	Participants     []string `json:"participants,omitempty"`
+	SttProvider      string   `json:"sttProvider,omitempty"`          // "transcribe" or "nova-sonic"
+	LinkedMeetingIDs []string `json:"linkedMeetingIds,omitempty"`
 }
 
 // UpdateMeetingRequest represents the request body for updating a meeting
@@ -42,10 +43,12 @@ type ShareMeetingRequest struct {
 
 // PresignedURLRequest represents the request body for generating a presigned URL
 type PresignedURLRequest struct {
-	FileName  string `json:"fileName"`
-	FileType  string `json:"fileType"`            // audio/webm, audio/mp4, audio/x-m4a, image/jpeg, image/png
-	Category  string `json:"category"`            // "audio" or "image"
-	MeetingID string `json:"meetingId,omitempty"` // required for image uploads
+	FileName   string `json:"fileName"`
+	FileType   string `json:"fileType"`            // audio/webm, audio/mp4, audio/x-m4a, image/jpeg, image/png
+	Category   string `json:"category"`            // "audio" or "image"
+	MeetingID  string `json:"meetingId,omitempty"` // required for image uploads
+	PartIndex  int    `json:"partIndex,omitempty"` // 0-based index for multi-file audio
+	TotalParts int    `json:"totalParts,omitempty"`
 }
 
 // PresignedURLResponse represents the response for presigned URL generation
@@ -57,12 +60,14 @@ type PresignedURLResponse struct {
 
 // UploadCompleteRequest represents the request body for upload completion notification
 type UploadCompleteRequest struct {
-	MeetingID string `json:"meetingId"`
-	Key       string `json:"key"`
-	Category  string `json:"category"`           // "audio", "image", or "file"
-	FileName  string `json:"fileName,omitempty"`
-	FileSize  int64  `json:"fileSize,omitempty"`
-	MimeType  string `json:"mimeType,omitempty"`
+	MeetingID  string `json:"meetingId"`
+	Key        string `json:"key"`
+	Category   string `json:"category"`           // "audio", "image", or "file"
+	FileName   string `json:"fileName,omitempty"`
+	FileSize   int64  `json:"fileSize,omitempty"`
+	MimeType   string `json:"mimeType,omitempty"`
+	PartIndex  int    `json:"partIndex,omitempty"`  // 0-based index for multi-file audio
+	TotalParts int    `json:"totalParts,omitempty"` // total number of audio parts
 }
 
 // UploadCompleteResponse represents the response for upload completion
@@ -106,11 +111,15 @@ type MeetingDetailResponse struct {
 	TranscriptB        string               `json:"transcriptB,omitempty"`
 	SelectedTranscript *string              `json:"selectedTranscript,omitempty"` // "A" | "B" | null
 	AudioKey           string               `json:"audioKey,omitempty"`
+	AudioKeys          []string             `json:"audioKeys,omitempty"`
+	AudioPartCount     int                  `json:"audioPartCount,omitempty"`
+	AudioPartsReady    int                  `json:"audioPartsReady,omitempty"`
 	Transcription      json.RawMessage      `json:"transcription,omitempty"`
 	Tags               []string             `json:"tags,omitempty"`
 	ActionItems        json.RawMessage      `json:"actionItems,omitempty"`
 	SpeakerMap         map[string]string    `json:"speakerMap,omitempty"`
 	SttProvider        string               `json:"sttProvider,omitempty"`
+	LinkedMeetingIDs   []string             `json:"linkedMeetingIds,omitempty"`
 	Attachments        []AttachmentResponse `json:"attachments,omitempty"`
 	Shares             []ShareResponse      `json:"shares,omitempty"` // Only visible to owner
 	CreatedAt          string               `json:"createdAt"`
@@ -177,6 +186,17 @@ type HealthResponse struct {
 type MeetingUpdateResponse struct {
 	MeetingID string `json:"meetingId"`
 	UpdatedAt string `json:"updatedAt"`
+}
+
+// LinkMeetingsRequest represents the request body for linking follow-up meetings
+type LinkMeetingsRequest struct {
+	LinkedMeetingIDs []string `json:"linkedMeetingIds"`
+}
+
+// AudioURLResponse represents the response for audio URL(s)
+type AudioURLResponse struct {
+	AudioUrl  string   `json:"audioUrl,omitempty"`
+	AudioUrls []string `json:"audioUrls,omitempty"`
 }
 
 // NewErrorResponse creates a new error response

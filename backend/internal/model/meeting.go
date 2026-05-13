@@ -15,7 +15,10 @@ type Meeting struct {
 	TranscriptA        string    `dynamodbav:"transcriptA,omitempty"`        // AWS Transcribe result
 	TranscriptB        string    `dynamodbav:"transcriptB,omitempty"`        // Nova Sonic result
 	SelectedTranscript string    `dynamodbav:"selectedTranscript,omitempty"` // "A" or "B"
-	AudioKey           string    `dynamodbav:"audioKey,omitempty"`           // S3 key for audio file
+	AudioKey           string    `dynamodbav:"audioKey,omitempty"`           // S3 key for audio file (legacy single-file)
+	AudioKeys          []string  `dynamodbav:"audioKeys,omitempty"`          // Ordered S3 keys for multi-file uploads
+	AudioPartCount     int       `dynamodbav:"audioPartCount,omitempty"`     // Total parts expected
+	AudioPartsReady    int       `dynamodbav:"audioPartsReady,omitempty"`    // Parts with completed transcription
 	SttProvider        string    `dynamodbav:"sttProvider,omitempty"`        // "transcribe" or "nova-sonic"
 	TranscriptSegments string    `dynamodbav:"transcriptSegments,omitempty"` // JSON string of speaker-labeled segments
 	ActionItems        string            `dynamodbav:"actionItems,omitempty"`        // JSON string of extracted action items
@@ -23,8 +26,9 @@ type Meeting struct {
 	SpeakerMap         map[string]string `dynamodbav:"speakerMap,omitempty"`         // spk_0 -> "김팀장" mapping
 	Participants       []string          `dynamodbav:"participants,omitempty"`
 	Tags               []string  `dynamodbav:"tags,omitempty"`
-	Sentiment          string    `dynamodbav:"sentiment,omitempty"` // "positive", "neutral", "negative" — extracted by summarize Lambda
-	Status             string    `dynamodbav:"status"` // recording, transcribing, summarizing, done, error
+	Sentiment          string    `dynamodbav:"sentiment,omitempty"`          // "positive", "neutral", "negative" — extracted by summarize Lambda
+	LinkedMeetingIDs   []string  `dynamodbav:"linkedMeetingIds,omitempty"`   // Chronologically ordered predecessor IDs
+	Status             string    `dynamodbav:"status"`                       // recording, transcribing, summarizing, done, error
 	CreatedAt          time.Time `dynamodbav:"createdAt"`
 	UpdatedAt          time.Time `dynamodbav:"updatedAt"`
 	GSI1PK             string    `dynamodbav:"GSI1PK,omitempty"` // USER#{userId} for date sorting
@@ -157,6 +161,22 @@ type Research struct {
 	TrashedAt    string `dynamodbav:"trashedAt,omitempty" json:"trashedAt,omitempty"`
 	IsShared     bool   `dynamodbav:"-" json:"isShared,omitempty"`
 	SharedBy     string `dynamodbav:"-" json:"sharedBy,omitempty"`
+}
+
+const MaxAudioParts = 10
+
+func (m *Meeting) GetEffectiveAudioKeys() []string {
+	if len(m.AudioKeys) > 0 {
+		return m.AudioKeys
+	}
+	if m.AudioKey != "" {
+		return []string{m.AudioKey}
+	}
+	return nil
+}
+
+func (m *Meeting) IsMultiPart() bool {
+	return m.AudioPartCount > 1
 }
 
 // MeetingStatus constants

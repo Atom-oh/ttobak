@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -420,6 +421,107 @@ func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, me
 	}
 
 	return nil
+}
+
+// PreAllocateAudioKeys initializes audioKeys as a list of empty strings for multi-file upload.
+// Called lazily on first CompleteUpload with totalParts > 1.
+// Uses ConditionExpression to be safe against concurrent calls.
+func (r *DynamoDBRepository) PreAllocateAudioKeys(ctx context.Context, userID, meetingID string, totalParts int) error {
+	emptyKeys := make([]string, totalParts)
+	for i := range emptyKeys {
+		emptyKeys[i] = ""
+	}
+
+	update := expression.Set(expression.Name("audioKeys"), expression.Value(emptyKeys)).
+		Set(expression.Name("audioPartCount"), expression.Value(totalParts)).
+		Set(expression.Name("audioPartsReady"), expression.Value(0)).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC().Format(time.RFC3339Nano)))
+
+	condition := expression.And(
+		expression.AttributeExists(expression.Name("PK")),
+		expression.AttributeNotExists(expression.Name("audioKeys")),
+	)
+
+	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build pre-allocate expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var condErr *types.ConditionalCheckFailedException
+		if ok := errors.As(err, &condErr); ok {
+			return nil // already pre-allocated by concurrent call
+		}
+		return fmt.Errorf("failed to pre-allocate audio keys: %w", err)
+	}
+	return nil
+}
+
+// SetAudioKeyAtIndex sets a specific index in the audioKeys list. Idempotent — re-uploading
+// the same part overwrites the same slot.
+func (r *DynamoDBRepository) SetAudioKeyAtIndex(ctx context.Context, userID, meetingID, key string, partIndex int) error {
+	indexPath := fmt.Sprintf("audioKeys[%d]", partIndex)
+
+	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String(fmt.Sprintf("SET %s = :key, #st = :transcribing, updatedAt = :now", indexPath)),
+		ExpressionAttributeNames: map[string]string{
+			"#st": "status",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":key":          &types.AttributeValueMemberS{Value: key},
+			":transcribing": &types.AttributeValueMemberS{Value: model.StatusTranscribing},
+			":now":          &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339Nano)},
+		},
+		ConditionExpression: aws.String("attribute_exists(PK) AND attribute_exists(audioKeys)"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set audio key at index %d: %w", partIndex, err)
+	}
+	return nil
+}
+
+// IncrementAudioPartsReady atomically increments audioPartsReady and returns the new values.
+// Uses ReturnValues: ALL_NEW to avoid a separate read after increment.
+func (r *DynamoDBRepository) IncrementAudioPartsReady(ctx context.Context, userID, meetingID string) (partsReady, partCount int, err error) {
+	result, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String("ADD audioPartsReady :one SET updatedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":one": &types.AttributeValueMemberN{Value: "1"},
+			":now": &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339Nano)},
+		},
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+		ReturnValues:        types.ReturnValueAllNew,
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to increment audio parts ready: %w", err)
+	}
+
+	var meeting model.Meeting
+	if unmarshalErr := attributevalue.UnmarshalMap(result.Attributes, &meeting); unmarshalErr != nil {
+		return 0, 0, fmt.Errorf("failed to unmarshal updated meeting: %w", unmarshalErr)
+	}
+	return meeting.AudioPartsReady, meeting.AudioPartCount, nil
 }
 
 // DeleteMeeting deletes a meeting and all related items atomically using TransactWriteItems.

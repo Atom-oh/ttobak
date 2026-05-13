@@ -59,7 +59,17 @@ func (s *UploadService) GeneratePresignedUploadURL(
 		if meetingID == "" {
 			meetingID = uuid.New().String()
 		}
-		s3Key = fmt.Sprintf("audio/%s/%s/%s", userID, meetingID, s.sanitizeFileName(req.FileName))
+		if req.TotalParts > 1 {
+			if req.TotalParts > model.MaxAudioParts {
+				return nil, fmt.Errorf("totalParts exceeds maximum of %d", model.MaxAudioParts)
+			}
+			if req.PartIndex < 0 || req.PartIndex >= req.TotalParts {
+				return nil, fmt.Errorf("partIndex %d out of range [0, %d)", req.PartIndex, req.TotalParts)
+			}
+			s3Key = fmt.Sprintf("audio/%s/%s/part_%03d_%s", userID, meetingID, req.PartIndex, s.sanitizeFileName(req.FileName))
+		} else {
+			s3Key = fmt.Sprintf("audio/%s/%s/%s", userID, meetingID, s.sanitizeFileName(req.FileName))
+		}
 	case "image":
 		if req.MeetingID == "" {
 			return nil, fmt.Errorf("meetingId is required for image uploads")
@@ -108,8 +118,21 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 
 	switch req.Category {
 	case "audio":
-		// Atomic partial update — only set audioKey and status, avoiding
-		// read-modify-write race with the summarize Lambda pipeline
+		if req.TotalParts > 1 {
+			if req.TotalParts > model.MaxAudioParts {
+				return fmt.Errorf("totalParts exceeds maximum of %d", model.MaxAudioParts)
+			}
+			if req.PartIndex < 0 || req.PartIndex >= req.TotalParts {
+				return fmt.Errorf("partIndex %d out of range [0, %d)", req.PartIndex, req.TotalParts)
+			}
+			// Lazy pre-allocation: create empty audioKeys list on first multi-file call
+			if err := s.repo.PreAllocateAudioKeys(ctx, meeting.UserID, meeting.MeetingID, req.TotalParts); err != nil {
+				return err
+			}
+			// Idempotent index-based set
+			return s.repo.SetAudioKeyAtIndex(ctx, meeting.UserID, meeting.MeetingID, req.Key, req.PartIndex)
+		}
+		// Single-file: existing flow
 		return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, map[string]interface{}{
 			"audioKey": req.Key,
 			"status":   model.StatusTranscribing,

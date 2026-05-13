@@ -394,6 +394,17 @@ export class GatewayStack extends cdk.Stack {
     });
     transcriptUploadRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction));
 
+    // EventBridge rule for AllPartsTranscribed custom event -> Summarize Lambda
+    const allPartsTranscribedRule = new events.Rule(this, 'AllPartsTranscribedRule', {
+      ruleName: 'ttobak-all-parts-transcribed',
+      description: 'Trigger summarize Lambda when all multi-file audio parts are transcribed',
+      eventPattern: {
+        source: ['ttobak.transcribe'],
+        detailType: ['AllPartsTranscribed'],
+      },
+    });
+    allPartsTranscribedRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction));
+
     // ==================== WebSocket API (Live QA Streaming) ====================
 
     // WebSocket authorizer Lambda (validates Cognito JWT on $connect)

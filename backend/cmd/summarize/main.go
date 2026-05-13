@@ -18,6 +18,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -29,6 +31,8 @@ var (
 	kbExportService *service.KBExportService
 	repo            *repository.DynamoDBRepository
 	s3Client        *s3.Client
+	ebClient        *eventbridge.Client
+	bucketName      string
 )
 
 func init() {
@@ -51,12 +55,13 @@ func init() {
 	dynamoClient := dynamodb.NewFromConfig(cfg)
 	s3Client = s3.NewFromConfig(cfg)
 	bedrockClient := bedrockruntime.NewFromConfig(bedrockCfg)
+	ebClient = eventbridge.NewFromConfig(cfg)
 
 	tableName := os.Getenv("TABLE_NAME")
 	if tableName == "" {
 		tableName = "ttobak-main"
 	}
-	bucketName := os.Getenv("BUCKET_NAME")
+	bucketName = os.Getenv("BUCKET_NAME")
 	if bucketName == "" {
 		bucketName = "ttobak-assets"
 	}
@@ -81,19 +86,19 @@ type TranscribeResult struct {
 		Transcripts []struct {
 			Transcript string `json:"transcript"`
 		} `json:"transcripts"`
-		SpeakerLabels *SpeakerLabels `json:"speaker_labels,omitempty"`
+		SpeakerLabels *SpeakerLabels   `json:"speaker_labels,omitempty"`
 		Items         []TranscribeItem `json:"items,omitempty"`
 	} `json:"results"`
-	Status          string          `json:"status"`
+	Status          string           `json:"status"`
 	WhisperMetadata *WhisperMetadata `json:"whisper_metadata,omitempty"`
 }
 
 // WhisperMetadata represents the Whisper-specific metadata in transcript JSON
 type WhisperMetadata struct {
-	Engine              string                   `json:"engine"`
-	Language            string                   `json:"language"`
-	DurationSeconds     float64                  `json:"duration_seconds"`
-	Segments            []service.WhisperSegment `json:"segments"`
+	Engine          string                   `json:"engine"`
+	Language        string                   `json:"language"`
+	DurationSeconds float64                  `json:"duration_seconds"`
+	Segments        []service.WhisperSegment `json:"segments"`
 }
 
 // SpeakerLabels represents the speaker diarization results
@@ -136,8 +141,24 @@ type TranscriptSegmentOut struct {
 	EndTime   float64 `json:"endTime"`
 }
 
-// Handler processes EventBridge S3 events for completed transcriptions
+// Handler processes EventBridge events: S3 transcript uploads and custom AllPartsTranscribed events
 func Handler(ctx context.Context, raw json.RawMessage) error {
+	// Two-phase dispatch: detect event type first, then route
+	var envelope model.EventEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return fmt.Errorf("failed to unmarshal event envelope: %w", err)
+	}
+
+	// Custom event: all parts of a multi-file meeting have been transcribed
+	if envelope.Source == "ttobak.transcribe" && envelope.DetailType == "AllPartsTranscribed" {
+		var event model.AllPartsTranscribedEvent
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("failed to unmarshal AllPartsTranscribed event: %w", err)
+		}
+		return handleAllPartsTranscribed(ctx, &event.Detail)
+	}
+
+	// S3 event: transcript file uploaded
 	var event model.EventBridgeS3Event
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return fmt.Errorf("failed to unmarshal EventBridge event: %w", err)
@@ -146,30 +167,45 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	bucket := event.Detail.Bucket.Name
 	key := event.Detail.Object.Key
 
-	// URL decode the key (handles both + and %XX encoding)
 	if decoded, err := url.QueryUnescape(key); err == nil {
 		key = decoded
 	}
 
 	log.Printf("Processing transcript: bucket=%s, key=%s", bucket, key)
 
-	// Only process transcript files
 	if !strings.HasPrefix(key, "transcripts/") {
 		log.Printf("Skipping non-transcript file: %s", key)
 		return nil
 	}
 
-	// Extract meeting ID from key
-	// Expected format: transcripts/{meetingID}.json or transcripts/{meetingID}-nova.json
+	// Part transcript: just increment counter (no summary on individual parts)
+	if strings.Contains(key, "_part_") {
+		return handlePartTranscript(ctx, bucket, key)
+	}
+
+	// Single/legacy transcript: full processing + summary
+	return handleSingleTranscript(ctx, bucket, key)
+}
+
+// handleSingleTranscript processes a single (non-part) transcript: parse, refine, save, summarize
+func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 	meetingID := extractMeetingIDFromTranscriptKey(key)
 	if meetingID == "" {
 		log.Printf("Could not extract meeting ID from key: %s", key)
 		return nil
 	}
 
+	// Status guard: skip if already processed (prevents re-trigger after merged transcript write)
+	meeting, err := repo.GetMeetingByID(ctx, meetingID)
+	if err == nil && meeting != nil {
+		if meeting.Status == model.StatusDone || meeting.Status == model.StatusSummarizing {
+			log.Printf("Skipping transcript for meeting %s (status=%s)", meetingID, meeting.Status)
+			return nil
+		}
+	}
+
 	isNova := strings.Contains(key, "-nova.json")
 
-	// Download and parse transcript
 	transcript, segments, whisperSegments, err := downloadAndParseTranscript(ctx, bucket, key)
 	if err != nil {
 		log.Printf("Failed to parse transcript: %v", err)
@@ -198,7 +234,6 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		}
 	}
 
-	// Update meeting with transcript and speaker segments (atomic partial update)
 	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, isNova)
 	if err != nil {
 		log.Printf("Failed to update meeting with transcript: %v", err)
@@ -208,9 +243,8 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	log.Printf("Updated meeting %s with transcript (nova=%v)", meetingID, isNova)
 
-	// We just saved the transcript, so proceed directly to summary generation.
-	// Avoid re-reading via GSI (eventual consistency can return stale data).
-	meeting, err := repo.GetMeetingByID(ctx, meetingID)
+	// Re-fetch meeting for summary generation
+	meeting, err = repo.GetMeetingByID(ctx, meetingID)
 	if err != nil || meeting == nil {
 		log.Printf("Failed to get meeting via GSI, retrying after 1s: %v", err)
 		time.Sleep(1 * time.Second)
@@ -221,86 +255,253 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		}
 	}
 
-	// Generate summary — transcript was just saved so it's guaranteed to exist
-	if transcript != "" {
-		if meeting.Status != model.StatusError {
-			repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
-				"status": model.StatusSummarizing,
-			})
+	if transcript == "" {
+		return nil
+	}
 
-			content, err := bedrockService.SummarizeTranscript(ctx, meetingID, meeting.UserID)
-			if err != nil {
-				log.Printf("Failed to generate summary: %v", err)
-				repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
-					"status": model.StatusError,
-				})
-				return nil
-			}
+	priorContext := buildLinkedMeetingContext(ctx, meeting)
+	return generateSummary(ctx, meeting, priorContext)
+}
 
-			log.Printf("Generated content for meeting %s: %d characters", meetingID, len(content))
+// handlePartTranscript increments the parts-ready counter and emits AllPartsTranscribed when all parts are done
+func handlePartTranscript(ctx context.Context, bucket, key string) error {
+	meetingID, partIndex, ok := extractPartInfo(key)
+	if !ok {
+		log.Printf("Could not extract part info from key: %s", key)
+		return nil
+	}
 
-			// Extract action items using Haiku (fast, cheap)
-			actionItems, err := bedrockService.ExtractActionItems(ctx, meetingID, meeting.UserID)
-			if err != nil {
-				log.Printf("Failed to extract action items (non-fatal): %v", err)
-			} else {
-				if err := repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
-					"actionItems": actionItems,
-				}); err != nil {
-					log.Printf("Failed to save action items: %v", err)
-				} else {
-					log.Printf("Extracted action items for meeting %s: %s", meetingID, actionItems)
-				}
-			}
+	log.Printf("Part transcript received: meeting=%s part=%d key=%s", meetingID, partIndex, key)
 
-			// Extract tags using Haiku (fast, cheap)
-			tags, err := bedrockService.ExtractTags(ctx, meetingID, meeting.UserID)
-			if err != nil {
-				log.Printf("Failed to extract tags (non-fatal): %v", err)
-			} else if len(tags) > 0 {
-				if err := repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
-					"tags": tags,
-				}); err != nil {
-					log.Printf("Failed to save tags: %v", err)
-				} else {
-					log.Printf("Extracted tags for meeting %s: %v", meetingID, tags)
-				}
-			}
+	meeting, err := repo.GetMeetingByID(ctx, meetingID)
+	if err != nil || meeting == nil {
+		log.Printf("Failed to get meeting %s: %v", meetingID, err)
+		return nil
+	}
 
-			// Extract overall sentiment using Haiku (fast, cheap). Non-fatal — dashboard
-			// gracefully handles missing sentiment as "neutral".
-			sentiment, err := bedrockService.ExtractSentiment(ctx, meetingID, meeting.UserID)
-			if err != nil {
-				log.Printf("Failed to extract sentiment (non-fatal): %v", err)
-			} else if sentiment != "" {
-				if err := repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{
-					"sentiment": sentiment,
-				}); err != nil {
-					log.Printf("Failed to save sentiment: %v", err)
-				} else {
-					log.Printf("Extracted sentiment for meeting %s: %s", meetingID, sentiment)
-				}
-			}
+	// Status guard: skip if already past transcription phase
+	if meeting.Status == model.StatusDone || meeting.Status == model.StatusError || meeting.Status == model.StatusSummarizing {
+		log.Printf("Skipping part transcript for meeting %s (status=%s)", meetingID, meeting.Status)
+		return nil
+	}
 
-			// KB Export: generate meeting context document and upload to KB bucket
-			// Re-fetch meeting to get the latest state (summary, action items, tags, sentiment now saved)
-			updatedMeeting, err := repo.GetMeeting(ctx, meeting.UserID, meetingID)
-			if err != nil {
-				log.Printf("Failed to re-fetch meeting for KB export (non-fatal): %v", err)
-			} else if updatedMeeting != nil {
-				attachments, _ := repo.ListAttachments(ctx, meetingID)
-				doc := service.GenerateMeetingDocument(updatedMeeting, attachments)
-				if err := kbExportService.ExportToKB(ctx, updatedMeeting.UserID, meetingID, doc); err != nil {
-					log.Printf("Failed to export to KB (non-fatal): %v", err)
-				}
-				// P2: Auto-trigger KB ingestion
-				if err := kbExportService.TriggerIngestion(ctx); err != nil {
-					log.Printf("Failed to trigger KB ingestion (non-fatal): %v", err)
-				}
-			}
+	partsReady, partCount, err := repo.IncrementAudioPartsReady(ctx, meeting.UserID, meetingID)
+	if err != nil {
+		log.Printf("Failed to increment parts ready for meeting %s: %v", meetingID, err)
+		return nil
+	}
+
+	log.Printf("Meeting %s: parts ready %d/%d", meetingID, partsReady, partCount)
+
+	if partsReady >= partCount && partCount > 0 {
+		log.Printf("All %d parts transcribed for meeting %s, emitting AllPartsTranscribed", partCount, meetingID)
+		return emitAllPartsTranscribedEvent(ctx, meetingID, meeting.UserID, partCount, bucket)
+	}
+
+	return nil
+}
+
+// handleAllPartsTranscribed merges all part transcripts and generates the summary directly
+func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTranscribedDetail) error {
+	meetingID := detail.MeetingID
+	userID := detail.UserID
+
+	log.Printf("AllPartsTranscribed: merging %d parts for meeting %s", detail.PartCount, meetingID)
+
+	meeting, err := repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil || meeting == nil {
+		log.Printf("Failed to get meeting %s: %v", meetingID, err)
+		return nil
+	}
+
+	if meeting.Status == model.StatusDone || meeting.Status == model.StatusError {
+		log.Printf("Skipping merge for meeting %s (status=%s)", meetingID, meeting.Status)
+		return nil
+	}
+
+	transcript, segments, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)
+	if err != nil {
+		log.Printf("Failed to merge transcripts for meeting %s: %v", meetingID, err)
+		setMeetingError(ctx, meetingID)
+		return nil
+	}
+
+	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, false)
+	if err != nil {
+		log.Printf("Failed to save merged transcript for meeting %s: %v", meetingID, err)
+		setMeetingError(ctx, meetingID)
+		return nil
+	}
+
+	log.Printf("Saved merged transcript for meeting %s: %d chars, %d segments", meetingID, len(transcript), len(segments))
+
+	// Re-fetch meeting to get updated state
+	meeting, err = repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil || meeting == nil {
+		log.Printf("Failed to re-fetch meeting %s after merge: %v", meetingID, err)
+		return nil
+	}
+
+	priorContext := buildLinkedMeetingContext(ctx, meeting)
+	return generateSummary(ctx, meeting, priorContext)
+}
+
+// generateSummary runs the full Bedrock pipeline: summary, action items, tags, sentiment, KB export
+func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext string) error {
+	meetingID := meeting.MeetingID
+	userID := meeting.UserID
+
+	if meeting.Status == model.StatusError {
+		return nil
+	}
+
+	repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+		"status": model.StatusSummarizing,
+	})
+
+	content, err := bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
+	if err != nil {
+		log.Printf("Failed to generate summary: %v", err)
+		repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+			"status": model.StatusError,
+		})
+		return nil
+	}
+
+	log.Printf("Generated content for meeting %s: %d characters", meetingID, len(content))
+
+	actionItems, err := bedrockService.ExtractActionItems(ctx, meetingID, userID)
+	if err != nil {
+		log.Printf("Failed to extract action items (non-fatal): %v", err)
+	} else {
+		if err := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+			"actionItems": actionItems,
+		}); err != nil {
+			log.Printf("Failed to save action items: %v", err)
+		} else {
+			log.Printf("Extracted action items for meeting %s: %s", meetingID, actionItems)
 		}
 	}
 
+	tags, err := bedrockService.ExtractTags(ctx, meetingID, userID)
+	if err != nil {
+		log.Printf("Failed to extract tags (non-fatal): %v", err)
+	} else if len(tags) > 0 {
+		if err := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+			"tags": tags,
+		}); err != nil {
+			log.Printf("Failed to save tags: %v", err)
+		} else {
+			log.Printf("Extracted tags for meeting %s: %v", meetingID, tags)
+		}
+	}
+
+	sentiment, err := bedrockService.ExtractSentiment(ctx, meetingID, userID)
+	if err != nil {
+		log.Printf("Failed to extract sentiment (non-fatal): %v", err)
+	} else if sentiment != "" {
+		if err := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+			"sentiment": sentiment,
+		}); err != nil {
+			log.Printf("Failed to save sentiment: %v", err)
+		} else {
+			log.Printf("Extracted sentiment for meeting %s: %s", meetingID, sentiment)
+		}
+	}
+
+	// KB Export: re-fetch meeting with all saved fields
+	updatedMeeting, err := repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil {
+		log.Printf("Failed to re-fetch meeting for KB export (non-fatal): %v", err)
+	} else if updatedMeeting != nil {
+		attachments, _ := repo.ListAttachments(ctx, meetingID)
+		doc := service.GenerateMeetingDocument(updatedMeeting, attachments)
+		if err := kbExportService.ExportToKB(ctx, updatedMeeting.UserID, meetingID, doc); err != nil {
+			log.Printf("Failed to export to KB (non-fatal): %v", err)
+		}
+		if err := kbExportService.TriggerIngestion(ctx); err != nil {
+			log.Printf("Failed to trigger KB ingestion (non-fatal): %v", err)
+		}
+	}
+
+	return nil
+}
+
+// buildLinkedMeetingContext fetches summaries from linked predecessor meetings
+func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) string {
+	if len(meeting.LinkedMeetingIDs) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("아래는 이전 연관 회의의 요약입니다. 이전 회의에서의 액션 아이템 이행 여부와 연속성을 반영해주세요:\n\n")
+
+	count := 0
+	for _, linkedID := range meeting.LinkedMeetingIDs {
+		if count >= 3 {
+			break
+		}
+		linked, err := repo.GetMeetingByID(ctx, linkedID)
+		if err != nil || linked == nil || linked.Content == "" {
+			continue
+		}
+
+		summary := linked.Content
+		if len(summary) > 2000 {
+			summary = summary[:2000] + "..."
+		}
+
+		title := linked.Title
+		if title == "" {
+			title = linked.MeetingID
+		}
+
+		sb.WriteString(fmt.Sprintf("### 이전 회의: %s\n%s\n\n", title, summary))
+
+		if linked.ActionItems != "" {
+			items := linked.ActionItems
+			if len(items) > 500 {
+				items = items[:500] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("#### 액션 아이템\n%s\n\n", items))
+		}
+
+		count++
+	}
+
+	if count == 0 {
+		return ""
+	}
+
+	return sb.String()
+}
+
+// emitAllPartsTranscribedEvent publishes a custom EventBridge event when all parts are transcribed
+func emitAllPartsTranscribedEvent(ctx context.Context, meetingID, userID string, partCount int, bucket string) error {
+	if ebClient == nil {
+		log.Printf("EventBridge client not configured, cannot emit AllPartsTranscribed")
+		return fmt.Errorf("EventBridge client not configured")
+	}
+
+	detail, _ := json.Marshal(model.AllPartsTranscribedDetail{
+		MeetingID: meetingID,
+		UserID:    userID,
+		PartCount: partCount,
+		Bucket:    bucket,
+	})
+
+	_, err := ebClient.PutEvents(ctx, &eventbridge.PutEventsInput{
+		Entries: []ebtypes.PutEventsRequestEntry{{
+			Source:     aws.String("ttobak.transcribe"),
+			DetailType: aws.String("AllPartsTranscribed"),
+			Detail:     aws.String(string(detail)),
+		}},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to emit AllPartsTranscribed event: %w", err)
+	}
+
+	log.Printf("Emitted AllPartsTranscribed event for meeting %s", meetingID)
 	return nil
 }
 
@@ -339,13 +540,11 @@ func downloadAndParseTranscript(ctx context.Context, bucket, key string) (string
 	return transcript, segments, whisperSegments, nil
 }
 
-// extractSpeakerSegments builds speaker-labeled segments from Transcribe output
 func extractSpeakerSegments(result *TranscribeResult) []TranscriptSegmentOut {
 	if result.Results.SpeakerLabels == nil || len(result.Results.SpeakerLabels.Segments) == 0 {
 		return nil
 	}
 
-	// Build a map from item start_time -> content for pronunciation items
 	itemContent := make(map[string]string)
 	for _, item := range result.Results.Items {
 		if len(item.Alternatives) > 0 {
@@ -355,7 +554,6 @@ func extractSpeakerSegments(result *TranscribeResult) []TranscriptSegmentOut {
 		}
 	}
 
-	// Walk speaker segments and accumulate text
 	var segments []TranscriptSegmentOut
 	for _, seg := range result.Results.SpeakerLabels.Segments {
 		var words []string
@@ -382,8 +580,6 @@ func extractSpeakerSegments(result *TranscribeResult) []TranscriptSegmentOut {
 	return segments
 }
 
-// setMeetingError sets a meeting's status to error via atomic update.
-// Logs and swallows errors since this is a best-effort error path.
 func setMeetingError(ctx context.Context, meetingID string) {
 	meeting, err := repo.GetMeetingByID(ctx, meetingID)
 	if err != nil || meeting == nil {
@@ -395,15 +591,33 @@ func setMeetingError(ctx context.Context, meetingID string) {
 }
 
 func extractMeetingIDFromTranscriptKey(key string) string {
-	// Expected format: transcripts/{meetingID}.json or transcripts/{meetingID}-nova.json
 	key = strings.TrimPrefix(key, "transcripts/")
 	key = strings.TrimSuffix(key, ".json")
 	key = strings.TrimSuffix(key, "-nova")
 	return key
 }
 
+// extractPartInfo parses meetingID and partIndex from a part transcript key
+// Expected: transcripts/{meetingID}_part_{NNN}.json
+func extractPartInfo(key string) (meetingID string, partIndex int, ok bool) {
+	key = strings.TrimPrefix(key, "transcripts/")
+	key = strings.TrimSuffix(key, ".json")
+
+	idx := strings.LastIndex(key, "_part_")
+	if idx < 0 {
+		return "", 0, false
+	}
+
+	meetingID = key[:idx]
+	partStr := key[idx+6:] // skip "_part_"
+	partIndex, err := strconv.Atoi(partStr)
+	if err != nil {
+		return "", 0, false
+	}
+	return meetingID, partIndex, true
+}
+
 func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, segments []TranscriptSegmentOut, isNova bool) error {
-	// Get meeting to obtain userID for the primary key
 	meeting, err := repo.GetMeetingByID(ctx, meetingID)
 	if err != nil {
 		return err
@@ -412,7 +626,6 @@ func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, 
 		return fmt.Errorf("meeting not found")
 	}
 
-	// Build partial update — only touch transcript fields
 	fields := map[string]interface{}{}
 	if isNova {
 		fields["transcriptB"] = transcript
@@ -420,7 +633,6 @@ func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, 
 		fields["transcriptA"] = transcript
 	}
 
-	// Save speaker segments as JSON string
 	if len(segments) > 0 {
 		segJSON, err := json.Marshal(segments)
 		if err == nil {

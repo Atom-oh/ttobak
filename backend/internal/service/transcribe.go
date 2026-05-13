@@ -38,8 +38,9 @@ func NewTranscribeService(
 }
 
 // StartTranscriptionJob starts an AWS Transcribe job for the given audio file.
+// outputKey overrides the default transcript output path when non-empty (used for multi-part audio).
 // An optional vocabularyName can be passed to use a custom vocabulary (pass "" for default).
-func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID, bucket, key string, vocabularyName ...string) (string, error) {
+func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID, bucket, key, outputKey string, vocabularyName ...string) (string, error) {
 	// Determine media format from key
 	mediaFormat := s.getMediaFormat(key)
 	if mediaFormat == "" {
@@ -52,6 +53,10 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 
 	resolvedVocab := s.resolveVocabularyName(vocabularyName...)
 
+	if outputKey == "" {
+		outputKey = fmt.Sprintf("transcripts/%s.json", meetingID)
+	}
+
 	input := &transcribe.StartTranscriptionJobInput{
 		TranscriptionJobName:      aws.String(jobName),
 		IdentifyMultipleLanguages: aws.Bool(true),
@@ -61,7 +66,7 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 		},
 		MediaFormat:      types.MediaFormat(mediaFormat),
 		OutputBucketName: aws.String(s.outputBucket),
-		OutputKey:        aws.String(fmt.Sprintf("transcripts/%s.json", meetingID)),
+		OutputKey:        aws.String(outputKey),
 		Settings: &types.Settings{
 			ShowSpeakerLabels: aws.Bool(true),
 			MaxSpeakerLabels:  aws.Int32(10),
@@ -89,12 +94,8 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 }
 
 // StartNovaSonicTranscription starts Nova Sonic transcription (placeholder - falls back to standard Transcribe)
-// Nova Sonic would use Amazon Transcribe Streaming with the nova-sonic model
-func (s *TranscribeService) StartNovaSonicTranscription(ctx context.Context, meetingID, bucket, key string) (string, error) {
-	// Nova Sonic transcription would use streaming API
-	// For now, this is a placeholder that uses standard Transcribe as fallback
-	// In production, this would use Amazon Transcribe Streaming API with WebSocket
-
+// outputKey overrides the default transcript output path when non-empty (used for multi-part audio).
+func (s *TranscribeService) StartNovaSonicTranscription(ctx context.Context, meetingID, bucket, key, outputKey string) (string, error) {
 	jobName := fmt.Sprintf("ttobak-nova-%s-%d", meetingID, time.Now().Unix())
 	mediaFormat := s.getMediaFormat(key)
 	if mediaFormat == "" {
@@ -102,6 +103,10 @@ func (s *TranscribeService) StartNovaSonicTranscription(ctx context.Context, mee
 	}
 
 	mediaURI := fmt.Sprintf("s3://%s/%s", bucket, key)
+
+	if outputKey == "" {
+		outputKey = fmt.Sprintf("transcripts/%s-nova.json", meetingID)
+	}
 
 	input := &transcribe.StartTranscriptionJobInput{
 		TranscriptionJobName:      aws.String(jobName),
@@ -112,7 +117,7 @@ func (s *TranscribeService) StartNovaSonicTranscription(ctx context.Context, mee
 		},
 		MediaFormat:      types.MediaFormat(mediaFormat),
 		OutputBucketName: aws.String(s.outputBucket),
-		OutputKey:        aws.String(fmt.Sprintf("transcripts/%s-nova.json", meetingID)),
+		OutputKey:        aws.String(outputKey),
 		Settings: &types.Settings{
 			ShowSpeakerLabels: aws.Bool(true),
 			MaxSpeakerLabels:  aws.Int32(10),

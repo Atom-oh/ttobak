@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -102,6 +103,17 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
+	}
+
+	// Set linked meeting IDs if provided
+	if len(req.LinkedMeetingIDs) > 0 {
+		if len(req.LinkedMeetingIDs) > 3 {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Maximum 3 linked predecessors")
+			return
+		}
+		_ = h.repo.UpdateMeetingFields(ctx, userID, meeting.MeetingID, map[string]interface{}{
+			"linkedMeetingIds": req.LinkedMeetingIDs,
+		})
 	}
 
 	response := map[string]interface{}{
@@ -340,13 +352,36 @@ func (h *MeetingHandler) GetAudioURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if result.AudioKey == "" {
-		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "No audio file for this meeting")
+	if h.uploadService == nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Upload service not configured")
 		return
 	}
 
-	if h.uploadService == nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Upload service not configured")
+	// Multi-file: return all audio URLs
+	if len(result.AudioKeys) > 0 {
+		var audioUrls []string
+		for _, key := range result.AudioKeys {
+			if key == "" {
+				continue // skip pre-allocated empty slots
+			}
+			url, urlErr := h.uploadService.GeneratePresignedDownloadURL(ctx, key)
+			if urlErr != nil {
+				writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to generate audio URL")
+				return
+			}
+			audioUrls = append(audioUrls, url)
+		}
+		if len(audioUrls) == 0 {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "No audio files for this meeting")
+			return
+		}
+		writeJSON(w, http.StatusOK, model.AudioURLResponse{AudioUrls: audioUrls})
+		return
+	}
+
+	// Single-file (legacy)
+	if result.AudioKey == "" {
+		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "No audio file for this meeting")
 		return
 	}
 
@@ -356,7 +391,7 @@ func (h *MeetingHandler) GetAudioURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"audioUrl": audioURL})
+	writeJSON(w, http.StatusOK, model.AudioURLResponse{AudioUrl: audioURL})
 }
 
 // RecoverMeeting handles POST /api/meetings/{meetingId}/recover
@@ -387,6 +422,60 @@ func (h *MeetingHandler) RecoverMeeting(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"meetingId": meetingID, "status": "transcribing"})
+}
+
+// LinkMeetings handles POST /api/meetings/{meetingId}/link
+func (h *MeetingHandler) LinkMeetings(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	meetingID := chi.URLParam(r, "meetingId")
+
+	if meetingID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Meeting ID is required")
+		return
+	}
+
+	var req model.LinkMeetingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	if len(req.LinkedMeetingIDs) == 0 {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "At least one linked meeting ID is required")
+		return
+	}
+	if len(req.LinkedMeetingIDs) > 3 {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Maximum 3 linked predecessors allowed")
+		return
+	}
+
+	// Verify ownership of both this meeting and all linked meetings
+	for _, linkedID := range req.LinkedMeetingIDs {
+		if linkedID == meetingID {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Cannot link a meeting to itself")
+			return
+		}
+		linked, err := h.repo.GetMeeting(ctx, userID, linkedID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+			return
+		}
+		if linked == nil {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, fmt.Sprintf("Linked meeting %s not found", linkedID))
+			return
+		}
+	}
+
+	err := h.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+		"linkedMeetingIds": req.LinkedMeetingIDs,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // writeJSON writes a JSON response

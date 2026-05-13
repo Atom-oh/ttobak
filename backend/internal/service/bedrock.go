@@ -134,12 +134,13 @@ var mdEscaper = strings.NewReplacer(
 func sanitizeMarkdownText(s string) string { return mdEscaper.Replace(s) }
 
 // SummarizeTranscript generates meeting notes (content) from the transcript using Claude.
-// When userID is provided, uses strongly-consistent base table read instead of GSI.
-func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID string, userID ...string) (string, error) {
+// userID enables strongly-consistent base table read instead of GSI.
+// priorContext is optional linked-meeting context prepended to the prompt.
+func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, userID, priorContext string) (string, error) {
 	var meeting *model.Meeting
 	var err error
-	if len(userID) > 0 && userID[0] != "" {
-		meeting, err = s.repo.GetMeeting(ctx, userID[0], meetingID)
+	if userID != "" {
+		meeting, err = s.repo.GetMeeting(ctx, userID, meetingID)
 	} else {
 		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
 	}
@@ -190,7 +191,12 @@ Format in Korean unless the transcript is entirely in English.
 Use bullet points and checkboxes. Include timestamps where available.`
 
 	// Build speaker-labeled prompt if segments exist
-	userPrompt := fmt.Sprintf("다음 회의 녹취록을 바탕으로 회의록을 작성해주세요:\n\n%s", transcript)
+	var userPrompt string
+	if priorContext != "" {
+		userPrompt = priorContext + "\n\n---\n\n다음 회의 녹취록을 바탕으로 회의록을 작성해주세요:\n\n" + transcript
+	} else {
+		userPrompt = fmt.Sprintf("다음 회의 녹취록을 바탕으로 회의록을 작성해주세요:\n\n%s", transcript)
+	}
 
 	if meeting.TranscriptSegments != "" {
 		var segments []speakerSegment
