@@ -336,8 +336,14 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		return nil
 	}
 
-	if meeting.Status == model.StatusDone || meeting.Status == model.StatusError {
-		log.Printf("Skipping merge for meeting %s (status=%s)", meetingID, meeting.Status)
+	// Whitelist guard — only process when the meeting is still in the
+	// `transcribing` state. `EventBridge` is at-least-once: if the same
+	// `AllPartsTranscribed` event re-invokes after the first call has
+	// flipped the status to `summarizing`, the second invoke would
+	// otherwise run a duplicate Bedrock summary + KB export + DynamoDB
+	// write. Matches `handlePartTranscript`'s guard for consistency.
+	if meeting.Status != model.StatusTranscribing {
+		log.Printf("Skipping merge for meeting %s (status=%s, expected=transcribing)", meetingID, meeting.Status)
 		return nil
 	}
 
@@ -476,6 +482,17 @@ func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) stri
 		}
 		linked, err := repo.GetMeetingByID(ctx, linkedID)
 		if err != nil || linked == nil || linked.Content == "" {
+			continue
+		}
+		// Defense-in-depth: `LinkMeetings` handler validates ownership at
+		// link time, but if a future code path (direct DDB write, admin
+		// import, migration) ever planted another user's id into
+		// LinkedMeetingIDs we don't want to embed their summary into this
+		// meeting's prompt. Skip silently so the prompt remains valid but
+		// drops the orphaned reference.
+		if linked.UserID != meeting.UserID {
+			log.Printf("Skipping linked meeting %s — owner mismatch (%s vs %s)",
+				linkedID, linked.UserID, meeting.UserID)
 			continue
 		}
 

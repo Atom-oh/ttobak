@@ -549,7 +549,11 @@ func (r *DynamoDBRepository) IncrementAudioPartsReady(ctx context.Context, userI
 		ConditionExpression: aws.String("attribute_exists(PK)"),
 	}); mirrorErr != nil {
 		// Stale audioPartsReady is preferable to retrying — the set is
-		// the source of truth and emit-decision already happened.
+		// the source of truth and the emit-all-parts decision already
+		// happened above. Log so CloudWatch surfaces the drift instead
+		// of silently leaving the frontend progress bar stuck.
+		log.Printf("Failed to mirror audioPartsReady for meeting %s (partIndex=%d): %v",
+			meetingID, partIndex, mirrorErr)
 	}
 
 	return partsReady, meeting.AudioPartCount, nil
