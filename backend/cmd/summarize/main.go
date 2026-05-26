@@ -333,7 +333,20 @@ func handlePartTranscript(ctx context.Context, bucket, key string) error {
 			return nil
 		}
 		log.Printf("All %d parts transcribed for meeting %s, emitting AllPartsTranscribed", partCount, meetingID)
-		return emitAllPartsTranscribedEvent(ctx, meetingID, meeting.UserID, partCount, bucket)
+		if emitErr := emitAllPartsTranscribedEvent(ctx, meetingID, meeting.UserID, partCount, bucket); emitErr != nil {
+			// Compensation path: release the lock so the next Lambda retry
+			// can re-claim and re-emit. Without this, EventBridge throttle
+			// / transient PutEvents failure would leave the meeting
+			// permanently stuck in `transcribing` (30-min auto-expiry
+			// would eventually flip it to `error`, but that's a poor UX).
+			// Return the emit error so the Lambda runtime retries.
+			if releaseErr := repo.ReleaseAllPartsEmit(ctx, meeting.UserID, meetingID); releaseErr != nil {
+				log.Printf("CRITICAL: lock-release failed after emit failure for meeting %s: %v (emit err: %v)",
+					meetingID, releaseErr, emitErr)
+			}
+			return emitErr
+		}
+		return nil
 	}
 
 	return nil

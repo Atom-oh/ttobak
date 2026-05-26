@@ -559,6 +559,29 @@ func (r *DynamoDBRepository) IncrementAudioPartsReady(ctx context.Context, userI
 	return partsReady, meeting.AudioPartCount, nil
 }
 
+// ReleaseAllPartsEmit clears the `allPartsEmittedAt` lock. Use this as the
+// compensation path when the caller successfully claimed the emit lock but
+// then the downstream `PutEvents` call failed — without the release, a
+// throttle/network failure on PutEvents would leave the meeting permanently
+// `transcribing` because every retry would see `claim=false` and skip.
+//
+// Safe to call when the field doesn't exist (idempotent REMOVE).
+func (r *DynamoDBRepository) ReleaseAllPartsEmit(ctx context.Context, userID, meetingID string) error {
+	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression:    aws.String("REMOVE allPartsEmittedAt"),
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to release all-parts emit lock: %w", err)
+	}
+	return nil
+}
+
 // ClaimAllPartsEmit attempts to atomically claim the right to emit the
 // `AllPartsTranscribed` EventBridge event for this meeting. Returns
 // (true, nil) for the first caller that wins the conditional write;
@@ -567,6 +590,11 @@ func (r *DynamoDBRepository) IncrementAudioPartsReady(ctx context.Context, userI
 //
 // Used to make `emitAllPartsTranscribedEvent` once-only despite S3
 // at-least-once redelivery of part transcripts.
+//
+// IMPORTANT: callers must invoke `ReleaseAllPartsEmit` if the downstream
+// emit (PutEvents) subsequently fails. Otherwise a transient throttle on
+// EventBridge will leave the meeting `transcribing` forever — every Lambda
+// retry will see `claim=false` and silently skip.
 func (r *DynamoDBRepository) ClaimAllPartsEmit(ctx context.Context, userID, meetingID string) (bool, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
