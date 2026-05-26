@@ -10,7 +10,7 @@
 # English
 
 ## Status
-Accepted — Phases 1, 2, 4, 5 implemented (2026-05-26). Phase 3 (summarize merge) and Phase 6 (linked meetings) pending.
+Accepted — Phases 1–5 implemented. Phase 6 partially implemented (display chips in `MeetingHeader`, `meetingsApi.link()` client wired; picker UI to create/edit links from the frontend still pending).
 
 ## Context
 
@@ -119,12 +119,13 @@ For linked meetings, the `Meeting` model gains a `LinkedMeetingIDs []string` fie
 - Unicode NFC normalization for Korean filenames in ECS env vars (fix: 2026-05-26)
 - **Gap**: Does not yet increment `AudioPartsReady` or emit "all parts done" event
 
-### Phase 3: Summarize Lambda (Merge Logic) — Not Started
-- New handler for "all parts ready" event
-- Load all `transcripts/{meetingId}_part_*.json`, sort by part index
-- Compute timestamp offsets from audio duration (stored in part transcript metadata or S3 object metadata)
-- Concatenate segments, write merged `transcripts/{meetingId}.json`
-- Proceed with existing summary pipeline
+### Phase 3: Summarize Lambda (Merge Logic) ✅ (Done)
+- `handlePartTranscript`: each part transcript triggers counter increment via `IncrementAudioPartsReady`
+- When all parts ready, `emitAllPartsTranscribedEvent` publishes custom EventBridge event
+- `AllPartsTranscribedRule` EventBridge rule routes to summarize Lambda
+- `handleAllPartsTranscribed` → `mergePartTranscripts` (in `merge.go`)
+- Merge logic: list S3 `transcripts/{meetingId}_part_*`, sort by index, refine each via Bedrock, offset timestamps cumulatively, concatenate
+- Proceeds with normal `generateSummary` pipeline on merged transcript
 
 ### Phase 4: Frontend Multi-File Upload ✅ (Done — 2026-05-26)
 - `AudioUploader` accepts `multiple` files with drag-and-drop reordering
@@ -181,7 +182,7 @@ For linked meetings, the `Meeting` model gains a `LinkedMeetingIDs []string` fie
 # 한국어
 
 ## 상태
-채택됨 — Phase 1, 2, 4, 5 구현 완료 (2026-05-26). Phase 3 (요약 병합)과 Phase 6 (후속 미팅 링크)은 미구현.
+채택됨 — Phase 1–5 구현 완료. Phase 6는 부분 구현 (MeetingHeader에 연결된 미팅 칩 표시, `meetingsApi.link()` 클라이언트 추가됨. 프론트엔드에서 링크를 생성/편집하는 picker UI는 미구현).
 
 ## 배경
 
@@ -283,12 +284,13 @@ Summarize 단계의 트랜스크립트 병합 로직은 간단합니다: 파트 
 - 한국어 파일명에 대한 Unicode NFC 정규화 (수정: 2026-05-26)
 - **미완**: `AudioPartsReady` 증가 및 "모든 파트 완료" 이벤트 발행 미구현
 
-### Phase 3: Summarize Lambda (병합 로직) — 미시작
-- "모든 파트 준비 완료" 이벤트를 위한 새 핸들러
-- 모든 `transcripts/{meetingId}_part_*.json` 로드, 파트 인덱스로 정렬
-- 오디오 길이로 타임스탬프 오프셋 계산
-- 세그먼트 연결, 병합된 `transcripts/{meetingId}.json` 작성
-- 기존 요약 파이프라인 실행
+### Phase 3: Summarize Lambda (병합 로직) ✅ (완료)
+- `handlePartTranscript`: 각 파트 트랜스크립트가 `IncrementAudioPartsReady` 카운터 증가 트리거
+- 모든 파트 준비 시 `emitAllPartsTranscribedEvent`가 커스텀 EventBridge 이벤트 발행
+- `AllPartsTranscribedRule` EventBridge 규칙이 summarize Lambda로 라우팅
+- `handleAllPartsTranscribed` → `mergePartTranscripts` (`merge.go`)
+- 병합 로직: S3에서 `transcripts/{meetingId}_part_*` 목록 조회, 인덱스 정렬, 각각 Bedrock 정제, 누적 타임스탬프 오프셋, 연결
+- 병합된 트랜스크립트로 기존 `generateSummary` 파이프라인 실행
 
 ### Phase 4: 프런트엔드 멀티파일 업로드 ✅ (완료 — 2026-05-26)
 - `AudioUploader`가 드래그앤드롭 재정렬로 `multiple` 파일 허용

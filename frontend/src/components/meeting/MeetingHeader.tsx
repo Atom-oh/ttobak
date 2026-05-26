@@ -128,6 +128,28 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange }: Me
           </h1>
         )}
 
+        {/* Linked predecessor meetings (ADR-014 Phase 6) — shown as clickable chips.
+            The summarize Lambda already injects these meetings' summaries as prior
+            context, so surfacing them here lets the user jump back to source material. */}
+        {meeting.linkedMeetingIds && meeting.linkedMeetingIds.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 mb-4 text-xs">
+            <span className="text-slate-400 dark:text-[#849396] font-medium">
+              <span className="material-symbols-outlined text-sm align-middle mr-1">link</span>
+              연결된 이전 미팅:
+            </span>
+            {meeting.linkedMeetingIds.map((linkedId) => (
+              <Link
+                key={linkedId}
+                href={`/meeting/${linkedId}`}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-primary/5 dark:bg-primary/10 text-primary hover:bg-primary/10 dark:hover:bg-primary/20 transition-colors font-mono"
+                title="이전 미팅으로 이동"
+              >
+                {linkedId.slice(-8)}
+              </Link>
+            ))}
+          </div>
+        )}
+
         {/* Participants & Actions */}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
