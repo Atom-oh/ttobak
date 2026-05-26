@@ -261,7 +261,10 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 
 	log.Printf("Updated meeting %s with transcript (nova=%v)", meetingID, isNova)
 
-	// Re-fetch meeting for summary generation
+	// Re-fetch meeting for summary generation. The earlier `meeting` from the
+	// status guard at the top of this function may be nil (GSI eventual
+	// consistency) — we shadow it here and the explicit nil/error returns
+	// below guarantee `meeting` is non-nil before any field access.
 	meeting, err = repo.GetMeetingByID(ctx, meetingID)
 	if err != nil || meeting == nil {
 		log.Printf("Failed to get meeting via GSI, retrying after 1s: %v", err)
@@ -277,6 +280,7 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 		return nil
 	}
 
+	// `meeting` is guaranteed non-nil here by the retry block above.
 	priorContext := buildLinkedMeetingContext(ctx, meeting)
 	return generateSummary(ctx, meeting, priorContext)
 }
@@ -445,6 +449,17 @@ func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext s
 	return nil
 }
 
+// truncateRunes returns at most `n` runes of `s` plus an ellipsis when truncated.
+// Used instead of byte slicing for Korean / mixed-script content where naive
+// `s[:n]` can cut mid-rune and produce invalid UTF-8.
+func truncateRunes(s string, n int) string {
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n]) + "..."
+}
+
 // buildLinkedMeetingContext fetches summaries from linked predecessor meetings
 func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) string {
 	if len(meeting.LinkedMeetingIDs) == 0 {
@@ -464,10 +479,7 @@ func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) stri
 			continue
 		}
 
-		summary := linked.Content
-		if len(summary) > 2000 {
-			summary = summary[:2000] + "..."
-		}
+		summary := truncateRunes(linked.Content, 2000)
 
 		title := linked.Title
 		if title == "" {
@@ -477,11 +489,7 @@ func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) stri
 		sb.WriteString(fmt.Sprintf("### 이전 회의: %s\n%s\n\n", title, summary))
 
 		if linked.ActionItems != "" {
-			items := linked.ActionItems
-			if len(items) > 500 {
-				items = items[:500] + "..."
-			}
-			sb.WriteString(fmt.Sprintf("#### 액션 아이템\n%s\n\n", items))
+			sb.WriteString(fmt.Sprintf("#### 액션 아이템\n%s\n\n", truncateRunes(linked.ActionItems, 500)))
 		}
 
 		count++

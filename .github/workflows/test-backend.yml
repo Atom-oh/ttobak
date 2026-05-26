@@ -16,6 +16,9 @@ on:
       - 'backend/go.*'
       - 'backend/whisper/**'
       - 'backend/python/**'
+      # Re-run on workflow changes so PRs that only touch CI still trigger
+      # the required `test` check (branch protection blocks otherwise).
+      - '.github/workflows/test-backend.yml'
 
 permissions:
   contents: read
@@ -27,7 +30,9 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.24'
+          # Match backend/go.mod's `go 1.25.0`. With '1.24' the build fails
+          # with `go.mod requires go >= 1.25.0 (running go 1.24.13)`.
+          go-version: '1.25'
 
       - name: Build all Lambda binaries
         working-directory: backend

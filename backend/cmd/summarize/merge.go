@@ -82,10 +82,21 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 
 		allTexts = append(allTexts, transcript)
 
-		// Determine this part's duration from its last segment
+		// Determine this part's duration with a fallback chain so a single
+		// failed refinement doesn't silently collapse the rest of the
+		// timeline onto offset=0:
+		//   1. last refined segment's EndTime (preferred — already in target shape)
+		//   2. last raw Whisper segment's End (covers RefineTranscript failure)
+		//   3. 0 (only when both lists are empty — part is effectively silent)
 		var partDuration float64
 		if len(segments) > 0 {
 			partDuration = segments[len(segments)-1].EndTime
+		} else if len(whisperSegments) > 0 {
+			partDuration = whisperSegments[len(whisperSegments)-1].End
+			log.Printf(
+				"Part %d had no refined segments; using raw Whisper end=%.2fs as duration",
+				part.index, partDuration,
+			)
 		}
 
 		// Offset segment timestamps and append to merged list

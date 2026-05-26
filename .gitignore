@@ -62,7 +62,7 @@ review/*.png
 .playwright-mcp/
 
 # Codex CLI session state
-.codex/
+.codex
 
 # Graphify analysis output
 graphify-out/
