@@ -55,10 +55,12 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	var allSegments []TranscriptSegmentOut
 	var cumulativeOffset float64
 
+	var parseFailures int
 	for _, part := range parts {
 		transcript, segments, whisperSegments, parseErr := downloadAndParseTranscript(ctx, bucket, part.key)
 		if parseErr != nil {
 			log.Printf("Failed to parse part %d transcript: %v", part.index, parseErr)
+			parseFailures++
 			continue
 		}
 
@@ -101,6 +103,9 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 
 	if len(allTexts) == 0 {
 		return "", nil, fmt.Errorf("no valid transcripts found for meeting %s", meetingID)
+	}
+	if parseFailures > 0 {
+		return "", nil, fmt.Errorf("merge aborted: %d of %d parts failed to parse for meeting %s", parseFailures, len(parts), meetingID)
 	}
 
 	mergedText := strings.Join(allTexts, "\n\n")

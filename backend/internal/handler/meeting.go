@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -105,15 +106,27 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set linked meeting IDs if provided
+	// Set linked meeting IDs if provided (validate ownership to prevent cross-user leakage)
 	if len(req.LinkedMeetingIDs) > 0 {
 		if len(req.LinkedMeetingIDs) > 3 {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Maximum 3 linked predecessors")
 			return
 		}
-		_ = h.repo.UpdateMeetingFields(ctx, userID, meeting.MeetingID, map[string]interface{}{
+		for _, linkedID := range req.LinkedMeetingIDs {
+			if linkedID == meeting.MeetingID {
+				continue
+			}
+			linked, lookupErr := h.repo.GetMeeting(ctx, userID, linkedID)
+			if lookupErr != nil || linked == nil {
+				writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, fmt.Sprintf("Linked meeting %s not found or not owned", linkedID))
+				return
+			}
+		}
+		if err := h.repo.UpdateMeetingFields(ctx, userID, meeting.MeetingID, map[string]interface{}{
 			"linkedMeetingIds": req.LinkedMeetingIDs,
-		})
+		}); err != nil {
+			log.Printf("Failed to set linkedMeetingIds: %v", err)
+		}
 	}
 
 	response := map[string]interface{}{

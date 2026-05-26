@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -469,7 +470,7 @@ func (r *DynamoDBRepository) PreAllocateAudioKeys(ctx context.Context, userID, m
 }
 
 // SetAudioKeyAtIndex sets a specific index in the audioKeys list. Idempotent — re-uploading
-// the same part overwrites the same slot.
+// the same part overwrites the same slot. Validates index is within pre-allocated range.
 func (r *DynamoDBRepository) SetAudioKeyAtIndex(ctx context.Context, userID, meetingID, key string, partIndex int) error {
 	indexPath := fmt.Sprintf("audioKeys[%d]", partIndex)
 
@@ -487,8 +488,9 @@ func (r *DynamoDBRepository) SetAudioKeyAtIndex(ctx context.Context, userID, mee
 			":key":          &types.AttributeValueMemberS{Value: key},
 			":transcribing": &types.AttributeValueMemberS{Value: model.StatusTranscribing},
 			":now":          &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339Nano)},
+			":idx":          &types.AttributeValueMemberN{Value: strconv.Itoa(partIndex)},
 		},
-		ConditionExpression: aws.String("attribute_exists(PK) AND attribute_exists(audioKeys)"),
+		ConditionExpression: aws.String("attribute_exists(PK) AND attribute_exists(audioKeys) AND size(audioKeys) > :idx"),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to set audio key at index %d: %w", partIndex, err)
@@ -496,19 +498,19 @@ func (r *DynamoDBRepository) SetAudioKeyAtIndex(ctx context.Context, userID, mee
 	return nil
 }
 
-// IncrementAudioPartsReady atomically increments audioPartsReady and returns the new values.
-// Uses ReturnValues: ALL_NEW to avoid a separate read after increment.
-func (r *DynamoDBRepository) IncrementAudioPartsReady(ctx context.Context, userID, meetingID string) (partsReady, partCount int, err error) {
+// IncrementAudioPartsReady atomically adds partIndex to a Number Set (audioPartsReadySet),
+// making it idempotent on re-upload of the same part. Returns the set size as partsReady.
+func (r *DynamoDBRepository) IncrementAudioPartsReady(ctx context.Context, userID, meetingID string, partIndex int) (partsReady, partCount int, err error) {
 	result, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(r.tableName),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 		},
-		UpdateExpression: aws.String("ADD audioPartsReady :one SET updatedAt = :now"),
+		UpdateExpression: aws.String("ADD audioPartsReadySet :partSet SET updatedAt = :now"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":one": &types.AttributeValueMemberN{Value: "1"},
-			":now": &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339Nano)},
+			":partSet": &types.AttributeValueMemberNS{Value: []string{strconv.Itoa(partIndex)}},
+			":now":     &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339Nano)},
 		},
 		ConditionExpression: aws.String("attribute_exists(PK)"),
 		ReturnValues:        types.ReturnValueAllNew,
@@ -517,11 +519,17 @@ func (r *DynamoDBRepository) IncrementAudioPartsReady(ctx context.Context, userI
 		return 0, 0, fmt.Errorf("failed to increment audio parts ready: %w", err)
 	}
 
+	attrs := result.Attributes
+	// Count ready parts from the returned Number Set
+	if ns, ok := attrs["audioPartsReadySet"].(*types.AttributeValueMemberNS); ok {
+		partsReady = len(ns.Value)
+	}
+	// Read audioPartCount from the item
 	var meeting model.Meeting
-	if unmarshalErr := attributevalue.UnmarshalMap(result.Attributes, &meeting); unmarshalErr != nil {
+	if unmarshalErr := attributevalue.UnmarshalMap(attrs, &meeting); unmarshalErr != nil {
 		return 0, 0, fmt.Errorf("failed to unmarshal updated meeting: %w", unmarshalErr)
 	}
-	return meeting.AudioPartsReady, meeting.AudioPartCount, nil
+	return partsReady, meeting.AudioPartCount, nil
 }
 
 // DeleteMeeting deletes a meeting and all related items atomically using TransactWriteItems.

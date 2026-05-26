@@ -303,7 +303,7 @@ func handlePartTranscript(ctx context.Context, bucket, key string) error {
 		return nil
 	}
 
-	partsReady, partCount, err := repo.IncrementAudioPartsReady(ctx, meeting.UserID, meetingID)
+	partsReady, partCount, err := repo.IncrementAudioPartsReady(ctx, meeting.UserID, meetingID, partIndex)
 	if err != nil {
 		log.Printf("Failed to increment parts ready for meeting %s: %v", meetingID, err)
 		return nil

@@ -19,6 +19,8 @@ import (
 	ecsTypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
@@ -82,6 +84,8 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	if decoded, err := url.QueryUnescape(key); err == nil {
 		key = decoded
 	}
+	// macOS stores filenames in NFD (decomposed jamo); ECS RunTask rejects non-NFC env vars
+	key = norm.NFC.String(key)
 
 	log.Printf("Processing S3 event: bucket=%s, key=%s", bucket, key)
 
