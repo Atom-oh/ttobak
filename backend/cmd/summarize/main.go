@@ -133,12 +133,30 @@ type TranscribeItem struct {
 	} `json:"alternatives"`
 }
 
-// TranscriptSegmentOut represents a speaker-labeled transcript segment for the API response
+// TranscriptSegmentOut represents a speaker-labeled transcript segment for the API response.
+// `ID` is assigned at save time (see `assignSegmentIDs`) so frontend deep links
+// from the AI summary (ADR-013 `transcript://{id}`) can resolve to a stable
+// scroll target.
 type TranscriptSegmentOut struct {
+	ID        string  `json:"id,omitempty"`
 	Speaker   string  `json:"speaker"`
 	Text      string  `json:"text"`
 	StartTime float64 `json:"startTime"`
 	EndTime   float64 `json:"endTime"`
+}
+
+// assignSegmentIDs gives every segment a deterministic, stable identifier the
+// frontend uses as the scroll-target DOM id (`ts-{ID}`). Per ADR-013 we use
+// the rounded-millisecond start time as the ID — unique within a meeting
+// because transcript segments do not overlap, and stable across re-renders
+// since the value derives entirely from the segment data itself.
+func assignSegmentIDs(segs []TranscriptSegmentOut) {
+	for i := range segs {
+		if segs[i].ID != "" {
+			continue
+		}
+		segs[i].ID = fmt.Sprintf("seg-%d", int64(segs[i].StartTime*1000))
+	}
 }
 
 // Handler processes EventBridge events: S3 transcript uploads and custom AllPartsTranscribed events
@@ -634,6 +652,9 @@ func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, 
 	}
 
 	if len(segments) > 0 {
+		// ADR-013: ensure every segment carries a stable ID so the AI summary
+		// can deep-link into the transcript via `transcript://{id}`.
+		assignSegmentIDs(segments)
 		segJSON, err := json.Marshal(segments)
 		if err == nil {
 			fields["transcriptSegments"] = string(segJSON)

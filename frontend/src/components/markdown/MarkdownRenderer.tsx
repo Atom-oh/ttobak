@@ -89,6 +89,36 @@ const components: Components = {
   a(props: AnchorHTMLAttributes<HTMLAnchorElement> & { children?: ReactNode }) {
     const { href, children, ...rest } = props;
     const isExternal = href?.startsWith('http');
+    // ADR-013: summary deep links to transcript segments. The backend emits
+    // `transcript://{segmentId}`; we resolve that to the corresponding DOM
+    // anchor `#ts-{segmentId}` rendered by TranscriptSection and intercept
+    // clicks for smooth-scroll + brief highlight.
+    const isTranscript = href?.startsWith('#ts-') || href?.startsWith('transcript://');
+    if (isTranscript) {
+      const segmentId = href!.startsWith('transcript://')
+        ? href!.slice('transcript://'.length)
+        : href!.slice('#ts-'.length);
+      const onClick: React.MouseEventHandler<HTMLAnchorElement> = (e) => {
+        e.preventDefault();
+        const el = document.getElementById(`ts-${segmentId}`);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('ring-2', 'ring-primary/50', 'dark:ring-[#00E5FF]/50');
+        window.setTimeout(() => {
+          el.classList.remove('ring-2', 'ring-primary/50', 'dark:ring-[#00E5FF]/50');
+        }, 1800);
+      };
+      return (
+        <a
+          href={`#ts-${segmentId}`}
+          onClick={onClick}
+          className="text-[#3211d4] dark:text-[#00E5FF] underline underline-offset-2 decoration-dotted decoration-[#3211d4]/40 dark:decoration-[#00E5FF]/40 hover:decoration-solid hover:decoration-[#3211d4] dark:hover:decoration-[#00E5FF] transition-colors text-[13px] tabular-nums ml-1 align-baseline"
+          title="회의록의 해당 발언으로 이동"
+        >
+          {children}
+        </a>
+      );
+    }
     return (
       <a
         href={href}

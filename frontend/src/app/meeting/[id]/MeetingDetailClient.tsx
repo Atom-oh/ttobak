@@ -44,6 +44,18 @@ function resolveAttachmentUrls(content: string, attachments?: import('@/types/me
   });
 }
 
+/**
+ * ADR-013: rewrite `transcript://{segmentId}` deep links emitted by the
+ * summarize Lambda into in-page `#ts-{segmentId}` anchors. rehype-sanitize's
+ * default schema only permits http/https/mailto/tel/hash hrefs, so the
+ * `transcript://` scheme would otherwise be stripped. `MarkdownRenderer`
+ * detects the `#ts-` prefix and attaches smooth-scroll + highlight on click.
+ */
+function resolveTranscriptLinks(content: string): string {
+  if (!content) return content;
+  return content.replace(/transcript:\/\/([a-zA-Z0-9_\-]+)/g, '#ts-$1');
+}
+
 /** Normalize action items from API — handles legacy `done` field and missing `id` */
 function normalizeActionItems(raw: unknown): ActionItem[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
@@ -244,7 +256,9 @@ function MeetingDetailContent() {
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showUploader, setShowUploader] = useState(false);
+  const [showAudioUploader, setShowAudioUploader] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioUrls, setAudioUrls] = useState<string[]>([]);
 
   // Extract meeting ID from URL. usePathname() updates on client-side navigation,
   // unlike window.location.pathname in a mount-only effect which goes stale.
@@ -256,12 +270,15 @@ function MeetingDetailContent() {
     [pathname]
   );
 
-  // Fetch a fresh presigned audio URL when meeting has audio and is done
+  const hasAudio = meeting?.audioKey || (meeting?.audioKeys && meeting.audioKeys.length > 0);
   useEffect(() => {
-    if (meeting?.audioKey && meeting.status === 'done' && meetingId) {
-      meetingsApi.audioUrl(meetingId).then(res => setAudioUrl(res.audioUrl)).catch(() => {});
+    if (hasAudio && meeting?.status === 'done' && meetingId) {
+      meetingsApi.audioUrl(meetingId).then(res => {
+        if (res.audioUrls?.length) setAudioUrls(res.audioUrls);
+        if (res.audioUrl) setAudioUrl(res.audioUrl);
+      }).catch(() => {});
     }
-  }, [meeting?.audioKey, meeting?.status, meetingId]);
+  }, [hasAudio, meeting?.status, meetingId]);
 
   useEffect(() => {
     if (!isAuthenticated || !meetingId) return;
@@ -434,8 +451,8 @@ function MeetingDetailContent() {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-12">
               <div className="lg:col-span-7">
                 <AISummaryCard
-                  content={resolveAttachmentUrls(meeting.content || '', meeting.attachments)}
-                  summary={meeting.summary}
+                  content={resolveTranscriptLinks(resolveAttachmentUrls(meeting.content || '', meeting.attachments))}
+                  summary={resolveTranscriptLinks(meeting.summary || '')}
                   transcriptA={meeting.transcriptA}
                   onSave={async (html) => {
                     await meetingsApi.update(meeting.meetingId, { content: html });
@@ -550,9 +567,25 @@ function MeetingDetailContent() {
           </section>
 
           {/* Audio Player / Uploader */}
-          {audioUrl ? (
-            <AudioPlayer audioUrl={audioUrl} />
-          ) : (meeting.status === 'done' || meeting.status === 'error') && !meeting.audioKey ? (
+          {audioUrls.length > 0 || audioUrl ? (
+            <>
+              <AudioPlayer audioUrl={audioUrl ?? undefined} audioUrls={audioUrls.length > 0 ? audioUrls : undefined} />
+              {(meeting.status === 'done' || meeting.status === 'error') && !showAudioUploader && (
+                <div className="flex justify-center mt-4">
+                  <button
+                    onClick={() => setShowAudioUploader(true)}
+                    className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-primary transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-lg">add_circle</span>
+                    오디오 파일 추가
+                  </button>
+                </div>
+              )}
+              {showAudioUploader && (
+                <AudioUploader meetingId={meeting.meetingId} onUploadComplete={() => { setShowAudioUploader(false); refetchMeeting(); }} />
+              )}
+            </>
+          ) : (meeting.status === 'done' || meeting.status === 'error') && !hasAudio ? (
             <AudioUploader meetingId={meeting.meetingId} onUploadComplete={refetchMeeting} />
           ) : null}
           </div>
