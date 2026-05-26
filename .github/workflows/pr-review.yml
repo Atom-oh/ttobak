@@ -27,10 +27,16 @@ jobs:
 
       - name: Get PR diff
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
+          # Use local `git diff` instead of `gh pr diff` because the GitHub
+          # REST API caps PR diffs at 300 files and returns 406 ("PullRequest.diff
+          # too_large") above that. `fetch-depth: 0` in the checkout step gives
+          # us the full history locally, so a three-dot diff against the merge
+          # base works without an API call and has no file-count limit.
+          git fetch origin "$BASE_SHA" --depth=1 || true
+          git diff "$BASE_SHA"..."$HEAD_SHA" > /tmp/pr-diff.txt
           TOTAL_LINES=$(wc -l < /tmp/pr-diff.txt)
           echo "total_lines=$TOTAL_LINES" >> "$GITHUB_ENV"
           echo "Diff: $TOTAL_LINES lines"
