@@ -10,7 +10,7 @@
 # English
 
 ## Status
-Accepted — Phases 1–5 implemented. Phase 6 partially implemented (display chips in `MeetingHeader`, `meetingsApi.link()` client wired; picker UI to create/edit links from the frontend still pending).
+Accepted — Phases 1–6 implemented. Phase 6 picker (`LinkMeetingsModal`) opens from `MeetingHeader`, lists user's meetings excluding self and future-dated, multi-selects predecessors, and persists via `meetingsApi.link()`. Selection is ordered chronologically before save so the summarize Lambda prepends summaries in monotonic order.
 
 ## Context
 
@@ -182,7 +182,7 @@ For linked meetings, the `Meeting` model gains a `LinkedMeetingIDs []string` fie
 # 한국어
 
 ## 상태
-채택됨 — Phase 1–5 구현 완료. Phase 6는 부분 구현 (MeetingHeader에 연결된 미팅 칩 표시, `meetingsApi.link()` 클라이언트 추가됨. 프론트엔드에서 링크를 생성/편집하는 picker UI는 미구현).
+채택됨 — Phase 1–6 구현 완료. Phase 6 picker(`LinkMeetingsModal`)가 `MeetingHeader`에서 열리며, 사용자 미팅 목록에서 자신과 미래 미팅을 제외하고 다중 선택해 `meetingsApi.link()`로 저장. 저장 직전 선택을 날짜순(오래된→최신)으로 정렬해 요약 Lambda가 시간 순서대로 prior context를 prepend하도록 함.
 
 ## 배경
 

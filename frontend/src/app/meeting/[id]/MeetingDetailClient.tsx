@@ -425,6 +425,7 @@ function MeetingDetailContent() {
                 setMeeting(meeting);
               }
             }}
+            onLinkedMeetingsChange={(ids) => setMeeting({ ...meeting, linkedMeetingIds: ids })}
           />
 
           {/* Recovery banner for crashed recordings */}
