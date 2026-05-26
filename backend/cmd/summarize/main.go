@@ -316,6 +316,22 @@ func handlePartTranscript(ctx context.Context, bucket, key string) error {
 	log.Printf("Meeting %s: parts ready %d/%d", meetingID, partsReady, partCount)
 
 	if partsReady >= partCount && partCount > 0 {
+		// Once-only emit lock: S3 part transcripts can be redelivered (S3
+		// notifications are at-least-once via EventBridge), and every retry
+		// would otherwise re-emit `AllPartsTranscribed` here. The
+		// `handleAllPartsTranscribed` whitelist guard catches duplicates
+		// downstream, but the spurious events still cost CloudWatch + IAM
+		// throttle budget. `ClaimAllPartsEmit` writes
+		// `allPartsEmittedAt` only when not already set.
+		claimed, claimErr := repo.ClaimAllPartsEmit(ctx, meeting.UserID, meetingID)
+		if claimErr != nil {
+			log.Printf("Failed to claim all-parts emit for meeting %s: %v", meetingID, claimErr)
+			return nil
+		}
+		if !claimed {
+			log.Printf("Skipping duplicate AllPartsTranscribed emit for meeting %s (already emitted)", meetingID)
+			return nil
+		}
 		log.Printf("All %d parts transcribed for meeting %s, emitting AllPartsTranscribed", partCount, meetingID)
 		return emitAllPartsTranscribedEvent(ctx, meetingID, meeting.UserID, partCount, bucket)
 	}

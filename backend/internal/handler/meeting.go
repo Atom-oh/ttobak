@@ -478,7 +478,11 @@ func (h *MeetingHandler) LinkMeetings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify ownership of all linked predecessors.
+	// Verify ownership of all linked predecessors and reject cycles.
+	// `buildLinkedMeetingContext` only walks one level (max 3 predecessors),
+	// so infinite traversal isn't possible, but a 1-hop cycle (A→B + B→A)
+	// would still produce broken breadcrumb chains and waste tokens by
+	// embedding the parent's own summary back into its own prompt.
 	for _, linkedID := range req.LinkedMeetingIDs {
 		if linkedID == meetingID {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Cannot link a meeting to itself")
@@ -492,6 +496,16 @@ func (h *MeetingHandler) LinkMeetings(w http.ResponseWriter, r *http.Request) {
 		if linked == nil {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, fmt.Sprintf("Linked meeting %s not found", linkedID))
 			return
+		}
+		// Reject 1-hop reverse references — if `linked` already lists
+		// `meetingID` as one of ITS predecessors, this link would form
+		// a cycle.
+		for _, reverseID := range linked.LinkedMeetingIDs {
+			if reverseID == meetingID {
+				writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest,
+					fmt.Sprintf("Cannot link to %s — that meeting already lists this one as a predecessor (cycle)", linkedID))
+				return
+			}
 		}
 	}
 

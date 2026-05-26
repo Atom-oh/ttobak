@@ -559,6 +559,40 @@ func (r *DynamoDBRepository) IncrementAudioPartsReady(ctx context.Context, userI
 	return partsReady, meeting.AudioPartCount, nil
 }
 
+// ClaimAllPartsEmit attempts to atomically claim the right to emit the
+// `AllPartsTranscribed` EventBridge event for this meeting. Returns
+// (true, nil) for the first caller that wins the conditional write;
+// returns (false, nil) for every subsequent caller (lost race or
+// EventBridge redelivery). Returns (false, err) on real DynamoDB errors.
+//
+// Used to make `emitAllPartsTranscribedEvent` once-only despite S3
+// at-least-once redelivery of part transcripts.
+func (r *DynamoDBRepository) ClaimAllPartsEmit(ctx context.Context, userID, meetingID string) (bool, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String("SET allPartsEmittedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":now": &types.AttributeValueMemberS{Value: now},
+		},
+		// Only succeed when the field hasn't been written yet.
+		ConditionExpression: aws.String("attribute_exists(PK) AND attribute_not_exists(allPartsEmittedAt)"),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			// Lost the race — another invocation already claimed the emit.
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to claim all-parts emit lock: %w", err)
+	}
+	return true, nil
+}
+
 // DeleteMeeting deletes a meeting and all related items atomically using TransactWriteItems.
 // DynamoDB TransactWriteItems supports up to 100 items per transaction.
 func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingID string) error {

@@ -19,6 +19,12 @@ type Meeting struct {
 	AudioKeys          []string  `dynamodbav:"audioKeys,omitempty"`          // Ordered S3 keys for multi-file uploads
 	AudioPartCount     int       `dynamodbav:"audioPartCount,omitempty"`     // Total parts expected
 	AudioPartsReady    int       `dynamodbav:"audioPartsReady,omitempty"`    // Parts with completed transcription
+	// AllPartsEmittedAt marks the moment we first emitted the
+	// `AllPartsTranscribed` EventBridge event for this meeting. Used as a
+	// once-only lock so EventBridge at-least-once re-deliveries of part
+	// transcripts don't republish duplicate events. Populated via
+	// conditional update `SET allPartsEmittedAt = :now WHERE attribute_not_exists(...)`.
+	AllPartsEmittedAt  string    `dynamodbav:"allPartsEmittedAt,omitempty"`
 	SttProvider        string    `dynamodbav:"sttProvider,omitempty"`        // "transcribe" or "nova-sonic"
 	TranscriptSegments string    `dynamodbav:"transcriptSegments,omitempty"` // JSON string of speaker-labeled segments
 	ActionItems        string            `dynamodbav:"actionItems,omitempty"`        // JSON string of extracted action items
