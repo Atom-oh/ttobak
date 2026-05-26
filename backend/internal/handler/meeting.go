@@ -32,7 +32,10 @@ func NewMeetingHandler(meetingService *service.MeetingService, repo *repository.
 	return h
 }
 
-// ListMeetings handles GET /api/meetings?tab={all|shared}&cursor={lastKey}&limit={20}
+// ListMeetings handles GET /api/meetings?tab={all|shared}&cursor={lastKey}&limit={20}.
+// `tab` defaults to "all"; "shared" returns meetings shared with the caller.
+// `cursor` is the opaque last-evaluated-key from a previous page; `limit` caps
+// page size at 20 items by default.
 func (h *MeetingHandler) ListMeetings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := middleware.GetUserID(ctx)
