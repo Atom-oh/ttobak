@@ -463,7 +463,22 @@ func (h *MeetingHandler) LinkMeetings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify ownership of both this meeting and all linked meetings
+	// Verify ownership of the parent meeting FIRST. `UpdateMeetingFields` is
+	// upsert-style — without this check a user could create a phantom row at
+	// `USER#caller + MEETING#someone-elses-id` (cross-user data leak is
+	// blocked by the PK scoping, but the orphan row would pollute the
+	// caller's list view).
+	parent, err := h.repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		return
+	}
+	if parent == nil {
+		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		return
+	}
+
+	// Verify ownership of all linked predecessors.
 	for _, linkedID := range req.LinkedMeetingIDs {
 		if linkedID == meetingID {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Cannot link a meeting to itself")
@@ -480,7 +495,7 @@ func (h *MeetingHandler) LinkMeetings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	err := h.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+	err = h.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
 		"linkedMeetingIds": req.LinkedMeetingIDs,
 	})
 	if err != nil {

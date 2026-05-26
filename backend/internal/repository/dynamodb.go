@@ -529,6 +529,29 @@ func (r *DynamoDBRepository) IncrementAudioPartsReady(ctx context.Context, userI
 	if unmarshalErr := attributevalue.UnmarshalMap(attrs, &meeting); unmarshalErr != nil {
 		return 0, 0, fmt.Errorf("failed to unmarshal updated meeting: %w", unmarshalErr)
 	}
+
+	// Mirror the set size onto the `audioPartsReady` int field so the API
+	// response and any list-view projection see the current count without
+	// having to read the set themselves. Best-effort second write; the
+	// caller has already learned `partsReady` from the set above and the
+	// emit-all-parts-transcribed decision uses that, so a failure here is
+	// observability-only — log and continue.
+	if _, mirrorErr := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String("SET audioPartsReady = :n"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":n": &types.AttributeValueMemberN{Value: strconv.Itoa(partsReady)},
+		},
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+	}); mirrorErr != nil {
+		// Stale audioPartsReady is preferable to retrying — the set is
+		// the source of truth and emit-decision already happened.
+	}
+
 	return partsReady, meeting.AudioPartCount, nil
 }
 
