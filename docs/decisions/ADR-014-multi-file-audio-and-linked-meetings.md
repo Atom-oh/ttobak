@@ -10,7 +10,7 @@
 # English
 
 ## Status
-Proposed
+Accepted — Phases 1, 2, 4, 5 implemented (2026-05-26). Phase 3 (summarize merge) and Phase 6 (linked meetings) pending.
 
 ## Context
 
@@ -105,35 +105,40 @@ For linked meetings, the `Meeting` model gains a `LinkedMeetingIDs []string` fie
 
 ## Implementation Plan
 
-### Phase 1: Backend Model + Upload API
-- Add `AudioKeys`, `AudioPartCount`, `AudioPartsCompleted` to `Meeting` model
-- Modify `CompleteUpload` to support `partIndex` parameter and list-append semantics
-- Add migration path: `AudioKey` (string) treated as `AudioKeys[0]` for backward compatibility
-- Add `POST /api/upload/multi-complete` or extend existing endpoint with `totalParts` field
+### Phase 1: Backend Model + Upload API ✅ (Done)
+- `AudioKeys`, `AudioPartCount`, `AudioPartsReady` added to `Meeting` model (`model/meeting.go`)
+- `GetEffectiveAudioKeys()` backward-compat helper returns `AudioKeys` or falls back to `[AudioKey]`
+- `CompleteUpload` supports `partIndex`/`totalParts` for multi-file list-append semantics
+- `PreAllocateAudioKeys`, `SetAudioKeyAtIndex`, `IncrementAudioPartsReady` repo methods with DynamoDB conditional expressions
+- `GetAudioURL` handler returns `audioUrls []string` for multi-file meetings
+- Presigned URL endpoint accepts `partIndex`/`totalParts` and generates `part_{NNN}_{filename}` S3 keys
 
-### Phase 2: Transcribe Lambda
-- Detect part index from S3 key pattern `part_{N}_{filename}`
-- Write output to `transcripts/{meetingId}_part_{N}.json`
-- On completion, increment `AudioPartsCompleted` via atomic counter
-- If `AudioPartsCompleted == AudioPartCount`, emit a custom EventBridge event to trigger merge
+### Phase 2: Transcribe Lambda ✅ (Done)
+- Detects part index from S3 key pattern `part_{NNN}_{filename}`
+- Writes output to `transcripts/{meetingId}_part_{NNN}.json`
+- Unicode NFC normalization for Korean filenames in ECS env vars (fix: 2026-05-26)
+- **Gap**: Does not yet increment `AudioPartsReady` or emit "all parts done" event
 
-### Phase 3: Summarize Lambda (Merge Logic)
+### Phase 3: Summarize Lambda (Merge Logic) — Not Started
 - New handler for "all parts ready" event
 - Load all `transcripts/{meetingId}_part_*.json`, sort by part index
 - Compute timestamp offsets from audio duration (stored in part transcript metadata or S3 object metadata)
 - Concatenate segments, write merged `transcripts/{meetingId}.json`
 - Proceed with existing summary pipeline
 
-### Phase 4: Frontend Multi-File Upload
+### Phase 4: Frontend Multi-File Upload ✅ (Done — 2026-05-26)
 - `AudioUploader` accepts `multiple` files with drag-and-drop reordering
-- File upload mode on `/record?mode=upload` supports multi-select
-- Per-file progress bars + overall progress
-- Meeting detail page: sequential audio player (gapless or with part markers)
+- Per-file progress bars with parallel upload
+- File list with remove/reorder before upload start
+- `uploadsApi` passes `partIndex`/`totalParts` to presigned URL and complete endpoints
+- `MeetingDetail` TypeScript type includes `audioKeys`, `audioPartCount`, `audioPartsReady`
+- Max 10 files, 500MB each
 
-### Phase 5: Audio Playback
-- `AudioPlayer` component handles array of audio URLs
-- Gapless playback via Web Audio API or sequential `<audio>` element switching
-- Transcript sync highlights the active part
+### Phase 5: Audio Playback ✅ (Done — 2026-05-26)
+- `AudioPlayer` accepts `audioUrls?: string[]` for sequential multi-track playback
+- Auto-advances to next track on ended; part selector buttons for multi-track
+- Skip previous/next track controls shown in multi-track mode
+- Backward compatible: single `audioUrl` prop still works
 
 ### Phase 6: Linked Follow-Up Meetings
 - Add `LinkedMeetingIDs []string` to `Meeting` model (DynamoDB `linkedMeetingIds: L`)
@@ -176,7 +181,7 @@ For linked meetings, the `Meeting` model gains a `LinkedMeetingIDs []string` fie
 # 한국어
 
 ## 상태
-제안됨
+채택됨 — Phase 1, 2, 4, 5 구현 완료 (2026-05-26). Phase 3 (요약 병합)과 Phase 6 (후속 미팅 링크)은 미구현.
 
 ## 배경
 
@@ -264,35 +269,40 @@ Summarize 단계의 트랜스크립트 병합 로직은 간단합니다: 파트 
 
 ## 구현 계획
 
-### Phase 1: 백엔드 모델 + 업로드 API
-- `Meeting` 모델에 `AudioKeys`, `AudioPartCount`, `AudioPartsCompleted` 추가
-- `CompleteUpload`를 수정하여 `partIndex` 파라미터와 리스트 추가 의미론 지원
-- 마이그레이션 경로: `AudioKey` (string)를 하위 호환을 위해 `AudioKeys[0]`으로 취급
-- `POST /api/upload/multi-complete` 추가 또는 기존 엔드포인트에 `totalParts` 필드 확장
+### Phase 1: 백엔드 모델 + 업로드 API ✅ (완료)
+- `Meeting` 모델에 `AudioKeys`, `AudioPartCount`, `AudioPartsReady` 추가 (`model/meeting.go`)
+- `GetEffectiveAudioKeys()` 하위 호환 헬퍼가 `AudioKeys` 또는 `[AudioKey]` 반환
+- `CompleteUpload`가 `partIndex`/`totalParts` 지원하여 리스트 추가 의미론 구현
+- `PreAllocateAudioKeys`, `SetAudioKeyAtIndex`, `IncrementAudioPartsReady` 리포지토리 메서드 (DynamoDB 조건부 표현식 포함)
+- `GetAudioURL` 핸들러가 멀티파일 미팅에 `audioUrls []string` 반환
+- Presigned URL 엔드포인트가 `partIndex`/`totalParts` 수신하여 `part_{NNN}_{filename}` S3 키 생성
 
-### Phase 2: Transcribe Lambda
-- S3 키 패턴 `part_{N}_{filename}`에서 파트 인덱스 감지
-- 출력을 `transcripts/{meetingId}_part_{N}.json`으로 작성
-- 완료 시 원자적 카운터로 `AudioPartsCompleted` 증가
-- `AudioPartsCompleted == AudioPartCount`이면 커스텀 EventBridge 이벤트를 발행하여 병합 트리거
+### Phase 2: Transcribe Lambda ✅ (완료)
+- S3 키 패턴 `part_{NNN}_{filename}`에서 파트 인덱스 감지
+- 출력을 `transcripts/{meetingId}_part_{NNN}.json`으로 작성
+- 한국어 파일명에 대한 Unicode NFC 정규화 (수정: 2026-05-26)
+- **미완**: `AudioPartsReady` 증가 및 "모든 파트 완료" 이벤트 발행 미구현
 
-### Phase 3: Summarize Lambda (병합 로직)
+### Phase 3: Summarize Lambda (병합 로직) — 미시작
 - "모든 파트 준비 완료" 이벤트를 위한 새 핸들러
 - 모든 `transcripts/{meetingId}_part_*.json` 로드, 파트 인덱스로 정렬
-- 오디오 길이(파트 트랜스크립트 메타데이터 또는 S3 객체 메타데이터에 저장)로 타임스탬프 오프셋 계산
+- 오디오 길이로 타임스탬프 오프셋 계산
 - 세그먼트 연결, 병합된 `transcripts/{meetingId}.json` 작성
 - 기존 요약 파이프라인 실행
 
-### Phase 4: 프런트엔드 멀티파일 업로드
+### Phase 4: 프런트엔드 멀티파일 업로드 ✅ (완료 — 2026-05-26)
 - `AudioUploader`가 드래그앤드롭 재정렬로 `multiple` 파일 허용
-- `/record?mode=upload`의 파일 업로드 모드에서 다중 선택 지원
-- 파일별 프로그레스 바 + 전체 진행률
-- 미팅 상세 페이지: 순차 오디오 플레이어 (갭 없는 재생 또는 파트 마커)
+- 파일별 프로그레스 바, 병렬 업로드
+- 업로드 전 파일 목록에서 제거/재정렬 가능
+- `uploadsApi`가 `partIndex`/`totalParts`를 presigned URL 및 complete 엔드포인트에 전달
+- `MeetingDetail` TypeScript 타입에 `audioKeys`, `audioPartCount`, `audioPartsReady` 추가
+- 최대 10개 파일, 각 500MB
 
-### Phase 5: 오디오 재생
-- `AudioPlayer` 컴포넌트가 오디오 URL 배열 처리
-- Web Audio API 또는 순차 `<audio>` 엘리먼트 전환을 통한 갭 없는 재생
-- 트랜스크립트 동기화가 활성 파트를 하이라이트
+### Phase 5: 오디오 재생 ✅ (완료 — 2026-05-26)
+- `AudioPlayer`가 `audioUrls?: string[]`로 순차 멀티트랙 재생 지원
+- 트랙 종료 시 자동 다음 트랙 재생; 멀티트랙용 파트 선택 버튼
+- 멀티트랙 모드에서 이전/다음 트랙 건너뛰기 컨트롤 표시
+- 하위 호환: 단일 `audioUrl` prop도 동작
 
 ### Phase 6: 후속 미팅 링크
 - `Meeting` 모델에 `LinkedMeetingIDs []string` 추가 (DynamoDB `linkedMeetingIds: L`)
