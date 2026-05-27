@@ -79,13 +79,13 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	var allSegments []TranscriptSegmentOut
 	var cumulativeOffset float64
 
-	var parseFailures int
 	for _, part := range parts {
 		transcript, segments, whisperSegments, audioDuration, parseErr := downloadAndParseTranscript(ctx, bucket, part.key)
 		if parseErr != nil {
-			log.Printf("Failed to parse part %d transcript: %v", part.index, parseErr)
-			parseFailures++
-			continue
+			// Fail fast: continuing would download/refine the rest of the
+			// parts only to abort at the end (the prior loop drained S3 +
+			// Bedrock budget on a doomed merge). The merge is all-or-nothing.
+			return "", nil, fmt.Errorf("part %d parse failed for meeting %s: %w", part.index, meetingID, parseErr)
 		}
 
 		if len(whisperSegments) > 0 && len(segments) == 0 {
@@ -150,9 +150,6 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 
 	if len(allTexts) == 0 {
 		return "", nil, fmt.Errorf("no valid transcripts found for meeting %s", meetingID)
-	}
-	if parseFailures > 0 {
-		return "", nil, fmt.Errorf("merge aborted: %d of %d parts failed to parse for meeting %s", parseFailures, len(parts), meetingID)
 	}
 
 	mergedText := strings.Join(allTexts, "\n\n")

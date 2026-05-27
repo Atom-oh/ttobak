@@ -405,6 +405,30 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 
 	log.Printf("Saved merged transcript for meeting %s: %d chars, %d segments", meetingID, len(transcript), len(segments))
 
+	// Flip status to `summarizing` BEFORE the archival S3 write so the
+	// EventBridge re-trigger from `PutObject(transcripts/{id}.json)`
+	// (which routes to `handleSingleTranscript`) is rejected by that
+	// path's `status == transcribing` whitelist guard. Without this
+	// reorder the archival write would replay the entire single-file
+	// pipeline (refine + save + summarize) on top of the already-merged
+	// content. Errors here must abort so we don't write the archive
+	// under an inconsistent status.
+	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+		"status": model.StatusSummarizing,
+	}); statusErr != nil {
+		log.Printf("Failed to set status=summarizing before archive for meeting %s: %v", meetingID, statusErr)
+		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
+	}
+
+	// Archive the merged transcript to S3 (ADR-014 design.md §5.1 step 7).
+	// AudioPlayer uses presigned URLs from `audioKeys` so playback doesn't
+	// depend on this object, but the archival copy preserves the merged
+	// timeline for KB re-ingest, support debugging, and future re-summary.
+	// Non-fatal: a failed archival write must not block the summary pipeline.
+	if archiveErr := archiveMergedTranscript(ctx, detail.Bucket, meetingID, transcript, segments); archiveErr != nil {
+		log.Printf("Non-fatal: failed to archive merged transcript for meeting %s: %v", meetingID, archiveErr)
+	}
+
 	// Re-fetch meeting to get updated state
 	meeting, err = repo.GetMeeting(ctx, userID, meetingID)
 	if err != nil || meeting == nil {
@@ -597,6 +621,42 @@ func emitAllPartsTranscribedEvent(ctx context.Context, meetingID, userID string,
 	return nil
 }
 
+// archiveMergedTranscript writes the merged multi-part transcript to
+// `transcripts/{meetingID}.json` so the archival shape mirrors a
+// single-file transcript. This is debug/replay scaffolding per ADR-014
+// design.md §5.1; the live playback path uses presigned URLs from the
+// `audioKeys` slice, so a failed write here must NOT block summarization.
+func archiveMergedTranscript(ctx context.Context, bucket, meetingID, transcript string, segments []TranscriptSegmentOut) error {
+	payload := struct {
+		Source     string                 `json:"source"`
+		MeetingID  string                 `json:"meetingId"`
+		Transcript string                 `json:"transcript"`
+		Segments   []TranscriptSegmentOut `json:"segments"`
+		MergedAt   string                 `json:"mergedAt"`
+	}{
+		Source:     "merged-parts",
+		MeetingID:  meetingID,
+		Transcript: transcript,
+		Segments:   segments,
+		MergedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal merged transcript: %w", err)
+	}
+	key := fmt.Sprintf("transcripts/%s.json", meetingID)
+	_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(key),
+		Body:        strings.NewReader(string(body)),
+		ContentType: aws.String("application/json"),
+	})
+	if err != nil {
+		return fmt.Errorf("put merged transcript to s3: %w", err)
+	}
+	return nil
+}
+
 // downloadAndParseTranscript fetches a transcript JSON from S3 and returns its
 // transcript text, refined speaker segments, raw Whisper segments, and the
 // authoritative audio duration in seconds from `whisper_metadata.duration_seconds`
@@ -692,7 +752,17 @@ func setMeetingError(ctx context.Context, meetingID string) {
 	})
 }
 
+// extractMeetingIDFromTranscriptKey returns the meetingID embedded in a
+// single (non-part) transcript S3 key like `transcripts/{id}.json` or
+// `transcripts/{id}-nova.json`. Returns "" for part-transcript keys
+// (`transcripts/{id}_part_NNN.json`) — those are handled by
+// `extractPartInfo` and would otherwise produce an id of `{id}_part_NNN`
+// which is not a real meeting id. The dispatch in `handler` checks
+// `_part_` first so this defensive guard is belt-and-suspenders.
 func extractMeetingIDFromTranscriptKey(key string) string {
+	if strings.Contains(key, "_part_") {
+		return ""
+	}
 	key = strings.TrimPrefix(key, "transcripts/")
 	key = strings.TrimSuffix(key, ".json")
 	key = strings.TrimSuffix(key, "-nova")

@@ -44,6 +44,6 @@ type AllPartsTranscribedDetail struct {
 // AllPartsTranscribedEvent represents the full custom EventBridge event
 type AllPartsTranscribedEvent struct {
 	Source     string                    `json:"source"`
-	DetailType string                   `json:"detail-type"`
+	DetailType string                    `json:"detail-type"`
 	Detail     AllPartsTranscribedDetail `json:"detail"`
 }
