@@ -216,8 +216,12 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 	// Status guard: skip if already processed (prevents re-trigger after merged transcript write)
 	meeting, err := repo.GetMeetingByID(ctx, meetingID)
 	if err == nil && meeting != nil {
-		if meeting.Status == model.StatusDone || meeting.Status == model.StatusSummarizing {
-			log.Printf("Skipping transcript for meeting %s (status=%s)", meetingID, meeting.Status)
+		// Whitelist guard — only process when status is `transcribing`.
+		// Matches `handleAllPartsTranscribed` for consistency and avoids
+		// re-running Bedrock on S3 redelivery when the meeting is already
+		// `done`/`summarizing`/`error` or has been recovered.
+		if meeting.Status != model.StatusTranscribing {
+			log.Printf("Skipping transcript for meeting %s (status=%s, expected=transcribing)", meetingID, meeting.Status)
 			return nil
 		}
 	}
@@ -309,8 +313,13 @@ func handlePartTranscript(ctx context.Context, bucket, key string) error {
 
 	partsReady, partCount, err := repo.IncrementAudioPartsReady(ctx, meeting.UserID, meetingID, partIndex)
 	if err != nil {
+		// Transient DynamoDB error (throttle, timeout). Propagate so the
+		// Lambda runtime retries — `IncrementAudioPartsReady` is idempotent
+		// (set ADD), so retry is safe. Without this, an ack would lose the
+		// part forever and the meeting would sit at `transcribing` until
+		// the 30-min auto-expiry.
 		log.Printf("Failed to increment parts ready for meeting %s: %v", meetingID, err)
-		return nil
+		return fmt.Errorf("increment parts ready failed (retrying): %w", err)
 	}
 
 	log.Printf("Meeting %s: parts ready %d/%d", meetingID, partsReady, partCount)
@@ -325,8 +334,12 @@ func handlePartTranscript(ctx context.Context, bucket, key string) error {
 		// `allPartsEmittedAt` only when not already set.
 		claimed, claimErr := repo.ClaimAllPartsEmit(ctx, meeting.UserID, meetingID)
 		if claimErr != nil {
+			// Transient DynamoDB error on the conditional SET. Propagate
+			// so Lambda retries — `ClaimAllPartsEmit` is idempotent (only
+			// the first conditional check succeeds; later attempts return
+			// claimed=false), so retry is safe.
 			log.Printf("Failed to claim all-parts emit for meeting %s: %v", meetingID, claimErr)
-			return nil
+			return fmt.Errorf("claim all-parts emit failed (retrying): %w", claimErr)
 		}
 		if !claimed {
 			log.Printf("Skipping duplicate AllPartsTranscribed emit for meeting %s (already emitted)", meetingID)
