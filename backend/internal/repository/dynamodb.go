@@ -582,6 +582,15 @@ func (r *DynamoDBRepository) ReleaseAllPartsEmit(ctx context.Context, userID, me
 	return nil
 }
 
+// AllPartsEmitClaimTTL is the maximum age of a stale `allPartsEmittedAt`
+// claim before it can be reclaimed by another invocation. This bounds the
+// failure mode where `PutEvents` succeeded after a claim but the Lambda
+// crashed before any downstream side-effect (or where `ReleaseAllPartsEmit`
+// itself failed, leaving the lock orphaned). After this window, the next
+// retry can re-emit. Chosen > P99 emit latency and < the 30-minute
+// meeting auto-expiry so recovery happens before the meeting is errored.
+const AllPartsEmitClaimTTL = 5 * time.Minute
+
 // ClaimAllPartsEmit attempts to atomically claim the right to emit the
 // `AllPartsTranscribed` EventBridge event for this meeting. Returns
 // (true, nil) for the first caller that wins the conditional write;
@@ -591,12 +600,15 @@ func (r *DynamoDBRepository) ReleaseAllPartsEmit(ctx context.Context, userID, me
 // Used to make `emitAllPartsTranscribedEvent` once-only despite S3
 // at-least-once redelivery of part transcripts.
 //
-// IMPORTANT: callers must invoke `ReleaseAllPartsEmit` if the downstream
-// emit (PutEvents) subsequently fails. Otherwise a transient throttle on
-// EventBridge will leave the meeting `transcribing` forever — every Lambda
-// retry will see `claim=false` and silently skip.
+// The claim is TTL-bound (`AllPartsEmitClaimTTL`): if an existing claim
+// is older than the TTL, this call reclaims it. This is the self-healing
+// path for the case where the previous holder claimed the lock and then
+// failed to either emit or release it (e.g., Lambda OOM between claim
+// and PutEvents). Callers still SHOULD invoke `ReleaseAllPartsEmit` on
+// emit failure for fast recovery; the TTL is the backstop.
 func (r *DynamoDBRepository) ClaimAllPartsEmit(ctx context.Context, userID, meetingID string) (bool, error) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC()
+	staleBefore := now.Add(-AllPartsEmitClaimTTL).Format(time.RFC3339Nano)
 	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(r.tableName),
 		Key: map[string]types.AttributeValue{
@@ -605,15 +617,20 @@ func (r *DynamoDBRepository) ClaimAllPartsEmit(ctx context.Context, userID, meet
 		},
 		UpdateExpression: aws.String("SET allPartsEmittedAt = :now"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":now": &types.AttributeValueMemberS{Value: now},
+			":now":         &types.AttributeValueMemberS{Value: now.Format(time.RFC3339Nano)},
+			":staleBefore": &types.AttributeValueMemberS{Value: staleBefore},
 		},
-		// Only succeed when the field hasn't been written yet.
-		ConditionExpression: aws.String("attribute_exists(PK) AND attribute_not_exists(allPartsEmittedAt)"),
+		// Succeed when EITHER the field has never been written, OR the
+		// existing claim is older than the TTL. The string compare is
+		// well-defined because RFC3339Nano is lexicographically sortable.
+		ConditionExpression: aws.String(
+			"attribute_exists(PK) AND (attribute_not_exists(allPartsEmittedAt) OR allPartsEmittedAt < :staleBefore)",
+		),
 	})
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException
 		if errors.As(err, &ccfe) {
-			// Lost the race — another invocation already claimed the emit.
+			// Lost the race — another invocation holds a fresh claim.
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to claim all-parts emit lock: %w", err)

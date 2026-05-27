@@ -81,7 +81,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 
 	var parseFailures int
 	for _, part := range parts {
-		transcript, segments, whisperSegments, parseErr := downloadAndParseTranscript(ctx, bucket, part.key)
+		transcript, segments, whisperSegments, audioDuration, parseErr := downloadAndParseTranscript(ctx, bucket, part.key)
 		if parseErr != nil {
 			log.Printf("Failed to parse part %d transcript: %v", part.index, parseErr)
 			parseFailures++
@@ -109,16 +109,28 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		// Determine this part's duration with a fallback chain so a single
 		// failed refinement doesn't silently collapse the rest of the
 		// timeline onto offset=0:
-		//   1. last refined segment's EndTime (preferred — already in target shape)
-		//   2. last raw Whisper segment's End (covers RefineTranscript failure)
-		//   3. 0 (only when both lists are empty — part is effectively silent)
+		//   1. whisper_metadata.duration_seconds (preferred — true audio length
+		//      including trailing silence; ADR-014 §5.2 mandates this)
+		//   2. last refined segment's EndTime (covers older transcripts without
+		//      whisper metadata; understates by trailing silence so subsequent
+		//      parts drift earlier)
+		//   3. last raw Whisper segment's End (covers RefineTranscript failure
+		//      AND missing duration metadata)
+		//   4. 0 (only when all sources are empty — part is effectively silent)
 		var partDuration float64
-		if len(segments) > 0 {
+		switch {
+		case audioDuration > 0:
+			partDuration = audioDuration
+		case len(segments) > 0:
 			partDuration = segments[len(segments)-1].EndTime
-		} else if len(whisperSegments) > 0 {
+			log.Printf(
+				"Part %d: whisper_metadata.duration_seconds missing; falling back to last segment EndTime=%.2fs (may drift)",
+				part.index, partDuration,
+			)
+		case len(whisperSegments) > 0:
 			partDuration = whisperSegments[len(whisperSegments)-1].End
 			log.Printf(
-				"Part %d had no refined segments; using raw Whisper end=%.2fs as duration",
+				"Part %d had no refined segments and no duration; using raw Whisper end=%.2fs as duration",
 				part.index, partDuration,
 			)
 		}

@@ -228,7 +228,7 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 
 	isNova := strings.Contains(key, "-nova.json")
 
-	transcript, segments, whisperSegments, err := downloadAndParseTranscript(ctx, bucket, key)
+	transcript, segments, whisperSegments, _, err := downloadAndParseTranscript(ctx, bucket, key)
 	if err != nil {
 		log.Printf("Failed to parse transcript: %v", err)
 		setMeetingError(ctx, meetingID)
@@ -425,9 +425,16 @@ func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext s
 		return nil
 	}
 
-	repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+	// Flip status to `summarizing` before Bedrock work. If this write fails we
+	// must abort: otherwise the downstream summary save would overwrite the
+	// content while status is still `transcribing`, which the frontend gates
+	// off (loading spinner stays visible while content appears blank).
+	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
 		"status": model.StatusSummarizing,
-	})
+	}); statusErr != nil {
+		log.Printf("Failed to set status=summarizing for meeting %s: %v", meetingID, statusErr)
+		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
+	}
 
 	content, err := bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
 	if err != nil {
@@ -590,39 +597,49 @@ func emitAllPartsTranscribedEvent(ctx context.Context, meetingID, userID string,
 	return nil
 }
 
-func downloadAndParseTranscript(ctx context.Context, bucket, key string) (string, []TranscriptSegmentOut, []service.WhisperSegment, error) {
+// downloadAndParseTranscript fetches a transcript JSON from S3 and returns its
+// transcript text, refined speaker segments, raw Whisper segments, and the
+// authoritative audio duration in seconds from `whisper_metadata.duration_seconds`
+// (0 when absent — caller handles fallback). The duration is required by
+// `mergePartTranscripts` to avoid timestamp drift caused by trailing silence
+// that the last segment's EndTime omits.
+func downloadAndParseTranscript(ctx context.Context, bucket, key string) (string, []TranscriptSegmentOut, []service.WhisperSegment, float64, error) {
 	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("failed to download transcript: %w", err)
+		return "", nil, nil, 0, fmt.Errorf("failed to download transcript: %w", err)
 	}
 	defer result.Body.Close()
 
 	data, err := io.ReadAll(result.Body)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("failed to read transcript: %w", err)
+		return "", nil, nil, 0, fmt.Errorf("failed to read transcript: %w", err)
 	}
 
 	var transcribeResult TranscribeResult
 	if err := json.Unmarshal(data, &transcribeResult); err != nil {
-		return "", nil, nil, fmt.Errorf("failed to parse transcript JSON: %w", err)
+		return "", nil, nil, 0, fmt.Errorf("failed to parse transcript JSON: %w", err)
 	}
 
 	if len(transcribeResult.Results.Transcripts) == 0 {
-		return "", nil, nil, fmt.Errorf("no transcript found in result")
+		return "", nil, nil, 0, fmt.Errorf("no transcript found in result")
 	}
 
 	transcript := transcribeResult.Results.Transcripts[0].Transcript
 	segments := extractSpeakerSegments(&transcribeResult)
 
 	var whisperSegments []service.WhisperSegment
-	if transcribeResult.WhisperMetadata != nil && len(transcribeResult.WhisperMetadata.Segments) > 0 {
-		whisperSegments = transcribeResult.WhisperMetadata.Segments
+	var durationSeconds float64
+	if transcribeResult.WhisperMetadata != nil {
+		if len(transcribeResult.WhisperMetadata.Segments) > 0 {
+			whisperSegments = transcribeResult.WhisperMetadata.Segments
+		}
+		durationSeconds = transcribeResult.WhisperMetadata.DurationSeconds
 	}
 
-	return transcript, segments, whisperSegments, nil
+	return transcript, segments, whisperSegments, durationSeconds, nil
 }
 
 func extractSpeakerSegments(result *TranscribeResult) []TranscriptSegmentOut {
