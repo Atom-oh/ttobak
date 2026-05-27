@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -17,6 +19,8 @@ import (
 	ecsTypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
@@ -80,6 +84,8 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	if decoded, err := url.QueryUnescape(key); err == nil {
 		key = decoded
 	}
+	// macOS stores filenames in NFD (decomposed jamo); ECS RunTask rejects non-NFC env vars
+	key = norm.NFC.String(key)
 
 	log.Printf("Processing S3 event: bucket=%s, key=%s", bucket, key)
 
@@ -113,6 +119,14 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	if meetingID == "" {
 		log.Printf("Could not extract meeting ID from key: %s", key)
 		return nil
+	}
+
+	// Detect multi-part upload from S3 key pattern (e.g. part_000_, part_001_)
+	partIndex, isMultiPart := extractPartIndex(key)
+	var outputKey string
+	if isMultiPart {
+		outputKey = fmt.Sprintf("transcripts/%s_part_%03d.json", meetingID, partIndex)
+		log.Printf("Multi-part audio detected: part %d, output key: %s", partIndex, outputKey)
 	}
 
 	log.Printf("Starting transcription for meeting: %s", meetingID)
@@ -149,7 +163,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	case "whisper":
 		if whisperCluster == "" || whisperTaskDef == "" {
 			log.Printf("Whisper not configured, falling back to Transcribe")
-			jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key, customVocab)
+			jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key, outputKey, customVocab)
 		} else {
 			log.Printf("Using Whisper GPU for meeting: %s", meetingID)
 			// Build initial_prompt from user's custom dictionary for Whisper
@@ -168,14 +182,14 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 					log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
 				}
 			}
-			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt)
+			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt, outputKey)
 			jobName = "whisper-ecs-" + meetingID
 		}
 	case "nova-sonic":
 		log.Printf("Using Nova Sonic transcription for meeting: %s", meetingID)
-		jobName, err = transcribeService.StartNovaSonicTranscription(ctx, meetingID, bucket, key)
+		jobName, err = transcribeService.StartNovaSonicTranscription(ctx, meetingID, bucket, key, outputKey)
 	default:
-		jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key, customVocab)
+		jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key, outputKey, customVocab)
 	}
 	if err != nil {
 		log.Printf("Failed to start transcription job: %v", err)
@@ -191,7 +205,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	return nil
 }
 
-func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt string) error {
+func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string) error {
 	envOverrides := []ecsTypes.KeyValuePair{
 		{Name: aws.String("AUDIO_KEY"), Value: aws.String(audioKey)},
 		{Name: aws.String("MEETING_ID"), Value: aws.String(meetingID)},
@@ -200,6 +214,11 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialP
 	if initialPrompt != "" {
 		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{
 			Name: aws.String("INITIAL_PROMPT"), Value: aws.String(initialPrompt),
+		})
+	}
+	if outputKey != "" {
+		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{
+			Name: aws.String("OUTPUT_KEY"), Value: aws.String(outputKey),
 		})
 	}
 
@@ -233,6 +252,20 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialP
 		return fmt.Errorf("ECS task placement failed: %s", *result.Failures[0].Reason)
 	}
 	return nil
+}
+
+var partIndexPattern = regexp.MustCompile(`part_(\d{3})_`)
+
+func extractPartIndex(key string) (int, bool) {
+	matches := partIndexPattern.FindStringSubmatch(key)
+	if len(matches) < 2 {
+		return 0, false
+	}
+	idx, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, false
+	}
+	return idx, true
 }
 
 func main() {

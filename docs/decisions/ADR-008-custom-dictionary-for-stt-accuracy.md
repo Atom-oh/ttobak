@@ -10,7 +10,7 @@
 # English
 
 ## Status
-Proposed
+Accepted
 
 ## Context
 
@@ -140,7 +140,7 @@ A "Custom Dictionary" section in the Settings page:
 # 한국어
 
 ## 상태
-제안됨
+승인됨
 
 ## 배경
 

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ExportMenu } from '@/components/ExportMenu';
 import { MeetingShareButton } from '@/components/ShareButton';
+import { LinkMeetingsModal } from '@/components/meeting/LinkMeetingsModal';
 import { meetingsApi } from '@/lib/api';
 import type { MeetingDetail, SharedUser } from '@/types/meeting';
 
@@ -60,11 +61,14 @@ interface MeetingHeaderProps {
   onShare: (user: SharedUser) => void;
   onUnshare: (userId: string) => void;
   onTitleChange?: (newTitle: string) => void;
+  /** ADR-014 Phase 6: called with the updated linked id list after the picker saves. */
+  onLinkedMeetingsChange?: (linkedMeetingIds: string[]) => void;
 }
 
-export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange }: MeetingHeaderProps) {
+export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLinkedMeetingsChange }: MeetingHeaderProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState(meeting.title);
+  const [showLinkPicker, setShowLinkPicker] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -126,6 +130,50 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange }: Me
             {meeting.title}
             <span className="material-symbols-outlined text-lg ml-2 opacity-0 group-hover:opacity-50 transition-opacity align-middle">edit</span>
           </h1>
+        )}
+
+        {/* Linked predecessor meetings (ADR-014 Phase 6) — chips for existing
+            links + a "+ 연결" button to open the picker. The summarize Lambda
+            prepends these meetings' summaries as prior context, so surfacing
+            them here lets the user manage the chain and jump back to source
+            material. */}
+        <div className="flex flex-wrap items-center gap-1.5 mb-4 text-xs">
+          {meeting.linkedMeetingIds && meeting.linkedMeetingIds.length > 0 ? (
+            <>
+              <span className="text-slate-400 dark:text-[#849396] font-medium">
+                <span className="material-symbols-outlined text-sm align-middle mr-1">link</span>
+                연결된 이전 미팅:
+              </span>
+              {meeting.linkedMeetingIds.map((linkedId) => (
+                <Link
+                  key={linkedId}
+                  href={`/meeting/${linkedId}`}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-primary/5 dark:bg-primary/10 text-primary hover:bg-primary/10 dark:hover:bg-primary/20 transition-colors font-mono"
+                  title="이전 미팅으로 이동"
+                >
+                  {linkedId.slice(-8)}
+                </Link>
+              ))}
+            </>
+          ) : null}
+          <button
+            onClick={() => setShowLinkPicker(true)}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-dashed border-slate-300 dark:border-white/15 text-slate-500 dark:text-text-muted hover:border-primary/40 hover:text-primary dark:hover:border-[#00E5FF]/40 dark:hover:text-[#00E5FF] transition-colors"
+            title="이전 미팅 연결"
+          >
+            <span className="material-symbols-outlined text-sm">add_link</span>
+            {meeting.linkedMeetingIds && meeting.linkedMeetingIds.length > 0 ? '편집' : '이전 미팅 연결'}
+          </button>
+        </div>
+
+        {showLinkPicker && (
+          <LinkMeetingsModal
+            meetingId={meeting.meetingId}
+            meetingDate={meeting.date}
+            initialLinkedIds={meeting.linkedMeetingIds ?? []}
+            onClose={() => setShowLinkPicker(false)}
+            onLinked={(ids) => onLinkedMeetingsChange?.(ids)}
+          />
         )}
 
         {/* Participants & Actions */}

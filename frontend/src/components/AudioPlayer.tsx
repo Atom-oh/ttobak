@@ -4,6 +4,14 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 
 interface AudioPlayerProps {
   audioUrl?: string;
+  /**
+   * Per ADR-014: ordered list of presigned audio URLs for multi-file
+   * meetings. If provided, the player uses the first URL as the
+   * effective source (sequential playback across parts is a follow-up
+   * — most meetings ship as a single concatenated file once the
+   * summarize Lambda's `mergePartTranscripts` runs).
+   */
+  audioUrls?: string[];
 }
 
 function formatTime(seconds: number): string {
@@ -12,7 +20,11 @@ function formatTime(seconds: number): string {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-export function AudioPlayer({ audioUrl }: AudioPlayerProps) {
+export function AudioPlayer({ audioUrl, audioUrls }: AudioPlayerProps) {
+  // Multi-file fallback: play the first part. Sequential playback across
+  // parts can be added later — most users will get a merged single file
+  // from the summarize Lambda before they ever hit this UI.
+  const effectiveUrl = audioUrl ?? audioUrls?.[0];
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -20,7 +32,7 @@ export function AudioPlayer({ audioUrl }: AudioPlayerProps) {
   const [volume, setVolume] = useState(1);
   const [error, setError] = useState(false);
 
-  useEffect(() => { setError(false); }, [audioUrl]);
+  useEffect(() => { setError(false); }, [effectiveUrl]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -36,7 +48,7 @@ export function AudioPlayer({ audioUrl }: AudioPlayerProps) {
       audio.removeEventListener('loadedmetadata', onMeta);
       audio.removeEventListener('ended', onEnd);
     };
-  }, [audioUrl]);
+  }, [effectiveUrl]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
@@ -59,13 +71,13 @@ export function AudioPlayer({ audioUrl }: AudioPlayerProps) {
     audio.currentTime = Math.max(0, Math.min(duration, audio.currentTime + seconds));
   }, [duration]);
 
-  if (!audioUrl || error) return null;
+  if (!effectiveUrl || error) return null;
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
     <div className="sticky bottom-6 mt-12 w-full max-w-2xl mx-auto z-30 animate-slide-up">
-      <audio ref={audioRef} src={audioUrl} preload="metadata" onError={() => setError(true)} />
+      <audio ref={audioRef} src={effectiveUrl} preload="metadata" onError={() => setError(true)} />
       <div className="bg-white/80 dark:bg-[#09090E]/80 backdrop-blur-md border border-slate-200 dark:border-white/10 shadow-xl rounded-full px-6 py-3 flex items-center gap-4">
         {/* Play button */}
         <button onClick={togglePlay}

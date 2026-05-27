@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -118,10 +121,79 @@ type ClaudeResponse struct {
 
 // speakerSegment represents a speaker-labeled transcript segment for summary generation
 type speakerSegment struct {
+	// ID is the unique segment identifier the frontend uses as the scroll
+	// target (rendered as `id="ts-{ID}"` on each transcript row). Populated
+	// from the merged transcript JSON when available so ADR-013 deep links
+	// can resolve to a real segment.
+	ID        string  `json:"id,omitempty"`
 	Speaker   string  `json:"speaker"`
 	Text      string  `json:"text"`
 	StartTime float64 `json:"startTime"`
 	EndTime   float64 `json:"endTime"`
+}
+
+// resolveTranscriptAnchors replaces `[TS:NNN]` markers Claude emitted in the
+// summary with proper markdown links pointing at the closest transcript
+// segment by start time. Per ADR-013 the protocol is `transcript://{segmentId}`;
+// the frontend pre-processes that to `#ts-{segmentId}` before passing to
+// the markdown renderer, then attaches a smooth-scroll click handler.
+//
+// NNN is approximate seconds — Claude is told to emit the segment's start
+// time but may round, so we snap to the nearest segment instead of requiring
+// an exact match. If no segments exist, the markers are stripped.
+func resolveTranscriptAnchors(content string, segments []speakerSegment) string {
+	re := regexp.MustCompile(`\[TS:(\d+)\]`)
+	if len(segments) == 0 {
+		return re.ReplaceAllString(content, "")
+	}
+	return re.ReplaceAllStringFunc(content, func(match string) string {
+		m := re.FindStringSubmatch(match)
+		if len(m) < 2 {
+			return ""
+		}
+		target, err := strconv.Atoi(m[1])
+		if err != nil {
+			return ""
+		}
+		// Snap to nearest segment by startTime.
+		bestIdx := -1
+		bestDiff := math.MaxFloat64
+		for i, seg := range segments {
+			diff := math.Abs(seg.StartTime - float64(target))
+			if diff < bestDiff {
+				bestDiff = diff
+				bestIdx = i
+			}
+		}
+		if bestIdx < 0 {
+			return ""
+		}
+		seg := segments[bestIdx]
+		if seg.ID == "" {
+			// Without a stable ID we can't make a deep link. Fall back to
+			// a plain timestamp label so the line still reads correctly.
+			return fmt.Sprintf("(%s)", formatTSLabel(target))
+		}
+		// Markdown inline link. Frontend strips `transcript://` → `#ts-` so
+		// rehype-sanitize keeps the href intact and a smooth-scroll handler
+		// in MarkdownRenderer's `<a>` component takes over the click.
+		return fmt.Sprintf("[%s](transcript://%s)", formatTSLabel(target), seg.ID)
+	})
+}
+
+// formatTSLabel renders an integer-second offset as `MM:SS` (or `H:MM:SS` past
+// the hour) for use as link text inside the summary.
+func formatTSLabel(totalSeconds int) string {
+	if totalSeconds < 0 {
+		totalSeconds = 0
+	}
+	h := totalSeconds / 3600
+	m := (totalSeconds % 3600) / 60
+	s := totalSeconds % 60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%02d:%02d", m, s)
 }
 
 var mdEscaper = strings.NewReplacer(
@@ -134,12 +206,13 @@ var mdEscaper = strings.NewReplacer(
 func sanitizeMarkdownText(s string) string { return mdEscaper.Replace(s) }
 
 // SummarizeTranscript generates meeting notes (content) from the transcript using Claude.
-// When userID is provided, uses strongly-consistent base table read instead of GSI.
-func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID string, userID ...string) (string, error) {
+// userID enables strongly-consistent base table read instead of GSI.
+// priorContext is optional linked-meeting context prepended to the prompt.
+func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, userID, priorContext string) (string, error) {
 	var meeting *model.Meeting
 	var err error
-	if len(userID) > 0 && userID[0] != "" {
-		meeting, err = s.repo.GetMeeting(ctx, userID[0], meetingID)
+	if userID != "" {
+		meeting, err = s.repo.GetMeeting(ctx, userID, meetingID)
 	} else {
 		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
 	}
@@ -187,17 +260,30 @@ Your output MUST follow this exact structure:
 - [ ] 담당자(Speaker Label): 할 일 내용
 
 Format in Korean unless the transcript is entirely in English.
-Use bullet points and checkboxes. Include timestamps where available.`
+Use bullet points and checkboxes. Include timestamps where available.
+
+ADR-013 — 트랜스크립트 딥 링크:
+- 요약 각 항목(개요 문장, 화자별 발언, 논의 사항, 결정 사항, 액션 아이템)의 끝에 해당 발언이 시작된 시점을 [TS:NNN] 마커로 정확히 한 번 표기.
+- NNN은 입력 트랜스크립트의 [Speaker N.Nsec~M.Msec] 헤더에서 발견한 startTime을 가장 가까운 정수 초로 반올림한 값 (예: 142.7초 → [TS:143]).
+- 마커는 본문 텍스트와 분리된 형태로(문장 끝, 마침표 또는 따옴표 뒤) 적고, 그 외 형식의 시간 표기(예: "5분 30초")는 따로 만들지 말 것.
+- 한 항목에 여러 발언이 묶인 경우 가장 핵심 발언의 시점 하나만 표기.`
 
 	// Build speaker-labeled prompt if segments exist
-	userPrompt := fmt.Sprintf("다음 회의 녹취록을 바탕으로 회의록을 작성해주세요:\n\n%s", transcript)
+	var userPrompt string
+	if priorContext != "" {
+		userPrompt = priorContext + "\n\n---\n\n다음 회의 녹취록을 바탕으로 회의록을 작성해주세요:\n\n" + transcript
+	} else {
+		userPrompt = fmt.Sprintf("다음 회의 녹취록을 바탕으로 회의록을 작성해주세요:\n\n%s", transcript)
+	}
 
+	// Parsed segments are reused after the LLM call to resolve ADR-013
+	// `[TS:NNN]` markers into `transcript://{segmentId}` deep links.
+	var parsedSegments []speakerSegment
 	if meeting.TranscriptSegments != "" {
-		var segments []speakerSegment
-		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
+		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &parsedSegments); err == nil && len(parsedSegments) > 0 {
 			var sb strings.Builder
 			sb.WriteString("다음은 화자별로 분리된 회의 녹취록입니다:\n\n")
-			for _, seg := range segments {
+			for _, seg := range parsedSegments {
 				sb.WriteString(fmt.Sprintf("[%s %.0f초~%.0f초] %s\n", seg.Speaker, seg.StartTime, seg.EndTime, seg.Text))
 			}
 			userPrompt = sb.String() + "\n\n위 녹취록을 바탕으로 회의록을 작성해주세요."
@@ -236,6 +322,12 @@ Use bullet points and checkboxes. Include timestamps where available.`
 	if err != nil {
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
+
+	// ADR-013: replace `[TS:NNN]` markers Claude embedded in the summary with
+	// `transcript://{segmentId}` deep links. The frontend will resolve those
+	// to `#ts-{segmentId}` anchors backed by smooth-scroll click handlers.
+	// Safe no-op when segments are missing or markers weren't emitted.
+	content = resolveTranscriptAnchors(content, parsedSegments)
 
 	// Append inline image references for processed attachments.
 	// Frontend resolves attachment:// URLs to presigned S3 URLs at render time.

@@ -17,7 +17,9 @@ export async function uploadToS3(
   file: File,
   category: 'audio' | 'image' | 'file',
   onProgress?: (progress: UploadProgress) => void,
-  meetingId?: string
+  meetingId?: string,
+  partIndex?: number,
+  totalParts?: number,
 ): Promise<UploadResult> {
   // Get presigned URL from backend
   const { uploadUrl, key } = await uploadsApi.getPresignedUrl({
@@ -25,6 +27,8 @@ export async function uploadToS3(
     fileType: file.type,
     category,
     meetingId,
+    partIndex,
+    totalParts,
   });
 
   // Upload directly to S3
@@ -129,7 +133,7 @@ export async function notifyUploadComplete(
   meetingId: string,
   key: string,
   category: 'audio' | 'image' | 'file',
-  metadata?: { fileName?: string; fileSize?: number; mimeType?: string },
+  metadata?: { fileName?: string; fileSize?: number; mimeType?: string; partIndex?: number; totalParts?: number },
 ): Promise<void> {
   await uploadsApi.notifyComplete({ meetingId, key, category, ...metadata });
 }

@@ -16,6 +16,9 @@ on:
       - 'backend/go.*'
       - 'backend/whisper/**'
       - 'backend/python/**'
+      # Re-run on workflow changes so PRs that only touch CI still trigger
+      # the required `test` check (branch protection blocks otherwise).
+      - '.github/workflows/test-backend.yml'
 
 permissions:
   contents: read

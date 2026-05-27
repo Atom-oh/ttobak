@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { usersApi, meetingsApi } from '@/lib/api';
+import { NotionPushSection } from '@/components/meeting/NotionPushSection';
 import type { User, SharedUser } from '@/types/meeting';
 
 interface ShareButtonProps {
@@ -12,6 +13,12 @@ interface ShareButtonProps {
   shareApi: (id: string, data: { email: string; permission: 'read' | 'edit' }) => Promise<unknown>;
   unshareApi: (id: string, userId: string) => Promise<unknown>;
   label?: string;
+  /**
+   * Optional slot rendered between the user list and the Done footer.
+   * Used by meeting share to embed `NotionPushSection`; keeps the generic
+   * `ShareButton` agnostic of meeting-specific exporters.
+   */
+  extraSection?: ReactNode;
 }
 
 // Backwards-compatible wrapper for meetings
@@ -39,6 +46,7 @@ export function MeetingShareButton({
       shareApi={meetingsApi.share}
       unshareApi={meetingsApi.unshare}
       label="Share meeting"
+      extraSection={<NotionPushSection meetingId={meetingId} />}
     />
   );
 }
@@ -51,6 +59,7 @@ export function ShareButton({
   shareApi,
   unshareApi,
   label = 'Share',
+  extraSection,
 }: ShareButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -275,6 +284,8 @@ export function ShareButton({
               </div>
             </div>
           )}
+
+          {extraSection}
 
           <div className="p-3 border-t border-slate-200 dark:border-slate-700">
             <button

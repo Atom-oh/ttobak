@@ -19,6 +19,11 @@ export interface Meeting {
   createdAt: string;
   updatedAt: string;
   sttProvider?: 'transcribe' | 'nova-sonic';
+  /** Per ADR-014: ordered S3 keys for multi-file uploads. Falls back to audioKey for legacy single-file meetings. */
+  audioKey?: string;
+  audioKeys?: string[];
+  /** Per ADR-014 Phase 6: ordered predecessor meeting IDs whose summaries are prepended to this meeting's prompt. */
+  linkedMeetingIds?: string[];
 }
 
 export interface Participant {
@@ -108,6 +113,9 @@ export interface MeetingDetail extends Meeting {
   transcriptB?: string;
   selectedTranscript?: 'A' | 'B' | null;
   audioKey?: string;
+  audioKeys?: string[];
+  audioPartCount?: number;
+  audioPartsReady?: number;
   speakerMap?: Record<string, string>;
   shares?: SharedUser[];
   isShared?: boolean;

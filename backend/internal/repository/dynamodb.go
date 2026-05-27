@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -420,6 +422,220 @@ func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, me
 	}
 
 	return nil
+}
+
+// PreAllocateAudioKeys initializes audioKeys as a list of empty strings for multi-file upload.
+// Called lazily on first CompleteUpload with totalParts > 1.
+// Uses ConditionExpression to be safe against concurrent calls.
+func (r *DynamoDBRepository) PreAllocateAudioKeys(ctx context.Context, userID, meetingID string, totalParts int) error {
+	emptyKeys := make([]string, totalParts)
+	for i := range emptyKeys {
+		emptyKeys[i] = ""
+	}
+
+	update := expression.Set(expression.Name("audioKeys"), expression.Value(emptyKeys)).
+		Set(expression.Name("audioPartCount"), expression.Value(totalParts)).
+		Set(expression.Name("audioPartsReady"), expression.Value(0)).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC().Format(time.RFC3339Nano)))
+
+	condition := expression.And(
+		expression.AttributeExists(expression.Name("PK")),
+		expression.AttributeNotExists(expression.Name("audioKeys")),
+	)
+
+	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build pre-allocate expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var condErr *types.ConditionalCheckFailedException
+		if ok := errors.As(err, &condErr); ok {
+			return nil // already pre-allocated by concurrent call
+		}
+		return fmt.Errorf("failed to pre-allocate audio keys: %w", err)
+	}
+	return nil
+}
+
+// SetAudioKeyAtIndex sets a specific index in the audioKeys list. Idempotent — re-uploading
+// the same part overwrites the same slot. Validates index is within pre-allocated range.
+func (r *DynamoDBRepository) SetAudioKeyAtIndex(ctx context.Context, userID, meetingID, key string, partIndex int) error {
+	indexPath := fmt.Sprintf("audioKeys[%d]", partIndex)
+
+	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String(fmt.Sprintf("SET %s = :key, #st = :transcribing, updatedAt = :now", indexPath)),
+		ExpressionAttributeNames: map[string]string{
+			"#st": "status",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":key":          &types.AttributeValueMemberS{Value: key},
+			":transcribing": &types.AttributeValueMemberS{Value: model.StatusTranscribing},
+			":now":          &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339Nano)},
+			":idx":          &types.AttributeValueMemberN{Value: strconv.Itoa(partIndex)},
+		},
+		ConditionExpression: aws.String("attribute_exists(PK) AND attribute_exists(audioKeys) AND size(audioKeys) > :idx"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set audio key at index %d: %w", partIndex, err)
+	}
+	return nil
+}
+
+// IncrementAudioPartsReady atomically adds partIndex to a Number Set (audioPartsReadySet),
+// making it idempotent on re-upload of the same part. Returns the set size as partsReady.
+func (r *DynamoDBRepository) IncrementAudioPartsReady(ctx context.Context, userID, meetingID string, partIndex int) (partsReady, partCount int, err error) {
+	result, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String("ADD audioPartsReadySet :partSet SET updatedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":partSet": &types.AttributeValueMemberNS{Value: []string{strconv.Itoa(partIndex)}},
+			":now":     &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339Nano)},
+		},
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+		ReturnValues:        types.ReturnValueAllNew,
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to increment audio parts ready: %w", err)
+	}
+
+	attrs := result.Attributes
+	// Count ready parts from the returned Number Set
+	if ns, ok := attrs["audioPartsReadySet"].(*types.AttributeValueMemberNS); ok {
+		partsReady = len(ns.Value)
+	}
+	// Read audioPartCount from the item
+	var meeting model.Meeting
+	if unmarshalErr := attributevalue.UnmarshalMap(attrs, &meeting); unmarshalErr != nil {
+		return 0, 0, fmt.Errorf("failed to unmarshal updated meeting: %w", unmarshalErr)
+	}
+
+	// Mirror the set size onto the `audioPartsReady` int field so the API
+	// response and any list-view projection see the current count without
+	// having to read the set themselves. Best-effort second write; the
+	// caller has already learned `partsReady` from the set above and the
+	// emit-all-parts-transcribed decision uses that, so a failure here is
+	// observability-only — log and continue.
+	if _, mirrorErr := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String("SET audioPartsReady = :n"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":n": &types.AttributeValueMemberN{Value: strconv.Itoa(partsReady)},
+		},
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+	}); mirrorErr != nil {
+		// Stale audioPartsReady is preferable to retrying — the set is
+		// the source of truth and the emit-all-parts decision already
+		// happened above. Log so CloudWatch surfaces the drift instead
+		// of silently leaving the frontend progress bar stuck.
+		log.Printf("Failed to mirror audioPartsReady for meeting %s (partIndex=%d): %v",
+			meetingID, partIndex, mirrorErr)
+	}
+
+	return partsReady, meeting.AudioPartCount, nil
+}
+
+// ReleaseAllPartsEmit clears the `allPartsEmittedAt` lock. Use this as the
+// compensation path when the caller successfully claimed the emit lock but
+// then the downstream `PutEvents` call failed — without the release, a
+// throttle/network failure on PutEvents would leave the meeting permanently
+// `transcribing` because every retry would see `claim=false` and skip.
+//
+// Safe to call when the field doesn't exist (idempotent REMOVE).
+func (r *DynamoDBRepository) ReleaseAllPartsEmit(ctx context.Context, userID, meetingID string) error {
+	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression:    aws.String("REMOVE allPartsEmittedAt"),
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to release all-parts emit lock: %w", err)
+	}
+	return nil
+}
+
+// AllPartsEmitClaimTTL is the maximum age of a stale `allPartsEmittedAt`
+// claim before it can be reclaimed by another invocation. This bounds the
+// failure mode where `PutEvents` succeeded after a claim but the Lambda
+// crashed before any downstream side-effect (or where `ReleaseAllPartsEmit`
+// itself failed, leaving the lock orphaned). After this window, the next
+// retry can re-emit. Chosen > P99 emit latency and < the 30-minute
+// meeting auto-expiry so recovery happens before the meeting is errored.
+const AllPartsEmitClaimTTL = 5 * time.Minute
+
+// ClaimAllPartsEmit attempts to atomically claim the right to emit the
+// `AllPartsTranscribed` EventBridge event for this meeting. Returns
+// (true, nil) for the first caller that wins the conditional write;
+// returns (false, nil) for every subsequent caller (lost race or
+// EventBridge redelivery). Returns (false, err) on real DynamoDB errors.
+//
+// Used to make `emitAllPartsTranscribedEvent` once-only despite S3
+// at-least-once redelivery of part transcripts.
+//
+// The claim is TTL-bound (`AllPartsEmitClaimTTL`): if an existing claim
+// is older than the TTL, this call reclaims it. This is the self-healing
+// path for the case where the previous holder claimed the lock and then
+// failed to either emit or release it (e.g., Lambda OOM between claim
+// and PutEvents). Callers still SHOULD invoke `ReleaseAllPartsEmit` on
+// emit failure for fast recovery; the TTL is the backstop.
+func (r *DynamoDBRepository) ClaimAllPartsEmit(ctx context.Context, userID, meetingID string) (bool, error) {
+	now := time.Now().UTC()
+	staleBefore := now.Add(-AllPartsEmitClaimTTL).Format(time.RFC3339Nano)
+	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String("SET allPartsEmittedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":now":         &types.AttributeValueMemberS{Value: now.Format(time.RFC3339Nano)},
+			":staleBefore": &types.AttributeValueMemberS{Value: staleBefore},
+		},
+		// Succeed when EITHER the field has never been written, OR the
+		// existing claim is older than the TTL. The string compare is
+		// well-defined because RFC3339Nano is lexicographically sortable.
+		ConditionExpression: aws.String(
+			"attribute_exists(PK) AND (attribute_not_exists(allPartsEmittedAt) OR allPartsEmittedAt < :staleBefore)",
+		),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			// Lost the race — another invocation holds a fresh claim.
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to claim all-parts emit lock: %w", err)
+	}
+	return true, nil
 }
 
 // DeleteMeeting deletes a meeting and all related items atomically using TransactWriteItems.

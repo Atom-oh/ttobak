@@ -167,15 +167,26 @@ export const meetingsApi = {
     api.put<{ meetingId: string; updatedAt: string }>(`/api/meetings/${id}/speakers`, { speakerMap }),
 
   audioUrl: (id: string) =>
-    api.get<{ audioUrl: string }>(`/api/meetings/${id}/audio`),
+    api.get<{ audioUrl?: string; audioUrls?: string[] }>(`/api/meetings/${id}/audio`),
+
+  /**
+   * Per ADR-014 Phase 6: link this meeting to one or more chronologically prior meetings.
+   * The summarize Lambda will prepend the linked meetings' summaries to the prompt,
+   * giving the LLM cross-meeting context for follow-up discussions.
+   */
+  link: (id: string, linkedMeetingIds: string[]) =>
+    api.post<{ meetingId: string; linkedMeetingIds: string[]; updatedAt: string }>(
+      `/api/meetings/${id}/link`,
+      { linkedMeetingIds },
+    ),
 };
 
 // Presigned URL for uploads
 export const uploadsApi = {
-  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image' | 'file'; meetingId?: string }) =>
+  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image' | 'file'; meetingId?: string; partIndex?: number; totalParts?: number }) =>
     api.post<{ uploadUrl: string; key: string; expiresIn: number }>('/api/upload/presigned', data),
 
-  notifyComplete: (data: { meetingId: string; key: string; category: 'audio' | 'image' | 'file'; fileName?: string; fileSize?: number; mimeType?: string }) =>
+  notifyComplete: (data: { meetingId: string; key: string; category: 'audio' | 'image' | 'file'; fileName?: string; fileSize?: number; mimeType?: string; partIndex?: number; totalParts?: number }) =>
     api.post<{ status: string }>('/api/upload/complete', data),
 };
 

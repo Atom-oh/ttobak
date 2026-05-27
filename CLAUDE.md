@@ -101,6 +101,7 @@ CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE
 ### Medium
 - **JWT signature not verified in backend** (`middleware/auth.go`): Backend only decodes JWT payload without signature verification. Safe because Lambda@Edge pre-validates, but lacks defense-in-depth.
 - **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID are hardcoded in CDK stacks. Should be extracted to CDK context for multi-account/stage support.
+- **Single audio file per meeting**: `Meeting.AudioKey` is a single string — uploading a new file overwrites the previous one. Multi-file upload and linked follow-up meetings planned in ADR-014.
 
 ### Low
 - Default table/bucket names in Go don't match CDK defaults (no runtime impact since CDK injects env vars)

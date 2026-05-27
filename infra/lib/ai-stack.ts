@@ -249,6 +249,18 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // EventBridge PutEvents (for emitting AllPartsTranscribed multi-file events)
+    this.summarizeRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'EventBridgePutEvents',
+        effect: iam.Effect.ALLOW,
+        actions: ['events:PutEvents'],
+        resources: [
+          `arn:aws:events:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:event-bus/default`,
+        ],
+      })
+    );
+
     // ==================== Process Image Role ====================
     // Needs: DynamoDB R/W, S3 Read, Bedrock InvokeModel
     this.processImageRole = createLambdaRole(

@@ -141,6 +141,9 @@ func init() {
 		// Speaker mapping
 		r.Put("/api/meetings/{meetingId}/speakers", meetingHandler.UpdateSpeakers)
 
+		// Linked follow-up meetings
+		r.Post("/api/meetings/{meetingId}/link", meetingHandler.LinkMeetings)
+
 		// Share routes
 		r.Post("/api/meetings/{meetingId}/share", shareHandler.ShareMeeting)
 		r.Delete("/api/meetings/{meetingId}/share/{userId}", shareHandler.RevokeShare)

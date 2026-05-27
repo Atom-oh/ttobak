@@ -167,10 +167,18 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
             const color = speakerColorMap.get(group.speaker) || SPEAKER_COLORS[0];
             const initial = getSpeakerInitial(group.speaker);
 
+            // ADR-013: deep-link target. Use the first segment's id as the
+            // group anchor so summary `transcript://{id}` URLs can scroll
+            // straight to the right speaker turn. Older meetings without
+            // saved segment ids fall back to a startTime-based key.
+            const groupAnchor =
+              group.segments[0]?.id || `seg-${Math.round(group.startTime * 1000)}`;
             return (
               <div
                 key={`${group.speaker}-${group.startTime}-${gi}`}
-                className="group relative flex gap-3 py-3 px-3 -mx-3 rounded-xl hover:bg-slate-50 dark:hover:bg-white/[0.03] transition-colors"
+                id={`ts-${groupAnchor}`}
+                data-transcript-anchor={groupAnchor}
+                className="group relative flex gap-3 py-3 px-3 -mx-3 rounded-xl hover:bg-slate-50 dark:hover:bg-white/[0.03] transition-colors scroll-mt-24 transition-shadow"
               >
                 {/* Avatar */}
                 <div className="flex-shrink-0 pt-0.5">
@@ -195,12 +203,22 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
 
                   {/* Merged text blocks */}
                   <div className="text-[15px] leading-[1.75] text-slate-700 dark:text-gray-300">
-                    {group.segments.map((seg, si) => (
-                      <span key={seg.id || `${gi}-${si}`}>
-                        {si > 0 && ' '}
-                        <EditableText text={seg.text} />
-                      </span>
-                    ))}
+                    {group.segments.map((seg, si) => {
+                      // Per ADR-013, each segment also gets its own `ts-{id}`
+                      // anchor so summary links can target sub-utterances
+                      // within a long speaker turn.
+                      const segAnchor = seg.id || `seg-${Math.round(seg.startTime * 1000)}`;
+                      return (
+                        <span
+                          key={seg.id || `${gi}-${si}`}
+                          id={`ts-${segAnchor}`}
+                          data-transcript-anchor={segAnchor}
+                        >
+                          {si > 0 && ' '}
+                          <EditableText text={seg.text} />
+                        </span>
+                      );
+                    })}
                   </div>
                 </div>
 
