@@ -694,6 +694,13 @@ func extractPartInfo(key string) (meetingID string, partIndex int, ok bool) {
 	}
 
 	meetingID = key[:idx]
+	// Reject malformed keys where the meeting id is empty (e.g.
+	// `transcripts/_part_001.json`). Without this guard, callers reach
+	// `repo.GetMeetingByID("")` which returns nil and the call is silently
+	// dropped — the malformed event vanishes from the retry queue.
+	if meetingID == "" {
+		return "", 0, false
+	}
 	partStr := key[idx+6:] // skip "_part_"
 	partIndex, err := strconv.Atoi(partStr)
 	if err != nil {

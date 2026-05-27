@@ -51,6 +51,30 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		return parts[i].index < parts[j].index
 	})
 
+	// Guard against silent data loss: S3 list can return fewer keys than
+	// `partCount` (eventual consistency lag, accidental delete, etc.).
+	// Bailing here is safer than merging a partial timeline. The Lambda
+	// runtime will retry on returned errors and AllPartsTranscribed events
+	// are claimed once-only via `allPartsEmittedAt`, so a transient lag
+	// resolves on the next invocation.
+	if len(parts) != partCount {
+		return "", nil, fmt.Errorf(
+			"part count mismatch for meeting %s: expected %d, got %d (S3 list lag or missing parts)",
+			meetingID, partCount, len(parts),
+		)
+	}
+	// Verify dense contiguous indices [0, partCount). A gap means one of
+	// the expected parts was never uploaded or its key doesn't match the
+	// expected pattern.
+	for i, p := range parts {
+		if p.index != i {
+			return "", nil, fmt.Errorf(
+				"part index gap for meeting %s: expected index %d, got %d",
+				meetingID, i, p.index,
+			)
+		}
+	}
+
 	var allTexts []string
 	var allSegments []TranscriptSegmentOut
 	var cumulativeOffset float64
