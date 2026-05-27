@@ -471,6 +471,14 @@ func (r *DynamoDBRepository) PreAllocateAudioKeys(ctx context.Context, userID, m
 
 // SetAudioKeyAtIndex sets a specific index in the audioKeys list. Idempotent — re-uploading
 // the same part overwrites the same slot. Validates index is within pre-allocated range.
+//
+// Status transitions are gated: only `recording` or `transcribing` meetings
+// flip to `transcribing`. Without this guard, a late part-upload (S3 retry,
+// client clock skew) could regress a `summarizing`/`done`/`error` meeting back
+// to `transcribing`, which the summarize Lambda's whitelist guard would then
+// happily accept — replaying refine + Bedrock + KB export on top of finished
+// content. ConditionalCheckFailedException on stale status is surfaced to the
+// caller as a typed error so transcribe.go can log+skip rather than retry.
 func (r *DynamoDBRepository) SetAudioKeyAtIndex(ctx context.Context, userID, meetingID, key string, partIndex int) error {
 	indexPath := fmt.Sprintf("audioKeys[%d]", partIndex)
 
@@ -487,12 +495,20 @@ func (r *DynamoDBRepository) SetAudioKeyAtIndex(ctx context.Context, userID, mee
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":key":          &types.AttributeValueMemberS{Value: key},
 			":transcribing": &types.AttributeValueMemberS{Value: model.StatusTranscribing},
+			":recording":    &types.AttributeValueMemberS{Value: model.StatusRecording},
 			":now":          &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339Nano)},
 			":idx":          &types.AttributeValueMemberN{Value: strconv.Itoa(partIndex)},
 		},
-		ConditionExpression: aws.String("attribute_exists(PK) AND attribute_exists(audioKeys) AND size(audioKeys) > :idx"),
+		ConditionExpression: aws.String(
+			"attribute_exists(PK) AND attribute_exists(audioKeys) AND size(audioKeys) > :idx " +
+				"AND (#st = :recording OR #st = :transcribing)",
+		),
 	})
 	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("set audio key at index %d rejected (meeting not in recording/transcribing state or index out of range): %w", partIndex, err)
+		}
 		return fmt.Errorf("failed to set audio key at index %d: %w", partIndex, err)
 	}
 	return nil

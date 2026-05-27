@@ -254,7 +254,13 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialP
 	return nil
 }
 
-var partIndexPattern = regexp.MustCompile(`part_(\d{3})_`)
+// partIndexPattern matches the multi-part audio prefix only when it appears
+// at the START of the S3 object's basename (e.g. `audio/{user}/{meeting}/part_001_xxx.wav`).
+// Without the path-anchor a legitimate user-named single upload like
+// `part_002_song.wav` would be misclassified as a multi-part chunk,
+// routing it to the merge pipeline that would then block forever on
+// missing sibling parts.
+var partIndexPattern = regexp.MustCompile(`(?:^|/)part_(\d{3})_`)
 
 func extractPartIndex(key string) (int, bool) {
 	matches := partIndexPattern.FindStringSubmatch(key)
