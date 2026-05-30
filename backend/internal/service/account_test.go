@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"errors"
+	"testing"
 
 	"github.com/ttobak/backend/internal/model"
 )
@@ -82,4 +84,43 @@ func (m *mockAccountRepo) GetUserByEmail(_ context.Context, email string) (*mode
 	}
 	cp := *u
 	return &cp, nil
+}
+
+func TestCreateAccount_SetsOwnerMember(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+
+	acc, err := svc.CreateAccount(context.Background(), "user-1", "u1@example.com",
+		&model.CreateAccountRequest{Name: "하나은행", Aliases: []string{"Hana Bank"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if acc.AccountID == "" {
+		t.Fatal("expected generated accountId")
+	}
+	if acc.OwnerUserID != "user-1" {
+		t.Errorf("expected owner user-1, got %s", acc.OwnerUserID)
+	}
+	if acc.EntityType != model.EntityTypeAccount {
+		t.Errorf("expected entityType ACCOUNT, got %s", acc.EntityType)
+	}
+	// owner must exist as a member with role owner
+	owner, _ := repo.GetMember(context.Background(), acc.AccountID, "user-1")
+	if owner == nil || owner.Role != model.RoleOwner {
+		t.Errorf("expected owner member with role owner, got %+v", owner)
+	}
+	// GSI1 keys for reverse lookup
+	if owner.GSI1PK != model.PrefixUser+"user-1" || owner.GSI1SK != model.PrefixAccount+acc.AccountID {
+		t.Errorf("owner GSI1 keys wrong: %s / %s", owner.GSI1PK, owner.GSI1SK)
+	}
+}
+
+func TestCreateAccount_EmptyNameRejected(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	_, err := svc.CreateAccount(context.Background(), "user-1", "u1@example.com",
+		&model.CreateAccountRequest{Name: "   "})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput, got %v", err)
+	}
 }

@@ -76,7 +76,39 @@ func toAccountResponse(a *model.Account, members []model.AccountMember) *model.A
 	}
 }
 
-// methods added in Tasks 3-6
-var _ = uuid.NewString
-var _ = strings.TrimSpace
-var _ = time.Now
+func (s *AccountService) CreateAccount(ctx context.Context, ownerUserID, ownerEmail string, req *model.CreateAccountRequest) (*model.Account, error) {
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, ErrInvalidInput
+	}
+	now := time.Now().UTC()
+	accountID := uuid.NewString()
+	account := &model.Account{
+		PK:          model.PrefixAccount + accountID,
+		SK:          model.SKAccountMeta,
+		AccountID:   accountID,
+		Name:        strings.TrimSpace(req.Name),
+		Aliases:     req.Aliases,
+		Domains:     req.Domains,
+		Industry:    req.Industry,
+		OwnerUserID: ownerUserID,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		EntityType:  model.EntityTypeAccount,
+	}
+	owner := &model.AccountMember{
+		PK:         model.PrefixAccount + accountID,
+		SK:         model.PrefixMember + ownerUserID,
+		AccountID:  accountID,
+		UserID:     ownerUserID,
+		Email:      ownerEmail,
+		Role:       model.RoleOwner,
+		AddedAt:    now,
+		GSI1PK:     model.PrefixUser + ownerUserID,
+		GSI1SK:     model.PrefixAccount + accountID,
+		EntityType: model.EntityTypeAccountMember,
+	}
+	if err := s.repo.CreateAccount(ctx, account, owner); err != nil {
+		return nil, err
+	}
+	return account, nil
+}
