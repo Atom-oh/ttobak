@@ -161,3 +161,46 @@ func (s *AccountService) ListAccounts(ctx context.Context, userID string) ([]mod
 	}
 	return out, nil
 }
+
+func (s *AccountService) AddMember(ctx context.Context, requesterUserID, accountID string, req *model.AddMemberRequest) (*model.AccountMemberDTO, error) {
+	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
+	if err != nil {
+		return nil, err
+	}
+	if requester == nil || requester.Role != model.RoleOwner {
+		return nil, ErrForbidden
+	}
+	if !isAssignableRole(req.Role) {
+		return nil, ErrInvalidInput
+	}
+	user, err := s.repo.GetUserByEmail(ctx, req.Email)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil {
+		return nil, ErrUserNotFound
+	}
+	existing, err := s.repo.GetMember(ctx, accountID, user.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return nil, ErrMemberExists
+	}
+	member := &model.AccountMember{
+		PK:         model.PrefixAccount + accountID,
+		SK:         model.PrefixMember + user.UserID,
+		AccountID:  accountID,
+		UserID:     user.UserID,
+		Email:      user.Email,
+		Role:       req.Role,
+		AddedAt:    time.Now().UTC(),
+		GSI1PK:     model.PrefixUser + user.UserID,
+		GSI1SK:     model.PrefixAccount + accountID,
+		EntityType: model.EntityTypeAccountMember,
+	}
+	if err := s.repo.PutMember(ctx, member); err != nil {
+		return nil, err
+	}
+	return &model.AccountMemberDTO{UserID: user.UserID, Email: user.Email, Role: req.Role}, nil
+}

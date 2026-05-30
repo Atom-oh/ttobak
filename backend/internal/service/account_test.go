@@ -181,3 +181,74 @@ func TestListAccounts_OnlyMine(t *testing.T) {
 		t.Errorf("unexpected summary: %+v", list[0])
 	}
 }
+
+func seedUser(repo *mockAccountRepo, userID, email string) {
+	repo.users[email] = &model.User{UserID: userID, Email: email}
+}
+
+func TestAddMember_OwnerAddsTAM(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+
+	dto, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dto.UserID != "tam-1" || dto.Role != model.RoleTAM {
+		t.Errorf("unexpected dto: %+v", dto)
+	}
+	mem, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1")
+	if mem == nil || mem.GSI1PK != model.PrefixUser+"tam-1" {
+		t.Errorf("member not persisted with GSI1 keys: %+v", mem)
+	}
+}
+
+func TestAddMember_NonOwnerForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	// make tam-1 a non-owner member first
+	_, _ = svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	seedUser(repo, "ssa-1", "ssa@x.com")
+
+	_, err := svc.AddMember(context.Background(), "tam-1", acc.AccountID, &model.AddMemberRequest{Email: "ssa@x.com", Role: model.RoleSSA})
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestAddMember_UnknownEmail(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ghost@x.com", Role: model.RoleSSA})
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
+func TestAddMember_DuplicateRejected(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	_, _ = svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleSSA})
+	if !errors.Is(err, ErrMemberExists) {
+		t.Errorf("expected ErrMemberExists, got %v", err)
+	}
+}
+
+func TestAddMember_InvalidRole(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "x-1", "x@x.com")
+	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "x@x.com", Role: "owner"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput (owner not assignable), got %v", err)
+	}
+}
