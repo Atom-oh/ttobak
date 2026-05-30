@@ -575,6 +575,12 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 		return nil, err
 	}
 
+	if items, berr := BuildAccountInsights(accountID, meeting); berr == nil && len(items) > 0 {
+		if err := s.repo.PutAccountInsights(ctx, items); err != nil {
+			return nil, err
+		}
+	}
+
 	members, err := s.repo.ListAccountMembers(ctx, accountID)
 	if err != nil {
 		return nil, err

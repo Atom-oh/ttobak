@@ -569,3 +569,37 @@ func TestBuildAccountInsights_Empty(t *testing.T) {
 		t.Errorf("expected nil,nil for no insights; got %v, %v", items, err)
 	}
 }
+
+func TestShareMeetingToAccount_FansOutInsights(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "ROSA", Status: model.StatusDone,
+		Date:     time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC),
+		Insights: `[{"type":"risk","text":"지연"},{"type":"opportunity","text":"확대"}]`,
+	})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+
+	if _, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.accountInsights) != 2 {
+		t.Fatalf("expected 2 fanned-out insights, got %d", len(repo.accountInsights))
+	}
+	if repo.accountInsights[0].AccountID != "acc-1" || repo.accountInsights[0].SourceID != "m-1" {
+		t.Errorf("unexpected fanned insight: %+v", repo.accountInsights[0])
+	}
+}
+
+func TestShareMeetingToAccount_NoInsightsNoFanout(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+	if _, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.accountInsights) != 0 {
+		t.Errorf("expected no fanout for meeting without insights, got %d", len(repo.accountInsights))
+	}
+}
