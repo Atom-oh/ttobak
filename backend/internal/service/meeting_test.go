@@ -240,6 +240,46 @@ func TestLinkMeetingToAccount_NotOwner(t *testing.T) {
 	}
 }
 
+func TestShareMeetingToAccount_GrantsAndRefs(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "ROSA 리뷰", Status: model.StatusDone})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+	repo.addMember("acc-1", "tam-1", model.RoleTAM)
+	repo.addMember("acc-1", "ssa-1", model.RoleSSA)
+
+	res, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.SharedWith != 2 { // tam-1, ssa-1 (owner excluded)
+		t.Errorf("expected 2 shares, got %d", res.SharedWith)
+	}
+	got := repo.meetings[meetingKey("owner-1", "m-1")]
+	if got.AccountID != "acc-1" || !got.SharedToAccount {
+		t.Errorf("expected accountId+sharedToAccount set, got %+v", got)
+	}
+	if repo.shares[shareKey("tam-1", "m-1")] == nil || repo.shares[shareKey("ssa-1", "m-1")] == nil {
+		t.Error("expected shares created for tam-1 and ssa-1")
+	}
+	if repo.shares[shareKey("owner-1", "m-1")] != nil {
+		t.Error("owner must not be shared to themselves")
+	}
+	if len(repo.meetingRefs["acc-1"]) != 1 || repo.meetingRefs["acc-1"][0].MeetingID != "m-1" {
+		t.Errorf("expected 1 meeting ref for acc-1, got %+v", repo.meetingRefs["acc-1"])
+	}
+}
+
+func TestShareMeetingToAccount_NotMemberForbidden(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone})
+	_, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
 func TestCreateMeeting(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)

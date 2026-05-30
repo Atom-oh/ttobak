@@ -523,6 +523,66 @@ func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, ownerID, meet
 	return s.repo.UpdateMeeting(ctx, meeting)
 }
 
+// ShareMeetingToAccount publishes a meeting to an account team: sets
+// accountId+sharedToAccount, grants read Share to every account member
+// (except the owner), and writes a MeetingRef into the account partition.
+func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, ownerEmail, meetingID, accountID string) (*model.ShareToAccountResult, error) {
+	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	if meeting == nil {
+		if existing, _ := s.repo.GetMeetingByID(ctx, meetingID); existing != nil {
+			return nil, ErrForbidden
+		}
+		return nil, ErrNotFound
+	}
+	owner, err := s.repo.GetMember(ctx, accountID, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	if owner == nil {
+		return nil, ErrForbidden
+	}
+
+	meeting.AccountID = accountID
+	meeting.SharedToAccount = true
+	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
+		return nil, err
+	}
+
+	members, err := s.repo.ListAccountMembers(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	shared := 0
+	for _, m := range members {
+		if m.UserID == ownerID {
+			continue
+		}
+		if _, err := s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, m.UserID, m.Email, model.PermissionRead); err != nil {
+			return nil, err
+		}
+		shared++
+	}
+
+	ref := &model.MeetingRef{
+		PK:          model.PrefixAccount + accountID,
+		SK:          model.PrefixMeetingRef + meeting.Date.UTC().Format(time.RFC3339) + "#" + meetingID,
+		AccountID:   accountID,
+		MeetingID:   meetingID,
+		OwnerUserID: ownerID,
+		Title:       meeting.Title,
+		Date:        meeting.Date,
+		EntityType:  model.EntityTypeMeetingRef,
+	}
+	if err := s.repo.PutMeetingRef(ctx, ref); err != nil {
+		return nil, err
+	}
+
+	return &model.ShareToAccountResult{AccountID: accountID, SharedWith: shared}, nil
+}
+
 // strPtr returns a pointer to string, or nil if empty
 func strPtr(s string) *string {
 	if s == "" {
