@@ -131,3 +131,69 @@ type MeetingRefDTO struct {
 	Title       string    `json:"title"`
 	Date        time.Time `json:"date"`
 }
+
+// Insight types (Plan 3). Feeds SIFT / 2by2 / Player Card raw material.
+const (
+	InsightTrend       = "trend"
+	InsightNeed        = "need"
+	InsightCompetitive = "competitive"
+	InsightRisk        = "risk"
+	InsightOpportunity = "opportunity"
+	InsightTech        = "tech"
+	InsightStakeholder = "stakeholder"
+	InsightAction      = "action"
+)
+
+const (
+	PrefixInsight     = "INSIGHT#"
+	EntityTypeInsight = "ACCOUNT_INSIGHT"
+)
+
+// IsValidInsightType reports whether t is one of the 8 recognized insight types.
+func IsValidInsightType(t string) bool {
+	switch t {
+	case InsightTrend, InsightNeed, InsightCompetitive, InsightRisk,
+		InsightOpportunity, InsightTech, InsightStakeholder, InsightAction:
+		return true
+	default:
+		return false
+	}
+}
+
+// MeetingInsight is one typed insight extracted from a meeting (stored as JSON in Meeting.Insights).
+type MeetingInsight struct {
+	ID       string   `json:"id"`
+	Type     string   `json:"type"`
+	Text     string   `json:"text"`
+	TsMarker string   `json:"tsMarker,omitempty"` // [TS:NNN] transcript deep link
+	Entities []string `json:"entities,omitempty"`
+}
+
+// AccountInsight is a persisted insight item in the account partition.
+// PK: ACCOUNT#{accountId}, SK: INSIGHT#{occurredAt}#{meetingId}#{index}
+type AccountInsight struct {
+	PK           string    `dynamodbav:"PK"`
+	SK           string    `dynamodbav:"SK"`
+	AccountID    string    `dynamodbav:"accountId"`
+	InsightID    string    `dynamodbav:"insightId"`
+	Type         string    `dynamodbav:"type"`
+	Text         string    `dynamodbav:"text"`
+	SourceType   string    `dynamodbav:"sourceType"` // "meeting" | "news" | "ingest"
+	SourceID     string    `dynamodbav:"sourceId"`
+	SourceUserID string    `dynamodbav:"sourceUserId,omitempty"`
+	OccurredAt   time.Time `dynamodbav:"occurredAt"`
+	TsMarker     string    `dynamodbav:"tsMarker,omitempty"`
+	Entities     []string  `dynamodbav:"entities,omitempty"`
+	CreatedAt    time.Time `dynamodbav:"createdAt"`
+	EntityType   string    `dynamodbav:"entityType"` // "ACCOUNT_INSIGHT"
+}
+
+type AccountInsightDTO struct {
+	Type       string    `json:"type"`
+	Text       string    `json:"text"`
+	SourceType string    `json:"sourceType"`
+	SourceID   string    `json:"sourceId"`
+	OccurredAt time.Time `json:"occurredAt"`
+	TsMarker   string    `json:"tsMarker,omitempty"`
+	Entities   []string  `json:"entities,omitempty"`
+}
