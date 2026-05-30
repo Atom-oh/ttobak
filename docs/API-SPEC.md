@@ -160,6 +160,108 @@ Error: 403 Forbidden (only owner can delete)
 
 ---
 
+### Accounts
+
+고객사(Account)는 팀이 공유하는 1급 엔티티다. 생성자는 자동으로 `owner` 멤버가 되며, owner만 멤버를 추가할 수 있다. 멤버십(역할 AM/TAM/SSA/owner)이 곧 접근 권한이다. 모든 엔드포인트는 인증 필요.
+
+#### List Accounts (내 Account 목록)
+
+```
+GET /api/accounts
+
+Response: 200 OK
+{
+  "accounts": [
+    {
+      "accountId": "uuid",
+      "name": "하나은행",
+      "role": "owner"            // owner | AM | TAM | SSA
+    }
+  ]
+}
+```
+
+내가 멤버인 Account만 반환한다(GSI1 역조회).
+
+#### Create Account
+
+```
+POST /api/accounts
+Request:
+{
+  "name": "하나은행",
+  "aliases": ["Hana Bank"],     // optional, 태그 별칭 매핑
+  "domains": ["hanafn.com"],    // optional
+  "industry": "Finance"         // optional
+}
+
+Response: 201 Created
+{
+  "accountId": "uuid",
+  "name": "하나은행",
+  "aliases": ["Hana Bank"],
+  "domains": ["hanafn.com"],
+  "industry": "Finance",
+  "ownerUserId": "owner-uuid",
+  "members": [
+    { "userId": "owner-uuid", "email": "owner@example.com", "role": "owner" }
+  ],
+  "createdAt": "2026-05-30T10:00:00Z"
+}
+
+Error: 400 Bad Request (name이 비어있음)
+```
+
+생성자는 자동으로 `owner` 역할의 멤버가 된다.
+
+#### Get Account Detail
+
+```
+GET /api/accounts/{accountId}
+
+Response: 200 OK
+{
+  "accountId": "uuid",
+  "name": "하나은행",
+  "aliases": ["Hana Bank"],
+  "domains": ["hanafn.com"],
+  "industry": "Finance",
+  "ownerUserId": "owner-uuid",
+  "members": [
+    { "userId": "owner-uuid", "email": "owner@example.com", "role": "owner" },
+    { "userId": "tam-uuid", "email": "tam@example.com", "role": "TAM" }
+  ],
+  "createdAt": "2026-05-30T10:00:00Z"
+}
+
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
+#### Add Member (owner 전용)
+
+```
+POST /api/accounts/{accountId}/members
+Request:
+{
+  "email": "tam@example.com",   // 기존 등록 사용자의 이메일
+  "role": "TAM"                 // AM | TAM | SSA (owner는 지정 불가)
+}
+
+Response: 201 Created
+{
+  "userId": "tam-uuid",
+  "email": "tam@example.com",
+  "role": "TAM"
+}
+
+Error: 403 Forbidden (owner가 아님)
+Error: 404 Not Found (해당 이메일의 사용자 없음)
+Error: 400 Bad Request (이미 멤버이거나 잘못된 역할)
+```
+
+---
+
 ### Sharing
 
 #### Share Meeting
