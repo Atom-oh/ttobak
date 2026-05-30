@@ -527,3 +527,39 @@ func TestSelectTranscript_ReadOnlyForbidden(t *testing.T) {
 		t.Errorf("expected ErrForbidden, got %v", err)
 	}
 }
+
+func TestBuildAccountInsights(t *testing.T) {
+	when := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	meeting := &model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Date: when,
+		Insights: `[{"id":"ins_1","type":"risk","text":"일정 지연","entities":["PoC"]},{"id":"ins_2","type":"opportunity","text":"확대 여지"}]`,
+	}
+	items, err := BuildAccountInsights("acc-1", meeting)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2, got %d", len(items))
+	}
+	got := items[0]
+	if got.PK != model.PrefixAccount+"acc-1" {
+		t.Errorf("bad PK: %s", got.PK)
+	}
+	wantSK := model.PrefixInsight + when.Format(time.RFC3339) + "#m-1#0"
+	if got.SK != wantSK {
+		t.Errorf("bad SK: got %s want %s", got.SK, wantSK)
+	}
+	if got.Type != "risk" || got.SourceType != "meeting" || got.SourceID != "m-1" || got.SourceUserID != "owner-1" {
+		t.Errorf("bad fields: %+v", got)
+	}
+	if !got.OccurredAt.Equal(when) {
+		t.Errorf("bad occurredAt: %v", got.OccurredAt)
+	}
+}
+
+func TestBuildAccountInsights_Empty(t *testing.T) {
+	items, err := BuildAccountInsights("acc-1", &model.Meeting{MeetingID: "m-1"})
+	if err != nil || items != nil {
+		t.Errorf("expected nil,nil for no insights; got %v, %v", items, err)
+	}
+}
