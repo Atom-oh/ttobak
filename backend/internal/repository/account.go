@@ -185,3 +185,48 @@ func (r *DynamoDBRepository) ListMeetingRefsForAccount(ctx context.Context, acco
 	}
 	return refs, nil
 }
+
+// PutAccountInsights writes account insight items (caller builds PK/SK). The
+// loop of PutItems is idempotent per item key (deterministic SK), so re-fanning
+// a meeting's insights overwrites in place.
+func (r *DynamoDBRepository) PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error {
+	for i := range insights {
+		item, err := attributevalue.MarshalMap(&insights[i])
+		if err != nil {
+			return fmt.Errorf("marshal account insight: %w", err)
+		}
+		if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
+			TableName: aws.String(r.tableName),
+			Item:      item,
+		}); err != nil {
+			return fmt.Errorf("put account insight: %w", err)
+		}
+	}
+	return nil
+}
+
+// ListInsightsForAccount returns all INSIGHT# items for an account (newest first).
+// Period/type filtering is done by the service layer (spec §6.3: client-side for v1).
+func (r *DynamoDBRepository) ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").BeginsWith(model.PrefixInsight))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build insights query: %w", err)
+	}
+	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(false),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query insights: %w", err)
+	}
+	insights := []model.AccountInsight{}
+	if err := attributevalue.UnmarshalListOfMaps(result.Items, &insights); err != nil {
+		return nil, fmt.Errorf("unmarshal insights: %w", err)
+	}
+	return insights, nil
+}
