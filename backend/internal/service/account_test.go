@@ -163,3 +163,21 @@ func TestGetAccount_MissingNotFound(t *testing.T) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestListAccounts_OnlyMine(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	a1, _ := svc.CreateAccount(context.Background(), "user-1", "u1@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, _ = svc.CreateAccount(context.Background(), "user-2", "u2@x.com", &model.CreateAccountRequest{Name: "삼성전자"})
+
+	list, err := svc.ListAccounts(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("expected 1 account for user-1, got %d", len(list))
+	}
+	if list[0].AccountID != a1.AccountID || list[0].Role != model.RoleOwner {
+		t.Errorf("unexpected summary: %+v", list[0])
+	}
+}

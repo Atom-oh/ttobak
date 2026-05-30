@@ -142,3 +142,22 @@ func (s *AccountService) GetAccount(ctx context.Context, userID, accountID strin
 	}
 	return toAccountResponse(account, members), nil
 }
+
+func (s *AccountService) ListAccounts(ctx context.Context, userID string) ([]model.AccountSummary, error) {
+	memberships, err := s.repo.ListAccountsForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.AccountSummary, 0, len(memberships))
+	for _, m := range memberships {
+		account, err := s.repo.GetAccount(ctx, m.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		if account == nil {
+			continue // membership dangling after account deletion
+		}
+		out = append(out, model.AccountSummary{AccountID: account.AccountID, Name: account.Name, Role: m.Role})
+	}
+	return out, nil
+}
