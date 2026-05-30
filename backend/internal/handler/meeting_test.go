@@ -347,6 +347,27 @@ func TestSelectTranscriptHandler_InvalidSelection(t *testing.T) {
 	}
 }
 
+func TestHandlerLinkToAccount_OK(t *testing.T) {
+	h, repo := newStubMeetingHandler()
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone})
+	repo.members["acc-1|owner-1"] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+
+	body, _ := json.Marshal(model.LinkAccountRequest{AccountID: "acc-1"})
+	r := httptest.NewRequest(http.MethodPost, "/api/meetings/m-1/account", bytes.NewReader(body))
+	r = withUserCtx(r, "owner-1")
+	r = withChiParam(r, "meetingId", "m-1")
+	w := httptest.NewRecorder()
+
+	h.LinkToAccount(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if repo.meetings[hKey("owner-1", "m-1")].AccountID != "acc-1" {
+		t.Error("accountId not set on meeting")
+	}
+}
+
 // Verify error response structure matches API spec
 func TestErrorResponseFormat(t *testing.T) {
 	h, _ := newStubMeetingHandler()
