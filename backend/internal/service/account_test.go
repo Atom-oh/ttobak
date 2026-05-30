@@ -378,3 +378,40 @@ func TestListAccountInsights_NonMemberForbidden(t *testing.T) {
 		t.Errorf("expected ErrForbidden, got %v", err)
 	}
 }
+
+func TestGetAccountBrief_Bundles(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	d := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	repo.insightsByAccount[acc.AccountID] = []model.AccountInsight{
+		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연", OccurredAt: d},
+		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연2", OccurredAt: d},
+		{AccountID: acc.AccountID, Type: model.InsightOpportunity, Text: "확대", OccurredAt: d},
+	}
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1", Title: "ROSA"}}
+
+	brief, err := svc.GetAccountBrief(context.Background(), "owner-1", acc.AccountID, time.Time{}, time.Time{}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if brief.Account == nil || brief.Account.Name != "하나은행" {
+		t.Errorf("missing account meta: %+v", brief.Account)
+	}
+	if len(brief.InsightsByType[model.InsightRisk]) != 2 || len(brief.InsightsByType[model.InsightOpportunity]) != 1 {
+		t.Errorf("insights not grouped: %+v", brief.InsightsByType)
+	}
+	if len(brief.Meetings) != 1 || brief.Meetings[0].MeetingID != "m-1" {
+		t.Errorf("missing meetings: %+v", brief.Meetings)
+	}
+}
+
+func TestGetAccountBrief_NonMemberForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, err := svc.GetAccountBrief(context.Background(), "stranger-9", acc.AccountID, time.Time{}, time.Time{}, nil)
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}

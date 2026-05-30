@@ -197,3 +197,12 @@ type AccountInsightDTO struct {
 	TsMarker   string    `json:"tsMarker,omitempty"`
 	Entities   []string  `json:"entities,omitempty"`
 }
+
+// AccountBrief bundles an account's raw material for one-shot consumption by
+// the personal-side agent (SFDC/SIFT/2by2/Player Card prep). Insights are
+// grouped by type for convenience.
+type AccountBrief struct {
+	Account        *AccountResponse               `json:"account"`
+	InsightsByType map[string][]AccountInsightDTO `json:"insightsByType"`
+	Meetings       []MeetingRefDTO                `json:"meetings"`
+}
