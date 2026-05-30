@@ -44,6 +44,7 @@ type meetingRepo interface {
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error
+	PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error
 }
 
 // MeetingService handles meeting business logic

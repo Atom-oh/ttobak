@@ -14,6 +14,7 @@ type mockAccountRepo struct {
 	members  map[string]*model.AccountMember // accountID|userID
 	users    map[string]*model.User          // email
 	meetingRefs map[string][]model.MeetingRef // accountID -> refs
+	insightsByAccount map[string][]model.AccountInsight
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -22,6 +23,7 @@ func newMockAccountRepo() *mockAccountRepo {
 		members:  make(map[string]*model.AccountMember),
 		users:    make(map[string]*model.User),
 		meetingRefs: make(map[string][]model.MeetingRef),
+		insightsByAccount: make(map[string][]model.AccountInsight),
 	}
 }
 
@@ -90,6 +92,10 @@ func (m *mockAccountRepo) GetUserByEmail(_ context.Context, email string) (*mode
 
 func (m *mockAccountRepo) ListMeetingRefsForAccount(_ context.Context, accountID string) ([]model.MeetingRef, error) {
 	return append([]model.MeetingRef(nil), m.meetingRefs[accountID]...), nil
+}
+
+func (m *mockAccountRepo) ListInsightsForAccount(_ context.Context, accountID string) ([]model.AccountInsight, error) {
+	return append([]model.AccountInsight(nil), m.insightsByAccount[accountID]...), nil
 }
 
 func TestCreateAccount_SetsOwnerMember(t *testing.T) {

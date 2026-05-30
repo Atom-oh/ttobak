@@ -51,6 +51,7 @@ type mockHandlerMeetingRepo struct {
 	users        map[string]*model.User
 	members      map[string]*model.AccountMember // "accountID|userID"
 	meetingRefs  map[string][]model.MeetingRef   // accountID -> refs
+	accountInsights []model.AccountInsight
 }
 
 func newMockHandlerMeetingRepo() *mockHandlerMeetingRepo {
@@ -167,6 +168,11 @@ func (m *mockHandlerMeetingRepo) ListAccountMembers(_ context.Context, accountID
 
 func (m *mockHandlerMeetingRepo) PutMeetingRef(_ context.Context, ref *model.MeetingRef) error {
 	m.meetingRefs[ref.AccountID] = append(m.meetingRefs[ref.AccountID], *ref)
+	return nil
+}
+
+func (m *mockHandlerMeetingRepo) PutAccountInsights(_ context.Context, insights []model.AccountInsight) error {
+	m.accountInsights = append(m.accountInsights, insights...)
 	return nil
 }
 
