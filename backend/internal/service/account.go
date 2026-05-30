@@ -112,3 +112,33 @@ func (s *AccountService) CreateAccount(ctx context.Context, ownerUserID, ownerEm
 	}
 	return account, nil
 }
+
+func (s *AccountService) GetAccount(ctx context.Context, userID, accountID string) (*model.AccountResponse, error) {
+	member, err := s.repo.GetMember(ctx, accountID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if member == nil {
+		// Distinguish "no such account" (NotFound) from "exists but not a member" (Forbidden).
+		account, err := s.repo.GetAccount(ctx, accountID)
+		if err != nil {
+			return nil, err
+		}
+		if account == nil {
+			return nil, ErrNotFound
+		}
+		return nil, ErrForbidden
+	}
+	account, err := s.repo.GetAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if account == nil {
+		return nil, ErrNotFound
+	}
+	members, err := s.repo.ListAccountMembers(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	return toAccountResponse(account, members), nil
+}

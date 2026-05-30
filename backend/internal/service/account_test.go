@@ -124,3 +124,42 @@ func TestCreateAccount_EmptyNameRejected(t *testing.T) {
 		t.Errorf("expected ErrInvalidInput, got %v", err)
 	}
 }
+
+func TestGetAccount_MemberSees(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com",
+		&model.CreateAccountRequest{Name: "하나은행"})
+
+	resp, err := svc.GetAccount(context.Background(), "owner-1", acc.AccountID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Name != "하나은행" {
+		t.Errorf("expected name 하나은행, got %s", resp.Name)
+	}
+	if len(resp.Members) != 1 || resp.Members[0].Role != model.RoleOwner {
+		t.Errorf("expected 1 owner member, got %+v", resp.Members)
+	}
+}
+
+func TestGetAccount_NonMemberForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com",
+		&model.CreateAccountRequest{Name: "하나은행"})
+
+	_, err := svc.GetAccount(context.Background(), "stranger-9", acc.AccountID)
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestGetAccount_MissingNotFound(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	_, err := svc.GetAccount(context.Background(), "user-1", "does-not-exist")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
