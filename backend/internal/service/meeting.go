@@ -545,9 +545,32 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 		return nil, ErrForbidden
 	}
 
+	// This sequence is non-transactional, but every write is idempotent
+	// (UpdateMeeting and the MeetingRef PutItem target fixed keys; CreateShare
+	// keys on the recipient), so a client retry converges. Single-item DynamoDB
+	// writes rarely fail; full atomicity via TransactWriteItems was considered
+	// but rejected because its 100-item limit would cap account team size.
+	// Order matters: write the MeetingRef BEFORE the per-member share loop so a
+	// list-visible record always exists even if a later CreateShare fails —
+	// otherwise the meeting would be flagged sharedToAccount=true with no ref,
+	// leaving ListAccountMeetings permanently unable to surface it.
 	meeting.AccountID = accountID
 	meeting.SharedToAccount = true
 	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
+		return nil, err
+	}
+
+	ref := &model.MeetingRef{
+		PK:          model.PrefixAccount + accountID,
+		SK:          model.PrefixMeetingRef + meeting.Date.UTC().Format(time.RFC3339) + "#" + meetingID,
+		AccountID:   accountID,
+		MeetingID:   meetingID,
+		OwnerUserID: ownerID,
+		Title:       meeting.Title,
+		Date:        meeting.Date,
+		EntityType:  model.EntityTypeMeetingRef,
+	}
+	if err := s.repo.PutMeetingRef(ctx, ref); err != nil {
 		return nil, err
 	}
 
@@ -564,20 +587,6 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 			return nil, err
 		}
 		shared++
-	}
-
-	ref := &model.MeetingRef{
-		PK:          model.PrefixAccount + accountID,
-		SK:          model.PrefixMeetingRef + meeting.Date.UTC().Format(time.RFC3339) + "#" + meetingID,
-		AccountID:   accountID,
-		MeetingID:   meetingID,
-		OwnerUserID: ownerID,
-		Title:       meeting.Title,
-		Date:        meeting.Date,
-		EntityType:  model.EntityTypeMeetingRef,
-	}
-	if err := s.repo.PutMeetingRef(ctx, ref); err != nil {
-		return nil, err
 	}
 
 	return &model.ShareToAccountResult{AccountID: accountID, SharedWith: shared}, nil
