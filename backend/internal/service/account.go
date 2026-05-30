@@ -14,8 +14,9 @@ import (
 // Account-specific sentinel errors. (ErrForbidden, ErrNotFound, ErrUserNotFound
 // are already declared in service/meeting.go in this same package — reuse them.)
 var (
-	ErrInvalidInput = errors.New("invalid input")
-	ErrMemberExists = errors.New("member already exists")
+	ErrInvalidInput   = errors.New("invalid input")
+	ErrMemberExists   = errors.New("member already exists")
+	ErrAmbiguousAlias = errors.New("alias maps to multiple accounts")
 )
 
 // accountRepo is the persistence seam for AccountService (mirrors meetingRepo).
@@ -204,4 +205,43 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 		return nil, err
 	}
 	return &model.AccountMemberDTO{UserID: user.UserID, Email: user.Email, Role: req.Role}, nil
+}
+
+// ResolveAccountByAlias finds, among the user's accounts, the one whose aliases
+// (or name) match the given tag. Returns ErrNotFound if none, ErrAmbiguousAlias
+// if more than one (never auto-pick).
+func (s *AccountService) ResolveAccountByAlias(ctx context.Context, userID, alias string) (*model.Account, error) {
+	memberships, err := s.repo.ListAccountsForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	target := strings.ToLower(strings.TrimSpace(alias))
+	var matches []*model.Account
+	for _, m := range memberships {
+		account, err := s.repo.GetAccount(ctx, m.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		if account == nil {
+			continue
+		}
+		if strings.ToLower(account.Name) == target {
+			matches = append(matches, account)
+			continue
+		}
+		for _, a := range account.Aliases {
+			if strings.ToLower(strings.TrimSpace(a)) == target {
+				matches = append(matches, account)
+				break
+			}
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, ErrNotFound
+	case 1:
+		return matches[0], nil
+	default:
+		return nil, ErrAmbiguousAlias
+	}
 }

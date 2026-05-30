@@ -248,6 +248,45 @@ func TestAddMember_DuplicateRejected(t *testing.T) {
 	}
 }
 
+func TestResolveAccountByAlias_Unique(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "u1", "u1@x.com",
+		&model.CreateAccountRequest{Name: "하나은행", Aliases: []string{"하나은행", "Hana Bank"}})
+
+	got, err := svc.ResolveAccountByAlias(context.Background(), "u1", "Hana Bank")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil || got.AccountID != acc.AccountID {
+		t.Errorf("expected to resolve to %s, got %+v", acc.AccountID, got)
+	}
+}
+
+func TestResolveAccountByAlias_NotFound(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	_, _ = svc.CreateAccount(context.Background(), "u1", "u1@x.com",
+		&model.CreateAccountRequest{Name: "하나은행", Aliases: []string{"하나은행"}})
+	_, err := svc.ResolveAccountByAlias(context.Background(), "u1", "없는태그")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestResolveAccountByAlias_Ambiguous(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	_, _ = svc.CreateAccount(context.Background(), "u1", "u1@x.com",
+		&model.CreateAccountRequest{Name: "A", Aliases: []string{"공통"}})
+	_, _ = svc.CreateAccount(context.Background(), "u1", "u1@x.com",
+		&model.CreateAccountRequest{Name: "B", Aliases: []string{"공통"}})
+	_, err := svc.ResolveAccountByAlias(context.Background(), "u1", "공통")
+	if !errors.Is(err, ErrAmbiguousAlias) {
+		t.Errorf("expected ErrAmbiguousAlias, got %v", err)
+	}
+}
+
 func TestAddMember_InvalidRole(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
