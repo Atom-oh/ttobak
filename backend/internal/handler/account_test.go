@@ -167,3 +167,20 @@ func TestHandlerListAccountMeetings_Forbidden(t *testing.T) {
 }
 
 var _ = chi.URLParam // ensure chi import is used if helpers are trimmed
+
+func TestHandlerListAccountInsights_Forbidden(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+
+	r := httptest.NewRequest(http.MethodGet, "/api/accounts/acc-1/insights", nil)
+	r = withUserEmailCtx(r, "stranger-9", "s@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	w := httptest.NewRecorder()
+
+	h.ListAccountInsights(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
+	}
+}
