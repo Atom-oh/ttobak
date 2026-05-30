@@ -196,6 +196,50 @@ func (m *mockMeetingRepo) PutMeetingRef(_ context.Context, ref *model.MeetingRef
 
 // --- Tests ---
 
+func (m *mockMeetingRepo) addMember(accountID, userID, role string) {
+	m.members[accountID+"|"+userID] = &model.AccountMember{AccountID: accountID, UserID: userID, Role: role}
+}
+
+func TestLinkMeetingToAccount_OwnerMember(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "T", Status: model.StatusDone})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+
+	if err := svc.LinkMeetingToAccount(context.Background(), "owner-1", "m-1", "acc-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := repo.meetings[meetingKey("owner-1", "m-1")]
+	if got.AccountID != "acc-1" {
+		t.Errorf("expected accountId acc-1, got %s", got.AccountID)
+	}
+	if got.SharedToAccount {
+		t.Error("link must not set SharedToAccount")
+	}
+}
+
+func TestLinkMeetingToAccount_NotMemberForbidden(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone})
+	// owner-1 is NOT a member of acc-1
+	err := svc.LinkMeetingToAccount(context.Background(), "owner-1", "m-1", "acc-1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestLinkMeetingToAccount_NotOwner(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone})
+	repo.addMember("acc-1", "intruder-9", model.RoleSSA)
+	err := svc.LinkMeetingToAccount(context.Background(), "intruder-9", "m-1", "acc-1")
+	if !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrNotFound/ErrForbidden for non-owner, got %v", err)
+	}
+}
+
 func TestCreateMeeting(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)

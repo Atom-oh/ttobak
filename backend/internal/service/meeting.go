@@ -499,6 +499,30 @@ func (s *MeetingService) UpdateMeetingContent(ctx context.Context, meetingID, co
 	return s.repo.UpdateMeeting(ctx, meeting)
 }
 
+// LinkMeetingToAccount classifies a meeting under an account (no sharing).
+// Only the meeting owner who is a member of the account may do this.
+func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, ownerID, meetingID, accountID string) error {
+	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+	if err != nil {
+		return err
+	}
+	if meeting == nil {
+		if existing, _ := s.repo.GetMeetingByID(ctx, meetingID); existing != nil {
+			return ErrForbidden
+		}
+		return ErrNotFound
+	}
+	member, err := s.repo.GetMember(ctx, accountID, ownerID)
+	if err != nil {
+		return err
+	}
+	if member == nil {
+		return ErrForbidden
+	}
+	meeting.AccountID = accountID
+	return s.repo.UpdateMeeting(ctx, meeting)
+}
+
 // strPtr returns a pointer to string, or nil if empty
 func strPtr(s string) *string {
 	if s == "" {
