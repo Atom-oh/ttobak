@@ -144,3 +144,44 @@ func (r *DynamoDBRepository) ListAccountsForUser(ctx context.Context, userID str
 	}
 	return members, nil
 }
+
+// PutMeetingRef writes a MeetingRef item (caller builds PK/SK).
+func (r *DynamoDBRepository) PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error {
+	item, err := attributevalue.MarshalMap(ref)
+	if err != nil {
+		return fmt.Errorf("marshal meeting ref: %w", err)
+	}
+	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(r.tableName),
+		Item:      item,
+	}); err != nil {
+		return fmt.Errorf("put meeting ref: %w", err)
+	}
+	return nil
+}
+
+// ListMeetingRefsForAccount queries the account partition for MEETINGREF# items
+// (sorted by occurredAt via the SK prefix).
+func (r *DynamoDBRepository) ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").BeginsWith(model.PrefixMeetingRef))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build meeting refs query: %w", err)
+	}
+	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(false), // newest first
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query meeting refs: %w", err)
+	}
+	refs := []model.MeetingRef{}
+	if err := attributevalue.UnmarshalListOfMaps(result.Items, &refs); err != nil {
+		return nil, fmt.Errorf("unmarshal meeting refs: %w", err)
+	}
+	return refs, nil
+}
