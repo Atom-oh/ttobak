@@ -207,6 +207,34 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 	return &model.AccountMemberDTO{UserID: user.UserID, Email: user.Email, Role: req.Role}, nil
 }
 
+// ListAccountMeetings returns the shared-meeting references for an account.
+// Only members may read; non-members get ErrForbidden, missing account ErrNotFound.
+func (s *AccountService) ListAccountMeetings(ctx context.Context, userID, accountID string) ([]model.MeetingRefDTO, error) {
+	member, err := s.repo.GetMember(ctx, accountID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if member == nil {
+		account, err := s.repo.GetAccount(ctx, accountID)
+		if err != nil {
+			return nil, err
+		}
+		if account == nil {
+			return nil, ErrNotFound
+		}
+		return nil, ErrForbidden
+	}
+	refs, err := s.repo.ListMeetingRefsForAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.MeetingRefDTO, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, model.MeetingRefDTO{MeetingID: r.MeetingID, OwnerUserID: r.OwnerUserID, Title: r.Title, Date: r.Date})
+	}
+	return out, nil
+}
+
 // ResolveAccountByAlias finds, among the user's accounts, the one whose aliases
 // (or name) match the given tag. Returns ErrNotFound if none, ErrAmbiguousAlias
 // if more than one (never auto-pick).

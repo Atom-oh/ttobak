@@ -248,6 +248,33 @@ func TestAddMember_DuplicateRejected(t *testing.T) {
 	}
 }
 
+func TestListAccountMeetings_MemberOnly(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{
+		{AccountID: acc.AccountID, MeetingID: "m-1", OwnerUserID: "owner-1", Title: "ROSA"},
+	}
+
+	list, err := svc.ListAccountMeetings(context.Background(), "owner-1", acc.AccountID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list) != 1 || list[0].MeetingID != "m-1" {
+		t.Errorf("unexpected list: %+v", list)
+	}
+}
+
+func TestListAccountMeetings_NonMemberForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, err := svc.ListAccountMeetings(context.Background(), "stranger-9", acc.AccountID)
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
 func TestResolveAccountByAlias_Unique(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
