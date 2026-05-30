@@ -49,6 +49,8 @@ type mockHandlerMeetingRepo struct {
 	shares       map[string]*model.Share
 	attachments  map[string][]model.Attachment
 	users        map[string]*model.User
+	members      map[string]*model.AccountMember // "accountID|userID"
+	meetingRefs  map[string][]model.MeetingRef   // accountID -> refs
 }
 
 func newMockHandlerMeetingRepo() *mockHandlerMeetingRepo {
@@ -58,6 +60,8 @@ func newMockHandlerMeetingRepo() *mockHandlerMeetingRepo {
 		shares:       make(map[string]*model.Share),
 		attachments:  make(map[string][]model.Attachment),
 		users:        make(map[string]*model.User),
+		members:      make(map[string]*model.AccountMember),
+		meetingRefs:  make(map[string][]model.MeetingRef),
 	}
 }
 
@@ -139,6 +143,30 @@ func (m *mockHandlerMeetingRepo) CreateShare(_ context.Context, meetingID, owner
 	return &model.Share{MeetingID: meetingID, SharedToID: sharedToID, Permission: permission}, nil
 }
 func (m *mockHandlerMeetingRepo) DeleteShare(_ context.Context, sharedToID, meetingID string) error {
+	return nil
+}
+
+func (m *mockHandlerMeetingRepo) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
+	mem, ok := m.members[accountID+"|"+userID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *mem
+	return &cp, nil
+}
+
+func (m *mockHandlerMeetingRepo) ListAccountMembers(_ context.Context, accountID string) ([]model.AccountMember, error) {
+	out := []model.AccountMember{}
+	for _, mem := range m.members {
+		if mem.AccountID == accountID {
+			out = append(out, *mem)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockHandlerMeetingRepo) PutMeetingRef(_ context.Context, ref *model.MeetingRef) error {
+	m.meetingRefs[ref.AccountID] = append(m.meetingRefs[ref.AccountID], *ref)
 	return nil
 }
 

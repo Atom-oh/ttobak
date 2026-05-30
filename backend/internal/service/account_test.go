@@ -13,6 +13,7 @@ type mockAccountRepo struct {
 	accounts map[string]*model.Account       // accountID
 	members  map[string]*model.AccountMember // accountID|userID
 	users    map[string]*model.User          // email
+	meetingRefs map[string][]model.MeetingRef // accountID -> refs
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -20,6 +21,7 @@ func newMockAccountRepo() *mockAccountRepo {
 		accounts: make(map[string]*model.Account),
 		members:  make(map[string]*model.AccountMember),
 		users:    make(map[string]*model.User),
+		meetingRefs: make(map[string][]model.MeetingRef),
 	}
 }
 
@@ -84,6 +86,10 @@ func (m *mockAccountRepo) GetUserByEmail(_ context.Context, email string) (*mode
 	}
 	cp := *u
 	return &cp, nil
+}
+
+func (m *mockAccountRepo) ListMeetingRefsForAccount(_ context.Context, accountID string) ([]model.MeetingRef, error) {
+	return append([]model.MeetingRef(nil), m.meetingRefs[accountID]...), nil
 }
 
 func TestCreateAccount_SetsOwnerMember(t *testing.T) {

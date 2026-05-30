@@ -41,6 +41,9 @@ type meetingRepo interface {
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error)
 	DeleteShare(ctx context.Context, sharedToID, meetingID string) error
+	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
+	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
+	PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error
 }
 
 // MeetingService handles meeting business logic

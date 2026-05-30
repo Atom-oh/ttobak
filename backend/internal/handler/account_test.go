@@ -26,6 +26,7 @@ type mockHandlerAccountRepo struct {
 	accounts map[string]*model.Account
 	members  map[string]*model.AccountMember
 	users    map[string]*model.User
+	meetingRefs map[string][]model.MeetingRef
 }
 
 func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
@@ -33,6 +34,7 @@ func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
 		accounts: make(map[string]*model.Account),
 		members:  make(map[string]*model.AccountMember),
 		users:    make(map[string]*model.User),
+		meetingRefs: make(map[string][]model.MeetingRef),
 	}
 }
 
@@ -91,6 +93,9 @@ func (m *mockHandlerAccountRepo) GetUserByEmail(_ context.Context, email string)
 	}
 	c := *u
 	return &c, nil
+}
+func (m *mockHandlerAccountRepo) ListMeetingRefsForAccount(_ context.Context, accountID string) ([]model.MeetingRef, error) {
+	return append([]model.MeetingRef(nil), m.meetingRefs[accountID]...), nil
 }
 
 func newStubAccountHandler() (*AccountHandler, *mockHandlerAccountRepo) {
