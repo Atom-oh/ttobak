@@ -8,20 +8,24 @@ TTOBAK은 현재 **"미팅 1건"** 단위 도구다(record → STT → 구조화
 
 이 산출물 문서들은 **개인 맥북에서 사내 Internal MCP/에이전트로 조립**된다. 따라서 TTOBAK의 역할은 그 문서들을 **흉내 내거나 조립하는 것이 아니라**, 그것들을 채울 **원재료(raw material)를 Account 단위로 누적하고 MCP로 떠먹여 주는 것**이다.
 
-> **한 줄 정의:** TTOBAK은 Account 단위 *필드 인사이트 적립 + 미팅 코퍼스 검색* 층이 되고, 실제 산출물 조립은 개인 맥북 에이전트(예: `playercard-agent`)에게 맡긴다.
+> **한 줄 정의:** TTOBAK은 Account 단위 *필드 인사이트 적립 + 미팅 코퍼스 검색* 층이 되고, 정형 사내 산출물 조립은 개인 맥북 에이전트(예: `playercard-agent`)에게 맡긴다.
+
+### 제품 비전 (중요)
+TTOBAK은 *단순한 데이터 공급 도구*가 아니라 **Solutions Architect의 전용 비서**다. 따라서 "원재료만 만든다"는 경계는 **외부 정형 사내 산출물(SFDC·SIFT·2by2·Player Card)** 에만 적용된다 — 그것들은 사내 템플릿/기밀이고 개인 맥북에서 조립한다. 그 외 영역에서 TTOBAK은 SA를 돕는 **능동적 비서**로서 검색·질문추천·리서치·(향후) 즉석 deliverable 생성까지 한다. 이번 스펙은 그 비서의 **장기 기억(Account 단위 데이터 계층)** 을 까는 기반 작업이다.
 
 ## 2. Goals / Non-Goals
 
 ### In (이번 스펙)
 1. **Account** = 1급 엔티티 (명시 등록 + 기존 태그 매핑 + 팀 공유)
 2. **Insight Substrate** = 미팅·뉴스·인제스트 문서에서 추출한 *유형·시간·출처가 붙은* 인사이트 레코드를 Account 단위 누적
-3. **MCP back-data 도구** (양방향): Account 인사이트/미팅 코퍼스를 `account + 기간 + 유형 + scope`로 서빙(아웃바운드) + 로컬 vault 문서를 TTOBAK으로 인제스트(인바운드)
+3. **MCP back-data 도구** (양방향): Account 인사이트/미팅 코퍼스를 `account + 기간 + 유형 + scope`로 서빙(아웃바운드) + 로컬 vault 문서·**고객 미팅 준비 자료(`docType:"prep"`)** 를 TTOBAK으로 인제스트(인바운드)
 4. **Obsidian Vault 미러링**: 미팅 코퍼스를 디렉터리 단위 공유가 가능한 vault 구조로 export
 5. **최소 프런트엔드**: Account 등록/멤버 초대, 미팅↔Account 연결·공유, Account 상세(인사이트·공유 미팅·문서 열람)
 
-### Out (명시적 제외)
-- ❌ SFDC / SIFT / 2by2 / **Player Card 문서 조립** — 개인 맥북 에이전트의 몫
-- ❌ **Self 축**(Player Card 기여 원장: STAR + LP 매핑 + 정량지표) — 다음 하위 시스템
+### Out (명시적 제외 — 단, 일부는 후속 스펙으로 명문화)
+- ❌ SFDC / SIFT / 2by2 / **Player Card 문서 조립** — 개인 맥북 에이전트의 몫(영구 외부)
+- ⏭️ **챗 에이전트 deliverable 출력(PPT/Notion)** — *바로 다음 스펙*. 이 기반(Account+substrate+MCP+KB) 위에서 동작. no-Mac 시나리오용(§14 참조)
+- ⏭️ **Self 축**(Player Card 기여 원장: STAR + LP 매핑 + 정량지표) — 후속 하위 시스템
 - ❌ 실시간 통역 강화, 미팅 중 라이브 Q&A 강화 — 별도 하위 시스템
 - ❌ 독립(standalone) 그룹 엔티티 — 1차에선 Account 멤버십을 그룹으로 사용
 
@@ -172,7 +176,9 @@ ACCOUNT#{accountId} 파티션에 INSIGHT# 적립 (occurredAt = 출처 발생 시
 | `ttobak_get_insights(account, from, to, types[])` | 유형·기간별 인사이트 배열 | SIFT·2by2 |
 | `ttobak_get_account_activity(account, from, to)` | 공유 미팅 메타+요약+action 인사이트 | SFDC Activity |
 | `ttobak_get_account_brief(account, period)` | 위를 묶은 단일 원재료 페이로드 | 개인 에이전트 일괄 소비 |
-| `ttobak_put_document(account, path, markdown, docType, shared)` | 인제스트 결과 | 로컬 vault → TTOBAK (인바운드) |
+| `ttobak_list_documents(account, docType?)` | Account KB 문서 목록(인제스트·준비자료·뉴스) | 다음 스펙(B) deliverable 소스 |
+| `ttobak_get_document(docId)` | 문서 본문 | 다음 스펙(B) deliverable 소스 |
+| `ttobak_put_document(account, path, markdown, docType, shared)` | 인제스트 결과 (`docType:"prep"` = 미팅 준비 자료) | 로컬 vault → TTOBAK (인바운드) |
 
 소비 예:
 ```
@@ -246,12 +252,21 @@ ttobak_id: <meetingId>
 ## 13. 테스트 전략
 - **Go 단위**: Account repo(멤버십·권한), Insight repo(기간 range 쿼리), 태그 매핑 충돌, 미팅↔Account 링크.
 - **추출**: `ExtractInsights` 프롬프트 + JSON 파싱 fixture 테스트(8개 유형 분류).
-- **MCP**: 도구 9종 통합 테스트(권한 경계 포함).
+- **MCP**: 도구 11종 통합 테스트(권한 경계 포함).
 - **Vault export**: Markdown/frontmatter 스냅샷 테스트, 공유/비공개 폴더 분기.
 - **인바운드**: `put_document` 루프 차단(ttobak_id 거부), Account 스코프 저장.
 - **CDK jest**: 신규 GSI / IAM 최소권한.
 
 ## 14. Future / 후속 하위 시스템
+
+### 14.1 챗 에이전트 deliverable 출력 (바로 다음 스펙) — no-Mac 시나리오
+**동기:** 맥을 켜기 어려운 현장에서, TTOBAK 챗 에이전트(전용 비서) 안에서 고객 미팅 자료를 즉석 생성.
+- 기존 Q&A 에이전트(`backend/python/qa/`)의 agentic tool-use 루프에 **deliverable 생성 도구** 추가.
+- 소스 = 이 기반이 제공하는 **Account KB(`prep`/뉴스/인제스트) + 인사이트**(`list_documents`/`get_document`/`get_insights`).
+- 산출: 발표용 Markdown/HTML 덱 + Notion 페이지(Notion MCP / 기존 `ExportMenu` 재사용). 실제 `.pptx` 렌더링은 별도 난이도 → 단계적.
+- **의존성:** 본 스펙(Account + substrate + MCP + KB 인제스트)이 선행되어야 함. 본 스펙은 (B)가 소비할 데이터 훅(`list_documents`/`get_document`)을 미리 보장한다.
+
+### 14.2 기타
 - **Self 축 (Player Card)**: 기여 원장(STAR 후보 + 정량지표 + LP 매핑) 누적 + `playercard-agent`의 `00_Raw_Data` 공급. 발표·CSAT·ARR 등 외부 증빙 입력 경로 필요.
 - **독립 그룹 엔티티**: Account와 무관한 재사용 공유 그룹.
 - **인사이트 유형 GSI**: 볼륨 증가 시 `ACCOUNT#{id}#TYPE#{type}` GSI.
