@@ -312,6 +312,32 @@ Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (Account 없음)
 ```
 
+#### Get Account Brief (묶음 원재료 — 멤버 전용)
+
+Account 한 곳의 원재료(메타 + 유형별 인사이트 + 공유 미팅)를 한 번의 호출로
+묶어서 반환한다. 개인 맥북 에이전트가 SFDC/SIFT/2by2/Player Card 준비에 쓰는
+"일괄 소비"용. 기존 `GetAccount`+`ListAccountMeetings`+`ListAccountInsights`를
+서비스 레이어에서 합성하며, 멤버 게이트를 그대로 상속한다. `from`/`to`/`types`
+필터는 insights 엔드포인트와 동일하게 동작한다.
+
+```
+GET /api/accounts/{accountId}/brief?from=<RFC3339>&to=<RFC3339>&types=risk,opportunity
+
+Response: 200 OK
+{
+  "account": { "accountId": "acc-uuid", "name": "하나은행", "members": [ ... ], ... },
+  "insightsByType": {
+    "risk": [ { "type": "risk", "text": "...", "occurredAt": "2026-05-12T09:00:00Z", ... } ],
+    "opportunity": [ ... ]
+  },
+  "meetings": [ { "meetingId": "meeting-uuid", "title": "ROSA PoC", "ownerUserId": "...", "date": "2026-05-12T09:00:00Z" } ]
+}
+
+Error: 400 Bad Request (잘못된 from/to — RFC3339 아님)
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
 #### Link Meeting to Account (분류만 — owner+멤버 전용)
 
 ```
