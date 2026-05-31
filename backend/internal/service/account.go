@@ -53,6 +53,9 @@ type accountRepo interface {
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
 	ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error)
+	PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error
+	ListAccountDocuments(ctx context.Context, accountID string) ([]model.AccountDocument, error)
+	GetAccountDocument(ctx context.Context, accountID, docID string) (*model.AccountDocument, error)
 }
 
 // AccountRepo is the exported alias for cross-package (handler) tests.
