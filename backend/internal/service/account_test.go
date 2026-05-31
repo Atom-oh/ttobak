@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 )
@@ -14,6 +15,7 @@ type mockAccountRepo struct {
 	members  map[string]*model.AccountMember // accountID|userID
 	users    map[string]*model.User          // email
 	meetingRefs map[string][]model.MeetingRef // accountID -> refs
+	insightsByAccount map[string][]model.AccountInsight
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -22,6 +24,7 @@ func newMockAccountRepo() *mockAccountRepo {
 		members:  make(map[string]*model.AccountMember),
 		users:    make(map[string]*model.User),
 		meetingRefs: make(map[string][]model.MeetingRef),
+		insightsByAccount: make(map[string][]model.AccountInsight),
 	}
 }
 
@@ -90,6 +93,10 @@ func (m *mockAccountRepo) GetUserByEmail(_ context.Context, email string) (*mode
 
 func (m *mockAccountRepo) ListMeetingRefsForAccount(_ context.Context, accountID string) ([]model.MeetingRef, error) {
 	return append([]model.MeetingRef(nil), m.meetingRefs[accountID]...), nil
+}
+
+func (m *mockAccountRepo) ListInsightsForAccount(_ context.Context, accountID string) ([]model.AccountInsight, error) {
+	return append([]model.AccountInsight(nil), m.insightsByAccount[accountID]...), nil
 }
 
 func TestCreateAccount_SetsOwnerMember(t *testing.T) {
@@ -322,5 +329,52 @@ func TestAddMember_InvalidRole(t *testing.T) {
 	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "x@x.com", Role: "owner"})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("expected ErrInvalidInput (owner not assignable), got %v", err)
+	}
+}
+
+func TestListAccountInsights_FilterByType(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	d := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	repo.insightsByAccount[acc.AccountID] = []model.AccountInsight{
+		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연", OccurredAt: d, SourceID: "m-1", SourceType: "meeting"},
+		{AccountID: acc.AccountID, Type: model.InsightTech, Text: "EKS", OccurredAt: d, SourceID: "m-1", SourceType: "meeting"},
+	}
+	got, err := svc.ListAccountInsights(context.Background(), "owner-1", acc.AccountID, time.Time{}, time.Time{}, []string{model.InsightRisk})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].Type != model.InsightRisk {
+		t.Errorf("expected only risk, got %+v", got)
+	}
+}
+
+func TestListAccountInsights_FilterByPeriod(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	repo.insightsByAccount[acc.AccountID] = []model.AccountInsight{
+		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "4월", OccurredAt: time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC)},
+		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "5월", OccurredAt: time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)},
+	}
+	from := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 5, 31, 23, 59, 59, 0, time.UTC)
+	got, err := svc.ListAccountInsights(context.Background(), "owner-1", acc.AccountID, from, to, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 1 || got[0].Text != "5월" {
+		t.Errorf("expected only May insight, got %+v", got)
+	}
+}
+
+func TestListAccountInsights_NonMemberForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, err := svc.ListAccountInsights(context.Background(), "stranger-9", acc.AccountID, time.Time{}, time.Time{}, nil)
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
 	}
 }

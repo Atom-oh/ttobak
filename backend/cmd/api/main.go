@@ -130,6 +130,7 @@ func init() {
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
 		r.Post("/api/accounts/{accountId}/members", accountHandler.AddMember)
 		r.Get("/api/accounts/{accountId}/meetings", accountHandler.ListAccountMeetings)
+		r.Get("/api/accounts/{accountId}/insights", accountHandler.ListAccountInsights)
 		r.Post("/api/meetings/{meetingId}/account", meetingHandler.LinkToAccount)
 		r.Post("/api/meetings/{meetingId}/share-account", shareHandler.ShareToAccount)
 

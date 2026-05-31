@@ -44,6 +44,7 @@ type meetingRepo interface {
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error
+	PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error
 }
 
 // MeetingService handles meeting business logic
@@ -574,6 +575,12 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 		return nil, err
 	}
 
+	if items, berr := BuildAccountInsights(accountID, meeting); berr == nil && len(items) > 0 {
+		if err := s.repo.PutAccountInsights(ctx, items); err != nil {
+			return nil, err
+		}
+	}
+
 	members, err := s.repo.ListAccountMembers(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -590,6 +597,42 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 	}
 
 	return &model.ShareToAccountResult{AccountID: accountID, SharedWith: shared}, nil
+}
+
+// BuildAccountInsights parses a meeting's stored insights JSON and builds
+// account-partition AccountInsight items. SK = INSIGHT#{occurredAt}#{meetingId}#{index}
+// is deterministic per (meeting,index), so re-running overwrites the same items
+// (idempotent). Returns nil if the meeting has no insights yet.
+func BuildAccountInsights(accountID string, meeting *model.Meeting) ([]model.AccountInsight, error) {
+	if meeting == nil || strings.TrimSpace(meeting.Insights) == "" {
+		return nil, nil
+	}
+	var parsed []model.MeetingInsight
+	if err := json.Unmarshal([]byte(meeting.Insights), &parsed); err != nil {
+		return nil, err
+	}
+	occurred := meeting.Date.UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
+	out := make([]model.AccountInsight, 0, len(parsed))
+	for i, p := range parsed {
+		out = append(out, model.AccountInsight{
+			PK:           model.PrefixAccount + accountID,
+			SK:           fmt.Sprintf("%s%s#%s#%d", model.PrefixInsight, occurred, meeting.MeetingID, i),
+			AccountID:    accountID,
+			InsightID:    fmt.Sprintf("%s_%d", meeting.MeetingID, i),
+			Type:         p.Type,
+			Text:         p.Text,
+			SourceType:   "meeting",
+			SourceID:     meeting.MeetingID,
+			SourceUserID: meeting.UserID,
+			OccurredAt:   meeting.Date,
+			TsMarker:     p.TsMarker,
+			Entities:     p.Entities,
+			CreatedAt:    now,
+			EntityType:   model.EntityTypeInsight,
+		})
+	}
+	return out, nil
 }
 
 // strPtr returns a pointer to string, or nil if empty

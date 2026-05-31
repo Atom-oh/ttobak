@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ type mockMeetingRepo struct {
 	users       map[string]*model.User       // email -> user
 	members     map[string]*model.AccountMember // "accountID|userID"
 	meetingRefs map[string][]model.MeetingRef   // accountID -> refs
+	accountInsights []model.AccountInsight
 }
 
 func newMockMeetingRepo() *mockMeetingRepo {
@@ -191,6 +193,27 @@ func (m *mockMeetingRepo) ListAccountMembers(_ context.Context, accountID string
 
 func (m *mockMeetingRepo) PutMeetingRef(_ context.Context, ref *model.MeetingRef) error {
 	m.meetingRefs[ref.AccountID] = append(m.meetingRefs[ref.AccountID], *ref)
+	return nil
+}
+
+func (m *mockMeetingRepo) PutAccountInsights(_ context.Context, insights []model.AccountInsight) error {
+	if len(insights) == 0 {
+		return nil
+	}
+	// Mirror the repo's replace-by-prefix semantics: drop existing items sharing
+	// the meeting's SK prefix, then append the fresh set.
+	prefix := insights[0].SK
+	if idx := strings.LastIndex(prefix, "#"); idx >= 0 {
+		prefix = prefix[:idx+1]
+	}
+	kept := make([]model.AccountInsight, 0, len(m.accountInsights))
+	for _, ai := range m.accountInsights {
+		if ai.PK == insights[0].PK && strings.HasPrefix(ai.SK, prefix) {
+			continue
+		}
+		kept = append(kept, ai)
+	}
+	m.accountInsights = append(kept, insights...)
 	return nil
 }
 
@@ -525,5 +548,106 @@ func TestSelectTranscript_ReadOnlyForbidden(t *testing.T) {
 	err := svc.SelectTranscript(context.Background(), "reader-1", "m-1", "B")
 	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestBuildAccountInsights(t *testing.T) {
+	when := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	meeting := &model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Date: when,
+		Insights: `[{"id":"ins_1","type":"risk","text":"일정 지연","entities":["PoC"]},{"id":"ins_2","type":"opportunity","text":"확대 여지"}]`,
+	}
+	items, err := BuildAccountInsights("acc-1", meeting)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2, got %d", len(items))
+	}
+	got := items[0]
+	if got.PK != model.PrefixAccount+"acc-1" {
+		t.Errorf("bad PK: %s", got.PK)
+	}
+	wantSK := model.PrefixInsight + when.Format(time.RFC3339) + "#m-1#0"
+	if got.SK != wantSK {
+		t.Errorf("bad SK: got %s want %s", got.SK, wantSK)
+	}
+	if got.Type != "risk" || got.SourceType != "meeting" || got.SourceID != "m-1" || got.SourceUserID != "owner-1" {
+		t.Errorf("bad fields: %+v", got)
+	}
+	if !got.OccurredAt.Equal(when) {
+		t.Errorf("bad occurredAt: %v", got.OccurredAt)
+	}
+}
+
+func TestBuildAccountInsights_Empty(t *testing.T) {
+	items, err := BuildAccountInsights("acc-1", &model.Meeting{MeetingID: "m-1"})
+	if err != nil || items != nil {
+		t.Errorf("expected nil,nil for no insights; got %v, %v", items, err)
+	}
+}
+
+func TestShareMeetingToAccount_FansOutInsights(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "ROSA", Status: model.StatusDone,
+		Date:     time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC),
+		Insights: `[{"type":"risk","text":"지연"},{"type":"opportunity","text":"확대"}]`,
+	})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+
+	if _, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.accountInsights) != 2 {
+		t.Fatalf("expected 2 fanned-out insights, got %d", len(repo.accountInsights))
+	}
+	if repo.accountInsights[0].AccountID != "acc-1" || repo.accountInsights[0].SourceID != "m-1" {
+		t.Errorf("unexpected fanned insight: %+v", repo.accountInsights[0])
+	}
+}
+
+func TestShareMeetingToAccount_NoInsightsNoFanout(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+	if _, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.accountInsights) != 0 {
+		t.Errorf("expected no fanout for meeting without insights, got %d", len(repo.accountInsights))
+	}
+}
+
+func TestShareMeetingToAccount_ReplacesStaleInsights(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	when := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "ROSA", Status: model.StatusDone, Date: when,
+		Insights: `[{"type":"risk","text":"a"},{"type":"opportunity","text":"b"}]`,
+	})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+	if _, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1"); err != nil {
+		t.Fatalf("first share: %v", err)
+	}
+	if len(repo.accountInsights) != 2 {
+		t.Fatalf("expected 2 after first share, got %d", len(repo.accountInsights))
+	}
+	// Re-extraction yields FEWER insights → stale index must not linger.
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "ROSA", Status: model.StatusDone, Date: when,
+		Insights: `[{"type":"risk","text":"a-updated"}]`,
+	})
+	if _, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1"); err != nil {
+		t.Fatalf("second share: %v", err)
+	}
+	if len(repo.accountInsights) != 1 {
+		t.Fatalf("expected 1 after re-share with fewer insights (stale removed), got %d", len(repo.accountInsights))
+	}
+	if repo.accountInsights[0].Text != "a-updated" {
+		t.Errorf("expected updated insight text, got %q", repo.accountInsights[0].Text)
 	}
 }

@@ -510,6 +510,27 @@ func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext s
 		}
 	}
 
+	insights, err := bedrockService.ExtractInsights(ctx, meetingID, userID)
+	if err != nil {
+		log.Printf("Failed to extract insights (non-fatal): %v", err)
+	} else if insights != "" && insights != "[]" {
+		if err := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+			"insights": insights,
+		}); err != nil {
+			log.Printf("Failed to save insights: %v", err)
+		} else {
+			meeting.Insights = insights
+			// If already shared to an account, fan out now (covers share-before-summarize ordering).
+			if meeting.SharedToAccount && meeting.AccountID != "" {
+				if items, berr := service.BuildAccountInsights(meeting.AccountID, meeting); berr == nil && len(items) > 0 {
+					if perr := repo.PutAccountInsights(ctx, items); perr != nil {
+						log.Printf("Failed to fan out insights to account (non-fatal): %v", perr)
+					}
+				}
+			}
+		}
+	}
+
 	// KB Export: re-fetch meeting with all saved fields
 	updatedMeeting, err := repo.GetMeeting(ctx, userID, meetingID)
 	if err != nil {

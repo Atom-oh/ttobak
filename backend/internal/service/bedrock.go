@@ -965,6 +965,96 @@ func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID strin
 	return string(result), nil
 }
 
+// parseMeetingInsights strips code fences, unmarshals, drops invalid-type or
+// empty-text entries, and assigns stable IDs. Pure (unit-testable).
+func parseMeetingInsights(raw string) ([]model.MeetingInsight, error) {
+	raw = stripCodeFences(raw)
+	var items []model.MeetingInsight
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil, err
+	}
+	out := make([]model.MeetingInsight, 0, len(items))
+	for _, it := range items {
+		if !model.IsValidInsightType(it.Type) || strings.TrimSpace(it.Text) == "" {
+			continue
+		}
+		it.ID = fmt.Sprintf("ins_%d", len(out)+1)
+		out = append(out, it)
+	}
+	return out, nil
+}
+
+// ExtractInsights classifies a meeting into the 8 typed insights using Claude Haiku.
+// Mirrors ExtractActionItems. Returns a JSON array string ("[]" on parse failure).
+func (s *BedrockService) ExtractInsights(ctx context.Context, meetingID string, userID ...string) (string, error) {
+	var meeting *model.Meeting
+	var err error
+	if len(userID) > 0 && userID[0] != "" {
+		meeting, err = s.repo.GetMeeting(ctx, userID[0], meetingID)
+	} else {
+		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to get meeting: %w", err)
+	}
+	if meeting == nil {
+		return "", fmt.Errorf("meeting not found: %s", meetingID)
+	}
+
+	source := meeting.Content
+	if source == "" {
+		source = meeting.TranscriptA
+		if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
+			source = meeting.TranscriptB
+		} else if source == "" && meeting.TranscriptB != "" {
+			source = meeting.TranscriptB
+		}
+	}
+	if source == "" {
+		return "[]", nil
+	}
+
+	systemPrompt := `회의 요약/트랜스크립트에서 영업·고객 인사이트를 추출해 분류하세요.
+각 인사이트: { "type": <유형>, "text": <한국어 설명>, "entities": [관련 고유명사들] }
+유형(type)은 반드시 다음 8가지 중 하나:
+- trend: 고객/시장 트렌드 (예: 그룹사 클라우드 전환 가속)
+- need: 고객 니즈/요구사항 (예: DR 금융보안 컴플라이언스)
+- competitive: 경쟁 정보 (예: 타사 견적 진행)
+- risk: 리스크 (예: PoC 일정 지연 가능성)
+- opportunity: 기회 (예: 워크로드 확대 여지)
+- tech: 기술 주제/워크로드 (예: EKS, PrivateLink)
+- stakeholder: 이해관계자 변화 (예: 신임 CTO 부임)
+- action: 우리측 다음 액션 (예: 다음주 아키텍처 리뷰)
+해당 유형이 명확한 항목만 추출하세요. 유효한 JSON 배열만 반환하고, 없으면 []를 반환하세요.
+예시: [{"type":"risk","text":"PoC 일정 2개월 지연 가능","entities":["PoC"]}]`
+
+	userPrompt := fmt.Sprintf("다음 회의 내용에서 인사이트를 추출하세요:\n\n%s", source)
+
+	request := ClaudeRequest{
+		AnthropicVersion: "bedrock-2023-05-31",
+		MaxTokens:        1536,
+		System:           systemPrompt,
+		Messages: []ClaudeMessage{
+			{Role: "user", Content: []ContentBlock{{Type: "text", Text: userPrompt}}},
+		},
+	}
+
+	response, err := s.invokeClaudeModelWithID(ctx, request, ClaudeHaikuModelID)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract insights: %w", err)
+	}
+
+	items, err := parseMeetingInsights(response)
+	if err != nil {
+		return "[]", nil
+	}
+	result, err := json.Marshal(items)
+	if err != nil {
+		return "[]", nil
+	}
+	return string(result), nil
+}
+
 // ExtractTags extracts topic tags from a meeting transcript using Claude Haiku.
 // When userID is provided, uses strongly-consistent base table read instead of GSI.
 func (s *BedrockService) ExtractTags(ctx context.Context, meetingID string, userID ...string) ([]string, error) {

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -184,4 +185,88 @@ func (r *DynamoDBRepository) ListMeetingRefsForAccount(ctx context.Context, acco
 		return nil, fmt.Errorf("unmarshal meeting refs: %w", err)
 	}
 	return refs, nil
+}
+
+// PutAccountInsights REPLACES the account insights for a single meeting: it first
+// deletes any existing items sharing the meeting's SK prefix
+// (INSIGHT#{occurredAt}#{meetingId}#) and then writes the fresh set. This makes a
+// re-extraction that yields FEWER insights (N→M, M<N) leave no stale items — a
+// plain overwrite would orphan indices M..N-1. All items in `insights` must belong
+// to one meeting (BuildAccountInsights guarantees this: same PK + SK prefix).
+func (r *DynamoDBRepository) PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error {
+	if len(insights) == 0 {
+		return nil
+	}
+	pk := insights[0].PK
+	prefix := insights[0].SK
+	if idx := strings.LastIndex(prefix, "#"); idx >= 0 {
+		prefix = prefix[:idx+1] // INSIGHT#{occurredAt}#{meetingId}#
+	}
+
+	// Delete the meeting's existing insight items under the prefix.
+	keyEx := expression.Key("PK").Equal(expression.Value(pk)).
+		And(expression.Key("SK").BeginsWith(prefix))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return fmt.Errorf("build insight replace query: %w", err)
+	}
+	res, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ProjectionExpression:      aws.String("PK, SK"),
+	})
+	if err != nil {
+		return fmt.Errorf("query existing insights: %w", err)
+	}
+	for _, existing := range res.Items {
+		if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+			TableName: aws.String(r.tableName),
+			Key:       map[string]types.AttributeValue{"PK": existing["PK"], "SK": existing["SK"]},
+		}); err != nil {
+			return fmt.Errorf("delete stale insight: %w", err)
+		}
+	}
+
+	// Write the fresh set.
+	for i := range insights {
+		item, err := attributevalue.MarshalMap(&insights[i])
+		if err != nil {
+			return fmt.Errorf("marshal account insight: %w", err)
+		}
+		if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
+			TableName: aws.String(r.tableName),
+			Item:      item,
+		}); err != nil {
+			return fmt.Errorf("put account insight: %w", err)
+		}
+	}
+	return nil
+}
+
+// ListInsightsForAccount returns all INSIGHT# items for an account (newest first).
+// Period/type filtering is done by the service layer (spec §6.3: client-side for v1).
+func (r *DynamoDBRepository) ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").BeginsWith(model.PrefixInsight))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build insights query: %w", err)
+	}
+	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(false),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query insights: %w", err)
+	}
+	insights := []model.AccountInsight{}
+	if err := attributevalue.UnmarshalListOfMaps(result.Items, &insights); err != nil {
+		return nil, fmt.Errorf("unmarshal insights: %w", err)
+	}
+	return insights, nil
 }

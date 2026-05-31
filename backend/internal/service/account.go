@@ -29,6 +29,7 @@ type accountRepo interface {
 	ListAccountsForUser(ctx context.Context, userID string) ([]model.AccountMember, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
+	ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error)
 }
 
 // AccountRepo is the exported alias for cross-package (handler) tests.
@@ -231,6 +232,56 @@ func (s *AccountService) ListAccountMeetings(ctx context.Context, userID, accoun
 	out := make([]model.MeetingRefDTO, 0, len(refs))
 	for _, r := range refs {
 		out = append(out, model.MeetingRefDTO{MeetingID: r.MeetingID, OwnerUserID: r.OwnerUserID, Title: r.Title, Date: r.Date})
+	}
+	return out, nil
+}
+
+// ListAccountInsights returns insight raw material for an account, filtered by
+// optional period [from,to] and optional types. Member-gated. (spec §6.3: filter
+// client-side for v1.)
+func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accountID string, from, to time.Time, types []string) ([]model.AccountInsightDTO, error) {
+	member, err := s.repo.GetMember(ctx, accountID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if member == nil {
+		account, err := s.repo.GetAccount(ctx, accountID)
+		if err != nil {
+			return nil, err
+		}
+		if account == nil {
+			return nil, ErrNotFound
+		}
+		return nil, ErrForbidden
+	}
+	insights, err := s.repo.ListInsightsForAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	typeSet := make(map[string]bool, len(types))
+	for _, t := range types {
+		typeSet[t] = true
+	}
+	out := make([]model.AccountInsightDTO, 0, len(insights))
+	for _, ins := range insights {
+		if !from.IsZero() && ins.OccurredAt.Before(from) {
+			continue
+		}
+		if !to.IsZero() && ins.OccurredAt.After(to) {
+			continue
+		}
+		if len(typeSet) > 0 && !typeSet[ins.Type] {
+			continue
+		}
+		out = append(out, model.AccountInsightDTO{
+			Type:       ins.Type,
+			Text:       ins.Text,
+			SourceType: ins.SourceType,
+			SourceID:   ins.SourceID,
+			OccurredAt: ins.OccurredAt,
+			TsMarker:   ins.TsMarker,
+			Entities:   ins.Entities,
+		})
 	}
 	return out, nil
 }

@@ -281,6 +281,37 @@ Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (Account 없음)
 ```
 
+#### List Account Insights (인사이트 raw material — 멤버 전용)
+
+미팅에서 추출되어 Account 파티션에 팬아웃된 8유형 인사이트를 조회한다.
+`from`/`to`는 선택적 기간 필터(RFC3339), `types`는 선택적 유형 필터(콤마 구분).
+기간·유형 필터는 서비스 레이어에서 client-side로 적용된다(spec §6.3).
+
+유형(type) 8종: `trend`, `need`, `competitive`, `risk`, `opportunity`, `tech`, `stakeholder`, `action`
+
+```
+GET /api/accounts/{accountId}/insights?from=<RFC3339>&to=<RFC3339>&types=risk,opportunity
+
+Response: 200 OK
+{
+  "insights": [
+    {
+      "type": "risk",
+      "text": "PoC 일정 2개월 지연 가능",
+      "sourceType": "meeting",
+      "sourceId": "meeting-uuid",
+      "occurredAt": "2026-05-12T09:00:00Z",
+      "tsMarker": "[TS:120]",
+      "entities": ["PoC"]
+    }
+  ]
+}
+
+Error: 400 Bad Request (잘못된 from/to — RFC3339 아님)
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
 #### Link Meeting to Account (분류만 — owner+멤버 전용)
 
 ```
