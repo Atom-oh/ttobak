@@ -41,6 +41,9 @@ type meetingRepo interface {
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error)
 	DeleteShare(ctx context.Context, sharedToID, meetingID string) error
+	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
+	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
+	PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error
 }
 
 // MeetingService handles meeting business logic
@@ -494,6 +497,99 @@ func (s *MeetingService) UpdateMeetingContent(ctx context.Context, meetingID, co
 	meeting.Content = content
 	meeting.Status = model.StatusDone
 	return s.repo.UpdateMeeting(ctx, meeting)
+}
+
+// LinkMeetingToAccount classifies a meeting under an account (no sharing).
+// Only the meeting owner who is a member of the account may do this.
+func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, ownerID, meetingID, accountID string) error {
+	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+	if err != nil {
+		return err
+	}
+	if meeting == nil {
+		if existing, _ := s.repo.GetMeetingByID(ctx, meetingID); existing != nil {
+			return ErrForbidden
+		}
+		return ErrNotFound
+	}
+	member, err := s.repo.GetMember(ctx, accountID, ownerID)
+	if err != nil {
+		return err
+	}
+	if member == nil {
+		return ErrForbidden
+	}
+	meeting.AccountID = accountID
+	return s.repo.UpdateMeeting(ctx, meeting)
+}
+
+// ShareMeetingToAccount publishes a meeting to an account team: sets
+// accountId+sharedToAccount, grants read Share to every account member
+// (except the owner), and writes a MeetingRef into the account partition.
+func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, ownerEmail, meetingID, accountID string) (*model.ShareToAccountResult, error) {
+	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	if meeting == nil {
+		if existing, _ := s.repo.GetMeetingByID(ctx, meetingID); existing != nil {
+			return nil, ErrForbidden
+		}
+		return nil, ErrNotFound
+	}
+	owner, err := s.repo.GetMember(ctx, accountID, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	if owner == nil {
+		return nil, ErrForbidden
+	}
+
+	// This sequence is non-transactional, but every write is idempotent
+	// (UpdateMeeting and the MeetingRef PutItem target fixed keys; CreateShare
+	// keys on the recipient), so a client retry converges. Single-item DynamoDB
+	// writes rarely fail; full atomicity via TransactWriteItems was considered
+	// but rejected because its 100-item limit would cap account team size.
+	// Order matters: write the MeetingRef BEFORE the per-member share loop so a
+	// list-visible record always exists even if a later CreateShare fails —
+	// otherwise the meeting would be flagged sharedToAccount=true with no ref,
+	// leaving ListAccountMeetings permanently unable to surface it.
+	meeting.AccountID = accountID
+	meeting.SharedToAccount = true
+	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
+		return nil, err
+	}
+
+	ref := &model.MeetingRef{
+		PK:          model.PrefixAccount + accountID,
+		SK:          model.PrefixMeetingRef + meeting.Date.UTC().Format(time.RFC3339) + "#" + meetingID,
+		AccountID:   accountID,
+		MeetingID:   meetingID,
+		OwnerUserID: ownerID,
+		Title:       meeting.Title,
+		Date:        meeting.Date,
+		EntityType:  model.EntityTypeMeetingRef,
+	}
+	if err := s.repo.PutMeetingRef(ctx, ref); err != nil {
+		return nil, err
+	}
+
+	members, err := s.repo.ListAccountMembers(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	shared := 0
+	for _, m := range members {
+		if m.UserID == ownerID {
+			continue
+		}
+		if _, err := s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, m.UserID, m.Email, model.PermissionRead); err != nil {
+			return nil, err
+		}
+		shared++
+	}
+
+	return &model.ShareToAccountResult{AccountID: accountID, SharedWith: shared}, nil
 }
 
 // strPtr returns a pointer to string, or nil if empty

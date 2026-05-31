@@ -90,3 +90,44 @@ type AccountSummary struct {
 	Name      string `json:"name"`
 	Role      string `json:"role"`
 }
+
+const (
+	PrefixMeetingRef     = "MEETINGREF#"
+	EntityTypeMeetingRef = "MEETING_REF"
+)
+
+// MeetingRef is a lightweight reference to a meeting shared into an account,
+// stored in the account partition so members can list shared meetings without
+// a cross-partition scan. PK: ACCOUNT#{accountId}, SK: MEETINGREF#{occurredAt}#{meetingId}.
+type MeetingRef struct {
+	PK          string    `dynamodbav:"PK"`
+	SK          string    `dynamodbav:"SK"`
+	AccountID   string    `dynamodbav:"accountId"`
+	MeetingID   string    `dynamodbav:"meetingId"`
+	OwnerUserID string    `dynamodbav:"ownerUserId"`
+	Title       string    `dynamodbav:"title,omitempty"`
+	Date        time.Time `dynamodbav:"date"`
+	EntityType  string    `dynamodbav:"entityType"` // "MEETING_REF"
+}
+
+// --- meeting↔account request/response DTOs ---
+
+type LinkAccountRequest struct {
+	AccountID string `json:"accountId"`
+}
+
+type ShareToAccountRequest struct {
+	AccountID string `json:"accountId"`
+}
+
+type ShareToAccountResult struct {
+	AccountID  string `json:"accountId"`
+	SharedWith int    `json:"sharedWith"` // number of account members granted read
+}
+
+type MeetingRefDTO struct {
+	MeetingID   string    `json:"meetingId"`
+	OwnerUserID string    `json:"ownerUserId"`
+	Title       string    `json:"title"`
+	Date        time.Time `json:"date"`
+}

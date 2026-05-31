@@ -117,3 +117,26 @@ func (h *AccountHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusCreated, dto)
 }
+
+func (h *AccountHandler) ListAccountMeetings(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID is required")
+		return
+	}
+	list, err := h.accountService.ListAccountMeetings(ctx, userID, accountID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Account not found")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"meetings": list})
+}

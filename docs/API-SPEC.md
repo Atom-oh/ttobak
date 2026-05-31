@@ -260,6 +260,68 @@ Error: 404 Not Found (해당 이메일의 사용자 없음)
 Error: 400 Bad Request (이미 멤버이거나 잘못된 역할)
 ```
 
+#### List Account Meetings (공유된 미팅 목록 — 멤버 전용)
+
+```
+GET /api/accounts/{accountId}/meetings
+
+Response: 200 OK
+{
+  "meetings": [
+    {
+      "meetingId": "uuid",
+      "ownerUserId": "owner-uuid",
+      "title": "ROSA 리뷰",
+      "date": "2026-05-30T10:00:00Z"
+    }
+  ]
+}
+
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
+#### Link Meeting to Account (분류만 — owner+멤버 전용)
+
+```
+POST /api/meetings/{meetingId}/account
+Request:
+{
+  "accountId": "acc-uuid"
+}
+
+Response: 200 OK
+{
+  "accountId": "acc-uuid"
+}
+
+Error: 403 Forbidden (owner가 아니거나 해당 Account 멤버가 아님)
+Error: 404 Not Found (미팅 없음)
+```
+
+#### Share Meeting to Account (팀 공유 — owner+멤버 전용)
+
+미팅을 Account 팀에 공유한다: `accountId`+`sharedToAccount`를 설정하고,
+owner를 제외한 모든 Account 멤버에게 read 권한 Share를 부여하며, Account
+파티션에 MeetingRef를 적립한다.
+
+```
+POST /api/meetings/{meetingId}/share-account
+Request:
+{
+  "accountId": "acc-uuid"
+}
+
+Response: 200 OK
+{
+  "accountId": "acc-uuid",
+  "sharedWith": 2          // read 권한을 부여받은 멤버 수 (owner 제외)
+}
+
+Error: 403 Forbidden (owner가 아니거나 해당 Account 멤버가 아님)
+Error: 404 Not Found (미팅 없음)
+```
+
 ---
 
 ### Sharing

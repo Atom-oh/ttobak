@@ -13,6 +13,7 @@ type mockAccountRepo struct {
 	accounts map[string]*model.Account       // accountID
 	members  map[string]*model.AccountMember // accountID|userID
 	users    map[string]*model.User          // email
+	meetingRefs map[string][]model.MeetingRef // accountID -> refs
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -20,6 +21,7 @@ func newMockAccountRepo() *mockAccountRepo {
 		accounts: make(map[string]*model.Account),
 		members:  make(map[string]*model.AccountMember),
 		users:    make(map[string]*model.User),
+		meetingRefs: make(map[string][]model.MeetingRef),
 	}
 }
 
@@ -84,6 +86,10 @@ func (m *mockAccountRepo) GetUserByEmail(_ context.Context, email string) (*mode
 	}
 	cp := *u
 	return &cp, nil
+}
+
+func (m *mockAccountRepo) ListMeetingRefsForAccount(_ context.Context, accountID string) ([]model.MeetingRef, error) {
+	return append([]model.MeetingRef(nil), m.meetingRefs[accountID]...), nil
 }
 
 func TestCreateAccount_SetsOwnerMember(t *testing.T) {
@@ -239,6 +245,72 @@ func TestAddMember_DuplicateRejected(t *testing.T) {
 	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleSSA})
 	if !errors.Is(err, ErrMemberExists) {
 		t.Errorf("expected ErrMemberExists, got %v", err)
+	}
+}
+
+func TestListAccountMeetings_MemberOnly(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{
+		{AccountID: acc.AccountID, MeetingID: "m-1", OwnerUserID: "owner-1", Title: "ROSA"},
+	}
+
+	list, err := svc.ListAccountMeetings(context.Background(), "owner-1", acc.AccountID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(list) != 1 || list[0].MeetingID != "m-1" {
+		t.Errorf("unexpected list: %+v", list)
+	}
+}
+
+func TestListAccountMeetings_NonMemberForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, err := svc.ListAccountMeetings(context.Background(), "stranger-9", acc.AccountID)
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestResolveAccountByAlias_Unique(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "u1", "u1@x.com",
+		&model.CreateAccountRequest{Name: "하나은행", Aliases: []string{"하나은행", "Hana Bank"}})
+
+	got, err := svc.ResolveAccountByAlias(context.Background(), "u1", "Hana Bank")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got == nil || got.AccountID != acc.AccountID {
+		t.Errorf("expected to resolve to %s, got %+v", acc.AccountID, got)
+	}
+}
+
+func TestResolveAccountByAlias_NotFound(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	_, _ = svc.CreateAccount(context.Background(), "u1", "u1@x.com",
+		&model.CreateAccountRequest{Name: "하나은행", Aliases: []string{"하나은행"}})
+	_, err := svc.ResolveAccountByAlias(context.Background(), "u1", "없는태그")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestResolveAccountByAlias_Ambiguous(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	_, _ = svc.CreateAccount(context.Background(), "u1", "u1@x.com",
+		&model.CreateAccountRequest{Name: "A", Aliases: []string{"공통"}})
+	_, _ = svc.CreateAccount(context.Background(), "u1", "u1@x.com",
+		&model.CreateAccountRequest{Name: "B", Aliases: []string{"공통"}})
+	_, err := svc.ResolveAccountByAlias(context.Background(), "u1", "공통")
+	if !errors.Is(err, ErrAmbiguousAlias) {
+		t.Errorf("expected ErrAmbiguousAlias, got %v", err)
 	}
 }
 
