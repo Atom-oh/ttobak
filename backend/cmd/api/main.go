@@ -64,6 +64,8 @@ func init() {
 
 	// Initialize services
 	meetingService := service.NewMeetingService(repo)
+	accountService := service.NewAccountService(repo)
+	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)
 	kbService.SetAssetsBucketName(bucketName)
@@ -72,6 +74,8 @@ func init() {
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler()
 	meetingHandler := handler.NewMeetingHandler(meetingService, repo, uploadService)
+	accountHandler := handler.NewAccountHandler(accountService)
+	vaultHandler := handler.NewVaultHandler(vaultService)
 	shareHandler := handler.NewShareHandler(meetingService)
 	uploadHandler := handler.NewUploadHandler(uploadService)
 	kbHandler := handler.NewKBHandler(kbService)
@@ -121,6 +125,21 @@ func init() {
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth)
+
+		// Account routes
+		r.Get("/api/accounts", accountHandler.ListAccounts)
+		r.Post("/api/accounts", accountHandler.CreateAccount)
+		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
+		r.Post("/api/accounts/{accountId}/members", accountHandler.AddMember)
+		r.Get("/api/accounts/{accountId}/meetings", accountHandler.ListAccountMeetings)
+		r.Get("/api/accounts/{accountId}/insights", accountHandler.ListAccountInsights)
+		r.Get("/api/accounts/{accountId}/brief", accountHandler.GetAccountBrief)
+		r.Post("/api/accounts/{accountId}/documents", accountHandler.PutDocument)
+		r.Get("/api/accounts/{accountId}/documents", accountHandler.ListDocuments)
+		r.Get("/api/accounts/{accountId}/documents/{docId}", accountHandler.GetDocument)
+		r.Get("/api/vault/export", vaultHandler.ExportVault)
+		r.Post("/api/meetings/{meetingId}/account", meetingHandler.LinkToAccount)
+		r.Post("/api/meetings/{meetingId}/share-account", shareHandler.ShareToAccount)
 
 		// Meeting routes
 		r.Get("/api/meetings", meetingHandler.ListMeetings)

@@ -160,6 +160,285 @@ Error: 403 Forbidden (only owner can delete)
 
 ---
 
+### Accounts
+
+고객사(Account)는 팀이 공유하는 1급 엔티티다. 생성자는 자동으로 `owner` 멤버가 되며, owner만 멤버를 추가할 수 있다. 멤버십(역할 AM/TAM/SSA/owner)이 곧 접근 권한이다. 모든 엔드포인트는 인증 필요.
+
+#### List Accounts (내 Account 목록)
+
+```
+GET /api/accounts
+
+Response: 200 OK
+{
+  "accounts": [
+    {
+      "accountId": "uuid",
+      "name": "하나은행",
+      "role": "owner"            // owner | AM | TAM | SSA
+    }
+  ]
+}
+```
+
+내가 멤버인 Account만 반환한다(GSI1 역조회).
+
+#### Create Account
+
+```
+POST /api/accounts
+Request:
+{
+  "name": "하나은행",
+  "aliases": ["Hana Bank"],     // optional, 태그 별칭 매핑
+  "domains": ["hanafn.com"],    // optional
+  "industry": "Finance"         // optional
+}
+
+Response: 201 Created
+{
+  "accountId": "uuid",
+  "name": "하나은행",
+  "aliases": ["Hana Bank"],
+  "domains": ["hanafn.com"],
+  "industry": "Finance",
+  "ownerUserId": "owner-uuid",
+  "members": [
+    { "userId": "owner-uuid", "email": "owner@example.com", "role": "owner" }
+  ],
+  "createdAt": "2026-05-30T10:00:00Z"
+}
+
+Error: 400 Bad Request (name이 비어있음)
+```
+
+생성자는 자동으로 `owner` 역할의 멤버가 된다.
+
+#### Get Account Detail
+
+```
+GET /api/accounts/{accountId}
+
+Response: 200 OK
+{
+  "accountId": "uuid",
+  "name": "하나은행",
+  "aliases": ["Hana Bank"],
+  "domains": ["hanafn.com"],
+  "industry": "Finance",
+  "ownerUserId": "owner-uuid",
+  "members": [
+    { "userId": "owner-uuid", "email": "owner@example.com", "role": "owner" },
+    { "userId": "tam-uuid", "email": "tam@example.com", "role": "TAM" }
+  ],
+  "createdAt": "2026-05-30T10:00:00Z"
+}
+
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
+#### Add Member (owner 전용)
+
+```
+POST /api/accounts/{accountId}/members
+Request:
+{
+  "email": "tam@example.com",   // 기존 등록 사용자의 이메일
+  "role": "TAM"                 // AM | TAM | SSA (owner는 지정 불가)
+}
+
+Response: 201 Created
+{
+  "userId": "tam-uuid",
+  "email": "tam@example.com",
+  "role": "TAM"
+}
+
+Error: 403 Forbidden (owner가 아님)
+Error: 404 Not Found (해당 이메일의 사용자 없음)
+Error: 400 Bad Request (이미 멤버이거나 잘못된 역할)
+```
+
+#### List Account Meetings (공유된 미팅 목록 — 멤버 전용)
+
+```
+GET /api/accounts/{accountId}/meetings
+
+Response: 200 OK
+{
+  "meetings": [
+    {
+      "meetingId": "uuid",
+      "ownerUserId": "owner-uuid",
+      "title": "ROSA 리뷰",
+      "date": "2026-05-30T10:00:00Z"
+    }
+  ]
+}
+
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
+#### List Account Insights (인사이트 raw material — 멤버 전용)
+
+미팅에서 추출되어 Account 파티션에 팬아웃된 8유형 인사이트를 조회한다.
+`from`/`to`는 선택적 기간 필터(RFC3339), `types`는 선택적 유형 필터(콤마 구분).
+기간·유형 필터는 서비스 레이어에서 client-side로 적용된다(spec §6.3).
+
+유형(type) 8종: `trend`, `need`, `competitive`, `risk`, `opportunity`, `tech`, `stakeholder`, `action`
+
+```
+GET /api/accounts/{accountId}/insights?from=<RFC3339>&to=<RFC3339>&types=risk,opportunity
+
+Response: 200 OK
+{
+  "insights": [
+    {
+      "type": "risk",
+      "text": "PoC 일정 2개월 지연 가능",
+      "sourceType": "meeting",
+      "sourceId": "meeting-uuid",
+      "occurredAt": "2026-05-12T09:00:00Z",
+      "tsMarker": "[TS:120]",
+      "entities": ["PoC"]
+    }
+  ]
+}
+
+Error: 400 Bad Request (잘못된 from/to — RFC3339 아님)
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
+#### Get Account Brief (묶음 원재료 — 멤버 전용)
+
+Account 한 곳의 원재료(메타 + 유형별 인사이트 + 공유 미팅)를 한 번의 호출로
+묶어서 반환한다. 개인 맥북 에이전트가 SFDC/SIFT/2by2/Player Card 준비에 쓰는
+"일괄 소비"용. 기존 `GetAccount`+`ListAccountMeetings`+`ListAccountInsights`를
+서비스 레이어에서 합성하며, 멤버 게이트를 그대로 상속한다. `from`/`to`/`types`
+필터는 insights 엔드포인트와 동일하게 동작한다.
+
+```
+GET /api/accounts/{accountId}/brief?from=<RFC3339>&to=<RFC3339>&types=risk,opportunity
+
+Response: 200 OK
+{
+  "account": { "accountId": "acc-uuid", "name": "하나은행", "members": [ ... ], ... },
+  "insightsByType": {
+    "risk": [ { "type": "risk", "text": "...", "occurredAt": "2026-05-12T09:00:00Z", ... } ],
+    "opportunity": [ ... ]
+  },
+  "meetings": [ { "meetingId": "meeting-uuid", "title": "ROSA PoC", "ownerUserId": "...", "date": "2026-05-12T09:00:00Z" } ]
+}
+
+Error: 400 Bad Request (잘못된 from/to — RFC3339 아님)
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
+#### Put Account Document (로컬 문서 인제스트 — 멤버 전용)
+
+로컬에서 작성한 문서(이메일/캘린더/prep 노트 등)를 Account에 인라인 마크다운
+(≤300KB)으로 저장해 비-Obsidian 팀원도 TTOBAK에서 열람한다. 출처 규칙 루프 차단:
+`ttobak_id` frontmatter가 있는 TTOBAK-원본 문서는 거부한다.
+
+```
+POST /api/accounts/{accountId}/documents
+{ "title": "Email notes", "markdown": "# Prep\n...", "docType": "prep", "path": "Accounts/하나은행/prep.md" }
+
+Response: 201 Created
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "Accounts/하나은행/prep.md", "sourceUserId": "user-uuid", "createdAt": "2026-05-30T09:00:00Z" }
+
+Error: 400 Bad Request (title/markdown 누락 또는 >300KB)
+Error: 400 Bad Request (TTOBAK 원본 — loop guard)
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
+#### List Account Documents (인제스트 문서 목록 — 멤버 전용)
+
+```
+GET /api/accounts/{accountId}/documents?docType=prep
+
+Response: 200 OK
+{ "documents": [ { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z" } ] }
+
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
+#### Get Account Document (전체 내용 — 멤버 전용)
+
+```
+GET /api/accounts/{accountId}/documents/{docId}
+
+Response: 200 OK
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "content": "# Prep\n..." }
+
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (문서 없음)
+```
+
+#### Export Vault (Obsidian 마크다운 내보내기)
+
+본인 소유 미팅을 Obsidian 친화 마크다운(YAML frontmatter)으로 렌더링해
+`Accounts/{name}/`(Account 공유) 또는 `_Private/Meetings/`(비공개) 경로의
+파일 목록으로 반환한다. MCP 클라이언트가 각 파일을 로컬 vault에 기록한다.
+
+```
+GET /api/vault/export
+
+Response: 200 OK
+{ "files": [ { "path": "Accounts/하나은행/2026-05-12 ROSA 리뷰.md", "markdown": "---\naccount: \"[[하나은행]]\"\n...\n---\n\n# ROSA 리뷰\n..." } ] }
+
+Error: 403 Forbidden
+```
+
+#### Link Meeting to Account (분류만 — owner+멤버 전용)
+
+```
+POST /api/meetings/{meetingId}/account
+Request:
+{
+  "accountId": "acc-uuid"
+}
+
+Response: 200 OK
+{
+  "accountId": "acc-uuid"
+}
+
+Error: 403 Forbidden (owner가 아니거나 해당 Account 멤버가 아님)
+Error: 404 Not Found (미팅 없음)
+```
+
+#### Share Meeting to Account (팀 공유 — owner+멤버 전용)
+
+미팅을 Account 팀에 공유한다: `accountId`+`sharedToAccount`를 설정하고,
+owner를 제외한 모든 Account 멤버에게 read 권한 Share를 부여하며, Account
+파티션에 MeetingRef를 적립한다.
+
+```
+POST /api/meetings/{meetingId}/share-account
+Request:
+{
+  "accountId": "acc-uuid"
+}
+
+Response: 200 OK
+{
+  "accountId": "acc-uuid",
+  "sharedWith": 2          // read 권한을 부여받은 멤버 수 (owner 제외)
+}
+
+Error: 403 Forbidden (owner가 아니거나 해당 Account 멤버가 아님)
+Error: 404 Not Found (미팅 없음)
+```
+
+---
+
 ### Sharing
 
 #### Share Meeting

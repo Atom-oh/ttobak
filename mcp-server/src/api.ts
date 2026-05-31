@@ -31,6 +31,64 @@ export class TtobakApi {
     return this.post('/api/qa/ask', body);
   }
 
+  async listAccounts() {
+    return this.get('/api/accounts');
+  }
+
+  async getAccount(accountId: string) {
+    return this.get(`/api/accounts/${accountId}`);
+  }
+
+  async getAccountMeetings(accountId: string) {
+    return this.get(`/api/accounts/${accountId}/meetings`);
+  }
+
+  async getAccountInsights(
+    accountId: string,
+    opts?: { from?: string; to?: string; types?: string[] },
+  ) {
+    const q = new URLSearchParams();
+    if (opts?.from) q.set('from', opts.from);
+    if (opts?.to) q.set('to', opts.to);
+    if (opts?.types && opts.types.length) q.set('types', opts.types.join(','));
+    const qs = q.toString();
+    return this.get(`/api/accounts/${accountId}/insights${qs ? '?' + qs : ''}`);
+  }
+
+  async getAccountBrief(
+    accountId: string,
+    opts?: { from?: string; to?: string; types?: string[] },
+  ) {
+    const q = new URLSearchParams();
+    if (opts?.from) q.set('from', opts.from);
+    if (opts?.to) q.set('to', opts.to);
+    if (opts?.types && opts.types.length) q.set('types', opts.types.join(','));
+    const qs = q.toString();
+    return this.get(`/api/accounts/${accountId}/brief${qs ? '?' + qs : ''}`);
+  }
+
+  async exportVault() {
+    return this.get('/api/vault/export');
+  }
+
+  async putDocument(
+    accountId: string,
+    doc: { title: string; markdown: string; docType?: string; path?: string },
+  ) {
+    return this.post(`/api/accounts/${accountId}/documents`, doc);
+  }
+
+  async listDocuments(accountId: string, docType?: string) {
+    const q = new URLSearchParams();
+    if (docType) q.set('docType', docType);
+    const qs = q.toString();
+    return this.get(`/api/accounts/${accountId}/documents${qs ? '?' + qs : ''}`);
+  }
+
+  async getDocument(accountId: string, docId: string) {
+    return this.get(`/api/accounts/${accountId}/documents/${docId}`);
+  }
+
   private async get(path: string) {
     return this.request('GET', path);
   }

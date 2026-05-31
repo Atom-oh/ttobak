@@ -41,6 +41,10 @@ type meetingRepo interface {
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error)
 	DeleteShare(ctx context.Context, sharedToID, meetingID string) error
+	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
+	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
+	PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error
+	PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error
 }
 
 // MeetingService handles meeting business logic
@@ -494,6 +498,141 @@ func (s *MeetingService) UpdateMeetingContent(ctx context.Context, meetingID, co
 	meeting.Content = content
 	meeting.Status = model.StatusDone
 	return s.repo.UpdateMeeting(ctx, meeting)
+}
+
+// LinkMeetingToAccount classifies a meeting under an account (no sharing).
+// Only the meeting owner who is a member of the account may do this.
+func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, ownerID, meetingID, accountID string) error {
+	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+	if err != nil {
+		return err
+	}
+	if meeting == nil {
+		if existing, _ := s.repo.GetMeetingByID(ctx, meetingID); existing != nil {
+			return ErrForbidden
+		}
+		return ErrNotFound
+	}
+	member, err := s.repo.GetMember(ctx, accountID, ownerID)
+	if err != nil {
+		return err
+	}
+	if member == nil {
+		return ErrForbidden
+	}
+	meeting.AccountID = accountID
+	return s.repo.UpdateMeeting(ctx, meeting)
+}
+
+// ShareMeetingToAccount publishes a meeting to an account team: sets
+// accountId+sharedToAccount, grants read Share to every account member
+// (except the owner), and writes a MeetingRef into the account partition.
+func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, ownerEmail, meetingID, accountID string) (*model.ShareToAccountResult, error) {
+	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	if meeting == nil {
+		if existing, _ := s.repo.GetMeetingByID(ctx, meetingID); existing != nil {
+			return nil, ErrForbidden
+		}
+		return nil, ErrNotFound
+	}
+	owner, err := s.repo.GetMember(ctx, accountID, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	if owner == nil {
+		return nil, ErrForbidden
+	}
+
+	// This sequence is non-transactional, but every write is idempotent
+	// (UpdateMeeting and the MeetingRef PutItem target fixed keys; CreateShare
+	// keys on the recipient), so a client retry converges. Single-item DynamoDB
+	// writes rarely fail; full atomicity via TransactWriteItems was considered
+	// but rejected because its 100-item limit would cap account team size.
+	// Order matters: write the MeetingRef BEFORE the per-member share loop so a
+	// list-visible record always exists even if a later CreateShare fails —
+	// otherwise the meeting would be flagged sharedToAccount=true with no ref,
+	// leaving ListAccountMeetings permanently unable to surface it.
+	meeting.AccountID = accountID
+	meeting.SharedToAccount = true
+	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
+		return nil, err
+	}
+
+	ref := &model.MeetingRef{
+		PK:          model.PrefixAccount + accountID,
+		SK:          model.PrefixMeetingRef + meeting.Date.UTC().Format(time.RFC3339) + "#" + meetingID,
+		AccountID:   accountID,
+		MeetingID:   meetingID,
+		OwnerUserID: ownerID,
+		Title:       meeting.Title,
+		Date:        meeting.Date,
+		EntityType:  model.EntityTypeMeetingRef,
+	}
+	if err := s.repo.PutMeetingRef(ctx, ref); err != nil {
+		return nil, err
+	}
+
+	if items, berr := BuildAccountInsights(accountID, meeting); berr == nil && len(items) > 0 {
+		if err := s.repo.PutAccountInsights(ctx, items); err != nil {
+			return nil, err
+		}
+	}
+
+	members, err := s.repo.ListAccountMembers(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	shared := 0
+	for _, m := range members {
+		if m.UserID == ownerID {
+			continue
+		}
+		if _, err := s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, m.UserID, m.Email, model.PermissionRead); err != nil {
+			return nil, err
+		}
+		shared++
+	}
+
+	return &model.ShareToAccountResult{AccountID: accountID, SharedWith: shared}, nil
+}
+
+// BuildAccountInsights parses a meeting's stored insights JSON and builds
+// account-partition AccountInsight items. SK = INSIGHT#{occurredAt}#{meetingId}#{index}
+// is deterministic per (meeting,index), so re-running overwrites the same items
+// (idempotent). Returns nil if the meeting has no insights yet.
+func BuildAccountInsights(accountID string, meeting *model.Meeting) ([]model.AccountInsight, error) {
+	if meeting == nil || strings.TrimSpace(meeting.Insights) == "" {
+		return nil, nil
+	}
+	var parsed []model.MeetingInsight
+	if err := json.Unmarshal([]byte(meeting.Insights), &parsed); err != nil {
+		return nil, err
+	}
+	occurred := meeting.Date.UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
+	out := make([]model.AccountInsight, 0, len(parsed))
+	for i, p := range parsed {
+		out = append(out, model.AccountInsight{
+			PK:           model.PrefixAccount + accountID,
+			SK:           fmt.Sprintf("%s%s#%s#%d", model.PrefixInsight, occurred, meeting.MeetingID, i),
+			AccountID:    accountID,
+			InsightID:    fmt.Sprintf("%s_%d", meeting.MeetingID, i),
+			Type:         p.Type,
+			Text:         p.Text,
+			SourceType:   "meeting",
+			SourceID:     meeting.MeetingID,
+			SourceUserID: meeting.UserID,
+			OccurredAt:   meeting.Date,
+			TsMarker:     p.TsMarker,
+			Entities:     p.Entities,
+			CreatedAt:    now,
+			EntityType:   model.EntityTypeInsight,
+		})
+	}
+	return out, nil
 }
 
 // strPtr returns a pointer to string, or nil if empty

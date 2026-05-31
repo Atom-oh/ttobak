@@ -49,6 +49,9 @@ type mockHandlerMeetingRepo struct {
 	shares       map[string]*model.Share
 	attachments  map[string][]model.Attachment
 	users        map[string]*model.User
+	members      map[string]*model.AccountMember // "accountID|userID"
+	meetingRefs  map[string][]model.MeetingRef   // accountID -> refs
+	accountInsights []model.AccountInsight
 }
 
 func newMockHandlerMeetingRepo() *mockHandlerMeetingRepo {
@@ -58,6 +61,8 @@ func newMockHandlerMeetingRepo() *mockHandlerMeetingRepo {
 		shares:       make(map[string]*model.Share),
 		attachments:  make(map[string][]model.Attachment),
 		users:        make(map[string]*model.User),
+		members:      make(map[string]*model.AccountMember),
+		meetingRefs:  make(map[string][]model.MeetingRef),
 	}
 }
 
@@ -139,6 +144,35 @@ func (m *mockHandlerMeetingRepo) CreateShare(_ context.Context, meetingID, owner
 	return &model.Share{MeetingID: meetingID, SharedToID: sharedToID, Permission: permission}, nil
 }
 func (m *mockHandlerMeetingRepo) DeleteShare(_ context.Context, sharedToID, meetingID string) error {
+	return nil
+}
+
+func (m *mockHandlerMeetingRepo) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
+	mem, ok := m.members[accountID+"|"+userID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *mem
+	return &cp, nil
+}
+
+func (m *mockHandlerMeetingRepo) ListAccountMembers(_ context.Context, accountID string) ([]model.AccountMember, error) {
+	out := []model.AccountMember{}
+	for _, mem := range m.members {
+		if mem.AccountID == accountID {
+			out = append(out, *mem)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockHandlerMeetingRepo) PutMeetingRef(_ context.Context, ref *model.MeetingRef) error {
+	m.meetingRefs[ref.AccountID] = append(m.meetingRefs[ref.AccountID], *ref)
+	return nil
+}
+
+func (m *mockHandlerMeetingRepo) PutAccountInsights(_ context.Context, insights []model.AccountInsight) error {
+	m.accountInsights = append(m.accountInsights, insights...)
 	return nil
 }
 
@@ -316,6 +350,27 @@ func TestSelectTranscriptHandler_InvalidSelection(t *testing.T) {
 	json.Unmarshal(rr.Body.Bytes(), &errResp)
 	if errResp.Error.Code != model.ErrCodeBadRequest {
 		t.Errorf("expected error code BAD_REQUEST, got %q", errResp.Error.Code)
+	}
+}
+
+func TestHandlerLinkToAccount_OK(t *testing.T) {
+	h, repo := newStubMeetingHandler()
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone})
+	repo.members["acc-1|owner-1"] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+
+	body, _ := json.Marshal(model.LinkAccountRequest{AccountID: "acc-1"})
+	r := httptest.NewRequest(http.MethodPost, "/api/meetings/m-1/account", bytes.NewReader(body))
+	r = withUserCtx(r, "owner-1")
+	r = withChiParam(r, "meetingId", "m-1")
+	w := httptest.NewRecorder()
+
+	h.LinkToAccount(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if repo.meetings[hKey("owner-1", "m-1")].AccountID != "acc-1" {
+		t.Error("accountId not set on meeting")
 	}
 }
 

@@ -34,6 +34,34 @@ func NewMeetingHandler(meetingService *service.MeetingService, repo *repository.
 	return h
 }
 
+// LinkToAccount handles POST /api/meetings/{meetingId}/account.
+func (h *MeetingHandler) LinkToAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	meetingID := chi.URLParam(r, "meetingId")
+	if meetingID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Meeting ID is required")
+		return
+	}
+	var req model.LinkAccountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AccountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "accountId is required")
+		return
+	}
+	if err := h.meetingService.LinkMeetingToAccount(ctx, userID, meetingID, req.AccountID); err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"accountId": req.AccountID})
+}
+
 // ListMeetings handles GET /api/meetings?tab={all|shared}&cursor={lastKey}&limit={20}.
 // `tab` defaults to "all"; "shared" returns meetings shared with the caller.
 // `cursor` is the opaque last-evaluated-key from a previous page; `limit` caps

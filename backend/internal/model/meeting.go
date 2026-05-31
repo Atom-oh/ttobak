@@ -34,7 +34,10 @@ type Meeting struct {
 	Participants       []string          `dynamodbav:"participants,omitempty"`
 	Tags               []string          `dynamodbav:"tags,omitempty"`
 	Sentiment          string            `dynamodbav:"sentiment,omitempty"`        // "positive", "neutral", "negative" — extracted by summarize Lambda
+	Insights           string            `dynamodbav:"insights,omitempty"`         // JSON []MeetingInsight
 	LinkedMeetingIDs   []string          `dynamodbav:"linkedMeetingIds,omitempty"` // Chronologically ordered predecessor IDs
+	AccountID          string            `dynamodbav:"accountId,omitempty"`        // linked Account
+	SharedToAccount    bool              `dynamodbav:"sharedToAccount,omitempty"`  // published to account team
 	Status             string            `dynamodbav:"status"`                     // recording, transcribing, summarizing, done, error
 	CreatedAt          time.Time         `dynamodbav:"createdAt"`
 	UpdatedAt          time.Time         `dynamodbav:"updatedAt"`

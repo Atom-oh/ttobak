@@ -121,6 +121,8 @@ export interface MeetingDetail extends Meeting {
   isShared?: boolean;
   sharedBy?: string | null;
   permission?: 'read' | 'edit' | null;
+  accountId?: string;
+  sharedToAccount?: boolean;
 }
 
 export interface KBFile {
@@ -242,6 +244,60 @@ export interface ResearchDetail extends Research {
   content?: string;
   shares?: SharedUser[];
 }
+
+export interface AccountSummary {
+  accountId: string;
+  name: string;
+  role: string;
+}
+
+export interface AccountMember {
+  userId: string;
+  email?: string;
+  role: string;
+}
+
+export interface Account {
+  accountId: string;
+  name: string;
+  aliases?: string[];
+  domains?: string[];
+  industry?: string;
+  ownerUserId: string;
+  members: AccountMember[];
+  createdAt: string;
+}
+
+export interface AccountMeetingRef {
+  meetingId: string;
+  ownerUserId: string;
+  title: string;
+  date: string;
+}
+
+export interface AccountInsight {
+  type: string;
+  text: string;
+  sourceType: string;
+  sourceId: string;
+  occurredAt: string;
+  tsMarker?: string;
+  entities?: string[];
+}
+
+export interface AccountDocument {
+  docId: string;
+  title: string;
+  docType?: string;
+  path?: string;
+  sourceUserId: string;
+  createdAt: string;
+  content?: string;
+}
+
+export const INSIGHT_TYPES = [
+  'trend', 'need', 'competitive', 'risk', 'opportunity', 'tech', 'stakeholder', 'action',
+] as const;
 
 export interface DictionaryTerm {
   phrase: string;
