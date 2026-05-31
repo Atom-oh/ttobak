@@ -286,6 +286,29 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 	return out, nil
 }
 
+// GetAccountBrief composes account meta + insights (grouped by type) + shared
+// meetings into one payload. Access is enforced by the composed methods
+// (GetAccount gates membership first).
+func (s *AccountService) GetAccountBrief(ctx context.Context, userID, accountID string, from, to time.Time, types []string) (*model.AccountBrief, error) {
+	account, err := s.GetAccount(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	meetings, err := s.ListAccountMeetings(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	insights, err := s.ListAccountInsights(ctx, userID, accountID, from, to, types)
+	if err != nil {
+		return nil, err
+	}
+	byType := make(map[string][]model.AccountInsightDTO)
+	for _, ins := range insights {
+		byType[ins.Type] = append(byType[ins.Type], ins)
+	}
+	return &model.AccountBrief{Account: account, InsightsByType: byType, Meetings: meetings}, nil
+}
+
 // ResolveAccountByAlias finds, among the user's accounts, the one whose aliases
 // (or name) match the given tag. Returns ErrNotFound if none, ErrAmbiguousAlias
 // if more than one (never auto-pick).
