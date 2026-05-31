@@ -18,21 +18,19 @@ func (r *DynamoDBRepository) CreateAccount(ctx context.Context, account *model.A
 	if err != nil {
 		return fmt.Errorf("marshal account: %w", err)
 	}
-	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      accItem,
-	}); err != nil {
-		return fmt.Errorf("put account: %w", err)
-	}
 	memItem, err := attributevalue.MarshalMap(ownerMember)
 	if err != nil {
 		return fmt.Errorf("marshal owner member: %w", err)
 	}
-	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      memItem,
+	// Atomic two-item write: an account must never exist without its owner member
+	// (a missing owner would make GetMember deny everyone, orphaning the account).
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: accItem}},
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: memItem}},
+		},
 	}); err != nil {
-		return fmt.Errorf("put owner member: %w", err)
+		return fmt.Errorf("create account transaction: %w", err)
 	}
 	return nil
 }
