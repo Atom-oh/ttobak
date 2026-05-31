@@ -67,6 +67,28 @@ export class TtobakApi {
     return this.get(`/api/accounts/${accountId}/brief${qs ? '?' + qs : ''}`);
   }
 
+  async exportVault() {
+    return this.get('/api/vault/export');
+  }
+
+  async putDocument(
+    accountId: string,
+    doc: { title: string; markdown: string; docType?: string; path?: string },
+  ) {
+    return this.post(`/api/accounts/${accountId}/documents`, doc);
+  }
+
+  async listDocuments(accountId: string, docType?: string) {
+    const q = new URLSearchParams();
+    if (docType) q.set('docType', docType);
+    const qs = q.toString();
+    return this.get(`/api/accounts/${accountId}/documents${qs ? '?' + qs : ''}`);
+  }
+
+  async getDocument(accountId: string, docId: string) {
+    return this.get(`/api/accounts/${accountId}/documents/${docId}`);
+  }
+
   private async get(path: string) {
     return this.request('GET', path);
   }
