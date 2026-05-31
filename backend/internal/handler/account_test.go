@@ -219,3 +219,18 @@ func TestHandlerGetAccountBrief_Forbidden(t *testing.T) {
 		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
 	}
 }
+
+func TestHandlerPutDocument_Forbidden(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	body, _ := json.Marshal(model.PutDocumentRequest{Title: "t", Markdown: "x"})
+	r := httptest.NewRequest(http.MethodPost, "/api/accounts/acc-1/documents", bytes.NewReader(body))
+	r = withUserEmailCtx(r, "stranger-9", "s@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	w := httptest.NewRecorder()
+	h.PutDocument(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
+	}
+}

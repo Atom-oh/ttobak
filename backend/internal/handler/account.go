@@ -240,3 +240,82 @@ func (h *AccountHandler) GetAccountBrief(w http.ResponseWriter, r *http.Request)
 	}
 	writeJSON(w, http.StatusOK, brief)
 }
+
+func (h *AccountHandler) PutDocument(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID is required")
+		return
+	}
+	var req model.PutDocumentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+	dto, err := h.accountService.PutDocument(ctx, userID, accountID, &req)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Account not found")
+		case errors.Is(err, service.ErrLoopGuard):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Document originated from TTOBAK (loop guard)")
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "title and markdown required (<=300KB)")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusCreated, dto)
+}
+
+func (h *AccountHandler) ListDocuments(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID is required")
+		return
+	}
+	list, err := h.accountService.ListAccountDocuments(ctx, userID, accountID, r.URL.Query().Get("docType"))
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Account not found")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"documents": list})
+}
+
+func (h *AccountHandler) GetDocument(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	docID := chi.URLParam(r, "docId")
+	if accountID == "" || docID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID and Document ID are required")
+		return
+	}
+	detail, err := h.accountService.GetAccountDocument(ctx, userID, accountID, docID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Document not found")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
