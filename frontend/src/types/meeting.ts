@@ -121,6 +121,8 @@ export interface MeetingDetail extends Meeting {
   isShared?: boolean;
   sharedBy?: string | null;
   permission?: 'read' | 'edit' | null;
+  accountId?: string;
+  sharedToAccount?: boolean;
 }
 
 export interface KBFile {

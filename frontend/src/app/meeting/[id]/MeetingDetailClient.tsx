@@ -15,6 +15,7 @@ import { ActionItemsCard } from '@/components/meeting/ActionItemsCard';
 import { ProcessingStatus } from '@/components/meeting/ProcessingStatus';
 import { TranscriptSection } from '@/components/meeting/TranscriptSection';
 import { SpeakerMapEditor } from '@/components/meeting/SpeakerMapEditor';
+import AccountSection from '@/components/meeting/AccountSection';
 import { meetingsApi } from '@/lib/api';
 import type { Meeting, MeetingDetail, ActionItem, SharedUser } from '@/types/meeting';
 
@@ -495,6 +496,19 @@ function MeetingDetailContent() {
               <LiveTranscriptSection meeting={meeting} />
             </>
           ) : null}
+
+          {/* Account */}
+          <section className="mb-12">
+            <h3 className="text-base font-bold flex items-center gap-2 mb-4 dark:text-text-main">
+              <span className="material-symbols-outlined text-primary">corporate_fare</span>
+              Account
+            </h3>
+            <AccountSection
+              meetingId={meeting.meetingId}
+              initialAccountId={meeting.accountId}
+              initialShared={meeting.sharedToAccount}
+            />
+          </section>
 
           {/* Meeting Notes */}
           {meeting.notes && (
