@@ -25,7 +25,10 @@ const maxInlineDocBytes = 300 * 1024 // mirror repo transcript inline threshold
 // hasTtobakOriginMarker reports whether markdown carries a ttobak_id key in a
 // leading YAML frontmatter block (i.e. TTOBAK-origin → must not be re-ingested).
 func hasTtobakOriginMarker(markdown string) bool {
-	s := strings.TrimSpace(markdown)
+	// Strip a leading UTF-8 BOM first: otherwise a BOM+"---\nttobak_id: ..."
+	// document would fail the HasPrefix("---") check and bypass the loop guard.
+	s := strings.TrimPrefix(markdown, "\ufeff")
+	s = strings.TrimSpace(s)
 	if !strings.HasPrefix(s, "---") {
 		return false
 	}

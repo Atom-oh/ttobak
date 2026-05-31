@@ -131,6 +131,11 @@ func TestHasTtobakOriginMarker(t *testing.T) {
 	if hasTtobakOriginMarker(noFront) {
 		t.Error("expected false when no frontmatter")
 	}
+	// A UTF-8 BOM prefix must not bypass the guard (Kiro adversarial finding #2).
+	bomTtobak := "\ufeff---\nttobak_id: m-123\n---\n\n# 회의록"
+	if !hasTtobakOriginMarker(bomTtobak) {
+		t.Error("expected true for BOM-prefixed ttobak_id doc (loop-guard bypass)")
+	}
 }
 
 func TestCreateAccount_SetsOwnerMember(t *testing.T) {
