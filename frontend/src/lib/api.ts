@@ -2,7 +2,7 @@
 
 import { getIdToken, refreshSession } from './auth';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
-import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage } from '@/types/meeting';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -375,4 +375,43 @@ export const researchChatApi = {
     api.post<{ messageId: string }>(`/api/research/${encodeURIComponent(researchId)}/chat`, data),
   listSubPages: (researchId: string) =>
     api.get<{ subpages: Research[] }>(`/api/research/${encodeURIComponent(researchId)}/subpages`),
+};
+
+// Account API
+export const accountApi = {
+  list: () => api.get<{ accounts: AccountSummary[] }>('/api/accounts'),
+  get: (id: string) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`),
+  create: (data: { name: string; aliases?: string[]; domains?: string[]; industry?: string }) =>
+    api.post<Account>('/api/accounts', data),
+  addMember: (id: string, data: { email: string; role: string }) =>
+    api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/members`, data),
+  meetings: (id: string) =>
+    api.get<{ meetings: AccountMeetingRef[] }>(`/api/accounts/${encodeURIComponent(id)}/meetings`),
+  insights: (id: string, params?: { from?: string; to?: string; types?: string[] }) => {
+    const q = new URLSearchParams();
+    if (params?.from) q.set('from', params.from);
+    if (params?.to) q.set('to', params.to);
+    if (params?.types?.length) q.set('types', params.types.join(','));
+    const qs = q.toString();
+    return api.get<{ insights: AccountInsight[] }>(
+      `/api/accounts/${encodeURIComponent(id)}/insights${qs ? `?${qs}` : ''}`);
+  },
+  listDocuments: (id: string, docType?: string) => {
+    const q = new URLSearchParams();
+    if (docType) q.set('docType', docType);
+    const qs = q.toString();
+    return api.get<{ documents: AccountDocument[] }>(
+      `/api/accounts/${encodeURIComponent(id)}/documents${qs ? `?${qs}` : ''}`);
+  },
+  getDocument: (id: string, docId: string) =>
+    api.get<AccountDocument>(
+      `/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
+};
+
+export const meetingAccountApi = {
+  link: (meetingId: string, accountId: string) =>
+    api.post<{ accountId: string }>(`/api/meetings/${encodeURIComponent(meetingId)}/account`, { accountId }),
+  shareToAccount: (meetingId: string, accountId: string) =>
+    api.post<{ accountId: string; sharedWith: number }>(
+      `/api/meetings/${encodeURIComponent(meetingId)}/share-account`, { accountId }),
 };
