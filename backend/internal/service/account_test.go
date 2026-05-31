@@ -99,6 +99,21 @@ func (m *mockAccountRepo) ListInsightsForAccount(_ context.Context, accountID st
 	return append([]model.AccountInsight(nil), m.insightsByAccount[accountID]...), nil
 }
 
+func TestHasTtobakOriginMarker(t *testing.T) {
+	ttobakDoc := "---\naccount: \"[[하나은행]]\"\nttobak_id: m-123\n---\n\n# 회의록"
+	if !hasTtobakOriginMarker(ttobakDoc) {
+		t.Error("expected true for doc with ttobak_id frontmatter")
+	}
+	localDoc := "---\ntitle: Email notes\ntags: [prep]\n---\n\n# Prep"
+	if hasTtobakOriginMarker(localDoc) {
+		t.Error("expected false for local doc without ttobak_id")
+	}
+	noFront := "# Just markdown, no frontmatter"
+	if hasTtobakOriginMarker(noFront) {
+		t.Error("expected false when no frontmatter")
+	}
+}
+
 func TestCreateAccount_SetsOwnerMember(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)

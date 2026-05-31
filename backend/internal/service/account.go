@@ -17,7 +17,30 @@ var (
 	ErrInvalidInput   = errors.New("invalid input")
 	ErrMemberExists   = errors.New("member already exists")
 	ErrAmbiguousAlias = errors.New("alias maps to multiple accounts")
+	ErrLoopGuard      = errors.New("document originated from ttobak (loop guard)")
 )
+
+const maxInlineDocBytes = 300 * 1024 // mirror repo transcript inline threshold
+
+// hasTtobakOriginMarker reports whether markdown carries a ttobak_id key in a
+// leading YAML frontmatter block (i.e. TTOBAK-origin → must not be re-ingested).
+func hasTtobakOriginMarker(markdown string) bool {
+	s := strings.TrimSpace(markdown)
+	if !strings.HasPrefix(s, "---") {
+		return false
+	}
+	rest := s[3:]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return false
+	}
+	for _, line := range strings.Split(rest[:end], "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "ttobak_id:") {
+			return true
+		}
+	}
+	return false
+}
 
 // accountRepo is the persistence seam for AccountService (mirrors meetingRepo).
 type accountRepo interface {
