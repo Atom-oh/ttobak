@@ -206,3 +206,52 @@ type AccountBrief struct {
 	InsightsByType map[string][]AccountInsightDTO `json:"insightsByType"`
 	Meetings       []MeetingRefDTO                `json:"meetings"`
 }
+
+const EntityTypeAccountDoc = "ACCOUNT_DOC" // SK uses existing model.PrefixDoc ("DOC#")
+
+// AccountDocument is a locally-authored (email/calendar/prep) doc ingested into
+// an account so non-Obsidian teammates can read it in TTOBAK. PK: ACCOUNT#{id},
+// SK: DOC#{docId}. Content is inline markdown (<=300KB). Loop guard: only
+// local-origin docs (no ttobak_id frontmatter) are accepted, so TtobakOrigin=false.
+type AccountDocument struct {
+	PK           string    `dynamodbav:"PK"`
+	SK           string    `dynamodbav:"SK"`
+	AccountID    string    `dynamodbav:"accountId"`
+	DocID        string    `dynamodbav:"docId"`
+	Title        string    `dynamodbav:"title"`
+	DocType      string    `dynamodbav:"docType,omitempty"` // "prep" | "reference" | ...
+	Path         string    `dynamodbav:"path,omitempty"`    // original vault path
+	Content      string    `dynamodbav:"content"`           // inline markdown
+	SourceUserID string    `dynamodbav:"sourceUserId"`
+	TtobakOrigin bool      `dynamodbav:"ttobakOrigin"`
+	CreatedAt    time.Time `dynamodbav:"createdAt"`
+	UpdatedAt    time.Time `dynamodbav:"updatedAt"`
+	EntityType   string    `dynamodbav:"entityType"`
+}
+
+type PutDocumentRequest struct {
+	Title    string `json:"title"`
+	DocType  string `json:"docType,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Markdown string `json:"markdown"`
+}
+
+type AccountDocumentDTO struct {
+	DocID        string    `json:"docId"`
+	Title        string    `json:"title"`
+	DocType      string    `json:"docType,omitempty"`
+	Path         string    `json:"path,omitempty"`
+	SourceUserID string    `json:"sourceUserId"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
+type AccountDocumentDetail struct {
+	AccountDocumentDTO
+	Content string `json:"content"`
+}
+
+// VaultFile is one Obsidian note in an export bundle.
+type VaultFile struct {
+	Path     string `json:"path"`
+	Markdown string `json:"markdown"`
+}
