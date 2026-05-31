@@ -270,3 +270,60 @@ func (r *DynamoDBRepository) ListInsightsForAccount(ctx context.Context, account
 	}
 	return insights, nil
 }
+
+func (r *DynamoDBRepository) PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error {
+	item, err := attributevalue.MarshalMap(doc)
+	if err != nil {
+		return fmt.Errorf("marshal account doc: %w", err)
+	}
+	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(r.tableName), Item: item}); err != nil {
+		return fmt.Errorf("put account doc: %w", err)
+	}
+	return nil
+}
+
+func (r *DynamoDBRepository) ListAccountDocuments(ctx context.Context, accountID string) ([]model.AccountDocument, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").BeginsWith(model.PrefixDoc))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build docs query: %w", err)
+	}
+	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(false),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query docs: %w", err)
+	}
+	docs := []model.AccountDocument{}
+	if err := attributevalue.UnmarshalListOfMaps(result.Items, &docs); err != nil {
+		return nil, fmt.Errorf("unmarshal docs: %w", err)
+	}
+	return docs, nil
+}
+
+func (r *DynamoDBRepository) GetAccountDocument(ctx context.Context, accountID, docID string) (*model.AccountDocument, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docID},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get account doc: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+	var doc model.AccountDocument
+	if err := attributevalue.UnmarshalMap(result.Item, &doc); err != nil {
+		return nil, fmt.Errorf("unmarshal account doc: %w", err)
+	}
+	return &doc, nil
+}

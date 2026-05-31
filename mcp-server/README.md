@@ -97,7 +97,9 @@ ttobak
   Tools:  ttobak_login, ttobak_status, ttobak_list_meetings,
           ttobak_get_meeting, ttobak_list_accounts, ttobak_get_account,
           ttobak_get_account_meetings, ttobak_get_account_insights,
-          ttobak_get_account_brief, ttobak_ask, ttobak_logout
+          ttobak_get_account_brief, ttobak_export_vault,
+          ttobak_put_document, ttobak_list_documents, ttobak_get_document,
+          ttobak_ask, ttobak_logout
 ```
 
 If the status shows "failed", check:
@@ -150,6 +152,10 @@ Use the ttobak_login tool to authenticate.
 | `ttobak_get_account_meetings` | Meetings shared into an account | "List meetings shared into Hana Bank" |
 | `ttobak_get_account_insights` | Typed insights by period/type | "Hana Bank's May risk and opportunity insights" |
 | `ttobak_get_account_brief` | Bundled account raw material | "Give me Hana Bank's quarterly brief in one shot" |
+| `ttobak_export_vault` | Export meetings as Obsidian markdown files | "Export my meetings to my vault" |
+| `ttobak_put_document` | Ingest a local document into an account | "Add this prep note to Hana Bank" |
+| `ttobak_list_documents` | List ingested documents for an account | "List Hana Bank's ingested documents" |
+| `ttobak_get_document` | Get an ingested document with content | "Show the Hana Bank prep doc" |
 | `ttobak_ask` | RAG Q&A across meetings | "What decisions were made about the API redesign?" |
 | `ttobak_logout` | Clear stored tokens | "Log out of TTOBAK" |
 
@@ -296,7 +302,9 @@ ttobak
   Tools:  ttobak_login, ttobak_status, ttobak_list_meetings,
           ttobak_get_meeting, ttobak_list_accounts, ttobak_get_account,
           ttobak_get_account_meetings, ttobak_get_account_insights,
-          ttobak_get_account_brief, ttobak_ask, ttobak_logout
+          ttobak_get_account_brief, ttobak_export_vault,
+          ttobak_put_document, ttobak_list_documents, ttobak_get_document,
+          ttobak_ask, ttobak_logout
 ```
 
 "failed" 상태가 표시되면:
@@ -349,6 +357,10 @@ TTOBAK에 로그인해줘
 | `ttobak_get_account_meetings` | 공유 미팅 목록 | "하나은행 공유 미팅 목록" |
 | `ttobak_get_account_insights` | 기간·유형별 인사이트 | "하나은행 5월 리스크/기회 인사이트" |
 | `ttobak_get_account_brief` | 묶음 원재료 | "하나은행 분기 브리프 한 번에" |
+| `ttobak_export_vault` | 미팅을 Obsidian 마크다운 파일로 내보내기 | "내 미팅을 vault로 내보내줘" |
+| `ttobak_put_document` | 로컬 문서를 Account로 인제스트 | "이 prep 노트를 하나은행에 추가해줘" |
+| `ttobak_list_documents` | Account 인제스트 문서 목록 | "하나은행 인제스트 문서 목록" |
+| `ttobak_get_document` | 인제스트 문서 전체 내용 조회 | "하나은행 prep 문서 보여줘" |
 | `ttobak_ask` | 미팅 기반 RAG Q&A | "API 재설계에 대해 어떤 결정이 있었어?" |
 | `ttobak_logout` | 저장된 토큰 삭제 | "TTOBAK에서 로그아웃해줘" |
 

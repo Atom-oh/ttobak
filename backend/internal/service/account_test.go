@@ -16,6 +16,7 @@ type mockAccountRepo struct {
 	users    map[string]*model.User          // email
 	meetingRefs map[string][]model.MeetingRef // accountID -> refs
 	insightsByAccount map[string][]model.AccountInsight
+	documents map[string][]model.AccountDocument // accountID -> docs
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -25,6 +26,7 @@ func newMockAccountRepo() *mockAccountRepo {
 		users:    make(map[string]*model.User),
 		meetingRefs: make(map[string][]model.MeetingRef),
 		insightsByAccount: make(map[string][]model.AccountInsight),
+		documents: make(map[string][]model.AccountDocument),
 	}
 }
 
@@ -97,6 +99,43 @@ func (m *mockAccountRepo) ListMeetingRefsForAccount(_ context.Context, accountID
 
 func (m *mockAccountRepo) ListInsightsForAccount(_ context.Context, accountID string) ([]model.AccountInsight, error) {
 	return append([]model.AccountInsight(nil), m.insightsByAccount[accountID]...), nil
+}
+
+func (m *mockAccountRepo) PutAccountDocument(_ context.Context, doc *model.AccountDocument) error {
+	m.documents[doc.AccountID] = append(m.documents[doc.AccountID], *doc)
+	return nil
+}
+func (m *mockAccountRepo) ListAccountDocuments(_ context.Context, accountID string) ([]model.AccountDocument, error) {
+	return append([]model.AccountDocument(nil), m.documents[accountID]...), nil
+}
+func (m *mockAccountRepo) GetAccountDocument(_ context.Context, accountID, docID string) (*model.AccountDocument, error) {
+	for _, d := range m.documents[accountID] {
+		if d.DocID == docID {
+			cp := d
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
+func TestHasTtobakOriginMarker(t *testing.T) {
+	ttobakDoc := "---\naccount: \"[[하나은행]]\"\nttobak_id: m-123\n---\n\n# 회의록"
+	if !hasTtobakOriginMarker(ttobakDoc) {
+		t.Error("expected true for doc with ttobak_id frontmatter")
+	}
+	localDoc := "---\ntitle: Email notes\ntags: [prep]\n---\n\n# Prep"
+	if hasTtobakOriginMarker(localDoc) {
+		t.Error("expected false for local doc without ttobak_id")
+	}
+	noFront := "# Just markdown, no frontmatter"
+	if hasTtobakOriginMarker(noFront) {
+		t.Error("expected false when no frontmatter")
+	}
+	// A UTF-8 BOM prefix must not bypass the guard (Kiro adversarial finding #2).
+	bomTtobak := "\ufeff---\nttobak_id: m-123\n---\n\n# 회의록"
+	if !hasTtobakOriginMarker(bomTtobak) {
+		t.Error("expected true for BOM-prefixed ttobak_id doc (loop-guard bypass)")
+	}
 }
 
 func TestCreateAccount_SetsOwnerMember(t *testing.T) {
@@ -413,5 +452,56 @@ func TestGetAccountBrief_NonMemberForbidden(t *testing.T) {
 	_, err := svc.GetAccountBrief(context.Background(), "stranger-9", acc.AccountID, time.Time{}, time.Time{}, nil)
 	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestPutDocument_MemberStores(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	dto, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Email notes", DocType: "prep", Markdown: "# Prep\ncontent"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dto.DocID == "" || dto.Title != "Email notes" {
+		t.Errorf("unexpected dto: %+v", dto)
+	}
+	docs, _ := repo.ListAccountDocuments(context.Background(), acc.AccountID)
+	if len(docs) != 1 || docs[0].Content != "# Prep\ncontent" || docs[0].TtobakOrigin {
+		t.Errorf("doc not stored correctly: %+v", docs)
+	}
+}
+
+func TestPutDocument_RejectsTtobakOrigin(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "echo", Markdown: "---\nttobak_id: m-1\n---\n# loop"})
+	if !errors.Is(err, ErrLoopGuard) {
+		t.Errorf("expected ErrLoopGuard, got %v", err)
+	}
+}
+
+func TestPutDocument_NonMemberForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, err := svc.PutDocument(context.Background(), "stranger-9", acc.AccountID, &model.PutDocumentRequest{Title: "t", Markdown: "x"})
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestGetAccountDocument_ReturnsContent(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	dto, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "T", Markdown: "body"})
+	detail, err := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, dto.DocID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if detail.Content != "body" {
+		t.Errorf("expected content body, got %q", detail.Content)
 	}
 }

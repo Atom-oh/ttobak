@@ -338,6 +338,64 @@ Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (Account 없음)
 ```
 
+#### Put Account Document (로컬 문서 인제스트 — 멤버 전용)
+
+로컬에서 작성한 문서(이메일/캘린더/prep 노트 등)를 Account에 인라인 마크다운
+(≤300KB)으로 저장해 비-Obsidian 팀원도 TTOBAK에서 열람한다. 출처 규칙 루프 차단:
+`ttobak_id` frontmatter가 있는 TTOBAK-원본 문서는 거부한다.
+
+```
+POST /api/accounts/{accountId}/documents
+{ "title": "Email notes", "markdown": "# Prep\n...", "docType": "prep", "path": "Accounts/하나은행/prep.md" }
+
+Response: 201 Created
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "Accounts/하나은행/prep.md", "sourceUserId": "user-uuid", "createdAt": "2026-05-30T09:00:00Z" }
+
+Error: 400 Bad Request (title/markdown 누락 또는 >300KB)
+Error: 400 Bad Request (TTOBAK 원본 — loop guard)
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
+#### List Account Documents (인제스트 문서 목록 — 멤버 전용)
+
+```
+GET /api/accounts/{accountId}/documents?docType=prep
+
+Response: 200 OK
+{ "documents": [ { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z" } ] }
+
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (Account 없음)
+```
+
+#### Get Account Document (전체 내용 — 멤버 전용)
+
+```
+GET /api/accounts/{accountId}/documents/{docId}
+
+Response: 200 OK
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "content": "# Prep\n..." }
+
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (문서 없음)
+```
+
+#### Export Vault (Obsidian 마크다운 내보내기)
+
+본인 소유 미팅을 Obsidian 친화 마크다운(YAML frontmatter)으로 렌더링해
+`Accounts/{name}/`(Account 공유) 또는 `_Private/Meetings/`(비공개) 경로의
+파일 목록으로 반환한다. MCP 클라이언트가 각 파일을 로컬 vault에 기록한다.
+
+```
+GET /api/vault/export
+
+Response: 200 OK
+{ "files": [ { "path": "Accounts/하나은행/2026-05-12 ROSA 리뷰.md", "markdown": "---\naccount: \"[[하나은행]]\"\n...\n---\n\n# ROSA 리뷰\n..." } ] }
+
+Error: 403 Forbidden
+```
+
 #### Link Meeting to Account (분류만 — owner+멤버 전용)
 
 ```

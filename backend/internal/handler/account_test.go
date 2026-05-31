@@ -28,6 +28,7 @@ type mockHandlerAccountRepo struct {
 	users    map[string]*model.User
 	meetingRefs map[string][]model.MeetingRef
 	insightsByAccount map[string][]model.AccountInsight
+	documents map[string][]model.AccountDocument
 }
 
 func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
@@ -37,6 +38,7 @@ func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
 		users:    make(map[string]*model.User),
 		meetingRefs: make(map[string][]model.MeetingRef),
 		insightsByAccount: make(map[string][]model.AccountInsight),
+		documents: make(map[string][]model.AccountDocument),
 	}
 }
 
@@ -101,6 +103,22 @@ func (m *mockHandlerAccountRepo) ListMeetingRefsForAccount(_ context.Context, ac
 }
 func (m *mockHandlerAccountRepo) ListInsightsForAccount(_ context.Context, accountID string) ([]model.AccountInsight, error) {
 	return append([]model.AccountInsight(nil), m.insightsByAccount[accountID]...), nil
+}
+func (m *mockHandlerAccountRepo) PutAccountDocument(_ context.Context, doc *model.AccountDocument) error {
+	m.documents[doc.AccountID] = append(m.documents[doc.AccountID], *doc)
+	return nil
+}
+func (m *mockHandlerAccountRepo) ListAccountDocuments(_ context.Context, accountID string) ([]model.AccountDocument, error) {
+	return append([]model.AccountDocument(nil), m.documents[accountID]...), nil
+}
+func (m *mockHandlerAccountRepo) GetAccountDocument(_ context.Context, accountID, docID string) (*model.AccountDocument, error) {
+	for _, d := range m.documents[accountID] {
+		if d.DocID == docID {
+			cp := d
+			return &cp, nil
+		}
+	}
+	return nil, nil
 }
 
 func newStubAccountHandler() (*AccountHandler, *mockHandlerAccountRepo) {
@@ -197,6 +215,21 @@ func TestHandlerGetAccountBrief_Forbidden(t *testing.T) {
 
 	h.GetAccountBrief(w, r)
 
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerPutDocument_Forbidden(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	body, _ := json.Marshal(model.PutDocumentRequest{Title: "t", Markdown: "x"})
+	r := httptest.NewRequest(http.MethodPost, "/api/accounts/acc-1/documents", bytes.NewReader(body))
+	r = withUserEmailCtx(r, "stranger-9", "s@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	w := httptest.NewRecorder()
+	h.PutDocument(w, r)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
 	}

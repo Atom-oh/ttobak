@@ -119,6 +119,50 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'ttobak_export_vault',
+      description: 'Export your meetings as Obsidian-ready markdown files [{path, markdown}], placed under Accounts/{name}/ (shared) or _Private/Meetings/. Write each to your local vault.',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
+    {
+      name: 'ttobak_put_document',
+      description: 'Ingest a locally-authored document (email/calendar/prep notes) into an account so teammates can read it in TTOBAK. Rejects docs that originated from TTOBAK (loop guard).',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          accountId: { type: 'string', description: 'Account ID' },
+          title: { type: 'string', description: 'Document title' },
+          markdown: { type: 'string', description: 'Markdown content (<=300KB)' },
+          docType: { type: 'string', description: 'Optional: prep | reference | ...' },
+          path: { type: 'string', description: 'Optional: original vault path' },
+        },
+        required: ['accountId', 'title', 'markdown'],
+      },
+    },
+    {
+      name: 'ttobak_list_documents',
+      description: 'List ingested documents for an account (docId, title, docType).',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          accountId: { type: 'string', description: 'Account ID' },
+          docType: { type: 'string', description: 'Optional docType filter' },
+        },
+        required: ['accountId'],
+      },
+    },
+    {
+      name: 'ttobak_get_document',
+      description: 'Get an ingested document with full content.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          accountId: { type: 'string', description: 'Account ID' },
+          docId: { type: 'string', description: 'Document ID' },
+        },
+        required: ['accountId', 'docId'],
+      },
+    },
+    {
       name: 'ttobak_ask',
       description:
         'Ask a natural-language question about your meetings. Uses Bedrock RAG with knowledge base. Optionally scope to one meeting.',
@@ -212,6 +256,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         if (!accountId) return error('accountId is required');
         const result = await api.getAccountBrief(accountId, { from, to, types });
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_export_vault': {
+        const result = await api.exportVault();
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_put_document': {
+        const { accountId, title, markdown, docType, path } = args as {
+          accountId: string; title: string; markdown: string; docType?: string; path?: string;
+        };
+        if (!accountId) return error('accountId is required');
+        if (!title) return error('title is required');
+        if (!markdown) return error('markdown is required');
+        const result = await api.putDocument(accountId, { title, markdown, docType, path });
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_list_documents': {
+        const { accountId, docType } = args as { accountId: string; docType?: string };
+        if (!accountId) return error('accountId is required');
+        const result = await api.listDocuments(accountId, docType);
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_get_document': {
+        const { accountId, docId } = args as { accountId: string; docId: string };
+        if (!accountId) return error('accountId is required');
+        if (!docId) return error('docId is required');
+        const result = await api.getDocument(accountId, docId);
         return text(JSON.stringify(result, null, 2));
       }
 
