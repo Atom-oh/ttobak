@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,7 +197,23 @@ func (m *mockMeetingRepo) PutMeetingRef(_ context.Context, ref *model.MeetingRef
 }
 
 func (m *mockMeetingRepo) PutAccountInsights(_ context.Context, insights []model.AccountInsight) error {
-	m.accountInsights = append(m.accountInsights, insights...)
+	if len(insights) == 0 {
+		return nil
+	}
+	// Mirror the repo's replace-by-prefix semantics: drop existing items sharing
+	// the meeting's SK prefix, then append the fresh set.
+	prefix := insights[0].SK
+	if idx := strings.LastIndex(prefix, "#"); idx >= 0 {
+		prefix = prefix[:idx+1]
+	}
+	kept := make([]model.AccountInsight, 0, len(m.accountInsights))
+	for _, ai := range m.accountInsights {
+		if ai.PK == insights[0].PK && strings.HasPrefix(ai.SK, prefix) {
+			continue
+		}
+		kept = append(kept, ai)
+	}
+	m.accountInsights = append(kept, insights...)
 	return nil
 }
 
@@ -601,5 +618,36 @@ func TestShareMeetingToAccount_NoInsightsNoFanout(t *testing.T) {
 	}
 	if len(repo.accountInsights) != 0 {
 		t.Errorf("expected no fanout for meeting without insights, got %d", len(repo.accountInsights))
+	}
+}
+
+func TestShareMeetingToAccount_ReplacesStaleInsights(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	when := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "ROSA", Status: model.StatusDone, Date: when,
+		Insights: `[{"type":"risk","text":"a"},{"type":"opportunity","text":"b"}]`,
+	})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+	if _, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1"); err != nil {
+		t.Fatalf("first share: %v", err)
+	}
+	if len(repo.accountInsights) != 2 {
+		t.Fatalf("expected 2 after first share, got %d", len(repo.accountInsights))
+	}
+	// Re-extraction yields FEWER insights → stale index must not linger.
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "ROSA", Status: model.StatusDone, Date: when,
+		Insights: `[{"type":"risk","text":"a-updated"}]`,
+	})
+	if _, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1"); err != nil {
+		t.Fatalf("second share: %v", err)
+	}
+	if len(repo.accountInsights) != 1 {
+		t.Fatalf("expected 1 after re-share with fewer insights (stale removed), got %d", len(repo.accountInsights))
+	}
+	if repo.accountInsights[0].Text != "a-updated" {
+		t.Errorf("expected updated insight text, got %q", repo.accountInsights[0].Text)
 	}
 }

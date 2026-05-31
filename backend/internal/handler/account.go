@@ -170,7 +170,17 @@ func (h *AccountHandler) ListAccountInsights(w http.ResponseWriter, r *http.Requ
 	}
 	var types []string
 	if v := r.URL.Query().Get("types"); v != "" {
-		types = strings.Split(v, ",")
+		for _, t := range strings.Split(v, ",") {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			if !model.IsValidInsightType(t) {
+				writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid insight type: "+t)
+				return
+			}
+			types = append(types, t)
+		}
 	}
 	list, err := h.accountService.ListAccountInsights(ctx, userID, accountID, from, to, types)
 	if err != nil {
