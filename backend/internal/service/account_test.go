@@ -449,3 +449,54 @@ func TestGetAccountBrief_NonMemberForbidden(t *testing.T) {
 		t.Errorf("expected ErrForbidden, got %v", err)
 	}
 }
+
+func TestPutDocument_MemberStores(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	dto, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Email notes", DocType: "prep", Markdown: "# Prep\ncontent"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dto.DocID == "" || dto.Title != "Email notes" {
+		t.Errorf("unexpected dto: %+v", dto)
+	}
+	docs, _ := repo.ListAccountDocuments(context.Background(), acc.AccountID)
+	if len(docs) != 1 || docs[0].Content != "# Prep\ncontent" || docs[0].TtobakOrigin {
+		t.Errorf("doc not stored correctly: %+v", docs)
+	}
+}
+
+func TestPutDocument_RejectsTtobakOrigin(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "echo", Markdown: "---\nttobak_id: m-1\n---\n# loop"})
+	if !errors.Is(err, ErrLoopGuard) {
+		t.Errorf("expected ErrLoopGuard, got %v", err)
+	}
+}
+
+func TestPutDocument_NonMemberForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, err := svc.PutDocument(context.Background(), "stranger-9", acc.AccountID, &model.PutDocumentRequest{Title: "t", Markdown: "x"})
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestGetAccountDocument_ReturnsContent(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	dto, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "T", Markdown: "body"})
+	detail, err := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, dto.DocID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if detail.Content != "body" {
+		t.Errorf("expected content body, got %q", detail.Content)
+	}
+}

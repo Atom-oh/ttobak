@@ -373,3 +373,84 @@ func (s *AccountService) ResolveAccountByAlias(ctx context.Context, userID, alia
 		return nil, ErrAmbiguousAlias
 	}
 }
+
+func (s *AccountService) requireMember(ctx context.Context, userID, accountID string) error {
+	member, err := s.repo.GetMember(ctx, accountID, userID)
+	if err != nil {
+		return err
+	}
+	if member != nil {
+		return nil
+	}
+	account, err := s.repo.GetAccount(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if account == nil {
+		return ErrNotFound
+	}
+	return ErrForbidden
+}
+
+func (s *AccountService) PutDocument(ctx context.Context, userID, accountID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
+	if err := s.requireMember(ctx, userID, accountID); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.Markdown) == "" {
+		return nil, ErrInvalidInput
+	}
+	if hasTtobakOriginMarker(req.Markdown) {
+		return nil, ErrLoopGuard
+	}
+	if len(req.Markdown) > maxInlineDocBytes {
+		return nil, ErrInvalidInput
+	}
+	now := time.Now().UTC()
+	docID := uuid.NewString()
+	doc := &model.AccountDocument{
+		PK: model.PrefixAccount + accountID, SK: model.PrefixDoc + docID,
+		AccountID: accountID, DocID: docID, Title: strings.TrimSpace(req.Title),
+		DocType: req.DocType, Path: req.Path, Content: req.Markdown,
+		SourceUserID: userID, TtobakOrigin: false,
+		CreatedAt: now, UpdatedAt: now, EntityType: model.EntityTypeAccountDoc,
+	}
+	if err := s.repo.PutAccountDocument(ctx, doc); err != nil {
+		return nil, err
+	}
+	return &model.AccountDocumentDTO{DocID: docID, Title: doc.Title, DocType: doc.DocType, Path: doc.Path, SourceUserID: userID, CreatedAt: now}, nil
+}
+
+func (s *AccountService) ListAccountDocuments(ctx context.Context, userID, accountID, docType string) ([]model.AccountDocumentDTO, error) {
+	if err := s.requireMember(ctx, userID, accountID); err != nil {
+		return nil, err
+	}
+	docs, err := s.repo.ListAccountDocuments(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.AccountDocumentDTO, 0, len(docs))
+	for _, d := range docs {
+		if docType != "" && d.DocType != docType {
+			continue
+		}
+		out = append(out, model.AccountDocumentDTO{DocID: d.DocID, Title: d.Title, DocType: d.DocType, Path: d.Path, SourceUserID: d.SourceUserID, CreatedAt: d.CreatedAt})
+	}
+	return out, nil
+}
+
+func (s *AccountService) GetAccountDocument(ctx context.Context, userID, accountID, docID string) (*model.AccountDocumentDetail, error) {
+	if err := s.requireMember(ctx, userID, accountID); err != nil {
+		return nil, err
+	}
+	doc, err := s.repo.GetAccountDocument(ctx, accountID, docID)
+	if err != nil {
+		return nil, err
+	}
+	if doc == nil {
+		return nil, ErrNotFound
+	}
+	return &model.AccountDocumentDetail{
+		AccountDocumentDTO: model.AccountDocumentDTO{DocID: doc.DocID, Title: doc.Title, DocType: doc.DocType, Path: doc.Path, SourceUserID: doc.SourceUserID, CreatedAt: doc.CreatedAt},
+		Content:            doc.Content,
+	}, nil
+}
