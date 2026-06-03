@@ -105,6 +105,25 @@ func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID stri
 		}
 	}
 
+	// Account-membership grants LIVE read access to meetings shared to an account:
+	// a teammate added AFTER the meeting was shared can still read it, and a removed
+	// member loses access automatically (no stale per-user Share snapshot). Only
+	// SharedToAccount meetings qualify — a Link-only (AccountID set, not shared)
+	// meeting stays private.
+	byID, err := s.repo.GetMeetingByID(ctx, meetingID)
+	if err != nil {
+		return nil, "", err
+	}
+	if byID != nil && byID.SharedToAccount && byID.AccountID != "" {
+		member, err := s.repo.GetMember(ctx, byID.AccountID, userID)
+		if err != nil {
+			return nil, "", err
+		}
+		if member != nil {
+			return byID, model.PermissionRead, nil
+		}
+	}
+
 	return nil, "", nil
 }
 
