@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -63,5 +64,36 @@ func TestExportVault_PlacesSharedAndPrivate(t *testing.T) {
 	}
 	if _, ok := byPath["_Private/Meetings/2026-05-12 개인 메모.md"]; !ok {
 		t.Fatalf("private meeting not under _Private; paths=%v", byPath)
+	}
+}
+
+func TestExportVault_CapsLargeCorpus(t *testing.T) {
+	orig := maxVaultMeetings
+	maxVaultMeetings = 2
+	defer func() { maxVaultMeetings = orig }()
+
+	d := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
+	owned := []model.Meeting{}
+	full := map[string]*model.Meeting{}
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("m-%d", i)
+		m := model.Meeting{MeetingID: id, UserID: "u1", Title: "T" + id, Date: d, Status: model.StatusDone}
+		owned = append(owned, m)
+		mm := m
+		full[id] = &mm
+	}
+	repo := &mockVaultRepo{owned: owned, full: full, accounts: map[string]*model.Account{}}
+	svc := newVaultServiceWithRepo(repo)
+
+	files, err := svc.ExportVault(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 2 capped meeting files + 1 truncation note
+	if len(files) != 3 {
+		t.Fatalf("expected 2 capped + 1 truncation note = 3 files, got %d", len(files))
+	}
+	if files[len(files)-1].Path != "_export-truncated.md" {
+		t.Errorf("expected truncation note last, got %q", files[len(files)-1].Path)
 	}
 }

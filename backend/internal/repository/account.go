@@ -13,6 +13,25 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
+// queryAllPages runs a Query and follows LastEvaluatedKey across all pages, so
+// account-partition reads are never silently capped at DynamoDB's 1MB page limit
+// as accounts accumulate members/insights/meeting-refs/documents.
+func (r *DynamoDBRepository) queryAllPages(ctx context.Context, input *dynamodb.QueryInput) ([]map[string]types.AttributeValue, error) {
+	var items []map[string]types.AttributeValue
+	for {
+		out, err := r.client.Query(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, out.Items...)
+		if out.LastEvaluatedKey == nil {
+			break
+		}
+		input.ExclusiveStartKey = out.LastEvaluatedKey
+	}
+	return items, nil
+}
+
 // CreateAccount writes the account META item and the owner member item.
 func (r *DynamoDBRepository) CreateAccount(ctx context.Context, account *model.Account, ownerMember *model.AccountMember) error {
 	accItem, err := attributevalue.MarshalMap(account)
@@ -102,7 +121,7 @@ func (r *DynamoDBRepository) ListAccountMembers(ctx context.Context, accountID s
 	if err != nil {
 		return nil, fmt.Errorf("build members query: %w", err)
 	}
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -112,7 +131,7 @@ func (r *DynamoDBRepository) ListAccountMembers(ctx context.Context, accountID s
 		return nil, fmt.Errorf("query members: %w", err)
 	}
 	members := []model.AccountMember{}
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &members); err != nil {
+	if err := attributevalue.UnmarshalListOfMaps(items, &members); err != nil {
 		return nil, fmt.Errorf("unmarshal members: %w", err)
 	}
 	return members, nil
@@ -129,7 +148,7 @@ func (r *DynamoDBRepository) ListAccountsForUser(ctx context.Context, userID str
 	if err != nil {
 		return nil, fmt.Errorf("build accounts-for-user query: %w", err)
 	}
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		IndexName:                 aws.String("GSI1"),
 		KeyConditionExpression:    expr.KeyCondition(),
@@ -140,7 +159,7 @@ func (r *DynamoDBRepository) ListAccountsForUser(ctx context.Context, userID str
 		return nil, fmt.Errorf("query accounts for user: %w", err)
 	}
 	members := []model.AccountMember{}
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &members); err != nil {
+	if err := attributevalue.UnmarshalListOfMaps(items, &members); err != nil {
 		return nil, fmt.Errorf("unmarshal memberships: %w", err)
 	}
 	return members, nil
@@ -170,7 +189,7 @@ func (r *DynamoDBRepository) ListMeetingRefsForAccount(ctx context.Context, acco
 	if err != nil {
 		return nil, fmt.Errorf("build meeting refs query: %w", err)
 	}
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -181,7 +200,7 @@ func (r *DynamoDBRepository) ListMeetingRefsForAccount(ctx context.Context, acco
 		return nil, fmt.Errorf("query meeting refs: %w", err)
 	}
 	refs := []model.MeetingRef{}
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &refs); err != nil {
+	if err := attributevalue.UnmarshalListOfMaps(items, &refs); err != nil {
 		return nil, fmt.Errorf("unmarshal meeting refs: %w", err)
 	}
 	return refs, nil
@@ -254,7 +273,7 @@ func (r *DynamoDBRepository) ListInsightsForAccount(ctx context.Context, account
 	if err != nil {
 		return nil, fmt.Errorf("build insights query: %w", err)
 	}
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -265,7 +284,7 @@ func (r *DynamoDBRepository) ListInsightsForAccount(ctx context.Context, account
 		return nil, fmt.Errorf("query insights: %w", err)
 	}
 	insights := []model.AccountInsight{}
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &insights); err != nil {
+	if err := attributevalue.UnmarshalListOfMaps(items, &insights); err != nil {
 		return nil, fmt.Errorf("unmarshal insights: %w", err)
 	}
 	return insights, nil
@@ -289,7 +308,7 @@ func (r *DynamoDBRepository) ListAccountDocuments(ctx context.Context, accountID
 	if err != nil {
 		return nil, fmt.Errorf("build docs query: %w", err)
 	}
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -300,7 +319,7 @@ func (r *DynamoDBRepository) ListAccountDocuments(ctx context.Context, accountID
 		return nil, fmt.Errorf("query docs: %w", err)
 	}
 	docs := []model.AccountDocument{}
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &docs); err != nil {
+	if err := attributevalue.UnmarshalListOfMaps(items, &docs); err != nil {
 		return nil, fmt.Errorf("unmarshal docs: %w", err)
 	}
 	return docs, nil
