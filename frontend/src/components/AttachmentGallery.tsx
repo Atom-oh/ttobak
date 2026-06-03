@@ -154,6 +154,9 @@ export function AttachmentGallery({
     if (attachment.type === 'image') {
       setSelectedAttachment(attachment);
       setShowOriginal(false);
+    } else if (attachment.url) {
+      // Documents/audio/video: open the file in a new tab (presigned S3 URL).
+      window.open(attachment.url, '_blank', 'noopener,noreferrer');
     }
   };
 

@@ -592,7 +592,7 @@ function MeetingDetailContent() {
                     className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-primary transition-colors"
                   >
                     <span className="material-symbols-outlined text-lg">add_circle</span>
-                    오디오 파일 추가
+                    파일 추가 (오디오·문서)
                   </button>
                 </div>
               )}
