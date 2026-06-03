@@ -118,6 +118,34 @@ TOOL_DEFINITIONS = [
                 }
             }
         }
+    },
+    {
+        "toolSpec": {
+            "name": "list_accounts",
+            "description": "내가 속한 고객사(Account) 목록과 내 역할을 조회합니다. 특정 고객사의 인사이트/미팅을 묻기 전에 어떤 계정이 있는지 확인할 때 사용.",
+            "inputSchema": {"json": {"type": "object", "properties": {}}}
+        }
+    },
+    {
+        "toolSpec": {
+            "name": "get_account_insights",
+            "description": "특정 고객사(Account)에 누적된 필드 인사이트를 기간/유형으로 조회합니다. SIFT(월간 인사이트), 2by2(리스크/기회), 어카운트 동향 정리에 사용. account는 고객사 이름/별칭으로 지정(예: '하나은행').",
+            "inputSchema": {"json": {"type": "object", "properties": {
+                "account": {"type": "string", "description": "고객사 이름 또는 별칭 (예: 하나은행)"},
+                "from": {"type": "string", "description": "시작 시각 RFC3339 (예: 2026-05-01T00:00:00Z). 선택"},
+                "to": {"type": "string", "description": "종료 시각 RFC3339 (예: 2026-05-31T23:59:59Z). 선택"},
+                "types": {"type": "array", "items": {"type": "string"}, "description": "인사이트 유형 필터. 가능: trend, need, competitive, risk, opportunity, tech, stakeholder, action. 선택"}
+            }, "required": ["account"]}}
+        }
+    },
+    {
+        "toolSpec": {
+            "name": "get_account_brief",
+            "description": "특정 고객사(Account)의 한눈 브리프 — 메타 + 유형별 인사이트 + 공유 미팅 목록을 한 번에. Player Card/분기 리뷰 준비, 어카운트 전반 파악에 사용. account는 고객사 이름/별칭.",
+            "inputSchema": {"json": {"type": "object", "properties": {
+                "account": {"type": "string", "description": "고객사 이름 또는 별칭 (예: 하나은행)"}
+            }, "required": ["account"]}}
+        }
     }
 ]
 
@@ -196,6 +224,30 @@ def execute_tool(tool_name, tool_input, context):
                 return f"리서치 생성 실패: {result['error']}", []
             rid = result.get("researchId", "")
             return f"리서치가 시작되었습니다!\n\n- **주제**: {topic}\n- **모드**: {mode}\n- **리서치 ID**: {rid}\n- **확인 링크**: /insights/research/{rid}\n\n리서치가 완료되면 Insights 페이지에서 확인하실 수 있습니다.", []
+        elif tool_name == "list_accounts":
+            user_id = context.get("user_id")
+            fn = context.get("list_accounts")
+            if not user_id or not fn:
+                return "사용자 인증 정보가 없습니다.", []
+            return format_accounts(fn(user_id)), []
+        elif tool_name == "get_account_insights":
+            user_id = context.get("user_id")
+            fn = context.get("get_account_insights")
+            if not user_id or not fn:
+                return "사용자 인증 정보가 없습니다.", []
+            res = fn(user_id, tool_input.get("account", ""), tool_input.get("from"), tool_input.get("to"), tool_input.get("types"))
+            if res.get("error"):
+                return res["error"], []
+            return format_account_insights(res), []
+        elif tool_name == "get_account_brief":
+            user_id = context.get("user_id")
+            fn = context.get("get_account_brief")
+            if not user_id or not fn:
+                return "사용자 인증 정보가 없습니다.", []
+            res = fn(user_id, tool_input.get("account", ""))
+            if res.get("error"):
+                return res["error"], []
+            return format_account_brief(res), []
         else:
             return f"Unknown tool: {tool_name}", []
     except Exception as e:
@@ -277,3 +329,50 @@ def format_meetings_results(meetings):
         parts.append(f"  상태: {m.get('status', 'unknown')} | ID: {m.get('meetingId', '')}")
         lines.append('\n'.join(parts))
     return f"미팅 {len(meetings)}건 검색됨:\n\n" + "\n\n".join(lines)
+
+
+def format_accounts(accounts):
+    """Format the user's account list."""
+    if not accounts:
+        return "속한 고객사(Account)가 없습니다."
+    lines = [f"- **{a.get('name', '(이름없음)')}** (역할: {a.get('role', '')}, ID: {a.get('accountId', '')})" for a in accounts]
+    return f"내 고객사 {len(accounts)}곳:\n\n" + "\n".join(lines)
+
+
+def format_account_insights(res):
+    """Format account insights grouped chronologically by type."""
+    insights = res.get("insights", [])
+    name = res.get("account", "")
+    if not insights:
+        return f"'{name}'에 해당 기간/유형의 인사이트가 없습니다."
+    lines = []
+    for ins in insights:
+        ent = f" [{', '.join(ins['entities'])}]" if ins.get("entities") else ""
+        when = (ins.get("occurredAt", "") or "")[:10]
+        lines.append(f"- ({ins.get('type', '')}{('/' + when) if when else ''}) {ins.get('text', '')}{ent}")
+    return f"'{name}' 인사이트 {len(insights)}건:\n\n" + "\n".join(lines)
+
+
+def format_account_brief(res):
+    """Format the one-shot account brief (meta + insights-by-type + meetings)."""
+    name = res.get("account", "")
+    parts = [f"## {name} 브리프"]
+    if res.get("industry"):
+        parts.append(f"- 산업: {res['industry']}")
+    by_type = res.get("insightsByType", {})
+    if by_type:
+        parts.append("\n### 인사이트 (유형별)")
+        for t in sorted(by_type.keys()):
+            items = by_type[t]
+            parts.append(f"\n**{t}** ({len(items)}건)")
+            for ins in items:
+                parts.append(f"  - {ins.get('text', '')}")
+    else:
+        parts.append("\n인사이트 없음.")
+    meetings = res.get("meetings", [])
+    if meetings:
+        parts.append(f"\n### 공유 미팅 {len(meetings)}건")
+        for m in meetings:
+            when = (m.get("date", "") or "")[:10]
+            parts.append(f"  - {m.get('title', '(제목없음)')}{(' (' + when + ')') if when else ''}")
+    return "\n".join(parts)
