@@ -496,64 +496,81 @@ def save_session(session_id, messages, user_id=None):
 # account from the user's membership list IS the authorization gate; a user
 # can never reach an account they aren't a member of.
 
-def list_accounts_for_user(user_id):
-    """Return [{accountId, name, role}] for accounts the user is a member of."""
+def _query_all(**kwargs):
+    """table.query following LastEvaluatedKey across all pages (no 1MB silent cap)."""
+    items = []
+    while True:
+        resp = table.query(**kwargs)
+        items.extend(resp.get('Items', []))
+        lek = resp.get('LastEvaluatedKey')
+        if not lek:
+            break
+        kwargs['ExclusiveStartKey'] = lek
+    return items
+
+
+def _user_account_metas(user_id):
+    """Return [(meta_item, role)] for the user's accounts — one META read each."""
     from boto3.dynamodb.conditions import Key
     try:
-        resp = table.query(
+        members = _query_all(
             IndexName='GSI1',
             KeyConditionExpression=Key('GSI1PK').eq(f'USER#{user_id}') & Key('GSI1SK').begins_with('ACCOUNT#'),
         )
     except Exception as e:
-        logger.warning(f"list_accounts_for_user failed: {e}")
+        logger.warning(f"account membership query failed: {e}")
         return []
     out = []
-    for m in resp.get('Items', []):
+    for m in members:
         acc_id = m.get('accountId')
         if not acc_id:
             continue
-        meta = table.get_item(Key={'PK': f'ACCOUNT#{acc_id}', 'SK': 'META'}).get('Item')
-        if not meta:
+        try:
+            meta = table.get_item(Key={'PK': f'ACCOUNT#{acc_id}', 'SK': 'META'}).get('Item')
+        except Exception as e:
+            logger.warning(f"account META read failed for {acc_id}: {e}")
             continue
-        out.append({'accountId': acc_id, 'name': meta.get('name', ''), 'role': m.get('role', '')})
+        if meta:
+            out.append((meta, m.get('role', '')))
     return out
 
 
-def _resolve_accounts(user_id, query):
-    """Match query (accountId / name / alias, case-insensitive) against the
-    user's own accounts. Returns a list of matching META items (0/1/many)."""
+def list_accounts_for_user(user_id):
+    """Return [{accountId, name, role}] for accounts the user is a member of."""
+    return [
+        {'accountId': meta.get('accountId', ''), 'name': meta.get('name', ''), 'role': role}
+        for meta, role in _user_account_metas(user_id)
+    ]
+
+
+def _resolve_account(user_id, query):
+    """Match query (accountId/name/alias, case-insensitive) against the user's own
+    accounts. Returns the list of matching META items (0/1/many)."""
     q = (query or '').strip().lower()
     matches = []
-    for a in list_accounts_for_user(user_id):
-        meta = table.get_item(Key={'PK': f"ACCOUNT#{a['accountId']}", 'SK': 'META'}).get('Item') or {}
+    for meta, _role in _user_account_metas(user_id):
         names = [meta.get('name', '')] + list(meta.get('aliases') or [])
-        if a['accountId'].lower() == q or any((n or '').strip().lower() == q for n in names):
+        if meta.get('accountId', '').lower() == q or any((n or '').strip().lower() == q for n in names):
             matches.append(meta)
     return matches
 
 
-def get_account_insights_for_chat(user_id, account_query, date_from=None, date_to=None, types=None):
-    """Return account insights filtered by period [from,to] (RFC3339) and types."""
-    from boto3.dynamodb.conditions import Key
-    matches = _resolve_accounts(user_id, account_query)
+def _resolve_error(user_id, account_query, matches):
     if len(matches) == 0:
         names = [a['name'] for a in list_accounts_for_user(user_id)]
         return {'error': f"'{account_query}' 계정을 찾을 수 없습니다. 접근 가능한 계정: {', '.join(names) or '(없음)'}"}
-    if len(matches) > 1:
-        return {'error': f"'{account_query}'가 여러 계정과 매칭됩니다: {', '.join(m.get('name', '') for m in matches)}. 더 구체적으로 지정하세요."}
-    acc = matches[0]
-    acc_id = acc.get('accountId', '')
-    try:
-        resp = table.query(
-            KeyConditionExpression=Key('PK').eq(f'ACCOUNT#{acc_id}') & Key('SK').begins_with('INSIGHT#'),
-            ScanIndexForward=False,
-        )
-    except Exception as e:
-        logger.warning(f"account insights query failed: {e}")
-        return {'error': '인사이트 조회 중 오류가 발생했습니다.'}
+    return {'error': f"'{account_query}'가 여러 계정과 매칭됩니다: {', '.join(m.get('name', '') for m in matches)}. 더 구체적으로 지정하세요."}
+
+
+def _account_insights(acc_id, date_from=None, date_to=None, types=None):
+    from boto3.dynamodb.conditions import Key
+    items = _query_all(
+        KeyConditionExpression=Key('PK').eq(f'ACCOUNT#{acc_id}') & Key('SK').begins_with('INSIGHT#'),
+        ScanIndexForward=False,
+    )
     type_set = set(types) if types else None
-    insights = []
-    for it in resp.get('Items', []):
+    out = []
+    for it in items:
         occ = it.get('occurredAt', '') or ''
         if date_from and occ and occ < date_from:
             continue
@@ -561,42 +578,52 @@ def get_account_insights_for_chat(user_id, account_query, date_from=None, date_t
             continue
         if type_set and it.get('type') not in type_set:
             continue
-        insights.append({
-            'type': it.get('type', ''), 'text': it.get('text', ''),
-            'occurredAt': occ, 'sourceType': it.get('sourceType', ''),
-            'entities': list(it.get('entities') or []),
-        })
+        out.append({'type': it.get('type', ''), 'text': it.get('text', ''), 'occurredAt': occ,
+                    'sourceType': it.get('sourceType', ''), 'entities': list(it.get('entities') or [])})
+    return out
+
+
+def get_account_insights_for_chat(user_id, account_query, date_from=None, date_to=None, types=None):
+    """Return account insights filtered by period [from,to] (RFC3339) and types."""
+    matches = _resolve_account(user_id, account_query)
+    if len(matches) != 1:
+        return _resolve_error(user_id, account_query, matches)
+    acc = matches[0]
+    try:
+        insights = _account_insights(acc.get('accountId', ''), date_from, date_to, types)
+    except Exception as e:
+        logger.warning(f"account insights query failed: {e}")
+        return {'error': '인사이트 조회 중 오류가 발생했습니다.'}
     return {'account': acc.get('name', ''), 'insights': insights}
 
 
 def get_account_brief_for_chat(user_id, account_query):
     """Bundle: account meta + insights grouped by type + shared meeting titles."""
     from boto3.dynamodb.conditions import Key
-    res = get_account_insights_for_chat(user_id, account_query)
-    if res.get('error'):
-        return res
-    matches = _resolve_accounts(user_id, account_query)
+    matches = _resolve_account(user_id, account_query)
+    if len(matches) != 1:
+        return _resolve_error(user_id, account_query, matches)
     acc = matches[0]
     acc_id = acc.get('accountId', '')
+    try:
+        insights = _account_insights(acc_id)
+    except Exception as e:
+        logger.warning(f"account brief insights failed: {e}")
+        insights = []
     by_type = {}
-    for ins in res.get('insights', []):
+    for ins in insights:
         by_type.setdefault(ins['type'], []).append(ins)
     meetings = []
     try:
-        mresp = table.query(
+        for r in _query_all(
             KeyConditionExpression=Key('PK').eq(f'ACCOUNT#{acc_id}') & Key('SK').begins_with('MEETINGREF#'),
             ScanIndexForward=False,
-        )
-        for r in mresp.get('Items', []):
+        ):
             meetings.append({'meetingId': r.get('meetingId', ''), 'title': r.get('title', ''), 'date': r.get('date', '')})
     except Exception as e:
         logger.warning(f"account meeting refs query failed: {e}")
-    return {
-        'account': acc.get('name', ''),
-        'industry': acc.get('industry', ''),
-        'insightsByType': by_type,
-        'meetings': meetings,
-    }
+    return {'account': acc.get('name', ''), 'industry': acc.get('industry', ''),
+            'insightsByType': by_type, 'meetings': meetings}
 
 
 def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
