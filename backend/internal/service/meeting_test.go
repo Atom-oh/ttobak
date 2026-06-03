@@ -621,6 +621,41 @@ func TestShareMeetingToAccount_NoInsightsNoFanout(t *testing.T) {
 	}
 }
 
+func TestGetMeetingDetail_AccountMemberReadsSharedMeeting(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// owner-1's meeting shared to acc-1; "late-1" is an account member added later
+	// with NO explicit Share record.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "ROSA", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+	repo.addMember("acc-1", "late-1", model.RoleTAM)
+
+	resp, err := svc.GetMeetingDetail(context.Background(), "late-1", "m-1")
+	if err != nil {
+		t.Fatalf("expected account member to read shared meeting, got %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected meeting detail for account member")
+	}
+
+	// A non-member must not read it.
+	if _, err := svc.GetMeetingDetail(context.Background(), "stranger-9", "m-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound for non-member, got %v", err)
+	}
+}
+
+func TestGetMeetingDetail_LinkedButNotSharedStaysPrivate(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// AccountID set but NOT shared (Link only) → account member must NOT read.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-2", UserID: "owner-1", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: false})
+	repo.addMember("acc-1", "late-1", model.RoleTAM)
+
+	if _, err := svc.GetMeetingDetail(context.Background(), "late-1", "m-2"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("linked-but-not-shared meeting must stay private to account members, got %v", err)
+	}
+}
+
 func TestShareMeetingToAccount_ReplacesStaleInsights(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)
