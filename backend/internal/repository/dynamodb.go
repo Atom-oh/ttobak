@@ -433,14 +433,31 @@ func (r *DynamoDBRepository) PreAllocateAudioKeys(ctx context.Context, userID, m
 		emptyKeys[i] = ""
 	}
 
+	// (Re)initialize multi-part tracking AND reset status to transcribing so a NEW
+	// multi-file batch on an already-finished meeting reprocesses cleanly. The prior
+	// batch's readiness set and all-parts marker are cleared so counting restarts and
+	// the merge can re-emit; audioPartCount becomes authoritative for this batch.
 	update := expression.Set(expression.Name("audioKeys"), expression.Value(emptyKeys)).
 		Set(expression.Name("audioPartCount"), expression.Value(totalParts)).
 		Set(expression.Name("audioPartsReady"), expression.Value(0)).
-		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC().Format(time.RFC3339Nano)))
+		Set(expression.Name("status"), expression.Value(model.StatusTranscribing)).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC().Format(time.RFC3339Nano))).
+		Remove(expression.Name("audioPartsReadySet")).
+		Remove(expression.Name("allPartsEmittedAt"))
 
+	// Init when this is the first part of a batch (no audioKeys yet) OR when
+	// re-transcribing a finished meeting (status done/error). Subsequent parts of the
+	// SAME batch see audioKeys present + status=transcribing → condition fails → no-op
+	// below (the front-end uploads parts sequentially, so no race). This is also the
+	// gate that stops a stray late part from resetting a finished meeting: only an
+	// intentional re-upload (done/error) re-inits.
 	condition := expression.And(
 		expression.AttributeExists(expression.Name("PK")),
-		expression.AttributeNotExists(expression.Name("audioKeys")),
+		expression.Or(
+			expression.AttributeNotExists(expression.Name("audioKeys")),
+			expression.Name("status").Equal(expression.Value(model.StatusDone)),
+			expression.Name("status").Equal(expression.Value(model.StatusError)),
+		),
 	)
 
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
