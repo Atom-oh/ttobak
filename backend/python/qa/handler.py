@@ -490,6 +490,115 @@ def save_session(session_id, messages, user_id=None):
             logger.warning(f"Failed to save chat session metadata {session_id}: {e}")
 
 
+# ── Account-aware chat tools ───────────────────────────────────────────────
+# These query the Account feature data directly via DynamoDB, scoped to the
+# caller's OWN memberships (GSI1 keyed by USER#{userId}) — so resolving an
+# account from the user's membership list IS the authorization gate; a user
+# can never reach an account they aren't a member of.
+
+def list_accounts_for_user(user_id):
+    """Return [{accountId, name, role}] for accounts the user is a member of."""
+    from boto3.dynamodb.conditions import Key
+    try:
+        resp = table.query(
+            IndexName='GSI1',
+            KeyConditionExpression=Key('GSI1PK').eq(f'USER#{user_id}') & Key('GSI1SK').begins_with('ACCOUNT#'),
+        )
+    except Exception as e:
+        logger.warning(f"list_accounts_for_user failed: {e}")
+        return []
+    out = []
+    for m in resp.get('Items', []):
+        acc_id = m.get('accountId')
+        if not acc_id:
+            continue
+        meta = table.get_item(Key={'PK': f'ACCOUNT#{acc_id}', 'SK': 'META'}).get('Item')
+        if not meta:
+            continue
+        out.append({'accountId': acc_id, 'name': meta.get('name', ''), 'role': m.get('role', '')})
+    return out
+
+
+def _resolve_accounts(user_id, query):
+    """Match query (accountId / name / alias, case-insensitive) against the
+    user's own accounts. Returns a list of matching META items (0/1/many)."""
+    q = (query or '').strip().lower()
+    matches = []
+    for a in list_accounts_for_user(user_id):
+        meta = table.get_item(Key={'PK': f"ACCOUNT#{a['accountId']}", 'SK': 'META'}).get('Item') or {}
+        names = [meta.get('name', '')] + list(meta.get('aliases') or [])
+        if a['accountId'].lower() == q or any((n or '').strip().lower() == q for n in names):
+            matches.append(meta)
+    return matches
+
+
+def get_account_insights_for_chat(user_id, account_query, date_from=None, date_to=None, types=None):
+    """Return account insights filtered by period [from,to] (RFC3339) and types."""
+    from boto3.dynamodb.conditions import Key
+    matches = _resolve_accounts(user_id, account_query)
+    if len(matches) == 0:
+        names = [a['name'] for a in list_accounts_for_user(user_id)]
+        return {'error': f"'{account_query}' 계정을 찾을 수 없습니다. 접근 가능한 계정: {', '.join(names) or '(없음)'}"}
+    if len(matches) > 1:
+        return {'error': f"'{account_query}'가 여러 계정과 매칭됩니다: {', '.join(m.get('name', '') for m in matches)}. 더 구체적으로 지정하세요."}
+    acc = matches[0]
+    acc_id = acc.get('accountId', '')
+    try:
+        resp = table.query(
+            KeyConditionExpression=Key('PK').eq(f'ACCOUNT#{acc_id}') & Key('SK').begins_with('INSIGHT#'),
+            ScanIndexForward=False,
+        )
+    except Exception as e:
+        logger.warning(f"account insights query failed: {e}")
+        return {'error': '인사이트 조회 중 오류가 발생했습니다.'}
+    type_set = set(types) if types else None
+    insights = []
+    for it in resp.get('Items', []):
+        occ = it.get('occurredAt', '') or ''
+        if date_from and occ and occ < date_from:
+            continue
+        if date_to and occ and occ > date_to:
+            continue
+        if type_set and it.get('type') not in type_set:
+            continue
+        insights.append({
+            'type': it.get('type', ''), 'text': it.get('text', ''),
+            'occurredAt': occ, 'sourceType': it.get('sourceType', ''),
+            'entities': list(it.get('entities') or []),
+        })
+    return {'account': acc.get('name', ''), 'insights': insights}
+
+
+def get_account_brief_for_chat(user_id, account_query):
+    """Bundle: account meta + insights grouped by type + shared meeting titles."""
+    from boto3.dynamodb.conditions import Key
+    res = get_account_insights_for_chat(user_id, account_query)
+    if res.get('error'):
+        return res
+    matches = _resolve_accounts(user_id, account_query)
+    acc = matches[0]
+    acc_id = acc.get('accountId', '')
+    by_type = {}
+    for ins in res.get('insights', []):
+        by_type.setdefault(ins['type'], []).append(ins)
+    meetings = []
+    try:
+        mresp = table.query(
+            KeyConditionExpression=Key('PK').eq(f'ACCOUNT#{acc_id}') & Key('SK').begins_with('MEETINGREF#'),
+            ScanIndexForward=False,
+        )
+        for r in mresp.get('Items', []):
+            meetings.append({'meetingId': r.get('meetingId', ''), 'title': r.get('title', ''), 'date': r.get('date', '')})
+    except Exception as e:
+        logger.warning(f"account meeting refs query failed: {e}")
+    return {
+        'account': acc.get('name', ''),
+        'industry': acc.get('industry', ''),
+        'insightsByType': by_type,
+        'meetings': meetings,
+    }
+
+
 def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
     """Agentic tool-use loop: model decides what tools to call."""
     context = {
@@ -499,6 +608,9 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
         "load_meeting_context": load_meeting_context,
         "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
         "check_research_limit": check_research_limit,
+        "list_accounts": list_accounts_for_user,
+        "get_account_insights": get_account_insights_for_chat,
+        "get_account_brief": get_account_brief_for_chat,
         "user_id": user_id,
     }
     tools_used = []
@@ -846,6 +958,9 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         "load_meeting_context": load_meeting_context,
         "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
         "check_research_limit": check_research_limit,
+        "list_accounts": list_accounts_for_user,
+        "get_account_insights": get_account_insights_for_chat,
+        "get_account_brief": get_account_brief_for_chat,
         "user_id": user_id,
     }
     tools_used = []
