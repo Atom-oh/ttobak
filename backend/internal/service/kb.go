@@ -207,6 +207,23 @@ func (s *KBService) DeleteFile(ctx context.Context, userID, fileID string) error
 	return nil
 }
 
+// validateAssetOwnership ensures sourceKey is an asset owned by userID. Every
+// asset key produced by the upload service is
+// "{audio|images|files}/{userID}/{meetingID}/{filename}", so the owner segment
+// (second path component) MUST equal the caller's userID. Path traversal is
+// rejected outright. Returns ErrForbidden on any mismatch.
+func validateAssetOwnership(sourceKey, userID string) error {
+	if userID == "" || strings.Contains(sourceKey, "..") {
+		return fmt.Errorf("%w: invalid source key", ErrForbidden)
+	}
+	for _, prefix := range []string{"files/", "audio/", "images/"} {
+		if strings.HasPrefix(sourceKey, prefix+userID+"/") {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: source key does not belong to caller", ErrForbidden)
+}
+
 // CopyAttachmentToKB copies a file from the assets bucket to the KB bucket.
 // sourceKey is the S3 key in the assets bucket (e.g. "files/{userId}/{meetingId}/{filename}").
 // The file is placed under "kb/{userID}/{filename}" in the KB bucket.
@@ -216,6 +233,12 @@ func (s *KBService) CopyAttachmentToKB(ctx context.Context, userID, sourceKey st
 	}
 	if s.kbBucketName == "" {
 		return fmt.Errorf("KB bucket not configured")
+	}
+
+	// Ownership gate (trust boundary): the API must not let an authenticated
+	// user copy another user's asset into their own KB.
+	if err := validateAssetOwnership(sourceKey, userID); err != nil {
+		return err
 	}
 
 	// Extract filename from source key

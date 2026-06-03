@@ -25,9 +25,11 @@ interface FileEntry {
   status: 'pending' | 'uploading' | 'done' | 'error';
   progress?: UploadProgress;
   error?: string;
+  kbFailed?: boolean; // document uploaded but KB promotion failed (chat RAG unavailable)
 }
 
 const AUDIO_RE = /\.(mp3|wav|m4a|webm|ogg|flac|aac|mp4)$/i;
+const DOC_RE = /\.(pdf|ppt|pptx|doc|docx|txt|md|csv|xls|xlsx)$/i;
 const MAX_SIZE = 500 * 1024 * 1024; // 500MB
 const ACCEPT_STRING =
   '.mp3,.wav,.m4a,.webm,.ogg,.flac,.aac,.mp4,.pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.csv,.xls,.xlsx,image/*';
@@ -38,11 +40,23 @@ function classifyFile(file: File): FileKind {
   return 'document';
 }
 
+// `accept` is only a picker hint — drag&drop bypasses it. Enforce an explicit
+// whitelist so arbitrary files can't be classified as 'document' and pushed to
+// the KB. Audio/image are recognized by extension or MIME; documents by extension.
+function isAllowedFile(file: File): boolean {
+  if (file.type.startsWith('audio/') || AUDIO_RE.test(file.name)) return true;
+  if (file.type.startsWith('image/')) return true;
+  return DOC_RE.test(file.name);
+}
+
 function iconFor(kind: FileKind): string {
   return kind === 'audio' ? 'audio_file' : kind === 'image' ? 'image' : 'description';
 }
 
 function validateFile(file: File): string | null {
+  if (!isAllowedFile(file)) {
+    return `지원하지 않는 파일 형식입니다: ${file.name}. 오디오·이미지·문서(PDF/PPT/DOC/XLS/CSV/TXT/MD)만 업로드할 수 있습니다.`;
+  }
   if (file.size > MAX_SIZE) {
     return `파일 크기가 너무 큽니다 (${formatFileSize(file.size)}). 최대 500MB까지 지원합니다.`;
   }
@@ -56,6 +70,7 @@ export function AudioUploader({ meetingId, onUploadComplete }: AudioUploaderProp
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const addMoreRef = useRef<HTMLInputElement>(null);
+  const idCounter = useRef(0);
 
   const addFiles = useCallback((newFiles: File[]) => {
     const entries: FileEntry[] = [];
@@ -66,7 +81,7 @@ export function AudioUploader({ meetingId, onUploadComplete }: AudioUploaderProp
         continue;
       }
       entries.push({
-        id: `${Date.now()}-${f.name}-${Math.round(f.size)}`,
+        id: `f${idCounter.current++}-${f.name}`,
         file: f,
         kind: classifyFile(f),
         status: 'pending',
@@ -89,8 +104,10 @@ export function AudioUploader({ meetingId, onUploadComplete }: AudioUploaderProp
 
     // Multi-part indexing applies to AUDIO files only — the transcribe pipeline
     // counts audio parts. Documents/images are independent attachments.
-    const audioIds = files.filter((f) => f.kind === 'audio').map((f) => f.id);
-    const audioTotal = audioIds.length;
+    // Precompute index once (stable) rather than indexOf per entry.
+    const audioIndex = new Map<string, number>();
+    files.filter((f) => f.kind === 'audio').forEach((f, i) => audioIndex.set(f.id, i));
+    const audioTotal = audioIndex.size;
     let allDone = true;
 
     for (const entry of files) {
@@ -102,7 +119,7 @@ export function AudioUploader({ meetingId, onUploadComplete }: AudioUploaderProp
           entry.kind === 'audio' ? 'audio' : entry.kind === 'image' ? 'image' : 'file';
 
         const isMultiAudio = entry.kind === 'audio' && audioTotal > 1;
-        const partIndex = isMultiAudio ? audioIds.indexOf(entry.id) : undefined;
+        const partIndex = isMultiAudio ? audioIndex.get(entry.id) : undefined;
         const totalParts = isMultiAudio ? audioTotal : undefined;
 
         const result = await uploadToS3(
@@ -122,15 +139,20 @@ export function AudioUploader({ meetingId, onUploadComplete }: AudioUploaderProp
         });
 
         // Auto-promote documents into the Knowledge Base for chat RAG (best-effort).
+        // The file is already attached; a KB failure is surfaced per-row, not fatal.
+        let kbFailed = false;
         if (entry.kind === 'document') {
           try {
             await kbApi.copyAttachment(result.key);
           } catch (kbErr) {
+            kbFailed = true;
             console.warn('KB promote failed (non-fatal):', kbErr);
           }
         }
 
-        setFiles((prev) => prev.map((f) => (f.id === entry.id ? { ...f, status: 'done' as const } : f)));
+        setFiles((prev) =>
+          prev.map((f) => (f.id === entry.id ? { ...f, status: 'done' as const, kbFailed } : f)),
+        );
       } catch (err) {
         allDone = false;
         setFiles((prev) =>
@@ -192,6 +214,11 @@ export function AudioUploader({ meetingId, onUploadComplete }: AudioUploaderProp
                 </div>
               )}
               {entry.status === 'error' && <p className="text-xs text-red-500 mt-1">{entry.error}</p>}
+              {entry.status === 'done' && entry.kbFailed && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                  첨부됨 · 지식베이스 등록 실패 — 채팅 검색에서 제외됩니다.
+                </p>
+              )}
             </div>
             {entry.status === 'done' && <span className="material-symbols-outlined text-green-500">check_circle</span>}
             {entry.status === 'uploading' && (

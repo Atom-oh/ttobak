@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -100,6 +101,10 @@ func (h *KBHandler) CopyAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.kbService.CopyAttachmentToKB(ctx, userID, req.SourceKey); err != nil {
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "sourceKey does not belong to caller")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
 	}
