@@ -95,16 +95,28 @@ func vaultPath(meeting *model.Meeting, accountName string) string {
 // placed under Accounts/{name}/ (if shared to an account) or _Private/Meetings/.
 // Account names are resolved once and cached. (Account MOC files are a follow-up;
 // the `account: "[[name]]"` frontmatter already drives Obsidian's graph.)
+// maxVaultMeetings caps how many meetings one export materializes in memory.
+// Each meeting pulls its full transcript + summary, so an unbounded export over a
+// large corpus could OOM/timeout the Lambda. Declared as a var so tests can lower it.
+var maxVaultMeetings = 300
+
 func (s *VaultService) ExportVault(ctx context.Context, userID string) ([]model.VaultFile, error) {
 	files := []model.VaultFile{}
 	nameCache := map[string]string{}
 	cursor := ""
+	processed := 0
+	truncated := false
+exportLoop:
 	for {
 		res, err := s.repo.ListMeetings(ctx, repository.ListMeetingsParams{UserID: userID, Tab: "all", Cursor: cursor, Limit: 100})
 		if err != nil {
 			return nil, err
 		}
 		for i := range res.Meetings {
+			if processed >= maxVaultMeetings {
+				truncated = true
+				break exportLoop
+			}
 			full, err := s.repo.GetMeeting(ctx, userID, res.Meetings[i].MeetingID)
 			if err != nil {
 				return nil, err
@@ -126,11 +138,19 @@ func (s *VaultService) ExportVault(ctx context.Context, userID string) ([]model.
 			attachments, _ := s.repo.ListAttachments(ctx, full.MeetingID)
 			md := buildFrontmatter(full, accountName) + GenerateMeetingDocument(full, attachments)
 			files = append(files, model.VaultFile{Path: vaultPath(full, accountName), Markdown: md})
+			processed++
 		}
 		if res.NextCursor == nil {
 			break
 		}
 		cursor = *res.NextCursor
+	}
+	// Surface truncation rather than silently capping (no silent caps).
+	if truncated {
+		files = append(files, model.VaultFile{
+			Path:     "_export-truncated.md",
+			Markdown: fmt.Sprintf("# Export truncated\n\nCapped at %d meetings to bound memory. Older meetings were omitted — narrow the range or export per-account to retrieve them.\n", maxVaultMeetings),
+		})
 	}
 	return files, nil
 }
