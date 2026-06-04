@@ -34,16 +34,43 @@ Interactive deployment workflow: build → Slack notification → approval → d
 ### Frontend
 ```bash
 cd /home/ec2-user/ttobak/frontend && npm run build
-aws s3 sync frontend/out/ s3://ttobak-site-180294183052-ap-northeast-2/ --delete --exclude "config.json"
+
+# 1) sync chunks/assets (uploads new content-hashed chunks, deletes stale ones)
+aws s3 sync out/ s3://ttobak-site-180294183052-ap-northeast-2/ --delete --exclude "config.json"
+
+# 2) ⚠️ MANDATORY re-upload of ALL html — DO NOT SKIP.
+#    `aws s3 sync` judges index.html "unchanged" by size+mtime and SKIPS it, while
+#    step 1 deletes the old chunks it referenced → stale index.html → 403 on a
+#    deleted chunk → ChunkLoadError → login page crashes. (Happened twice: 2026-06-03/04.)
+#    Unconditional cp guarantees every html points at the freshly-uploaded chunks.
+aws s3 cp out/ s3://ttobak-site-180294183052-ap-northeast-2/ --recursive \
+  --exclude "*" --include "*.html" \
+  --content-type "text/html; charset=utf-8" --cache-control "no-cache"
+
+# 3) invalidate (flushes CloudFront's cached old html)
 aws cloudfront create-invalidation --distribution-id E3IFMH57E9UTB5 --paths "/*"
 ```
+
+**Post-deploy verification (run after invalidation completes):** confirm the bucket is
+self-consistent — every html must reference a chunk that exists.
+```bash
+# live index.html chunks should all return 200 (never 403)
+curl -s https://d2olomx8td8txt.cloudfront.net/ \
+  | grep -oE '/_next/static/[^"]+\.(js|css)' | sort -u \
+  | while read c; do curl -s -o /dev/null -w "$c => %{http_code}\n" "https://d2olomx8td8txt.cloudfront.net$c"; done
+```
+Any non-200 (especially 403, since OAC returns 403 not 404 for missing objects) = broken deploy.
 
 ### Backend (all lambdas)
 ```bash
 cd /home/ec2-user/ttobak/backend && for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
   GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o $dir/bootstrap ./$dir
 done
-cd /home/ec2-user/ttobak/infra && npx cdk deploy --all --require-approval never
+# ⚠️ Use --exclusively TtobakGatewayStack, NOT --all. `cdk deploy --all` fails on
+#    TtobakKnowledgeStack (intentional Bedrock KB teardown is staged but undeployed;
+#    cross-stack export BedrockDataSourceDataSourceId is in use by GatewayStack → CFN
+#    refuses to delete it → rollback). GatewayStack hosts all 5 Lambdas + API routes.
+cd /home/ec2-user/ttobak/infra && npx cdk deploy TtobakGatewayStack --exclusively --require-approval never
 ```
 
 ## Slack Message Templates
@@ -59,6 +86,6 @@ cd /home/ec2-user/ttobak/infra && npx cdk deploy --all --require-approval never
 
 ### Result Messages
 - Approve detected: `✅ 승인 확인 — 배포를 시작합니다.`
-- Deploy complete: `🎉 배포 완료! S3 sync done, CF invalidation: {id}`
+- Deploy complete: `🎉 배포 완료! S3 sync + html 강제 재업로드 done, CF invalidation: {id}`
 - Reject: `❌ 배포 중단 — reject 되었습니다.`
 - Timeout: `⏰ 10분 타임아웃 — 승인 없이 배포를 중단합니다.`
