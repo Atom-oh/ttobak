@@ -243,31 +243,54 @@ function RecordPageInner() {
     setTabSharingLabel(null);
   };
 
-  const handleAudioUpload = async (file: File) => {
+  const handleAudioUpload = async (files: File[]) => {
+    if (files.length === 0) return;
     const audioExtensions = ['.m4a', '.mp3', '.wav', '.webm', '.ogg', '.flac', '.aac', '.mp4', '.caf'];
-    const isAudioByType = file.type.startsWith('audio/') || file.type === 'video/mp4';
-    const isAudioByExt = audioExtensions.some(ext => file.name.toLowerCase().endsWith(ext));
-    if (!isAudioByType && !isAudioByExt) {
+    const isAudio = (f: File) =>
+      f.type.startsWith('audio/') ||
+      f.type === 'video/mp4' ||
+      audioExtensions.some((ext) => f.name.toLowerCase().endsWith(ext));
+    if (!files.every(isAudio)) {
       session.setSpeechError('음성 파일만 업로드할 수 있습니다.');
       return;
     }
+
     setUploadProgress('미팅 생성 중...');
     try {
-      const title = meetingTitle || file.name.replace(/\.[^.]+$/, '');
+      const title = meetingTitle || files[0].name.replace(/\.[^.]+$/, '');
       const meeting = await meetingsApi.create({ title });
       const meetingId = meeting.meetingId;
 
-      setUploadProgress('음성 파일 업로드 중...');
-      const { key } = await uploadToS3(file, 'audio', (p) => {
-        setUploadProgress(`업로드 중... ${p.percentage}%`);
-      }, meetingId);
+      // Multiple audio files are uploaded as a multi-part set so the transcribe
+      // pipeline transcribes each and merges them into ONE meeting (in upload
+      // order). A single file uses the simpler single-key flow.
+      const totalParts = files.length;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const isMulti = totalParts > 1;
+        const partIndex = isMulti ? i : undefined;
+        const label = isMulti ? ` (${i + 1}/${totalParts})` : '';
+
+        setUploadProgress(`음성 파일 업로드 중${label}...`);
+        const { key } = await uploadToS3(
+          file,
+          'audio',
+          (p) => setUploadProgress(`업로드 중${label}... ${p.percentage}%`),
+          meetingId,
+          partIndex,
+          isMulti ? totalParts : undefined,
+        );
+
+        await notifyUploadComplete(meetingId, key, 'audio', {
+          fileName: file.name,
+          fileSize: file.size,
+          mimeType: file.type || 'audio/mp4',
+          partIndex,
+          totalParts: isMulti ? totalParts : undefined,
+        });
+      }
 
       setUploadProgress('전사 처리 시작...');
-      await notifyUploadComplete(meetingId, key, 'audio', {
-        fileName: file.name,
-        fileSize: file.size,
-        mimeType: file.type || 'audio/mp4',
-      });
       router.push(`/meeting/${meetingId}`);
     } catch (err) {
       console.error('Audio upload failed:', err);
@@ -363,11 +386,12 @@ function RecordPageInner() {
                 <input
                   ref={audioInputRef}
                   type="file"
+                  multiple
                   accept="audio/*,.m4a,.mp3,.wav,.webm,.ogg,.flac,.aac,.mp4,.caf"
                   className="hidden"
                   onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleAudioUpload(file);
+                    const files = e.target.files ? Array.from(e.target.files) : [];
+                    if (files.length > 0) handleAudioUpload(files);
                     e.target.value = '';
                   }}
                 />
@@ -376,8 +400,8 @@ function RecordPageInner() {
                   className="w-full max-w-md border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-primary/40 hover:bg-slate-50 dark:hover:bg-slate-800/50 rounded-xl p-10 text-center transition-all cursor-pointer"
                 >
                   <span className="material-symbols-outlined text-5xl text-slate-400 mb-3 block">audio_file</span>
-                  <p className="text-slate-600 dark:text-slate-400 font-medium">음성 파일을 선택하세요</p>
-                  <p className="text-slate-400 text-sm mt-1">MP3, WAV, M4A, WebM 등</p>
+                  <p className="text-slate-600 dark:text-slate-400 font-medium">음성 파일을 선택하세요 (여러 개 가능)</p>
+                  <p className="text-slate-400 text-sm mt-1">MP3, WAV, M4A, WebM 등 · 여러 개 선택 시 하나의 미팅으로 합쳐집니다</p>
                 </button>
                 <button
                   onClick={() => router.push('/record')}
