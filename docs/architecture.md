@@ -136,6 +136,10 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-012: 미팅 조회를 위한 GSI3 정렬 키 추가](decisions/ADR-012-gsi3-sort-key-for-meeting-lookup.md) (승인됨)
 - [ADR-013: 요약-트랜스크립트 딥 링크](decisions/ADR-013-summary-to-transcript-deep-links.md) (승인됨)
 - [ADR-014: 멀티파일 오디오 업로드 및 후속 미팅 링크](decisions/ADR-014-multi-file-audio-and-linked-meetings.md) (제안됨)
+- [ADR-015: Account 1급 공유 엔티티](decisions/ADR-015-account-first-class-shared-entity.md) (승인됨)
+- [ADR-016: MeetingRef 기반 미팅↔Account 연결 및 팀 공유](decisions/ADR-016-meeting-account-linking-and-sharing.md) (승인됨)
+- [ADR-017: Obsidian Vault 내보내기 및 인바운드 문서 인제스트(루프 가드)](decisions/ADR-017-vault-export-and-inbound-ingest.md) (승인됨)
+- [ADR-018: 양방향 MCP back-data 도구](decisions/ADR-018-mcp-back-data-tools.md) (승인됨)
 
 ### 운영
 
@@ -222,6 +226,10 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-012: Add entityType Sort Key to GSI3 for Meeting Lookup](decisions/ADR-012-gsi3-sort-key-for-meeting-lookup.md) (Accepted)
 - [ADR-013: Summary-to-Transcript Deep Links](decisions/ADR-013-summary-to-transcript-deep-links.md) (Accepted)
 - [ADR-014: Multi-File Audio Upload and Linked Meetings](decisions/ADR-014-multi-file-audio-and-linked-meetings.md) (Proposed)
+- [ADR-015: Account as a First-Class Shared Entity](decisions/ADR-015-account-first-class-shared-entity.md) (Accepted)
+- [ADR-016: Meeting↔Account Linking and Team Sharing via MeetingRef](decisions/ADR-016-meeting-account-linking-and-sharing.md) (Accepted)
+- [ADR-017: Obsidian Vault Export and Inbound Document Ingest with Loop-Guard](decisions/ADR-017-vault-export-and-inbound-ingest.md) (Accepted)
+- [ADR-018: Bidirectional MCP Back-Data Tools](decisions/ADR-018-mcp-back-data-tools.md) (Accepted)
 
 ### Operations
 
