@@ -1,5 +1,5 @@
 <!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 0205a5979c1c · generated-at: 2026-06-04 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
-> You are Gemini, an external reviewer — project context below.
+> You are Codex, an external reviewer — project context below.
 
 # TTOBAK (또박) — Reviewer Context
 
