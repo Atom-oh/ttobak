@@ -12,17 +12,17 @@ npm run lint      # ESLint
 
 ## Structure
 
-- `src/app/` — App Router pages (record, meeting/[id], kb, files, settings, profile)
+- `src/app/` — App Router pages (record, meeting/[id], accounts, accounts/[id], chat, insights, kb, files, settings, profile)
 - `src/components/` — React components
   - `auth/` — LoginForm, SignUpForm, AuthProvider (Cognito)
-  - `layout/` — Sidebar, DesktopHeader, MobileNav, AppLayout
-  - `meeting/` — MeetingHeader, AISummaryCard, ActionItemsCard, TranscriptSection, ProcessingStatus
+  - `layout/` — Sidebar (incl. Accounts nav entry), DesktopHeader, MobileNav, AppLayout
+  - `meeting/` — MeetingHeader, AISummaryCard, ActionItemsCard, TranscriptSection, ProcessingStatus, AccountSection (link/share-to-team)
   - `qa/` — QAChatMessage, QAEmptyState, QASuggestedQuestions
   - `record/` — RecordingConfig, PostRecordingBanner
   - `ui/` — Skeleton
-  - Root: RecordButton, LiveTranscript, LiveSummary, MeetingList, AudioPlayer, etc.
+  - Root: RecordButton, LiveTranscript, LiveSummary, MeetingList, AudioPlayer, AccountsClient, AccountDetailClient (members/insights/meetings/documents), etc.
 - `src/lib/` — Utilities
-  - `api.ts` — apiFetch wrapper with Bearer token + refresh
+  - `api.ts` — apiFetch wrapper with Bearer token + refresh; also `accountApi` (CRUD/members/brief) and `meetingAccountApi` (link/share-to-account)
   - `auth.ts` — Cognito SDK (signUp, login, refresh, getCurrentUser)
   - `sttManager.ts` — Orchestrates live STT engine switching (Web Speech / AWS Transcribe Streaming)
   - `transcribeStreamingClient.ts` — Browser-to-AWS Transcribe Streaming via `@aws-sdk/client-transcribe-streaming`
