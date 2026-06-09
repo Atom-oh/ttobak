@@ -38,8 +38,13 @@ func hasTtobakOriginMarker(markdown string) bool {
 		return false
 	}
 	for _, line := range strings.Split(rest[:end], "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "ttobak_id:") {
-			return true
+		// Compare the YAML key (text before the first ':') so that whitespace-
+		// padded keys like "ttobak_id :" — valid YAML — can't bypass the guard.
+		trimmed := strings.TrimSpace(line)
+		if idx := strings.Index(trimmed, ":"); idx >= 0 {
+			if strings.TrimSpace(trimmed[:idx]) == "ttobak_id" {
+				return true
+			}
 		}
 	}
 	return false
