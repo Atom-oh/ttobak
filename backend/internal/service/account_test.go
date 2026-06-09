@@ -136,6 +136,17 @@ func TestHasTtobakOriginMarker(t *testing.T) {
 	if !hasTtobakOriginMarker(bomTtobak) {
 		t.Error("expected true for BOM-prefixed ttobak_id doc (loop-guard bypass)")
 	}
+	// Whitespace before the colon ("ttobak_id :") is valid YAML and must not
+	// bypass the guard (panel finding #7).
+	spacedKey := "---\nttobak_id : m-123\n---\n\n# 회의록"
+	if !hasTtobakOriginMarker(spacedKey) {
+		t.Error("expected true for 'ttobak_id :' (space before colon) — loop-guard bypass")
+	}
+	// A different key that merely starts with ttobak_id must NOT match.
+	lookalike := "---\nttobak_id_extra: nope\n---\n\n# x"
+	if hasTtobakOriginMarker(lookalike) {
+		t.Error("expected false for lookalike key 'ttobak_id_extra'")
+	}
 }
 
 func TestCreateAccount_SetsOwnerMember(t *testing.T) {

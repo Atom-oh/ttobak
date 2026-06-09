@@ -30,6 +30,27 @@ func (m *mockVaultRepo) GetAccount(_ context.Context, accountID string) (*model.
 	return m.accounts[accountID], nil
 }
 
+func TestSanitizeFilename_PathTraversal(t *testing.T) {
+	cases := map[string]string{
+		"..":            "_",   // bare traversal segment neutralized
+		"../etc":        "_-etc", // "/" → "-", ".." → "_"
+		"a/b":           "a-b", // path separator stripped
+		"하나은행":      "하나은행", // normal name preserved
+		"v1..2":         "v1_2", // embedded ".." neutralized (acceptable)
+	}
+	for in, want := range cases {
+		if got := sanitizeFilename(in); got != want {
+			t.Errorf("sanitizeFilename(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// No output may contain a ".." traversal segment.
+	for _, in := range []string{"..", "../../x", "a/../../b", "....//.."} {
+		if strings.Contains(sanitizeFilename(in), "..") {
+			t.Errorf("sanitizeFilename(%q) still contains '..': %q", in, sanitizeFilename(in))
+		}
+	}
+}
+
 func TestExportVault_PlacesSharedAndPrivate(t *testing.T) {
 	d := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
 	shared := model.Meeting{MeetingID: "m-1", UserID: "u1", Title: "ROSA 리뷰", Date: d, Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true, Insights: `[{"type":"risk","text":"x"}]`}

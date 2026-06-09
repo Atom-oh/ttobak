@@ -31,7 +31,15 @@ func NewVaultServiceForTest(repo VaultRepo) *VaultService             { return &
 
 var fnameReplacer = strings.NewReplacer("/", "-", "\\", "-", ":", "-", "*", "-", "?", "", "\"", "'", "<", "(", ">", ")", "|", "-", "\n", " ")
 
-func sanitizeFilename(s string) string { return strings.TrimSpace(fnameReplacer.Replace(s)) }
+func sanitizeFilename(s string) string {
+	out := strings.TrimSpace(fnameReplacer.Replace(s))
+	// Path-traversal guard: the result becomes a single path segment in the
+	// exported vault (e.g. Accounts/{name}/...). The replacer already strips
+	// "/" and "\", so the only escape left is a ".." segment — neutralize it so
+	// an account named ".." can't climb out of its folder.
+	out = strings.ReplaceAll(out, "..", "_")
+	return out
+}
 
 // insightCountsLine returns a deterministic `risk: 1, opportunity: 2` style string.
 func insightCountsLine(insightsJSON string) string {
