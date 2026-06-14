@@ -1,5 +1,11 @@
 name: AI Code Review
 
+# PR마다 멀티 AI 패널(Codex + Kiro x3 + Antigravity)이 리뷰하고 Claude Opus 4.8 의장이
+# 종합해 코멘트로 게시(fail-closed VERDICT). 공유 actions-runner-claude 이미지 사용.
+#   - pull_request_target base-ref 체크아웃(M1): PR head 코드 미실행, diff 는 데이터로만
+#   - 인증: EKS Pod Identity(ci-runner) SigV4 + ai-panel-keys(KIRO/ANTIGRAVITY)
+#   - 리전: us-east-1 (Claude us. geo / codex gpt-5.5 bedrock-mantle In-Region)
+
 on:
   pull_request_target:
     types: [opened, synchronize]
@@ -15,103 +21,93 @@ jobs:
       pull-requests: write
       contents: read
     env:
+      # us-east-1 통일: Claude us. geo(on-demand) + codex gpt-5.5 mantle(In-Region).
       ANTHROPIC_MODEL: us.anthropic.claude-opus-4-8
       CLAUDE_CODE_USE_BEDROCK: 1
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
       AWS_REGION: us-east-1
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
+      # 보안(M1): pull_request_target 는 시크릿/쓰기권한 컨텍스트 → base(신뢰됨) 체크아웃.
+      - uses: actions/checkout@v4
+
+      - name: Verify CLIs present (runner image)
+        run: |
+          command -v claude >/dev/null 2>&1 || { echo "::warning::claude not found"; npm install -g @anthropic-ai/claude-code; }
+          claude --version
+          for c in codex kiro-cli agy; do
+            command -v "$c" >/dev/null 2>&1 || echo "::warning::$c not found on runner (image needs rebuild)"
+          done
 
       - name: Get PR diff
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          # Use local `git diff` instead of `gh pr diff` because the GitHub
-          # REST API caps PR diffs at 300 files and returns 406 ("PullRequest.diff
-          # too_large") above that. `fetch-depth: 0` in the checkout step gives
-          # us the full history locally, so a three-dot diff against the merge
-          # base works without an API call and has no file-count limit.
-          git fetch origin "$BASE_SHA" --depth=1 || true
-          git diff "$BASE_SHA"..."$HEAD_SHA" > /tmp/pr-diff.txt
-          TOTAL_LINES=$(wc -l < /tmp/pr-diff.txt)
-          echo "total_lines=$TOTAL_LINES" >> "$GITHUB_ENV"
-          echo "Diff: $TOTAL_LINES lines"
-
-      - name: Review with Claude Code
-        env:
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          gh pr diff "$PR_NUMBER" > /tmp/pr-diff-raw.txt
+          awk '
+            /^diff --git/ {
+              path = substr($3, 3)
+              skip = (path ~ /(^|\/)package-lock\.json$/) ||
+                     (path ~ /(^|\/)pnpm-lock\.yaml$/) ||
+                     (path ~ /(^|\/)yarn\.lock$/) ||
+                     (path ~ /(^|\/)node_modules\//) ||
+                     (path ~ /\.(pptx|png|jpg|jpeg|gif|pdf|vsix|zip)$/) ||
+                     (path ~ /(^|\/)(dist|out|build)\//) ||
+                     (path ~ /\.terraform\.lock\.hcl$/)
+            }
+            !skip
+          ' /tmp/pr-diff-raw.txt > /tmp/pr-diff.txt
+          echo "total_lines=$(wc -l < /tmp/pr-diff.txt)" >> "$GITHUB_ENV"
+
+      - name: Build panel prompt
         run: |
           set -euo pipefail
           MAX_LINES=3000
-          TRUNCATED=""
-          if [ "$total_lines" -gt "$MAX_LINES" ]; then
-            TRUNCATED="⚠️ Diff가 ${total_lines}줄 중 ${MAX_LINES}줄만 포함됨. 나머지는 리뷰되지 않았습니다."
-          fi
           head -"$MAX_LINES" /tmp/pr-diff.txt > /tmp/pr-diff-truncated.txt
-
-          cat <<PROMPT_EOF > /tmp/prompt.txt
-          You are reviewing PR #${PR_NUMBER}: ${PR_TITLE}
-          ${TRUNCATED:+
-          ${TRUNCATED}}
-
-          Read CLAUDE.md for project context. Then review the diff provided via stdin.
-
-          Provide:
-          1. **Summary** — what this PR does (2-3 sentences)
-          2. **Issues** — bugs, security risks, logic errors (CRITICAL/MAJOR/MINOR)
-          3. **Suggestions** — improvements
-          4. **Verdict** — LGTM / Changes Requested
-
-          Rules:
-          - Read CLAUDE.md to understand project conventions
-          - This is a Go/Python app with IAM-managed resources
-          - Check: Go error handling, IAM scope, injection risks, no public resources
-          - Check: error handling completeness, input validation
-          - Check: no hardcoded secrets, proper authentication
-          - Be concise. Write in Korean with English technical terms.
-          - Output ONLY the review markdown, no preamble.
-          - IMPORTANT: The very last line of your output MUST be exactly one of:
-            VERDICT: PASS
-            VERDICT: FAIL
-          Use FAIL if there are any CRITICAL or MAJOR issues. Use PASS otherwise.
+          cat <<'PROMPT_EOF' > /tmp/panel-prompt.txt
+          Review the diff provided via stdin for bugs, security risks, logic errors,
+          and convention violations (read CLAUDE.md / AGENTS.md for this repo's conventions).
+          Output concise findings grouped CRITICAL/MAJOR/MINOR.
+          DO NOT output a VERDICT line — that is the chair's job.
+          한국어+영문 기술용어 혼용 가능.
           PROMPT_EOF
-
-          cat /tmp/pr-diff-truncated.txt | claude -p "$(cat /tmp/prompt.txt)" --output-format text > /tmp/review.md
-
-          if [ ! -s /tmp/review.md ]; then
-            echo "ERROR: review output is empty" >&2
-            echo "VERDICT: FAIL" > /tmp/review.md
-            echo "리뷰 생성 실패 — Claude CLI가 빈 응답을 반환했습니다." >> /tmp/review.md
+          if [ "${total_lines:-0}" -gt "$MAX_LINES" ]; then
+            echo "WARNING: diff was ${total_lines} lines; only the first ${MAX_LINES} were reviewed." >> /tmp/panel-prompt.txt
+            echo "panel_truncated=1" >> "$GITHUB_ENV"
           fi
-          echo "Review generated: $(wc -c < /tmp/review.md) bytes"
+
+      - name: Run panel + synthesize
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PANEL_TIMEOUT: "300"
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pr-review
+          bash scripts/pr-review/run-panel.sh /tmp/pr-diff-truncated.txt /tmp/panel-prompt.txt /tmp/pr-review
+          bash scripts/pr-review/synthesize.sh /tmp/pr-diff-truncated.txt /tmp/pr-review \
+            "$PR_NUMBER" "$PR_TITLE" /tmp/review.md
+          echo "panel_responded=$(tr '\n' ' ' < /tmp/pr-review/responded.txt 2>/dev/null)" >> "$GITHUB_ENV"
 
       - name: Check for blocking issues
         id: gate
         run: |
           if grep -q "^VERDICT: FAIL$" /tmp/review.md; then
             echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "reason=VERDICT: FAIL" >> "$GITHUB_OUTPUT"
           elif grep -q "^VERDICT: PASS$" /tmp/review.md; then
             echo "result=pass" >> "$GITHUB_OUTPUT"
-            echo "reason=No blocking issues" >> "$GITHUB_OUTPUT"
           else
             echo "result=fail" >> "$GITHUB_OUTPUT"
-            echo "reason=No VERDICT line found — fail-closed" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Post review comment
+      - name: Post review comment (upsert)
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           GATE_RESULT: ${{ steps.gate.outputs.result }}
         run: |
-          MARKER="<!-- bedrock-pr-review -->"
+          MARKER="<!-- multi-ai-pr-review -->"
           if [ "$GATE_RESULT" = "fail" ]; then
             STATUS_BADGE="**Status: BLOCKED** — CRITICAL/MAJOR issues must be resolved before merge"
           else
@@ -120,20 +116,23 @@ jobs:
           sed '$ { /^VERDICT:/d }' /tmp/review.md > /tmp/review-clean.md
           {
             echo "$MARKER"
-            echo "## AI Code Review (Claude Code + Opus 4.7)"
+            echo "## 🤖 AI Code Review (Claude Opus 4.8 chair · Codex + Kiro + Antigravity panel)"
+            echo ""
+            echo "_Panel: Claude(chair) · ${panel_responded:-solo}_"
+            [ "${panel_truncated:-0}" = "1" ] && echo "_⚠️ diff truncated to first 3000 lines — review is partial._"
             echo ""
             echo "$STATUS_BADGE"
             echo ""
             cat /tmp/review-clean.md
             echo ""
             echo "---"
-            echo "_Automated review by Claude Code CLI with Bedrock Opus 4.7_"
+            echo "_Triggered by commit \`${{ github.event.pull_request.head.sha }}\` · workflow: \`.github/workflows/pr-review.yml\`_"
           } > /tmp/comment.md
           EXISTING=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
-            --jq '.[] | select(.body | contains("<!-- bedrock-pr-review -->")) | .id' 2>/dev/null | head -1)
+            --jq '.[] | select(.body | contains("<!-- multi-ai-pr-review -->")) | .id' 2>/dev/null | head -1)
           if [ -n "$EXISTING" ]; then
             gh api "repos/$REPO/issues/comments/$EXISTING" -X PATCH -f body="$(cat /tmp/comment.md)" 2>/dev/null || \
-            gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+              gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
           else
             gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
           fi
@@ -141,5 +140,5 @@ jobs:
       - name: Fail if CRITICAL or MAJOR
         if: steps.gate.outputs.result == 'fail'
         run: |
-          echo "AI Review failed: ${{ steps.gate.outputs.reason }}"
+          echo "AI Review failed"
           exit 1
