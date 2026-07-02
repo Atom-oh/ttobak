@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -42,14 +43,7 @@ func (h *SettingsHandler) GetIntegrations(w http.ResponseWriter, r *http.Request
 	}
 
 	if notionIntegration != nil {
-		// Decrypt API key if crypto service is available
-		displayKey := notionIntegration.APIKey
-		if h.crypto != nil {
-			if decrypted, err := h.crypto.Decrypt(ctx, notionIntegration.APIKey); err == nil {
-				displayKey = decrypted
-			}
-		}
-		maskedKey := maskAPIKey(displayKey)
+		maskedKey := maskAPIKey(decryptStoredAPIKey(ctx, h.crypto, notionIntegration.APIKey))
 		response.Notion = &model.IntegrationStatusResponse{
 			Configured: true,
 			MaskedKey:  maskedKey,
@@ -129,6 +123,19 @@ func (h *SettingsHandler) DeleteNotionKey(w http.ResponseWriter, r *http.Request
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// decryptStoredAPIKey returns the plaintext API key for a value stored via SaveNotionKey.
+// Falls back to the stored value when no crypto service is configured or decryption fails
+// (covers keys saved before KMS_KEY_ID was set).
+func decryptStoredAPIKey(ctx context.Context, crypto *service.CryptoService, stored string) string {
+	if crypto == nil {
+		return stored
+	}
+	if decrypted, err := crypto.Decrypt(ctx, stored); err == nil {
+		return decrypted
+	}
+	return stored
 }
 
 // maskAPIKey masks an API key for display

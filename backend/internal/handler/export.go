@@ -21,6 +21,7 @@ type ExportHandler struct {
 	meetingService *service.MeetingService
 	notionService  *service.NotionService
 	repo           *repository.DynamoDBRepository
+	crypto         *service.CryptoService
 }
 
 // NewExportHandler creates a new export handler
@@ -28,11 +29,13 @@ func NewExportHandler(
 	meetingService *service.MeetingService,
 	notionService *service.NotionService,
 	repo *repository.DynamoDBRepository,
+	crypto *service.CryptoService,
 ) *ExportHandler {
 	return &ExportHandler{
 		meetingService: meetingService,
 		notionService:  notionService,
 		repo:           repo,
+		crypto:         crypto,
 	}
 }
 
@@ -92,7 +95,8 @@ func (h *ExportHandler) ExportMeeting(w http.ResponseWriter, r *http.Request) {
 		}
 
 		content := h.generateMarkdownContent(meetingDetail)
-		_, pageURL, err := h.notionService.CreatePage(ctx, integration.APIKey, meetingDetail.Title, content)
+		apiKey := decryptStoredAPIKey(ctx, h.crypto, integration.APIKey)
+		_, pageURL, err := h.notionService.CreatePage(ctx, apiKey, meetingDetail.Title, content)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to create Notion page: "+err.Error())
 			return
