@@ -1,6 +1,6 @@
 """STT 3-Way Benchmark: Transcribe (ko-KR) vs Transcribe (Multi-Lang) vs Whisper
 
-Runs 3 STT engines on existing meeting audio and evaluates with Sonnet 4.6.
+Runs 3 STT engines on existing meeting audio and evaluates with Sonnet 5.
   A: AWS Transcribe (LanguageCode=ko-KR fixed)
   B: AWS Transcribe (IdentifyMultipleLanguages, ko-KR + en-US)
   C: Whisper large-v3 (faster-whisper, CPU)
@@ -14,7 +14,7 @@ import boto3
 
 REGION = "ap-northeast-2"
 BUCKET = "ttobak-assets-180294183052"
-BEDROCK_MODEL = "global.anthropic.claude-sonnet-4-6"
+BEDROCK_MODEL = "global.anthropic.claude-sonnet-5"
 
 s3 = boto3.client("s3", region_name=REGION)
 transcribe_client = boto3.client("transcribe", region_name=REGION)
@@ -240,7 +240,7 @@ def main():
             print("  SKIP: C failed"); continue
 
         # Evaluate
-        print("\n  [Eval] Evaluating with Sonnet 4.6...")
+        print("\n  [Eval] Evaluating with Sonnet 5...")
         evaluation = evaluate_3way(title, t_a, t_b, t_c, time_a, time_b, time_c)
         print(f"  [Eval] Done")
 
@@ -262,7 +262,7 @@ def main():
         f.write("| **A** | AWS Transcribe | `LanguageCode=ko-KR` (한국어 고정) |\n")
         f.write("| **B** | AWS Transcribe | `IdentifyMultipleLanguages` (ko-KR + en-US) |\n")
         f.write("| **C** | Whisper | `large-v3` (faster-whisper, CPU, int8) |\n")
-        f.write(f"\nEvaluator: Claude Sonnet 4.6\n")
+        f.write(f"\nEvaluator: Claude Sonnet 5\n")
         f.write(f"Meetings tested: {len(results)}\n\n---\n\n")
 
         for r in results:

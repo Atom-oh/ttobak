@@ -194,7 +194,7 @@ export class ResearchAgentStack extends cdk.Stack {
     // ==================== Bedrock Agent ====================
     const agent = new bedrock.CfnAgent(this, 'ResearchAgent', {
       agentName: 'ttobak-deep-research',
-      foundationModel: 'anthropic.claude-sonnet-4-6-v1:0',
+      foundationModel: 'anthropic.claude-sonnet-5-v1:0',
       instruction: RESEARCH_SYSTEM_PROMPT,
       agentResourceRoleArn: agentRole.roleArn,
       idleSessionTtlInSeconds: 3600,

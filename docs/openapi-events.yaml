@@ -130,7 +130,7 @@ paths:
       summary: "Summarize Lambda (EventBridge: transcripts/ S3 upload)"
       description: |
         Triggered by S3 Object Created event (prefix: transcripts/).
-        Reads transcript, calls Bedrock Claude Sonnet 4.6 for summary + action items.
+        Reads transcript, calls Bedrock Claude Sonnet 5 for summary + action items.
         Updates DynamoDB meeting record. Exports to KB bucket for RAG.
       tags: [EventBridge Lambdas]
       requestBody:

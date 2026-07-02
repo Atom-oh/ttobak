@@ -126,7 +126,7 @@ CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE
 - **CloudWatch LogGroup names**: `aws/*` prefix is reserved by AWS. Use `/ttobak/*` prefix for custom log groups (e.g. `/ttobak/agentcore/spans`, not `aws/spans`).
 - **OpenSearch Serverless**: Data access policies require exact IAM role ARN principals (no wildcards). Out-of-band AOSS policy changes cause CloudFormation version conflicts — revert before deploying
 - **Next.js static export**: `output: 'export'` only in production; local dev uses normal SSR for dynamic routes
-- **Bedrock models**: Claude Opus 4.6 for summarize/vision, Claude Haiku for fast translation/detection
+- **Bedrock models**: Claude Opus 4.8 for summarize/vision, Claude Haiku for fast translation/detection
 - **STT dual architecture**: Real-time uses browser Web Speech API (free, Korean-only) or AWS Transcribe Streaming (`@aws-sdk/client-transcribe-streaming` in browser via `sttManager.ts`). Batch post-upload always uses Whisper ECS GPU Spot (faster-whisper-large-v3 on g5.xlarge). The transcribe Lambda defaults to `sttProvider: "whisper"` and falls back to AWS Transcribe if Whisper cluster is not configured. `liveSttProvider` controls the real-time engine in the browser.
 - **Auto-expiry**: GetMeeting handler auto-marks stuck `transcribing`/`summarizing` status as `error` after 30 minutes. Long audio files rarely exceed this but be aware when debugging.
 - **Sentinel errors**: `service.ErrForbidden` and `service.ErrNotFound` enable typed error handling in handlers via `errors.Is()`

@@ -4,7 +4,7 @@ Runs both modes on existing meeting audio:
   A: Standard AWS Transcribe (LanguageCode=ko-KR, speaker labels)
   B: Multi-Language Transcribe (IdentifyMultipleLanguages, ko-KR + en-US)
 
-Evaluates with Claude Sonnet 4.6 on 5 criteria.
+Evaluates with Claude Sonnet 5 on 5 criteria.
 """
 
 import json
@@ -14,7 +14,7 @@ import boto3
 REGION = "ap-northeast-2"
 BUCKET = "ttobak-assets-180294183052"
 TABLE = "ttobak-main"
-BEDROCK_MODEL = "global.anthropic.claude-sonnet-4-6"
+BEDROCK_MODEL = "global.anthropic.claude-sonnet-5"
 
 s3 = boto3.client("s3", region_name=REGION)
 transcribe_client = boto3.client("transcribe", region_name=REGION)
@@ -193,7 +193,7 @@ def main():
             print(f"  [B] Languages detected: {lang_info}")
 
         # Evaluate
-        print("\n  [Eval] Evaluating with Sonnet 4.6...")
+        print("\n  [Eval] Evaluating with Sonnet 5...")
         evaluation = evaluate_with_sonnet(title, transcript_a, transcript_b, lang_info)
         print(f"  [Eval] Done ({len(evaluation)} chars)")
 
@@ -215,7 +215,7 @@ def main():
         f.write("|--------|------|-------------|\n")
         f.write("| **A** | Standard | `LanguageCode=ko-KR` (한국어 고정) |\n")
         f.write("| **B** | Multi-Language | `IdentifyMultipleLanguages=true` (ko-KR + en-US 자동 감지) |\n")
-        f.write(f"\nEvaluator: Claude Sonnet 4.6\n\n")
+        f.write(f"\nEvaluator: Claude Sonnet 5\n\n")
         f.write(f"Meetings tested: {len(results)}\n\n---\n\n")
 
         for r in results:
