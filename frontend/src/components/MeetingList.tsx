@@ -228,6 +228,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [showTagFilter, setShowTagFilter] = useState(false);
+  const [sortBy, setSortBy] = useState<'newest' | 'name'>('newest');
 
   const allTags = useMemo(() => {
     const tagSet = new Set<string>();
@@ -258,23 +259,31 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
     return true;
   });
 
-  // Group meetings by date
-  const groupedMeetings = filteredMeetings.reduce((acc, meeting) => {
-    const date = new Date(meeting.date);
-    const now = new Date();
-    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const sortedMeetings = [...filteredMeetings].sort((a, b) =>
+    sortBy === 'name'
+      ? a.title.localeCompare(b.title, 'ko')
+      : new Date(b.date).getTime() - new Date(a.date).getTime()
+  );
 
-    let group = 'Older';
-    if (date > weekAgo) {
-      group = 'This Week';
-    } else if (date > new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)) {
-      group = 'Last Week';
-    }
+  // Group by date (newest-first only; name sort renders as a flat list)
+  const groupedMeetings = sortBy === 'name'
+    ? (sortedMeetings.length > 0 ? { '': sortedMeetings } : {})
+    : sortedMeetings.reduce((acc, meeting) => {
+        const date = new Date(meeting.date);
+        const now = new Date();
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    if (!acc[group]) acc[group] = [];
-    acc[group].push(meeting);
-    return acc;
-  }, {} as Record<string, Meeting[]>);
+        let group = 'Older';
+        if (date > weekAgo) {
+          group = 'This Week';
+        } else if (date > new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)) {
+          group = 'Last Week';
+        }
+
+        if (!acc[group]) acc[group] = [];
+        acc[group].push(meeting);
+        return acc;
+      }, {} as Record<string, Meeting[]>);
 
   if (isLoading) {
     return (
@@ -326,23 +335,33 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
               </button>
             ))}
           </div>
-          {allTags.length > 0 && (
-            <button
-              onClick={() => setShowTagFilter(!showTagFilter)}
-              className={`flex items-center gap-1.5 pb-3 text-sm transition-colors ${
-                selectedTags.length > 0
-                  ? 'text-primary dark:text-[#00E5FF]'
-                  : 'text-slate-400 hover:text-slate-600 dark:text-[#849396] dark:hover:text-[#00E5FF]'
-              }`}
+          <div className="flex items-center gap-3 pb-2">
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as 'newest' | 'name')}
+              className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
             >
-              <span className="material-symbols-outlined text-lg">filter_list</span>
-              {selectedTags.length > 0 && (
-                <span className="text-[10px] font-bold bg-primary/10 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
-                  {selectedTags.length}
-                </span>
-              )}
-            </button>
-          )}
+              <option value="newest">최신순</option>
+              <option value="name">이름순</option>
+            </select>
+            {allTags.length > 0 && (
+              <button
+                onClick={() => setShowTagFilter(!showTagFilter)}
+                className={`flex items-center gap-1.5 text-sm transition-colors ${
+                  selectedTags.length > 0
+                    ? 'text-primary dark:text-[#00E5FF]'
+                    : 'text-slate-400 hover:text-slate-600 dark:text-[#849396] dark:hover:text-[#00E5FF]'
+                }`}
+              >
+                <span className="material-symbols-outlined text-lg">filter_list</span>
+                {selectedTags.length > 0 && (
+                  <span className="text-[10px] font-bold bg-primary/10 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                    {selectedTags.length}
+                  </span>
+                )}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Tag filter chips */}
@@ -384,9 +403,11 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
       <div className="px-4 lg:px-0 space-y-6">
         {Object.entries(groupedMeetings).map(([group, groupMeetings], groupIndex, arr) => (
           <div key={group}>
-            <h3 className="text-slate-500 dark:text-[#849396] text-xs font-bold uppercase tracking-widest pb-3">
-              {group}
-            </h3>
+            {group && (
+              <h3 className="text-slate-500 dark:text-[#849396] text-xs font-bold uppercase tracking-widest pb-3">
+                {group}
+              </h3>
+            )}
             <div className="space-y-4 lg:grid lg:grid-cols-3 lg:gap-6 lg:space-y-0">
               {groupMeetings.map((meeting) => (
                 <MeetingCard key={meeting.meetingId} meeting={meeting} onDelete={onDeleteMeeting} />

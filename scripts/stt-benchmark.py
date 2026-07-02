@@ -1,7 +1,7 @@
 """STT A/B Benchmark: Transcribe vs Nova Sonic
 
 Runs both STT engines on existing meeting audio files and evaluates
-transcription quality using Claude Sonnet 4.6.
+transcription quality using Claude Sonnet 5.
 
 Usage:
     python scripts/stt-benchmark.py
@@ -15,7 +15,7 @@ import boto3
 REGION = "ap-northeast-2"
 BUCKET = "ttobak-assets-180294183052"
 TABLE = "ttobak-main"
-BEDROCK_MODEL = "global.anthropic.claude-sonnet-4-6"
+BEDROCK_MODEL = "global.anthropic.claude-sonnet-5"
 
 s3 = boto3.client("s3", region_name=REGION)
 transcribe = boto3.client("transcribe", region_name=REGION)
@@ -171,7 +171,7 @@ def main():
         print(f"  [B] {len(transcript_b)} chars")
 
         # Evaluate with Sonnet
-        print("  [Eval] Evaluating with Sonnet 4.6...")
+        print("  [Eval] Evaluating with Sonnet 5...")
         evaluation = evaluate_with_sonnet(title, transcript_a, transcript_b)
         print(f"  [Eval] Done ({len(evaluation)} chars)")
 
@@ -190,7 +190,7 @@ def main():
         f.write(f"Date: {time.strftime('%Y-%m-%d %H:%M')}\n")
         f.write(f"Engine A: AWS Transcribe (existing)\n")
         f.write(f"Engine B: AWS Transcribe (re-run)\n")
-        f.write(f"Evaluator: Claude Sonnet 4.6\n\n")
+        f.write(f"Evaluator: Claude Sonnet 5\n\n")
 
         for r in results:
             f.write(f"## {r['meeting']}\n\n")

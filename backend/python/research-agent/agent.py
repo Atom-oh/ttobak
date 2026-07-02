@@ -32,13 +32,13 @@ TABLE_NAME = os.environ.get("TABLE_NAME", "ttobak-main")
 KB_BUCKET = os.environ.get("KB_BUCKET_NAME", "ttobak-kb-180294183052")
 
 MODEL_BY_MODE = {
-    "quick": "global.anthropic.claude-sonnet-4-6",
-    "standard": "global.anthropic.claude-sonnet-4-6",
+    "quick": "global.anthropic.claude-sonnet-5",
+    "standard": "global.anthropic.claude-sonnet-5",
     "deep": "us.anthropic.claude-opus-4-7",
 }
 
 # Light model for plan/respond (fast, cheap)
-CHAT_MODEL = "global.anthropic.claude-sonnet-4-6"
+CHAT_MODEL = "global.anthropic.claude-sonnet-5"
 
 RESEARCH_SYSTEM_PROMPT = """You are a Deep Research Agent for Ttobak, an AI meeting assistant for AWS Solutions Architects.
 

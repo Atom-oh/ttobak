@@ -25,7 +25,7 @@ var (
 	// ClaudeOpusModelID is for complex tasks (Q&A with tools, summarization, image analysis)
 	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-4-6-v1")
 	// ClaudeSonnetModelID is for transcript refinement and mid-tier tasks
-	ClaudeSonnetModelID = getEnvOrDefaultChain("global.anthropic.claude-sonnet-4-6", "BEDROCK_SONNET_MODEL_ID", "BEDROCK_SUMMARIZE_MODEL_ID")
+	ClaudeSonnetModelID = getEnvOrDefaultChain("global.anthropic.claude-sonnet-5", "BEDROCK_SONNET_MODEL_ID", "BEDROCK_SUMMARIZE_MODEL_ID")
 	// ClaudeHaikuModelID is for live summary (fast, low-cost incremental updates)
 	ClaudeHaikuModelID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 )

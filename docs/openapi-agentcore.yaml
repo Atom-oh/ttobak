@@ -24,7 +24,7 @@ paths:
         Results are written to S3 and DynamoDB by the save_report tool.
 
         Models:
-        - quick/standard: global.anthropic.claude-sonnet-4-6 (ap-northeast-2)
+        - quick/standard: global.anthropic.claude-sonnet-5 (ap-northeast-2)
         - deep: us.anthropic.claude-opus-4-7 (us-east-1)
       tags: [AgentCore]
       requestBody:

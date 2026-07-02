@@ -26,7 +26,7 @@ export class CrawlerStack extends cdk.Stack {
       KB_BUCKET_NAME: props.kbBucket.bucketName,
       KB_ID: props.knowledgeBaseId || '',
       DATA_SOURCE_ID: props.dataSourceId || '',
-      SUMMARIZE_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
+      SUMMARIZE_MODEL_ID: 'global.anthropic.claude-sonnet-5',
     };
 
     const orchestrator = new lambda.Function(this, 'OrchestratorFunction', {

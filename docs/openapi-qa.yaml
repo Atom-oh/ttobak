@@ -46,7 +46,7 @@ paths:
     post:
       summary: Ask a question (cross-meeting RAG)
       description: |
-        Uses Bedrock Converse API (Sonnet 4.6) with tool use:
+        Uses Bedrock Converse API (Sonnet 5) with tool use:
         - kb_search: Bedrock Knowledge Base retrieval
         - aws_docs_search: AWS documentation search
         - meeting_transcript: Search meeting transcripts
