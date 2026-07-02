@@ -902,7 +902,7 @@ Response: 204 No Content
 - **역할**: Bedrock Claude로 회의록 요약
 - **처리**:
   1. 선택된 전사 텍스트 로드
-  2. Bedrock Claude Opus 4.6 호출
+  2. Bedrock Claude Opus 4.8 호출
   3. 구조화된 마크다운 회의록 생성
   4. DynamoDB에 content 저장
   5. 상태를 "done"으로 업데이트

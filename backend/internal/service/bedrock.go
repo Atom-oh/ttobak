@@ -23,7 +23,7 @@ import (
 // Model IDs for different use cases (cost optimization)
 var (
 	// ClaudeOpusModelID is for complex tasks (Q&A with tools, summarization, image analysis)
-	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-4-6-v1")
+	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-4-8")
 	// ClaudeSonnetModelID is for transcript refinement and mid-tier tasks
 	ClaudeSonnetModelID = getEnvOrDefaultChain("global.anthropic.claude-sonnet-5", "BEDROCK_SONNET_MODEL_ID", "BEDROCK_SUMMARIZE_MODEL_ID")
 	// ClaudeHaikuModelID is for live summary (fast, low-cost incremental updates)
