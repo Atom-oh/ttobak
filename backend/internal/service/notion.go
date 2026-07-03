@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -150,10 +151,15 @@ func (s *NotionService) CreatePage(ctx context.Context, apiKey, title, content s
 		return "", "", fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	// Append any remaining blocks that didn't fit in the create request.
+	// Append any remaining blocks that didn't fit in the create request. The
+	// page already exists at this point, so on failure we still return its
+	// ID/URL alongside the error instead of "", "" — otherwise the caller has
+	// no way to find (or clean up) the now-orphaned partial page, and a retry
+	// would create a duplicate rather than resuming it.
 	for _, batch := range batches[1:] {
 		if err := s.appendBlocks(ctx, apiKey, pageResp.ID, batch); err != nil {
-			return "", "", err
+			log.Printf("notion CreatePage: page %s created but appendBlocks failed, page left partial: %v", pageResp.ID, err)
+			return pageResp.ID, pageResp.URL, fmt.Errorf("page created but not all content was added: %w", err)
 		}
 	}
 
