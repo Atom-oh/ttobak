@@ -149,6 +149,30 @@ func (s *NotionService) CreatePage(ctx context.Context, apiKey, title, content s
 	return pageResp.ID, pageResp.URL, nil
 }
 
+// notionRichTextMaxLen is the Notion API limit for a single rich_text.text.content value.
+const notionRichTextMaxLen = 2000
+
+// chunkRichText splits text into one or more Notion rich_text entries, each capped at
+// notionRichTextMaxLen runes, so a single long line (e.g. an unbroken transcript
+// paragraph) doesn't trip Notion's per-rich-text length validation. A block's rich_text
+// array can hold multiple entries that render as one continuous span, so splitting here
+// doesn't change how the text looks on the page.
+func chunkRichText(text string) []NotionRichText {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return []NotionRichText{{Type: "text", Text: &NotionTextObj{Content: ""}}}
+	}
+	chunks := make([]NotionRichText, 0, (len(runes)/notionRichTextMaxLen)+1)
+	for i := 0; i < len(runes); i += notionRichTextMaxLen {
+		end := i + notionRichTextMaxLen
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunks = append(chunks, NotionRichText{Type: "text", Text: &NotionTextObj{Content: string(runes[i:end])}})
+	}
+	return chunks
+}
+
 // markdownToNotionBlocks converts markdown text to Notion blocks
 func (s *NotionService) markdownToNotionBlocks(content string) []NotionBlock {
 	var blocks []NotionBlock
@@ -168,32 +192,24 @@ func (s *NotionService) markdownToNotionBlocks(content string) []NotionBlock {
 		if strings.HasPrefix(line, "### ") {
 			block.Type = "heading_3"
 			block.Heading3 = &NotionHeadingBlock{
-				RichText: []NotionRichText{
-					{Type: "text", Text: &NotionTextObj{Content: strings.TrimPrefix(line, "### ")}},
-				},
+				RichText: chunkRichText(strings.TrimPrefix(line, "### ")),
 			}
 		} else if strings.HasPrefix(line, "## ") {
 			block.Type = "heading_2"
 			block.Heading2 = &NotionHeadingBlock{
-				RichText: []NotionRichText{
-					{Type: "text", Text: &NotionTextObj{Content: strings.TrimPrefix(line, "## ")}},
-				},
+				RichText: chunkRichText(strings.TrimPrefix(line, "## ")),
 			}
 		} else if strings.HasPrefix(line, "# ") {
 			block.Type = "heading_1"
 			block.Heading1 = &NotionHeadingBlock{
-				RichText: []NotionRichText{
-					{Type: "text", Text: &NotionTextObj{Content: strings.TrimPrefix(line, "# ")}},
-				},
+				RichText: chunkRichText(strings.TrimPrefix(line, "# ")),
 			}
 		} else if strings.HasPrefix(line, "- [ ] ") {
 			// Unchecked to-do
 			block.Type = "to_do"
 			block.ToDo = &NotionToDoBlock{
-				RichText: []NotionRichText{
-					{Type: "text", Text: &NotionTextObj{Content: strings.TrimPrefix(line, "- [ ] ")}},
-				},
-				Checked: false,
+				RichText: chunkRichText(strings.TrimPrefix(line, "- [ ] ")),
+				Checked:  false,
 			}
 		} else if strings.HasPrefix(line, "- [x] ") || strings.HasPrefix(line, "- [X] ") {
 			// Checked to-do
@@ -201,34 +217,26 @@ func (s *NotionService) markdownToNotionBlocks(content string) []NotionBlock {
 			text = strings.TrimPrefix(text, "- [X] ")
 			block.Type = "to_do"
 			block.ToDo = &NotionToDoBlock{
-				RichText: []NotionRichText{
-					{Type: "text", Text: &NotionTextObj{Content: text}},
-				},
-				Checked: true,
+				RichText: chunkRichText(text),
+				Checked:  true,
 			}
 		} else if strings.HasPrefix(line, "- ") {
 			// Bulleted list
 			block.Type = "bulleted_list_item"
 			block.BulletedListItem = &NotionListItemBlock{
-				RichText: []NotionRichText{
-					{Type: "text", Text: &NotionTextObj{Content: strings.TrimPrefix(line, "- ")}},
-				},
+				RichText: chunkRichText(strings.TrimPrefix(line, "- ")),
 			}
 		} else if strings.HasPrefix(line, "* ") {
 			// Bulleted list (asterisk)
 			block.Type = "bulleted_list_item"
 			block.BulletedListItem = &NotionListItemBlock{
-				RichText: []NotionRichText{
-					{Type: "text", Text: &NotionTextObj{Content: strings.TrimPrefix(line, "* ")}},
-				},
+				RichText: chunkRichText(strings.TrimPrefix(line, "* ")),
 			}
 		} else {
 			// Regular paragraph
 			block.Type = "paragraph"
 			block.Paragraph = &NotionParagraphBlock{
-				RichText: []NotionRichText{
-					{Type: "text", Text: &NotionTextObj{Content: line}},
-				},
+				RichText: chunkRichText(line),
 			}
 		}
 
