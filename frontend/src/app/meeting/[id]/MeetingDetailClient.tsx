@@ -411,7 +411,7 @@ function MeetingDetailContent() {
       <div className="flex flex-1 min-h-0">
         {/* Main Content */}
         <div className="flex-1 p-4 lg:p-8 overflow-y-auto">
-          <div className="lg:max-w-5xl lg:mx-auto">
+          <div className="lg:max-w-7xl lg:mx-auto">
           {/* Header */}
           <MeetingHeader
             meeting={meeting}
