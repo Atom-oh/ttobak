@@ -95,7 +95,11 @@ func (h *ExportHandler) ExportMeeting(w http.ResponseWriter, r *http.Request) {
 		}
 
 		content := h.generateMarkdownContent(meetingDetail)
-		apiKey := decryptStoredAPIKey(ctx, h.crypto, integration.APIKey)
+		apiKey, err := decryptStoredAPIKey(ctx, h.crypto, integration.APIKey)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to decrypt Notion API key")
+			return
+		}
 		_, pageURL, err := h.notionService.CreatePage(ctx, apiKey, meetingDetail.Title, content)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to create Notion page: "+err.Error())

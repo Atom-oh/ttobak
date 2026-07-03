@@ -201,8 +201,12 @@ func (h *ResearchHandler) ExportResearch(w http.ResponseWriter, r *http.Request)
 		title = title[:80]
 	}
 
-	apiKey := decryptStoredAPIKey(ctx, h.crypto, integration.APIKey)
-	notionURL, _, err := h.notionService.CreatePage(ctx, apiKey, title, detail.Content)
+	apiKey, err := decryptStoredAPIKey(ctx, h.crypto, integration.APIKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to decrypt Notion API key")
+		return
+	}
+	_, notionURL, err := h.notionService.CreatePage(ctx, apiKey, title, detail.Content)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Notion export failed")
 		return

@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -43,7 +45,10 @@ func (h *SettingsHandler) GetIntegrations(w http.ResponseWriter, r *http.Request
 	}
 
 	if notionIntegration != nil {
-		maskedKey := maskAPIKey(decryptStoredAPIKey(ctx, h.crypto, notionIntegration.APIKey))
+		maskedKey := "****"
+		if key, err := decryptStoredAPIKey(ctx, h.crypto, notionIntegration.APIKey); err == nil {
+			maskedKey = maskAPIKey(key)
+		}
 		response.Notion = &model.IntegrationStatusResponse{
 			Configured: true,
 			MaskedKey:  maskedKey,
@@ -126,16 +131,24 @@ func (h *SettingsHandler) DeleteNotionKey(w http.ResponseWriter, r *http.Request
 }
 
 // decryptStoredAPIKey returns the plaintext API key for a value stored via SaveNotionKey.
-// Falls back to the stored value when no crypto service is configured or decryption fails
-// (covers keys saved before KMS_KEY_ID was set).
-func decryptStoredAPIKey(ctx context.Context, crypto *service.CryptoService, stored string) string {
+// With no crypto service configured, the stored value is assumed to already be plaintext.
+// With a crypto service configured, a decrypt failure only falls back to the raw stored value
+// when it already looks like a plaintext Notion key (covers records saved before KMS_KEY_ID
+// was set) — any other decrypt failure is a real error (bad KMS config, revoked key, etc.) and
+// must not be silently sent to Notion as if it were the API key.
+func decryptStoredAPIKey(ctx context.Context, crypto *service.CryptoService, stored string) (string, error) {
 	if crypto == nil {
-		return stored
+		return stored, nil
 	}
-	if decrypted, err := crypto.Decrypt(ctx, stored); err == nil {
-		return decrypted
+	decrypted, err := crypto.Decrypt(ctx, stored)
+	if err == nil {
+		return decrypted, nil
 	}
-	return stored
+	if isValidNotionKey(stored) {
+		return stored, nil
+	}
+	log.Printf("decryptStoredAPIKey: KMS decrypt failed: %v", err)
+	return "", fmt.Errorf("decrypt Notion API key: %w", err)
 }
 
 // maskAPIKey masks an API key for display
