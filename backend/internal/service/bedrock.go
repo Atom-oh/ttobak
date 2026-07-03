@@ -244,14 +244,14 @@ Your output MUST follow this exact structure:
 - 화자별 식별 및 주요 역할 추정
 
 ## 개요
-- 회의 핵심 요약 (3-5문장)
+회의 핵심 요약을 3-5문장의 자연스러운 문단으로 서술 (불릿 사용 금지)
 
 ## 화자별 주요 발언
 ### [Speaker Label]
-- 주요 발언 요약 (2-3개)
+주요 발언을 2-3문장의 짧은 문단으로 서술 (불릿 사용 금지)
 
 ## 주요 논의 사항
-- 논의된 핵심 토픽 (상세하게)
+논의된 핵심 토픽별로 문단을 나눠 서술. 각 토픽은 무슨 내용이 논의되고 어떤 맥락이었는지 자연스러운 글로 설명 (불릿 사용 금지, 토픽이 명확히 나열식일 때만 예외)
 
 ## 결정 사항
 - 합의된 결정들
@@ -260,7 +260,7 @@ Your output MUST follow this exact structure:
 - [ ] 담당자(Speaker Label): 할 일 내용
 
 Format in Korean unless the transcript is entirely in English.
-Use bullet points and checkboxes. Include timestamps where available.
+결정 사항과 액션 아이템만 bullet/checkbox 리스트로 작성하고, 그 외 섹션(개요/화자별 발언/논의 사항)은 문단 형태로 서술해 불필요한 불릿 나열을 피할 것. Include timestamps where available.
 
 ADR-013 — 트랜스크립트 딥 링크:
 - 요약 각 항목(개요 문장, 화자별 발언, 논의 사항, 결정 사항, 액션 아이템)의 끝에 해당 발언이 시작된 시점을 [TS:NNN] 마커로 정확히 한 번 표기.

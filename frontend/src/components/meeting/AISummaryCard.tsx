@@ -2,23 +2,17 @@
 
 import { useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
+import { marked } from 'marked';
 import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
 
 const MeetingEditor = dynamic(() => import('../MeetingEditor').then(m => ({ default: m.MeetingEditor })), {
   loading: () => <div className="animate-pulse bg-slate-100 dark:bg-slate-800 rounded-xl h-64" />,
 });
 
-function markdownToHtml(md: string): string {
-  return md
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>\n?)+/gm, (m) => `<ul>${m}</ul>`)
-    .replace(/\n\n/g, '</p><p>')
-    .replace(/\n/g, '<br/>');
-}
+// TipTap's MeetingEditor has no TaskList/TaskItem extension, so marked's default
+// GFM checkbox (`<input type="checkbox">`) gets dropped entirely by the ProseMirror
+// schema on edit. Render it as literal `[ ]`/`[x]` text instead so it round-trips.
+marked.use({ renderer: { checkbox({ checked }) { return checked ? '[x] ' : '[ ] '; } } });
 
 interface AISummaryCardProps {
   content?: string;
@@ -71,7 +65,7 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
 
       {editing ? (
         <MeetingEditor
-          content={markdownToHtml(rawText)}
+          content={marked.parse(rawText, { async: false }) as string}
           onAutoSave={handleAutoSave}
           autoSaveDelay={3000}
         />
