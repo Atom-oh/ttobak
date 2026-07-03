@@ -79,12 +79,12 @@ func init() {
 	shareHandler := handler.NewShareHandler(meetingService)
 	uploadHandler := handler.NewUploadHandler(uploadService)
 	kbHandler := handler.NewKBHandler(kbService)
-	exportHandler := handler.NewExportHandler(meetingService, notionService, repo)
 	// Initialize crypto service for API key encryption (optional — requires KMS_KEY_ID)
 	var cryptoService *service.CryptoService
 	if kmsKeyID := os.Getenv("KMS_KEY_ID"); kmsKeyID != "" {
 		cryptoService = service.NewCryptoService(kmsClient, kmsKeyID)
 	}
+	exportHandler := handler.NewExportHandler(meetingService, notionService, repo, cryptoService)
 	settingsHandler := handler.NewSettingsHandler(repo, cryptoService)
 	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
 	dictService := service.NewDictionaryService(dictRepo, transcribeClient)
@@ -99,7 +99,7 @@ func init() {
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
 	sfnClient := sfn.NewFromConfig(cfg)
 	researchService := service.NewResearchService(researchRepo, repo, s3Client, sfnClient, kbBucketName, os.Getenv("RESEARCH_SFN_ARN"))
-	researchHandler := handler.NewResearchHandler(researchService, notionService, repo)
+	researchHandler := handler.NewResearchHandler(researchService, notionService, repo, cryptoService)
 	researchShareHandler := handler.NewResearchShareHandler(researchService)
 	chatHandler := handler.NewChatHandler(repo)
 	researchChatRepo := repository.NewChatRepository(dynamoClient, tableName)

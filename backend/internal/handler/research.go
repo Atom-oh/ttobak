@@ -18,14 +18,16 @@ type ResearchHandler struct {
 	researchService *service.ResearchService
 	notionService   *service.NotionService
 	repo            *repository.DynamoDBRepository
+	crypto          *service.CryptoService
 }
 
 // NewResearchHandler creates a new ResearchHandler.
-func NewResearchHandler(researchService *service.ResearchService, notionService *service.NotionService, repo *repository.DynamoDBRepository) *ResearchHandler {
+func NewResearchHandler(researchService *service.ResearchService, notionService *service.NotionService, repo *repository.DynamoDBRepository, crypto *service.CryptoService) *ResearchHandler {
 	return &ResearchHandler{
 		researchService: researchService,
 		notionService:   notionService,
 		repo:            repo,
+		crypto:          crypto,
 	}
 }
 
@@ -199,7 +201,12 @@ func (h *ResearchHandler) ExportResearch(w http.ResponseWriter, r *http.Request)
 		title = title[:80]
 	}
 
-	notionURL, _, err := h.notionService.CreatePage(ctx, integration.APIKey, title, detail.Content)
+	apiKey, err := decryptStoredAPIKey(ctx, h.crypto, integration.APIKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to decrypt Notion API key")
+		return
+	}
+	_, notionURL, err := h.notionService.CreatePage(ctx, apiKey, title, detail.Content)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Notion export failed")
 		return
