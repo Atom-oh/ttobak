@@ -9,6 +9,11 @@ const MeetingEditor = dynamic(() => import('../MeetingEditor').then(m => ({ defa
   loading: () => <div className="animate-pulse bg-slate-100 dark:bg-slate-800 rounded-xl h-64" />,
 });
 
+// TipTap's MeetingEditor has no TaskList/TaskItem extension, so marked's default
+// GFM checkbox (`<input type="checkbox">`) gets dropped entirely by the ProseMirror
+// schema on edit. Render it as literal `[ ]`/`[x]` text instead so it round-trips.
+marked.use({ renderer: { checkbox({ checked }) { return checked ? '[x] ' : '[ ] '; } } });
+
 interface AISummaryCardProps {
   content?: string;
   summary?: string;
