@@ -67,13 +67,6 @@ type NotionTextObj struct {
 	Content string `json:"content"`
 }
 
-// NotionPageParent represents the parent of a page
-type NotionPageParent struct {
-	Type      string `json:"type"`
-	PageID    string `json:"page_id,omitempty"`
-	Workspace bool   `json:"workspace,omitempty"`
-}
-
 // NotionCreatePageRequest represents a request to create a page
 type NotionCreatePageRequest struct {
 	Parent     map[string]interface{} `json:"parent"`
@@ -87,8 +80,14 @@ type NotionCreatePageResponse struct {
 	URL string `json:"url"`
 }
 
-// CreatePage creates a new page in Notion
-func (s *NotionService) CreatePage(ctx context.Context, apiKey, title, content string) (string, string, error) {
+// CreatePage creates a new page in Notion as a child of the given parent
+// (parentType is "page_id" or "database_id" — internal integrations cannot
+// create pages at the workspace root, only under a page/database the user
+// has explicitly shared with the integration). titleProperty is the
+// properties-object key to set the title under: "title" for a page parent;
+// for a database parent it must be that database's actual title-property
+// name (from VerifyParent), since Notion does not accept a generic alias.
+func (s *NotionService) CreatePage(ctx context.Context, apiKey, parentType, parentID, titleProperty, title, content string) (string, string, error) {
 	// Convert markdown content to Notion blocks
 	blocks := s.markdownToNotionBlocks(content)
 
@@ -99,11 +98,11 @@ func (s *NotionService) CreatePage(ctx context.Context, apiKey, title, content s
 	// Create page request
 	reqBody := NotionCreatePageRequest{
 		Parent: map[string]interface{}{
-			"type":      "workspace",
-			"workspace": true,
+			"type":     parentType,
+			parentType: parentID,
 		},
 		Properties: map[string]interface{}{
-			"title": map[string]interface{}{
+			titleProperty: map[string]interface{}{
 				"title": []map[string]interface{}{
 					{
 						"type": "text",
@@ -200,6 +199,132 @@ func (s *NotionService) appendBlocks(ctx context.Context, apiKey, pageID string,
 	}
 
 	return nil
+}
+
+// isHexString reports whether s is non-empty and consists only of lowercase hex digits.
+func isHexString(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// ParseNotionPageID extracts a Notion page/database ID from a pasted URL or
+// bare ID and normalizes it to dashed UUID form (8-4-4-4-12, lowercase), the
+// form the Notion API expects in parent.page_id / parent.database_id.
+func ParseNotionPageID(input string) (string, error) {
+	s := strings.TrimSpace(input)
+	if i := strings.IndexAny(s, "?#"); i != -1 {
+		s = s[:i]
+	}
+	s = strings.TrimRight(s, "/")
+	if i := strings.LastIndex(s, "/"); i != -1 {
+		s = s[i+1:]
+	}
+
+	// Walk dash-separated tokens from the end, merging only tokens that are
+	// themselves entirely hex digits — this stops a title word (e.g. "Page")
+	// from donating a stray hex-looking character to a truncated or malformed
+	// ID; merging requires the whole preceding token to be hex, not just its
+	// last character.
+	tokens := strings.Split(s, "-")
+	hex := ""
+	for i := len(tokens) - 1; i >= 0; i-- {
+		t := strings.ToLower(tokens[i])
+		if !isHexString(t) {
+			break
+		}
+		hex = t + hex
+	}
+	if len(hex) < 32 {
+		return "", fmt.Errorf("no Notion page ID found in %q", input)
+	}
+	id := hex[len(hex)-32:]
+	return fmt.Sprintf("%s-%s-%s-%s-%s", id[0:8], id[8:12], id[12:16], id[16:20], id[20:32]), nil
+}
+
+// ErrNotionInvalidAPIKey is returned by VerifyParent when Notion rejects the
+// API key itself (401), as opposed to the parent page/database being
+// missing or unshared (404) — the two are distinguishable, so the caller can
+// give the user the right guidance instead of always blaming the page.
+var ErrNotionInvalidAPIKey = fmt.Errorf("Notion API key is invalid or has been revoked")
+
+// VerifyParent checks that id is a page or database the integration can
+// access, returning the parentType ("page_id" or "database_id") and the
+// properties key to use for the title when creating a page under it —
+// "title" for a page parent, or the target database's actual title-property
+// name for a database parent (Notion requires the properties object to use
+// the database's own property name; a database's title property is not
+// always literally called "title"). Notion returns 404 for both a
+// nonexistent ID and an existing-but-unshared one, so a 404 here also means
+// "not shared with the integration" — the caller should tell the user to
+// share the page.
+func (s *NotionService) VerifyParent(ctx context.Context, apiKey, id string) (parentType, titleProperty string, err error) {
+	status, _ := s.notionGet(ctx, apiKey, "https://api.notion.com/v1/pages/"+id)
+	if status == http.StatusOK {
+		return "page_id", "title", nil
+	}
+	if status == http.StatusUnauthorized {
+		return "", "", ErrNotionInvalidAPIKey
+	}
+
+	status, body := s.notionGet(ctx, apiKey, "https://api.notion.com/v1/databases/"+id)
+	if status == http.StatusOK {
+		titleProperty := notionTitlePropertyName(body)
+		if titleProperty == "" {
+			return "", "", fmt.Errorf("could not find a title property on the Notion database")
+		}
+		return "database_id", titleProperty, nil
+	}
+	if status == http.StatusUnauthorized {
+		return "", "", ErrNotionInvalidAPIKey
+	}
+
+	return "", "", fmt.Errorf("Notion page not found or not shared with the integration")
+}
+
+// notionTitlePropertyName returns the property name (the properties map key,
+// e.g. "Name") of the title-type property in a Notion database's GET
+// response body, or "" if not found.
+func notionTitlePropertyName(body []byte) string {
+	var db struct {
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(body, &db); err != nil {
+		return ""
+	}
+	for name, prop := range db.Properties {
+		if prop.Type == "title" {
+			return name
+		}
+	}
+	return ""
+}
+
+// notionGet performs a GET to url with apiKey and returns the HTTP status
+// code (0 on a transport-level failure) and the response body.
+func (s *NotionService) notionGet(ctx context.Context, apiKey, url string) (int, []byte) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return 0, nil
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Notion-Version", "2022-06-28")
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return 0, nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, body
 }
 
 // notionMaxChildrenPerRequest is Notion's limit on children blocks accepted

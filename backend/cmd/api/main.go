@@ -85,7 +85,7 @@ func init() {
 		cryptoService = service.NewCryptoService(kmsClient, kmsKeyID)
 	}
 	exportHandler := handler.NewExportHandler(meetingService, notionService, repo, cryptoService)
-	settingsHandler := handler.NewSettingsHandler(repo, cryptoService)
+	settingsHandler := handler.NewSettingsHandler(repo, cryptoService, notionService)
 	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
 	dictService := service.NewDictionaryService(dictRepo, transcribeClient)
 	dictHandler := handler.NewDictionaryHandler(dictService)

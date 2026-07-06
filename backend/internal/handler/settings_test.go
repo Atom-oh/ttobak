@@ -2,6 +2,9 @@ package handler
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -47,4 +50,33 @@ func TestDecryptStoredAPIKey(t *testing.T) {
 			t.Fatal("expected error for undecryptable ciphertext, got nil")
 		}
 	})
+}
+
+// SaveNotionKey must reject a missing or unparseable parentPage before ever
+// touching crypto/repo/Notion — this is the fix for internal integrations
+// being unable to create pages at the workspace root: every export now
+// requires a verified parent page, so save-time is where that's enforced.
+func TestSaveNotionKeyRequiresParentPage(t *testing.T) {
+	h := NewSettingsHandler(nil, nil, nil)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"missing parentPage", `{"apiKey":"secret_1234567890"}`},
+		{"unparseable parentPage", `{"apiKey":"secret_1234567890","parentPage":"not-a-notion-url"}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "/api/settings/integrations/notion", strings.NewReader(tc.body))
+			w := httptest.NewRecorder()
+
+			h.SaveNotionKey(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
 }

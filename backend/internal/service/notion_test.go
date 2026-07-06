@@ -118,3 +118,56 @@ func TestSplitBlocks(t *testing.T) {
 		})
 	}
 }
+
+// ParseNotionPageID must extract a Notion page/database ID from whatever a
+// user pastes — a bare ID, a dashed UUID, or a full page URL — and normalize
+// it to dashed UUID form, since that's what Notion's parent.page_id and
+// parent.database_id expect. This is the fix for internal integrations being
+// unable to create pages at the workspace root: the user now supplies a
+// parent page/database ID at connect time.
+func TestParseNotionPageID(t *testing.T) {
+	const want = "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"bare 32-hex ID", "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", want, false},
+		{"dashed UUID", "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d", want, false},
+		{"plain URL", "https://www.notion.so/My-Page-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", want, false},
+		{"URL with workspace path and query", "https://www.notion.so/my-workspace/My-Page-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d?pvs=4", want, false},
+		{"uppercase hex", "1A2B3C4D5E6F7A8B9C0D1E2F3A4B5C6D", want, false},
+		{"whitespace-padded", "  1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d\n", want, false},
+		{"too short", "1a2b3c4d", "", true},
+		{"non-hex 32 chars", strings.Repeat("z", 32), "", true},
+		{"empty string", "", "", true},
+		{"URL with no ID", "https://www.notion.so/", "", true},
+		// Regression: a 31-char (truncated-by-one) ID must not silently absorb
+		// a trailing hex-looking character from the preceding title word
+		// ("Page" ends in a non-hex 'g', so it can no longer donate a char).
+		{"truncated ID must not borrow from title word", "https://www.notion.so/My-Page-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6", "", true},
+		// Regression: a trailing slash must not make the post-"/" segment
+		// empty and reject an otherwise-valid ID.
+		{"URL with trailing slash", "https://www.notion.so/My-Page-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d/", want, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseNotionPageID(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

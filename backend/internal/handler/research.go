@@ -195,6 +195,10 @@ func (h *ResearchHandler) ExportResearch(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion not configured")
 		return
 	}
+	if integration.NotionParentID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion integration needs a parent page. Re-connect Notion in Settings with a shared page URL.")
+		return
+	}
 
 	title := detail.Topic
 	if len(title) > 80 {
@@ -206,9 +210,9 @@ func (h *ResearchHandler) ExportResearch(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to decrypt Notion API key")
 		return
 	}
-	_, notionURL, err := h.notionService.CreatePage(ctx, apiKey, title, detail.Content)
+	_, notionURL, err := h.notionService.CreatePage(ctx, apiKey, integration.NotionParentType, integration.NotionParentID, integration.NotionTitleProperty, title, detail.Content)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Notion export failed")
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Notion export failed: "+err.Error())
 		return
 	}
 

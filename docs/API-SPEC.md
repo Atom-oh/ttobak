@@ -822,30 +822,39 @@ Response: 200 OK
   "notion": {
     "configured": true,
     "maskedKey": "ntn_****abcd",    // last 4 chars visible
-    "connectedAt": "2026-03-05T10:00:00Z"
-  },
-  "obsidian": {
-    "configured": false
+    "parentPageId": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
   }
 }
 ```
 
+Note: an empty/absent `parentPageId` on a configured integration means the connection predates the parent-page requirement and must be re-saved with a `parentPage` before exports will work.
+
 #### Configure Notion Integration
+
+Notion internal integrations can no longer create pages at the workspace root — a parent page or database that has been shared with the integration is required.
 
 ```
 PUT /api/settings/integrations/notion
 Request:
 {
-  "apiKey": "ntn_xxxxxxxxxxxx"
+  "apiKey": "ntn_xxxxxxxxxxxx",
+  "parentPage": "https://www.notion.so/My-Page-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d"
 }
 
 Response: 200 OK
 {
   "configured": true,
   "maskedKey": "ntn_****xxxx",
-  "connectedAt": "2026-03-05T10:00:00Z"
+  "parentPageId": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
 }
 ```
+
+**Errors:**
+- `400 BAD_REQUEST` — `apiKey` missing or invalid format
+- `400 BAD_REQUEST` — `"parentPage is required"` (missing)
+- `400 BAD_REQUEST` — `"Invalid Notion page URL or ID"` (unparseable `parentPage`)
+- `400 BAD_REQUEST` — `"Notion API key is invalid or has been revoked."` (`apiKey` itself rejected by Notion — 401)
+- `400 BAD_REQUEST` — `"Notion page not found or not shared with the integration. Share the page with your integration (··· → Connections) and try again."` (page not found, or not shared with the integration — Notion returns 404 for both cases)
 
 #### Remove Notion Integration
 
