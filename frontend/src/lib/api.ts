@@ -267,7 +267,7 @@ export const settingsApi = {
     api.get<import('@/types/meeting').IntegrationsResponse>('/api/settings/integrations'),
 
   saveNotionKey: (apiKey: string, parentPage: string) =>
-    api.put<{ status: string }>('/api/settings/integrations/notion', { apiKey, parentPage }),
+    api.put<import('@/types/meeting').IntegrationConfig>('/api/settings/integrations/notion', { apiKey, parentPage }),
 
   deleteNotionKey: () => api.delete('/api/settings/integrations/notion'),
 };

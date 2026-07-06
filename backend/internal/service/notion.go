@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -252,7 +253,19 @@ func ParseNotionPageID(input string) (string, error) {
 // API key itself (401), as opposed to the parent page/database being
 // missing or unshared (404) — the two are distinguishable, so the caller can
 // give the user the right guidance instead of always blaming the page.
-var ErrNotionInvalidAPIKey = fmt.Errorf("Notion API key is invalid or has been revoked")
+var ErrNotionInvalidAPIKey = errors.New("notion api key is invalid or has been revoked")
+
+// ErrNotionUnavailable is returned by VerifyParent when Notion couldn't be
+// reached, or returned something other than a definitive 200/401/404 (e.g.
+// 429 rate-limited, 5xx outage) — this must not be reported to the user as
+// "page not shared", since the page/key may be perfectly fine.
+var ErrNotionUnavailable = errors.New("notion is temporarily unavailable, try again later")
+
+// errNotionParentNotFound is Notion 404 on both probes: a nonexistent ID and
+// an existing-but-unshared one are indistinguishable, so this also means
+// "not shared with the integration" — the caller should tell the user to
+// share the page.
+var errNotionParentNotFound = errors.New("notion page not found or not shared with the integration")
 
 // VerifyParent checks that id is a page or database the integration can
 // access, returning the parentType ("page_id" or "database_id") and the
@@ -260,32 +273,45 @@ var ErrNotionInvalidAPIKey = fmt.Errorf("Notion API key is invalid or has been r
 // "title" for a page parent, or the target database's actual title-property
 // name for a database parent (Notion requires the properties object to use
 // the database's own property name; a database's title property is not
-// always literally called "title"). Notion returns 404 for both a
-// nonexistent ID and an existing-but-unshared one, so a 404 here also means
-// "not shared with the integration" — the caller should tell the user to
-// share the page.
+// always literally called "title").
 func (s *NotionService) VerifyParent(ctx context.Context, apiKey, id string) (parentType, titleProperty string, err error) {
-	status, _ := s.notionGet(ctx, apiKey, "https://api.notion.com/v1/pages/"+id)
-	if status == http.StatusOK {
+	pageStatus, _, err := s.notionGet(ctx, apiKey, "https://api.notion.com/v1/pages/"+id)
+	if err != nil {
+		log.Printf("notion VerifyParent: GET pages/%s failed: %v", id, err)
+		return "", "", fmt.Errorf("%w: %v", ErrNotionUnavailable, err)
+	}
+	if pageStatus == http.StatusOK {
 		return "page_id", "title", nil
 	}
-	if status == http.StatusUnauthorized {
+	if pageStatus == http.StatusUnauthorized {
 		return "", "", ErrNotionInvalidAPIKey
 	}
 
-	status, body := s.notionGet(ctx, apiKey, "https://api.notion.com/v1/databases/"+id)
-	if status == http.StatusOK {
+	dbStatus, body, err := s.notionGet(ctx, apiKey, "https://api.notion.com/v1/databases/"+id)
+	if err != nil {
+		log.Printf("notion VerifyParent: GET databases/%s failed: %v", id, err)
+		return "", "", fmt.Errorf("%w: %v", ErrNotionUnavailable, err)
+	}
+	if dbStatus == http.StatusOK {
 		titleProperty := notionTitlePropertyName(body)
 		if titleProperty == "" {
 			return "", "", fmt.Errorf("could not find a title property on the Notion database")
 		}
 		return "database_id", titleProperty, nil
 	}
-	if status == http.StatusUnauthorized {
+	if dbStatus == http.StatusUnauthorized {
 		return "", "", ErrNotionInvalidAPIKey
 	}
 
-	return "", "", fmt.Errorf("Notion page not found or not shared with the integration")
+	// Anything other than a clean 404 on both probes (429 rate-limited, 5xx,
+	// etc.) is a real Notion-side problem, not "page not shared" — surface it
+	// distinctly instead of misdiagnosing it as a sharing mistake.
+	if pageStatus != http.StatusNotFound || dbStatus != http.StatusNotFound {
+		log.Printf("notion VerifyParent: unexpected status for %s (pages=%d, databases=%d)", id, pageStatus, dbStatus)
+		return "", "", ErrNotionUnavailable
+	}
+
+	return "", "", errNotionParentNotFound
 }
 
 // notionTitlePropertyName returns the property name (the properties map key,
@@ -308,23 +334,28 @@ func notionTitlePropertyName(body []byte) string {
 	return ""
 }
 
-// notionGet performs a GET to url with apiKey and returns the HTTP status
-// code (0 on a transport-level failure) and the response body.
-func (s *NotionService) notionGet(ctx context.Context, apiKey, url string) (int, []byte) {
+// notionGet performs a GET to url with apiKey, returning the HTTP status
+// code and response body. err is non-nil only for a transport-level failure
+// (request construction, network, or body read) — the caller must not treat
+// that the same as a normal Notion response.
+func (s *NotionService) notionGet(ctx context.Context, apiKey, url string) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return 0, nil
+		return 0, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Notion-Version", "2022-06-28")
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return 0, nil
+		return 0, nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	return resp.StatusCode, body, nil
 }
 
 // notionMaxChildrenPerRequest is Notion's limit on children blocks accepted

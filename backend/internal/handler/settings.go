@@ -98,11 +98,14 @@ func (h *SettingsHandler) SaveNotionKey(w http.ResponseWriter, r *http.Request) 
 	}
 	parentType, titleProperty, err := h.notion.VerifyParent(ctx, req.APIKey, parentID)
 	if err != nil {
-		if errors.Is(err, service.ErrNotionInvalidAPIKey) {
+		switch {
+		case errors.Is(err, service.ErrNotionInvalidAPIKey):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion API key is invalid or has been revoked.")
-			return
+		case errors.Is(err, service.ErrNotionUnavailable):
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to verify the Notion page — Notion may be temporarily unavailable. Try again in a moment.")
+		default:
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion page not found or not shared with the integration. Share the page with your integration (··· → Connections) and try again.")
 		}
-		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion page not found or not shared with the integration. Share the page with your integration (··· → Connections) and try again.")
 		return
 	}
 
