@@ -141,6 +141,7 @@ func TestNormalizeMarkdownListItem(t *testing.T) {
 		{"plain bullet triple space", "-   일반 항목", "- 일반 항목"},
 		{"already canonical", "- [ ] 이미 정상", "- [ ] 이미 정상"},
 		{"asterisk bullet", "* 항목", "* 항목"},
+		{"non-checkbox escaped brackets preserved", `- \[참고\] 항목`, `- \[참고\] 항목`},
 		{"bold text is not a list", "**중요** 강조", "**중요** 강조"},
 		{"heading untouched", "## 액션 아이템", "## 액션 아이템"},
 		{"empty", "", ""},

@@ -488,8 +488,15 @@ func NormalizeMarkdownListItem(line string) string {
 	if trimmed == rest {
 		return line // no space after marker (e.g. "**bold**", "-word")
 	}
-	trimmed = strings.ReplaceAll(trimmed, "\\[", "[")
-	trimmed = strings.ReplaceAll(trimmed, "\\]", "]")
+	// Unescape only a leading task checkbox ("\[ \]" from turndown, "\[ ]" from
+	// html-to-markdown/v2, and the checked variants); brackets the user escaped
+	// elsewhere in the item (e.g. "\[참고\]") are left as typed.
+	for _, box := range []string{`\[ \]`, `\[x\]`, `\[X\]`, `\[ ]`, `\[x]`, `\[X]`} {
+		if strings.HasPrefix(trimmed, box) {
+			trimmed = strings.NewReplacer(`\[`, "[", `\]`, "]").Replace(box) + trimmed[len(box):]
+			break
+		}
+	}
 	return string(marker) + " " + trimmed
 }
 

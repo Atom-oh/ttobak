@@ -21,7 +21,9 @@ marked.use({ renderer: { checkbox({ checked }) { return checked ? '[x] ' : '[ ] 
 // export via markdownToNotionBlocks) parse it as markdown, and would otherwise
 // render raw <h1>/<p> tags. atx headings + `-` bullets match the Bedrock
 // summary skeleton (`# 회의록`, `- `) the exporter expects.
-const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-' });
+// hr: '---' keeps horizontal rules as `---` rather than turndown's default
+// `* * *`, which normalizeMarkdown below would otherwise rewrite into a bullet.
+const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', hr: '---' });
 
 // turndown emits "-   " (marker + 3 spaces) and backslash-escapes the literal
 // task-checkbox text ("\[ \]") that rides along because TipTap has no TaskList
