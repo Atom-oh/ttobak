@@ -44,7 +44,10 @@ printf '%s\n' "$PANEL" >> "$WORK/synth-prompt.txt"
 
 PRIMARY_MODEL="${ANTHROPIC_MODEL:-us.anthropic.claude-fable-5}"
 FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-4-8}"
-CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-120}"
+# 300s(패널 PANEL_TIMEOUT) 보다 짧으면 정상 응답도 강제 종료된다 — 실측 근거:
+# oh-my-cloud-skills #105, 이 repo 의 러너에서 무타임아웃 chair가 357줄 diff
+# 종합에 286s를 정상 소요. 600s로 그 여유를 반영.
+CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-600}"
 
 chair_label() { case "$1" in
   *fable-5*)  echo "Claude Fable 5" ;;
@@ -58,20 +61,27 @@ run_chair() {  # $1=model → "$OUT" 에 기록. claude 실패해도 || true 로
     < "$DIFF" > "$OUT" 2>"$WORK/chair.err" || true
 }
 
-chair_degraded() { [ ! -s "$OUT" ] || ! grep -q '^VERDICT:' "$OUT"; }
+# gate(pr-review.yml)와 동일한 기준으로 정합: 마지막 줄이 정확히
+# VERDICT: PASS|FAIL 이어야 "유효". 느슨한 substring 매칭은 stray VERDICT:
+# 라인이나 truncation 을 놓친다.
+chair_valid() { [ -s "$OUT" ] && tail -n1 "$OUT" | grep -qE '^VERDICT: (PASS|FAIL)$'; }
 
 run_chair "$PRIMARY_MODEL"
 CHAIR_USED="$PRIMARY_MODEL"
-if chair_degraded; then
-  echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty, ${CHAIR_TIMEOUT}s cap) — falling back to '$(chair_label "$FALLBACK_MODEL")'"
+if ! chair_valid; then
+  echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(head -c 500 "$WORK/chair.err" 2>/dev/null) — falling back to '$(chair_label "$FALLBACK_MODEL")'"
   run_chair "$FALLBACK_MODEL"
-  CHAIR_USED="$FALLBACK_MODEL"
+  if chair_valid; then
+    CHAIR_USED="$FALLBACK_MODEL"
+  fi
 fi
 
-if [ ! -s "$OUT" ]; then
-  echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 빈 응답." > "$OUT"
+if ! chair_valid; then
+  echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 유효한 응답(빈 응답 또는 VERDICT 없음)을 반환하지 않음." > "$OUT"
   echo "VERDICT: FAIL" >> "$OUT"
 fi
 
-[ -n "${GITHUB_ENV:-}" ] && echo "chair_used=$(chair_label "$CHAIR_USED")" >> "$GITHUB_ENV"
+if [ -n "${GITHUB_ENV:-}" ]; then
+  echo "chair_used=$(chair_label "$CHAIR_USED")" >> "$GITHUB_ENV"
+fi
 echo "Synthesis: $(wc -c < "$OUT") bytes (chair: $(chair_label "$CHAIR_USED"), panel: ${RESP})"
