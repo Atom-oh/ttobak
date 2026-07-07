@@ -467,6 +467,32 @@ func blocksForText(blockType, text string, checked bool) []NotionBlock {
 	return blocks
 }
 
+// NormalizeMarkdownListItem rewrites a list line to the canonical
+// "- "/"* " + unescaped-content form the markdown parsers expect. HTML→markdown
+// converters used on edited summaries diverge from that form: turndown emits
+// "-   " (marker + three spaces) and both turndown and html-to-markdown/v2
+// backslash-escape task brackets ("\[ \]" / "\[ ]"), so an edited "- [ ] task"
+// round-trips as "-   \[ \] task" and would otherwise export as a plain bullet
+// with literal brackets instead of a Notion to_do. Returns line unchanged when
+// it is not a list item (marker not followed by whitespace).
+func NormalizeMarkdownListItem(line string) string {
+	if line == "" {
+		return line
+	}
+	marker := line[0]
+	if marker != '-' && marker != '*' {
+		return line
+	}
+	rest := line[1:]
+	trimmed := strings.TrimLeft(rest, " ")
+	if trimmed == rest {
+		return line // no space after marker (e.g. "**bold**", "-word")
+	}
+	trimmed = strings.ReplaceAll(trimmed, "\\[", "[")
+	trimmed = strings.ReplaceAll(trimmed, "\\]", "]")
+	return string(marker) + " " + trimmed
+}
+
 // markdownToNotionBlocks converts markdown text to Notion blocks
 func (s *NotionService) markdownToNotionBlocks(content string) []NotionBlock {
 	var blocks []NotionBlock
@@ -478,6 +504,11 @@ func (s *NotionService) markdownToNotionBlocks(content string) []NotionBlock {
 		if line == "" {
 			continue
 		}
+
+		// Normalize list markers so summaries edited in the TipTap editor
+		// (HTML→markdown converted) still match the "- [ ] " todo / "- " bullet
+		// prefixes below. No-op for headings and paragraphs.
+		line = NormalizeMarkdownListItem(line)
 
 		// Check for headings
 		if strings.HasPrefix(line, "### ") {

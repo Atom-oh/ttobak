@@ -23,6 +23,17 @@ marked.use({ renderer: { checkbox({ checked }) { return checked ? '[x] ' : '[ ] 
 // summary skeleton (`# 회의록`, `- `) the exporter expects.
 const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-' });
 
+// turndown emits "-   " (marker + 3 spaces) and backslash-escapes the literal
+// task-checkbox text ("\[ \]") that rides along because TipTap has no TaskList
+// extension. Normalize both to the canonical "- [ ] "/"- [x] " the summary
+// skeleton uses so stored markdown stays clean. (The backend export parser is
+// tolerant of these too, but keeping the source canonical avoids surprises.)
+function normalizeMarkdown(md: string): string {
+  return md
+    .replace(/^(\s*)[-*][ \t]+/gm, '$1- ')
+    .replace(/^(\s*- )\\?\[([ xX])\\?\] /gm, '$1[$2] ');
+}
+
 interface AISummaryCardProps {
   content?: string;
   summary?: string;
@@ -40,7 +51,7 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
     if (!onSave) return;
     setSaving(true);
     try {
-      await onSave(turndown.turndown(html));
+      await onSave(normalizeMarkdown(turndown.turndown(html)));
       setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
     } finally {
       setSaving(false);

@@ -123,6 +123,69 @@ func TestSplitBlocks(t *testing.T) {
 	}
 }
 
+// NormalizeMarkdownListItem must canonicalize the list forms that HTML→markdown
+// converters produce for an edited summary — turndown's "-   " (3-space marker)
+// and both converters' backslash-escaped task brackets ("\[ \]" / "\[ ]") — so
+// the downstream "- [ ] " todo prefix still matches. Without this, edited action
+// items export as plain bullets containing literal "[ ]" text instead of Notion
+// to_do blocks.
+func TestNormalizeMarkdownListItem(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"turndown unchecked task", `-   \[ \] 담당자에게 문서 전달`, "- [ ] 담당자에게 문서 전달"},
+		{"turndown checked task", `-   \[x\] 완료된 작업`, "- [x] 완료된 작업"},
+		{"html-to-markdown unchecked task", `- \[ ] 문서 전달`, "- [ ] 문서 전달"},
+		{"plain bullet triple space", "-   일반 항목", "- 일반 항목"},
+		{"already canonical", "- [ ] 이미 정상", "- [ ] 이미 정상"},
+		{"asterisk bullet", "* 항목", "* 항목"},
+		{"bold text is not a list", "**중요** 강조", "**중요** 강조"},
+		{"heading untouched", "## 액션 아이템", "## 액션 아이템"},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeMarkdownListItem(tt.in); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// After an edit round-trips a summary through the editor's HTML→markdown path,
+// action items arrive as "-   \[ \] ..." — markdownToNotionBlocks must still
+// emit to_do blocks (checked/unchecked) for them, not plain bulleted_list_item
+// blocks with literal "[ ]" text.
+func TestMarkdownToNotionBlocksEditedTasks(t *testing.T) {
+	s := NewNotionService()
+	md := "## 액션 아이템\n" +
+		`-   \[ \] 담당자에게 문서 전달` + "\n" +
+		`-   \[x\] 완료된 작업` + "\n" +
+		"-   일반 불릿 항목"
+	blocks := s.markdownToNotionBlocks(md)
+
+	var todos, bullets int
+	for _, b := range blocks {
+		switch b.Type {
+		case "to_do":
+			todos++
+			if len(b.ToDo.RichText) == 0 || strings.Contains(b.ToDo.RichText[0].Text.Content, "[") {
+				t.Fatalf("to_do block still contains literal bracket text: %+v", b.ToDo.RichText)
+			}
+		case "bulleted_list_item":
+			bullets++
+		}
+	}
+	if todos != 2 {
+		t.Fatalf("expected 2 to_do blocks (1 unchecked + 1 checked), got %d", todos)
+	}
+	if bullets != 1 {
+		t.Fatalf("expected 1 bulleted_list_item block, got %d", bullets)
+	}
+}
+
 // ParseNotionPageID must extract a Notion page/database ID from whatever a
 // user pastes — a bare ID, a dashed UUID, or a full page URL — and normalize
 // it to dashed UUID form, since that's what Notion's parent.page_id and

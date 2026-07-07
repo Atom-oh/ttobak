@@ -23,6 +23,14 @@ func TestContentAsMarkdown(t *testing.T) {
 		}
 	})
 
+	t.Run("markdown autolink is not mistaken for HTML", func(t *testing.T) {
+		// Starts with "<" but has no closing tag — a bare autolink, not HTML.
+		md := "<https://example.com> 참고 링크입니다"
+		if got := contentAsMarkdown(md); got != md {
+			t.Fatalf("autolink markdown was altered:\ngot:  %q\nwant: %q", got, md)
+		}
+	})
+
 	t.Run("tiptap HTML converts to markdown", func(t *testing.T) {
 		html := `<h1>회의록</h1><p></p><h2>참석자</h2><ul><li><p><strong>오준석 SA</strong>: AWS 솔루션즈 아키텍트</p></li><li><p><br></p></li><li><p><strong>강광일 TAM</strong>: AWS 서포트</p></li></ul>`
 		got := contentAsMarkdown(html)

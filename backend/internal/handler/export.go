@@ -23,8 +23,12 @@ import (
 // stored in content; exporting that as-is renders literal <h1>/<p> tags in
 // Notion/Obsidian. On conversion failure, fall back to the raw string rather
 // than dropping the summary entirely.
+//
+// HTML is detected by a leading "<" plus a closing tag ("</"): TipTap block
+// output always opens with a tag and has closing tags, while markdown that
+// merely starts with an autolink ("<https://…>") has no "</" and is left alone.
 func contentAsMarkdown(content string) string {
-	if !strings.HasPrefix(strings.TrimSpace(content), "<") {
+	if !strings.HasPrefix(strings.TrimSpace(content), "<") || !strings.Contains(content, "</") {
 		return content
 	}
 	md, err := htmltomarkdown.ConvertString(content)
@@ -495,7 +499,7 @@ func extractActionItems(content string) []string {
 	lines := strings.Split(content, "\n")
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
+		line = service.NormalizeMarkdownListItem(strings.TrimSpace(line))
 		// Look for lines that start with action-like prefixes
 		if strings.HasPrefix(line, "- [ ]") || strings.HasPrefix(line, "* [ ]") {
 			item := strings.TrimPrefix(line, "- [ ]")
