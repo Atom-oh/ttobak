@@ -147,6 +147,7 @@ export interface QAEntry {
 export interface IntegrationConfig {
   configured: boolean;
   maskedKey?: string;
+  parentPageId?: string; // empty on a legacy record saved before the parent-page requirement — needs re-connect
 }
 
 export interface IntegrationsResponse {

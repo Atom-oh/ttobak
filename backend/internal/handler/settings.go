@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,15 +20,12 @@ import (
 type SettingsHandler struct {
 	repo   *repository.DynamoDBRepository
 	crypto *service.CryptoService
+	notion *service.NotionService
 }
 
 // NewSettingsHandler creates a new settings handler
-func NewSettingsHandler(repo *repository.DynamoDBRepository, crypto ...*service.CryptoService) *SettingsHandler {
-	h := &SettingsHandler{repo: repo}
-	if len(crypto) > 0 {
-		h.crypto = crypto[0]
-	}
-	return h
+func NewSettingsHandler(repo *repository.DynamoDBRepository, crypto *service.CryptoService, notion *service.NotionService) *SettingsHandler {
+	return &SettingsHandler{repo: repo, crypto: crypto, notion: notion}
 }
 
 // GetIntegrations handles GET /api/settings/integrations
@@ -50,8 +48,9 @@ func (h *SettingsHandler) GetIntegrations(w http.ResponseWriter, r *http.Request
 			maskedKey = maskAPIKey(key)
 		}
 		response.Notion = &model.IntegrationStatusResponse{
-			Configured: true,
-			MaskedKey:  maskedKey,
+			Configured:   true,
+			MaskedKey:    maskedKey,
+			ParentPageID: notionIntegration.NotionParentID,
 		}
 	} else {
 		response.Notion = &model.IntegrationStatusResponse{
@@ -84,6 +83,34 @@ func (h *SettingsHandler) SaveNotionKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if req.ParentPage == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "parentPage is required")
+		return
+	}
+
+	// Notion internal integrations can only create pages under a page/database
+	// the user has shared with the integration — never at the workspace root —
+	// so a parent must be resolved and verified before we store anything.
+	parentID, err := service.ParseNotionPageID(req.ParentPage)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid Notion page URL or ID")
+		return
+	}
+	parentType, titleProperty, err := h.notion.VerifyParent(ctx, req.APIKey, parentID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrNotionInvalidAPIKey):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion API key is invalid or has been revoked.")
+		case errors.Is(err, service.ErrNotionParentInaccessible):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion rejected access to that page or database. Check the integration's capabilities in Notion (··· → Connections) and try again.")
+		case errors.Is(err, service.ErrNotionUnavailable):
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to verify the Notion page — Notion may be temporarily unavailable. Try again in a moment.")
+		default:
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion page not found or not shared with the integration. Share the page with your integration (··· → Connections) and try again.")
+		}
+		return
+	}
+
 	// Encrypt API key if crypto service is available
 	apiKeyToStore := req.APIKey
 	if h.crypto != nil {
@@ -96,13 +123,16 @@ func (h *SettingsHandler) SaveNotionKey(w http.ResponseWriter, r *http.Request) 
 	}
 
 	integration := &model.Integration{
-		PK:           model.PrefixUser + userID,
-		SK:           model.PrefixIntegration + "notion",
-		UserID:       userID,
-		Service:      "notion",
-		APIKey:       apiKeyToStore,
-		ConfiguredAt: time.Now().UTC(),
-		EntityType:   "INTEGRATION",
+		PK:                  model.PrefixUser + userID,
+		SK:                  model.PrefixIntegration + "notion",
+		UserID:              userID,
+		Service:             "notion",
+		APIKey:              apiKeyToStore,
+		NotionParentID:      parentID,
+		NotionParentType:    parentType,
+		NotionTitleProperty: titleProperty,
+		ConfiguredAt:        time.Now().UTC(),
+		EntityType:          "INTEGRATION",
 	}
 
 	if err := h.repo.SaveIntegration(ctx, integration); err != nil {
@@ -112,8 +142,9 @@ func (h *SettingsHandler) SaveNotionKey(w http.ResponseWriter, r *http.Request) 
 
 	maskedKey := maskAPIKey(req.APIKey)
 	writeJSON(w, http.StatusOK, model.IntegrationStatusResponse{
-		Configured: true,
-		MaskedKey:  maskedKey,
+		Configured:   true,
+		MaskedKey:    maskedKey,
+		ParentPageID: parentID,
 	})
 }
 

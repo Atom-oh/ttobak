@@ -1,6 +1,10 @@
 package service
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -114,6 +118,225 @@ func TestSplitBlocks(t *testing.T) {
 			}
 			if total != tt.numBlocks {
 				t.Fatalf("expected total %d blocks across batches, got %d", tt.numBlocks, total)
+			}
+		})
+	}
+}
+
+// ParseNotionPageID must extract a Notion page/database ID from whatever a
+// user pastes — a bare ID, a dashed UUID, or a full page URL — and normalize
+// it to dashed UUID form, since that's what Notion's parent.page_id and
+// parent.database_id expect. This is the fix for internal integrations being
+// unable to create pages at the workspace root: the user now supplies a
+// parent page/database ID at connect time.
+func TestParseNotionPageID(t *testing.T) {
+	const want = "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"bare 32-hex ID", "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", want, false},
+		{"dashed UUID", "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d", want, false},
+		{"plain URL", "https://www.notion.so/My-Page-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d", want, false},
+		{"URL with workspace path and query", "https://www.notion.so/my-workspace/My-Page-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d?pvs=4", want, false},
+		{"uppercase hex", "1A2B3C4D5E6F7A8B9C0D1E2F3A4B5C6D", want, false},
+		{"whitespace-padded", "  1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d\n", want, false},
+		{"too short", "1a2b3c4d", "", true},
+		{"non-hex 32 chars", strings.Repeat("z", 32), "", true},
+		{"empty string", "", "", true},
+		{"URL with no ID", "https://www.notion.so/", "", true},
+		// Regression: a 31-char (truncated-by-one) ID must not silently absorb
+		// a trailing hex-looking character from the preceding title word
+		// ("Page" ends in a non-hex 'g', so it can no longer donate a char).
+		{"truncated ID must not borrow from title word", "https://www.notion.so/My-Page-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6", "", true},
+		// Regression: a trailing slash must not make the post-"/" segment
+		// empty and reject an otherwise-valid ID.
+		{"URL with trailing slash", "https://www.notion.so/My-Page-1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d/", want, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseNotionPageID(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// notionTitlePropertyName must find the title-type property by its "type"
+// field, not by assuming the key is literally "title" — a database's title
+// property display name (the properties map key) can be anything (e.g.
+// "Name"), which is exactly the case this PR's database-parent support
+// depends on getting right.
+func TestNotionTitlePropertyName(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "title property is not literally named title",
+			body: `{"properties":{"Tags":{"type":"multi_select"},"Name":{"type":"title"}}}`,
+			want: "Name",
+		},
+		{
+			name: "no title property present",
+			body: `{"properties":{"Tags":{"type":"multi_select"}}}`,
+			want: "",
+		},
+		{
+			name: "invalid json",
+			body: `not json`,
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := notionTitlePropertyName([]byte(tt.body)); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// VerifyParent's status-code branching (200/401/404/400/403/429/5xx across
+// two probes) is the core logic this feature depends on: it decides whether
+// a user gets a "bad key", "not shared", "check capabilities", or "try
+// again later" message. Table-driven against an httptest.Server so it's
+// verified without calling the real Notion API.
+func TestVerifyParent(t *testing.T) {
+	const id = "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+
+	tests := []struct {
+		name           string
+		pageStatus     int
+		dbStatus       int
+		dbBody         string
+		wantParentType string
+		wantTitleProp  string
+		wantErr        error // nil + wantErrNonNil means "any non-nil error"
+		wantErrNonNil  bool
+	}{
+		{
+			name:           "page found",
+			pageStatus:     http.StatusOK,
+			wantParentType: "page_id",
+			wantTitleProp:  "title",
+		},
+		{
+			name:          "page probe unauthorized",
+			pageStatus:    http.StatusUnauthorized,
+			wantErr:       ErrNotionInvalidAPIKey,
+			wantErrNonNil: true,
+		},
+		{
+			name:           "database found with non-default title property name",
+			pageStatus:     http.StatusNotFound,
+			dbStatus:       http.StatusOK,
+			dbBody:         `{"properties":{"Tags":{"type":"multi_select"},"Name":{"type":"title"}}}`,
+			wantParentType: "database_id",
+			wantTitleProp:  "Name",
+		},
+		{
+			name:          "database probe unauthorized",
+			pageStatus:    http.StatusNotFound,
+			dbStatus:      http.StatusUnauthorized,
+			wantErr:       ErrNotionInvalidAPIKey,
+			wantErrNonNil: true,
+		},
+		{
+			name:          "database found but has no title property",
+			pageStatus:    http.StatusNotFound,
+			dbStatus:      http.StatusOK,
+			dbBody:        `{"properties":{"Tags":{"type":"multi_select"}}}`,
+			wantErrNonNil: true,
+		},
+		{
+			name:          "not found on both probes means not shared",
+			pageStatus:    http.StatusNotFound,
+			dbStatus:      http.StatusNotFound,
+			wantErr:       errNotionParentNotFound,
+			wantErrNonNil: true,
+		},
+		{
+			name:          "permanent forbidden on both probes",
+			pageStatus:    http.StatusForbidden,
+			dbStatus:      http.StatusForbidden,
+			wantErr:       ErrNotionParentInaccessible,
+			wantErrNonNil: true,
+		},
+		{
+			name:          "permanent bad request on one probe still classifies as inaccessible",
+			pageStatus:    http.StatusBadRequest,
+			dbStatus:      http.StatusNotFound,
+			wantErr:       ErrNotionParentInaccessible,
+			wantErrNonNil: true,
+		},
+		{
+			name:          "transient rate limit on both probes is retryable",
+			pageStatus:    http.StatusTooManyRequests,
+			dbStatus:      http.StatusTooManyRequests,
+			wantErr:       ErrNotionUnavailable,
+			wantErrNonNil: true,
+		},
+		{
+			name:          "transient server error on both probes is retryable",
+			pageStatus:    http.StatusInternalServerError,
+			dbStatus:      http.StatusInternalServerError,
+			wantErr:       ErrNotionUnavailable,
+			wantErrNonNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasPrefix(r.URL.Path, "/v1/pages/"):
+					w.WriteHeader(tt.pageStatus)
+				case strings.HasPrefix(r.URL.Path, "/v1/databases/"):
+					w.WriteHeader(tt.dbStatus)
+					if tt.dbBody != "" {
+						_, _ = w.Write([]byte(tt.dbBody))
+					}
+				default:
+					t.Fatalf("unexpected request path: %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+
+			s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+			parentType, titleProperty, err := s.VerifyParent(context.Background(), "ntn_test", id)
+
+			if !tt.wantErrNonNil {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if parentType != tt.wantParentType || titleProperty != tt.wantTitleProp {
+					t.Fatalf("got (%q, %q), want (%q, %q)", parentType, titleProperty, tt.wantParentType, tt.wantTitleProp)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("got error %v, want it to match %v", err, tt.wantErr)
 			}
 		})
 	}

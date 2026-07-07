@@ -93,6 +93,10 @@ func (h *ExportHandler) ExportMeeting(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion integration not configured")
 			return
 		}
+		if integration.NotionParentID == "" {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion integration needs a parent page. Re-connect Notion in Settings with a shared page URL.")
+			return
+		}
 
 		content := h.generateMarkdownContent(meetingDetail)
 		apiKey, err := decryptStoredAPIKey(ctx, h.crypto, integration.APIKey)
@@ -100,7 +104,7 @@ func (h *ExportHandler) ExportMeeting(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to decrypt Notion API key")
 			return
 		}
-		_, pageURL, err := h.notionService.CreatePage(ctx, apiKey, meetingDetail.Title, content)
+		_, pageURL, err := h.notionService.CreatePage(ctx, apiKey, integration.NotionParentType, integration.NotionParentID, integration.NotionTitleProperty, meetingDetail.Title, content)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to create Notion page: "+err.Error())
 			return

@@ -250,13 +250,15 @@ type ExportResponse struct {
 
 // IntegrationRequest represents the request body for saving an integration
 type IntegrationRequest struct {
-	APIKey string `json:"apiKey"`
+	APIKey     string `json:"apiKey"`
+	ParentPage string `json:"parentPage"` // Notion page/database URL or ID to create exports under
 }
 
 // IntegrationStatusResponse represents the status of a single integration
 type IntegrationStatusResponse struct {
-	Configured bool   `json:"configured"`
-	MaskedKey  string `json:"maskedKey,omitempty"`
+	Configured   bool   `json:"configured"`
+	MaskedKey    string `json:"maskedKey,omitempty"`
+	ParentPageID string `json:"parentPageId,omitempty"` // empty means a legacy record needing re-connect
 }
 
 // IntegrationsResponse represents the response for listing integrations
