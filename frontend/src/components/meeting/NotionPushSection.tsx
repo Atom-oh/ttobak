@@ -59,12 +59,12 @@ export function NotionPushSection({ meetingId }: NotionPushSectionProps) {
     setPushedUrl(null);
     try {
       const response = await exportApi.export(meetingId, 'notion');
-      if (response.notionUrl) {
-        setPushedUrl(response.notionUrl);
+      if (response.url) {
+        setPushedUrl(response.url);
         // Open immediately for users who want to jump straight to the page.
         // We also keep the URL visible so they can re-open later from the
         // modal without re-pushing (which would create a duplicate page).
-        window.open(response.notionUrl, '_blank', 'noopener,noreferrer');
+        window.open(response.url, '_blank', 'noopener,noreferrer');
       } else {
         setError('Notion에서 페이지 URL을 반환하지 않았습니다');
       }

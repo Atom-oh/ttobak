@@ -44,8 +44,8 @@ export function ExportMenu({ meetingId, onExportStart, onExportComplete }: Expor
         }
 
         const response = await exportApi.export(meetingId, 'notion');
-        if (response.notionUrl) {
-          window.open(response.notionUrl, '_blank');
+        if (response.url) {
+          window.open(response.url, '_blank');
         }
       } else if (format === 'pdf') {
         const response = await exportApi.export(meetingId, 'pdf');
