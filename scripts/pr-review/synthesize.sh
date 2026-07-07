@@ -78,7 +78,10 @@ chair_valid() {
 
 run_chair "$PRIMARY_MODEL"
 CHAIR_USED="$PRIMARY_MODEL"
-if ! chair_valid; then
+# PRIMARY_MODEL/FALLBACK_MODEL 이 같은 모델로 resolve 되면(예: job env 의
+# ANTHROPIC_MODEL 이 이미 fallback 기본값과 동일) 재시도는 동일 호출을 그대로
+# 반복할 뿐이라 CHAIR_TIMEOUT 을 두 번 태우고도 아무 이득이 없다 — skip.
+if ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
   echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $(head -c 500 "$WORK/chair.err" 2>/dev/null) — falling back to '$(chair_label "$FALLBACK_MODEL")'"
   run_chair "$FALLBACK_MODEL"
   if chair_valid; then
