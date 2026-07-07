@@ -42,9 +42,36 @@ PROMPT_EOF
 
 printf '%s\n' "$PANEL" >> "$WORK/synth-prompt.txt"
 
-cat "$DIFF" | claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text > "$OUT" || true
+PRIMARY_MODEL="${ANTHROPIC_MODEL:-us.anthropic.claude-fable-5}"
+FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-4-8}"
+CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-120}"
+
+chair_label() { case "$1" in
+  *fable-5*)  echo "Claude Fable 5" ;;
+  *opus-4-8*) echo "Claude Opus 4.8" ;;
+  *)          echo "$1" ;;
+esac ; }
+
+run_chair() {  # $1=model → "$OUT" 에 기록. claude 실패해도 || true 로 계속.
+  ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
+    claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
+    < "$DIFF" > "$OUT" 2>"$WORK/chair.err" || true
+}
+
+chair_degraded() { [ ! -s "$OUT" ] || ! grep -q '^VERDICT:' "$OUT"; }
+
+run_chair "$PRIMARY_MODEL"
+CHAIR_USED="$PRIMARY_MODEL"
+if chair_degraded; then
+  echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty, ${CHAIR_TIMEOUT}s cap) — falling back to '$(chair_label "$FALLBACK_MODEL")'"
+  run_chair "$FALLBACK_MODEL"
+  CHAIR_USED="$FALLBACK_MODEL"
+fi
+
 if [ ! -s "$OUT" ]; then
-  echo "리뷰 생성 실패 — Claude CLI가 빈 응답을 반환했습니다." > "$OUT"
+  echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 빈 응답." > "$OUT"
   echo "VERDICT: FAIL" >> "$OUT"
 fi
-echo "Synthesis: $(wc -c < "$OUT") bytes (panel: ${RESP})"
+
+[ -n "${GITHUB_ENV:-}" ] && echo "chair_used=$(chair_label "$CHAIR_USED")" >> "$GITHUB_ENV"
+echo "Synthesis: $(wc -c < "$OUT") bytes (chair: $(chair_label "$CHAIR_USED"), panel: ${RESP})"
