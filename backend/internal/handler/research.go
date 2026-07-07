@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -212,7 +213,8 @@ func (h *ResearchHandler) ExportResearch(w http.ResponseWriter, r *http.Request)
 	}
 	_, notionURL, err := h.notionService.CreatePage(ctx, apiKey, integration.NotionParentType, integration.NotionParentID, integration.NotionTitleProperty, title, detail.Content)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Notion export failed: "+err.Error())
+		log.Printf("ExportResearch: notion CreatePage failed: %v", err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Notion export failed. Check your Notion connection in Settings and try again.")
 		return
 	}
 

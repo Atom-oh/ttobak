@@ -12,15 +12,23 @@ import (
 	"strings"
 )
 
+// notionAPIBaseURL is Notion's production API host. Tests override this via
+// the unexported baseURL field (same package) to point at an httptest.Server,
+// since VerifyParent's status-code branching is the core logic this feature
+// depends on and must be verifiable without calling the real Notion API.
+const notionAPIBaseURL = "https://api.notion.com"
+
 // NotionService handles Notion API operations
 type NotionService struct {
 	httpClient *http.Client
+	baseURL    string
 }
 
 // NewNotionService creates a new Notion service
 func NewNotionService() *NotionService {
 	return &NotionService{
 		httpClient: &http.Client{},
+		baseURL:    notionAPIBaseURL,
 	}
 }
 
@@ -122,7 +130,7 @@ func (s *NotionService) CreatePage(ctx context.Context, apiKey, parentType, pare
 		return "", "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.notion.com/v1/pages", bytes.NewReader(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "POST", s.baseURL+"/v1/pages", bytes.NewReader(jsonBody))
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -175,7 +183,7 @@ func (s *NotionService) appendBlocks(ctx context.Context, apiKey, pageID string,
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "PATCH", "https://api.notion.com/v1/blocks/"+pageID+"/children", bytes.NewReader(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, "PATCH", s.baseURL+"/v1/blocks/"+pageID+"/children", bytes.NewReader(jsonBody))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -267,6 +275,19 @@ var ErrNotionUnavailable = errors.New("notion is temporarily unavailable, try ag
 // share the page.
 var errNotionParentNotFound = errors.New("notion page not found or not shared with the integration")
 
+// ErrNotionParentInaccessible is returned when Notion rejects both probes
+// with a permanent client error (400/403) rather than a definitive 404 —
+// unlike ErrNotionUnavailable, retrying will not help; the user's Notion
+// setup (integration capabilities, malformed ID) needs to change.
+var ErrNotionParentInaccessible = errors.New("notion rejected access to this page or database")
+
+// isPermanentNotionErrorStatus reports whether status is a definitive client
+// error (bad request / forbidden) that will not resolve on retry, as opposed
+// to a transient one (429 rate-limited, 5xx outage).
+func isPermanentNotionErrorStatus(status int) bool {
+	return status == http.StatusBadRequest || status == http.StatusForbidden
+}
+
 // VerifyParent checks that id is a page or database the integration can
 // access, returning the parentType ("page_id" or "database_id") and the
 // properties key to use for the title when creating a page under it —
@@ -275,7 +296,7 @@ var errNotionParentNotFound = errors.New("notion page not found or not shared wi
 // the database's own property name; a database's title property is not
 // always literally called "title").
 func (s *NotionService) VerifyParent(ctx context.Context, apiKey, id string) (parentType, titleProperty string, err error) {
-	pageStatus, _, err := s.notionGet(ctx, apiKey, "https://api.notion.com/v1/pages/"+id)
+	pageStatus, _, err := s.notionGet(ctx, apiKey, s.baseURL+"/v1/pages/"+id)
 	if err != nil {
 		log.Printf("notion VerifyParent: GET pages/%s failed: %v", id, err)
 		return "", "", fmt.Errorf("%w: %v", ErrNotionUnavailable, err)
@@ -287,31 +308,36 @@ func (s *NotionService) VerifyParent(ctx context.Context, apiKey, id string) (pa
 		return "", "", ErrNotionInvalidAPIKey
 	}
 
-	dbStatus, body, err := s.notionGet(ctx, apiKey, "https://api.notion.com/v1/databases/"+id)
+	dbStatus, body, err := s.notionGet(ctx, apiKey, s.baseURL+"/v1/databases/"+id)
 	if err != nil {
 		log.Printf("notion VerifyParent: GET databases/%s failed: %v", id, err)
 		return "", "", fmt.Errorf("%w: %v", ErrNotionUnavailable, err)
 	}
 	if dbStatus == http.StatusOK {
-		titleProperty := notionTitlePropertyName(body)
-		if titleProperty == "" {
+		dbTitleProperty := notionTitlePropertyName(body)
+		if dbTitleProperty == "" {
 			return "", "", fmt.Errorf("could not find a title property on the Notion database")
 		}
-		return "database_id", titleProperty, nil
+		return "database_id", dbTitleProperty, nil
 	}
 	if dbStatus == http.StatusUnauthorized {
 		return "", "", ErrNotionInvalidAPIKey
 	}
 
-	// Anything other than a clean 404 on both probes (429 rate-limited, 5xx,
-	// etc.) is a real Notion-side problem, not "page not shared" — surface it
-	// distinctly instead of misdiagnosing it as a sharing mistake.
-	if pageStatus != http.StatusNotFound || dbStatus != http.StatusNotFound {
-		log.Printf("notion VerifyParent: unexpected status for %s (pages=%d, databases=%d)", id, pageStatus, dbStatus)
-		return "", "", ErrNotionUnavailable
+	if pageStatus == http.StatusNotFound && dbStatus == http.StatusNotFound {
+		return "", "", errNotionParentNotFound
 	}
 
-	return "", "", errNotionParentNotFound
+	log.Printf("notion VerifyParent: unexpected status for %s (pages=%d, databases=%d)", id, pageStatus, dbStatus)
+
+	// A permanent 400/403 on either probe means retrying won't help — it's a
+	// user-actionable config problem (capabilities, malformed ID), distinct
+	// from a transient 429/5xx that's genuinely worth retrying.
+	if isPermanentNotionErrorStatus(pageStatus) || isPermanentNotionErrorStatus(dbStatus) {
+		return "", "", ErrNotionParentInaccessible
+	}
+
+	return "", "", ErrNotionUnavailable
 }
 
 // notionTitlePropertyName returns the property name (the properties map key,

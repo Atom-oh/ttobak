@@ -101,6 +101,8 @@ func (h *SettingsHandler) SaveNotionKey(w http.ResponseWriter, r *http.Request) 
 		switch {
 		case errors.Is(err, service.ErrNotionInvalidAPIKey):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion API key is invalid or has been revoked.")
+		case errors.Is(err, service.ErrNotionParentInaccessible):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion rejected access to that page or database. Check the integration's capabilities in Notion (··· → Connections) and try again.")
 		case errors.Is(err, service.ErrNotionUnavailable):
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to verify the Notion page — Notion may be temporarily unavailable. Try again in a moment.")
 		default:
