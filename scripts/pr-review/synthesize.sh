@@ -42,7 +42,11 @@ PROMPT_EOF
 
 printf '%s\n' "$PANEL" >> "$WORK/synth-prompt.txt"
 
-PRIMARY_MODEL="${ANTHROPIC_MODEL:-us.anthropic.claude-fable-5}"
+# 의도적으로 job 전역 ANTHROPIC_MODEL 을 참조하지 않는다 — 그 값은 job 의 다른
+# step/용도에도 쓰일 수 있고, repo 마다 다르게 고정돼 있을 수 있어(예: 아직
+# opus-4-8 로 고정된 repo) 그대로 재사용하면 PRIMARY==FALLBACK 으로 붕괴해
+# fallback 자체가 무력화된다. chair 전용 CHAIR_PRIMARY_MODEL 로 완전히 분리.
+PRIMARY_MODEL="${CHAIR_PRIMARY_MODEL:-us.anthropic.claude-fable-5}"
 FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-4-8}"
 # 300s(패널 PANEL_TIMEOUT) 보다 짧으면 정상 응답도 강제 종료된다 — 실측 근거:
 # oh-my-cloud-skills #105, 이 repo 의 러너에서 무타임아웃 chair가 357줄 diff
