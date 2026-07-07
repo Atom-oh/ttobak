@@ -63,14 +63,17 @@ run_chair() {  # $1=model → "$OUT" 에 기록. claude 실패해도 || true 로
 
 # 요구사항: 마지막 non-empty 줄이 정확히 VERDICT: PASS 또는 VERDICT: FAIL.
 # tail -n1 대신 awk 로 trailing 빈 줄을 건너뛴다 — trailing blank line 하나로
-# 유효한 응답이 invalid 처리되는 걸 방지.
-# NOTE: gate(pr-review.yml) 는 파일 전체에서 FAIL 을 먼저 grep 하므로 완전히
-# 동일한 기준은 아니다 — chair 프롬프트가 "마지막 줄" 규칙을 강제하는 한 실무상
-# 충분하지만, 본문에 패널의 raw "VERDICT: FAIL" 인용이 그대로 남으면 gate 와
-# 어긋날 수 있다(이 변경 이전부터 존재하던 gate 자체의 특성, 범위 밖).
+# 유효한 응답이 invalid 처리되는 걸 방지. 정규식엔 whitespace 여유를 두지 않는다
+# — gate(pr-review.yml) 가 동일 라인을 공백 없는 정확매칭(^VERDICT: PASS$)으로
+# 다시 검사하므로, 여기서 여유를 주면 chair_valid 는 통과시키고 gate 는 그 원본
+# 파일을 그대로 걸러버리는 validator/gate 불일치가 생긴다.
+# NOTE: gate 는 파일 전체에서 FAIL 을 먼저 grep 하므로 완전히 동일한 기준은
+# 아니다 — chair 프롬프트가 "마지막 줄" 규칙을 강제하는 한 실무상 충분하지만,
+# 본문에 패널의 raw "VERDICT: FAIL" 인용이 그대로 남으면 gate 와 어긋날 수
+# 있다(이 변경 이전부터 존재하던 gate 자체의 특성, 범위 밖).
 chair_valid() {
   [ -s "$OUT" ] || return 1
-  awk 'NF{last=$0} END{print last}' "$OUT" | grep -qE '^VERDICT: (PASS|FAIL)[[:space:]]*$'
+  awk 'NF{last=$0} END{print last}' "$OUT" | grep -qE '^VERDICT: (PASS|FAIL)$'
 }
 
 run_chair "$PRIMARY_MODEL"
