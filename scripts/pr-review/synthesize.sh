@@ -71,8 +71,10 @@ Synthesize ONE final review, grouped by lens (L2/L3/L4/L5):
 3. **Suggestions**
 4. **Verdict**
 
-Project rules (ttobak — AI 회의 어시스턴트, TypeScript/Tauri 프론트엔드 + Python STT 백엔드, lens 별 체크리스트):
-- L2(코드 정확성): TS 프론트엔드/Tauri + Python STT·백엔드 로직 버그, 엣지케이스.
+Project rules (ttobak — AI 회의 어시스턴트, Next.js 프론트엔드 + Go Lambda 백엔드(+ 별도 Python
+Q&A Lambda), lens 별 체크리스트):
+- L2(코드 정확성): Go Lambda(chi, sentinel errors, DynamoDB pagination) + Python Q&A Lambda
+  로직 버그, 엣지케이스. handler→service→repository 레이어링 위반.
 - L3(보안/개인정보): 회의 녹음·transcript 데이터 처리, 이메일 도메인 allowlist, MCP 외부 접근 범위, 시크릿 하드코딩 금지.
 - L4(AI 파이프라인 정확성): STT 정확도 관련 로직, 다국어 감지, summary↔transcript 딥링크, deep research 흐름.
 - L5(문서/ADR 일관성): docs/decisions/ADR-*.md 와 실제 구현 정합, README 최신성.
@@ -84,13 +86,7 @@ IMPORTANT: 마지막 줄은 정확히 하나:
   VERDICT: PASS
   VERDICT: FAIL
 CRITICAL/MAJOR 있으면 FAIL, 아니면 PASS.
-
-=== PANEL REVIEWS ===
 PROMPT_EOF
-
-# 패널 원문(${PANEL})은 heredoc 밖에서 append: 패널 출력에 'PROMPT_EOF' 단독 라인이
-# 있어도 heredoc 가 조기 종료되지 않도록.
-printf '%s\n' "$PANEL" >> "$WORK/synth-prompt.txt"
 
 # stdin 페이로드: diff + 패널 리뷰. 여기는 heredoc 이 아니라 순수 파일 결합이라
 # 패널 출력 안의 임의 텍스트(예: 'PROMPT_EOF' 단독 라인)가 조기 종료를 유발할 걱정이 없다.

@@ -32,7 +32,12 @@ jobs:
       AWS_REGION: us-east-1
     steps:
       # 보안(M1): pull_request_target 는 시크릿/쓰기권한 컨텍스트 → base(신뢰됨) 체크아웃.
+      # persist-credentials: false (ADR-019) — Kiro 는 fs_read 로 절대경로를 read 할 수 있어,
+      # diff 인젝션이 기본값(true)이 남기는 .git/config 의 GITHUB_TOKEN 을 읽어 외부 서비스로
+      # 유출시킬 수 있다. 이 스텝이 그 토큰을 아예 디스크에 남기지 않게 한다.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Verify CLIs present (runner image)
         run: |
@@ -71,7 +76,8 @@ jobs:
           rm -rf /tmp/pr-review/lenses
           mkdir -p /tmp/pr-review/lenses
           COMMON="Review ONLY the diff under review for this PR, in
-          this AI meeting-assistant repo (TypeScript/Tauri frontend + Python STT backend). The diff reaches you one of
+          this AI meeting-assistant repo (Next.js frontend + Go Lambda backend, separate
+          Python Lambda for Q&A/RAG; STT via AWS Transcribe Streaming + Whisper ECS). The diff reaches you one of
           two ways depending on your tool: it is either piped to your stdin directly, or
           your instructions below tell you to read it via a file-read tool from an
           absolute path — whichever applies to you, that IS the diff under review; do not
@@ -79,13 +85,16 @@ jobs:
           Stay inside your assigned lens below — do not comment on other lenses (other
           agents cover those independently). Output concise findings grouped
           CRITICAL/MAJOR/MINOR. DO NOT output a VERDICT line — that is the chair's job.
+          If you can read repo files (e.g. via fs_read), read CLAUDE.md/AGENTS.md (if
+          present) for this repo's conventions first.
           한국어+영문 기술용어 혼용 가능."
 
           cat <<PROMPT_EOF > /tmp/pr-review/lenses/L2.txt
           $COMMON
 
           LENS: L2 — 코드 정확성
-          - TS 프론트엔드/Tauri + Python STT·백엔드 로직 버그, 엣지케이스.
+          - Next.js 프론트엔드 + Go Lambda 백엔드(chi, sentinel errors, DynamoDB pagination),
+            Python Q&A Lambda 로직 버그, 엣지케이스. handler→service→repository 레이어링 위반.
           PROMPT_EOF
 
           cat <<PROMPT_EOF > /tmp/pr-review/lenses/L3.txt
