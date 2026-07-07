@@ -9,12 +9,30 @@ import (
 	"strings"
 	"time"
 
+	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
+
+// contentAsMarkdown returns content unchanged when it is already markdown,
+// converting from HTML when it isn't. Meetings whose summary was edited in the
+// TipTap editor before the frontend started saving markdown have raw HTML
+// stored in content; exporting that as-is renders literal <h1>/<p> tags in
+// Notion/Obsidian. On conversion failure, fall back to the raw string rather
+// than dropping the summary entirely.
+func contentAsMarkdown(content string) string {
+	if !strings.HasPrefix(strings.TrimSpace(content), "<") {
+		return content
+	}
+	md, err := htmltomarkdown.ConvertString(content)
+	if err != nil {
+		return content
+	}
+	return md
+}
 
 // ExportHandler handles export-related requests
 type ExportHandler struct {
@@ -209,7 +227,7 @@ func (h *ExportHandler) generateMarkdownContent(meeting *model.MeetingDetailResp
 
 	if meeting.Content != "" {
 		sb.WriteString("## Summary\n\n")
-		sb.WriteString(meeting.Content)
+		sb.WriteString(contentAsMarkdown(meeting.Content))
 		sb.WriteString("\n\n")
 	}
 
@@ -310,9 +328,10 @@ func (h *ExportHandler) generateObsidianContent(ctx context.Context, userID stri
 	sb.WriteString(fmt.Sprintf("# %s\n\n", meeting.Title))
 
 	// ── Summary ──
-	if meeting.Content != "" {
+	content := contentAsMarkdown(meeting.Content)
+	if content != "" {
 		sb.WriteString("## 요약\n\n")
-		sb.WriteString(meeting.Content)
+		sb.WriteString(content)
 		sb.WriteString("\n\n")
 	}
 
@@ -349,7 +368,7 @@ func (h *ExportHandler) generateObsidianContent(ctx context.Context, userID stri
 		sb.WriteString("\n")
 	} else {
 		// Fallback: extract from content text
-		actionItems := extractActionItems(meeting.Content)
+		actionItems := extractActionItems(content)
 		if len(actionItems) > 0 {
 			sb.WriteString("## 액션 아이템\n\n")
 			for _, item := range actionItems {

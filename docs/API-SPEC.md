@@ -149,6 +149,8 @@ Response: 200 OK
 Error: 403 Forbidden (shared users with "read" permission cannot edit)
 ```
 
+> `content` must be **Markdown**, not HTML. The web editor (TipTap) edits in HTML but converts back to Markdown before saving, because the summary is consumed as Markdown downstream (Notion/Obsidian export). Exporters also normalize any stray HTML to Markdown as a safety net for legacy records.
+
 #### Delete Meeting
 
 ```

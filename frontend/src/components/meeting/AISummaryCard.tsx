@@ -3,6 +3,7 @@
 import { useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { marked } from 'marked';
+import TurndownService from 'turndown';
 import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
 
 const MeetingEditor = dynamic(() => import('../MeetingEditor').then(m => ({ default: m.MeetingEditor })), {
@@ -13,6 +14,14 @@ const MeetingEditor = dynamic(() => import('../MeetingEditor').then(m => ({ defa
 // GFM checkbox (`<input type="checkbox">`) gets dropped entirely by the ProseMirror
 // schema on edit. Render it as literal `[ ]`/`[x]` text instead so it round-trips.
 marked.use({ renderer: { checkbox({ checked }) { return checked ? '[x] ' : '[ ] '; } } });
+
+// The editor loads markdown as HTML (marked.parse above) and emits HTML on
+// save (editor.getHTML()). Convert back to markdown before persisting so the
+// stored `content` stays markdown — downstream consumers (Notion/Obsidian
+// export via markdownToNotionBlocks) parse it as markdown, and would otherwise
+// render raw <h1>/<p> tags. atx headings + `-` bullets match the Bedrock
+// summary skeleton (`# 회의록`, `- `) the exporter expects.
+const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-' });
 
 interface AISummaryCardProps {
   content?: string;
@@ -31,7 +40,7 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
     if (!onSave) return;
     setSaving(true);
     try {
-      await onSave(html);
+      await onSave(turndown.turndown(html));
       setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
     } finally {
       setSaving(false);
