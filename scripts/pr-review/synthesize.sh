@@ -20,9 +20,8 @@ PANEL=""
 SCRUB_TMP="$WORK/scrub-cell.tmp"
 while IFS= read -r f; do
   [ -s "$f" ] || continue
-  # 크리덴셜 스크럽(마지막 방어선) — Kiro fs_read 잔여 위험(diff 인젝션 → 절대경로 read →
-  # 셀 출력에 크리덴셜 노출 → 체어 종합 → 공개 PR 코멘트/외부 Kiro 유출) 체인을 여기서 끊는다.
-  scrub_secrets < "$f" > "$SCRUB_TMP"
+  # 크리덴셜 스크럽(마지막 방어선) — Kiro fs_read 잔여 위험은 그 tool grant 자체를 제거해
+  # 구조적으로 닫혔다(ADR-013 계열 수정); 이 스크럽은 이제 일반적인 defense-in-depth다.   scrub_secrets < "$f" > "$SCRUB_TMP"
   CELL="$(head -c "$PANEL_CELL_CAP" "$SCRUB_TMP")"
   SCRUBBED_LEN="$(wc -c < "$SCRUB_TMP")"
   [ "$SCRUBBED_LEN" -gt "$PANEL_CELL_CAP" ] && CELL+=$'\n[...TRUNCATED at '"$PANEL_CELL_CAP"'B — full output not retained...]'
