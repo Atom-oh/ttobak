@@ -38,6 +38,7 @@ type Meeting struct {
 	LinkedMeetingIDs   []string          `dynamodbav:"linkedMeetingIds,omitempty"` // Chronologically ordered predecessor IDs
 	AccountID          string            `dynamodbav:"accountId,omitempty"`        // linked Account
 	SharedToAccount    bool              `dynamodbav:"sharedToAccount,omitempty"`  // published to account team
+	NotionPageID       string            `dynamodbav:"notionPageId,omitempty"`     // Notion page created by a prior export; re-export updates it in place instead of creating a duplicate
 	Status             string            `dynamodbav:"status"`                     // recording, transcribing, summarizing, done, error
 	CreatedAt          time.Time         `dynamodbav:"createdAt"`
 	UpdatedAt          time.Time         `dynamodbav:"updatedAt"`

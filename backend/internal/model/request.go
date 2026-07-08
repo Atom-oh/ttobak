@@ -8,9 +8,9 @@ import (
 // CreateMeetingRequest represents the request body for creating a meeting
 type CreateMeetingRequest struct {
 	Title            string   `json:"title"`
-	Date             string   `json:"date"`                           // ISO 8601 format
+	Date             string   `json:"date"` // ISO 8601 format
 	Participants     []string `json:"participants,omitempty"`
-	SttProvider      string   `json:"sttProvider,omitempty"`          // "transcribe" or "nova-sonic"
+	SttProvider      string   `json:"sttProvider,omitempty"` // "transcribe" or "nova-sonic"
 	LinkedMeetingIDs []string `json:"linkedMeetingIds,omitempty"`
 }
 
@@ -62,7 +62,7 @@ type PresignedURLResponse struct {
 type UploadCompleteRequest struct {
 	MeetingID  string `json:"meetingId"`
 	Key        string `json:"key"`
-	Category   string `json:"category"`           // "audio", "image", or "file"
+	Category   string `json:"category"` // "audio", "image", or "file"
 	FileName   string `json:"fileName,omitempty"`
 	FileSize   int64  `json:"fileSize,omitempty"`
 	MimeType   string `json:"mimeType,omitempty"`
@@ -91,7 +91,7 @@ type MeetingListItem struct {
 	Participants []string `json:"participants,omitempty"`
 	Tags         []string `json:"tags,omitempty"`
 	IsShared     bool     `json:"isShared"`
-	SharedBy     *string  `json:"sharedBy,omitempty"`  // owner email if shared
+	SharedBy     *string  `json:"sharedBy,omitempty"`   // owner email if shared
 	Permission   *string  `json:"permission,omitempty"` // "read" | "edit" if shared
 	CreatedAt    string   `json:"createdAt"`
 	UpdatedAt    string   `json:"updatedAt"`
@@ -120,6 +120,8 @@ type MeetingDetailResponse struct {
 	SpeakerMap         map[string]string    `json:"speakerMap,omitempty"`
 	SttProvider        string               `json:"sttProvider,omitempty"`
 	LinkedMeetingIDs   []string             `json:"linkedMeetingIds,omitempty"`
+	NotionPageID       string               `json:"notionPageId,omitempty"`
+	Permission         string               `json:"permission"` // "owner", "read", or "edit"
 	Attachments        []AttachmentResponse `json:"attachments,omitempty"`
 	Shares             []ShareResponse      `json:"shares,omitempty"` // Only visible to owner
 	CreatedAt          string               `json:"createdAt"`
@@ -306,9 +308,9 @@ type KBFilesResponse struct {
 
 // KBSyncResponse represents the response for KB sync
 type KBSyncResponse struct {
-	Status    string `json:"status"`
-	JobID     string `json:"jobId,omitempty"`
-	Message   string `json:"message,omitempty"`
+	Status  string `json:"status"`
+	JobID   string `json:"jobId,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // AddCrawlerSourceRequest represents the request body for adding a crawler source

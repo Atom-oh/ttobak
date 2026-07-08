@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -126,10 +127,33 @@ func (h *ExportHandler) ExportMeeting(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to decrypt Notion API key")
 			return
 		}
-		_, pageURL, err := h.notionService.CreatePage(ctx, apiKey, integration.NotionParentType, integration.NotionParentID, integration.NotionTitleProperty, meetingDetail.Title, content)
+
+		// notionDetailID is meetingDetail.NotionPageID only for the owner: a
+		// shared user's export uses their own Notion integration/API key, so
+		// reusing the owner's page ID here would patch/clear a page in a
+		// workspace the caller doesn't own. Shared exports always create a
+		// fresh page and never persist notionPageId (that field belongs to
+		// the owner's copy of the meeting, keyed on the owner's userID).
+		isOwner := meetingDetail.Permission == "owner"
+		notionDetailID := ""
+		if isOwner {
+			notionDetailID = meetingDetail.NotionPageID
+		}
+		pageID, pageURL, err := h.notionService.UpsertPage(ctx, apiKey, integration.NotionParentType, integration.NotionParentID, integration.NotionTitleProperty, meetingDetail.Title, content, notionDetailID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to create Notion page: "+err.Error())
+			errMsg := "Failed to create Notion page: " + err.Error()
+			if notionDetailID != "" {
+				errMsg = "Failed to update Notion page: " + err.Error()
+			}
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, errMsg)
 			return
+		}
+		if isOwner && pageID != notionDetailID {
+			if updateErr := h.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+				"notionPageId": pageID,
+			}); updateErr != nil {
+				log.Printf("export: failed to save notionPageId for meeting %s: %v", meetingID, updateErr)
+			}
 		}
 
 		writeJSON(w, http.StatusOK, model.ExportResponse{

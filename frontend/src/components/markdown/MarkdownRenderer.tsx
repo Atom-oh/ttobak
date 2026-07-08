@@ -1,6 +1,6 @@
 'use client';
 
-import ReactMarkdown, { Components } from 'react-markdown';
+import ReactMarkdown, { Components, defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
@@ -25,6 +25,14 @@ const customSchema = {
       'className',
     ],
     img: [...(defaultSchema.attributes?.img ?? []), 'loading'],
+  },
+  // rehype-sanitize's default href allowlist (http/https/irc/ircs/mailto/xmpp)
+  // strips the ADR-013 "transcript://{segmentId}" deep links entirely — the
+  // <a> tag survives but loses its href, so the timestamp renders unclickable
+  // instead of scrolling to the transcript segment.
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), 'transcript'],
   },
 };
 
@@ -161,11 +169,20 @@ interface MarkdownRendererProps {
   content: string;
 }
 
+// react-markdown's default urlTransform strips any protocol outside
+// http(s)/irc(s)/mailto/xmpp regardless of the rehype-sanitize schema above —
+// it runs independently, so the ADR-013 "transcript://{segmentId}" deep link
+// would still be blanked out to "" without this override.
+function urlTransform(url: string): string {
+  return url.startsWith('transcript://') ? url : defaultUrlTransform(url);
+}
+
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkCallout]}
       rehypePlugins={[rehypeRaw, [rehypeSanitize, customSchema]]}
+      urlTransform={urlTransform}
       components={components}
     >
       {content}
