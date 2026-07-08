@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import { marked } from 'marked';
+import { Marked } from 'marked';
 import TurndownService from 'turndown';
 import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
 
@@ -13,6 +13,10 @@ const MeetingEditor = dynamic(() => import('../MeetingEditor').then(m => ({ defa
 // TipTap's MeetingEditor has no TaskList/TaskItem extension, so marked's default
 // GFM checkbox (`<input type="checkbox">`) gets dropped entirely by the ProseMirror
 // schema on edit. Render it as literal `[ ]`/`[x]` text instead so it round-trips.
+// An isolated `Marked` instance (rather than the shared default export) keeps
+// this renderer override from leaking into any other component that imports
+// `marked` for a different purpose.
+const marked = new Marked();
 marked.use({ renderer: { checkbox({ checked }) { return checked ? '[x] ' : '[ ] '; } } });
 
 // The editor loads markdown as HTML (marked.parse above) and emits HTML on

@@ -104,6 +104,8 @@ Response: 200 OK
   "transcriptB": "Nova 2 Sonic 결과 전체 텍스트...",
   "selectedTranscript": "A",                    // "A" | "B" | null
   "audioKey": "audio/user-uuid/meeting-uuid.webm",
+  "notionPageId": "abc123",                     // set once this meeting has been exported to Notion; re-export updates this page in place
+  "permission": "owner",                        // "owner" | "read" | "edit"
   "attachments": [
     {
       "attachmentId": "uuid",

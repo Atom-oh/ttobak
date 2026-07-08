@@ -286,7 +286,11 @@ func TestUpsertPage(t *testing.T) {
 				_, _ = w.Write([]byte(`{"id":"new-id","url":"https://notion.so/new-id"}`))
 				return
 			}
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			// t.Fatalf from the handler goroutine (httptest.Server serves each
+			// request on its own goroutine, not the test's) doesn't abort the
+			// test correctly — t.Errorf + a 500 response does.
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer srv.Close()
 
@@ -329,7 +333,8 @@ func TestUpsertPage(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{}`))
 			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusInternalServerError)
 			}
 		}))
 		defer srv.Close()
@@ -364,7 +369,8 @@ func TestUpsertPage(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"id":"fresh-id","url":"https://notion.so/fresh-id"}`))
 			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusInternalServerError)
 			}
 		}))
 		defer srv.Close()
@@ -376,6 +382,38 @@ func TestUpsertPage(t *testing.T) {
 		}
 		if !sawCreate || pageID != "fresh-id" {
 			t.Fatalf("expected fallback to create a new page, got id=%q sawCreate=%v", pageID, sawCreate)
+		}
+	})
+
+	// Regression: only a confirmed-gone (404) page should fall back to
+	// creating a new page. A transient error (rate limit, outage) on the
+	// title-patch probe must propagate instead — otherwise a temporary blip
+	// would orphan the real page and silently start a duplicate on every
+	// retry.
+	t.Run("transient error updating existing page does not fall back to creating", func(t *testing.T) {
+		var sawCreate bool
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == "PATCH" && r.URL.Path == "/v1/pages/existing-id":
+				w.WriteHeader(http.StatusTooManyRequests)
+			case r.Method == "POST" && r.URL.Path == "/v1/pages":
+				sawCreate = true
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":"new-id","url":"https://notion.so/new-id"}`))
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}))
+		defer srv.Close()
+
+		s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+		_, _, err := s.UpsertPage(context.Background(), "key", "page_id", "parent", "title", "Title", "# content", "existing-id")
+		if err == nil {
+			t.Fatal("expected an error, got nil")
+		}
+		if sawCreate {
+			t.Fatal("expected UpsertPage NOT to fall back to creating a new page on a transient error")
 		}
 	})
 
@@ -418,7 +456,8 @@ func TestUpsertPage(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{}`))
 			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusInternalServerError)
 			}
 		}))
 		defer srv.Close()
@@ -437,6 +476,85 @@ func TestUpsertPage(t *testing.T) {
 		serialLowerBound := time.Duration(numChildren) * perRequestDelay
 		if elapsed >= serialLowerBound {
 			t.Fatalf("deletes ran serially, not concurrently: %d children took %v (serial lower bound %v)", numChildren, elapsed, serialLowerBound)
+		}
+	})
+}
+
+// deleteBlockWithRetry must retry a 429 rather than surface it immediately
+// (Notion's real rate limit is easily hit by notionMaxConcurrentDeletes
+// concurrent deletes), honoring Retry-After when Notion sends one, and must
+// give up after notionDeleteMaxRetries so one stuck block can't consume the
+// export Lambda's entire time budget.
+func TestDeleteBlockWithRetry(t *testing.T) {
+	t.Run("retries once on 429 then succeeds", func(t *testing.T) {
+		var attempts atomic.Int64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if attempts.Add(1) == 1 {
+				w.Header().Set("Retry-After", "0")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+		if err := s.deleteBlockWithRetry(context.Background(), "key", "block-1"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if attempts.Load() != 2 {
+			t.Fatalf("expected 2 attempts (1 rate-limited + 1 success), got %d", attempts.Load())
+		}
+	})
+
+	t.Run("gives up after notionDeleteMaxRetries and returns an error", func(t *testing.T) {
+		var attempts atomic.Int64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts.Add(1)
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}))
+		defer srv.Close()
+
+		s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+		err := s.deleteBlockWithRetry(context.Background(), "key", "block-1")
+		if err == nil {
+			t.Fatal("expected an error after exhausting retries")
+		}
+		if got := attempts.Load(); got != notionDeleteMaxRetries+1 {
+			t.Fatalf("expected %d attempts (initial + %d retries), got %d", notionDeleteMaxRetries+1, notionDeleteMaxRetries, got)
+		}
+	})
+
+	t.Run("a non-429 error is not retried", func(t *testing.T) {
+		var attempts atomic.Int64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+		if err := s.deleteBlockWithRetry(context.Background(), "key", "block-1"); err == nil {
+			t.Fatal("expected an error")
+		}
+		if attempts.Load() != 1 {
+			t.Fatalf("expected exactly 1 attempt for a non-429 error, got %d", attempts.Load())
+		}
+	})
+
+	t.Run("stops immediately when ctx is already done", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("should not make any request once ctx is done")
+		}))
+		defer srv.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+		if err := s.deleteBlockWithRetry(ctx, "key", "block-1"); err == nil {
+			t.Fatal("expected an error from the canceled context")
 		}
 	})
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import ReactMarkdown, { Components } from 'react-markdown';
+import ReactMarkdown, { Components, defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
@@ -169,11 +169,20 @@ interface MarkdownRendererProps {
   content: string;
 }
 
+// react-markdown's default urlTransform strips any protocol outside
+// http(s)/irc(s)/mailto/xmpp regardless of the rehype-sanitize schema above —
+// it runs independently, so the ADR-013 "transcript://{segmentId}" deep link
+// would still be blanked out to "" without this override.
+function urlTransform(url: string): string {
+  return url.startsWith('transcript://') ? url : defaultUrlTransform(url);
+}
+
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkCallout]}
       rehypePlugins={[rehypeRaw, [rehypeSanitize, customSchema]]}
+      urlTransform={urlTransform}
       components={components}
     >
       {content}

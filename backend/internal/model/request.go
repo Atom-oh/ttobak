@@ -121,6 +121,7 @@ type MeetingDetailResponse struct {
 	SttProvider        string               `json:"sttProvider,omitempty"`
 	LinkedMeetingIDs   []string             `json:"linkedMeetingIds,omitempty"`
 	NotionPageID       string               `json:"notionPageId,omitempty"`
+	Permission         string               `json:"permission"` // "owner", "read", or "edit"
 	Attachments        []AttachmentResponse `json:"attachments,omitempty"`
 	Shares             []ShareResponse      `json:"shares,omitempty"` // Only visible to owner
 	CreatedAt          string               `json:"createdAt"`

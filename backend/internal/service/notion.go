@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // notionAPIBaseURL is Notion's production API host. Tests override this via
@@ -476,13 +478,74 @@ func (s *NotionService) listChildBlockIDs(ctx context.Context, apiKey, blockID s
 // notionMaxConcurrentDeletes bounds how many block deletions clearPageChildren
 // fires at once — a real meeting summary can have 50+ blocks, and deleting
 // them one at a time sequentially routinely exceeded the export Lambda's 30s
-// timeout (each DELETE round-trip to Notion took 300-500ms).
+// timeout (each DELETE round-trip to Notion took 300-500ms). 8 concurrent
+// deletes is comfortably inside Notion's ~3 req/s average rate limit only
+// when spread out; deleteBlockWithRetry below is what actually keeps this
+// safe against 429s rather than the concurrency bound itself.
 const notionMaxConcurrentDeletes = 8
+
+// notionDeleteMaxRetries bounds how many times deleteBlockWithRetry retries a
+// single block delete after a 429. Deliberately small: clearPageChildren runs
+// inside the export Lambda's ~30s budget, so unbounded retries could exhaust
+// it entirely on one stuck block instead of failing fast with a clear error.
+const notionDeleteMaxRetries = 3
+
+// notionDeleteDefaultBackoff is used when a 429 response has no (or an
+// unparsable) Retry-After header.
+const notionDeleteDefaultBackoff = 500 * time.Millisecond
+
+// deleteBlockWithRetry deletes a single block, retrying on 429 (rate limited)
+// with a delay taken from Notion's Retry-After header when present. Returns
+// immediately if ctx is done, whether that's before the first attempt or
+// between retries — so a Lambda nearing its timeout doesn't keep firing
+// requests that will never complete in time.
+func (s *NotionService) deleteBlockWithRetry(ctx context.Context, apiKey, blockID string) error {
+	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "DELETE", s.baseURL+"/v1/blocks/"+blockID, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Notion-Version", "2022-06-28")
+
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to send request: %w", err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return fmt.Errorf("failed to read response: %w", readErr)
+		}
+
+		if resp.StatusCode == http.StatusOK {
+			return nil
+		}
+		if resp.StatusCode != http.StatusTooManyRequests || attempt >= notionDeleteMaxRetries {
+			return fmt.Errorf("notion API error deleting block (status %d): %s", resp.StatusCode, string(body))
+		}
+
+		delay := notionDeleteDefaultBackoff
+		if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 {
+			delay = time.Duration(seconds) * time.Second
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+}
 
 // clearPageChildren deletes (archives) every direct child block of pageID, so
 // fresh content can be appended without leaving stale blocks from a prior
 // export mixed in underneath. Deletions run concurrently, bounded by
-// notionMaxConcurrentDeletes.
+// notionMaxConcurrentDeletes, each retrying through 429s via
+// deleteBlockWithRetry.
 func (s *NotionService) clearPageChildren(ctx context.Context, apiKey, pageID string) error {
 	ids, err := s.listChildBlockIDs(ctx, apiKey, pageID)
 	if err != nil {
@@ -501,11 +564,7 @@ func (s *NotionService) clearPageChildren(ctx context.Context, apiKey, pageID st
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			status, body, err := s.notionDo(ctx, apiKey, "DELETE", s.baseURL+"/v1/blocks/"+blockID, nil)
-			if err == nil && status != http.StatusOK {
-				err = fmt.Errorf("notion API error deleting block: %s", string(body))
-			}
-			if err != nil {
+			if err := s.deleteBlockWithRetry(ctx, apiKey, blockID); err != nil {
 				mu.Lock()
 				if firstErr == nil {
 					firstErr = err
@@ -520,6 +579,13 @@ func (s *NotionService) clearPageChildren(ctx context.Context, apiKey, pageID st
 
 // updatePageTitle renames an existing page's title property and returns its
 // URL from Notion's response.
+// errNotionPageGone means Notion returned 404 for the page — it was deleted
+// or unshared with the integration, so UpsertPage should fall back to
+// creating a new page. Any other error (429 rate limit, 5xx, network) is
+// transient and must NOT trigger that fallback, or a temporary blip would
+// orphan the real page and silently start a duplicate.
+var errNotionPageGone = errors.New("notion page not found")
+
 func (s *NotionService) updatePageTitle(ctx context.Context, apiKey, pageID, titleProperty, title string) (string, error) {
 	reqBody, err := json.Marshal(map[string]interface{}{
 		"properties": map[string]interface{}{
@@ -537,6 +603,9 @@ func (s *NotionService) updatePageTitle(ctx context.Context, apiKey, pageID, tit
 	if err != nil {
 		return "", err
 	}
+	if status == http.StatusNotFound {
+		return "", fmt.Errorf("%w: %s", errNotionPageGone, string(body))
+	}
 	if status != http.StatusOK {
 		return "", fmt.Errorf("notion API error updating page: %s", string(body))
 	}
@@ -550,8 +619,9 @@ func (s *NotionService) updatePageTitle(ctx context.Context, apiKey, pageID, tit
 // UpsertPage creates a new Notion page for a meeting export, or — when
 // existingPageID is non-empty — replaces that page's content in place, so
 // re-exporting the same meeting updates one page instead of piling up
-// duplicates. Falls back to creating a fresh page if the existing one was
-// deleted or is otherwise inaccessible (the title patch fails).
+// duplicates. Falls back to creating a fresh page only when the existing one
+// is confirmed gone (404); other errors (rate limit, outage) propagate so a
+// transient blip doesn't orphan the real page.
 func (s *NotionService) UpsertPage(ctx context.Context, apiKey, parentType, parentID, titleProperty, title, content, existingPageID string) (string, string, error) {
 	if existingPageID == "" {
 		return s.CreatePage(ctx, apiKey, parentType, parentID, titleProperty, title, content)
@@ -559,7 +629,10 @@ func (s *NotionService) UpsertPage(ctx context.Context, apiKey, parentType, pare
 
 	pageURL, err := s.updatePageTitle(ctx, apiKey, existingPageID, titleProperty, title)
 	if err != nil {
-		log.Printf("notion UpsertPage: existing page %s unavailable, creating a new one: %v", existingPageID, err)
+		if !errors.Is(err, errNotionPageGone) {
+			return "", "", fmt.Errorf("failed to update existing page: %w", err)
+		}
+		log.Printf("notion UpsertPage: existing page %s gone, creating a new one: %v", existingPageID, err)
 		return s.CreatePage(ctx, apiKey, parentType, parentID, titleProperty, title, content)
 	}
 
@@ -627,13 +700,15 @@ func chunkRichText(text string) []NotionRichText {
 // first (so their label's *asterisks* don't get misread as emphasis), then
 // bold, code, and italic. Go's regexp alternation is leftmost-first, so listing
 // "**bold**" before the single-asterisk italic form makes bold win when both
-// could start at the same position.
+// could start at the same position. No "_italic_" form: unlike CommonMark,
+// this doesn't require a word boundary, so it would mangle snake_case
+// identifiers like MAX_TOKENS_LIMIT (common in meeting notes) into
+// MAX + italic("TOKENS") + LIMIT. The summarizer only emits **/* anyway.
 var inlineMarkdownPattern = regexp.MustCompile(
 	`\[([^\]]*)\]\(([^)]+)\)` + `|` +
 		`\*\*([^*]+)\*\*` + `|` +
 		"`([^`]+)`" + `|` +
-		`\*([^*]+)\*` + `|` +
-		`_([^_]+)_`,
+		`\*([^*]+)\*`,
 )
 
 // styledRichText builds rich_text entries for a single styled run, splitting
@@ -676,8 +751,6 @@ func parseInlineMarkdown(text string) []NotionRichText {
 			out = append(out, styledRichText(text[m[8]:m[9]], &NotionAnnotations{Code: true}, nil)...)
 		case m[10] != -1: // *italic*
 			out = append(out, styledRichText(text[m[10]:m[11]], &NotionAnnotations{Italic: true}, nil)...)
-		case m[12] != -1: // _italic_
-			out = append(out, styledRichText(text[m[12]:m[13]], &NotionAnnotations{Italic: true}, nil)...)
 		}
 		last = m[1]
 	}

@@ -227,6 +227,14 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		transcription = json.RawMessage(meeting.TranscriptSegments)
 	}
 
+	// The owner's exported Notion page is private to their own export — a
+	// shared viewer has no use for it and no business seeing which external
+	// page the owner's summary lives on (same reasoning as Shares above).
+	notionPageID := ""
+	if permission == "owner" {
+		notionPageID = meeting.NotionPageID
+	}
+
 	return &model.MeetingDetailResponse{
 		MeetingID:          meeting.MeetingID,
 		UserID:             meeting.UserID,
@@ -248,7 +256,8 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		SpeakerMap:         meeting.SpeakerMap,
 		SttProvider:        meeting.SttProvider,
 		LinkedMeetingIDs:   meeting.LinkedMeetingIDs,
-		NotionPageID:       meeting.NotionPageID,
+		NotionPageID:       notionPageID,
+		Permission:         permission,
 		Transcription:      transcription,
 		Attachments:        attachmentResponses,
 		Shares:             shareResponses,

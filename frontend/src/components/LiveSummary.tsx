@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { marked } from 'marked';
+import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
 
 interface LiveSummaryProps {
   summary: string;
@@ -63,10 +63,13 @@ export function LiveSummary({ summary, isGenerating, wordCount, lastSummaryWordC
             </p>
           </div>
         ) : (
-          <div
-            className="prose prose-sm dark:prose-invert max-w-none"
-            dangerouslySetInnerHTML={{ __html: marked.parse(summary, { async: false }) as string }}
-          />
+          <div className="prose prose-sm dark:prose-invert max-w-none">
+            {/* Live summary text comes from Bedrock, which is fed by
+                transcript audio the meeting participants control — treat it
+                as untrusted input and render through the sanitizing
+                MarkdownRenderer rather than raw marked+dangerouslySetInnerHTML. */}
+            <MarkdownRenderer content={summary} />
+          </div>
         )}
       </div>
     </div>
