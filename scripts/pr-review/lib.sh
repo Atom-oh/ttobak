@@ -19,12 +19,14 @@ ensure_slots() {
 #   $1 slot 파일 경로, $2 패널 라벨, $3 responded 파일
 record_result() {
   local slot="$1" label="$2" responded="$3"
-  if [ -s "$slot" ]; then
+  local rc; rc="$(cat "$slot.rc" 2>/dev/null || echo 1)"
+  if [ -s "$slot" ] && [ "$rc" = "0" ]; then
     echo "$label" >> "$responded"
   else
-    echo "[skip] $label" >&2
+    echo "[skip] $label (exit=$rc)" >&2
     : > "$slot"  # 빈 슬롯 보장
   fi
+  rm -f "$slot.rc"
 }
 
 # 자격증명 패턴 스크럽 — 마지막 방어선(last line of defense), 예방이 아님. Kiro 의
