@@ -21,7 +21,9 @@ SCRUB_TMP="$WORK/scrub-cell.tmp"
 while IFS= read -r f; do
   [ -s "$f" ] || continue
   # 크리덴셜 스크럽(마지막 방어선) — Kiro fs_read 잔여 위험은 그 tool grant 자체를 제거해
-  # 구조적으로 닫혔다(ADR-013 계열 수정); 이 스크럽은 이제 일반적인 defense-in-depth다.   scrub_secrets < "$f" > "$SCRUB_TMP"
+  # 구조적으로 닫혔다(이 수정을 다룬 원본 ADR은 oh-my-cloud-skills 저장소의 ADR-013 —
+  # 이 repo 자신의 ADR-013(있다면)과는 무관). 이 스크럽은 이제 일반적인 defense-in-depth다.
+  scrub_secrets < "$f" > "$SCRUB_TMP"
   CELL="$(head -c "$PANEL_CELL_CAP" "$SCRUB_TMP")"
   SCRUBBED_LEN="$(wc -c < "$SCRUB_TMP")"
   [ "$SCRUBBED_LEN" -gt "$PANEL_CELL_CAP" ] && CELL+=$'\n[...TRUNCATED at '"$PANEL_CELL_CAP"'B — full output not retained...]'
@@ -161,8 +163,8 @@ if [ -f "$WORK/kiro-diff-truncated.flag" ]; then
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
 fi
 
-# 심각도 상향(run-panel.sh 의 coverage-severe.flag) — degraded 모델이 (전체-1)개 이상이면
-# 살아남은 벤더가 최대 1개뿐이라 "lens당 교차확인"이 성립하지 않는다. 이 경우는 경고만으로
+# 심각도 상향(run-panel.sh 의 coverage-severe.flag) — codex 가 죽거나 kiro 모델 전체가
+# 죽으면(둘 중 하나라도, DEAD_VENDORS 축 — 모델 개수 축이 아님) 살아남은 벤더가 최대 1개뿐이라 "lens당 교차확인"이 성립하지 않는다. 이 경우는 경고만으로
 # 끝내지 않고 체어의 판정과 무관하게 VERDICT 를 강제 FAIL 한다(fail-closed 계약 보존).
 # VERDICT 는 파일의 마지막 줄이어야 하므로 기존 VERDICT 줄을 지우고 새로 붙인다. GNU sed 의
 # `0,/re/d` 는 패턴이 한 번도 매치하지 않으면 파일 전체를 지우므로, 매치가 있을 때만
