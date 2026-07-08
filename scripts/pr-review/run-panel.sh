@@ -88,8 +88,11 @@ kiro_env() {
 # 기밀 노출이 아니다.
 KIRO_DIFF_CAP="${KIRO_DIFF_CAP:-100000}"
 KIRO_DIFF_TEXT="$(head -c "$KIRO_DIFF_CAP" "$DIFF")"
-[ "$(wc -c < "$DIFF")" -gt "$KIRO_DIFF_CAP" ] \
-  && KIRO_DIFF_TEXT+=$'\n[...TRUNCATED at '"$KIRO_DIFF_CAP"'B -- full diff not sent to Kiro...]'
+if [ "$(wc -c < "$DIFF")" -gt "$KIRO_DIFF_CAP" ]; then
+  KIRO_DIFF_TEXT+=$'\n[...TRUNCATED at '"$KIRO_DIFF_CAP"'B -- full diff not sent to Kiro...]'
+  echo "::warning::diff exceeds KIRO_DIFF_CAP (${KIRO_DIFF_CAP}B) -- Kiro cells only see a truncated prefix" >&2
+  : > "$WORK/kiro-diff-truncated.flag"
+fi
 
 for lens_file in "${LENS_FILES[@]}"; do
   lens="$(basename "$lens_file" .txt)"
@@ -169,7 +172,9 @@ done
 CODEX_DEAD=0
 grep -qx "codex" "$WORK/degraded-models.txt" 2>/dev/null && CODEX_DEAD=1
 KIRO_TOTAL=${#KIRO_MODELS[@]}
-KIRO_DEGRADED_COUNT=$(grep -c "^kiro-" "$WORK/degraded-models.txt" 2>/dev/null || echo 0)
+# `|| echo 0` 폴백 없음 — grep -c 는 매치가 0건이어도 "0"을 stdout 에 찍고 exit 1
+# 하므로, 폴백을 붙이면 "0\n0"이 된다(정수 비교에 노이즈 stderr 유발).
+KIRO_DEGRADED_COUNT="$(grep -c "^kiro-" "$WORK/degraded-models.txt" 2>/dev/null)"
 KIRO_ALL_DEAD=0
 [ "$KIRO_TOTAL" -gt 0 ] && [ "${KIRO_DEGRADED_COUNT:-0}" -ge "$KIRO_TOTAL" ] && KIRO_ALL_DEAD=1
 if [ "$CODEX_DEAD" = 1 ] || [ "$KIRO_ALL_DEAD" = 1 ]; then
