@@ -206,13 +206,16 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
                     {group.segments.map((seg, si) => {
                       // Per ADR-013, each segment also gets its own `ts-{id}`
                       // anchor so summary links can target sub-utterances
-                      // within a long speaker turn.
+                      // within a long speaker turn. The first segment's anchor
+                      // already lives on the group wrapper above, so skip it
+                      // here to avoid a duplicate DOM id.
                       const segAnchor = seg.id || `seg-${Math.round(seg.startTime * 1000)}`;
+                      const isDuplicateOfGroupAnchor = si === 0 && segAnchor === groupAnchor;
                       return (
                         <span
                           key={seg.id || `${gi}-${si}`}
-                          id={`ts-${segAnchor}`}
-                          data-transcript-anchor={segAnchor}
+                          id={isDuplicateOfGroupAnchor ? undefined : `ts-${segAnchor}`}
+                          data-transcript-anchor={isDuplicateOfGroupAnchor ? undefined : segAnchor}
                         >
                           {si > 0 && ' '}
                           <EditableText text={seg.text} />

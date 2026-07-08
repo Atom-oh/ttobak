@@ -9,7 +9,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
+	"sync"
 )
 
 // notionAPIBaseURL is Notion's production API host. Tests override this via
@@ -67,13 +70,27 @@ type NotionToDoBlock struct {
 
 // NotionRichText represents rich text in Notion
 type NotionRichText struct {
-	Type string         `json:"type"`
-	Text *NotionTextObj `json:"text,omitempty"`
+	Type        string             `json:"type"`
+	Text        *NotionTextObj     `json:"text,omitempty"`
+	Annotations *NotionAnnotations `json:"annotations,omitempty"`
 }
 
 // NotionTextObj represents text content
 type NotionTextObj struct {
-	Content string `json:"content"`
+	Content string         `json:"content"`
+	Link    *NotionLinkObj `json:"link,omitempty"`
+}
+
+// NotionAnnotations represents inline text styling
+type NotionAnnotations struct {
+	Bold   bool `json:"bold,omitempty"`
+	Italic bool `json:"italic,omitempty"`
+	Code   bool `json:"code,omitempty"`
+}
+
+// NotionLinkObj represents an inline link on a text run
+type NotionLinkObj struct {
+	URL string `json:"url"`
 }
 
 // NotionCreatePageRequest represents a request to create a page
@@ -384,6 +401,182 @@ func (s *NotionService) notionGet(ctx context.Context, apiKey, url string) (int,
 	return resp.StatusCode, body, nil
 }
 
+// notionDo performs an HTTP request with an optional JSON body, returning the
+// status code and response body. Shared by the update-in-place helpers below
+// (patching a title, listing/deleting existing children) so each doesn't
+// hand-roll request construction.
+func (s *NotionService) notionDo(ctx context.Context, apiKey, method, requestURL string, body []byte) (int, []byte, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, reader)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Notion-Version", "2022-06-28")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return resp.StatusCode, nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	return resp.StatusCode, respBody, nil
+}
+
+// notionBlockChildrenResponse is the shape of GET /v1/blocks/{id}/children.
+type notionBlockChildrenResponse struct {
+	Results []struct {
+		ID string `json:"id"`
+	} `json:"results"`
+	HasMore    bool   `json:"has_more"`
+	NextCursor string `json:"next_cursor"`
+}
+
+// listChildBlockIDs returns the IDs of every direct child of blockID,
+// paginating through Notion's 100-per-page children listing.
+func (s *NotionService) listChildBlockIDs(ctx context.Context, apiKey, blockID string) ([]string, error) {
+	var ids []string
+	cursor := ""
+	for {
+		requestURL := s.baseURL + "/v1/blocks/" + blockID + "/children?page_size=100"
+		if cursor != "" {
+			requestURL += "&start_cursor=" + url.QueryEscape(cursor)
+		}
+		status, body, err := s.notionGet(ctx, apiKey, requestURL)
+		if err != nil {
+			return nil, err
+		}
+		if status != http.StatusOK {
+			return nil, fmt.Errorf("notion API error listing children: %s", string(body))
+		}
+		var parsed notionBlockChildrenResponse
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal children response: %w", err)
+		}
+		for _, r := range parsed.Results {
+			ids = append(ids, r.ID)
+		}
+		if !parsed.HasMore || parsed.NextCursor == "" {
+			break
+		}
+		cursor = parsed.NextCursor
+	}
+	return ids, nil
+}
+
+// notionMaxConcurrentDeletes bounds how many block deletions clearPageChildren
+// fires at once — a real meeting summary can have 50+ blocks, and deleting
+// them one at a time sequentially routinely exceeded the export Lambda's 30s
+// timeout (each DELETE round-trip to Notion took 300-500ms).
+const notionMaxConcurrentDeletes = 8
+
+// clearPageChildren deletes (archives) every direct child block of pageID, so
+// fresh content can be appended without leaving stale blocks from a prior
+// export mixed in underneath. Deletions run concurrently, bounded by
+// notionMaxConcurrentDeletes.
+func (s *NotionService) clearPageChildren(ctx context.Context, apiKey, pageID string) error {
+	ids, err := s.listChildBlockIDs(ctx, apiKey, pageID)
+	if err != nil {
+		return fmt.Errorf("failed to list existing page content: %w", err)
+	}
+
+	sem := make(chan struct{}, notionMaxConcurrentDeletes)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+
+	for _, id := range ids {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(blockID string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			status, body, err := s.notionDo(ctx, apiKey, "DELETE", s.baseURL+"/v1/blocks/"+blockID, nil)
+			if err == nil && status != http.StatusOK {
+				err = fmt.Errorf("notion API error deleting block: %s", string(body))
+			}
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}(id)
+	}
+	wg.Wait()
+	return firstErr
+}
+
+// updatePageTitle renames an existing page's title property and returns its
+// URL from Notion's response.
+func (s *NotionService) updatePageTitle(ctx context.Context, apiKey, pageID, titleProperty, title string) (string, error) {
+	reqBody, err := json.Marshal(map[string]interface{}{
+		"properties": map[string]interface{}{
+			titleProperty: map[string]interface{}{
+				"title": []map[string]interface{}{
+					{"type": "text", "text": map[string]string{"content": title}},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+	status, body, err := s.notionDo(ctx, apiKey, "PATCH", s.baseURL+"/v1/pages/"+pageID, reqBody)
+	if err != nil {
+		return "", err
+	}
+	if status != http.StatusOK {
+		return "", fmt.Errorf("notion API error updating page: %s", string(body))
+	}
+	var pageResp NotionCreatePageResponse
+	if err := json.Unmarshal(body, &pageResp); err != nil {
+		return "", fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+	return pageResp.URL, nil
+}
+
+// UpsertPage creates a new Notion page for a meeting export, or — when
+// existingPageID is non-empty — replaces that page's content in place, so
+// re-exporting the same meeting updates one page instead of piling up
+// duplicates. Falls back to creating a fresh page if the existing one was
+// deleted or is otherwise inaccessible (the title patch fails).
+func (s *NotionService) UpsertPage(ctx context.Context, apiKey, parentType, parentID, titleProperty, title, content, existingPageID string) (string, string, error) {
+	if existingPageID == "" {
+		return s.CreatePage(ctx, apiKey, parentType, parentID, titleProperty, title, content)
+	}
+
+	pageURL, err := s.updatePageTitle(ctx, apiKey, existingPageID, titleProperty, title)
+	if err != nil {
+		log.Printf("notion UpsertPage: existing page %s unavailable, creating a new one: %v", existingPageID, err)
+		return s.CreatePage(ctx, apiKey, parentType, parentID, titleProperty, title, content)
+	}
+
+	if err := s.clearPageChildren(ctx, apiKey, existingPageID); err != nil {
+		return existingPageID, pageURL, fmt.Errorf("failed to clear existing page content: %w", err)
+	}
+
+	blocks := s.markdownToNotionBlocks(content)
+	for _, batch := range splitBlocks(blocks, notionMaxChildrenPerRequest) {
+		if err := s.appendBlocks(ctx, apiKey, existingPageID, batch); err != nil {
+			return existingPageID, pageURL, fmt.Errorf("page updated but not all content was added: %w", err)
+		}
+	}
+
+	return existingPageID, pageURL, nil
+}
+
 // notionMaxChildrenPerRequest is Notion's limit on children blocks accepted
 // per pages.create or blocks.children.append request.
 const notionMaxChildrenPerRequest = 100
@@ -430,15 +623,82 @@ func chunkRichText(text string) []NotionRichText {
 	return chunks
 }
 
+// inlineMarkdownPattern tokenizes inline markdown within a single line: links
+// first (so their label's *asterisks* don't get misread as emphasis), then
+// bold, code, and italic. Go's regexp alternation is leftmost-first, so listing
+// "**bold**" before the single-asterisk italic form makes bold win when both
+// could start at the same position.
+var inlineMarkdownPattern = regexp.MustCompile(
+	`\[([^\]]*)\]\(([^)]+)\)` + `|` +
+		`\*\*([^*]+)\*\*` + `|` +
+		"`([^`]+)`" + `|` +
+		`\*([^*]+)\*` + `|` +
+		`_([^_]+)_`,
+)
+
+// styledRichText builds rich_text entries for a single styled run, splitting
+// on notionRichTextMaxLen like chunkRichText so a long bold/link span can't
+// trip Notion's per-entry length validation.
+func styledRichText(content string, ann *NotionAnnotations, link *NotionLinkObj) []NotionRichText {
+	runes := []rune(content)
+	if len(runes) == 0 {
+		return nil
+	}
+	out := make([]NotionRichText, 0, (len(runes)/notionRichTextMaxLen)+1)
+	for i := 0; i < len(runes); i += notionRichTextMaxLen {
+		end := i + notionRichTextMaxLen
+		if end > len(runes) {
+			end = len(runes)
+		}
+		out = append(out, NotionRichText{Type: "text", Text: &NotionTextObj{Content: string(runes[i:end]), Link: link}, Annotations: ann})
+	}
+	return out
+}
+
+// parseInlineMarkdown converts inline markdown (bold, italic, inline code,
+// links) within a single line into styled Notion rich_text runs. Without this,
+// markdown emitted by the summarizer (e.g. "**오준석 SA**" or a
+// "[00:30](transcript://seg-30000)" ADR-013 deep link) lands in Notion as
+// literal asterisks/brackets instead of bold text or a clickable link.
+func parseInlineMarkdown(text string) []NotionRichText {
+	var out []NotionRichText
+	last := 0
+	for _, m := range inlineMarkdownPattern.FindAllStringSubmatchIndex(text, -1) {
+		if m[0] > last {
+			out = append(out, chunkRichText(text[last:m[0]])...)
+		}
+		switch {
+		case m[2] != -1: // link: [label](url)
+			out = append(out, styledRichText(text[m[2]:m[3]], nil, &NotionLinkObj{URL: text[m[4]:m[5]]})...)
+		case m[6] != -1: // **bold**
+			out = append(out, styledRichText(text[m[6]:m[7]], &NotionAnnotations{Bold: true}, nil)...)
+		case m[8] != -1: // `code`
+			out = append(out, styledRichText(text[m[8]:m[9]], &NotionAnnotations{Code: true}, nil)...)
+		case m[10] != -1: // *italic*
+			out = append(out, styledRichText(text[m[10]:m[11]], &NotionAnnotations{Italic: true}, nil)...)
+		case m[12] != -1: // _italic_
+			out = append(out, styledRichText(text[m[12]:m[13]], &NotionAnnotations{Italic: true}, nil)...)
+		}
+		last = m[1]
+	}
+	if last < len(text) {
+		out = append(out, chunkRichText(text[last:])...)
+	}
+	if len(out) == 0 {
+		return chunkRichText("")
+	}
+	return out
+}
+
 // notionMaxRichTextPerBlock is Notion's limit on rich_text entries per block.
 const notionMaxRichTextPerBlock = 100
 
 // blocksForText builds one or more Notion blocks of blockType from text. A
-// single line's chunkRichText output can exceed notionMaxRichTextPerBlock
+// single line's parseInlineMarkdown output can exceed notionMaxRichTextPerBlock
 // (e.g. a >200,000-rune line), so the rich_text entries are split across
 // multiple consecutive blocks of the same type instead of one oversized block.
 func blocksForText(blockType, text string, checked bool) []NotionBlock {
-	rt := chunkRichText(text)
+	rt := parseInlineMarkdown(text)
 	blocks := make([]NotionBlock, 0, (len(rt)/notionMaxRichTextPerBlock)+1)
 	for i := 0; i < len(rt); i += notionMaxRichTextPerBlock {
 		end := i + notionMaxRichTextPerBlock

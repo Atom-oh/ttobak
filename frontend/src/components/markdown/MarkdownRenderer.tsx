@@ -26,6 +26,14 @@ const customSchema = {
     ],
     img: [...(defaultSchema.attributes?.img ?? []), 'loading'],
   },
+  // rehype-sanitize's default href allowlist (http/https/irc/ircs/mailto/xmpp)
+  // strips the ADR-013 "transcript://{segmentId}" deep links entirely — the
+  // <a> tag survives but loses its href, so the timestamp renders unclickable
+  // instead of scrolling to the transcript segment.
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), 'transcript'],
+  },
 };
 
 const components: Components = {

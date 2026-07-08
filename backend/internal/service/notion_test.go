@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // chunkRichText must split any text longer than Notion's 2000-char rich_text
@@ -185,6 +189,256 @@ func TestMarkdownToNotionBlocksEditedTasks(t *testing.T) {
 	if bullets != 1 {
 		t.Fatalf("expected 1 bulleted_list_item block, got %d", bullets)
 	}
+}
+
+// parseInlineMarkdown must turn inline markdown emitted by the summarizer
+// (bold speaker names, ADR-013 "[00:30](transcript://seg-30000)" deep links)
+// into styled Notion rich_text runs — otherwise the asterisks/brackets show
+// up as literal characters in Notion instead of bold text or a real link.
+func TestParseInlineMarkdown(t *testing.T) {
+	t.Run("bold run gets a bold annotation, not literal asterisks", func(t *testing.T) {
+		rt := parseInlineMarkdown("**오준석 SA**: 발언")
+		if len(rt) != 2 {
+			t.Fatalf("expected 2 runs, got %d: %+v", len(rt), rt)
+		}
+		if rt[0].Text.Content != "오준석 SA" || rt[0].Annotations == nil || !rt[0].Annotations.Bold {
+			t.Fatalf("expected bold run %q, got %+v", "오준석 SA", rt[0])
+		}
+		if rt[1].Text.Content != ": 발언" || rt[1].Annotations != nil {
+			t.Fatalf("expected plain trailing run, got %+v", rt[1])
+		}
+	})
+
+	t.Run("markdown link becomes a real href, not literal brackets", func(t *testing.T) {
+		rt := parseInlineMarkdown("합의했다. [00:30](transcript://seg-30000)")
+		if len(rt) != 2 {
+			t.Fatalf("expected 2 runs, got %d: %+v", len(rt), rt)
+		}
+		if rt[1].Text.Content != "00:30" || rt[1].Text.Link == nil || rt[1].Text.Link.URL != "transcript://seg-30000" {
+			t.Fatalf("expected link run to transcript://seg-30000, got %+v", rt[1])
+		}
+		if strings.Contains(rt[0].Text.Content, "[") || strings.Contains(rt[1].Text.Content, "[") {
+			t.Fatalf("literal bracket leaked into rich_text: %+v", rt)
+		}
+	})
+
+	t.Run("inline code gets a code annotation", func(t *testing.T) {
+		rt := parseInlineMarkdown("run `kubectl get pods`")
+		if len(rt) != 2 || rt[1].Text.Content != "kubectl get pods" || rt[1].Annotations == nil || !rt[1].Annotations.Code {
+			t.Fatalf("expected code run, got %+v", rt)
+		}
+	})
+
+	t.Run("plain text with no markdown yields a single unstyled run", func(t *testing.T) {
+		rt := parseInlineMarkdown("plain sentence")
+		if len(rt) != 1 || rt[0].Text.Content != "plain sentence" || rt[0].Annotations != nil {
+			t.Fatalf("expected single plain run, got %+v", rt)
+		}
+	})
+}
+
+// End-to-end through markdownToNotionBlocks: a bullet line combining a bold
+// name and a deep link (the exact shape SummarizeTranscript emits) must
+// produce a bulleted_list_item whose rich_text has a bold run and a link run,
+// not one literal-text run.
+func TestMarkdownToNotionBlocksInlineFormatting(t *testing.T) {
+	s := NewNotionService()
+	md := "- **오준석 SA**: VPC CNI 권장. [05:46](transcript://seg-346100)"
+	blocks := s.markdownToNotionBlocks(md)
+
+	if len(blocks) != 1 || blocks[0].Type != "bulleted_list_item" {
+		t.Fatalf("expected 1 bulleted_list_item block, got %+v", blocks)
+	}
+	rt := blocks[0].BulletedListItem.RichText
+
+	var sawBold, sawLink bool
+	for _, r := range rt {
+		if r.Annotations != nil && r.Annotations.Bold && r.Text.Content == "오준석 SA" {
+			sawBold = true
+		}
+		if r.Text.Link != nil && r.Text.Link.URL == "transcript://seg-346100" && r.Text.Content == "05:46" {
+			sawLink = true
+		}
+		if strings.ContainsAny(r.Text.Content, "*[]") {
+			t.Fatalf("literal markdown syntax leaked into rich_text: %q", r.Text.Content)
+		}
+	}
+	if !sawBold {
+		t.Fatalf("expected a bold run for the speaker name, got %+v", rt)
+	}
+	if !sawLink {
+		t.Fatalf("expected a link run for the timestamp, got %+v", rt)
+	}
+}
+
+// UpsertPage must update an existing Notion page in place (title + replace
+// children) instead of creating a new one, so repeated exports of the same
+// meeting don't pile up duplicate pages. It must still create a fresh page
+// when no existing ID is given, and fall back to creating one when the
+// existing page is no longer reachable (deleted, unshared).
+func TestUpsertPage(t *testing.T) {
+	t.Run("no existing page ID creates a new page", func(t *testing.T) {
+		var sawCreate bool
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == "POST" && r.URL.Path == "/v1/pages" {
+				sawCreate = true
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":"new-id","url":"https://notion.so/new-id"}`))
+				return
+			}
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}))
+		defer srv.Close()
+
+		s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+		pageID, pageURL, err := s.UpsertPage(context.Background(), "key", "page_id", "parent", "title", "Title", "# content", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !sawCreate || pageID != "new-id" || pageURL != "https://notion.so/new-id" {
+			t.Fatalf("expected a fresh page, got id=%q url=%q sawCreate=%v", pageID, pageURL, sawCreate)
+		}
+	})
+
+	t.Run("existing page ID updates title and replaces children instead of creating", func(t *testing.T) {
+		// clearPageChildren deletes concurrently, so the test server's handler
+		// can be invoked from multiple goroutines at once — these flags must be
+		// atomic, not plain bools.
+		var sawCreate, sawDelete1, sawDelete2, sawAppend atomic.Bool
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == "POST" && r.URL.Path == "/v1/pages":
+				sawCreate.Store(true)
+				w.WriteHeader(http.StatusOK)
+			case r.Method == "PATCH" && r.URL.Path == "/v1/pages/existing-id":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":"existing-id","url":"https://notion.so/existing-id"}`))
+			case r.Method == "GET" && r.URL.Path == "/v1/blocks/existing-id/children":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"results":[{"id":"child-1"},{"id":"child-2"}],"has_more":false}`))
+			case r.Method == "DELETE" && r.URL.Path == "/v1/blocks/child-1":
+				sawDelete1.Store(true)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			case r.Method == "DELETE" && r.URL.Path == "/v1/blocks/child-2":
+				sawDelete2.Store(true)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			case r.Method == "PATCH" && r.URL.Path == "/v1/blocks/existing-id/children":
+				sawAppend.Store(true)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer srv.Close()
+
+		s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+		pageID, pageURL, err := s.UpsertPage(context.Background(), "key", "page_id", "parent", "title", "Title", "# content", "existing-id")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if sawCreate.Load() {
+			t.Fatal("expected UpsertPage to update in place, but it created a new page")
+		}
+		if !sawDelete1.Load() || !sawDelete2.Load() {
+			t.Fatalf("expected both existing children to be deleted (child-1=%v child-2=%v)", sawDelete1.Load(), sawDelete2.Load())
+		}
+		if !sawAppend.Load() {
+			t.Fatal("expected new content to be appended to the existing page")
+		}
+		if pageID != "existing-id" || pageURL != "https://notion.so/existing-id" {
+			t.Fatalf("expected the same page ID/URL to be returned, got id=%q url=%q", pageID, pageURL)
+		}
+	})
+
+	t.Run("unreachable existing page falls back to creating a new one", func(t *testing.T) {
+		var sawCreate bool
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == "PATCH" && r.URL.Path == "/v1/pages/gone-id":
+				w.WriteHeader(http.StatusNotFound)
+			case r.Method == "POST" && r.URL.Path == "/v1/pages":
+				sawCreate = true
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":"fresh-id","url":"https://notion.so/fresh-id"}`))
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer srv.Close()
+
+		s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+		pageID, _, err := s.UpsertPage(context.Background(), "key", "page_id", "parent", "title", "Title", "# content", "gone-id")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !sawCreate || pageID != "fresh-id" {
+			t.Fatalf("expected fallback to create a new page, got id=%q sawCreate=%v", pageID, sawCreate)
+		}
+	})
+
+	// Regression: a real meeting summary can have 50+ blocks. Deleting them
+	// one at a time sequentially (each DELETE taking ~300-500ms against the
+	// real Notion API) blew past the export Lambda's 30s timeout in
+	// production. clearPageChildren must delete concurrently — this asserts
+	// wall-clock time for 60 blocks stays well under what serial deletes
+	// would take, using a fake per-request latency the test controls.
+	t.Run("clears many children concurrently, not one at a time", func(t *testing.T) {
+		const numChildren = 60
+		const perRequestDelay = 50 * time.Millisecond
+
+		results := make([]struct {
+			ID string `json:"id"`
+		}, numChildren)
+		for i := range results {
+			results[i].ID = fmt.Sprintf("child-%d", i)
+		}
+		childrenBody, err := json.Marshal(map[string]interface{}{"results": results, "has_more": false})
+		if err != nil {
+			t.Fatalf("failed to build fixture: %v", err)
+		}
+
+		var deletes atomic.Int64
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == "PATCH" && r.URL.Path == "/v1/pages/existing-id":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"id":"existing-id","url":"https://notion.so/existing-id"}`))
+			case r.Method == "GET" && r.URL.Path == "/v1/blocks/existing-id/children":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(childrenBody)
+			case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/v1/blocks/child-"):
+				time.Sleep(perRequestDelay)
+				deletes.Add(1)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			case r.Method == "PATCH" && r.URL.Path == "/v1/blocks/existing-id/children":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer srv.Close()
+
+		s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+		start := time.Now()
+		_, _, err = s.UpsertPage(context.Background(), "key", "page_id", "parent", "title", "Title", "# content", "existing-id")
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if deletes.Load() != numChildren {
+			t.Fatalf("expected %d deletes, got %d", numChildren, deletes.Load())
+		}
+
+		serialLowerBound := time.Duration(numChildren) * perRequestDelay
+		if elapsed >= serialLowerBound {
+			t.Fatalf("deletes ran serially, not concurrently: %d children took %v (serial lower bound %v)", numChildren, elapsed, serialLowerBound)
+		}
+	})
 }
 
 // ParseNotionPageID must extract a Notion page/database ID from whatever a

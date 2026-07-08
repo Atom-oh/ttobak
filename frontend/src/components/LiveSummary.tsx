@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { marked } from 'marked';
 
 interface LiveSummaryProps {
   summary: string;
@@ -62,25 +63,12 @@ export function LiveSummary({ summary, isGenerating, wordCount, lastSummaryWordC
             </p>
           </div>
         ) : (
-          <div className="prose prose-sm dark:prose-invert max-w-none">
-            <div dangerouslySetInnerHTML={{ __html: renderMarkdown(summary) }} />
-          </div>
+          <div
+            className="prose prose-sm dark:prose-invert max-w-none"
+            dangerouslySetInnerHTML={{ __html: marked.parse(summary, { async: false }) as string }}
+          />
         )}
       </div>
     </div>
   );
-}
-
-// Simple markdown renderer (bold, headers, lists, checkboxes)
-function renderMarkdown(md: string): string {
-  return md
-    .replace(/^### (.+)$/gm, '<h3 class="text-base font-bold mt-4 mb-2">$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2 class="text-lg font-bold mt-4 mb-2">$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1 class="text-xl font-bold mt-4 mb-2">$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^- \[ \] (.+)$/gm, '<div class="flex items-start gap-2"><input type="checkbox" disabled class="mt-1"><span>$1</span></div>')
-    .replace(/^- \[x\] (.+)$/gm, '<div class="flex items-start gap-2"><input type="checkbox" checked disabled class="mt-1"><span>$1</span></div>')
-    .replace(/^- (.+)$/gm, '<li class="ml-4 dark-summary-item">$1</li>')
-    .replace(/\n\n/g, '<br/><br/>')
-    .replace(/\n/g, '<br/>');
 }

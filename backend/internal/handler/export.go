@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -126,10 +127,17 @@ func (h *ExportHandler) ExportMeeting(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to decrypt Notion API key")
 			return
 		}
-		_, pageURL, err := h.notionService.CreatePage(ctx, apiKey, integration.NotionParentType, integration.NotionParentID, integration.NotionTitleProperty, meetingDetail.Title, content)
+		pageID, pageURL, err := h.notionService.UpsertPage(ctx, apiKey, integration.NotionParentType, integration.NotionParentID, integration.NotionTitleProperty, meetingDetail.Title, content, meetingDetail.NotionPageID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to create Notion page: "+err.Error())
 			return
+		}
+		if pageID != meetingDetail.NotionPageID {
+			if updateErr := h.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+				"notionPageId": pageID,
+			}); updateErr != nil {
+				log.Printf("export: failed to save notionPageId for meeting %s: %v", meetingID, updateErr)
+			}
 		}
 
 		writeJSON(w, http.StatusOK, model.ExportResponse{

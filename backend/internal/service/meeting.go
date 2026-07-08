@@ -248,6 +248,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		SpeakerMap:         meeting.SpeakerMap,
 		SttProvider:        meeting.SttProvider,
 		LinkedMeetingIDs:   meeting.LinkedMeetingIDs,
+		NotionPageID:       meeting.NotionPageID,
 		Transcription:      transcription,
 		Attachments:        attachmentResponses,
 		Shares:             shareResponses,
