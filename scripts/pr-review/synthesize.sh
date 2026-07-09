@@ -130,8 +130,15 @@ if ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
   # 빠져 있었다 — claude CLI 에러 메시지에 credential/env 정보가 섞이면 public Actions
   # 로그로 그대로 새는 경로였다(cc-on-bedrock PR#107 리뷰 M4). scrub 을 head -c 뒤에 걸면
   # 500B 경계에서 시크릿이 반토막 나 정규식 미매칭으로 통과할 수 있다 — 전체를 먼저
-  # scrub 하고 그 결과를 자른다(ttobak PR#104 리뷰).
-  CHAIR_ERR_EXCERPT="$(scrub_secrets < "$WORK/chair.err" 2>/dev/null | head -c 500)"
+  # scrub 하고 그 결과를 자른다(ttobak PR#104 리뷰). 단, scrub_secrets 결과를 파이프로
+  # head 에 바로 넘기면 head 가 500B 만 읽고 먼저 종료할 때 upstream awk/sed 가 SIGPIPE
+  # 를 받고 `set -euo pipefail` 하에서 그 command substitution 실패가 스크립트 전체를
+  # 죽인다 — 바로 이 fallback 경로(그리고 그 아래 최종 fail-closed 코멘트 생성)가 스킵
+  # 되는 최악의 타이밍이 된다(cc-on-bedrock PR#107 리뷰 M1). 패널 셀 처리와 동일하게
+  # 파일 기반으로 받는다.
+  scrub_secrets < "$WORK/chair.err" 2>/dev/null > "$WORK/chair-err-scrubbed.tmp" || true
+  CHAIR_ERR_EXCERPT="$(head -c 500 "$WORK/chair-err-scrubbed.tmp" 2>/dev/null)"
+  rm -f "$WORK/chair-err-scrubbed.tmp"
   echo "::warning::chair '$(chair_label "$PRIMARY_MODEL")' degraded (connection/timeout/empty/no-verdict, ${CHAIR_TIMEOUT}s cap): $CHAIR_ERR_EXCERPT — falling back to '$(chair_label "$FALLBACK_MODEL")'"
   run_chair "$FALLBACK_MODEL"
   if chair_valid; then
