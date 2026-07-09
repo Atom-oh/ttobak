@@ -37,12 +37,12 @@ Claude Code  ──stdio──>  TTOBAK MCP Server  ──HTTPS──>  CloudFro
 cd mcp-server && npm install && npm run build
 
 # 2. Register with Claude Code
-claude mcp add --transport stdio --scope project \
+claude mcp add ttobak --transport stdio --scope project \
   --env TTOBAK_COGNITO_DOMAIN="https://ttobak-auth-180294183052.auth.ap-northeast-2.amazoncognito.com" \
   --env TTOBAK_CLIENT_ID="33rh85mv6l9n7tn3s5h16prfdr" \
   --env TTOBAK_API_URL="https://ttobak.atomai.click" \
   --env TTOBAK_REGION="ap-northeast-2" \
-  ttobak -- node mcp-server/dist/index.js
+  -- node mcp-server/dist/index.js
 ```
 
 #### Method 2: Auto Setup Script
@@ -242,12 +242,12 @@ Claude Code  ──stdio──>  TTOBAK MCP Server  ──HTTPS──>  CloudFro
 cd mcp-server && npm install && npm run build
 
 # 2. Claude Code에 등록
-claude mcp add --transport stdio --scope project \
+claude mcp add ttobak --transport stdio --scope project \
   --env TTOBAK_COGNITO_DOMAIN="https://ttobak-auth-180294183052.auth.ap-northeast-2.amazoncognito.com" \
   --env TTOBAK_CLIENT_ID="33rh85mv6l9n7tn3s5h16prfdr" \
   --env TTOBAK_API_URL="https://ttobak.atomai.click" \
   --env TTOBAK_REGION="ap-northeast-2" \
-  ttobak -- node mcp-server/dist/index.js
+  -- node mcp-server/dist/index.js
 ```
 
 #### 방법 2: 자동 설정 스크립트

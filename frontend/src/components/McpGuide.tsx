@@ -118,7 +118,7 @@ export function McpGuide() {
               Run this command in your terminal to add the TTOBAK MCP server.
             </p>
             <div className="ml-8">
-              <CodeBlock>{`claude mcp add --transport stdio --scope user -e TTOBAK_COGNITO_DOMAIN="https://ttobak-auth-180294183052.auth.ap-northeast-2.amazoncognito.com" -e TTOBAK_CLIENT_ID="33rh85mv6l9n7tn3s5h16prfdr" -e TTOBAK_API_URL="https://ttobak.atomai.click" ttobak -- node ~/.ttobak/server.mjs`}</CodeBlock>
+              <CodeBlock>{`claude mcp add ttobak --transport stdio --scope user -e TTOBAK_COGNITO_DOMAIN="https://ttobak-auth-180294183052.auth.ap-northeast-2.amazoncognito.com" -e TTOBAK_CLIENT_ID="33rh85mv6l9n7tn3s5h16prfdr" -e TTOBAK_API_URL="https://ttobak.atomai.click" -- node ~/.ttobak/server.mjs`}</CodeBlock>
             </div>
           </div>
 

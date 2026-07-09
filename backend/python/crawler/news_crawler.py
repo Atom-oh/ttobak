@@ -274,7 +274,7 @@ def _summarize_and_tag(title: str, text: str, source_name: str = '') -> tuple:
         resp = bedrock.converse(
             modelId=SUMMARIZE_MODEL_ID,
             messages=[{'role': 'user', 'content': [{'text': prompt}]}],
-            inferenceConfig={'maxTokens': 1500, 'temperature': 0.2},
+            inferenceConfig={'maxTokens': 1500},
         )
         response_text = resp['output']['message']['content'][0]['text']
 
