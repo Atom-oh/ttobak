@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -241,6 +242,27 @@ func (h *ExportHandler) generatePDFContent(meeting *model.MeetingDetailResponse)
 	return sb.String()
 }
 
+// ttobakAppBaseURL is the production frontend origin, used to rewrite
+// ADR-013 "transcript://{segmentId}" deep links into real, clickable URLs
+// for exports (Notion's API rejects non-http(s) link schemes outright —
+// "Invalid URL for link" — so the raw transcript:// form can't be sent to
+// Notion as-is; it works in-app only because MarkdownRenderer's custom `a`
+// component special-cases that scheme client-side).
+const ttobakAppBaseURL = "https://ttobak.atomai.click"
+
+// transcriptLinkPattern matches the markdown link syntax around a
+// transcript:// deep link, capturing the segment id.
+var transcriptLinkPattern = regexp.MustCompile(`\(transcript://([^)]+)\)`)
+
+// resolveTranscriptLinksForExport rewrites transcript:// deep links into an
+// absolute URL to the meeting page with a #ts-{segmentId} fragment — the
+// same anchor MarkdownRenderer's `a` component scrolls to in-app — so the
+// link is both valid for Notion's API and still useful (opens the meeting
+// at that moment) when clicked from an export.
+func resolveTranscriptLinksForExport(content, meetingID string) string {
+	return transcriptLinkPattern.ReplaceAllString(content, "("+ttobakAppBaseURL+"/meeting/"+meetingID+"#ts-$1)")
+}
+
 // generateMarkdownContent generates markdown content for Notion
 func (h *ExportHandler) generateMarkdownContent(meeting *model.MeetingDetailResponse) string {
 	var sb strings.Builder
@@ -255,7 +277,7 @@ func (h *ExportHandler) generateMarkdownContent(meeting *model.MeetingDetailResp
 
 	if meeting.Content != "" {
 		sb.WriteString("## Summary\n\n")
-		sb.WriteString(contentAsMarkdown(meeting.Content))
+		sb.WriteString(resolveTranscriptLinksForExport(contentAsMarkdown(meeting.Content), meeting.MeetingID))
 		sb.WriteString("\n\n")
 	}
 

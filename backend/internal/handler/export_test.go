@@ -49,3 +49,42 @@ func TestContentAsMarkdown(t *testing.T) {
 		}
 	})
 }
+
+// resolveTranscriptLinksForExport must rewrite ADR-013 "transcript://{id}"
+// deep links into absolute ttobak URLs before content reaches Notion —
+// Notion's pages/blocks API rejects non-http(s) link schemes outright with
+// "Invalid URL for link", which failed every Notion export for any meeting
+// whose summary contains a deep link (i.e. every meeting) until this fix.
+func TestResolveTranscriptLinksForExport(t *testing.T) {
+	t.Run("rewrites a transcript link to an absolute app URL with the same anchor", func(t *testing.T) {
+		md := "합의했다. [05:46](transcript://seg-346100) 추가로."
+		got := resolveTranscriptLinksForExport(md, "a7964eee-84a8-42d9-a3ca-ca304990241c")
+		want := "합의했다. [05:46](https://ttobak.atomai.click/meeting/a7964eee-84a8-42d9-a3ca-ca304990241c#ts-seg-346100) 추가로."
+		if got != want {
+			t.Fatalf("got  %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("rewrites multiple links in the same document", func(t *testing.T) {
+		md := "[00:30](transcript://seg-30000) 그리고 [05:46](transcript://seg-346100)"
+		got := resolveTranscriptLinksForExport(md, "meeting-1")
+		for _, want := range []string{
+			"https://ttobak.atomai.click/meeting/meeting-1#ts-seg-30000",
+			"https://ttobak.atomai.click/meeting/meeting-1#ts-seg-346100",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("expected output to contain %q, got %q", want, got)
+			}
+		}
+		if strings.Contains(got, "transcript://") {
+			t.Fatalf("transcript:// scheme leaked through: %q", got)
+		}
+	})
+
+	t.Run("content without deep links passes through unchanged", func(t *testing.T) {
+		md := "일반 텍스트, 링크 없음."
+		if got := resolveTranscriptLinksForExport(md, "meeting-1"); got != md {
+			t.Fatalf("got %q, want unchanged %q", got, md)
+		}
+	})
+}

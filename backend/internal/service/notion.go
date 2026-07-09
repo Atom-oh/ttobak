@@ -195,37 +195,25 @@ func (s *NotionService) CreatePage(ctx context.Context, apiKey, parentType, pare
 
 // appendBlocks sends additional children blocks to an already-created page
 // via PATCH /v1/blocks/{page_id}/children, used when a page has more blocks
-// than Notion's per-request create limit.
+// than Notion's per-request create limit. Retries on 429 via
+// notionDoWithRetry: this call routinely lands immediately after
+// clearPageChildren's burst of concurrent deletes, which primes Notion's
+// rate limiter to reject the very next request — without the retry, a
+// successful clear followed by a failed append left the page emptied out
+// with no new content (observed in production).
 func (s *NotionService) appendBlocks(ctx context.Context, apiKey, pageID string, blocks []NotionBlock) error {
 	jsonBody, err := json.Marshal(map[string]interface{}{"children": blocks})
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "PATCH", s.baseURL+"/v1/blocks/"+pageID+"/children", bytes.NewReader(jsonBody))
+	status, body, err := s.notionDoWithRetry(ctx, apiKey, "PATCH", s.baseURL+"/v1/blocks/"+pageID+"/children", jsonBody)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return err
 	}
-
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Notion-Version", "2022-06-28")
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
+	if status != http.StatusOK {
 		return fmt.Errorf("notion API error: %s", string(body))
 	}
-
 	return nil
 }
 
@@ -407,14 +395,17 @@ func (s *NotionService) notionGet(ctx context.Context, apiKey, url string) (int,
 // status code and response body. Shared by the update-in-place helpers below
 // (patching a title, listing/deleting existing children) so each doesn't
 // hand-roll request construction.
-func (s *NotionService) notionDo(ctx context.Context, apiKey, method, requestURL string, body []byte) (int, []byte, error) {
+// notionDo returns the response's Retry-After header value (empty if absent)
+// alongside status/body/err, so callers can back off correctly on a 429
+// without re-issuing the request just to read a header.
+func (s *NotionService) notionDo(ctx context.Context, apiKey, method, requestURL string, body []byte) (int, []byte, string, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, requestURL, reader)
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to create request: %w", err)
+		return 0, nil, "", fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Notion-Version", "2022-06-28")
@@ -424,14 +415,14 @@ func (s *NotionService) notionDo(ctx context.Context, apiKey, method, requestURL
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to send request: %w", err)
+		return 0, nil, "", fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return resp.StatusCode, nil, fmt.Errorf("failed to read response: %w", err)
+		return resp.StatusCode, nil, "", fmt.Errorf("failed to read response: %w", err)
 	}
-	return resp.StatusCode, respBody, nil
+	return resp.StatusCode, respBody, resp.Header.Get("Retry-After"), nil
 }
 
 // notionBlockChildrenResponse is the shape of GET /v1/blocks/{id}/children.
@@ -494,51 +485,52 @@ const notionDeleteMaxRetries = 3
 // unparsable) Retry-After header.
 const notionDeleteDefaultBackoff = 500 * time.Millisecond
 
-// deleteBlockWithRetry deletes a single block, retrying on 429 (rate limited)
-// with a delay taken from Notion's Retry-After header when present. Returns
-// immediately if ctx is done, whether that's before the first attempt or
-// between retries — so a Lambda nearing its timeout doesn't keep firing
-// requests that will never complete in time.
-func (s *NotionService) deleteBlockWithRetry(ctx context.Context, apiKey, blockID string) error {
+// notionDoWithRetry is notionDo with 429 (rate limit) retry: a burst of
+// concurrent block deletes routinely leaves Notion's rate limiter primed to
+// reject the very next request, so any call immediately following
+// clearPageChildren — appendBlocks included — needs the same backoff, not
+// just the deletes. Returns immediately if ctx is done, whether that's
+// before the first attempt or between retries, so a Lambda nearing its
+// timeout doesn't keep firing requests that will never complete in time.
+func (s *NotionService) notionDoWithRetry(ctx context.Context, apiKey, method, requestURL string, body []byte) (int, []byte, error) {
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
-			return err
+			return 0, nil, err
 		}
 
-		req, err := http.NewRequestWithContext(ctx, "DELETE", s.baseURL+"/v1/blocks/"+blockID, nil)
+		status, respBody, retryAfter, err := s.notionDo(ctx, apiKey, method, requestURL, body)
 		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
+			return status, respBody, err
 		}
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-		req.Header.Set("Notion-Version", "2022-06-28")
-
-		resp, err := s.httpClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("failed to send request: %w", err)
+		if status == http.StatusOK {
+			return status, respBody, nil
 		}
-		body, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			return fmt.Errorf("failed to read response: %w", readErr)
-		}
-
-		if resp.StatusCode == http.StatusOK {
-			return nil
-		}
-		if resp.StatusCode != http.StatusTooManyRequests || attempt >= notionDeleteMaxRetries {
-			return fmt.Errorf("notion API error deleting block (status %d): %s", resp.StatusCode, string(body))
+		if status != http.StatusTooManyRequests || attempt >= notionDeleteMaxRetries {
+			return status, respBody, nil
 		}
 
 		delay := notionDeleteDefaultBackoff
-		if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 {
+		if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
 			delay = time.Duration(seconds) * time.Second
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return 0, nil, ctx.Err()
 		case <-time.After(delay):
 		}
 	}
+}
+
+// deleteBlockWithRetry deletes a single block, retrying on 429 via notionDoWithRetry.
+func (s *NotionService) deleteBlockWithRetry(ctx context.Context, apiKey, blockID string) error {
+	status, body, err := s.notionDoWithRetry(ctx, apiKey, "DELETE", s.baseURL+"/v1/blocks/"+blockID, nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("notion API error deleting block (status %d): %s", status, string(body))
+	}
+	return nil
 }
 
 // clearPageChildren deletes (archives) every direct child block of pageID, so
@@ -599,7 +591,7 @@ func (s *NotionService) updatePageTitle(ctx context.Context, apiKey, pageID, tit
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
-	status, body, err := s.notionDo(ctx, apiKey, "PATCH", s.baseURL+"/v1/pages/"+pageID, reqBody)
+	status, body, err := s.notionDoWithRetry(ctx, apiKey, "PATCH", s.baseURL+"/v1/pages/"+pageID, reqBody)
 	if err != nil {
 		return "", err
 	}
