@@ -656,7 +656,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
                 system=system_messages,
                 messages=messages,
                 toolConfig={"tools": TOOL_DEFINITIONS},
-                inferenceConfig={"maxTokens": 4096, "temperature": 0.3},
+                inferenceConfig={"maxTokens": 4096},
             )
         except Exception as e:
             logger.error(f"Bedrock converse failed: {e}", exc_info=True)
@@ -1001,7 +1001,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 system=[{"text": get_system_prompt()}],
                 messages=messages,
                 toolConfig={"tools": TOOL_DEFINITIONS},
-                inferenceConfig={"maxTokens": 4096, "temperature": 0.3},
+                inferenceConfig={"maxTokens": 4096},
             )
         except Exception as e:
             logger.error(f"Bedrock converse_stream failed: {e}", exc_info=True)
