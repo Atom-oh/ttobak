@@ -28,14 +28,15 @@ AWS Bedrock AgentCore Gateway에 신규 **Web Search 커넥터**(`connectorId: "
 
 | 파일 | 현재 | 이번 스펙 |
 |---|---|---|
-| `news_crawler.py` `_search_google_news`/`_fetch_site_rss`/`_parse_rss`/`extract_paragraphs` | RSS 페치 + 본문 스크래핑 | **삭제** |
+| `news_crawler.py` `_search_google_news`/`_fetch_site_rss`/`_parse_rss` | RSS 페치 | **삭제** |
+| `news_crawler.py` `extract_paragraphs`/`_ParagraphExtractor`/`BLOCKED_URL_PATTERNS`/`MAX_CONTENT_LENGTH` | `customUrls` 직접 fetch용 본문 추출 | **유지** (§5.1) |
 | `news_crawler.py` `_generate_search_queries` | 소스명+키워드로 검색어 생성 | **재사용 그대로** |
 | `news_crawler.py` `_summarize_and_tag` (Bedrock `converse`, `global.anthropic.claude-sonnet-5`) | 기사 요약+태깅 | **재사용 그대로** (입력이 전문→snippet으로 바뀔 뿐) |
 | `news_crawler.py` `_doc_exists`/`_write_metadata`/`_make_hash` | dedup, DynamoDB 저장, URL 해시 | **재사용 그대로** |
 | `news_crawler.py` `_write_to_s3` | 마크다운에 "원문 발췌"(최대 30,000자) 포함 | **수정**: snippet 기반으로 축소, `publishedDate` 필드 추가 |
-| `research-agent/tools.py` `web_search()` | Google News RSS 파싱 | **교체**: Gateway 호출 |
+| `research-agent/tools.py` `web_search()` | Google News RSS 파싱 | **교체**: Gateway 호출 (실행 주체는 AgentCore Runtime 컨테이너 — §5.2) |
 | `infra/lib/crawler-stack.ts` Step Functions/Lambda 설정 | `ListActiveSources → Parallel[CrawlTechDocs, Map(CrawlNews)] → TriggerIngestion` | **변경 없음** (환경변수만 추가) |
-| `infra/lib/ai-stack.ts` `crawlerRole`/`researchWorkerRole` | Bedrock invoke 권한만 | **추가**: `bedrock-agentcore:InvokeGateway` |
+| `infra/lib/ai-stack.ts` `crawlerRole` | Bedrock invoke 권한만 | **추가**: `bedrock-agentcore:InvokeGateway` (research-agent 쪽은 CDK 밖 컨테이너 역할 — §5.2/§8) |
 
 ## 4. 아키텍처
 
@@ -104,7 +105,7 @@ ListActiveSources → Parallel[ CrawlTechDocs | Map(CrawlNews, concurrency=5) ] 
 `commonEnv`에 `WEB_SEARCH_GATEWAY_URL`, `WEB_SEARCH_GATEWAY_REGION` 추가(신규 props로 전달).
 
 ### 5.5 `infra/lib/ai-stack.ts`
-`crawlerRole`, `researchWorkerRole`에 `bedrock-agentcore:InvokeGateway` 정책 추가.
+`crawlerRole`에 `bedrock-agentcore:InvokeGateway` 정책 추가. `researchWorkerRole`에는 추가하지 않음 — Gateway를 실제로 호출하는 코드는 `researchWorkerRole`로 실행되는 `research-worker` Lambda가 아니라 AgentCore Runtime 컨테이너이므로, 그 권한은 컨테이너의 실행 역할에 별도로 부여해야 한다(§5.2/§8).
 
 ### 5.6 `infra/bin/infra.ts`
 `WebSearchGatewayStack` 인스턴스화(`env: usEast1Env`), `CrawlerStack`과 research-agent를 쓰는 스택이 `addDependency`.
@@ -126,4 +127,4 @@ ListActiveSources → Parallel[ CrawlTechDocs | Map(CrawlNews, concurrency=5) ] 
 - SigV4 서명의 정확한 서비스명(`bedrock-agentcore` 추정) — AWS SDK/실제 호출로 검증 필요
 - CDK `agentcore.Gateway`/`GatewayTarget` L2가 `connector` 타깃 타입을 지원하는지 최신 `aws-cdk-lib` 버전에서 재확인, 미지원 시 L1 `CfnGatewayTarget` 사용
 - research-agent AgentCore Runtime 컨테이너(§5.2)의 실행 역할에 `bedrock-agentcore:InvokeGateway`를 부여하는 방식 — 콘솔/CLI 직접 편집 vs CDK `iam.Role.fromRoleArn` import 중 선택
-- 로드맵 문서([2026-07-09-work-assistant-roadmap-design.md](2026-07-09-work-assistant-roadmap-design.md) SP1)의 "Gateway를 어느 스택에 둘지" 열린 질문은 이 스펙의 §4/§5.3에서 **신규 `web-search-gateway-stack.ts`로 확정**했으므로 해소됨 — 로드맵 쪽 문서도 동기화 필요
+- 로드맵 문서([2026-07-09-work-assistant-roadmap-design.md](2026-07-09-work-assistant-roadmap-design.md) SP1)의 "Gateway를 어느 스택에 둘지" 열린 질문은 이 스펙의 §4/§5.3에서 **신규 `web-search-gateway-stack.ts`로 확정**했으며, 로드맵 문서도 동기화 완료
