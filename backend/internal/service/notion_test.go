@@ -483,7 +483,7 @@ func TestUpsertPage(t *testing.T) {
 // deleteBlockWithRetry must retry a 429 rather than surface it immediately
 // (Notion's real rate limit is easily hit by notionMaxConcurrentDeletes
 // concurrent deletes), honoring Retry-After when Notion sends one, and must
-// give up after notionDeleteMaxRetries so one stuck block can't consume the
+// give up after notionMaxRetries so one stuck block can't consume the
 // export Lambda's entire time budget.
 func TestDeleteBlockWithRetry(t *testing.T) {
 	t.Run("retries once on 429 then succeeds", func(t *testing.T) {
@@ -507,7 +507,7 @@ func TestDeleteBlockWithRetry(t *testing.T) {
 		}
 	})
 
-	t.Run("gives up after notionDeleteMaxRetries and returns an error", func(t *testing.T) {
+	t.Run("gives up after notionMaxRetries and returns an error", func(t *testing.T) {
 		var attempts atomic.Int64
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			attempts.Add(1)
@@ -521,8 +521,8 @@ func TestDeleteBlockWithRetry(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected an error after exhausting retries")
 		}
-		if got := attempts.Load(); got != notionDeleteMaxRetries+1 {
-			t.Fatalf("expected %d attempts (initial + %d retries), got %d", notionDeleteMaxRetries+1, notionDeleteMaxRetries, got)
+		if got := attempts.Load(); got != notionMaxRetries+1 {
+			t.Fatalf("expected %d attempts (initial + %d retries), got %d", notionMaxRetries+1, notionMaxRetries, got)
 		}
 	})
 

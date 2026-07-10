@@ -63,18 +63,21 @@ ListActiveSources → Parallel[ CrawlTechDocs | Map(CrawlNews, concurrency=5) ] 
 **신규 us-east-1 리소스** — `infra/lib/web-search-gateway-stack.ts` (신규 스택, `EdgeAuthStack`와 동일 패턴: `env: usEast1Env`, `crossRegionReferences: true`):
 - `agentcore.Gateway` (CDK L2, `aws-cdk-lib/aws-bedrockagentcore`) — `authorizerConfiguration: agentcore.GatewayAuthorizer.usingAwsIam()` (IAM/SigV4, Cognito 불필요)
 - `agentcore.GatewayTarget` — Web Search 커넥터(`source.connectorId: "web-search"`, tool 이름 `WebSearch`). L2가 connector 타깃 타입을 지원하지 않으면 `CfnGatewayTarget`(L1)로 `targetConfiguration.mcp.connector` 직접 지정
-- Gateway 서비스 역할(Gateway가 assume, `roleArn` 프로퍼티)에 정책 추가:
+- Gateway 서비스 역할(Gateway가 assume, `roleArn` 프로퍼티)에 정책 추가(AWS 공식 Web Search 커넥터 가이드가 명시하는 그대로 — 다른 커넥터(예: Managed KB)는 서비스 역할에 `InvokeGateway`를 넣지 않지만, Web Search 커넥터는 예외적으로 이 두 액션을 서비스 역할에 요구함):
   - `bedrock-agentcore:InvokeGateway` on `arn:aws:bedrock-agentcore:us-east-1:{account}:gateway/*`
   - `bedrock-agentcore:InvokeWebSearch` on `arn:aws:bedrock-agentcore:us-east-1:aws:tool/web-search.v1`
-- `CfnOutput`으로 `gatewayId`/`gatewayUrl` export (ap-northeast-2 스택이 cross-region reference로 소비)
+- `CfnOutput`으로 `gatewayId`/`gatewayUrl` export
+
+**Cross-region 참조 (ap-northeast-2 → us-east-1)**: CloudFormation의 export/import는 리전 범위이므로 `WebSearchGatewayStack`(us-east-1)의 `CfnOutput`만으로는 `CrawlerStack`(ap-northeast-2)이 값을 가져올 수 없다. `EdgeAuthStack` 패턴(반대 방향: us-east-1 스택이 ap-northeast-2 값을 소비)과 동일하게, **참조하는 쪽 스택에도 `crossRegionReferences: true`를 켜야 한다** — 이번 경우는 소비자인 `CrawlerStack`(및 research-agent 관련 스택)이 그 대상. CDK가 내부적으로 SSM Parameter Store 기반 커스텀 리소스로 값을 리전 간에 전달하므로, 코드상으로는 `webSearchGatewayStack.gatewayUrl` 같은 프로퍼티를 그대로 참조하면 되지만 **양쪽 스택 모두** `crossRegionReferences: true`가 필요함을 `infra/bin/infra.ts`에서 명시.
 
 **호출자 측 IAM** (`infra/lib/ai-stack.ts`):
-- `crawlerRole`(뉴스 크롤러 Lambda, ap-northeast-2)와 `researchWorkerRole`에 `bedrock-agentcore:InvokeGateway` on Gateway ARN(us-east-1) 추가 — cross-region 호출이므로 대상 리전을 하드코딩
+- `crawlerRole`(뉴스 크롤러 Lambda, ap-northeast-2)와 research-agent 실행 역할(§5.2에서 확정)에 `bedrock-agentcore:InvokeGateway` on Gateway ARN(us-east-1) 추가 — cross-region 호출이므로 대상 리전을 하드코딩
 
 ## 5. 상세 변경 사항
 
 ### 5.1 `backend/python/crawler/news_crawler.py`
-- **삭제**: `_search_google_news`, `_fetch_site_rss`, `_parse_rss`, `extract_paragraphs`/`_ParagraphExtractor`, `GOOGLE_NEWS_RSS`, `SITE_RSS_FEEDS`, `MAX_ARTICLES_PER_FEED`, `BLOCKED_URL_PATTERNS`, `MAX_CONTENT_LENGTH`, `MIN_BODY_LENGTH` (모두 RSS/전문 스크래핑 전용)
+- **삭제**: `_search_google_news`, `_fetch_site_rss`, `_parse_rss`, `GOOGLE_NEWS_RSS`, `SITE_RSS_FEEDS`, `MAX_ARTICLES_PER_FEED` (검색/RSS 전용, `customUrls` 경로는 안 씀)
+- **유지**: `extract_paragraphs`/`_ParagraphExtractor`, `BLOCKED_URL_PATTERNS`, `MAX_CONTENT_LENGTH` — `customUrls`(사용자가 직접 지정한 URL) 처리 경로가 여전히 페이지를 직접 fetch해 본문을 추출하므로 그대로 필요. `MIN_BODY_LENGTH`도 `customUrls` 경로에는 유지하고, Gateway 검색 결과(snippet) 경로에서만 체크를 건너뛴다(§5.1 하단 참조)
 - **신규**: `_gateway_web_search(query: str, max_results: int = 10) -> list[dict]`
   - `botocore.auth.SigV4Auth` + `botocore.awsrequest.AWSRequest`로 POST 요청 서명 (리전 `us-east-1`, 서비스명은 AWS 문서 확인 필요 — Gateway invoke의 서명 서비스명을 구현 착수 시 재확인. 통상 `bedrock-agentcore`로 추정되나 최종 값은 `boto3.client('bedrock-agentcore-control').meta.service_model` 또는 실제 호출 테스트로 검증)
   - 요청 바디: `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"WebSearch","arguments":{"query": query[:200], "maxResults": max_results}}}`
@@ -88,6 +91,11 @@ ListActiveSources → Parallel[ CrawlTechDocs | Map(CrawlNews, concurrency=5) ] 
 - `web_search()` 내부를 `_gateway_web_search`와 동일한 로직으로 교체(별도 배포 아티팩트라 헬퍼는 각 모듈에 독립 구현 — 공유 모듈화는 배포 복잡도 증가로 이번 스펙에서는 하지 않음)
 - Google News RSS 파싱 코드(`urlopen`, `ET.fromstring` 등) 삭제
 - `REGION`(ap-northeast-2) 기본 로직은 그대로, Gateway 호출만 `us-east-1` 고정 리전으로 서명
+
+**실행 주체와 IAM/env 배포 경로 (중요 — `researchWorkerRole`과는 별개)**: `research-agent/tools.py`는 `backend/cmd/research-worker`(Lambda, `researchWorkerRole`로 실행)가 아니라 **AgentCore Runtime 컨테이너**(`ttobakResearchContainer`, `backend/python/research-agent/agent.py`가 서빙) 안에서 실행된다. 이 컨테이너의 실행 역할과 ARN은 현재 CDK가 관리하지 않고 `infra/bin/infra.ts`에 하드코딩된 문자열(`agentCoreRuntimeArn`)로만 참조된다 — 즉 IaC 밖에서 배포/관리되는 리소스다. 따라서:
+- `bedrock-agentcore:InvokeGateway` 정책은 `researchWorkerRole`(호출자 Lambda)이 아니라 **이 AgentCore Runtime 컨테이너 자신의 실행 역할**에 부여해야 한다. `researchWorkerRole`에 부여해도 컨테이너 내부 코드의 Gateway 호출에는 아무 효과가 없다(그 역할은 `InvokeAgentRuntime`으로 컨테이너를 "부르는" 쪽 권한만 가짐).
+- 컨테이너 실행 역할이 CDK 밖에 있으므로, 이 역할에 대한 IAM 정책 추가는 (a) AWS 콘솔/CLI로 직접 편집, 또는 (b) 이 스펙과 별도로 해당 역할을 CDK import(`iam.Role.fromRoleArn`)해서 정책을 붙이는 방식 중 하나로 처리해야 한다 — SP1 구현 착수 시 어느 쪽을 택할지 결정 필요(§8에 열린 사항으로 추가).
+- `WEB_SEARCH_GATEWAY_URL`/`WEB_SEARCH_GATEWAY_REGION` 같은 env var도 이 컨테이너의 배포 파이프라인(`agentcore.json`/컨테이너 빌드·배포 스크립트)에 주입해야 하며, `infra/lib/crawler-stack.ts`의 `commonEnv`(Lambda용)와는 다른 경로임을 구분해서 처리한다.
 
 ### 5.3 `infra/lib/web-search-gateway-stack.ts` (신규)
 전체 신규 파일. `Gateway` + `GatewayTarget`(web-search connector) + 서비스 역할 정책 + output.
@@ -117,3 +125,5 @@ ListActiveSources → Parallel[ CrawlTechDocs | Map(CrawlNews, concurrency=5) ] 
 
 - SigV4 서명의 정확한 서비스명(`bedrock-agentcore` 추정) — AWS SDK/실제 호출로 검증 필요
 - CDK `agentcore.Gateway`/`GatewayTarget` L2가 `connector` 타깃 타입을 지원하는지 최신 `aws-cdk-lib` 버전에서 재확인, 미지원 시 L1 `CfnGatewayTarget` 사용
+- research-agent AgentCore Runtime 컨테이너(§5.2)의 실행 역할에 `bedrock-agentcore:InvokeGateway`를 부여하는 방식 — 콘솔/CLI 직접 편집 vs CDK `iam.Role.fromRoleArn` import 중 선택
+- 로드맵 문서([2026-07-09-work-assistant-roadmap-design.md](2026-07-09-work-assistant-roadmap-design.md) SP1)의 "Gateway를 어느 스택에 둘지" 열린 질문은 이 스펙의 §4/§5.3에서 **신규 `web-search-gateway-stack.ts`로 확정**했으므로 해소됨 — 로드맵 쪽 문서도 동기화 필요

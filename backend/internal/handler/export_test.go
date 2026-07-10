@@ -56,9 +56,11 @@ func TestContentAsMarkdown(t *testing.T) {
 // "Invalid URL for link", which failed every Notion export for any meeting
 // whose summary contains a deep link (i.e. every meeting) until this fix.
 func TestResolveTranscriptLinksForExport(t *testing.T) {
+	const baseURL = "https://ttobak.atomai.click"
+
 	t.Run("rewrites a transcript link to an absolute app URL with the same anchor", func(t *testing.T) {
 		md := "합의했다. [05:46](transcript://seg-346100) 추가로."
-		got := resolveTranscriptLinksForExport(md, "a7964eee-84a8-42d9-a3ca-ca304990241c")
+		got := resolveTranscriptLinksForExport(md, "a7964eee-84a8-42d9-a3ca-ca304990241c", baseURL)
 		want := "합의했다. [05:46](https://ttobak.atomai.click/meeting/a7964eee-84a8-42d9-a3ca-ca304990241c#ts-seg-346100) 추가로."
 		if got != want {
 			t.Fatalf("got  %q\nwant %q", got, want)
@@ -67,7 +69,7 @@ func TestResolveTranscriptLinksForExport(t *testing.T) {
 
 	t.Run("rewrites multiple links in the same document", func(t *testing.T) {
 		md := "[00:30](transcript://seg-30000) 그리고 [05:46](transcript://seg-346100)"
-		got := resolveTranscriptLinksForExport(md, "meeting-1")
+		got := resolveTranscriptLinksForExport(md, "meeting-1", baseURL)
 		for _, want := range []string{
 			"https://ttobak.atomai.click/meeting/meeting-1#ts-seg-30000",
 			"https://ttobak.atomai.click/meeting/meeting-1#ts-seg-346100",
@@ -83,8 +85,17 @@ func TestResolveTranscriptLinksForExport(t *testing.T) {
 
 	t.Run("content without deep links passes through unchanged", func(t *testing.T) {
 		md := "일반 텍스트, 링크 없음."
-		if got := resolveTranscriptLinksForExport(md, "meeting-1"); got != md {
+		if got := resolveTranscriptLinksForExport(md, "meeting-1", baseURL); got != md {
 			t.Fatalf("got %q, want unchanged %q", got, md)
+		}
+	})
+
+	t.Run("segment id and meeting id are path-escaped", func(t *testing.T) {
+		md := "[00:30](transcript://seg 300#00)"
+		got := resolveTranscriptLinksForExport(md, "meeting one", baseURL)
+		want := "https://ttobak.atomai.click/meeting/meeting%20one#ts-seg%20300%2300"
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected output to contain escaped URL %q, got %q", want, got)
 		}
 	})
 }

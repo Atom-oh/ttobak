@@ -50,7 +50,7 @@ SP5 (독립) ──────────────────┘
 
 **Out**: 커넥터가 지원하지 않는 리전에 배포하는 것, 검색 결과 캐싱/재색인 시스템 구축(Acceptable Use가 금지).
 
-**열린 질문**: us-east-1 Gateway를 어느 스택에 둘지(신규 `web-search-gateway-stack.ts` vs 기존 knowledge-stack 확장) — SP1 상세 설계에서 결정.
+**해소됨**: us-east-1 Gateway는 신규 `web-search-gateway-stack.ts`로 확정 — 상세는 [SP1 설계](2026-07-09-sp1-agentcore-web-search-news-crawling-design.md) §4/§5.3 참조.
 
 ### SP2. 문서 허브 v2 (노트/블로그/슬라이드/위키링크)
 

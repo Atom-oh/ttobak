@@ -71,6 +71,7 @@ export class GatewayStack extends cdk.Stack {
         KMS_KEY_ID: props.kmsKeyId || '',
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
         AWS_REGION_NAME: cdk.Aws.REGION,
+        FRONTEND_BASE_URL: `https://${this.node.tryGetContext('ttobak:domainName')}`,
       },
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,

@@ -392,12 +392,11 @@ func (s *NotionService) notionGet(ctx context.Context, apiKey, url string) (int,
 }
 
 // notionDo performs an HTTP request with an optional JSON body, returning the
-// status code and response body. Shared by the update-in-place helpers below
-// (patching a title, listing/deleting existing children) so each doesn't
-// hand-roll request construction.
-// notionDo returns the response's Retry-After header value (empty if absent)
-// alongside status/body/err, so callers can back off correctly on a 429
-// without re-issuing the request just to read a header.
+// status code, response body, and the response's Retry-After header value
+// (empty if absent) so callers can back off correctly on a 429 without
+// re-issuing the request just to read a header. Shared by every
+// update-in-place helper (deleting/appending children, patching a title) via
+// notionDoWithRetry, so none of them hand-roll request construction.
 func (s *NotionService) notionDo(ctx context.Context, apiKey, method, requestURL string, body []byte) (int, []byte, string, error) {
 	var reader io.Reader
 	if body != nil {
@@ -475,11 +474,11 @@ func (s *NotionService) listChildBlockIDs(ctx context.Context, apiKey, blockID s
 // safe against 429s rather than the concurrency bound itself.
 const notionMaxConcurrentDeletes = 8
 
-// notionDeleteMaxRetries bounds how many times deleteBlockWithRetry retries a
-// single block delete after a 429. Deliberately small: clearPageChildren runs
-// inside the export Lambda's ~30s budget, so unbounded retries could exhaust
-// it entirely on one stuck block instead of failing fast with a clear error.
-const notionDeleteMaxRetries = 3
+// notionMaxRetries bounds how many times notionDoWithRetry retries a request
+// after a 429. Deliberately small: clearPageChildren/appendBlocks run inside
+// the export Lambda's ~30s budget, so unbounded retries could exhaust it
+// entirely on one stuck request instead of failing fast with a clear error.
+const notionMaxRetries = 3
 
 // notionDeleteDefaultBackoff is used when a 429 response has no (or an
 // unparsable) Retry-After header.
@@ -505,7 +504,7 @@ func (s *NotionService) notionDoWithRetry(ctx context.Context, apiKey, method, r
 		if status == http.StatusOK {
 			return status, respBody, nil
 		}
-		if status != http.StatusTooManyRequests || attempt >= notionDeleteMaxRetries {
+		if status != http.StatusTooManyRequests || attempt >= notionMaxRetries {
 			return status, respBody, nil
 		}
 

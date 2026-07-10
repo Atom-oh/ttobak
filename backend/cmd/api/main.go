@@ -58,6 +58,7 @@ func init() {
 	}
 	kbID := os.Getenv("KB_ID")                     // Bedrock Knowledge Base ID
 	kbDataSourceID := os.Getenv("KB_DATASOURCE_ID") // Bedrock Data Source ID
+	frontendBaseURL := os.Getenv("FRONTEND_BASE_URL")
 
 	// Initialize repository with S3 support for large transcript storage
 	repo := repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
@@ -84,7 +85,7 @@ func init() {
 	if kmsKeyID := os.Getenv("KMS_KEY_ID"); kmsKeyID != "" {
 		cryptoService = service.NewCryptoService(kmsClient, kmsKeyID)
 	}
-	exportHandler := handler.NewExportHandler(meetingService, notionService, repo, cryptoService)
+	exportHandler := handler.NewExportHandler(meetingService, notionService, repo, cryptoService, frontendBaseURL)
 	settingsHandler := handler.NewSettingsHandler(repo, cryptoService, notionService)
 	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
 	dictService := service.NewDictionaryService(dictRepo, transcribeClient)
