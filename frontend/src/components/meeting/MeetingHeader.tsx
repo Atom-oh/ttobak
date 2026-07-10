@@ -101,7 +101,7 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
       <header className="mb-8 lg:mb-10">
         <div className="flex items-center gap-2 mb-3">
           {meeting.tags?.[0] && (
-            <span className="bg-slate-900 dark:bg-primary/10 text-white dark:text-primary dark:border dark:border-primary/20 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded">
+            <span className="bg-slate-900 dark:bg-white/5 text-white dark:text-text-secondary dark:border dark:border-white/10 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded">
               {meeting.tags[0]}
             </span>
           )}

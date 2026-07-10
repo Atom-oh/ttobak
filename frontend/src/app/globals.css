@@ -226,12 +226,16 @@ body {
   --tw-prose-pre-bg: rgba(255, 255, 255, 0.05);
 }
 
-/* AI Summary card — cyan headings in dark mode */
+/* AI Summary card headings — every h1/h2/h3 in a multi-heading summary lit up
+   full neon cyan with a glow read as gaudy rather than premium repeated over
+   and over. Keep the AI-summary accent (violet, matching the card's own
+   border-l-accent stripe) as a subtle left rule instead of full-color glow. */
 .dark .ai-summary-prose h1,
 .dark .ai-summary-prose h2,
 .dark .ai-summary-prose h3 {
-  color: #00E5FF;
-  text-shadow: 0 0 8px rgba(0, 229, 255, 0.3);
+  color: var(--text-main);
+  border-left: 2px solid var(--accent);
+  padding-left: 0.6em;
 }
 
 /* ═══════════════════════════════════════════════

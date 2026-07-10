@@ -49,10 +49,12 @@ function getTagColor(tag: string, variant: 'primary' | 'secondary' = 'primary'):
   const lightFallback = 'bg-slate-100 text-slate-600';
   const lightClass = lightColors[tag.toLowerCase()] || lightFallback;
 
+  // Dark mode: tint only, no outline ring — a colored border around a
+  // same-hue fill reads as a glowing outline; a flat tint is the calmer version.
   if (variant === 'secondary') {
-    return `${lightClass} dark:bg-accent/10 dark:text-accent dark:border dark:border-accent/20`;
+    return `${lightClass} dark:bg-accent/10 dark:text-accent`;
   }
-  return `${lightClass} dark:bg-primary/10 dark:text-primary dark:border dark:border-primary/20`;
+  return `${lightClass} dark:bg-primary/10 dark:text-primary`;
 }
 
 function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meetingId: string) => void }) {
@@ -113,7 +115,7 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
 
         {/* PC: icon badge + duration (dark mode), tag + date row, title */}
         <div className="hidden dark:lg:flex items-center gap-3 mb-4">
-          <div className="flex items-center justify-center size-9 rounded-lg bg-primary/10 border border-primary/20">
+          <div className="flex items-center justify-center size-9 rounded-lg bg-primary/10">
             <span className="material-symbols-outlined text-primary text-lg">video_chat</span>
           </div>
           {meeting.duration != null && meeting.duration > 0 && (
