@@ -269,7 +269,7 @@ export function ChatClient() {
     <AppLayout activePath="/chat">
       <div className="flex flex-col h-full">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-slate-200 dark:border-white/10 bg-white dark:bg-[#0e0e13]">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-primary text-2xl">smart_toy</span>
             <h1 className="text-lg font-semibold text-slate-900 dark:text-white">TTOBAK Assistant</h1>
@@ -384,7 +384,7 @@ export function ChatClient() {
         )}
 
         {/* Input bar */}
-        <div className="border-t border-slate-200 dark:border-white/10 bg-white dark:bg-[#0e0e13] px-4 py-4">
+        <div className="border-t border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest px-4 py-4">
           <form onSubmit={handleSubmit} className="max-w-3xl mx-auto">
             <div className="flex items-center gap-2">
               <input

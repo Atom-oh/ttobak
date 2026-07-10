@@ -22,7 +22,7 @@ export function SkeletonCard() {
       <div className="flex items-center justify-between pt-4 border-t border-slate-100 dark:border-white/5">
         <div className="flex -space-x-2">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="size-6 lg:size-7 rounded-full bg-slate-200 dark:bg-white/5 border-2 border-white dark:border-[#131318] animate-pulse" />
+            <div key={i} className="size-6 lg:size-7 rounded-full bg-slate-200 dark:bg-white/5 border-2 border-white dark:border-surface animate-pulse" />
           ))}
         </div>
         <div className="w-6 h-6 bg-slate-200 dark:bg-white/5 rounded animate-pulse" />

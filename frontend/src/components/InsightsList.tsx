@@ -239,8 +239,8 @@ export function InsightsList() {
           onClick={() => handleTabChange('news')}
           className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
             activeTab === 'news'
-              ? 'bg-primary text-white dark:text-[#09090E] dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]'
-              : 'text-slate-600 dark:text-[#849396] hover:bg-slate-100 dark:hover:bg-white/5'
+              ? 'bg-primary text-white dark:text-background-dark dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]'
+              : 'text-slate-600 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-white/5'
           }`}
         >
           <span className="flex items-center gap-1.5">
@@ -252,8 +252,8 @@ export function InsightsList() {
           onClick={() => handleTabChange('tech')}
           className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
             activeTab === 'tech'
-              ? 'bg-primary text-white dark:text-[#09090E] dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]'
-              : 'text-slate-600 dark:text-[#849396] hover:bg-slate-100 dark:hover:bg-white/5'
+              ? 'bg-primary text-white dark:text-background-dark dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]'
+              : 'text-slate-600 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-white/5'
           }`}
         >
           <span className="flex items-center gap-1.5">
@@ -265,8 +265,8 @@ export function InsightsList() {
           onClick={() => handleTabChange('research')}
           className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
             activeTab === 'research'
-              ? 'bg-primary text-white dark:text-[#09090E] dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]'
-              : 'text-slate-600 dark:text-[#849396] hover:bg-slate-100 dark:hover:bg-white/5'
+              ? 'bg-primary text-white dark:text-background-dark dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]'
+              : 'text-slate-600 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-white/5'
           }`}
         >
           <span className="flex items-center gap-1.5">
@@ -283,13 +283,13 @@ export function InsightsList() {
           <div className="flex items-center justify-between">
             <button
               onClick={() => setShowNewResearch(true)}
-              className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white dark:text-[#09090E] rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity"
+              className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white dark:text-background-dark rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity"
             >
               <span className="material-symbols-outlined text-lg">add</span>
               New Research
             </button>
             {!researchLoading && (
-              <span className="text-xs text-slate-500 dark:text-[#849396]">
+              <span className="text-xs text-slate-500 dark:text-text-muted">
                 {researchJobs.length} research job{researchJobs.length !== 1 ? 's' : ''}
               </span>
             )}
@@ -308,10 +308,10 @@ export function InsightsList() {
               <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
             </div>
           ) : researchJobs.length === 0 ? (
-            <div className="text-center py-12 text-slate-400 dark:text-[#849396]">
+            <div className="text-center py-12 text-slate-400 dark:text-text-muted">
               <span className="material-symbols-outlined text-4xl mb-2">science</span>
               <p className="text-sm mt-2">No research jobs yet</p>
-              <p className="text-xs mt-1 text-slate-400 dark:text-[#849396]/70">
+              <p className="text-xs mt-1 text-slate-400 dark:text-text-muted/70">
                 Start a new research to explore any topic in depth with AI.
               </p>
             </div>
@@ -327,7 +327,7 @@ export function InsightsList() {
                       r.status !== 'error' ? 'cursor-pointer' : ''
                     }`}
                   >
-                    <h3 className="text-base font-semibold text-slate-900 dark:text-[#e4e1e9] leading-snug line-clamp-2">
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-text-main leading-snug line-clamp-2">
                       {r.topic}
                     </h3>
                     <div className="flex flex-wrap items-center gap-2 mt-2">
@@ -338,7 +338,7 @@ export function InsightsList() {
                         {r.status === 'running' ? 'Running' : r.status === 'done' ? 'Done' : 'Error'}
                       </span>
                       {r.status === 'running' && (
-                        <span className="text-xs text-slate-500 dark:text-[#849396]">
+                        <span className="text-xs text-slate-500 dark:text-text-muted">
                           Running... {elapsed}분 경과
                         </span>
                       )}
@@ -347,22 +347,22 @@ export function InsightsList() {
                       {r.status === 'done' && (
                         <>
                           {r.sourceCount != null && (
-                            <span className="text-xs text-slate-500 dark:text-[#849396]">
+                            <span className="text-xs text-slate-500 dark:text-text-muted">
                               {r.sourceCount} sources
                             </span>
                           )}
                           {r.sourceCount != null && r.wordCount != null && (
-                            <span className="text-xs text-slate-300 dark:text-[#849396]/40">|</span>
+                            <span className="text-xs text-slate-300 dark:text-text-muted/40">|</span>
                           )}
                           {r.wordCount != null && (
-                            <span className="text-xs text-slate-500 dark:text-[#849396]">
+                            <span className="text-xs text-slate-500 dark:text-text-muted">
                               {r.wordCount.toLocaleString()} words
                             </span>
                           )}
-                          <span className="text-xs text-slate-300 dark:text-[#849396]/40">|</span>
+                          <span className="text-xs text-slate-300 dark:text-text-muted/40">|</span>
                         </>
                       )}
-                      <span className="text-xs text-slate-500 dark:text-[#849396]">
+                      <span className="text-xs text-slate-500 dark:text-text-muted">
                         {formatDate(r.createdAt)}
                       </span>
                     </div>
@@ -388,7 +388,7 @@ export function InsightsList() {
                               document.body.removeChild(a); URL.revokeObjectURL(url);
                             } catch {}
                           }}
-                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-[#849396] hover:text-primary dark:hover:text-[#00E5FF] transition-colors"
+                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-text-muted hover:text-primary dark:hover:text-primary transition-colors"
                         >
                           <span className="material-symbols-outlined text-sm">description</span>
                           MD
@@ -410,7 +410,7 @@ export function InsightsList() {
                               if (printWin) printWin.onload = () => { printWin.print(); URL.revokeObjectURL(url); };
                             } catch {}
                           }}
-                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-[#849396] hover:text-primary dark:hover:text-[#00E5FF] transition-colors"
+                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-text-muted hover:text-primary dark:hover:text-primary transition-colors"
                         >
                           <span className="material-symbols-outlined text-sm">picture_as_pdf</span>
                           PDF
@@ -427,7 +427,7 @@ export function InsightsList() {
           {showNewResearch && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
               <div className="glass-panel rounded-xl p-6 w-full max-w-lg mx-4 space-y-5">
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-[#e4e1e9]">
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-text-main">
                   New Research
                 </h2>
                 <textarea
@@ -435,10 +435,10 @@ export function InsightsList() {
                   onChange={(e) => setResearchTopic(e.target.value)}
                   placeholder="연구 주제를 입력하세요..."
                   rows={3}
-                  className="w-full px-4 py-3 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-[#e4e1e9] placeholder-slate-400 dark:placeholder-[#849396] focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
+                  className="w-full px-4 py-3 rounded-lg text-sm bg-slate-50 dark:bg-surface-lowest border border-slate-200 dark:border-white/10 text-slate-900 dark:text-text-main placeholder-slate-400 dark:placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
                 />
                 <div>
-                  <label className="text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-2 block">
+                  <label className="text-sm font-medium text-slate-700 dark:text-text-secondary mb-2 block">
                     Research Mode
                   </label>
                   <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-white/10">
@@ -452,12 +452,12 @@ export function InsightsList() {
                         onClick={() => setResearchMode(opt.value)}
                         className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
                           researchMode === opt.value
-                            ? 'bg-primary text-white dark:text-[#09090E]'
-                            : 'bg-slate-50 dark:bg-[#0e0e13] text-slate-600 dark:text-[#849396] hover:bg-slate-100 dark:hover:bg-white/5'
+                            ? 'bg-primary text-white dark:text-background-dark'
+                            : 'bg-slate-50 dark:bg-surface-lowest text-slate-600 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-white/5'
                         }`}
                       >
                         <div>{opt.label}</div>
-                        <div className={`text-xs ${researchMode === opt.value ? 'text-white/70 dark:text-[#09090E]/70' : 'text-slate-400 dark:text-[#849396]/60'}`}>
+                        <div className={`text-xs ${researchMode === opt.value ? 'text-white/70 dark:text-background-dark/70' : 'text-slate-400 dark:text-text-muted/60'}`}>
                           {opt.desc}
                         </div>
                       </button>
@@ -471,17 +471,17 @@ export function InsightsList() {
                       setResearchTopic('');
                       setResearchMode('standard');
                     }}
-                    className="px-4 py-2 text-sm font-semibold text-slate-600 dark:text-[#849396] border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
+                    className="px-4 py-2 text-sm font-semibold text-slate-600 dark:text-text-muted border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={handleCreateResearch}
                     disabled={creating || !researchTopic.trim()}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white dark:text-[#09090E] rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white dark:text-background-dark rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {creating ? (
-                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white dark:border-[#09090E] border-t-transparent" />
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-white dark:border-background-dark border-t-transparent" />
                     ) : (
                       <span className="material-symbols-outlined text-lg">science</span>
                     )}
@@ -506,7 +506,7 @@ export function InsightsList() {
                     setCrawlerFilter(e.target.value);
                     setPage(1);
                   }}
-                  className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-surface-lowest border border-slate-200 dark:border-white/10 text-slate-700 dark:text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
                 >
                   <option value="">All Customers</option>
                   {uniqueCrawlerSources.map((src) => (
@@ -523,7 +523,7 @@ export function InsightsList() {
                     setServiceFilter(e.target.value);
                     setPage(1);
                   }}
-                  className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-surface-lowest border border-slate-200 dark:border-white/10 text-slate-700 dark:text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
                 >
                   <option value="">All Services</option>
                   {uniqueServices.map((service) => (
@@ -539,7 +539,7 @@ export function InsightsList() {
                   setSortBy(e.target.value);
                   setPage(1);
                 }}
-                className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
+                className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-surface-lowest border border-slate-200 dark:border-white/10 text-slate-700 dark:text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
               >
                 <option value="newest">Newest first</option>
                 <option value="oldest">Oldest first</option>
@@ -560,7 +560,7 @@ export function InsightsList() {
                 </button>
               </div>
               {!loading && (
-                <span className="text-xs text-slate-500 dark:text-[#849396] ml-auto">
+                <span className="text-xs text-slate-500 dark:text-text-muted ml-auto">
                   {totalCount} document{totalCount !== 1 ? 's' : ''}
                 </span>
               )}
@@ -569,7 +569,7 @@ export function InsightsList() {
             {/* Tag filter chips */}
             {availableTags.length > 0 && (
               <div className="flex flex-wrap items-center gap-1.5">
-                <span className="material-symbols-outlined text-sm text-slate-400 dark:text-[#849396] mr-1">label</span>
+                <span className="material-symbols-outlined text-sm text-slate-400 dark:text-text-muted mr-1">label</span>
                 {availableTags.slice(0, 20).map((tag) => {
                   const isSelected = selectedTags.includes(tag);
                   return (
@@ -578,8 +578,8 @@ export function InsightsList() {
                       onClick={() => toggleTag(tag)}
                       className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
                         isSelected
-                          ? 'bg-primary text-white dark:bg-[#00E5FF] dark:text-[#09090E] shadow-sm'
-                          : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-[#bac9cc] hover:bg-slate-200 dark:hover:bg-white/10'
+                          ? 'bg-primary text-white dark:bg-primary dark:text-background-dark shadow-sm'
+                          : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary hover:bg-slate-200 dark:hover:bg-white/10'
                       }`}
                     >
                       {tag}
@@ -600,11 +600,11 @@ export function InsightsList() {
 
             {/* Active tag filters summary */}
             {selectedTags.length > 0 && (
-              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-[#849396]">
+              <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-text-muted">
                 <span className="material-symbols-outlined text-sm">filter_alt</span>
                 Filtering by: {selectedTags.map((tag, i) => (
                   <span key={tag}>
-                    <span className="font-semibold text-primary dark:text-[#00E5FF]">{tag}</span>
+                    <span className="font-semibold text-primary dark:text-primary">{tag}</span>
                     {i < selectedTags.length - 1 && <span className="mx-1">+</span>}
                   </span>
                 ))}
@@ -625,10 +625,10 @@ export function InsightsList() {
               <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
             </div>
           ) : documents.length === 0 ? (
-            <div className="text-center py-12 text-slate-400 dark:text-[#849396]">
+            <div className="text-center py-12 text-slate-400 dark:text-text-muted">
               <span className="material-symbols-outlined text-4xl mb-2">search_off</span>
               <p className="text-sm mt-2">No documents found</p>
-              <p className="text-xs mt-1 text-slate-400 dark:text-[#849396]/70">
+              <p className="text-xs mt-1 text-slate-400 dark:text-text-muted/70">
                 {selectedTags.length > 0
                   ? 'No documents match the selected tags. Try removing some filters.'
                   : activeTab === 'news'
@@ -657,7 +657,7 @@ export function InsightsList() {
                     onClick={() => doc.sourceId && doc.docHash && router.push(`/insights/${doc.sourceId}/${doc.docHash}`)}
                     className="text-left w-full group"
                   >
-                    <h3 className="text-base font-semibold text-slate-900 dark:text-[#e4e1e9] leading-snug group-hover:text-primary dark:group-hover:text-[#00E5FF] transition-colors line-clamp-2">
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-text-main leading-snug group-hover:text-primary dark:group-hover:text-primary transition-colors line-clamp-2">
                       {doc.title}
                     </h3>
                   </button>
@@ -665,12 +665,12 @@ export function InsightsList() {
                   {/* Meta row: source, date */}
                   <div className="flex flex-wrap items-center gap-2 mt-2">
                     {(doc.source || doc.type) && (
-                      <span className="text-xs text-slate-500 dark:text-[#849396]">
+                      <span className="text-xs text-slate-500 dark:text-text-muted">
                         {doc.source || (doc.type === 'news' ? 'News' : 'AWS Docs')}
                       </span>
                     )}
-                    <span className="text-xs text-slate-300 dark:text-[#849396]/40">|</span>
-                    <span className="text-xs text-slate-500 dark:text-[#849396]">
+                    <span className="text-xs text-slate-300 dark:text-text-muted/40">|</span>
+                    <span className="text-xs text-slate-500 dark:text-text-muted">
                       {formatDate(doc.pubDate || doc.crawledAt)}
                     </span>
                   </div>
@@ -687,25 +687,25 @@ export function InsightsList() {
                           }}
                           className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
                             selectedTags.includes(tag)
-                              ? 'bg-primary/20 text-primary dark:bg-[#00E5FF]/20 dark:text-[#00E5FF] ring-1 ring-primary/30 dark:ring-[#00E5FF]/30'
-                              : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-[#bac9cc] hover:bg-slate-200 dark:hover:bg-white/10'
+                              ? 'bg-primary/20 text-primary dark:bg-primary/20 dark:text-primary ring-1 ring-primary/30 dark:ring-primary/30'
+                              : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary hover:bg-slate-200 dark:hover:bg-white/10'
                           }`}
                         >
                           {tag}
                         </button>
                       ))}
                       {(doc.tags || []).length > 6 && (
-                        <span className="text-xs text-slate-400 dark:text-[#849396]">
+                        <span className="text-xs text-slate-400 dark:text-text-muted">
                           +{(doc.tags || []).length - 6}
                         </span>
                       )}
                       {doc.awsServices && doc.awsServices.length > 0 && (doc.tags || []).length > 0 && (
-                        <span className="text-xs text-slate-300 dark:text-[#849396]/40">|</span>
+                        <span className="text-xs text-slate-300 dark:text-text-muted/40">|</span>
                       )}
                       {(doc.awsServices || []).slice(0, 3).map((svc) => (
                         <span
                           key={svc}
-                          className="bg-primary/5 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] text-xs px-2 py-0.5 rounded-full"
+                          className="bg-primary/5 text-primary dark:bg-primary/10 dark:text-primary text-xs px-2 py-0.5 rounded-full"
                         >
                           {svc}
                         </span>
@@ -715,7 +715,7 @@ export function InsightsList() {
 
                   {/* Summary */}
                   {(doc.summary || doc.title) && (
-                    <p className="text-sm text-slate-600 dark:text-[#bac9cc] mt-3 line-clamp-3 leading-relaxed">
+                    <p className="text-sm text-slate-600 dark:text-text-secondary mt-3 line-clamp-3 leading-relaxed">
                       {doc.summary || doc.title}
                     </p>
                   )}
@@ -729,7 +729,7 @@ export function InsightsList() {
                           KB
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400 dark:text-[#849396] bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400 dark:text-text-muted bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
                           Not in KB
                         </span>
                       )}
@@ -737,14 +737,14 @@ export function InsightsList() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => doc.sourceId && doc.docHash && router.push(`/insights/${doc.sourceId}/${doc.docHash}`)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-primary dark:text-[#00E5FF] border border-primary/20 dark:border-[#00E5FF]/20 rounded-lg hover:bg-primary/5 dark:hover:bg-[#00E5FF]/10 transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-primary dark:text-primary border border-primary/20 dark:border-primary/20 rounded-lg hover:bg-primary/5 dark:hover:bg-primary/10 transition-colors"
                       >
                         <span className="material-symbols-outlined text-lg">article</span>
                         Read
                       </button>
                       <button
                         onClick={() => { if (doc.url?.startsWith('http')) window.open(doc.url, '_blank'); }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-slate-500 dark:text-[#849396] border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-slate-500 dark:text-text-muted border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
                       >
                         <span className="material-symbols-outlined text-lg">open_in_new</span>
                         Original
@@ -762,18 +762,18 @@ export function InsightsList() {
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page <= 1}
-                className="flex items-center gap-1 px-3 py-1.5 text-sm font-semibold text-slate-600 dark:text-[#bac9cc] border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="flex items-center gap-1 px-3 py-1.5 text-sm font-semibold text-slate-600 dark:text-text-secondary border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 <span className="material-symbols-outlined text-lg">chevron_left</span>
                 Previous
               </button>
-              <span className="text-sm text-slate-500 dark:text-[#849396]">
+              <span className="text-sm text-slate-500 dark:text-text-muted">
                 Page {page} of {totalPages}
               </span>
               <button
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={page >= totalPages}
-                className="flex items-center gap-1 px-3 py-1.5 text-sm font-semibold text-slate-600 dark:text-[#bac9cc] border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="flex items-center gap-1 px-3 py-1.5 text-sm font-semibold text-slate-600 dark:text-text-secondary border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-50 dark:hover:bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Next
                 <span className="material-symbols-outlined text-lg">chevron_right</span>

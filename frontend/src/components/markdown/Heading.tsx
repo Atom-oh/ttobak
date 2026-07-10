@@ -10,14 +10,14 @@ interface HeadingProps { level: 1 | 2 | 3 | 4 | 5 | 6; children: ReactNode; }
 export function Heading({ level, children }: HeadingProps) {
   const text = typeof children === 'string' ? children : '';
   const id = slugify(text);
-  const base = 'text-slate-900 dark:text-[#e4e1e9] font-bold scroll-mt-20';
+  const base = 'text-slate-900 dark:text-text-main font-bold scroll-mt-20';
   const styles: Record<number, string> = {
     1: 'text-[28px] leading-tight mt-8 mb-4',
     2: 'text-[22px] leading-snug mt-10 mb-4 flex items-center gap-3',
     3: 'text-[18px] leading-snug mt-8 mb-3 font-semibold',
     4: 'text-[16px] leading-snug mt-6 mb-2 font-medium',
     5: 'text-[14px] leading-snug mt-4 mb-2 font-medium',
-    6: 'text-[13px] leading-snug mt-4 mb-2 font-medium text-slate-600 dark:text-[#bac9cc]',
+    6: 'text-[13px] leading-snug mt-4 mb-2 font-medium text-slate-600 dark:text-text-secondary',
   };
 
   if (level === 2) {

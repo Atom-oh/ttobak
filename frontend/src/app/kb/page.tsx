@@ -31,7 +31,7 @@ export default function KnowledgeBasePage() {
           <div className="text-primary flex size-10 shrink-0 items-center justify-center bg-primary/10 rounded-lg">
             <span className="material-symbols-outlined">library_books</span>
           </div>
-          <h1 className="text-slate-900 dark:text-[#e4e1e9] dark:font-[var(--font-headline)] text-xl font-bold leading-tight tracking-tight">
+          <h1 className="text-slate-900 dark:text-text-main dark:font-headline text-xl font-bold leading-tight tracking-tight">
             Knowledge Base
           </h1>
         </div>
@@ -42,18 +42,18 @@ export default function KnowledgeBasePage() {
         <div className="p-4 lg:px-16 lg:pt-16 lg:pb-8 max-w-4xl w-full">
           {/* Page Header */}
           <div className="hidden lg:block mb-8">
-            <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-[var(--font-headline)] dark:text-[#e4e1e9]">
+            <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-text-main">
               Knowledge Base
             </h2>
-            <p className="text-slate-600 dark:text-[#849396] mt-2">
+            <p className="text-slate-600 dark:text-text-muted mt-2">
               Upload documents to enhance Q&amp;A with your meeting notes.
             </p>
           </div>
           <div className="lg:hidden mb-8">
-            <h2 className="text-2xl font-extrabold text-slate-900 dark:text-[#e4e1e9] dark:font-[var(--font-headline)] tracking-tight">
+            <h2 className="text-2xl font-extrabold text-slate-900 dark:text-text-main dark:font-headline tracking-tight">
               Knowledge Base
             </h2>
-            <p className="text-slate-500 dark:text-[#849396] mt-1">
+            <p className="text-slate-500 dark:text-text-muted mt-1">
               Upload documents to enhance Q&amp;A with your meeting notes.
             </p>
           </div>

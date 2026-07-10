@@ -26,11 +26,11 @@ export function LiveSummary({ summary, isGenerating, wordCount, lastSummaryWordC
     : Math.min(100, (wordCount / summaryInterval) * 100);
 
   return (
-    <div className="bg-white dark:bg-[#0e0e13] glass-panel rounded-xl border border-slate-200 dark:border-white/10">
+    <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl border border-slate-200 dark:border-white/10">
       {/* Header */}
       <div className="flex items-center gap-3 p-4 border-b border-slate-100 dark:border-white/5">
         <span className="material-symbols-outlined text-primary">auto_awesome</span>
-        <h3 className="text-sm font-semibold text-slate-900 dark:text-white dark:font-[var(--font-headline)]">Live Summary</h3>
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-white dark:font-headline">Live Summary</h3>
         <div className="ml-auto flex items-center gap-2">
           {isGenerating && (
             <div className="flex items-center gap-1.5 bg-primary/10 px-2.5 py-1 rounded-full border border-primary/20">

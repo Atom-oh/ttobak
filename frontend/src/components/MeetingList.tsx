@@ -50,9 +50,9 @@ function getTagColor(tag: string, variant: 'primary' | 'secondary' = 'primary'):
   const lightClass = lightColors[tag.toLowerCase()] || lightFallback;
 
   if (variant === 'secondary') {
-    return `${lightClass} dark:bg-[#B026FF]/10 dark:text-[#B026FF] dark:border dark:border-[#B026FF]/20`;
+    return `${lightClass} dark:bg-accent/10 dark:text-accent dark:border dark:border-accent/20`;
   }
-  return `${lightClass} dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] dark:border dark:border-[#00E5FF]/20`;
+  return `${lightClass} dark:bg-primary/10 dark:text-primary dark:border dark:border-primary/20`;
 }
 
 function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meetingId: string) => void }) {
@@ -91,7 +91,7 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
 
   return (
     <Link href={`/meeting/${meeting.meetingId}`}>
-      <div className={`glass-panel p-4 lg:p-6 rounded-xl hover:border-primary/30 lg:hover:border-slate-200 lg:dark:hover:border-[#00E5FF]/30 lg:hover:shadow-xl lg:hover:shadow-primary/5 lg:dark:hover:shadow-[0_0_15px_rgba(0,229,255,0.1)] transition-all cursor-pointer group ${isDeleting ? 'opacity-50 pointer-events-none' : ''}`}>
+      <div className={`glass-panel p-4 lg:p-6 rounded-xl hover:border-primary/30 lg:hover:border-slate-200 lg:dark:hover:border-primary/30 lg:hover:shadow-xl lg:hover:shadow-primary/5 lg:dark:hover:shadow-[0_0_15px_rgba(0,229,255,0.1)] transition-all cursor-pointer group ${isDeleting ? 'opacity-50 pointer-events-none' : ''}`}>
         {/* Mobile: title left, tag right */}
         <div className="flex justify-between items-start mb-2 lg:hidden">
           <h4 className="text-slate-900 dark:text-slate-100 font-bold text-base leading-tight group-hover:text-primary transition-colors">
@@ -113,11 +113,11 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
 
         {/* PC: icon badge + duration (dark mode), tag + date row, title */}
         <div className="hidden dark:lg:flex items-center gap-3 mb-4">
-          <div className="flex items-center justify-center size-9 rounded-lg bg-[#00E5FF]/10 border border-[#00E5FF]/20">
-            <span className="material-symbols-outlined text-[#00E5FF] text-lg">video_chat</span>
+          <div className="flex items-center justify-center size-9 rounded-lg bg-primary/10 border border-primary/20">
+            <span className="material-symbols-outlined text-primary text-lg">video_chat</span>
           </div>
           {meeting.duration != null && meeting.duration > 0 && (
-            <span className="text-[11px] font-bold uppercase tracking-wider text-[#849396]">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-text-muted">
               {`${Math.floor(meeting.duration / 60)}:${String(meeting.duration % 60).padStart(2, '0')} MIN`}
             </span>
           )}
@@ -137,9 +137,9 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
               <span />
             )}
           </div>
-          <span className="text-xs text-slate-400 dark:text-[#849396]">{formatDate(meeting.date)}</span>
+          <span className="text-xs text-slate-400 dark:text-text-muted">{formatDate(meeting.date)}</span>
         </div>
-        <h4 className="hidden lg:block text-slate-900 dark:text-[#e4e1e9] font-bold text-lg leading-tight group-hover:text-primary transition-colors mb-2">
+        <h4 className="hidden lg:block text-slate-900 dark:text-text-main font-bold text-lg leading-tight group-hover:text-primary transition-colors mb-2">
           {meeting.title}
         </h4>
 
@@ -150,7 +150,7 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
         </div>
 
         {meeting.summary && (
-          <p className="text-slate-600 dark:text-[#BAC9CC] text-sm line-clamp-2 lg:line-clamp-3 leading-relaxed mb-4">
+          <p className="text-slate-600 dark:text-text-secondary text-sm line-clamp-2 lg:line-clamp-3 leading-relaxed mb-4">
             {meeting.summary}
           </p>
         )}
@@ -172,7 +172,7 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
                 {meeting.participants.slice(0, 3).map((p, i) => (
                   <div
                     key={p.id || i}
-                    className="size-6 lg:size-7 rounded-full border-2 border-white dark:border-[#131318] bg-slate-200 dark:bg-[#1f1f25] overflow-hidden flex items-center justify-center text-[10px] font-bold text-slate-500 dark:text-[#849396]"
+                    className="size-6 lg:size-7 rounded-full border-2 border-white dark:border-surface bg-slate-200 dark:bg-[#1f1f25] overflow-hidden flex items-center justify-center text-[10px] font-bold text-slate-500 dark:text-text-muted"
                   >
                     {p.avatarUrl ? (
                       <img src={p.avatarUrl} alt={p.name} className="w-full h-full object-cover" />
@@ -182,7 +182,7 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
                   </div>
                 ))}
                 {meeting.participants.length > 3 && (
-                  <div className="size-6 lg:size-7 rounded-full border-2 border-white dark:border-[#131318] bg-slate-100 dark:bg-[#1f1f25] flex items-center justify-center text-[10px] font-bold text-slate-500 dark:text-[#849396]">
+                  <div className="size-6 lg:size-7 rounded-full border-2 border-white dark:border-surface bg-slate-100 dark:bg-[#1f1f25] flex items-center justify-center text-[10px] font-bold text-slate-500 dark:text-text-muted">
                     +{meeting.participants.length - 3}
                   </div>
                 )}
@@ -192,7 +192,7 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
             )}
             {/* Attendee count — dark mode */}
             {meeting.participants && meeting.participants.length > 0 && (
-              <div className="hidden dark:flex items-center gap-1 text-[#849396] text-xs">
+              <div className="hidden dark:flex items-center gap-1 text-text-muted text-xs">
                 <span className="material-symbols-outlined text-sm">person</span>
                 <span>{meeting.participants.length}</span>
               </div>
@@ -301,13 +301,13 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
       <div className="px-4 lg:hidden">
         <label className="flex flex-col min-w-40 h-11 w-full">
           <div className="flex w-full flex-1 items-stretch rounded-xl h-full shadow-sm">
-            <div className="text-slate-400 dark:text-[#849396] flex bg-slate-100 dark:bg-white/5 items-center justify-center pl-4 rounded-l-xl">
+            <div className="text-slate-400 dark:text-text-muted flex bg-slate-100 dark:bg-white/5 items-center justify-center pl-4 rounded-l-xl">
               <span className="material-symbols-outlined text-[20px]">search</span>
             </div>
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-r-xl text-slate-900 dark:text-[#e4e1e9] focus:outline-0 focus:ring-0 border-none bg-slate-100 dark:bg-white/5 placeholder:text-slate-400 dark:placeholder:text-[#849396] px-3 text-sm font-medium leading-normal"
+              className="flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-r-xl text-slate-900 dark:text-text-main focus:outline-0 focus:ring-0 border-none bg-slate-100 dark:bg-white/5 placeholder:text-slate-400 dark:placeholder:text-text-muted px-3 text-sm font-medium leading-normal"
               placeholder="Search meetings, notes, or tags"
             />
           </div>
@@ -339,7 +339,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as 'newest' | 'name')}
-              className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-[#bac9cc] focus:outline-none focus:ring-2 focus:ring-primary/30"
+              className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-surface-lowest border border-slate-200 dark:border-white/10 text-slate-700 dark:text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
             >
               <option value="newest">최신순</option>
               <option value="name">이름순</option>
@@ -349,13 +349,13 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
                 onClick={() => setShowTagFilter(!showTagFilter)}
                 className={`flex items-center gap-1.5 text-sm transition-colors ${
                   selectedTags.length > 0
-                    ? 'text-primary dark:text-[#00E5FF]'
-                    : 'text-slate-400 hover:text-slate-600 dark:text-[#849396] dark:hover:text-[#00E5FF]'
+                    ? 'text-primary dark:text-primary'
+                    : 'text-slate-400 hover:text-slate-600 dark:text-text-muted dark:hover:text-primary'
                 }`}
               >
                 <span className="material-symbols-outlined text-lg">filter_list</span>
                 {selectedTags.length > 0 && (
-                  <span className="text-[10px] font-bold bg-primary/10 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                  <span className="text-[10px] font-bold bg-primary/10 text-primary dark:bg-primary/10 dark:text-primary px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
                     {selectedTags.length}
                   </span>
                 )}
@@ -379,7 +379,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
                   }}
                   className={`text-xs font-bold px-3 py-1.5 rounded-full transition-all ${
                     isSelected
-                      ? 'bg-primary text-white dark:bg-[#00E5FF] dark:text-[#09090E] ring-2 ring-primary/30 dark:ring-[#00E5FF]/30'
+                      ? 'bg-primary text-white dark:bg-primary dark:text-background-dark ring-2 ring-primary/30 dark:ring-primary/30'
                       : getTagColor(tag)
                   }`}
                 >
@@ -390,7 +390,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
             {selectedTags.length > 0 && (
               <button
                 onClick={() => setSelectedTags([])}
-                className="text-xs font-medium text-slate-400 hover:text-slate-600 dark:text-[#849396] dark:hover:text-white px-2 py-1.5 transition-colors"
+                className="text-xs font-medium text-slate-400 hover:text-slate-600 dark:text-text-muted dark:hover:text-white px-2 py-1.5 transition-colors"
               >
                 Clear
               </button>
@@ -404,7 +404,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
         {Object.entries(groupedMeetings).map(([group, groupMeetings], groupIndex, arr) => (
           <div key={group}>
             {group && (
-              <h3 className="text-slate-500 dark:text-[#849396] text-xs font-bold uppercase tracking-widest pb-3">
+              <h3 className="text-slate-500 dark:text-text-muted text-xs font-bold uppercase tracking-widest pb-3">
                 {group}
               </h3>
             )}
@@ -414,7 +414,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
               ))}
               {/* "Record New Meeting" card — desktop only, in last group */}
               {groupIndex === arr.length - 1 && (
-                <Link href="/record" className="hidden lg:flex border-2 border-dashed border-slate-200 dark:border-white/10 rounded-xl items-center justify-center min-h-[180px] hover:border-primary dark:hover:border-[#00E5FF]/30 hover:text-primary text-slate-400 dark:text-[#849396] transition-colors group/new">
+                <Link href="/record" className="hidden lg:flex border-2 border-dashed border-slate-200 dark:border-white/10 rounded-xl items-center justify-center min-h-[180px] hover:border-primary dark:hover:border-primary/30 hover:text-primary text-slate-400 dark:text-text-muted transition-colors group/new">
                   <div className="flex flex-col items-center gap-2">
                     <span className="material-symbols-outlined text-3xl group-hover/new:text-primary transition-colors">add_circle</span>
                     <span className="text-sm font-semibold">Record New Meeting</span>
@@ -438,7 +438,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
                 </p>
                 <button
                   onClick={() => setSelectedTags([])}
-                  className="text-sm font-semibold text-primary dark:text-[#00E5FF] hover:underline"
+                  className="text-sm font-semibold text-primary dark:text-primary hover:underline"
                 >
                   Clear filter
                 </button>

@@ -24,7 +24,7 @@ function StatusBadge({ status }: { status: string }) {
   switch (s) {
     case 'active':
     case 'idle':
-      classes = 'bg-green-100 text-green-700 dark:bg-[#00E5FF]/10 dark:text-[#00E5FF]';
+      classes = 'bg-green-100 text-green-700 dark:bg-primary/10 dark:text-primary';
       label = 'Active';
       break;
     case 'crawling':
@@ -36,11 +36,11 @@ function StatusBadge({ status }: { status: string }) {
       label = 'Error';
       break;
     case 'disabled':
-      classes = 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-[#849396]';
+      classes = 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-muted';
       label = 'Disabled';
       break;
     default:
-      classes = 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-[#849396]';
+      classes = 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-muted';
       label = status;
   }
 
@@ -149,12 +149,12 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
       <div className="glass-panel rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 bg-white dark:bg-[#1a1a24]">
         <div className="flex items-center justify-between mb-6">
-          <h3 className="text-lg font-semibold text-slate-900 dark:text-[#e4e1e9]">
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-text-main">
             {isEdit ? 'Edit Source' : 'Add Source'}
           </h3>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 dark:text-[#849396] dark:hover:text-[#bac9cc]"
+            className="text-slate-400 hover:text-slate-600 dark:text-text-muted dark:hover:text-text-secondary"
           >
             <span className="material-symbols-outlined">close</span>
           </button>
@@ -169,7 +169,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
         <form onSubmit={handleSubmit} className="space-y-5">
           {/* Customer Name */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-1">
+            <label className="block text-sm font-medium text-slate-700 dark:text-text-secondary mb-1">
               고객사
             </label>
             <input
@@ -178,19 +178,19 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
               onChange={(e) => setSourceName(e.target.value)}
               placeholder="예: 우리은행, SK텔레콤, 삼성전자"
               disabled={isEdit}
-              className="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-[#849396] placeholder:text-slate-400 disabled:opacity-60"
+              className="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400 disabled:opacity-60"
             />
-            <p className="text-xs text-slate-400 dark:text-[#849396] mt-1">
+            <p className="text-xs text-slate-400 dark:text-text-muted mt-1">
               고객사명으로 Google News, Naver News 등에서 자동으로 관련 기사를 검색합니다.
             </p>
           </div>
 
           {/* Interest Keywords */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-2">
-              관심 키워드 <span className="font-normal text-slate-400 dark:text-[#849396]">(선택)</span>
+            <label className="block text-sm font-medium text-slate-700 dark:text-text-secondary mb-2">
+              관심 키워드 <span className="font-normal text-slate-400 dark:text-text-muted">(선택)</span>
             </label>
-            <p className="text-xs text-slate-400 dark:text-[#849396] mb-2">
+            <p className="text-xs text-slate-400 dark:text-text-muted mb-2">
               고객사와 조합하여 더 정확한 기사를 검색합니다. 예: &quot;우리은행 AI&quot;, &quot;우리은행 클라우드&quot;
             </p>
             {/* Keyword suggestions */}
@@ -202,8 +202,8 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                   onClick={() => addKeyword(kw)}
                   className={`px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
                     newsQueries.includes(kw)
-                      ? 'bg-primary text-white dark:bg-[#00E5FF] dark:text-[#09090E]'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-white/5 dark:text-[#849396] dark:hover:bg-white/10'
+                      ? 'bg-primary text-white dark:bg-primary dark:text-background-dark'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-white/5 dark:text-text-muted dark:hover:bg-white/10'
                   }`}
                 >
                   {kw}
@@ -218,7 +218,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                   .map((kw) => (
                     <span
                       key={kw}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] rounded-full"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary dark:bg-primary/10 dark:text-primary rounded-full"
                     >
                       {kw}
                       <button
@@ -244,13 +244,13 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                   }
                 }}
                 placeholder="직접 입력... (Enter로 추가)"
-                className="flex-1 px-3 py-2 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-[#849396] placeholder:text-slate-400"
+                className="flex-1 px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400"
               />
               <button
                 type="button"
                 onClick={() => addKeyword()}
                 disabled={!keywordInput.trim()}
-                className="px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10 dark:text-[#00E5FF] dark:hover:bg-[#00E5FF]/10 rounded-lg transition-colors disabled:opacity-40"
+                className="px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10 dark:text-primary dark:hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-40"
               >
                 Add
               </button>
@@ -259,8 +259,8 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
 
           {/* AWS Services */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-2">
-              AWS Services <span className="font-normal text-slate-400 dark:text-[#849396]">(Tech 크롤링용)</span>
+            <label className="block text-sm font-medium text-slate-700 dark:text-text-secondary mb-2">
+              AWS Services <span className="font-normal text-slate-400 dark:text-text-muted">(Tech 크롤링용)</span>
             </label>
             <div className="flex flex-wrap gap-2 mb-2">
               {AWS_SERVICE_PRESETS.map((svc) => (
@@ -270,8 +270,8 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                   onClick={() => toggleAwsService(svc)}
                   className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
                     awsServices.includes(svc)
-                      ? 'bg-primary text-white dark:text-[#09090E] dark:shadow-[0_0_10px_rgba(0,229,255,0.3)]'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-white/5 dark:text-[#849396] dark:hover:bg-white/10'
+                      ? 'bg-primary text-white dark:text-background-dark dark:shadow-[0_0_10px_rgba(0,229,255,0.3)]'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-white/5 dark:text-text-muted dark:hover:bg-white/10'
                   }`}
                 >
                   {svc}
@@ -285,7 +285,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                   .map((svc) => (
                     <span
                       key={svc}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] rounded-lg"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary dark:bg-primary/10 dark:text-primary rounded-lg"
                     >
                       {svc}
                       <button
@@ -311,12 +311,12 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                   }
                 }}
                 placeholder="Add custom service..."
-                className="flex-1 px-3 py-2 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-[#849396] placeholder:text-slate-400"
+                className="flex-1 px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400"
               />
               <button
                 type="button"
                 onClick={addCustomService}
-                className="px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10 dark:text-[#00E5FF] dark:hover:bg-[#00E5FF]/10 rounded-lg transition-colors"
+                className="px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10 dark:text-primary dark:hover:bg-primary/10 rounded-lg transition-colors"
               >
                 Add
               </button>
@@ -325,10 +325,10 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
 
           {/* Custom URLs */}
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-2">
-              Custom URLs <span className="font-normal text-slate-400 dark:text-[#849396]">(선택)</span>
+            <label className="block text-sm font-medium text-slate-700 dark:text-text-secondary mb-2">
+              Custom URLs <span className="font-normal text-slate-400 dark:text-text-muted">(선택)</span>
             </label>
-            <p className="text-xs text-slate-400 dark:text-[#849396] mb-2">
+            <p className="text-xs text-slate-400 dark:text-text-muted mb-2">
               특정 기사나 페이지를 직접 크롤링하고 싶을 때 URL을 추가하세요.
             </p>
             <div className="space-y-2">
@@ -339,13 +339,13 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                     value={url}
                     onChange={(e) => updateCustomUrl(idx, e.target.value)}
                     placeholder="https://..."
-                    className="flex-1 px-3 py-2 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-[#849396] placeholder:text-slate-400"
+                    className="flex-1 px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400"
                   />
                   {customUrls.length > 1 && (
                     <button
                       type="button"
                       onClick={() => removeUrlField(idx)}
-                      className="text-slate-400 hover:text-red-500 dark:text-[#849396]"
+                      className="text-slate-400 hover:text-red-500 dark:text-text-muted"
                     >
                       <span className="material-symbols-outlined text-lg">remove_circle</span>
                     </button>
@@ -356,7 +356,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
             <button
               type="button"
               onClick={addUrlField}
-              className="mt-2 flex items-center gap-1 text-sm font-medium text-primary hover:text-primary/80 dark:text-[#00E5FF] dark:hover:text-[#00E5FF]/80 transition-colors"
+              className="mt-2 flex items-center gap-1 text-sm font-medium text-primary hover:text-primary/80 dark:text-primary dark:hover:text-primary/80 transition-colors"
             >
               <span className="material-symbols-outlined text-lg">add</span>
               Add URL
@@ -368,14 +368,14 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 dark:text-[#849396] dark:hover:bg-white/5 rounded-lg transition-colors"
+              className="px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100 dark:text-text-muted dark:hover:bg-white/5 rounded-lg transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={!sourceName.trim() || submitting}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-white dark:text-[#09090E] rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-white dark:text-background-dark rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
             >
               {submitting ? (
                 <>
@@ -424,12 +424,12 @@ function HistoryModal({ sourceName, sourceId, onClose }: HistoryModalProps) {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
       <div className="glass-panel rounded-xl w-full max-w-lg max-h-[80vh] overflow-y-auto p-6 bg-white dark:bg-[#1a1a24]">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-slate-900 dark:text-[#e4e1e9]">
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-text-main">
             Crawl History — {sourceName}
           </h3>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 dark:text-[#849396] dark:hover:text-[#bac9cc]"
+            className="text-slate-400 hover:text-slate-600 dark:text-text-muted dark:hover:text-text-secondary"
           >
             <span className="material-symbols-outlined">close</span>
           </button>
@@ -444,7 +444,7 @@ function HistoryModal({ sourceName, sourceId, onClose }: HistoryModalProps) {
             {error}
           </div>
         ) : history.length === 0 ? (
-          <p className="text-sm text-slate-500 dark:text-[#849396] text-center py-8">
+          <p className="text-sm text-slate-500 dark:text-text-muted text-center py-8">
             No crawl history yet.
           </p>
         ) : (
@@ -452,17 +452,17 @@ function HistoryModal({ sourceName, sourceId, onClose }: HistoryModalProps) {
             {history.map((h, idx) => (
               <div
                 key={idx}
-                className="p-3 bg-slate-50 dark:bg-[#0e0e13] dark:border dark:border-white/10 rounded-lg"
+                className="p-3 bg-slate-50 dark:bg-surface-lowest dark:border dark:border-white/10 rounded-lg"
               >
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium text-slate-900 dark:text-[#e4e1e9]">
+                  <span className="text-sm font-medium text-slate-900 dark:text-text-main">
                     {new Date(h.timestamp).toLocaleString()}
                   </span>
-                  <span className="text-xs text-slate-500 dark:text-[#849396]">
+                  <span className="text-xs text-slate-500 dark:text-text-muted">
                     {(h.duration / 1000).toFixed(1)}s
                   </span>
                 </div>
-                <div className="flex gap-3 text-xs text-slate-600 dark:text-[#bac9cc]">
+                <div className="flex gap-3 text-xs text-slate-600 dark:text-text-secondary">
                   <span>+{h.docsAdded} added</span>
                   <span>{h.docsUpdated} updated</span>
                   {h.errors.length > 0 && (
@@ -580,13 +580,13 @@ export function CrawlerSettings() {
 
       {sources.length === 0 ? (
         <div className="glass-panel rounded-xl p-8 text-center">
-          <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-[#849396] mb-3 block">
+          <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-text-muted mb-3 block">
             travel_explore
           </span>
-          <p className="text-slate-500 dark:text-[#849396] text-sm">
+          <p className="text-slate-500 dark:text-text-muted text-sm">
             No crawler sources configured.
           </p>
-          <p className="text-slate-400 dark:text-[#849396]/60 text-xs mt-1">
+          <p className="text-slate-400 dark:text-text-muted/60 text-xs mt-1">
             고객사를 추가하면 관련 뉴스와 AWS 업데이트를 자동으로 수집합니다.
           </p>
         </div>
@@ -599,17 +599,17 @@ export function CrawlerSettings() {
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-slate-100 dark:bg-white/5 rounded-lg flex items-center justify-center">
-                      <span className="material-symbols-outlined text-slate-600 dark:text-[#00E5FF]">
+                      <span className="material-symbols-outlined text-slate-600 dark:text-primary">
                         cloud_sync
                       </span>
                     </div>
                     <div>
-                      <h4 className="text-base font-semibold text-slate-900 dark:text-[#e4e1e9]">
+                      <h4 className="text-base font-semibold text-slate-900 dark:text-text-main">
                         {source.sourceName}
                       </h4>
                       <div className="flex items-center gap-2 mt-0.5">
                         <StatusBadge status={source.status} />
-                        <span className="text-xs text-slate-400 dark:text-[#849396]">
+                        <span className="text-xs text-slate-400 dark:text-text-muted">
                           {source.documentCount} docs
                         </span>
                       </div>
@@ -622,7 +622,7 @@ export function CrawlerSettings() {
                         e.stopPropagation();
                         setOpenMenuId(openMenuId === source.sourceId ? null : source.sourceId);
                       }}
-                      className="p-1 text-slate-400 hover:text-slate-600 dark:text-[#849396] dark:hover:text-[#bac9cc] rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
+                      className="p-1 text-slate-400 hover:text-slate-600 dark:text-text-muted dark:hover:text-text-secondary rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
                     >
                       <span className="material-symbols-outlined">more_vert</span>
                     </button>
@@ -633,7 +633,7 @@ export function CrawlerSettings() {
                             setEditingSource(item);
                             setOpenMenuId(null);
                           }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-[#bac9cc] hover:bg-slate-50 dark:hover:bg-white/5"
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-text-secondary hover:bg-slate-50 dark:hover:bg-white/5"
                         >
                           <span className="material-symbols-outlined text-lg">edit</span>
                           Edit
@@ -643,7 +643,7 @@ export function CrawlerSettings() {
                             setHistorySource({ id: source.sourceId, name: source.sourceName });
                             setOpenMenuId(null);
                           }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-[#bac9cc] hover:bg-slate-50 dark:hover:bg-white/5"
+                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-text-secondary hover:bg-slate-50 dark:hover:bg-white/5"
                         >
                           <span className="material-symbols-outlined text-lg">history</span>
                           View History
@@ -669,7 +669,7 @@ export function CrawlerSettings() {
                     {subscription.awsServices.map((svc) => (
                       <span
                         key={svc}
-                        className="px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] rounded-md"
+                        className="px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary dark:bg-primary/10 dark:text-primary rounded-md"
                       >
                         {svc}
                       </span>
@@ -683,7 +683,7 @@ export function CrawlerSettings() {
                     {source.newsQueries.map((kw) => (
                       <span
                         key={kw}
-                        className="px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-[#bac9cc] rounded-full"
+                        className="px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary rounded-full"
                       >
                         {kw}
                       </span>
@@ -692,7 +692,7 @@ export function CrawlerSettings() {
                 )}
 
                 {source.lastCrawledAt && (
-                  <p className="text-xs text-slate-400 dark:text-[#849396]">
+                  <p className="text-xs text-slate-400 dark:text-text-muted">
                     Last crawled: {new Date(source.lastCrawledAt).toLocaleString()}
                   </p>
                 )}
@@ -704,7 +704,7 @@ export function CrawlerSettings() {
 
       <button
         onClick={() => setShowAddModal(true)}
-        className="flex items-center gap-2 px-4 py-2 bg-primary text-white dark:text-[#09090E] rounded-lg font-semibold text-sm hover:bg-primary/90 transition-colors dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
+        className="flex items-center gap-2 px-4 py-2 bg-primary text-white dark:text-background-dark rounded-lg font-semibold text-sm hover:bg-primary/90 transition-colors dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
       >
         <span className="material-symbols-outlined text-lg">add</span>
         Add Source

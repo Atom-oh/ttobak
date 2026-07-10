@@ -28,7 +28,7 @@ export function PostRecordingBanner({ step, errorMessage, onRetry, onDismiss, on
   if (isNotes) {
     return (
       <div className="fixed top-[64px] left-0 right-0 z-40 mx-4 mt-2 animate-slide-up">
-        <div className="rounded-xl shadow-lg px-4 py-4 bg-white dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10">
+        <div className="rounded-xl shadow-lg px-4 py-4 bg-white dark:bg-surface-lowest border border-slate-200 dark:border-white/10">
           <div className="flex items-center gap-2 mb-3">
             <span className="material-symbols-outlined text-primary text-xl">edit_note</span>
             <p className="text-sm font-semibold text-slate-900 dark:text-gray-100">
@@ -68,7 +68,7 @@ export function PostRecordingBanner({ step, errorMessage, onRetry, onDismiss, on
         className={`rounded-xl shadow-lg px-4 py-3 flex items-center gap-3 ${
           isError
             ? 'bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800'
-            : 'bg-white dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10'
+            : 'bg-white dark:bg-surface-lowest border border-slate-200 dark:border-white/10'
         }`}
       >
         {isError ? (

@@ -145,7 +145,7 @@ export function LinkMeetingsModal({
       onClick={onClose}
     >
       <div
-        className="bg-white dark:bg-[#0e0e13] rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col border border-slate-200 dark:border-white/10"
+        className="bg-white dark:bg-surface-lowest rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col border border-slate-200 dark:border-white/10"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -176,7 +176,7 @@ export function LinkMeetingsModal({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="미팅 제목 검색"
-              className="w-full pl-10 pr-3 py-2 text-sm bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 dark:focus:ring-[#00E5FF]/30 placeholder:text-slate-400 dark:text-gray-100"
+              className="w-full pl-10 pr-3 py-2 text-sm bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 dark:focus:ring-primary/30 placeholder:text-slate-400 dark:text-gray-100"
             />
           </div>
         </div>
@@ -206,12 +206,12 @@ export function LinkMeetingsModal({
                       <span
                         className={`flex-shrink-0 mt-0.5 size-5 rounded border-2 flex items-center justify-center transition-colors ${
                           isSelected
-                            ? 'bg-primary border-primary dark:bg-[#00E5FF] dark:border-[#00E5FF]'
+                            ? 'bg-primary border-primary dark:bg-primary dark:border-primary'
                             : 'border-slate-300 dark:border-white/20'
                         }`}
                       >
                         {isSelected && (
-                          <span className="material-symbols-outlined text-white dark:text-[#09090E] text-[14px]">
+                          <span className="material-symbols-outlined text-white dark:text-background-dark text-[14px]">
                             check
                           </span>
                         )}
@@ -255,7 +255,7 @@ export function LinkMeetingsModal({
             <button
               onClick={handleSave}
               disabled={saving || loading}
-              className="px-4 py-1.5 text-sm font-medium bg-primary dark:bg-[#00E5FF] text-white dark:text-[#09090E] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+              className="px-4 py-1.5 text-sm font-medium bg-primary dark:bg-primary text-white dark:text-background-dark rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
             >
               {saving ? '저장 중…' : '저장'}
             </button>

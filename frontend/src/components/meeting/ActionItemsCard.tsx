@@ -12,7 +12,7 @@ export function ActionItemsCard({ items, onToggle }: ActionItemsCardProps) {
     <div className="bg-primary/5 dark:bg-surface-lowest border border-primary/20 dark:border-white/10 rounded-xl p-6">
       <div className="flex items-center gap-2 mb-4 text-primary">
         <span className="material-symbols-outlined">check_circle</span>
-        <h3 className="font-bold dark:text-[#e4e1e9] dark:font-[var(--font-headline)]">Action Items</h3>
+        <h3 className="font-bold dark:text-text-main dark:font-headline">Action Items</h3>
       </div>
       <div className="space-y-4">
         {items && items.length > 0 ? (
@@ -22,14 +22,14 @@ export function ActionItemsCard({ items, onToggle }: ActionItemsCardProps) {
                 type="checkbox"
                 checked={item.completed}
                 onChange={() => onToggle(item.id)}
-                className="mt-1 rounded border-primary/30 text-primary focus:ring-primary h-4 w-4 dark:accent-[#00E5FF]"
+                className="mt-1 rounded border-primary/30 text-primary focus:ring-primary h-4 w-4 dark:accent-primary"
               />
               <div className="flex flex-col">
-                <span className={`text-sm font-medium transition-all duration-200 ${item.completed ? 'line-through text-slate-400 dark:text-[#849396]' : 'text-slate-900 dark:text-[#e4e1e9]'}`}>
+                <span className={`text-sm font-medium transition-all duration-200 ${item.completed ? 'line-through text-slate-400 dark:text-text-muted' : 'text-slate-900 dark:text-text-main'}`}>
                   {item.text}
                 </span>
                 {(item.assignee || item.dueDate) && (
-                  <span className="text-[10px] text-slate-400 dark:text-[#849396] mt-0.5">
+                  <span className="text-[10px] text-slate-400 dark:text-text-muted mt-0.5">
                     {item.assignee && `Assigned to: @${item.assignee}`}
                     {item.assignee && item.dueDate && ' · '}
                     {item.dueDate && `Due ${item.dueDate}`}

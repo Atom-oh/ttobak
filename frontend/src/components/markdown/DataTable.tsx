@@ -22,9 +22,9 @@ export function TR(props: { children?: ReactNode }) {
 }
 
 export function TH(props: ThHTMLAttributes<HTMLTableCellElement> & { children?: ReactNode }) {
-  return <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-900 dark:text-[#e4e1e9] whitespace-nowrap" {...props} />;
+  return <th className="px-4 py-2.5 text-left text-xs font-semibold text-slate-900 dark:text-text-main whitespace-nowrap" {...props} />;
 }
 
 export function TD(props: TdHTMLAttributes<HTMLTableCellElement> & { children?: ReactNode }) {
-  return <td className="px-4 py-2.5 text-sm text-slate-600 dark:text-[#bac9cc]" {...props} />;
+  return <td className="px-4 py-2.5 text-sm text-slate-600 dark:text-text-secondary" {...props} />;
 }

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useAuth } from './AuthProvider';
+import { PrimaryButton } from '@/components/ui/Button';
 
 interface LoginFormProps {
   onSwitchToSignUp?: () => void;
@@ -49,13 +50,13 @@ export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps
         <div className="space-y-1.5 dark:space-y-2">
           <label
             htmlFor="login-email"
-            className="block text-sm font-medium text-slate-700 dark:font-[var(--font-headline)] dark:text-[#8B949E] dark:text-[13px] dark:font-medium dark:uppercase dark:tracking-wide dark:ml-1"
+            className="block text-sm font-medium text-slate-700 dark:font-headline dark:text-[#8B949E] dark:text-[13px] dark:font-medium dark:uppercase dark:tracking-wide dark:ml-1"
           >
             <span className="dark:hidden">이메일</span>
             <span className="hidden dark:inline">Email Address</span>
           </label>
           <div className="relative group">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-[#849396] group-focus-within:text-primary dark:group-focus-within:text-[#00E5FF] transition-colors text-lg">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-text-muted group-focus-within:text-primary dark:group-focus-within:text-primary transition-colors text-lg">
               mail
             </span>
             <input
@@ -64,7 +65,7 @@ export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all dark:bg-black/30 dark:border-white/10 dark:h-12 dark:py-0 dark:text-white dark:placeholder-[#849396]/40 dark:focus:ring-0 dark:focus:border-[#00E5FF] dark:focus:shadow-[0_0_12px_rgba(0,229,255,0.2)]"
+              className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all dark:bg-black/30 dark:border-white/10 dark:h-12 dark:py-0 dark:text-white dark:placeholder-text-muted/40 dark:focus:ring-0 dark:focus:border-primary dark:focus:shadow-[0_0_12px_rgba(0,229,255,0.2)]"
               placeholder="you@example.com"
             />
           </div>
@@ -75,7 +76,7 @@ export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps
           <div className="flex justify-between items-center dark:px-1">
             <label
               htmlFor="login-password"
-              className="block text-sm font-medium text-slate-700 dark:font-[var(--font-headline)] dark:text-[#8B949E] dark:text-[13px] dark:font-medium dark:uppercase dark:tracking-wide"
+              className="block text-sm font-medium text-slate-700 dark:font-headline dark:text-[#8B949E] dark:text-[13px] dark:font-medium dark:uppercase dark:tracking-wide"
             >
               <span className="dark:hidden">비밀번호</span>
               <span className="hidden dark:inline">Security Key</span>
@@ -84,14 +85,14 @@ export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps
               <button
                 type="button"
                 onClick={onForgotPassword}
-                className="text-sm text-primary hover:underline dark:font-[var(--font-body)] dark:text-xs dark:text-[#e5b5ff] dark:hover:text-[#f4d9ff]"
+                className="text-sm text-primary hover:underline dark:font-body dark:text-xs dark:text-secondary dark:hover:text-[#f4d9ff]"
               >
                 Forgot Password?
               </button>
             )}
           </div>
           <div className="relative group">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-[#849396] group-focus-within:text-primary dark:group-focus-within:text-[#00E5FF] transition-colors text-lg">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-text-muted group-focus-within:text-primary dark:group-focus-within:text-primary transition-colors text-lg">
               lock
             </span>
             <input
@@ -100,13 +101,13 @@ export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              className="w-full pl-10 pr-12 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all dark:bg-black/30 dark:border-white/10 dark:h-12 dark:py-0 dark:text-white dark:placeholder-[#849396]/40 dark:focus:ring-0 dark:focus:border-[#00E5FF] dark:focus:shadow-[0_0_12px_rgba(0,229,255,0.2)]"
+              className="w-full pl-10 pr-12 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all dark:bg-black/30 dark:border-white/10 dark:h-12 dark:py-0 dark:text-white dark:placeholder-text-muted/40 dark:focus:ring-0 dark:focus:border-primary dark:focus:shadow-[0_0_12px_rgba(0,229,255,0.2)]"
               placeholder="비밀번호를 입력하세요"
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:text-[#849396] dark:hover:text-white transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:text-text-muted dark:hover:text-white transition-colors"
             >
               <span className="material-symbols-outlined text-xl">
                 {showPassword ? 'visibility_off' : 'visibility'}
@@ -116,31 +117,27 @@ export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps
         </div>
 
         {/* Submit */}
-        <button
-          type="submit"
-          disabled={isLoading}
-          className="w-full bg-primary hover:bg-primary/90 text-white font-semibold py-2.5 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#00E5FF] dark:text-[#001f24] dark:font-[var(--font-headline)] dark:font-bold dark:py-4 dark:rounded-xl dark:shadow-[0_0_20px_rgba(0,229,255,0.4)] dark:hover:scale-[1.02] dark:active:scale-[0.98] dark:text-lg dark:tracking-tight"
-        >
+        <PrimaryButton type="submit" disabled={isLoading}>
           {isLoading ? '로그인 중...' : '로그인'}
-        </button>
+        </PrimaryButton>
       </form>
 
       {/* Forgot Password — dark mode only (below form, above divider) */}
       <div className="hidden dark:flex justify-center mt-4">
         <button
           type="button"
-          className="font-[var(--font-body)] text-xs text-[#e5b5ff] hover:text-[#f4d9ff] hover:underline underline-offset-4 decoration-1 transition-colors"
+          className="font-body text-xs text-secondary hover:text-[#f4d9ff] hover:underline underline-offset-4 decoration-1 transition-colors"
         >
           Forgot Password?
         </button>
       </div>
 
       {onSwitchToSignUp && (
-        <p className="text-center mt-6 dark:mt-10 text-slate-600 dark:text-[#849396] text-sm dark:font-[var(--font-body)]">
+        <p className="text-center mt-6 dark:mt-10 text-slate-600 dark:text-text-muted text-sm dark:font-body">
           계정이 없으신가요?{' '}
           <button
             onClick={onSwitchToSignUp}
-            className="text-primary font-semibold hover:underline dark:text-[#e5b5ff] dark:hover:underline dark:underline-offset-4 dark:decoration-2"
+            className="text-primary font-semibold hover:underline dark:text-secondary dark:hover:underline dark:underline-offset-4 dark:decoration-2"
           >
             회원가입
           </button>

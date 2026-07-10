@@ -151,13 +151,13 @@ export default function FilesPage() {
           <div className="text-primary flex size-10 shrink-0 items-center justify-center bg-primary/10 rounded-lg">
             <span className="material-symbols-outlined">description</span>
           </div>
-          <h1 className="text-slate-900 dark:text-[#e4e1e9] dark:font-[var(--font-headline)] text-xl font-bold leading-tight tracking-tight">
+          <h1 className="text-slate-900 dark:text-text-main dark:font-headline text-xl font-bold leading-tight tracking-tight">
             Files
           </h1>
         </div>
         <Link
           href="/profile"
-          className="text-slate-500 dark:text-[#849396] p-2 hover:bg-slate-50 dark:hover:bg-white/5 rounded-full transition-colors"
+          className="text-slate-500 dark:text-text-muted p-2 hover:bg-slate-50 dark:hover:bg-white/5 rounded-full transition-colors"
         >
           <span className="material-symbols-outlined">account_circle</span>
         </Link>
@@ -168,10 +168,10 @@ export default function FilesPage() {
         <div className="p-4 lg:px-16 lg:pt-16 lg:pb-8 w-full">
           {/* Title (Desktop) */}
           <div className="hidden lg:block mb-8">
-            <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-[var(--font-headline)] dark:text-[#e4e1e9]">
+            <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-text-main">
               Files
             </h2>
-            <p className="text-slate-600 dark:text-[#849396] mt-2">
+            <p className="text-slate-600 dark:text-text-muted mt-2">
               All attachments from your meetings.
             </p>
           </div>
@@ -189,8 +189,8 @@ export default function FilesPage() {
                 onClick={() => setFilterType(tab.key)}
                 className={`px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-colors ${
                   filterType === tab.key
-                    ? 'bg-primary text-white dark:text-[#09090E]'
-                    : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-[#849396] hover:bg-slate-200 dark:hover:bg-white/10'
+                    ? 'bg-primary text-white dark:text-background-dark'
+                    : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-text-muted hover:bg-slate-200 dark:hover:bg-white/10'
                 }`}
               >
                 {tab.label} ({tab.count})
@@ -205,13 +205,13 @@ export default function FilesPage() {
             </div>
           ) : filteredFiles.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-center">
-              <span className="material-symbols-outlined text-6xl text-slate-300 dark:text-[#849396] mb-4">
+              <span className="material-symbols-outlined text-6xl text-slate-300 dark:text-text-muted mb-4">
                 folder_open
               </span>
-              <h3 className="text-lg font-bold text-slate-900 dark:text-[#e4e1e9] mb-1">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-text-main mb-1">
                 No files yet
               </h3>
-              <p className="text-sm text-slate-500 dark:text-[#849396] max-w-xs">
+              <p className="text-sm text-slate-500 dark:text-text-muted max-w-xs">
                 Files will appear here when you add attachments to your meetings.
               </p>
             </div>
@@ -226,7 +226,7 @@ export default function FilesPage() {
                       setShowOriginal(false);
                     }
                   }}
-                  className="group relative aspect-video rounded-xl overflow-hidden border border-slate-200 cursor-pointer bg-white hover:bg-slate-50 dark:glass-panel dark:hover:border-[#00E5FF]/30 transition-all"
+                  className="group relative aspect-video rounded-xl overflow-hidden border border-slate-200 cursor-pointer bg-white hover:bg-slate-50 dark:glass-panel dark:hover:border-primary/30 transition-all"
                 >
                   {file.type === 'image' ? (
                     <>
@@ -258,10 +258,10 @@ export default function FilesPage() {
                           ? 'audio_file'
                           : 'video_file'}
                       </span>
-                      <span className="text-xs font-medium text-slate-600 dark:text-[#bac9cc] truncate max-w-full">
+                      <span className="text-xs font-medium text-slate-600 dark:text-text-secondary truncate max-w-full">
                         {file.name}
                       </span>
-                      <span className="text-[10px] text-slate-400 dark:text-[#849396] truncate max-w-full mt-1">
+                      <span className="text-[10px] text-slate-400 dark:text-text-muted truncate max-w-full mt-1">
                         {file.meetingTitle}
                       </span>
                     </div>

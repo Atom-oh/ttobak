@@ -302,7 +302,7 @@ function RecordPageInner() {
   return (
     <AppLayout activePath="/record" showMobileNav={true} isRecording={session.isRecording} breadcrumbs={[{ label: 'Recording' }, { label: meetingTitle || 'New Meeting' }]}>
       {/* Header */}
-      <header className="lg:hidden flex items-center justify-between px-6 py-4 bg-white/80 dark:bg-[#09090E]/80 backdrop-blur-md sticky top-0 z-10 border-b border-slate-100 dark:border-white/10">
+      <header className="lg:hidden flex items-center justify-between px-6 py-4 bg-white/80 dark:bg-background-dark/80 backdrop-blur-md sticky top-0 z-10 border-b border-slate-100 dark:border-white/10">
         <button
           onClick={() => router.back()}
           className="p-2 hover:bg-slate-50 dark:hover:bg-white/5 rounded-lg transition-colors"
@@ -373,7 +373,7 @@ function RecordPageInner() {
                 value={meetingTitle}
                 onChange={(e) => setMeetingTitle(e.target.value)}
                 placeholder="Meeting Title"
-                className="text-2xl font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-slate-900 dark:text-gray-100 dark:font-[var(--font-headline)] placeholder:text-slate-400 w-full"
+                className="text-2xl font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-slate-900 dark:text-gray-100 dark:font-headline placeholder:text-slate-400 w-full"
               />
             </div>
             {uploadProgress ? (
@@ -426,12 +426,12 @@ function RecordPageInner() {
                 value={meetingTitle}
                 onChange={(e) => setMeetingTitle(e.target.value)}
                 placeholder="Meeting Title"
-                className="text-2xl font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-slate-900 dark:text-gray-100 dark:font-[var(--font-headline)] placeholder:text-slate-400 w-full"
+                className="text-2xl font-bold tracking-tight bg-transparent border-none text-center focus:outline-none focus:ring-0 text-slate-900 dark:text-gray-100 dark:font-headline placeholder:text-slate-400 w-full"
               />
             </div>
             {(supportsTabAudioCapture() || isTauri()) && (
               <div className="flex flex-col items-center gap-2 w-full max-w-xs">
-                <span className="text-xs font-semibold text-slate-500 dark:text-[#849396] uppercase tracking-wide">
+                <span className="text-xs font-semibold text-slate-500 dark:text-text-muted uppercase tracking-wide">
                   Audio Source
                 </span>
                 <div className="flex rounded-lg border border-slate-200 dark:border-white/10 overflow-hidden w-full">
@@ -439,8 +439,8 @@ function RecordPageInner() {
                     onClick={() => setAudioSource('mic')}
                     className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold transition-colors ${
                       audioSource === 'mic'
-                        ? 'bg-primary text-white dark:text-[#09090E]'
-                        : 'text-slate-600 dark:text-[#849396] hover:bg-slate-50 dark:hover:bg-white/5'
+                        ? 'bg-primary text-white dark:text-background-dark'
+                        : 'text-slate-600 dark:text-text-muted hover:bg-slate-50 dark:hover:bg-white/5'
                     }`}
                   >
                     <span className="material-symbols-outlined text-base">mic</span>
@@ -451,8 +451,8 @@ function RecordPageInner() {
                       onClick={() => setAudioSource('tab')}
                       className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold transition-colors ${
                         audioSource === 'tab'
-                          ? 'bg-primary text-white dark:text-[#09090E]'
-                          : 'text-slate-600 dark:text-[#849396] hover:bg-slate-50 dark:hover:bg-white/5'
+                          ? 'bg-primary text-white dark:text-background-dark'
+                          : 'text-slate-600 dark:text-text-muted hover:bg-slate-50 dark:hover:bg-white/5'
                       }`}
                     >
                       <span className="material-symbols-outlined text-base">tab</span>
@@ -464,8 +464,8 @@ function RecordPageInner() {
                       onClick={() => setAudioSource('system')}
                       className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold transition-colors ${
                         audioSource === 'system'
-                          ? 'bg-primary text-white dark:text-[#09090E]'
-                          : 'text-slate-600 dark:text-[#849396] hover:bg-slate-50 dark:hover:bg-white/5'
+                          ? 'bg-primary text-white dark:text-background-dark'
+                          : 'text-slate-600 dark:text-text-muted hover:bg-slate-50 dark:hover:bg-white/5'
                       }`}
                     >
                       <span className="material-symbols-outlined text-base">speaker</span>
@@ -514,7 +514,7 @@ function RecordPageInner() {
         {session.isRecording && (
           <div className="hidden lg:block mb-4">
             <p className="hidden dark:block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8B8D98] text-center mb-1">Studio</p>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white dark:font-[var(--font-headline)] text-center tracking-tight">
+            <h1 className="text-xl font-bold text-slate-900 dark:text-white dark:font-headline text-center tracking-tight">
               {meetingTitle || 'Untitled Meeting'}
             </h1>
           </div>

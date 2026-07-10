@@ -98,20 +98,20 @@ export default function AccountDetailClient() {
             <div className="flex items-center gap-3 mb-6">
               <span className="material-symbols-outlined text-primary text-3xl">corporate_fare</span>
               <div>
-                <h2 className="text-xl font-bold text-slate-900 dark:text-[#e4e1e9]">{account.name}</h2>
+                <h2 className="text-xl font-bold text-slate-900 dark:text-text-main">{account.name}</h2>
                 {account.industry && (
-                  <p className="text-sm text-slate-500 dark:text-[#849396]">{account.industry}</p>
+                  <p className="text-sm text-slate-500 dark:text-text-muted">{account.industry}</p>
                 )}
               </div>
             </div>
 
             {/* Members */}
             <section className="mb-8">
-              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-[#e4e1e9]">Members</h3>
+              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Members</h3>
               <div className="glass-panel rounded-xl p-4 space-y-2">
                 {account.members.map((m) => (
                   <div key={m.userId} className="flex items-center justify-between text-sm">
-                    <span className="text-slate-700 dark:text-[#bac9cc]">{m.email || m.userId}</span>
+                    <span className="text-slate-700 dark:text-text-secondary">{m.email || m.userId}</span>
                     <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary">{m.role}</span>
                   </div>
                 ))}
@@ -134,7 +134,7 @@ export default function AccountDetailClient() {
                   <button
                     type="submit"
                     disabled={inviting || !inviteEmail.trim()}
-                    className="bg-primary hover:bg-primary-hover text-white dark:text-[#09090E] rounded-lg font-semibold text-sm px-4 disabled:opacity-50"
+                    className="bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg font-semibold text-sm px-4 disabled:opacity-50"
                   >
                     Add
                   </button>
@@ -144,11 +144,11 @@ export default function AccountDetailClient() {
 
             {/* Insights */}
             <section className="mb-8">
-              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-[#e4e1e9]">Field Insights</h3>
+              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Field Insights</h3>
               <div className="flex flex-wrap gap-2 mb-3">
                 <button
                   onClick={() => setActiveType('')}
-                  className={`text-xs px-3 py-1 rounded-full border ${activeType === '' ? 'bg-primary text-white dark:text-[#09090E] border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-[#849396]'}`}
+                  className={`text-xs px-3 py-1 rounded-full border ${activeType === '' ? 'bg-primary text-white dark:text-background-dark border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
                 >
                   all
                 </button>
@@ -156,25 +156,25 @@ export default function AccountDetailClient() {
                   <button
                     key={t}
                     onClick={() => setActiveType(t)}
-                    className={`text-xs px-3 py-1 rounded-full border ${activeType === t ? 'bg-primary text-white dark:text-[#09090E] border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-[#849396]'}`}
+                    className={`text-xs px-3 py-1 rounded-full border ${activeType === t ? 'bg-primary text-white dark:text-background-dark border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
                   >
                     {t}
                   </button>
                 ))}
               </div>
               {shownInsights.length === 0 ? (
-                <p className="text-sm text-slate-400 dark:text-[#849396]">No insights yet.</p>
+                <p className="text-sm text-slate-400 dark:text-text-muted">No insights yet.</p>
               ) : (
                 <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
                   {shownInsights.map((ins, idx) => (
                     <div key={idx} className="p-3">
                       <div className="flex items-center gap-2 mb-1">
                         <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary">{ins.type}</span>
-                        <span className="text-xs text-slate-400 dark:text-[#849396]">
+                        <span className="text-xs text-slate-400 dark:text-text-muted">
                           {new Date(ins.occurredAt).toLocaleDateString()}
                         </span>
                       </div>
-                      <p className="text-sm text-slate-700 dark:text-[#bac9cc]">{ins.text}</p>
+                      <p className="text-sm text-slate-700 dark:text-text-secondary">{ins.text}</p>
                     </div>
                   ))}
                 </div>
@@ -183,15 +183,15 @@ export default function AccountDetailClient() {
 
             {/* Shared meetings */}
             <section className="mb-8">
-              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-[#e4e1e9]">Shared Meetings</h3>
+              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Shared Meetings</h3>
               {meetings.length === 0 ? (
-                <p className="text-sm text-slate-400 dark:text-[#849396]">No shared meetings.</p>
+                <p className="text-sm text-slate-400 dark:text-text-muted">No shared meetings.</p>
               ) : (
                 <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
                   {meetings.map((m) => (
                     <a key={m.meetingId} href={`/meeting/${m.meetingId}`} className="block p-3 hover:bg-slate-50 dark:hover:bg-white/5">
-                      <div className="text-sm font-medium text-slate-900 dark:text-[#e4e1e9]">{m.title || m.meetingId}</div>
-                      <div className="text-xs text-slate-400 dark:text-[#849396]">{new Date(m.date).toLocaleDateString()}</div>
+                      <div className="text-sm font-medium text-slate-900 dark:text-text-main">{m.title || m.meetingId}</div>
+                      <div className="text-xs text-slate-400 dark:text-text-muted">{new Date(m.date).toLocaleDateString()}</div>
                     </a>
                   ))}
                 </div>
@@ -200,16 +200,16 @@ export default function AccountDetailClient() {
 
             {/* Documents */}
             <section className="mb-8">
-              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-[#e4e1e9]">Documents</h3>
+              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Documents</h3>
               {documents.length === 0 ? (
-                <p className="text-sm text-slate-400 dark:text-[#849396]">No documents.</p>
+                <p className="text-sm text-slate-400 dark:text-text-muted">No documents.</p>
               ) : (
                 <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
                   {documents.map((d) => (
                     <div key={d.docId} className="flex items-center gap-2 p-3 text-sm">
                       <span className="material-symbols-outlined text-primary text-lg">description</span>
-                      <span className="text-slate-700 dark:text-[#bac9cc]">{d.title}</span>
-                      {d.docType && <span className="text-xs text-slate-400 dark:text-[#849396]">({d.docType})</span>}
+                      <span className="text-slate-700 dark:text-text-secondary">{d.title}</span>
+                      {d.docType && <span className="text-xs text-slate-400 dark:text-text-muted">({d.docType})</span>}
                     </div>
                   ))}
                 </div>

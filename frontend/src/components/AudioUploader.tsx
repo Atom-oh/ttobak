@@ -194,7 +194,7 @@ export function AudioUploader({ meetingId, onUploadComplete }: AudioUploaderProp
         {files.map((entry, idx) => (
           <div
             key={entry.id}
-            className="bg-white dark:bg-[#0e0e13] border border-slate-200 dark:border-white/10 rounded-xl p-4 flex items-center gap-3"
+            className="bg-white dark:bg-surface-lowest border border-slate-200 dark:border-white/10 rounded-xl p-4 flex items-center gap-3"
           >
             <span className="text-xs font-bold text-slate-400 w-6 text-center">{idx + 1}</span>
             <span className="material-symbols-outlined text-primary/40">{iconFor(entry.kind)}</span>
@@ -236,7 +236,7 @@ export function AudioUploader({ meetingId, onUploadComplete }: AudioUploaderProp
         ))}
 
         {docCount > 0 && (
-          <p className="text-xs text-slate-400 dark:text-[#849396] px-1">
+          <p className="text-xs text-slate-400 dark:text-text-muted px-1">
             문서 {docCount}개는 미팅에 첨부되고 지식베이스에 등록돼 채팅에서 검색됩니다.
           </p>
         )}
