@@ -480,9 +480,9 @@ const notionMaxConcurrentDeletes = 8
 // entirely on one stuck request instead of failing fast with a clear error.
 const notionMaxRetries = 3
 
-// notionDeleteDefaultBackoff is used when a 429 response has no (or an
+// notionDefaultBackoff is used when a 429 response has no (or an
 // unparsable) Retry-After header.
-const notionDeleteDefaultBackoff = 500 * time.Millisecond
+const notionDefaultBackoff = 500 * time.Millisecond
 
 // notionDoWithRetry is notionDo with 429 (rate limit) retry: a burst of
 // concurrent block deletes routinely leaves Notion's rate limiter primed to
@@ -508,8 +508,8 @@ func (s *NotionService) notionDoWithRetry(ctx context.Context, apiKey, method, r
 			return status, respBody, nil
 		}
 
-		delay := notionDeleteDefaultBackoff
-		if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
+		delay := notionDefaultBackoff
+		if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds >= 0 {
 			delay = time.Duration(seconds) * time.Second
 		}
 		select {

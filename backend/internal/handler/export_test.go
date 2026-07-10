@@ -98,4 +98,36 @@ func TestResolveTranscriptLinksForExport(t *testing.T) {
 			t.Fatalf("expected output to contain escaped URL %q, got %q", want, got)
 		}
 	})
+
+	// A meeting whose summary was edited and saved through the TipTap editor
+	// has already been rewritten client-side (resolveTranscriptLinks in
+	// MeetingDetailClient.tsx) from "transcript://{id}" to "#ts-{id}" before
+	// turndown converts it to markdown and it's persisted — so the *stored*
+	// content export reads from never contains the raw "transcript://" form
+	// for an edited meeting. Missing this form reproduces the exact bug this
+	// function exists to fix, just for edited meetings instead of unedited ones.
+	t.Run("rewrites an already-resolved #ts- anchor from an edited-and-saved summary", func(t *testing.T) {
+		md := "합의했다. [05:46](#ts-seg-346100) 추가로."
+		got := resolveTranscriptLinksForExport(md, "meeting-1", baseURL)
+		want := "합의했다. [05:46](https://ttobak.atomai.click/meeting/meeting-1#ts-seg-346100) 추가로."
+		if got != want {
+			t.Fatalf("got  %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("rewrites a mix of transcript:// and #ts- links in the same document", func(t *testing.T) {
+		md := "[00:30](transcript://seg-30000) 그리고 [05:46](#ts-seg-346100)"
+		got := resolveTranscriptLinksForExport(md, "meeting-1", baseURL)
+		for _, want := range []string{
+			"https://ttobak.atomai.click/meeting/meeting-1#ts-seg-30000",
+			"https://ttobak.atomai.click/meeting/meeting-1#ts-seg-346100",
+		} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("expected output to contain %q, got %q", want, got)
+			}
+		}
+		if strings.Contains(got, "transcript://") || strings.Contains(got, "](#ts-") {
+			t.Fatalf("an unresolved deep link leaked through: %q", got)
+		}
+	})
 }

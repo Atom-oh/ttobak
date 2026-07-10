@@ -249,24 +249,31 @@ func (h *ExportHandler) generatePDFContent(meeting *model.MeetingDetailResponse)
 	return sb.String()
 }
 
-// transcriptLinkPattern matches the markdown link syntax around a
-// transcript:// deep link, capturing the segment id.
-var transcriptLinkPattern = regexp.MustCompile(`\(transcript://([^)]+)\)`)
+// transcriptLinkPattern matches the markdown link syntax around an ADR-013
+// transcript deep link, capturing the segment id. It matches two forms: the
+// raw "transcript://{id}" scheme the summarize Lambda emits, AND the
+// "#ts-{id}" in-page anchor form that the frontend rewrites it to before
+// rendering (frontend/.../MeetingDetailClient.tsx's resolveTranscriptLinks) —
+// once a meeting's summary is edited and saved through the TipTap editor,
+// the *stored* content has already been converted to "#ts-{id}" by the time
+// it reaches this handler, so matching only "transcript://" silently misses
+// every edited meeting.
+var transcriptLinkPattern = regexp.MustCompile(`\((?:transcript://|#ts-)([^)]+)\)`)
 
-// resolveTranscriptLinksForExport rewrites ADR-013 "transcript://{segmentId}"
-// deep links into an absolute URL to the meeting page with a #ts-{segmentId}
-// fragment — the same anchor MarkdownRenderer's `a` component scrolls to
-// in-app — so the link is both valid for Notion's API (which rejects
-// non-http(s) link schemes outright with "Invalid URL for link"; the raw
-// transcript:// form only works in-app because MarkdownRenderer's custom `a`
-// component special-cases that scheme client-side) and still useful (opens
-// the meeting at that moment) when clicked from an export. segmentId and
-// meetingID are path/fragment-escaped since neither is guaranteed to be
+// resolveTranscriptLinksForExport rewrites ADR-013 transcript deep links —
+// both the raw "transcript://{segmentId}" scheme and the "#ts-{segmentId}"
+// in-page anchor form left behind by an editor save — into an absolute URL
+// to the meeting page with a #ts-{segmentId} fragment — the same anchor
+// MarkdownRenderer's `a` component scrolls to in-app — so the link is both
+// valid for Notion's API (which rejects non-http(s) link schemes and bare
+// fragment-only hrefs outright with "Invalid URL for link") and still useful
+// (opens the meeting at that moment) when clicked from an export. segmentId
+// and meetingID are path/fragment-escaped since neither is guaranteed to be
 // URL-safe.
 func resolveTranscriptLinksForExport(content, meetingID, frontendBaseURL string) string {
 	meetingPath := frontendBaseURL + "/meeting/" + url.PathEscape(meetingID)
 	return transcriptLinkPattern.ReplaceAllStringFunc(content, func(m string) string {
-		segmentID := m[len("(transcript://") : len(m)-1]
+		segmentID := transcriptLinkPattern.FindStringSubmatch(m)[1]
 		return "(" + meetingPath + "#ts-" + url.PathEscape(segmentID) + ")"
 	})
 }
