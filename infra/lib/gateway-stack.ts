@@ -54,6 +54,14 @@ export class GatewayStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: GatewayStackProps) {
     super(scope, id, props);
 
+    // ttobak:domainName (cdk.json context) is a bare domain, e.g.
+    // "ttobak.atomai.click" — fail synth early rather than deploying an api
+    // Lambda whose FRONTEND_BASE_URL is "https://undefined".
+    const domainName = this.node.tryGetContext('ttobak:domainName');
+    if (!domainName) {
+      throw new Error("Missing required CDK context 'ttobak:domainName' (see infra/cdk.json)");
+    }
+
     // API Lambda function (Go runtime, arm64)
     this.apiFunction = new lambda.Function(this, 'ApiFunction', {
       functionName: 'ttobak-api',
@@ -71,6 +79,7 @@ export class GatewayStack extends cdk.Stack {
         KMS_KEY_ID: props.kmsKeyId || '',
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
         AWS_REGION_NAME: cdk.Aws.REGION,
+        FRONTEND_BASE_URL: `https://${domainName}`,
       },
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,

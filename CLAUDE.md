@@ -91,7 +91,7 @@ Error codes: `BAD_REQUEST` (400), `UNAUTHORIZED` (401), `FORBIDDEN` (403), `NOT_
 
 ## Lambda Environment Variables
 
-CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE_NAME`, `BUCKET_NAME`, `BEDROCK_MODEL_ID`. The `api` Lambda also gets `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `KB_BUCKET_NAME`, `KMS_KEY_ID`.
+CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE_NAME`, `BUCKET_NAME`, `BEDROCK_MODEL_ID`. The `api` Lambda also gets `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `KB_BUCKET_NAME`, `KMS_KEY_ID`, `FRONTEND_BASE_URL` (deployed frontend origin, built as `https://${ttobak:domainName}` — the `ttobak:domainName` CDK context key in `infra/cdk.json` must be a bare domain, e.g. `ttobak.atomai.click`, with no scheme; used to build absolute links, e.g. rewriting `transcript://`/`#ts-` deep links for Notion export).
 
 ## Known Issues & Decisions
 

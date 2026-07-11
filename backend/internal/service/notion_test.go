@@ -483,7 +483,7 @@ func TestUpsertPage(t *testing.T) {
 // deleteBlockWithRetry must retry a 429 rather than surface it immediately
 // (Notion's real rate limit is easily hit by notionMaxConcurrentDeletes
 // concurrent deletes), honoring Retry-After when Notion sends one, and must
-// give up after notionDeleteMaxRetries so one stuck block can't consume the
+// give up after notionMaxRetries so one stuck block can't consume the
 // export Lambda's entire time budget.
 func TestDeleteBlockWithRetry(t *testing.T) {
 	t.Run("retries once on 429 then succeeds", func(t *testing.T) {
@@ -507,7 +507,7 @@ func TestDeleteBlockWithRetry(t *testing.T) {
 		}
 	})
 
-	t.Run("gives up after notionDeleteMaxRetries and returns an error", func(t *testing.T) {
+	t.Run("gives up after notionMaxRetries and returns an error", func(t *testing.T) {
 		var attempts atomic.Int64
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			attempts.Add(1)
@@ -521,8 +521,8 @@ func TestDeleteBlockWithRetry(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected an error after exhausting retries")
 		}
-		if got := attempts.Load(); got != notionDeleteMaxRetries+1 {
-			t.Fatalf("expected %d attempts (initial + %d retries), got %d", notionDeleteMaxRetries+1, notionDeleteMaxRetries, got)
+		if got := attempts.Load(); got != notionMaxRetries+1 {
+			t.Fatalf("expected %d attempts (initial + %d retries), got %d", notionMaxRetries+1, notionMaxRetries, got)
 		}
 	})
 
@@ -557,6 +557,78 @@ func TestDeleteBlockWithRetry(t *testing.T) {
 			t.Fatal("expected an error from the canceled context")
 		}
 	})
+}
+
+// Regression: a burst of concurrent block deletes routinely leaves Notion's
+// rate limiter primed to reject the very next request. Before this fix,
+// appendBlocks had no 429 retry, so a successful clearPageChildren followed
+// by a rate-limited append left the live Notion page emptied out with no
+// new content — observed in production (POST /export succeeded in clearing
+// 60+ blocks, then failed to append, leaving a 0-block page).
+func TestAppendBlocksRetriesOn429(t *testing.T) {
+	var attempts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+	blocks := s.markdownToNotionBlocks("# hello")
+	if err := s.appendBlocks(context.Background(), "key", "page-1", blocks); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("expected 2 attempts (1 rate-limited + 1 success), got %d", attempts.Load())
+	}
+}
+
+// End-to-end: UpsertPage must not leave the page empty when Notion rate-limits
+// the append immediately after clearPageChildren finishes deleting.
+func TestUpsertPageAppendSurvives429RightAfterClear(t *testing.T) {
+	var appendAttempts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "PATCH" && r.URL.Path == "/v1/pages/existing-id":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"existing-id","url":"https://notion.so/existing-id"}`))
+		case r.Method == "GET" && r.URL.Path == "/v1/blocks/existing-id/children":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"results":[{"id":"child-1"}],"has_more":false}`))
+		case r.Method == "DELETE" && r.URL.Path == "/v1/blocks/child-1":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == "PATCH" && r.URL.Path == "/v1/blocks/existing-id/children":
+			if appendAttempts.Add(1) == 1 {
+				w.Header().Set("Retry-After", "0")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	s := &NotionService{httpClient: srv.Client(), baseURL: srv.URL}
+	pageID, _, err := s.UpsertPage(context.Background(), "key", "page_id", "parent", "title", "Title", "# content", "existing-id")
+	if err != nil {
+		t.Fatalf("expected UpsertPage to survive a 429 on append, got error: %v", err)
+	}
+	if pageID != "existing-id" {
+		t.Fatalf("expected existing-id, got %q", pageID)
+	}
+	if appendAttempts.Load() != 2 {
+		t.Fatalf("expected 2 append attempts (1 rate-limited + 1 success), got %d", appendAttempts.Load())
+	}
 }
 
 // ParseNotionPageID must extract a Notion page/database ID from whatever a

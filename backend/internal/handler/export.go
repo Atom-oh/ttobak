@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -41,24 +43,30 @@ func contentAsMarkdown(content string) string {
 
 // ExportHandler handles export-related requests
 type ExportHandler struct {
-	meetingService *service.MeetingService
-	notionService  *service.NotionService
-	repo           *repository.DynamoDBRepository
-	crypto         *service.CryptoService
+	meetingService  *service.MeetingService
+	notionService   *service.NotionService
+	repo            *repository.DynamoDBRepository
+	crypto          *service.CryptoService
+	frontendBaseURL string
 }
 
-// NewExportHandler creates a new export handler
+// NewExportHandler creates a new export handler. frontendBaseURL is the
+// deployed frontend origin (FRONTEND_BASE_URL env var, e.g.
+// "https://ttobak.atomai.click") used to rewrite transcript:// deep links
+// into absolute URLs for export — see resolveTranscriptLinksForExport.
 func NewExportHandler(
 	meetingService *service.MeetingService,
 	notionService *service.NotionService,
 	repo *repository.DynamoDBRepository,
 	crypto *service.CryptoService,
+	frontendBaseURL string,
 ) *ExportHandler {
 	return &ExportHandler{
-		meetingService: meetingService,
-		notionService:  notionService,
-		repo:           repo,
-		crypto:         crypto,
+		meetingService:  meetingService,
+		notionService:   notionService,
+		repo:            repo,
+		crypto:          crypto,
+		frontendBaseURL: frontendBaseURL,
 	}
 }
 
@@ -241,6 +249,35 @@ func (h *ExportHandler) generatePDFContent(meeting *model.MeetingDetailResponse)
 	return sb.String()
 }
 
+// transcriptLinkPattern matches the markdown link syntax around an ADR-013
+// transcript deep link, capturing the segment id. It matches two forms: the
+// raw "transcript://{id}" scheme the summarize Lambda emits, AND the
+// "#ts-{id}" in-page anchor form that the frontend rewrites it to before
+// rendering (frontend/.../MeetingDetailClient.tsx's resolveTranscriptLinks) —
+// once a meeting's summary is edited and saved through the TipTap editor,
+// the *stored* content has already been converted to "#ts-{id}" by the time
+// it reaches this handler, so matching only "transcript://" silently misses
+// every edited meeting.
+var transcriptLinkPattern = regexp.MustCompile(`\((?:transcript://|#ts-)([^)]+)\)`)
+
+// resolveTranscriptLinksForExport rewrites ADR-013 transcript deep links —
+// both the raw "transcript://{segmentId}" scheme and the "#ts-{segmentId}"
+// in-page anchor form left behind by an editor save — into an absolute URL
+// to the meeting page with a #ts-{segmentId} fragment — the same anchor
+// MarkdownRenderer's `a` component scrolls to in-app — so the link is both
+// valid for Notion's API (which rejects non-http(s) link schemes and bare
+// fragment-only hrefs outright with "Invalid URL for link") and still useful
+// (opens the meeting at that moment) when clicked from an export. segmentId
+// and meetingID are path/fragment-escaped since neither is guaranteed to be
+// URL-safe.
+func resolveTranscriptLinksForExport(content, meetingID, frontendBaseURL string) string {
+	meetingPath := frontendBaseURL + "/meeting/" + url.PathEscape(meetingID)
+	return transcriptLinkPattern.ReplaceAllStringFunc(content, func(m string) string {
+		segmentID := transcriptLinkPattern.FindStringSubmatch(m)[1]
+		return "(" + meetingPath + "#ts-" + url.PathEscape(segmentID) + ")"
+	})
+}
+
 // generateMarkdownContent generates markdown content for Notion
 func (h *ExportHandler) generateMarkdownContent(meeting *model.MeetingDetailResponse) string {
 	var sb strings.Builder
@@ -255,7 +292,7 @@ func (h *ExportHandler) generateMarkdownContent(meeting *model.MeetingDetailResp
 
 	if meeting.Content != "" {
 		sb.WriteString("## Summary\n\n")
-		sb.WriteString(contentAsMarkdown(meeting.Content))
+		sb.WriteString(resolveTranscriptLinksForExport(contentAsMarkdown(meeting.Content), meeting.MeetingID, h.frontendBaseURL))
 		sb.WriteString("\n\n")
 	}
 
