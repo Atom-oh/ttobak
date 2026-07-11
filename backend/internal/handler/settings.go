@@ -18,14 +18,15 @@ import (
 
 // SettingsHandler handles settings-related requests
 type SettingsHandler struct {
-	repo   *repository.DynamoDBRepository
-	crypto *service.CryptoService
-	notion *service.NotionService
+	repo           *repository.DynamoDBRepository
+	crypto         *service.CryptoService
+	notion         *service.NotionService
+	meetingService *service.MeetingService
 }
 
 // NewSettingsHandler creates a new settings handler
-func NewSettingsHandler(repo *repository.DynamoDBRepository, crypto *service.CryptoService, notion *service.NotionService) *SettingsHandler {
-	return &SettingsHandler{repo: repo, crypto: crypto, notion: notion}
+func NewSettingsHandler(repo *repository.DynamoDBRepository, crypto *service.CryptoService, notion *service.NotionService, meetingService *service.MeetingService) *SettingsHandler {
+	return &SettingsHandler{repo: repo, crypto: crypto, notion: notion, meetingService: meetingService}
 }
 
 // GetIntegrations handles GET /api/settings/integrations
@@ -249,4 +250,58 @@ func isValidNotionKey(key string) bool {
 		return false
 	}
 	return len(key) >= 4 && (key[:4] == "ntn_" || (len(key) >= 7 && key[:7] == "secret_"))
+}
+
+// isValidEmail performs a minimal sanity check — Cognito itself is the
+// source of truth for validity and rejects malformed addresses.
+func isValidEmail(email string) bool {
+	at := strings.IndexByte(email, '@')
+	return at > 0 && at < len(email)-1 && !strings.ContainsAny(email, " \t\n")
+}
+
+// InviteUser handles POST /api/settings/invite-user (admin-only, enforced by
+// middleware.RequireAdmin in the router). Creates a Cognito user with a
+// system-generated temporary password; Cognito emails the invite (sign-in
+// URL + temp password) directly — no SES/templating on our side.
+func (h *SettingsHandler) InviteUser(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req model.InviteUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	if req.Email == "" || !isValidEmail(req.Email) {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "A valid email is required")
+		return
+	}
+
+	if err := h.meetingService.InviteUser(ctx, req.Email, strings.TrimSpace(req.Name), req.Admin); err != nil {
+		switch {
+		case errors.Is(err, service.ErrUserAlreadyExists):
+			writeError(w, http.StatusConflict, model.ErrCodeBadRequest, "A user with this email already exists")
+			return
+		case errors.Is(err, service.ErrAdminGroupAddFailed):
+			// User was created and invited; only the admins-group add failed.
+			log.Printf("InviteUser: %s created but not added to admins group: %v", req.Email, err)
+			writeJSON(w, http.StatusCreated, model.InviteUserResponse{
+				Email:         req.Email,
+				Invited:       true,
+				AddedToAdmins: false,
+			})
+			return
+		default:
+			log.Printf("InviteUser failed for %s: %v", req.Email, err)
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to invite user")
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusCreated, model.InviteUserResponse{
+		Email:         req.Email,
+		Invited:       true,
+		AddedToAdmins: req.Admin,
+	})
 }

@@ -33,6 +33,39 @@ export interface AuthUser {
   userId: string;
   email: string;
   name?: string;
+  groups: string[];
+  isAdmin: boolean;
+}
+
+// buildAuthUser maps a decoded Cognito ID token payload to an AuthUser.
+// The "cognito:groups" claim drives admin gating (matches the backend's
+// middleware.IsAdmin check for the "admins" group).
+function buildAuthUser(payload: Record<string, unknown>): AuthUser {
+  const groups = Array.isArray(payload['cognito:groups'])
+    ? (payload['cognito:groups'] as string[])
+    : [];
+  return {
+    userId: payload.sub as string,
+    email: payload.email as string,
+    name: payload.name as string | undefined,
+    groups,
+    isAdmin: groups.includes('admins'),
+  };
+}
+
+export interface NewPasswordRequiredResult {
+  challenge: 'NEW_PASSWORD_REQUIRED';
+  cognitoUser: CognitoUser;
+  /** Attributes Cognito returned alongside the challenge (e.g. email, name). Read-only/immutable ones are stripped before resubmission. */
+  userAttributes: Record<string, string>;
+}
+
+export type SignInResult = AuthUser | NewPasswordRequiredResult;
+
+export function isNewPasswordRequired(
+  result: SignInResult
+): result is NewPasswordRequiredResult {
+  return (result as NewPasswordRequiredResult).challenge === 'NEW_PASSWORD_REQUIRED';
 }
 
 export async function signUp(
@@ -88,7 +121,7 @@ export async function confirmSignUp(
 export async function signIn(
   email: string,
   password: string
-): Promise<AuthUser> {
+): Promise<SignInResult> {
   const pool = await getUserPool();
   return new Promise((resolve, reject) => {
     const authDetails = new AuthenticationDetails({
@@ -110,17 +143,53 @@ export async function signIn(
         localStorage.setItem('accessToken', session.getAccessToken().getJwtToken());
         localStorage.setItem('refreshToken', session.getRefreshToken().getToken());
 
-        resolve({
-          userId: payload.sub,
-          email: payload.email,
-          name: payload.name,
-        });
+        resolve(buildAuthUser(payload));
       },
       onFailure: (err) => {
         reject(err);
       },
-      newPasswordRequired: () => {
-        reject(new Error('New password required'));
+      newPasswordRequired: (userAttributes) => {
+        resolve({
+          challenge: 'NEW_PASSWORD_REQUIRED',
+          cognitoUser,
+          userAttributes,
+        });
+      },
+    });
+  });
+}
+
+/**
+ * Completes the NEW_PASSWORD_REQUIRED challenge returned by signIn() for
+ * users created with a temporary password (e.g. admin-created accounts).
+ */
+export async function completeNewPassword(
+  result: NewPasswordRequiredResult,
+  newPassword: string
+): Promise<AuthUser> {
+  return new Promise((resolve, reject) => {
+    // Cognito rejects the challenge if immutable/read-only attributes
+    // (email_verified, sub, etc.) are echoed back — strip everything
+    // except mutable name-style attributes.
+    const { email_verified, phone_number_verified, sub, ...requiredAttributes } =
+      result.userAttributes;
+    void email_verified;
+    void phone_number_verified;
+    void sub;
+
+    result.cognitoUser.completeNewPasswordChallenge(newPassword, requiredAttributes, {
+      onSuccess: (session: CognitoUserSession) => {
+        const idToken = session.getIdToken();
+        const payload = idToken.decodePayload();
+
+        localStorage.setItem('idToken', idToken.getJwtToken());
+        localStorage.setItem('accessToken', session.getAccessToken().getJwtToken());
+        localStorage.setItem('refreshToken', session.getRefreshToken().getToken());
+
+        resolve(buildAuthUser(payload));
+      },
+      onFailure: (err) => {
+        reject(err);
       },
     });
   });
@@ -164,11 +233,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
       const rt = session.getRefreshToken()?.getToken();
       if (rt) localStorage.setItem('refreshToken', rt);
 
-      resolve({
-        userId: payload.sub,
-        email: payload.email,
-        name: payload.name,
-      });
+      resolve(buildAuthUser(payload));
     });
   });
 }

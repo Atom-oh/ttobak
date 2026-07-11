@@ -99,13 +99,13 @@ CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE
 - **`updateAttachmentByKey` not implemented** (`process-image/main.go`): Image processing results are not saved to DynamoDB. Needs meetingId parsing from S3 key path.
 
 ### Medium
-- **JWT signature not verified in backend** (`middleware/auth.go`): Backend only decodes JWT payload without signature verification. Safe because Lambda@Edge pre-validates, but lacks defense-in-depth.
 - **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID are hardcoded in CDK stacks. Should be extracted to CDK context for multi-account/stage support.
 - **Single audio file per meeting**: `Meeting.AudioKey` is a single string — uploading a new file overwrites the previous one. Multi-file upload and linked follow-up meetings planned in ADR-014.
 
 ### Low
 - Default table/bucket names in Go don't match CDK defaults (no runtime impact since CDK injects env vars)
 - ~~`AudioContext` not closed on recording stop~~ — **FIXED** (`RecordButton.tsx:80` now calls `audioContextRef.current.close()`)
+- ~~JWT signature not verified in backend~~ — **FIXED**: `middleware/auth.go`'s `ParseVerifiedJWT` now verifies signatures against Cognito JWKS (RS256, issuer + exp checked), so the `cognito:groups` claim used by `RequireAdmin`/`IsAdmin` is backend-verified, not just Lambda@Edge-trusted.
 
 ## Security Policy
 

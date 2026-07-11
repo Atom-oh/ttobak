@@ -270,7 +270,18 @@ export const settingsApi = {
     api.put<import('@/types/meeting').IntegrationConfig>('/api/settings/integrations/notion', { apiKey, parentPage }),
 
   deleteNotionKey: () => api.delete('/api/settings/integrations/notion'),
+
+  // Invite a new user — backend calls Cognito AdminCreateUser, which emails the
+  // invitee a sign-in link + temporary password. Admin-only (403 otherwise).
+  inviteUser: (data: { email: string; name?: string; admin?: boolean }) =>
+    api.post<InviteUserResponse>('/api/settings/invite-user', data),
 };
+
+export interface InviteUserResponse {
+  email: string;
+  invited: boolean;
+  addedToAdmins: boolean;
+}
 
 // Translation API
 export const translateApi = {

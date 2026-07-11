@@ -57,7 +57,7 @@ func TestDecryptStoredAPIKey(t *testing.T) {
 // being unable to create pages at the workspace root: every export now
 // requires a verified parent page, so save-time is where that's enforced.
 func TestSaveNotionKeyRequiresParentPage(t *testing.T) {
-	h := NewSettingsHandler(nil, nil, nil)
+	h := NewSettingsHandler(nil, nil, nil, nil)
 
 	cases := []struct {
 		name string

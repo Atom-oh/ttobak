@@ -56,9 +56,11 @@ const aiStack = new AiStack(app, 'TtobakAiStack', {
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
   agentCoreRuntimeArn,
+  userPoolArn: authStack.userPool.userPoolArn,
 });
 aiStack.addDependency(storageStack);
 aiStack.addDependency(knowledgeStack);
+aiStack.addDependency(authStack);
 
 // Stack 5: Edge Auth (Lambda@Edge in us-east-1 for CloudFront)
 const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {

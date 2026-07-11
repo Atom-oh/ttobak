@@ -433,6 +433,68 @@ func (s *MeetingService) RevokeShare(ctx context.Context, ownerID, meetingID, sh
 	return s.repo.DeleteShare(ctx, sharedToID, meetingID)
 }
 
+// ErrUserAlreadyExists is returned when inviting an email that is already registered
+var ErrUserAlreadyExists = errors.New("user already exists")
+
+// ErrAdminGroupAddFailed is returned when the user was created and invited
+// successfully but adding them to the "admins" group failed. Callers should
+// treat this as a partial success, not a failure of the whole request.
+var ErrAdminGroupAddFailed = errors.New("user invited but failed to add to admins group")
+
+// InviteUser creates a new Cognito user with a system-generated temporary
+// password and email delivery. Cognito sends the invite email itself
+// (sign-in URL + temp password) — no SES/templating needed on our side.
+// If admin is true, the new user is also added to the "admins" group.
+func (s *MeetingService) InviteUser(ctx context.Context, email, name string, admin bool) error {
+	poolID := os.Getenv("COGNITO_USER_POOL_ID")
+	if poolID == "" {
+		return fmt.Errorf("server misconfiguration: COGNITO_USER_POOL_ID is not set")
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load AWS config: %w", err)
+	}
+	client := cognitoidp.NewFromConfig(cfg)
+
+	attrs := []cognitoidptypes.AttributeType{
+		{Name: aws.String("email"), Value: aws.String(email)},
+		{Name: aws.String("email_verified"), Value: aws.String("true")},
+	}
+	if name != "" {
+		attrs = append(attrs, cognitoidptypes.AttributeType{Name: aws.String("name"), Value: aws.String(name)})
+	}
+
+	_, err = client.AdminCreateUser(ctx, &cognitoidp.AdminCreateUserInput{
+		UserPoolId:             aws.String(poolID),
+		Username:               aws.String(email),
+		UserAttributes:         attrs,
+		DesiredDeliveryMediums: []cognitoidptypes.DeliveryMediumType{cognitoidptypes.DeliveryMediumTypeEmail},
+	})
+	if err != nil {
+		var exists *cognitoidptypes.UsernameExistsException
+		if errors.As(err, &exists) {
+			return ErrUserAlreadyExists
+		}
+		return fmt.Errorf("failed to create user: %w", err)
+	}
+
+	if admin {
+		_, err = client.AdminAddUserToGroup(ctx, &cognitoidp.AdminAddUserToGroupInput{
+			UserPoolId: aws.String(poolID),
+			Username:   aws.String(email),
+			GroupName:  aws.String("admins"),
+		})
+		if err != nil {
+			// The account was already created and the invite email sent —
+			// surface this as a partial failure rather than losing the user.
+			return fmt.Errorf("%w: %v", ErrAdminGroupAddFailed, err)
+		}
+	}
+
+	return nil
+}
+
 // SearchUsers searches users by email using Cognito ListUsers API
 func (s *MeetingService) SearchUsers(ctx context.Context, query string) ([]model.UserSearchResponse, error) {
 	poolID := os.Getenv("COGNITO_USER_POOL_ID")
