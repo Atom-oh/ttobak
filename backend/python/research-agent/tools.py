@@ -8,12 +8,14 @@ import json
 import os
 import logging
 import hashlib
-import xml.etree.ElementTree as ET
 from datetime import datetime
 from html.parser import HTMLParser
 from urllib.request import Request, urlopen
-from urllib.parse import quote_plus
 from urllib.error import URLError
+
+import botocore.session
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
 
 from strands.tools import tool
 
@@ -21,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 TABLE_NAME = os.environ.get("TABLE_NAME", "ttobak-main")
 KB_BUCKET = os.environ.get("KB_BUCKET_NAME", "ttobak-kb-180294183052")
+WEB_SEARCH_GATEWAY_URL = os.environ.get("WEB_SEARCH_GATEWAY_URL", "")
+WEB_SEARCH_GATEWAY_REGION = os.environ.get("WEB_SEARCH_GATEWAY_REGION", "us-east-1")
+FETCH_TIMEOUT_SECONDS = 10
 
 # Lazy-init boto3 clients
 _s3 = None
@@ -86,39 +91,52 @@ class _TextExtractor(HTMLParser):
 # Tools
 # ---------------------------------------------------------------------------
 
+def _sigv4_post(body_json: str) -> str:
+    """POST body_json to the Gateway MCP endpoint, SigV4-signed."""
+    session = botocore.session.get_session()
+    credentials = session.get_credentials()
+    request = AWSRequest(
+        method="POST",
+        url=WEB_SEARCH_GATEWAY_URL,
+        data=body_json,
+        headers={"Content-Type": "application/json"},
+    )
+    SigV4Auth(credentials, "bedrock-agentcore", WEB_SEARCH_GATEWAY_REGION).add_auth(request)
+    prepared = request.prepare()
+    body = prepared.body.encode("utf-8") if isinstance(prepared.body, str) else prepared.body
+    req = Request(prepared.url, data=body, headers=dict(prepared.headers), method="POST")
+    with urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
+        return resp.read().decode("utf-8")
+
+
 @tool
 def web_search(query: str, max_results: int = 10) -> str:
-    """Search the web using Google News RSS. Returns article titles and URLs.
+    """Search the web via the AgentCore Web Search connector. Returns article
+    snippets, titles, and URLs.
 
     Args:
         query: Search query (Korean or English)
         max_results: Maximum number of results to return (default 10)
     """
-    encoded = quote_plus(query)
-    rss_url = f"https://news.google.com/rss/search?q={encoded}&hl=ko&gl=KR&ceid=KR:ko"
-
+    body = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "WebSearch",
+            "arguments": {"query": query[:200], "maxResults": max_results},
+        },
+    })
     try:
-        req = Request(rss_url, headers={"User-Agent": "TtobakResearch/1.0"})
-        with urlopen(req, timeout=10) as resp:
-            xml_data = resp.read()
-
-        root = ET.fromstring(xml_data)
-        articles = []
-        channel = root.find("channel")
-        if channel is not None:
-            for item in channel.findall("item"):
-                title = item.findtext("title", "")
-                link = item.findtext("link", "")
-                pub_date = item.findtext("pubDate", "")
-                if title and link:
-                    articles.append({"title": title, "url": link, "date": pub_date})
-                    if len(articles) >= max_results:
-                        break
-
-        if not articles:
+        raw_response = _sigv4_post(body)
+        parsed = json.loads(raw_response)
+        if parsed.get("isError"):
+            return json.dumps({"results": [], "message": "Search returned an error"})
+        content = parsed.get("content", [])
+        if not content:
             return json.dumps({"results": [], "message": "No results found"})
-
-        return json.dumps({"results": articles}, ensure_ascii=False)
+        inner = json.loads(content[0]["text"])
+        return json.dumps({"results": inner.get("results", [])}, ensure_ascii=False)
     except Exception as e:
         logger.warning(f"Web search failed for '{query}': {e}")
         return json.dumps({"results": [], "error": str(e)})
