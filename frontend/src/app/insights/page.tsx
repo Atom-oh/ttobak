@@ -30,7 +30,7 @@ export default function InsightsPage() {
           <div className="text-primary flex size-10 shrink-0 items-center justify-center bg-primary/10 rounded-lg">
             <span className="material-symbols-outlined">insights</span>
           </div>
-          <h1 className="text-slate-900 dark:text-[#e4e1e9] dark:font-[var(--font-headline)] text-xl font-bold leading-tight tracking-tight">
+          <h1 className="text-slate-900 dark:text-text-main dark:font-headline text-xl font-bold leading-tight tracking-tight">
             Insights
           </h1>
         </div>
@@ -41,18 +41,18 @@ export default function InsightsPage() {
         <div className="p-4 lg:px-16 lg:pt-16 lg:pb-8 max-w-4xl w-full">
           {/* Page Header */}
           <div className="hidden lg:block mb-8">
-            <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-[var(--font-headline)] dark:text-[#e4e1e9]">
+            <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-text-main">
               Insights
             </h2>
-            <p className="text-slate-600 dark:text-[#849396] mt-2">
+            <p className="text-slate-600 dark:text-text-muted mt-2">
               Curated news and technical updates from your subscribed sources.
             </p>
           </div>
           <div className="lg:hidden mb-8">
-            <h2 className="text-2xl font-extrabold text-slate-900 dark:text-[#e4e1e9] dark:font-[var(--font-headline)] tracking-tight">
+            <h2 className="text-2xl font-extrabold text-slate-900 dark:text-text-main dark:font-headline tracking-tight">
               Insights
             </h2>
-            <p className="text-slate-500 dark:text-[#849396] mt-1">
+            <p className="text-slate-500 dark:text-text-muted mt-1">
               Curated news and technical updates from your subscribed sources.
             </p>
           </div>

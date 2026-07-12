@@ -42,7 +42,7 @@ export function QASuggestedQuestions({ questions, isDetected = false, onAsk, dis
             `}
           >
             <span className={`flex-shrink-0 w-2 h-2 rounded-full ${i === 0 && isDetected ? 'animate-pulse' : ''}`}
-              style={{ background: isDetected ? '#B026FF' : '#00E5FF' }} />
+              style={{ background: isDetected ? 'var(--accent)' : 'var(--primary)' }} />
             <span className="flex-1 truncate">{q}</span>
             <span className="material-symbols-outlined text-sm opacity-40 group-hover:opacity-100 transition-opacity flex-shrink-0">north_east</span>
           </button>

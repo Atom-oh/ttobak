@@ -16,8 +16,8 @@ const mainNav = [
 
 function NavItem({ href, icon, label, isActive }: { href: string; icon: string; label: string; isActive: boolean }) {
   const activeClasses = isActive
-    ? 'bg-primary/10 text-primary dark:bg-[#B026FF]/10 dark:text-[#B026FF] dark:border-l-[3px] dark:border-[#B026FF] dark:rounded-r-lg dark:rounded-l-none active-pill'
-    : 'text-slate-600 dark:text-[#BAC9CC]/70 hover:bg-slate-100 dark:hover:bg-white/5 dark:hover:text-[#00E5FF]';
+    ? 'bg-primary/10 text-primary dark:bg-accent/10 dark:text-accent dark:border-l-[3px] dark:border-accent dark:rounded-r-lg dark:rounded-l-none active-pill'
+    : 'text-slate-600 dark:text-text-secondary/70 hover:bg-slate-100 dark:hover:bg-white/5 dark:hover:text-primary';
 
   return (
     <Link
@@ -61,7 +61,7 @@ export function Sidebar({ activePath }: { activePath: string }) {
         <div className="flex items-center gap-3 px-2">
           <div className="relative bg-primary/10 rounded-lg p-2 flex items-center justify-center dark:bg-transparent dark:w-9 dark:h-9 dark:p-0">
             {/* Gradient border ring (dark mode only) */}
-            <div className="hidden dark:block absolute inset-0 rounded-xl bg-gradient-to-br from-[#00E5FF] to-[#B026FF] opacity-60" />
+            <div className="hidden dark:block absolute inset-0 rounded-xl bg-gradient-to-br from-primary to-accent opacity-60" />
             <div className="hidden dark:block absolute inset-[1px] rounded-[10px] bg-surface-lowest" />
             <span className="material-symbols-outlined text-primary relative z-10">record_voice_over</span>
           </div>
@@ -69,9 +69,9 @@ export function Sidebar({ activePath }: { activePath: string }) {
             {/* Light mode: Korean name */}
             <h1 className="text-sm font-semibold leading-none text-slate-900 dark:hidden">또박</h1>
             {/* Dark mode: English brand name with neon glow */}
-            <h1 className="text-sm font-semibold leading-none hidden dark:block dark:text-[#00E5FF] neon-text-cyan">TTOBAK Assist</h1>
+            <h1 className="text-sm font-semibold leading-none hidden dark:block dark:text-primary neon-text-cyan">TTOBAK Assist</h1>
             <p className="text-xs text-slate-500 dark:text-[#8B8D98] mt-1 dark:hidden">AI Meeting Assistant</p>
-            <p className="text-[9px] font-bold uppercase tracking-[0.15em] hidden dark:block dark:text-[#849396] mt-1">Premium Engine</p>
+            <p className="text-[9px] font-bold uppercase tracking-[0.15em] hidden dark:block dark:text-text-muted mt-1">Premium Engine</p>
           </div>
         </div>
 
@@ -89,7 +89,7 @@ export function Sidebar({ activePath }: { activePath: string }) {
         <div className="relative">
           <button
             onClick={() => setShowNewMenu(!showNewMenu)}
-            className="w-full bg-primary hover:bg-primary-hover text-white dark:text-[#09090E] rounded-lg h-10 px-4 font-semibold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-primary/20 dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
+            className="w-full bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg h-10 px-4 font-semibold text-sm flex items-center justify-center gap-2 transition-all shadow-lg shadow-primary/20 dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
           >
             <span className="material-symbols-outlined text-lg">add</span>
             <span>New Meeting</span>
@@ -130,7 +130,7 @@ export function Sidebar({ activePath }: { activePath: string }) {
           {/* Dark Mode Toggle */}
           <button
             onClick={toggleDark}
-            className="flex items-center gap-3 px-2 py-1.5 rounded-lg text-sm text-slate-600 dark:text-[#BAC9CC]/70 hover:bg-slate-100 dark:hover:bg-white/5 dark:hover:text-[#00E5FF] transition-colors"
+            className="flex items-center gap-3 px-2 py-1.5 rounded-lg text-sm text-slate-600 dark:text-text-secondary/70 hover:bg-slate-100 dark:hover:bg-white/5 dark:hover:text-primary transition-colors"
           >
             <span className="material-symbols-outlined text-lg">
               {isDark ? 'light_mode' : 'dark_mode'}

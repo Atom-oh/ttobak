@@ -78,7 +78,7 @@ export function AudioPlayer({ audioUrl, audioUrls }: AudioPlayerProps) {
   return (
     <div className="sticky bottom-6 mt-12 w-full max-w-2xl mx-auto z-30 animate-slide-up">
       <audio ref={audioRef} src={effectiveUrl} preload="metadata" onError={() => setError(true)} />
-      <div className="bg-white/80 dark:bg-[#09090E]/80 backdrop-blur-md border border-slate-200 dark:border-white/10 shadow-xl rounded-full px-6 py-3 flex items-center gap-4">
+      <div className="bg-white/80 dark:bg-background-dark/80 backdrop-blur-md border border-slate-200 dark:border-white/10 shadow-xl rounded-full px-6 py-3 flex items-center gap-4">
         {/* Play button */}
         <button onClick={togglePlay}
           className="size-10 rounded-full bg-primary flex items-center justify-center text-white shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 transition-transform shrink-0">

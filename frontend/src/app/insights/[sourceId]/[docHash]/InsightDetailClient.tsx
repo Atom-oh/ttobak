@@ -130,10 +130,10 @@ export default function InsightDetailPage() {
     <AppLayout activePath="/insights">
       {/* Mobile Header */}
       <header className="lg:hidden flex items-center bg-white dark:bg-[var(--surface)] px-4 py-3 gap-3 border-b border-slate-100 dark:border-white/10 sticky top-0 z-10">
-        <button onClick={() => router.push('/insights')} className="text-slate-500 dark:text-[#849396]">
+        <button onClick={() => router.push('/insights')} className="text-slate-500 dark:text-text-muted">
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
-        <h1 className="text-slate-900 dark:text-[#e4e1e9] text-base font-semibold truncate">
+        <h1 className="text-slate-900 dark:text-text-main text-base font-semibold truncate">
           {doc?.title || 'Article'}
         </h1>
       </header>
@@ -144,7 +144,7 @@ export default function InsightDetailPage() {
           {/* Back button (desktop) */}
           <button
             onClick={() => router.push('/insights')}
-            className="hidden lg:flex items-center gap-1.5 text-sm text-slate-500 dark:text-[#849396] hover:text-primary dark:hover:text-[#00E5FF] mb-6 transition-colors"
+            className="hidden lg:flex items-center gap-1.5 text-sm text-slate-500 dark:text-text-muted hover:text-primary mb-6 transition-colors"
           >
             <span className="material-symbols-outlined text-lg">arrow_back</span>
             Back to Insights
@@ -156,7 +156,7 @@ export default function InsightDetailPage() {
             </div>
           ) : error ? (
             <div className="text-center py-20">
-              <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-[#849396]">error</span>
+              <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-text-muted">error</span>
               <p className="text-sm text-red-500 mt-2">{error}</p>
             </div>
           ) : doc ? (
@@ -184,12 +184,12 @@ export default function InsightDetailPage() {
                 </div>
 
                 {/* Title */}
-                <h1 className="text-2xl lg:text-3xl font-bold text-slate-900 dark:text-[#e4e1e9] leading-tight">
+                <h1 className="text-2xl lg:text-3xl font-bold text-slate-900 dark:text-text-main leading-tight">
                   {doc.title}
                 </h1>
 
                 {/* Meta */}
-                <div className="flex flex-wrap items-center gap-3 mt-4 text-sm text-slate-500 dark:text-[#849396]">
+                <div className="flex flex-wrap items-center gap-3 mt-4 text-sm text-slate-500 dark:text-text-muted">
                   {doc.source && (
                     <span className="flex items-center gap-1">
                       <span className="material-symbols-outlined text-base">source</span>
@@ -214,7 +214,7 @@ export default function InsightDetailPage() {
                 {doc.awsServices && doc.awsServices.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-4">
                     {doc.awsServices.map((svc) => (
-                      <span key={svc} className="bg-primary/5 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF] text-xs font-medium px-2.5 py-1 rounded-full">
+                      <span key={svc} className="bg-primary/5 text-primary dark:bg-primary/10 text-xs font-medium px-2.5 py-1 rounded-full">
                         {svc}
                       </span>
                     ))}
@@ -228,7 +228,7 @@ export default function InsightDetailPage() {
                       href={doc.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary dark:text-[#00E5FF] hover:underline"
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline"
                     >
                       <span className="material-symbols-outlined text-base">open_in_new</span>
                       View Original Article
@@ -237,18 +237,18 @@ export default function InsightDetailPage() {
                   <div ref={exportRef} className="relative inline-block">
                     <button
                       onClick={() => setExportOpen(!exportOpen)}
-                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-600 dark:text-[#849396] hover:text-primary dark:hover:text-[#00E5FF] transition-colors"
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-600 dark:text-text-muted hover:text-primary transition-colors"
                     >
                       <span className="material-symbols-outlined text-base">download</span>
                       Export
                     </button>
                     {exportOpen && (
                       <div className="absolute left-0 top-full mt-2 w-48 bg-white dark:bg-[#1a1a24] border border-slate-200 dark:border-white/10 rounded-lg shadow-lg z-20 py-1">
-                        <button onClick={handleCopyMarkdown} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-[#bac9cc] hover:bg-slate-50 dark:hover:bg-white/5">
+                        <button onClick={handleCopyMarkdown} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-text-secondary hover:bg-slate-50 dark:hover:bg-white/5">
                           <span className="material-symbols-outlined text-lg">{copied ? 'check' : 'content_copy'}</span>
                           {copied ? 'Copied!' : 'Copy as Markdown'}
                         </button>
-                        <button onClick={handleDownloadMd} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-[#bac9cc] hover:bg-slate-50 dark:hover:bg-white/5">
+                        <button onClick={handleDownloadMd} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-text-secondary hover:bg-slate-50 dark:hover:bg-white/5">
                           <span className="material-symbols-outlined text-lg">download</span>
                           Download .md
                         </button>
@@ -261,8 +261,8 @@ export default function InsightDetailPage() {
               {/* Briefing Content — unified view, strip S3 header metadata */}
               <div className="flex gap-0">
                 <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 flex-1 min-w-0">
-                  <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-[#e4e1e9] uppercase tracking-wide mb-4">
-                    <span className="material-symbols-outlined text-primary dark:text-[#00E5FF] text-lg">auto_awesome</span>
+                  <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-text-main uppercase tracking-wide mb-4">
+                    <span className="material-symbols-outlined text-primary text-lg">auto_awesome</span>
                     AI Briefing
                   </h2>
                   <MarkdownRenderer content={stripS3Header(doc.content)} />

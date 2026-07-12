@@ -79,7 +79,7 @@ const components: Components = {
   },
 
   p({ children }: { children?: ReactNode }) {
-    return <p className="text-[15px] leading-relaxed text-slate-600 dark:text-[#bac9cc] my-3">{children}</p>;
+    return <p className="text-[15px] leading-relaxed text-slate-600 dark:text-text-secondary my-3">{children}</p>;
   },
 
   ul({ children }: { children?: ReactNode }) {
@@ -91,7 +91,7 @@ const components: Components = {
   },
 
   li({ children }: { children?: ReactNode }) {
-    return <li className="text-[15px] leading-relaxed text-slate-600 dark:text-[#bac9cc] pl-1">{children}</li>;
+    return <li className="text-[15px] leading-relaxed text-slate-600 dark:text-text-secondary pl-1">{children}</li>;
   },
 
   a(props: AnchorHTMLAttributes<HTMLAnchorElement> & { children?: ReactNode }) {
@@ -111,16 +111,16 @@ const components: Components = {
         const el = document.getElementById(`ts-${segmentId}`);
         if (!el) return;
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.classList.add('ring-2', 'ring-primary/50', 'dark:ring-[#00E5FF]/50');
+        el.classList.add('ring-2', 'ring-primary/50');
         window.setTimeout(() => {
-          el.classList.remove('ring-2', 'ring-primary/50', 'dark:ring-[#00E5FF]/50');
+          el.classList.remove('ring-2', 'ring-primary/50');
         }, 1800);
       };
       return (
         <a
           href={`#ts-${segmentId}`}
           onClick={onClick}
-          className="text-[#3211d4] dark:text-[#00E5FF] underline underline-offset-2 decoration-dotted decoration-[#3211d4]/40 dark:decoration-[#00E5FF]/40 hover:decoration-solid hover:decoration-[#3211d4] dark:hover:decoration-[#00E5FF] transition-colors text-[13px] tabular-nums ml-1 align-baseline"
+          className="text-[#3211d4] dark:text-primary underline underline-offset-2 decoration-dotted decoration-[#3211d4]/40 dark:decoration-primary/40 hover:decoration-solid hover:decoration-[#3211d4] dark:hover:decoration-primary transition-colors text-[13px] tabular-nums ml-1 align-baseline"
           title="회의록의 해당 발언으로 이동"
         >
           {children}
@@ -130,7 +130,7 @@ const components: Components = {
     return (
       <a
         href={href}
-        className="text-[#3211d4] dark:text-[#00E5FF] underline underline-offset-2 decoration-[#3211d4]/30 dark:decoration-[#00E5FF]/30 hover:decoration-[#3211d4] dark:hover:decoration-[#00E5FF] transition-colors inline-flex items-center gap-0.5"
+        className="text-[#3211d4] dark:text-primary underline underline-offset-2 decoration-[#3211d4]/30 dark:decoration-primary/30 hover:decoration-[#3211d4] dark:hover:decoration-primary transition-colors inline-flex items-center gap-0.5"
         {...(isExternal ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
         {...rest}
       >
@@ -147,11 +147,11 @@ const components: Components = {
   },
 
   strong({ children }: { children?: ReactNode }) {
-    return <strong className="font-semibold text-slate-900 dark:text-[#e4e1e9]">{children}</strong>;
+    return <strong className="font-semibold text-slate-900 dark:text-text-main">{children}</strong>;
   },
 
   em({ children }: { children?: ReactNode }) {
-    return <em className="italic text-slate-500 dark:text-[#849396]">{children}</em>;
+    return <em className="italic text-slate-500 dark:text-text-muted">{children}</em>;
   },
 
   img(props: React.ImgHTMLAttributes<HTMLImageElement>) {

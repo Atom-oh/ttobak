@@ -65,10 +65,10 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
   }, [onSave]);
 
   return (
-    <div className="bg-white dark:bg-[#0e0e13] glass-panel rounded-xl p-6 shadow-sm dark:border-l-4 dark:border-l-accent">
+    <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-6 shadow-sm dark:border-l-4 dark:border-l-accent">
       <div className="flex items-center gap-2 mb-4">
-        <span className="material-symbols-outlined text-primary dark:text-[#B026FF]">auto_awesome</span>
-        <h3 className="font-bold dark:font-[var(--font-headline)] text-primary dark:text-[#B026FF]">AI Summary</h3>
+        <span className="material-symbols-outlined text-primary dark:text-accent">auto_awesome</span>
+        <h3 className="font-bold dark:font-headline text-primary dark:text-accent">AI Summary</h3>
         <div className="flex-1" />
         {rawText && onSave && (
           <div className="flex items-center gap-2">
@@ -78,8 +78,8 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
               onClick={() => setEditing(!editing)}
               className={`p-1.5 rounded-lg transition-colors ${
                 editing
-                  ? 'bg-primary/10 text-primary dark:bg-[#00E5FF]/10 dark:text-[#00E5FF]'
-                  : 'text-slate-400 hover:text-slate-600 dark:hover:text-[#BAC9CC]'
+                  ? 'bg-primary/10 text-primary'
+                  : 'text-slate-400 hover:text-slate-600 dark:hover:text-text-secondary'
               }`}
               title={editing ? 'View mode' : 'Edit summary'}
             >
@@ -100,12 +100,12 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
           <MarkdownRenderer content={rawText} />
         </div>
       ) : (
-        <div className="text-slate-600 dark:text-[#BAC9CC] dark:font-[var(--font-body)] leading-relaxed">요약이 없습니다.</div>
+        <div className="text-slate-600 dark:text-text-secondary dark:font-body leading-relaxed">요약이 없습니다.</div>
       )}
 
       {!editing && transcriptA && (
         <details className="mt-6 border border-slate-200 dark:border-white/10 rounded-lg">
-          <summary className="px-4 py-3 text-sm font-medium text-slate-600 dark:text-[#849396] cursor-pointer hover:bg-slate-50 dark:hover:bg-white/5 rounded-lg flex items-center gap-2">
+          <summary className="px-4 py-3 text-sm font-medium text-slate-600 dark:text-text-muted cursor-pointer hover:bg-slate-50 dark:hover:bg-white/5 rounded-lg flex items-center gap-2">
             <span className="material-symbols-outlined text-lg">notes</span>
             원본 텍스트 보기
           </summary>

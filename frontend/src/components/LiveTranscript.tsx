@@ -70,7 +70,7 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
 
   if (transcripts.length === 0) {
     return (
-      <div className="bg-white dark:bg-[#0e0e13] glass-panel rounded-xl p-4">
+      <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-4">
         <div className="flex flex-col items-center justify-center py-8 text-slate-400 dark:text-[#8B8D98]">
           <span className="material-symbols-outlined text-4xl mb-2">mic</span>
           <p className="text-sm">Waiting for speech...</p>
@@ -80,11 +80,11 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
   }
 
   return (
-    <div className="flex flex-col bg-white dark:bg-[#0e0e13] glass-panel rounded-xl max-h-96 lg:max-h-none lg:h-full">
+    <div className="flex flex-col bg-white dark:bg-surface-lowest glass-panel rounded-xl max-h-96 lg:max-h-none lg:h-full">
       {/* Header */}
       <div className="flex items-center gap-2 p-4 pb-3 border-b border-slate-100 dark:border-white/5">
         <span className="material-symbols-outlined text-primary">graphic_eq</span>
-        <h3 className="text-sm font-semibold text-slate-900 dark:text-white dark:font-[var(--font-headline)]">Live Transcript</h3>
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-white dark:font-headline">Live Transcript</h3>
         <div className="ml-auto flex items-center gap-3">
           {wordCount !== undefined && wordCount > 0 && (
             <span className="text-xs font-medium text-slate-500 dark:text-[#8B8D98] bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
@@ -112,7 +112,7 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
                 entry.isFinal
                   ? 'pb-2 mb-1 border-b border-slate-100 dark:border-white/5 last:border-b-0'
                   : ''
-              } ${isLastInterim ? 'dark:border-l-2 dark:border-l-[#00E5FF]/50 dark:pl-2' : ''}`}
+              } ${isLastInterim ? 'dark:border-l-2 dark:border-l-primary/50 dark:pl-2' : ''}`}
             >
               <div className="flex items-start gap-3">
                 {/* Speaker avatar */}
@@ -197,7 +197,7 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
 
       {/* Export button — desktop only */}
       <div className="hidden lg:block p-4 border-t border-slate-100 dark:border-white/5">
-        <button className="w-full py-2 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-[#8B8D98] hover:text-primary dark:hover:text-primary transition-colors">
+        <button className="w-full py-2 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-[#8B8D98] hover:text-primary transition-colors">
           Export Transcript
         </button>
       </div>

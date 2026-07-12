@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
+import { getSpeakerColor } from '@/lib/speakerColors';
 
 interface SpeakerMapEditorProps {
   transcription?: { speaker: string }[];
@@ -59,8 +60,6 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
     }
   };
 
-  const speakerColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1'];
-
   return (
     <div className={`rounded-xl p-4 mb-6 ${hasUnmapped
       ? 'bg-amber-50 dark:bg-[#1a1520] border border-amber-200 dark:border-amber-900/30'
@@ -93,7 +92,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
             <div key={label} className="flex items-center gap-3">
               <div
                 className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
-                style={{ backgroundColor: speakerColors[i % speakerColors.length] }}
+                style={{ backgroundColor: getSpeakerColor(i).dot }}
               >
                 {i + 1}
               </div>
@@ -111,7 +110,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
           <button
             onClick={handleSave}
             disabled={saving || !hasAnyName}
-            className="mt-2 px-4 py-2 bg-primary dark:bg-[#00E5FF] text-white dark:text-[#09090E] rounded-lg text-sm font-semibold disabled:opacity-40 hover:opacity-90 transition-opacity flex items-center gap-2"
+            className="mt-2 px-4 py-2 bg-primary text-white dark:text-background-dark rounded-lg text-sm font-semibold disabled:opacity-40 hover:opacity-90 transition-opacity flex items-center gap-2"
           >
             {saving ? (
               <>

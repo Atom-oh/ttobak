@@ -69,14 +69,14 @@ export default function AccountSection({ meetingId, initialAccountId, initialSha
         <button
           onClick={handleLink}
           disabled={busy || !selected}
-          className="text-primary border border-primary rounded-lg hover:bg-primary/10 text-sm font-semibold px-4 py-2 disabled:opacity-50 dark:border-[#00E5FF]/30 dark:hover:bg-[#00E5FF]/10"
+          className="text-primary border border-primary rounded-lg hover:bg-primary/10 text-sm font-semibold px-4 py-2 disabled:opacity-50 dark:border-primary/30"
         >
           Link (private)
         </button>
         <button
           onClick={handleShare}
           disabled={busy || !selected}
-          className="bg-primary hover:bg-primary-hover text-white dark:text-[#09090E] rounded-lg font-semibold text-sm px-4 py-2 disabled:opacity-50"
+          className="bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg font-semibold text-sm px-4 py-2 disabled:opacity-50"
         >
           {shared ? 'Re-share to team' : 'Share to team'}
         </button>

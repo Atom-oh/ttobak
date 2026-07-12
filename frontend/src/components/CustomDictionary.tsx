@@ -12,7 +12,7 @@ function StatusBadge({ status }: { status: VocabStatus }) {
   switch (status) {
     case 'READY':
       return (
-        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-green-100 text-green-700 dark:bg-[#00E5FF]/10 dark:text-[#00E5FF]">
+        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-green-100 text-green-700 dark:bg-primary/10 dark:text-primary">
           Ready
         </span>
       );
@@ -30,7 +30,7 @@ function StatusBadge({ status }: { status: VocabStatus }) {
       );
     default:
       return (
-        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-[#849396]">
+        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-muted">
           {status}
         </span>
       );
@@ -207,7 +207,7 @@ export function CustomDictionary() {
 
       {/* Status */}
       <div className="flex items-center gap-3">
-        <span className="text-sm font-medium text-slate-700 dark:text-[#bac9cc]">
+        <span className="text-sm font-medium text-slate-700 dark:text-text-secondary">
           Vocabulary Status:
         </span>
         <StatusBadge status={status} />
@@ -219,11 +219,11 @@ export function CustomDictionary() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="bg-slate-50 dark:bg-[#0e0e13] border-b border-slate-200 dark:border-white/10">
-                  <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-[#bac9cc]">Phrase</th>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-[#bac9cc]">Pronunciation</th>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-[#bac9cc]">Display As</th>
-                  <th className="text-right px-4 py-3 font-semibold text-slate-700 dark:text-[#bac9cc]">Actions</th>
+                <tr className="bg-slate-50 dark:bg-surface-lowest border-b border-slate-200 dark:border-white/10">
+                  <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">Phrase</th>
+                  <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">Pronunciation</th>
+                  <th className="text-left px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">Display As</th>
+                  <th className="text-right px-4 py-3 font-semibold text-slate-700 dark:text-text-secondary">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -239,7 +239,7 @@ export function CustomDictionary() {
                             type="text"
                             value={editPhrase}
                             onChange={(e) => setEditPhrase(e.target.value)}
-                            className="w-full px-2 py-1.5 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20"
+                            className="w-full px-2 py-1.5 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20"
                           />
                         </td>
                         <td className="px-4 py-2">
@@ -247,7 +247,7 @@ export function CustomDictionary() {
                             type="text"
                             value={editSoundsLike}
                             onChange={(e) => setEditSoundsLike(e.target.value)}
-                            className="w-full px-2 py-1.5 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20"
+                            className="w-full px-2 py-1.5 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20"
                           />
                         </td>
                         <td className="px-4 py-2">
@@ -255,21 +255,21 @@ export function CustomDictionary() {
                             type="text"
                             value={editDisplayAs}
                             onChange={(e) => setEditDisplayAs(e.target.value)}
-                            className="w-full px-2 py-1.5 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20"
+                            className="w-full px-2 py-1.5 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20"
                           />
                         </td>
                         <td className="px-4 py-2 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <button
                               onClick={saveEditing}
-                              className="p-1.5 text-green-600 hover:bg-green-50 dark:text-[#00E5FF] dark:hover:bg-[#00E5FF]/10 rounded-lg transition-colors"
+                              className="p-1.5 text-green-600 hover:bg-green-50 dark:text-primary dark:hover:bg-primary/10 rounded-lg transition-colors"
                               title="Save"
                             >
                               <span className="material-symbols-outlined text-lg">check</span>
                             </button>
                             <button
                               onClick={cancelEditing}
-                              className="p-1.5 text-slate-400 hover:bg-slate-100 dark:text-[#849396] dark:hover:bg-white/5 rounded-lg transition-colors"
+                              className="p-1.5 text-slate-400 hover:bg-slate-100 dark:text-text-muted dark:hover:bg-white/5 rounded-lg transition-colors"
                               title="Cancel"
                             >
                               <span className="material-symbols-outlined text-lg">close</span>
@@ -279,27 +279,27 @@ export function CustomDictionary() {
                       </>
                     ) : (
                       <>
-                        <td className="px-4 py-3 text-slate-900 dark:text-[#e4e1e9] font-medium">
+                        <td className="px-4 py-3 text-slate-900 dark:text-text-main font-medium">
                           {term.phrase}
                         </td>
-                        <td className="px-4 py-3 text-slate-600 dark:text-[#bac9cc]">
+                        <td className="px-4 py-3 text-slate-600 dark:text-text-secondary">
                           {term.soundsLike || '-'}
                         </td>
-                        <td className="px-4 py-3 text-slate-600 dark:text-[#bac9cc]">
+                        <td className="px-4 py-3 text-slate-600 dark:text-text-secondary">
                           {term.displayAs || term.phrase}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <button
                               onClick={() => startEditing(term)}
-                              className="p-1.5 text-slate-400 hover:text-slate-600 dark:text-[#849396] dark:hover:text-[#bac9cc] rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
+                              className="p-1.5 text-slate-400 hover:text-slate-600 dark:text-text-muted dark:hover:text-text-secondary rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
                               title="Edit"
                             >
                               <span className="material-symbols-outlined text-lg">edit</span>
                             </button>
                             <button
                               onClick={() => handleDelete(term.phrase)}
-                              className="p-1.5 text-slate-400 hover:text-red-500 dark:text-[#849396] dark:hover:text-red-400 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
+                              className="p-1.5 text-slate-400 hover:text-red-500 dark:text-text-muted dark:hover:text-red-400 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 transition-colors"
                               title="Delete"
                             >
                               <span className="material-symbols-outlined text-lg">delete</span>
@@ -316,13 +316,13 @@ export function CustomDictionary() {
         </div>
       ) : (
         <div className="glass-panel rounded-xl p-8 text-center">
-          <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-[#849396] mb-3 block">
+          <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-text-muted mb-3 block">
             dictionary
           </span>
-          <p className="text-slate-500 dark:text-[#849396] text-sm">
+          <p className="text-slate-500 dark:text-text-muted text-sm">
             No custom terms configured.
           </p>
-          <p className="text-slate-400 dark:text-[#849396]/60 text-xs mt-1">
+          <p className="text-slate-400 dark:text-text-muted/60 text-xs mt-1">
             Add domain-specific terms to improve transcription accuracy.
           </p>
         </div>
@@ -330,12 +330,12 @@ export function CustomDictionary() {
 
       {/* Add Term Form */}
       <div className="glass-panel rounded-xl p-5">
-        <h4 className="text-sm font-semibold text-slate-900 dark:text-[#e4e1e9] mb-3">
+        <h4 className="text-sm font-semibold text-slate-900 dark:text-text-main mb-3">
           Add Term
         </h4>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
-            <label className="block text-xs font-medium text-slate-500 dark:text-[#849396] mb-1">
+            <label className="block text-xs font-medium text-slate-500 dark:text-text-muted mb-1">
               Phrase *
             </label>
             <input
@@ -349,11 +349,11 @@ export function CustomDictionary() {
                 }
               }}
               placeholder="e.g. Kubernetes"
-              className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-[#849396] placeholder:text-slate-400"
+              className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-500 dark:text-[#849396] mb-1">
+            <label className="block text-xs font-medium text-slate-500 dark:text-text-muted mb-1">
               Pronunciation
             </label>
             <input
@@ -367,11 +367,11 @@ export function CustomDictionary() {
                 }
               }}
               placeholder="e.g. koo-ber-net-eez"
-              className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-[#849396] placeholder:text-slate-400"
+              className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400"
             />
           </div>
           <div>
-            <label className="block text-xs font-medium text-slate-500 dark:text-[#849396] mb-1">
+            <label className="block text-xs font-medium text-slate-500 dark:text-text-muted mb-1">
               Display As
             </label>
             <input
@@ -385,14 +385,14 @@ export function CustomDictionary() {
                 }
               }}
               placeholder="e.g. Kubernetes"
-              className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-[#0e0e13] dark:border dark:border-white/10 dark:text-[#e4e1e9] border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-[#849396] placeholder:text-slate-400"
+              className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400"
             />
           </div>
         </div>
         <button
           onClick={handleAdd}
           disabled={!newPhrase.trim()}
-          className="mt-3 flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/10 dark:text-[#00E5FF] dark:hover:bg-[#00E5FF]/10 rounded-lg transition-colors disabled:opacity-40"
+          className="mt-3 flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-40"
         >
           <span className="material-symbols-outlined text-lg">add</span>
           Add Term
@@ -404,7 +404,7 @@ export function CustomDictionary() {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white dark:text-[#09090E] rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-white dark:text-background-dark rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
         >
           {saving ? (
             <>

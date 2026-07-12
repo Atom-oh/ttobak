@@ -60,10 +60,10 @@ export default function AccountsClient() {
   return (
     <div className="max-w-3xl mx-auto">
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-slate-900 dark:text-[#e4e1e9]">Accounts</h2>
+        <h2 className="text-xl font-bold text-slate-900 dark:text-text-main">Accounts</h2>
         <button
           onClick={() => setShowForm((v) => !v)}
-          className="bg-primary hover:bg-primary-hover text-white dark:text-[#09090E] rounded-lg font-semibold text-sm px-4 py-2 flex items-center gap-1"
+          className="bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg font-semibold text-sm px-4 py-2 flex items-center gap-1"
         >
           <span className="material-symbols-outlined text-lg">add</span>New Account
         </button>
@@ -98,7 +98,7 @@ export default function AccountsClient() {
           <button
             type="submit"
             disabled={creating || !name.trim()}
-            className="bg-primary hover:bg-primary-hover text-white dark:text-[#09090E] rounded-lg font-semibold text-sm px-4 py-2 disabled:opacity-50"
+            className="bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg font-semibold text-sm px-4 py-2 disabled:opacity-50"
           >
             {creating ? 'Creating…' : 'Create'}
           </button>
@@ -110,7 +110,7 @@ export default function AccountsClient() {
           <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
         </div>
       ) : accounts.length === 0 ? (
-        <div className="text-center py-16 text-slate-400 dark:text-[#849396]">
+        <div className="text-center py-16 text-slate-400 dark:text-text-muted">
           <span className="material-symbols-outlined text-4xl mb-2 block">corporate_fare</span>
           No accounts yet. Create one to start organizing customers.
         </div>
@@ -124,7 +124,7 @@ export default function AccountsClient() {
             >
               <div className="flex items-center gap-3">
                 <span className="material-symbols-outlined text-primary">corporate_fare</span>
-                <span className="font-medium text-slate-900 dark:text-[#e4e1e9]">{a.name}</span>
+                <span className="font-medium text-slate-900 dark:text-text-main">{a.name}</span>
               </div>
               <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary">
                 {a.role}

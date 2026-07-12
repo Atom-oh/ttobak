@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo } from 'react';
 import type { TranscriptSegment } from '@/types/meeting';
+import { SPEAKER_COLORS } from '@/lib/speakerColors';
 
 interface TranscriptSectionProps {
   transcription: TranscriptSegment[];
@@ -15,15 +16,6 @@ interface SpeakerGroup {
   endTime: number;
   segments: TranscriptSegment[];
 }
-
-const SPEAKER_COLORS = [
-  { bg: 'bg-indigo-100 dark:bg-indigo-500/20', text: 'text-indigo-700 dark:text-indigo-300', dot: '#6366f1' },
-  { bg: 'bg-emerald-100 dark:bg-emerald-500/20', text: 'text-emerald-700 dark:text-emerald-300', dot: '#10b981' },
-  { bg: 'bg-amber-100 dark:bg-amber-500/20', text: 'text-amber-700 dark:text-amber-300', dot: '#f59e0b' },
-  { bg: 'bg-rose-100 dark:bg-rose-500/20', text: 'text-rose-700 dark:text-rose-300', dot: '#f43f5e' },
-  { bg: 'bg-cyan-100 dark:bg-cyan-500/20', text: 'text-cyan-700 dark:text-cyan-300', dot: '#06b6d4' },
-  { bg: 'bg-purple-100 dark:bg-purple-500/20', text: 'text-purple-700 dark:text-purple-300', dot: '#a855f7' },
-];
 
 function formatTimestamp(seconds: number): string {
   const hrs = Math.floor(seconds / 3600);

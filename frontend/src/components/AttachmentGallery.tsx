@@ -98,7 +98,7 @@ function AttachmentCard({
   return (
     <div
       onClick={onClick}
-      className="group relative aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-white/10 cursor-pointer bg-white dark:bg-[#0e0e13] transition-all duration-300 hover:shadow-lg"
+      className="group relative aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-white/10 cursor-pointer bg-white dark:bg-surface-lowest transition-all duration-300 hover:shadow-lg"
     >
       {isImage ? (
         <>

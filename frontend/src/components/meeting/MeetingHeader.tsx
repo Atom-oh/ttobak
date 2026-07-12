@@ -91,7 +91,7 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
   return (
     <>
       {/* Breadcrumbs - Desktop */}
-      <div className="hidden lg:flex items-center gap-1.5 text-sm text-slate-400 dark:text-[#849396] mb-8">
+      <div className="hidden lg:flex items-center gap-1.5 text-sm text-slate-400 dark:text-text-muted mb-8">
         <Link href="/" className="hover:text-slate-900 dark:hover:text-text-main transition-colors">Meetings</Link>
         <span className="material-symbols-outlined text-base">chevron_right</span>
         <span className="text-slate-900 dark:text-text-main font-medium">{meeting.title}</span>
@@ -101,11 +101,11 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
       <header className="mb-8 lg:mb-10">
         <div className="flex items-center gap-2 mb-3">
           {meeting.tags?.[0] && (
-            <span className="bg-slate-900 dark:bg-[#00E5FF]/10 text-white dark:text-[#00E5FF] dark:border dark:border-[#00E5FF]/20 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded">
+            <span className="bg-slate-900 dark:bg-white/5 text-white dark:text-text-secondary dark:border dark:border-white/10 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded">
               {meeting.tags[0]}
             </span>
           )}
-          <span className="text-slate-400 dark:text-[#849396] text-xs">
+          <span className="text-slate-400 dark:text-text-muted text-xs">
             {formatDate(meeting.date)} · {formatTime(meeting.date)}
           </span>
         </div>
@@ -119,12 +119,12 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
               if (e.key === 'Enter') saveTitle();
               if (e.key === 'Escape') { setEditTitle(meeting.title); setIsEditingTitle(false); }
             }}
-            className="w-full text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-[var(--font-headline)] dark:text-[#00E5FF] mb-4 bg-transparent border-b-2 border-primary dark:border-[#00E5FF] outline-none text-slate-900"
+            className="w-full text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-primary mb-4 bg-transparent border-b-2 border-primary outline-none text-slate-900"
           />
         ) : (
           <h1
             onClick={() => { setEditTitle(meeting.title); setIsEditingTitle(true); }}
-            className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-[var(--font-headline)] dark:neon-text-cyan mb-4 cursor-pointer group"
+            className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:neon-text-cyan mb-4 cursor-pointer group"
             title="클릭하여 제목 수정"
           >
             {meeting.title}
@@ -140,7 +140,7 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
         <div className="flex flex-wrap items-center gap-1.5 mb-4 text-xs">
           {meeting.linkedMeetingIds && meeting.linkedMeetingIds.length > 0 ? (
             <>
-              <span className="text-slate-400 dark:text-[#849396] font-medium">
+              <span className="text-slate-400 dark:text-text-muted font-medium">
                 <span className="material-symbols-outlined text-sm align-middle mr-1">link</span>
                 연결된 이전 미팅:
               </span>
@@ -158,7 +158,7 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
           ) : null}
           <button
             onClick={() => setShowLinkPicker(true)}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-dashed border-slate-300 dark:border-white/15 text-slate-500 dark:text-text-muted hover:border-primary/40 hover:text-primary dark:hover:border-[#00E5FF]/40 dark:hover:text-[#00E5FF] transition-colors"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-dashed border-slate-300 dark:border-white/15 text-slate-500 dark:text-text-muted hover:border-primary/40 hover:text-primary transition-colors"
             title="이전 미팅 연결"
           >
             <span className="material-symbols-outlined text-sm">add_link</span>
@@ -183,7 +183,7 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
               {meeting.participants?.slice(0, 4).map((p) => (
                 <div
                   key={p.id}
-                  className="size-8 lg:size-9 rounded-full border-2 border-white dark:border-[#09090E] bg-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-500 overflow-hidden"
+                  className="size-8 lg:size-9 rounded-full border-2 border-white dark:border-background-dark bg-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-500 overflow-hidden"
                 >
                   {p.avatarUrl ? (
                     <img src={p.avatarUrl} alt={p.name} className="w-full h-full object-cover" />
@@ -193,12 +193,12 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
                 </div>
               ))}
               {(meeting.participants?.length || 0) > 4 && (
-                <div className="size-8 lg:size-9 rounded-full border-2 border-white dark:border-[#09090E] bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-500">
+                <div className="size-8 lg:size-9 rounded-full border-2 border-white dark:border-background-dark bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-500">
                   +{meeting.participants!.length - 4}
                 </div>
               )}
             </div>
-            <p className="text-xs text-slate-400 dark:text-[#849396] font-medium hidden lg:block">
+            <p className="text-xs text-slate-400 dark:text-text-muted font-medium hidden lg:block">
               {meeting.participants?.map((p) => p.name?.split(' ')[0]).slice(0, 3).join(', ')}
               {(meeting.participants?.length || 0) > 3 && ` and ${meeting.participants!.length - 3} others`}
             </p>

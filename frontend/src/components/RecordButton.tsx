@@ -522,7 +522,7 @@ export function RecordButton({
             <div className="relative flex items-center justify-center mb-8">
               <div className="absolute w-48 h-48 bg-primary/10 rounded-full animate-pulse" />
               <div className="absolute w-40 h-40 bg-primary/20 rounded-full" />
-              <div className="z-10 bg-white dark:bg-[#0e0e13] shadow-xl rounded-full w-32 h-32 flex items-center justify-center border-4 border-primary dark:shadow-[0_0_24px_rgba(0,229,255,0.15)]">
+              <div className="z-10 bg-white dark:bg-surface-lowest shadow-xl rounded-full w-32 h-32 flex items-center justify-center border-4 border-primary dark:shadow-[0_0_24px_rgba(0,229,255,0.15)]">
                 <span className="text-3xl font-bold text-primary tabular-nums tracking-tighter">{formatTime(elapsedTime)}</span>
               </div>
             </div>
@@ -539,7 +539,7 @@ export function RecordButton({
           </div>
 
           {/* PC: LIVE status bar */}
-          <div className="hidden lg:flex w-full items-center gap-6 bg-white dark:bg-[#0e0e13] glass-panel rounded-2xl shadow-sm border border-slate-200 dark:border-white/10 px-6 py-4 mb-8">
+          <div className="hidden lg:flex w-full items-center gap-6 bg-white dark:bg-surface-lowest glass-panel rounded-2xl shadow-sm border border-slate-200 dark:border-white/10 px-6 py-4 mb-8">
             {/* LIVE badge */}
             <div className="flex items-center gap-2 bg-red-50 dark:bg-red-500/10 px-3 py-1.5 rounded-full border border-red-200 dark:border-red-500/30 shrink-0">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
@@ -549,7 +549,7 @@ export function RecordButton({
             </div>
 
             {/* Timer */}
-            <span className="text-2xl font-bold text-slate-900 dark:text-white font-[var(--font-headline)] tabular-nums tracking-tight shrink-0">
+            <span className="text-2xl font-bold text-slate-900 dark:text-white font-headline tabular-nums tracking-tight shrink-0">
               {formatTime(elapsedTime)}
             </span>
 

@@ -164,11 +164,11 @@ function MobileMoreMenu({ meetingId }: { meetingId: string }) {
 function LiveTranscriptSection({ meeting }: { meeting: MeetingDetail }) {
   return (
     <section className="mb-12">
-      <h3 className="text-base font-bold flex items-center gap-2 mb-4 dark:font-[var(--font-headline)] dark:text-text-main">
-        <span className="material-symbols-outlined text-slate-400 dark:text-[#849396]">subtitles</span>
+      <h3 className="text-base font-bold flex items-center gap-2 mb-4 dark:font-headline dark:text-text-main">
+        <span className="material-symbols-outlined text-slate-400 dark:text-text-muted">subtitles</span>
         라이브 텍스트
       </h3>
-      <p className="text-slate-600 dark:text-[#BAC9CC] dark:font-[var(--font-body)] leading-relaxed whitespace-pre-wrap">
+      <p className="text-slate-600 dark:text-text-secondary dark:font-body leading-relaxed whitespace-pre-wrap">
         {meeting.transcriptA || meeting.content || '음성 인식 결과를 기다리는 중...'}
       </p>
     </section>
@@ -399,11 +399,11 @@ function MeetingDetailContent() {
   return (
     <AppLayout activePath="/">
       {/* Mobile Header */}
-      <header className="lg:hidden sticky top-0 z-10 flex items-center bg-white/90 dark:bg-[#09090E]/90 backdrop-blur-md p-4 border-b border-slate-200 dark:border-white/10 justify-between">
+      <header className="lg:hidden sticky top-0 z-10 flex items-center bg-white/90 dark:bg-background-dark/90 backdrop-blur-md p-4 border-b border-slate-200 dark:border-white/10 justify-between">
         <button onClick={() => router.back()} className="text-slate-700 dark:text-text-main flex size-10 items-center justify-center rounded-full hover:bg-slate-100 dark:hover:bg-white/5">
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
-        <h2 className="text-slate-900 dark:text-text-main text-sm font-bold dark:font-[var(--font-headline)] flex-1 text-center">Meeting Report</h2>
+        <h2 className="text-slate-900 dark:text-text-main text-sm font-bold dark:font-headline flex-1 text-center">Meeting Report</h2>
         <MobileMoreMenu meetingId={meetingId} />
       </header>
 
@@ -513,12 +513,12 @@ function MeetingDetailContent() {
           {/* Meeting Notes */}
           {meeting.notes && (
             <section className="mb-12">
-              <h3 className="text-base font-bold flex items-center gap-2 mb-4 dark:font-[var(--font-headline)] dark:text-text-main">
-                <span className="material-symbols-outlined text-slate-400 dark:text-[#849396]">edit_note</span>
+              <h3 className="text-base font-bold flex items-center gap-2 mb-4 dark:font-headline dark:text-text-main">
+                <span className="material-symbols-outlined text-slate-400 dark:text-text-muted">edit_note</span>
                 미팅 노트
               </h3>
               <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-5 dark:border dark:border-white/10">
-                <p className="text-slate-700 dark:text-[#BAC9CC] dark:font-[var(--font-body)] leading-relaxed whitespace-pre-wrap text-sm">
+                <p className="text-slate-700 dark:text-text-secondary dark:font-body leading-relaxed whitespace-pre-wrap text-sm">
                   {meeting.notes}
                 </p>
               </div>
@@ -540,8 +540,8 @@ function MeetingDetailContent() {
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
               <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-6 max-w-lg w-full dark:border dark:border-white/10">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-slate-900 dark:text-text-main dark:font-[var(--font-headline)]">Upload Files</h3>
-                  <button onClick={() => setShowUploader(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-[#849396]">
+                  <h3 className="font-bold text-slate-900 dark:text-text-main dark:font-headline">Upload Files</h3>
+                  <button onClick={() => setShowUploader(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-text-muted">
                     <span className="material-symbols-outlined">close</span>
                   </button>
                 </div>
@@ -574,7 +574,7 @@ function MeetingDetailContent() {
 
           {/* Inline Q&A - mobile only */}
           <section className="lg:hidden border-t border-slate-200 dark:border-white/10 pt-8">
-            <h2 className="text-lg font-bold flex items-center gap-2 text-slate-900 dark:text-text-main dark:font-[var(--font-headline)] mb-6">
+            <h2 className="text-lg font-bold flex items-center gap-2 text-slate-900 dark:text-text-main dark:font-headline mb-6">
               <span className="material-symbols-outlined">question_answer</span>
               Meeting Q&A
             </h2>

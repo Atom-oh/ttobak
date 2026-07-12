@@ -14,33 +14,33 @@ function AuthScreen() {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
 
   return (
-    <div className="min-h-screen flex items-center justify-center overflow-hidden relative bg-[#f6f6f8] dark:bg-[#09090E]">
+    <div className="min-h-screen flex items-center justify-center overflow-hidden relative bg-[#f6f6f8] dark:bg-background-dark">
       {/* Crystal Polygon Background — dark mode only */}
       <div className="hidden dark:block absolute inset-0 z-0 pointer-events-none overflow-hidden">
         {/* Large crystal — top right */}
         <div
           className="absolute -top-20 -right-10 w-[28rem] h-[28rem] opacity-[0.07]"
-          style={{ clipPath: 'polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%)', background: 'linear-gradient(160deg, #00E5FF 0%, #131318 60%)' }}
+          style={{ clipPath: 'polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%)', background: 'linear-gradient(160deg, var(--primary) 0%, var(--surface) 60%)' }}
         />
         {/* Medium crystal — bottom left */}
         <div
           className="absolute -bottom-16 -left-12 w-[22rem] h-[22rem] opacity-[0.06]"
-          style={{ clipPath: 'polygon(30% 0%, 100% 20%, 80% 100%, 0% 80%)', background: 'linear-gradient(200deg, #B026FF 0%, #131318 70%)' }}
+          style={{ clipPath: 'polygon(30% 0%, 100% 20%, 80% 100%, 0% 80%)', background: 'linear-gradient(200deg, var(--accent) 0%, var(--surface) 70%)' }}
         />
         {/* Small crystal — center left */}
         <div
           className="absolute top-1/3 left-[10%] w-[14rem] h-[14rem] opacity-[0.05]"
-          style={{ clipPath: 'polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%)', background: 'linear-gradient(140deg, #00E5FF 0%, transparent 80%)' }}
+          style={{ clipPath: 'polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%)', background: 'linear-gradient(140deg, var(--primary) 0%, transparent 80%)' }}
         />
         {/* Tiny crystal — top left accent */}
         <div
           className="absolute top-[15%] left-[25%] w-[8rem] h-[8rem] opacity-[0.04]"
-          style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)', background: 'linear-gradient(180deg, #e5b5ff 0%, transparent 70%)' }}
+          style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)', background: 'linear-gradient(180deg, var(--secondary) 0%, transparent 70%)' }}
         />
         {/* Edge crystal — right side */}
         <div
           className="absolute bottom-1/4 right-[8%] w-[10rem] h-[16rem] opacity-[0.04]"
-          style={{ clipPath: 'polygon(20% 0%, 100% 10%, 80% 100%, 0% 90%)', background: 'linear-gradient(220deg, #00E5FF 10%, #B026FF 90%)' }}
+          style={{ clipPath: 'polygon(20% 0%, 100% 10%, 80% 100%, 0% 90%)', background: 'linear-gradient(220deg, var(--primary) 10%, var(--accent) 90%)' }}
         />
         {/* Ambient glow behind crystals */}
         <div className="absolute -top-40 -left-40 w-[40rem] h-[40rem] bg-[radial-gradient(circle,rgba(0,229,255,0.08)_0%,transparent_70%)] blur-[120px]" />
@@ -61,10 +61,10 @@ function AuthScreen() {
           </div>
           {/* Dark mode: neon headline */}
           <div className="hidden dark:block">
-            <h1 className="font-[var(--font-headline)] text-4xl md:text-5xl font-bold tracking-tight text-[#00E5FF] drop-shadow-[0_0_12px_rgba(0,229,255,0.6)]">
+            <h1 className="font-headline text-4xl md:text-5xl font-bold tracking-tight text-primary drop-shadow-[0_0_12px_rgba(0,229,255,0.6)]">
               TTOBAK Assist
             </h1>
-            <p className="font-[var(--font-body)] text-[#bac9cc] mt-3 text-sm tracking-wide opacity-70">Intelligence redefined for the obsidian era</p>
+            <p className="font-body text-text-secondary mt-3 text-sm tracking-wide opacity-70">Intelligence redefined for the obsidian era</p>
           </div>
         </div>
 
@@ -172,10 +172,10 @@ export default function HomePage() {
       : 'help_outline';
   const moodAccent =
     dominantSentiment === 'positive'
-      ? 'text-[#00E5FF]'
+      ? 'text-primary'
       : dominantSentiment === 'negative'
-      ? 'text-[#B026FF]'
-      : 'text-[#849396]';
+      ? 'text-accent'
+      : 'text-text-muted';
 
   const tagCounts = meetings
     .flatMap((m) => m.tags ?? [])
@@ -227,12 +227,12 @@ export default function HomePage() {
         {/* Desktop Title — Dark mode: Stitch "TTOBAK Assist" welcome */}
         <div className="hidden dark:lg:block px-8 pt-8 pb-2 max-w-7xl mx-auto w-full">
           <div className="mb-8">
-            <h2 className="font-[var(--font-headline)] text-4xl font-bold tracking-tight text-[#00E5FF] drop-shadow-[0_0_12px_rgba(0,229,255,0.5)]">
+            <h2 className="font-headline text-4xl font-bold tracking-tight text-primary drop-shadow-[0_0_12px_rgba(0,229,255,0.5)]">
               TTOBAK Assist
             </h2>
-            <p className="font-[var(--font-body)] text-[#bac9cc] mt-2 text-sm tracking-wide">
+            <p className="font-body text-text-secondary mt-2 text-sm tracking-wide">
               Welcome back{user?.name ? `, ${user.name}` : ''}. Your AI cluster has processed{' '}
-              <span className="text-[#00E5FF]">{meetings.length}</span> meeting{meetings.length !== 1 ? 's' : ''}.
+              <span className="text-primary">{meetings.length}</span> meeting{meetings.length !== 1 ? 's' : ''}.
             </p>
           </div>
 
@@ -240,14 +240,14 @@ export default function HomePage() {
           <div className="flex gap-3 mb-8">
             <Link
               href="/record?mode=upload"
-              className="glass-panel rounded-lg px-5 py-2.5 text-sm font-semibold text-[#00E5FF] hover:border-[#00E5FF]/30 hover:shadow-[0_0_15px_rgba(0,229,255,0.15)] transition-all flex items-center gap-2"
+              className="glass-panel rounded-lg px-5 py-2.5 text-sm font-semibold text-primary hover:border-primary/30 hover:shadow-[0_0_15px_rgba(0,229,255,0.15)] transition-all flex items-center gap-2"
             >
               <span className="material-symbols-outlined text-lg">upload</span>
               Upload Audio
             </Link>
             <Link
               href="/record"
-              className="glass-panel rounded-lg px-5 py-2.5 text-sm font-semibold text-[#B026FF] hover:border-[#B026FF]/30 hover:shadow-[0_0_15px_rgba(176,38,255,0.15)] transition-all flex items-center gap-2"
+              className="glass-panel rounded-lg px-5 py-2.5 text-sm font-semibold text-accent hover:border-accent/30 hover:shadow-[0_0_15px_rgba(176,38,255,0.15)] transition-all flex items-center gap-2"
             >
               <span className="material-symbols-outlined text-lg">play_circle</span>
               Start Engine
@@ -258,22 +258,22 @@ export default function HomePage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
             {/* Activity */}
             <div className="glass-panel rounded-xl p-5">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#849396] mb-2">Activity</p>
-              <p className="font-[var(--font-headline)] text-2xl font-bold text-[#e4e1e9]">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">Activity</p>
+              <p className="font-headline text-2xl font-bold text-text-main">
                 {meetings.length > 0
                   ? `${(meetings.reduce((sum, m) => sum + (m.duration || 0), 0) / 3600).toFixed(1)} Hrs`
                   : '0.0 Hrs'}
               </p>
-              <p className="font-[var(--font-body)] text-xs text-[#bac9cc] mt-1 tracking-wide">
+              <p className="font-body text-xs text-text-secondary mt-1 tracking-wide">
                 Total airtime · {meetings.length} meeting{meetings.length !== 1 ? 's' : ''}
               </p>
             </div>
 
             {/* Insights */}
             <div className="glass-panel rounded-xl p-5">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#849396] mb-2">Insights</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">Insights</p>
               <div className="flex items-center gap-2">
-                <p className={`font-[var(--font-headline)] text-2xl font-bold ${dominantSentiment ? moodAccent : 'text-[#e4e1e9]'}`}>
+                <p className={`font-headline text-2xl font-bold ${dominantSentiment ? moodAccent : 'text-text-main'}`}>
                   {moodLabel}
                 </p>
                 <span className={`material-symbols-outlined text-xl ${moodAccent}`}>{moodIcon}</span>
@@ -283,13 +283,13 @@ export default function HomePage() {
                   topTags.map((t) => (
                     <span
                       key={t}
-                      className="px-2 py-0.5 rounded-full bg-[#00E5FF]/10 text-[#00E5FF] text-xs font-[var(--font-body)]"
+                      className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-body"
                     >
                       {t}
                     </span>
                   ))
                 ) : (
-                  <span className="text-xs text-[#849396]">No tags yet</span>
+                  <span className="text-xs text-text-muted">No tags yet</span>
                 )}
               </div>
             </div>
@@ -297,7 +297,7 @@ export default function HomePage() {
 
           {/* Section header */}
           <div className="mb-2">
-            <h3 className="text-xs font-bold uppercase tracking-widest text-[#849396]">Recent Meeting Capsules</h3>
+            <h3 className="text-xs font-bold uppercase tracking-widest text-text-muted">Recent Meeting Capsules</h3>
           </div>
         </div>
 
@@ -310,7 +310,7 @@ export default function HomePage() {
             <div className="flex justify-center py-6">
               <button
                 onClick={handleLoadMore}
-                className="px-6 py-2.5 bg-white dark:bg-transparent border border-slate-200 dark:border-white/10 rounded-lg text-sm font-semibold text-slate-700 dark:text-[#bac9cc] hover:bg-slate-50 dark:hover:bg-white/5 dark:hover:border-[#00E5FF]/30 transition-colors flex items-center gap-2"
+                className="px-6 py-2.5 bg-white dark:bg-transparent border border-slate-200 dark:border-white/10 rounded-lg text-sm font-semibold text-slate-700 dark:text-text-secondary hover:bg-slate-50 dark:hover:bg-white/5 dark:hover:border-primary/30 transition-colors flex items-center gap-2"
               >
                 <span className="material-symbols-outlined text-lg">expand_more</span>
                 Load More

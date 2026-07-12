@@ -88,7 +88,7 @@ export function QAPanel({ meetingId }: QAPanelProps) {
   };
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-[#0e0e13] rounded-xl lg:rounded-none border border-slate-200 dark:border-white/10 lg:border-0">
+    <div className="flex flex-col h-full bg-white dark:bg-surface-lowest rounded-xl lg:rounded-none border border-slate-200 dark:border-white/10 lg:border-0">
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 dark:border-slate-800">
         <span className="material-symbols-outlined text-primary">question_answer</span>

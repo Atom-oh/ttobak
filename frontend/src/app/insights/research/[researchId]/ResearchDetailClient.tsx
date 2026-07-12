@@ -266,10 +266,10 @@ export default function ResearchDetailPage() {
     <AppLayout activePath="/insights">
       {/* Mobile Header */}
       <header className="lg:hidden flex items-center bg-white dark:bg-[var(--surface)] px-4 py-3 gap-3 border-b border-slate-100 dark:border-white/10 sticky top-0 z-10">
-        <button onClick={() => router.push('/insights')} className="text-slate-500 dark:text-[#849396]">
+        <button onClick={() => router.push('/insights')} className="text-slate-500 dark:text-text-muted">
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
-        <h1 className="text-slate-900 dark:text-[#e4e1e9] text-base font-semibold truncate">
+        <h1 className="text-slate-900 dark:text-text-main text-base font-semibold truncate">
           {research?.topic || 'Research'}
         </h1>
       </header>
@@ -282,7 +282,7 @@ export default function ResearchDetailPage() {
             {/* Back button (desktop) */}
             <button
               onClick={() => router.push('/insights')}
-              className="hidden lg:flex items-center gap-1.5 text-sm text-slate-500 dark:text-[#849396] hover:text-primary dark:hover:text-[#00E5FF] mb-6 transition-colors"
+              className="hidden lg:flex items-center gap-1.5 text-sm text-slate-500 dark:text-text-muted hover:text-primary mb-6 transition-colors"
             >
               <span className="material-symbols-outlined text-lg">arrow_back</span>
               Back to Insights
@@ -294,7 +294,7 @@ export default function ResearchDetailPage() {
               </div>
             ) : error ? (
               <div className="text-center py-20">
-                <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-[#849396]">error</span>
+                <span className="material-symbols-outlined text-4xl text-slate-300 dark:text-text-muted">error</span>
                 <p className="text-sm text-red-500 mt-2">{error}</p>
               </div>
             ) : research ? (
@@ -329,7 +329,7 @@ export default function ResearchDetailPage() {
 
                   {/* Topic + Export + Share */}
                   <div className="flex items-start justify-between gap-4">
-                    <h1 className="text-2xl lg:text-3xl font-bold text-slate-900 dark:text-[#e4e1e9] leading-tight">
+                    <h1 className="text-2xl lg:text-3xl font-bold text-slate-900 dark:text-text-main leading-tight">
                       {(activeContent || research).topic}
                     </h1>
                     {research.status === 'done' && displayContent && (
@@ -358,22 +358,22 @@ export default function ResearchDetailPage() {
                         <div ref={exportRef} className="relative">
                         <button
                           onClick={() => setExportOpen(!exportOpen)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-sm font-semibold text-slate-600 dark:text-[#bac9cc] hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-sm font-semibold text-slate-600 dark:text-text-secondary hover:bg-slate-50 dark:hover:bg-white/5 transition-colors"
                         >
                           <span className="material-symbols-outlined text-lg">download</span>
                           Export
                         </button>
                         {exportOpen && (
                           <div className="absolute right-0 mt-2 w-52 bg-white dark:bg-[#1a1625] rounded-xl shadow-lg border border-slate-200 dark:border-white/10 p-1 z-50">
-                            <button onClick={handleCopyMarkdown} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 text-sm text-slate-700 dark:text-[#bac9cc]">
+                            <button onClick={handleCopyMarkdown} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 text-sm text-slate-700 dark:text-text-secondary">
                               <span className="material-symbols-outlined text-lg text-slate-400">{copied ? 'check' : 'content_copy'}</span>
                               {copied ? 'Copied!' : 'Copy Markdown'}
                             </button>
-                            <button onClick={handleDownloadMarkdown} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 text-sm text-slate-700 dark:text-[#bac9cc]">
+                            <button onClick={handleDownloadMarkdown} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 text-sm text-slate-700 dark:text-text-secondary">
                               <span className="material-symbols-outlined text-lg text-slate-400">description</span>
                               Download .md
                             </button>
-                            <button onClick={handleExportNotion} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 text-sm text-slate-700 dark:text-[#bac9cc]">
+                            <button onClick={handleExportNotion} className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-slate-100 dark:hover:bg-white/5 text-sm text-slate-700 dark:text-text-secondary">
                               <span className="material-symbols-outlined text-lg text-slate-400">open_in_new</span>
                               Notion
                             </button>
@@ -390,7 +390,7 @@ export default function ResearchDetailPage() {
                   </div>
 
                   {/* Meta */}
-                  <div className="flex flex-wrap items-center gap-3 mt-4 text-sm text-slate-500 dark:text-[#849396]">
+                  <div className="flex flex-wrap items-center gap-3 mt-4 text-sm text-slate-500 dark:text-text-muted">
                     {research.sourceCount != null && (
                       <span className="flex items-center gap-1">
                         <span className="material-symbols-outlined text-base">source</span>
@@ -422,11 +422,11 @@ export default function ResearchDetailPage() {
                 {(research.status === 'running' || research.status === 'approved') && (
                   <div className="glass-panel rounded-2xl p-8 flex flex-col items-center justify-center gap-4">
                     <div className="animate-spin rounded-full h-10 w-10 border-2 border-primary border-t-transparent" />
-                    <p className="text-sm font-medium text-slate-700 dark:text-[#bac9cc]">
+                    <p className="text-sm font-medium text-slate-700 dark:text-text-secondary">
                       {research.status === 'approved' ? 'Starting research...' : 'Research in progress...'}
                     </p>
                     {elapsed && (
-                      <p className="text-xs text-slate-400 dark:text-[#849396] tabular-nums">Elapsed: {elapsed}</p>
+                      <p className="text-xs text-slate-400 dark:text-text-muted tabular-nums">Elapsed: {elapsed}</p>
                     )}
                   </div>
                 )}
