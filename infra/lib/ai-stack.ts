@@ -11,6 +11,7 @@ export interface AiStackProps extends cdk.StackProps {
   table: dynamodb.ITable;
   kbBucket: s3.IBucket;
   agentCoreRuntimeArn?: string;
+  userPoolArn: string;
 }
 
 export class AiStack extends cdk.Stack {
@@ -92,6 +93,22 @@ export class AiStack extends cdk.Stack {
         effect: iam.Effect.ALLOW,
         actions: ['cognito-idp:ListUsers'],
         resources: ['*'],
+      })
+    );
+
+    // Admin user invitation — scoped to this User Pool only. AdminCreateUser
+    // triggers Cognito's built-in invite email (username + temp password, no
+    // login link); AdminAddUserToGroup adds the new user to "admins" when
+    // requested by the invite-user endpoint.
+    this.apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'CognitoAdminUserManagement',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'cognito-idp:AdminCreateUser',
+          'cognito-idp:AdminAddUserToGroup',
+        ],
+        resources: [props.userPoolArn],
       })
     );
 

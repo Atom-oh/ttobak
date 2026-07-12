@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useAuth } from './AuthProvider';
+import { isNewPasswordRequired, NewPasswordRequiredResult } from '@/lib/auth';
 
 interface LoginFormProps {
   onSwitchToSignUp?: () => void;
@@ -9,12 +10,15 @@ interface LoginFormProps {
 }
 
 export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps) {
-  const { login } = useAuth();
+  const { login, completeNewPassword } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [challenge, setChallenge] = useState<NewPasswordRequiredResult | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,13 +26,118 @@ export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps
     setIsLoading(true);
 
     try {
-      await login(email, password);
+      const result = await login(email, password);
+      if (isNewPasswordRequired(result)) {
+        setChallenge(result);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {
       setIsLoading(false);
     }
   };
+
+  const handleCompleteNewPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    if (newPassword !== confirmNewPassword) {
+      setError('비밀번호가 일치하지 않습니다');
+      return;
+    }
+    if (newPassword.length < 8) {
+      setError('비밀번호는 8자 이상이어야 합니다');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      await completeNewPassword(challenge!, newPassword);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to set new password');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (challenge) {
+    return (
+      <div className="w-full">
+        <div className="text-center mb-6">
+          <h2 className="text-xl font-bold text-slate-900 dark:font-[var(--font-headline)] dark:text-[#00E5FF]">
+            새 비밀번호 설정
+          </h2>
+          <p className="text-slate-600 dark:text-[#bac9cc] mt-1 text-sm dark:font-[var(--font-body)]">
+            최초 로그인입니다. 계속하려면 새 비밀번호를 설정해주세요
+          </p>
+        </div>
+
+        <form onSubmit={handleCompleteNewPassword} className="space-y-5 dark:space-y-6">
+          {error && (
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg dark:rounded-xl p-3">
+              <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>
+            </div>
+          )}
+
+          <div className="space-y-1.5 dark:space-y-2">
+            <label
+              htmlFor="new-password"
+              className="block text-sm font-medium text-slate-700 dark:font-[var(--font-headline)] dark:text-[#8B949E] dark:text-[13px] dark:font-medium dark:uppercase dark:tracking-wide dark:ml-1"
+            >
+              <span className="dark:hidden">새 비밀번호</span>
+              <span className="hidden dark:inline">New Password</span>
+            </label>
+            <div className="relative group">
+              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-[#849396] group-focus-within:text-primary dark:group-focus-within:text-[#00E5FF] transition-colors text-lg">
+                lock
+              </span>
+              <input
+                id="new-password"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                required
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all dark:bg-black/30 dark:border-white/10 dark:h-12 dark:py-0 dark:text-white dark:placeholder-[#849396]/40 dark:focus:ring-0 dark:focus:border-[#00E5FF] dark:focus:shadow-[0_0_12px_rgba(0,229,255,0.2)]"
+                placeholder="8자 이상 입력하세요"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1.5 dark:space-y-2">
+            <label
+              htmlFor="confirm-new-password"
+              className="block text-sm font-medium text-slate-700 dark:font-[var(--font-headline)] dark:text-[#8B949E] dark:text-[13px] dark:font-medium dark:uppercase dark:tracking-wide dark:ml-1"
+            >
+              <span className="dark:hidden">새 비밀번호 확인</span>
+              <span className="hidden dark:inline">Confirm New Password</span>
+            </label>
+            <div className="relative group">
+              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-[#849396] group-focus-within:text-primary dark:group-focus-within:text-[#00E5FF] transition-colors text-lg">
+                lock_reset
+              </span>
+              <input
+                id="confirm-new-password"
+                type="password"
+                value={confirmNewPassword}
+                onChange={(e) => setConfirmNewPassword(e.target.value)}
+                required
+                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all dark:bg-black/30 dark:border-white/10 dark:h-12 dark:py-0 dark:text-white dark:placeholder-[#849396]/40 dark:focus:ring-0 dark:focus:border-[#00E5FF] dark:focus:shadow-[0_0_12px_rgba(0,229,255,0.2)]"
+                placeholder="비밀번호를 다시 입력하세요"
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="w-full bg-primary hover:bg-primary/90 text-white font-semibold py-2.5 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#00E5FF] dark:text-[#001f24] dark:font-[var(--font-headline)] dark:font-bold dark:py-4 dark:rounded-xl dark:shadow-[0_0_20px_rgba(0,229,255,0.4)] dark:hover:scale-[1.02] dark:active:scale-[0.98] dark:text-lg dark:tracking-tight"
+          >
+            {isLoading ? '설정 중...' : '비밀번호 설정하고 로그인'}
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full">

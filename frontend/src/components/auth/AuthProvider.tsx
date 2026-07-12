@@ -2,13 +2,15 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AuthUser, getCurrentUser, signIn, signOut, signUp, confirmSignUp } from '@/lib/auth';
+import { AuthUser, getCurrentUser, signIn, signOut, signUp, confirmSignUp, completeNewPassword, isNewPasswordRequired, NewPasswordRequiredResult, SignInResult } from '@/lib/auth';
 
 interface AuthContextType {
   user: AuthUser | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  isAdmin: boolean;
+  login: (email: string, password: string) => Promise<SignInResult>;
+  completeNewPassword: (challenge: NewPasswordRequiredResult, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
   register: (email: string, password: string, name?: string) => Promise<void>;
   confirmRegistration: (email: string, code: string) => Promise<void>;
@@ -53,7 +55,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     // Dev mode: skip Cognito auth when env var is set
     if (process.env.NEXT_PUBLIC_DEV_AUTH === 'true') {
-      setUser({ userId: 'dev-user', email: 'dev@ttobak.io', name: 'Dev User' });
+      setUser({ userId: 'dev-user', email: 'dev@ttobak.io', name: 'Dev User', groups: ['admins'], isAdmin: true });
       setIsLoading(false);
       return;
     }
@@ -64,9 +66,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
-    const authUser = await signIn(email, password);
-    setUser(authUser);
+    const result = await signIn(email, password);
+    if (!isNewPasswordRequired(result)) {
+      setUser(result);
+    }
+    return result;
   }, []);
+
+  const completeNewPasswordAction = useCallback(
+    async (challenge: NewPasswordRequiredResult, newPassword: string) => {
+      const authUser = await completeNewPassword(challenge, newPassword);
+      setUser(authUser);
+    },
+    []
+  );
 
   const logout = useCallback(async () => {
     await signOut();
@@ -87,7 +100,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         isLoading,
         isAuthenticated: !!user,
+        isAdmin: !!user?.isAdmin,
         login,
+        completeNewPassword: completeNewPasswordAction,
         logout,
         register,
         confirmRegistration,

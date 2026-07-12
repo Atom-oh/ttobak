@@ -9,11 +9,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	"github.com/aws/aws-sdk-go-v2/service/translate"
 	"github.com/awslabs/aws-lambda-go-api-proxy/chi"
@@ -56,7 +56,7 @@ func init() {
 	if kbBucketName == "" {
 		kbBucketName = "ttobak-kb"
 	}
-	kbID := os.Getenv("KB_ID")                     // Bedrock Knowledge Base ID
+	kbID := os.Getenv("KB_ID")                      // Bedrock Knowledge Base ID
 	kbDataSourceID := os.Getenv("KB_DATASOURCE_ID") // Bedrock Data Source ID
 	frontendBaseURL := os.Getenv("FRONTEND_BASE_URL")
 
@@ -86,7 +86,7 @@ func init() {
 		cryptoService = service.NewCryptoService(kmsClient, kmsKeyID)
 	}
 	exportHandler := handler.NewExportHandler(meetingService, notionService, repo, cryptoService, frontendBaseURL)
-	settingsHandler := handler.NewSettingsHandler(repo, cryptoService, notionService)
+	settingsHandler := handler.NewSettingsHandler(repo, cryptoService, notionService, meetingService)
 	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
 	dictService := service.NewDictionaryService(dictRepo, transcribeClient)
 	dictHandler := handler.NewDictionaryHandler(dictService)
@@ -195,6 +195,12 @@ func init() {
 
 		// Allowed domains management
 		r.Put("/api/settings/allowed-domains", settingsHandler.SaveAllowedDomains)
+
+		// Admin-only routes
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequireAdmin)
+			r.Post("/api/settings/invite-user", settingsHandler.InviteUser)
+		})
 
 		// Dictionary routes
 		r.Get("/api/settings/dictionary", dictHandler.GetDictionary)

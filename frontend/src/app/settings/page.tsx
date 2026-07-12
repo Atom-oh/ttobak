@@ -6,9 +6,10 @@ import { IntegrationSettings } from '@/components/IntegrationSettings';
 import { CrawlerSettings } from '@/components/CrawlerSettings';
 import { McpGuide } from '@/components/McpGuide';
 import { CustomDictionary } from '@/components/CustomDictionary';
+import { InviteUser } from '@/components/InviteUser';
 
 export default function SettingsPage() {
-  const { user, isLoading, isAuthenticated } = useAuth();
+  const { user, isLoading, isAuthenticated, isAdmin } = useAuth();
 
   if (isLoading) {
     return (
@@ -73,6 +74,14 @@ export default function SettingsPage() {
             </h3>
             <IntegrationSettings />
           </section>
+
+          {/* User Invitation Section — admin only */}
+          {isAdmin && (
+            <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+              <h3 className="section-header mb-4">사용자 초대</h3>
+              <InviteUser />
+            </section>
+          )}
 
           {/* Custom Dictionary Section */}
           <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
