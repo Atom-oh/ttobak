@@ -10,6 +10,7 @@ import { FrontendStack } from '../lib/frontend-stack';
 import { CrawlerStack } from '../lib/crawler-stack';
 import { ResearchAgentStack } from '../lib/research-agent-stack';
 import { WhisperStack } from '../lib/whisper-stack';
+import { WebSearchGatewayStack } from '../lib/web-search-gateway-stack';
 
 const app = new cdk.App();
 
@@ -24,6 +25,14 @@ const usEast1Env = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
   region: 'us-east-1',
 };
+
+// Web Search Gateway (us-east-1 only — AWS Web Search connector constraint).
+// Consumed cross-region by the crawler Lambda + research-agent (SigV4 invoke).
+const webSearchGatewayStack = new WebSearchGatewayStack(app, 'TtobakWebSearchGatewayStack', {
+  env: usEast1Env,
+  crossRegionReferences: true,
+  description: 'TTOBAK AI Meeting Assistant - Web Search Gateway (AgentCore, us-east-1)',
+});
 
 // Stack 1: Storage first (Auth now depends on it for Pre Sign-Up Lambda DynamoDB access)
 const storageStack = new StorageStack(app, 'TtobakStorageStack', {
