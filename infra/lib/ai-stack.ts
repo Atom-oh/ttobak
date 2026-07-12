@@ -97,9 +97,9 @@ export class AiStack extends cdk.Stack {
     );
 
     // Admin user invitation — scoped to this User Pool only. AdminCreateUser
-    // triggers Cognito's built-in invite email (temp password + sign-in URL);
-    // AdminAddUserToGroup / AdminListGroupsForUser support the "admins" group
-    // used to gate the invite-user endpoint itself.
+    // triggers Cognito's built-in invite email (username + temp password, no
+    // login link); AdminAddUserToGroup adds the new user to "admins" when
+    // requested by the invite-user endpoint.
     this.apiRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CognitoAdminUserManagement',
@@ -107,7 +107,6 @@ export class AiStack extends cdk.Stack {
         actions: [
           'cognito-idp:AdminCreateUser',
           'cognito-idp:AdminAddUserToGroup',
-          'cognito-idp:AdminListGroupsForUser',
         ],
         resources: [props.userPoolArn],
       })

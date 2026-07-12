@@ -261,8 +261,9 @@ func isValidEmail(email string) bool {
 
 // InviteUser handles POST /api/settings/invite-user (admin-only, enforced by
 // middleware.RequireAdmin in the router). Creates a Cognito user with a
-// system-generated temporary password; Cognito emails the invite (sign-in
-// URL + temp password) directly — no SES/templating on our side.
+// system-generated temporary password; Cognito emails the invite (username +
+// temp password, no login link since no userInvitation template is
+// configured) directly — no SES/templating on our side.
 func (h *SettingsHandler) InviteUser(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

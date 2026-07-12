@@ -10,6 +10,7 @@ export function InviteUser() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,6 +20,7 @@ export function InviteUser() {
     setSubmitting(true);
     setError(null);
     setSuccess(null);
+    setWarning(null);
 
     try {
       const res = await settingsApi.inviteUser({
@@ -27,10 +29,13 @@ export function InviteUser() {
         admin: makeAdmin,
       });
       setSuccess(
-        `${res.email} 님에게 초대 이메일을 보냈습니다. 임시 비밀번호와 로그인 링크가 포함되어 있습니다.${
+        `${res.email} 님에게 초대 이메일을 보냈습니다. 임시 비밀번호가 포함되어 있습니다 — 로그인 주소는 별도로 안내해주세요.${
           res.addedToAdmins ? ' (관리자 권한 부여됨)' : ''
         }`
       );
+      if (makeAdmin && !res.addedToAdmins) {
+        setWarning(`${res.email} 계정은 생성됐지만 관리자 권한 부여에는 실패했습니다. 다시 시도하거나 직접 admins 그룹에 추가해주세요.`);
+      }
       setEmail('');
       setName('');
       setMakeAdmin(false);
@@ -47,7 +52,7 @@ export function InviteUser() {
   return (
     <div className="dark:glass-panel dark:rounded-xl dark:p-5 space-y-4">
       <p className="text-sm text-slate-600 dark:text-[#849396]">
-        이메일 주소를 입력하면 해당 사용자에게 로그인 링크와 임시 비밀번호가 담긴 초대 메일이 발송됩니다.
+        이메일 주소를 입력하면 해당 사용자에게 임시 비밀번호가 담긴 초대 메일이 발송됩니다 (로그인 주소는 포함되지 않으니 별도로 안내해주세요).
         초대받은 사용자는 최초 로그인 시 새 비밀번호를 설정하게 됩니다.
       </p>
 
@@ -59,6 +64,11 @@ export function InviteUser() {
       {success && (
         <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-lg p-3">
           <p className="text-emerald-700 dark:text-emerald-400 text-sm">{success}</p>
+        </div>
+      )}
+      {warning && (
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
+          <p className="text-amber-700 dark:text-amber-400 text-sm">{warning}</p>
         </div>
       )}
 

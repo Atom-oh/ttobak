@@ -308,7 +308,7 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
 - **Bedrock KB RAG**: `bedrock:Retrieve`, `bedrock:RetrieveAndGenerate`
 - **OpenSearch Serverless**: `aoss:APIAccessAll` on collection
 - **S3**: read from `audio/`, `images/`, `kb/`; write to `processed/`, `transcripts/`
-- **Cognito Admin (api Lambda only)**: `cognito-idp:AdminCreateUser`, `cognito-idp:AdminAddUserToGroup`, `cognito-idp:AdminListGroupsForUser` on the TTOBAK user pool (scoped via `userPoolArn` prop imported from AuthStack) — backs `POST /api/settings/invite-user`.
+- **Cognito Admin (api Lambda only)**: `cognito-idp:AdminCreateUser`, `cognito-idp:AdminAddUserToGroup` on the TTOBAK user pool (scoped via `userPoolArn` prop imported from AuthStack) — backs `POST /api/settings/invite-user`.
 
 ## 9. FrontendStack
 

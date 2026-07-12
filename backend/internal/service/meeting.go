@@ -443,9 +443,10 @@ var ErrUserAlreadyExists = errors.New("user already exists")
 var ErrAdminGroupAddFailed = errors.New("user invited but failed to add to admins group")
 
 // InviteUser creates a new Cognito user with a system-generated temporary
-// password and email delivery. Cognito sends the invite email itself
-// (sign-in URL + temp password) — no SES/templating needed on our side.
-// If admin is true, the new user is also added to the "admins" group.
+// password and email delivery. Cognito sends the invite email itself (the
+// default template: username + temp password, no login link) — no
+// SES/templating needed on our side. If admin is true, the new user is also
+// added to the "admins" group.
 func (s *MeetingService) InviteUser(ctx context.Context, email, name string, admin bool) error {
 	poolID := os.Getenv("COGNITO_USER_POOL_ID")
 	if poolID == "" {
