@@ -56,8 +56,10 @@ function buildAuthUser(payload: Record<string, unknown>): AuthUser {
 export interface NewPasswordRequiredResult {
   challenge: 'NEW_PASSWORD_REQUIRED';
   cognitoUser: CognitoUser;
-  /** Attributes Cognito returned alongside the challenge (e.g. email, name). Read-only/immutable ones are stripped before resubmission. */
+  /** Attributes Cognito returned alongside the challenge (e.g. email, name). */
   userAttributes: Record<string, string>;
+  /** Attribute names Cognito actually requires to complete the challenge — usually empty. */
+  requiredAttributes: string[];
 }
 
 export type SignInResult = AuthUser | NewPasswordRequiredResult;
@@ -148,11 +150,12 @@ export async function signIn(
       onFailure: (err) => {
         reject(err);
       },
-      newPasswordRequired: (userAttributes) => {
+      newPasswordRequired: (userAttributes, requiredAttributes) => {
         resolve({
           challenge: 'NEW_PASSWORD_REQUIRED',
           cognitoUser,
           userAttributes,
+          requiredAttributes: requiredAttributes ?? [],
         });
       },
     });
@@ -168,16 +171,17 @@ export async function completeNewPassword(
   newPassword: string
 ): Promise<AuthUser> {
   return new Promise((resolve, reject) => {
-    // Cognito rejects the challenge if immutable/read-only attributes
-    // (email_verified, sub, etc.) are echoed back — strip everything
-    // except mutable name-style attributes.
-    const { email_verified, phone_number_verified, sub, ...requiredAttributes } =
-      result.userAttributes;
-    void email_verified;
-    void phone_number_verified;
-    void sub;
+    // Cognito rejects the challenge if any attribute it didn't ask for is
+    // resubmitted (e.g. echoing back an already-set "email" throws
+    // "Cannot modify an already provided email") — only send attributes it
+    // actually listed as required.
+    const attributesToSubmit: Record<string, string> = {};
+    for (const name of result.requiredAttributes) {
+      const value = result.userAttributes[name];
+      if (value !== undefined) attributesToSubmit[name] = value;
+    }
 
-    result.cognitoUser.completeNewPasswordChallenge(newPassword, requiredAttributes, {
+    result.cognitoUser.completeNewPasswordChallenge(newPassword, attributesToSubmit, {
       onSuccess: (session: CognitoUserSession) => {
         const idToken = session.getIdToken();
         const payload = idToken.decodePayload();

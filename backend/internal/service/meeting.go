@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	cognitoidp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
+	cognitoidptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
