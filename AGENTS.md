@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e0067db8e4fd · generated-at: 2026-07-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 8e4798fd1c65 · generated-at: 2026-07-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -48,5 +48,5 @@ cd infra && npx cdk synth && npm test
 - **`updateAttachmentByKey` not implemented** (`process-image/main.go`, tracked HIGH): image-processing results aren't yet saved to DynamoDB (needs meetingId parsing from the S3 key path). Known gap, not a new bug to flag.
 - **JWT signature verification**: `middleware.ParseVerifiedJWT` verifies signatures against Cognito JWKS (RS256, issuer + exp checked) — this is not a gap; don't re-raise "unverified JWT" findings.
 - **Hardcoded ACM ARN / domain / CORS origin / KB id in CDK**: known tech-debt, tracked; not a new-PR blocker unless the diff worsens it.
-- **`cdk deploy --all` is never used — always `TtobakGatewayStack --exclusively`**: without `--exclusively`, CDK deploys the full dependency chain including `TtobakKnowledgeStack`, which stages a deliberate (undeployed) Bedrock KB teardown that would apply for real. `TtobakAiStack` also imports `ttobak-agentcore-research-role` by ARN — that role must exist first (created out-of-band by the research-agent deploy pipeline). Don't flag the KnowledgeStack drift or this import as regressions.
+- **`cdk deploy --all` is never used — deploy each changed stack with `--exclusively`**: without `--exclusively`, CDK deploys the full dependency chain including `TtobakKnowledgeStack`, which stages a deliberate (undeployed) Bedrock KB teardown that would apply for real. But `--exclusively` skips dependencies, so a single `TtobakGatewayStack --exclusively` won't pick up sibling-stack changes — each changed stack is deployed individually in dependency order. `TtobakAiStack` also imports `ttobak-agentcore-research-role` by ARN — that role must exist first (created out-of-band by the research-agent deploy pipeline). Don't flag the KnowledgeStack drift or this import as regressions.
 - Default table/bucket names in Go differing from CDK defaults — no runtime impact (CDK injects env vars).

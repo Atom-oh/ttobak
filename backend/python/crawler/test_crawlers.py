@@ -335,6 +335,12 @@ class TestExtractSseJson(unittest.TestCase):
         payload = '{"result": {}}'
         self.assertEqual(news_crawler._extract_sse_json(f'  data: {payload}'), payload)
 
+    def test_prefers_result_frame_over_leading_notification_frame(self):
+        notification = '{"jsonrpc": "2.0", "method": "notifications/progress"}'
+        response = '{"jsonrpc": "2.0", "id": 1, "result": {"isError": false}}'
+        sse_body = f'event: message\ndata: {notification}\n\nevent: message\ndata: {response}\n\n'
+        self.assertEqual(news_crawler._extract_sse_json(sse_body), response)
+
 
 # ---------------------------------------------------------------------------
 # 8. news_crawler._gateway_web_search

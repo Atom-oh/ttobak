@@ -96,14 +96,23 @@ def _extract_sse_json(text: str) -> str:
     HTTP servers may respond with either a plain JSON body or an SSE event
     stream (one or more "event:"/"data:" lines per frame) for the same
     tools/call request — the client can't pick which one it gets. Returns
-    text unchanged if it's already plain JSON (starts with "{")."""
+    text unchanged if it's already plain JSON (starts with "{"). Among SSE
+    "data:" frames, prefers the one carrying the JSON-RPC response (has a
+    "result" or "error" key) so a leading notification frame doesn't get
+    mistaken for the answer; falls back to the last data frame.
+
+    Kept in sync with backend/python/crawler/news_crawler.py's copy."""
     if text.lstrip().startswith("{"):
         return text
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("data:"):
-            return line[len("data:"):].strip()
-    return text
+    data_frames = [
+        line.strip()[len("data:"):].strip()
+        for line in text.splitlines()
+        if line.strip().startswith("data:")
+    ]
+    for frame in data_frames:
+        if '"result"' in frame or '"error"' in frame:
+            return frame
+    return data_frames[-1] if data_frames else text
 
 
 def _sigv4_post(body_json: str) -> str:
@@ -152,6 +161,16 @@ def web_search(query: str, max_results: int = 10) -> str:
     })
     try:
         raw_response = _sigv4_post(body)
+    except RuntimeError as e:
+        # Config error (missing gateway URL / no credentials) — must be
+        # distinguishable from a genuine "no results" so the agent doesn't
+        # silently treat a misconfigured tool as an empty web.
+        logger.error(f"Web search misconfigured: {e}")
+        return json.dumps({"results": [], "message": "Web search is misconfigured"})
+    except Exception as e:
+        logger.warning(f"Web search transport failed for '{query}': {e}")
+        return json.dumps({"results": [], "message": "Web search failed"})
+    try:
         parsed = json.loads(raw_response)
         if "error" in parsed:
             logger.warning(f"Web search gateway returned a JSON-RPC error for '{query}': {parsed['error']}")
