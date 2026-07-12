@@ -111,9 +111,9 @@ const components: Components = {
         const el = document.getElementById(`ts-${segmentId}`);
         if (!el) return;
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.classList.add('ring-2', 'ring-primary/50', '');
+        el.classList.add('ring-2', 'ring-primary/50');
         window.setTimeout(() => {
-          el.classList.remove('ring-2', 'ring-primary/50', '');
+          el.classList.remove('ring-2', 'ring-primary/50');
         }, 1800);
       };
       return (
