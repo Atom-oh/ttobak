@@ -99,6 +99,8 @@ def _sigv4_post(body_json: str) -> str:
         raise RuntimeError("WEB_SEARCH_GATEWAY_URL is not set")
     session = botocore.session.get_session()
     credentials = session.get_credentials()
+    if credentials is None:
+        raise RuntimeError("No AWS credentials available for SigV4 signing")
     request = AWSRequest(
         method="POST",
         url=WEB_SEARCH_GATEWAY_URL,

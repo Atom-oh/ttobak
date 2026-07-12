@@ -254,7 +254,39 @@ class TestTechCrawlerNewDoc(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 5. news_crawler._sigv4_post config guard
+# 5. news_crawler.handler -- customUrls direct-fetch path
+# ---------------------------------------------------------------------------
+
+class TestHandlerCustomUrls(unittest.TestCase):
+    """Regression test for the customUrls loop in handler(): a fetched and
+    extracted custom URL must actually reach _process_article (previously
+    the _try_process call was dead code, mis-indented under a `continue`)."""
+
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', []))
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    @mock.patch.object(news_crawler, '_fetch_url')
+    @mock.patch.object(news_crawler, '_gateway_web_search', return_value=[])
+    def test_custom_url_with_sufficient_body_is_written(
+        self, mock_search, mock_fetch, mock_exists, mock_summarize, mock_s3, mock_meta,
+    ):
+        mock_fetch.return_value = (
+            '<html><body><p>' + 'This is a long enough paragraph for testing. ' * 5 + '</p></body></html>'
+        )
+
+        result = news_crawler.handler({
+            'sourceId': 'tech-news',
+            'customUrls': [{'url': 'https://example.com/custom', 'title': 'Custom Doc'}],
+        }, None)
+
+        self.assertEqual(result['docsAdded'], 1)
+        mock_s3.assert_called_once()
+        mock_meta.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 6. news_crawler._sigv4_post config guard
 # ---------------------------------------------------------------------------
 
 class TestSigv4PostConfigGuard(unittest.TestCase):
@@ -283,7 +315,7 @@ class TestSigv4PostConfigGuard(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 6. news_crawler._gateway_web_search
+# 7. news_crawler._gateway_web_search
 # ---------------------------------------------------------------------------
 
 class TestGatewayWebSearch(unittest.TestCase):
@@ -412,7 +444,7 @@ class TestGatewayWebSearch(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 6. news_crawler.process_article -- dedup
+# 8. news_crawler.process_article -- dedup
 # ---------------------------------------------------------------------------
 
 class TestNewsCrawlerDedupSkip(unittest.TestCase):
@@ -474,7 +506,7 @@ class TestProcessArticleGuards(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 7. news_crawler.process_article -- new article
+# 9. news_crawler.process_article -- new article
 # ---------------------------------------------------------------------------
 
 class TestNewsCrawlerNewArticle(unittest.TestCase):
@@ -503,7 +535,7 @@ class TestNewsCrawlerNewArticle(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 8. ingest_trigger.handler -- success
+# 10. ingest_trigger.handler -- success
 # ---------------------------------------------------------------------------
 
 class TestIngestTriggerSuccess(unittest.TestCase):
@@ -569,7 +601,7 @@ class TestIngestTriggerSuccess(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 9. ingest_trigger.handler -- no KB config
+# 11. ingest_trigger.handler -- no KB config
 # ---------------------------------------------------------------------------
 
 class TestIngestTriggerNoKBConfig(unittest.TestCase):

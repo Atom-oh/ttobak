@@ -24,7 +24,7 @@ cd frontend && npm run lint      # eslint
 
 # CDK
 cd infra && npx cdk synth        # synthesize all 11 stacks
-cd infra && npx cdk deploy --all # deploy everything
+cd infra && npx cdk deploy --all # deploy everything (see caveats below — not used for real deploys)
 cd infra && npm test             # jest tests
 
 # Deploy frontend to S3 + invalidate CloudFront
@@ -103,6 +103,7 @@ The news crawler Lambda (`ttobak-crawler-news`) gets `WEB_SEARCH_GATEWAY_URL` / 
 ### Medium
 - **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID are hardcoded in CDK stacks. Should be extracted to CDK context for multi-account/stage support.
 - **Single audio file per meeting**: `Meeting.AudioKey` is a single string — uploading a new file overwrites the previous one. Multi-file upload and linked follow-up meetings planned in ADR-014.
+- **`cdk deploy --all` is not actually used for deploys**: real deploys target `TtobakGatewayStack` specifically (`TtobakKnowledgeStack` stages a deliberate, undeployed Bedrock KB teardown that `deploy --all` would apply). `TtobakAiStack` also has an out-of-band precondition — `ttobak-agentcore-research-role` must already exist (see the `WEB_SEARCH_GATEWAY_URL` note above) — so a clean-environment `deploy --all` can fail on that import regardless. Deploy stacks individually in dependency order instead.
 
 ### Low
 - Default table/bucket names in Go don't match CDK defaults (no runtime impact since CDK injects env vars)
