@@ -27,6 +27,8 @@ const (
 	UserEmailKey ContextKey = "userEmail"
 	// UserNameKey is the context key for user name
 	UserNameKey ContextKey = "userName"
+	// UserGroupsKey is the context key for Cognito groups (cognito:groups claim)
+	UserGroupsKey ContextKey = "userGroups"
 )
 
 // JWKS types for Cognito public key fetching
@@ -65,15 +67,16 @@ func getEnvOrDefault(key, defaultVal string) string {
 
 // ALBOIDCClaims represents the claims in the ALB OIDC JWT
 type ALBOIDCClaims struct {
-	Sub           string `json:"sub"`
-	Email         string `json:"email"`
-	EmailVerified bool   `json:"email_verified"`
-	Name          string `json:"name"`
-	GivenName     string `json:"given_name"`
-	FamilyName    string `json:"family_name"`
-	Exp           int64  `json:"exp"`
-	Iss           string `json:"iss"`
-	TokenUse      string `json:"token_use"`
+	Sub           string   `json:"sub"`
+	Email         string   `json:"email"`
+	EmailVerified bool     `json:"email_verified"`
+	Name          string   `json:"name"`
+	GivenName     string   `json:"given_name"`
+	FamilyName    string   `json:"family_name"`
+	Groups        []string `json:"cognito:groups"`
+	Exp           int64    `json:"exp"`
+	Iss           string   `json:"iss"`
+	TokenUse      string   `json:"token_use"`
 }
 
 // OriginVerify rejects requests that did not come through CloudFront.
@@ -131,6 +134,7 @@ func Auth(next http.Handler) http.Handler {
 		ctx := r.Context()
 		ctx = context.WithValue(ctx, UserIDKey, claims.Sub)
 		ctx = context.WithValue(ctx, UserEmailKey, claims.Email)
+		ctx = context.WithValue(ctx, UserGroupsKey, claims.Groups)
 
 		// Build user name from available fields
 		name := claims.Name
@@ -205,6 +209,7 @@ func ParseVerifiedJWT(tokenStr string) (*ALBOIDCClaims, error) {
 		GivenName:  getStringClaim(mapClaims, "given_name"),
 		FamilyName: getStringClaim(mapClaims, "family_name"),
 		Iss:        getStringClaim(mapClaims, "iss"),
+		Groups:     getStringSliceClaim(mapClaims, "cognito:groups"),
 	}
 	if v, ok := mapClaims["email_verified"].(bool); ok {
 		claims.EmailVerified = v
@@ -221,6 +226,22 @@ func getStringClaim(claims jwt.MapClaims, key string) string {
 		return v
 	}
 	return ""
+}
+
+// getStringSliceClaim extracts a []string claim. Cognito encodes
+// "cognito:groups" as a JSON array of strings.
+func getStringSliceClaim(claims jwt.MapClaims, key string) []string {
+	raw, ok := claims[key].([]interface{})
+	if !ok {
+		return nil
+	}
+	groups := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			groups = append(groups, s)
+		}
+	}
+	return groups
 }
 
 // parseUnverifiedJWT decodes JWT payload with lightweight validation (fallback)
@@ -403,6 +424,36 @@ func GetUserName(ctx context.Context) string {
 		return name
 	}
 	return ""
+}
+
+// GetUserGroups extracts the Cognito groups (cognito:groups claim) from the request context
+func GetUserGroups(ctx context.Context) []string {
+	if groups, ok := ctx.Value(UserGroupsKey).([]string); ok {
+		return groups
+	}
+	return nil
+}
+
+// IsAdmin reports whether the authenticated user belongs to the "admins" Cognito group
+func IsAdmin(ctx context.Context) bool {
+	for _, g := range GetUserGroups(ctx) {
+		if g == "admins" {
+			return true
+		}
+	}
+	return false
+}
+
+// RequireAdmin is middleware that rejects requests from non-admin users with 403.
+// Must run after Auth so cognito:groups has already been populated in the context.
+func RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !IsAdmin(r.Context()) {
+			http.Error(w, `{"error":{"code":"FORBIDDEN","message":"admin access required"}}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // allowedOrigins for CORS validation

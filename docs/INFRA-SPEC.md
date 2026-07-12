@@ -45,6 +45,10 @@ TtobakApp (bin/ttobak.ts)
 ### User Pool Domain
 - Cognito 호스팅 도메인: `ttobak-auth-{accountId}`
 
+### Admins Group
+- **CfnUserPoolGroup** `admins` — 멤버는 ID 토큰의 `cognito:groups` 클레임에 `admins`가 포함되며, 백엔드 `middleware.RequireAdmin`이 이를 검사해 admin-only 엔드포인트(예: `POST /api/settings/invite-user`)를 게이팅한다.
+- 그룹은 CDK가 생성하지만 멤버는 그룹에 자동으로 들어가지 않는다 — `aws cognito-idp admin-add-user-to-group`으로 별도 등록 필요.
+
 ### Outputs
 - `UserPoolId`
 - `UserPoolClientId` (App Client)
@@ -304,6 +308,7 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
 - **Bedrock KB RAG**: `bedrock:Retrieve`, `bedrock:RetrieveAndGenerate`
 - **OpenSearch Serverless**: `aoss:APIAccessAll` on collection
 - **S3**: read from `audio/`, `images/`, `kb/`; write to `processed/`, `transcripts/`
+- **Cognito Admin (api Lambda only)**: `cognito-idp:AdminCreateUser`, `cognito-idp:AdminAddUserToGroup` on the TTOBAK user pool (scoped via `userPoolArn` prop imported from AuthStack) — backs `POST /api/settings/invite-user`.
 
 ## 9. FrontendStack
 

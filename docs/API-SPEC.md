@@ -868,6 +868,36 @@ DELETE /api/settings/integrations/notion
 Response: 204 No Content
 ```
 
+#### Invite User (admin-only)
+
+Creates a Cognito user with a system-generated temporary password. Cognito emails the invite directly (default template: username + temp password — no login link, since no `userInvitation` template is configured in `infra/lib/auth-stack.ts`) — no SES/templating on our side. The admin who invited the user is responsible for sharing the sign-in URL separately. The invitee's first sign-in returns a `NEW_PASSWORD_REQUIRED` challenge, handled client-side by `completeNewPassword()` in `frontend/src/lib/auth.ts`.
+
+Requires the caller's JWT `cognito:groups` claim to contain `admins` (enforced by `middleware.RequireAdmin`, backed by JWKS-verified signature checking in `middleware.ParseVerifiedJWT`).
+
+```
+POST /api/settings/invite-user
+Request:
+{
+  "email": "new.hire@amazon.com",
+  "name": "New Hire",       // optional
+  "admin": false             // optional, adds to "admins" group if true
+}
+
+Response: 201 Created
+{
+  "email": "new.hire@amazon.com",
+  "invited": true,
+  "addedToAdmins": false
+}
+```
+
+**Errors:**
+- `400 BAD_REQUEST` — email missing or invalid format
+- `403 FORBIDDEN` — caller is not in the `admins` group
+- `409 BAD_REQUEST` — a user with this email already exists
+
+**Partial success:** if `admin: true` but adding the user to the `admins` group fails after the account was already created and invited, the response is still `201 Created` with `addedToAdmins: false` rather than an error — the invite itself succeeded.
+
 ---
 
 ## Error Response Format

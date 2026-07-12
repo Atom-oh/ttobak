@@ -201,6 +201,20 @@ type AudioURLResponse struct {
 	AudioUrls []string `json:"audioUrls,omitempty"`
 }
 
+// InviteUserRequest represents the request body for inviting a new user (admin-only)
+type InviteUserRequest struct {
+	Email string `json:"email"`
+	Name  string `json:"name,omitempty"`
+	Admin bool   `json:"admin,omitempty"`
+}
+
+// InviteUserResponse represents the response after successfully inviting a user
+type InviteUserResponse struct {
+	Email         string `json:"email"`
+	Invited       bool   `json:"invited"`
+	AddedToAdmins bool   `json:"addedToAdmins"`
+}
+
 // NewErrorResponse creates a new error response
 func NewErrorResponse(code, message string) ErrorResponse {
 	return ErrorResponse{

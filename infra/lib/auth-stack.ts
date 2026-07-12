@@ -86,6 +86,15 @@ export class AuthStack extends cdk.Stack {
       },
     });
 
+    // Admins group — members get an "admins" entry in the cognito:groups JWT
+    // claim, checked by the Go backend to gate admin-only endpoints (e.g.
+    // inviting new users via AdminCreateUser).
+    new cognito.CfnUserPoolGroup(this, 'AdminsGroup', {
+      userPoolId: this.userPool.userPoolId,
+      groupName: 'admins',
+      description: 'TTOBAK administrators — can invite new users and manage settings',
+    });
+
     // App Client with callback URLs
     const callbackUrls = props?.cloudFrontDomain
       ? [`https://${props.cloudFrontDomain}/api/auth/callback`, 'http://localhost:3000/api/auth/callback']

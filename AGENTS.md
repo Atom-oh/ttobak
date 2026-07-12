@@ -1,5 +1,5 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 0205a5979c1c · generated-at: 2026-07-02 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
-> You are Codex, an external reviewer — project context below.
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: b89d94bf29f9 · generated-at: 2026-07-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+> You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
 
@@ -28,6 +28,7 @@ cd infra && npx cdk synth && npm test
 - **Sentinel errors**: services return `service.ErrForbidden` / `service.ErrNotFound`; handlers branch with `errors.Is()` and map to HTTP status (403/404). Do NOT string-match error text for control flow.
 - **DynamoDB single-table**: key schemas in `backend/internal/model/`. `ACCOUNT#{id}` is a shared partition (outside `USER#`); meetings under `USER#{id}`; GSI1 (`GSI1PK`/`GSI1SK`) for reverse lookup. S3 keys: `{audio|images|files}/{userId}/{meetingId}/...`.
 - **Frontend**: API via `src/lib/api.ts` (Bearer token, auto-refresh on 401); auth via Cognito SDK in `src/lib/auth.ts`; runtime config from `/config.json` (NOT build-time env). Error shape `{ error: { code, message } }`.
+- **Admin gating**: `middleware.RequireAdmin` checks the `admins` entry in the JWT's `cognito:groups` claim (backend-verified — see below). Admin-only endpoints (e.g. `POST /api/settings/invite-user`) sit behind it; frontend `isAdmin` display state is cosmetic only, never a substitute for this check.
 
 ## Banned Patterns / Security Mandates (CRITICAL — flag any violation)
 - **No public AWS resources.** ALL public traffic through CloudFront only. No Lambda Function URL with `AuthType: NONE`; no public ALB/NLB; S3 Block Public Access always on (serve via OAC); API Gateway reached only via CloudFront origin.
@@ -44,7 +45,8 @@ cd infra && npx cdk synth && npm test
 - Keep functions/files focused; follow existing patterns in the touched package.
 
 ## Known False-Positives (do NOT report)
-- **JWT signature not verified in `middleware/auth.go`**: intentional — Lambda@Edge (us-east-1) pre-validates JWT on `/api/*`; backend only decodes the payload. (Defense-in-depth gap is acknowledged, not a bug to re-raise.)
+- **`updateAttachmentByKey` not implemented** (`process-image/main.go`, tracked HIGH): image-processing results aren't yet saved to DynamoDB (needs meetingId parsing from the S3 key path). Known gap, not a new bug to flag.
+- **JWT signature verification**: `middleware.ParseVerifiedJWT` verifies signatures against Cognito JWKS (RS256, issuer + exp checked) — this is not a gap; don't re-raise "unverified JWT" findings.
 - **Hardcoded ACM ARN / domain / CORS origin / KB id in CDK**: known tech-debt, tracked; not a new-PR blocker unless the diff worsens it.
 - **`cdk deploy --all` is intentionally avoided**: `TtobakKnowledgeStack` stages a deliberate (undeployed) Bedrock KB teardown; deploys use `TtobakGatewayStack --exclusively`. Don't flag the KnowledgeStack drift as a regression.
 - Default table/bucket names in Go differing from CDK defaults — no runtime impact (CDK injects env vars).

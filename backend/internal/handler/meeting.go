@@ -198,21 +198,6 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auto-expire stuck transcribing/summarizing status after 30 minutes
-	if (result.Status == model.StatusTranscribing || result.Status == model.StatusSummarizing) &&
-		result.UpdatedAt != "" {
-		if updatedAt, parseErr := time.Parse(time.RFC3339, result.UpdatedAt); parseErr == nil {
-			if time.Since(updatedAt) > 30*time.Minute {
-				result.Status = model.StatusError
-				// Also update in DynamoDB so it doesn't stay stuck
-				if meeting, mErr := h.repo.GetMeetingByID(ctx, meetingID); mErr == nil && meeting != nil {
-					meeting.Status = model.StatusError
-					h.repo.UpdateMeeting(ctx, meeting)
-				}
-			}
-		}
-	}
-
 	// Generate presigned download URLs for image attachments
 	if h.uploadService != nil {
 		for i := range result.Attachments {
