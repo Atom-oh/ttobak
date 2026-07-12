@@ -119,25 +119,25 @@ export function IntegrationSettings() {
           className="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400 font-mono"
         />
         <details className="mt-3 group">
-          <summary className="flex items-center gap-1.5 text-xs font-semibold text-primary dark:text-primary cursor-pointer hover:underline">
+          <summary className="flex items-center gap-1.5 text-xs font-semibold text-primary cursor-pointer hover:underline">
             <span className="material-symbols-outlined text-sm transition-transform group-open:rotate-90">chevron_right</span>
             API Key 발급 및 페이지 연동 방법
           </summary>
           <div className="mt-3 space-y-3 text-xs text-slate-600 dark:text-text-secondary bg-slate-50 dark:bg-surface-lowest border border-slate-200 dark:border-white/10 rounded-lg p-4">
             <div className="flex items-start gap-2">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 dark:bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary dark:text-primary">1</span>
-              <span><a href="https://www.notion.so/my-integrations" target="_blank" rel="noopener noreferrer" className="text-primary dark:text-primary font-semibold hover:underline">notion.so/my-integrations</a> 접속</span>
+              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">1</span>
+              <span><a href="https://www.notion.so/my-integrations" target="_blank" rel="noopener noreferrer" className="text-primary font-semibold hover:underline">notion.so/my-integrations</a> 접속</span>
             </div>
             <div className="flex items-start gap-2">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 dark:bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary dark:text-primary">2</span>
+              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">2</span>
               <span><strong>&quot;New integration&quot;</strong> 클릭 → 이름 입력 (예: TTOBAK) → 워크스페이스 선택</span>
             </div>
             <div className="flex items-start gap-2">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 dark:bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary dark:text-primary">3</span>
+              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">3</span>
               <span><strong>&quot;Internal Integration Token&quot;</strong> 복사 (<code className="bg-slate-200 dark:bg-white/10 px-1 py-0.5 rounded text-[10px]">secret_...</code> 또는 <code className="bg-slate-200 dark:bg-white/10 px-1 py-0.5 rounded text-[10px]">ntn_...</code>)</span>
             </div>
             <div className="flex items-start gap-2">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 dark:bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary dark:text-primary">4</span>
+              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">4</span>
               <span>위 토큰 입력 필드에 붙여넣기</span>
             </div>
             <div className="flex items-start gap-2">

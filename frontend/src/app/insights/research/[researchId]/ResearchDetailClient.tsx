@@ -282,7 +282,7 @@ export default function ResearchDetailPage() {
             {/* Back button (desktop) */}
             <button
               onClick={() => router.push('/insights')}
-              className="hidden lg:flex items-center gap-1.5 text-sm text-slate-500 dark:text-text-muted hover:text-primary dark:hover:text-primary mb-6 transition-colors"
+              className="hidden lg:flex items-center gap-1.5 text-sm text-slate-500 dark:text-text-muted hover:text-primary mb-6 transition-colors"
             >
               <span className="material-symbols-outlined text-lg">arrow_back</span>
               Back to Insights

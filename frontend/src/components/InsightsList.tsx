@@ -388,7 +388,7 @@ export function InsightsList() {
                               document.body.removeChild(a); URL.revokeObjectURL(url);
                             } catch {}
                           }}
-                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-text-muted hover:text-primary dark:hover:text-primary transition-colors"
+                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-text-muted hover:text-primary transition-colors"
                         >
                           <span className="material-symbols-outlined text-sm">description</span>
                           MD
@@ -410,7 +410,7 @@ export function InsightsList() {
                               if (printWin) printWin.onload = () => { printWin.print(); URL.revokeObjectURL(url); };
                             } catch {}
                           }}
-                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-text-muted hover:text-primary dark:hover:text-primary transition-colors"
+                          className="flex items-center gap-1 text-xs text-slate-500 dark:text-text-muted hover:text-primary transition-colors"
                         >
                           <span className="material-symbols-outlined text-sm">picture_as_pdf</span>
                           PDF
@@ -578,7 +578,7 @@ export function InsightsList() {
                       onClick={() => toggleTag(tag)}
                       className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
                         isSelected
-                          ? 'bg-primary text-white dark:bg-primary dark:text-background-dark shadow-sm'
+                          ? 'bg-primary text-white dark:text-background-dark shadow-sm'
                           : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary hover:bg-slate-200 dark:hover:bg-white/10'
                       }`}
                     >
@@ -604,7 +604,7 @@ export function InsightsList() {
                 <span className="material-symbols-outlined text-sm">filter_alt</span>
                 Filtering by: {selectedTags.map((tag, i) => (
                   <span key={tag}>
-                    <span className="font-semibold text-primary dark:text-primary">{tag}</span>
+                    <span className="font-semibold text-primary">{tag}</span>
                     {i < selectedTags.length - 1 && <span className="mx-1">+</span>}
                   </span>
                 ))}
@@ -657,7 +657,7 @@ export function InsightsList() {
                     onClick={() => doc.sourceId && doc.docHash && router.push(`/insights/${doc.sourceId}/${doc.docHash}`)}
                     className="text-left w-full group"
                   >
-                    <h3 className="text-base font-semibold text-slate-900 dark:text-text-main leading-snug group-hover:text-primary dark:group-hover:text-primary transition-colors line-clamp-2">
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-text-main leading-snug group-hover:text-primary transition-colors line-clamp-2">
                       {doc.title}
                     </h3>
                   </button>
@@ -687,7 +687,7 @@ export function InsightsList() {
                           }}
                           className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
                             selectedTags.includes(tag)
-                              ? 'bg-primary/20 text-primary dark:bg-primary/20 dark:text-primary ring-1 ring-primary/30 dark:ring-primary/30'
+                              ? 'bg-primary/20 text-primary ring-1 ring-primary/30'
                               : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary hover:bg-slate-200 dark:hover:bg-white/10'
                           }`}
                         >
@@ -705,7 +705,7 @@ export function InsightsList() {
                       {(doc.awsServices || []).slice(0, 3).map((svc) => (
                         <span
                           key={svc}
-                          className="bg-primary/5 text-primary dark:bg-primary/10 dark:text-primary text-xs px-2 py-0.5 rounded-full"
+                          className="bg-primary/5 text-primary dark:bg-primary/10 text-xs px-2 py-0.5 rounded-full"
                         >
                           {svc}
                         </span>
@@ -737,7 +737,7 @@ export function InsightsList() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => doc.sourceId && doc.docHash && router.push(`/insights/${doc.sourceId}/${doc.docHash}`)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-primary dark:text-primary border border-primary/20 dark:border-primary/20 rounded-lg hover:bg-primary/5 dark:hover:bg-primary/10 transition-colors"
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-primary border border-primary/20 rounded-lg hover:bg-primary/5 dark:hover:bg-primary/10 transition-colors"
                       >
                         <span className="material-symbols-outlined text-lg">article</span>
                         Read

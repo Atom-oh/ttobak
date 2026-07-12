@@ -176,7 +176,7 @@ export function LinkMeetingsModal({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="미팅 제목 검색"
-              className="w-full pl-10 pr-3 py-2 text-sm bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 dark:focus:ring-primary/30 placeholder:text-slate-400 dark:text-gray-100"
+              className="w-full pl-10 pr-3 py-2 text-sm bg-slate-50 dark:bg-white/[0.03] border border-slate-200 dark:border-white/10 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-slate-400 dark:text-gray-100"
             />
           </div>
         </div>
@@ -206,7 +206,7 @@ export function LinkMeetingsModal({
                       <span
                         className={`flex-shrink-0 mt-0.5 size-5 rounded border-2 flex items-center justify-center transition-colors ${
                           isSelected
-                            ? 'bg-primary border-primary dark:bg-primary dark:border-primary'
+                            ? 'bg-primary border-primary'
                             : 'border-slate-300 dark:border-white/20'
                         }`}
                       >
@@ -255,7 +255,7 @@ export function LinkMeetingsModal({
             <button
               onClick={handleSave}
               disabled={saving || loading}
-              className="px-4 py-1.5 text-sm font-medium bg-primary dark:bg-primary text-white dark:text-background-dark rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+              className="px-4 py-1.5 text-sm font-medium bg-primary text-white dark:text-background-dark rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
             >
               {saving ? '저장 중…' : '저장'}
             </button>

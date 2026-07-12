@@ -144,7 +144,7 @@ export default function InsightDetailPage() {
           {/* Back button (desktop) */}
           <button
             onClick={() => router.push('/insights')}
-            className="hidden lg:flex items-center gap-1.5 text-sm text-slate-500 dark:text-text-muted hover:text-primary dark:hover:text-primary mb-6 transition-colors"
+            className="hidden lg:flex items-center gap-1.5 text-sm text-slate-500 dark:text-text-muted hover:text-primary mb-6 transition-colors"
           >
             <span className="material-symbols-outlined text-lg">arrow_back</span>
             Back to Insights
@@ -214,7 +214,7 @@ export default function InsightDetailPage() {
                 {doc.awsServices && doc.awsServices.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-4">
                     {doc.awsServices.map((svc) => (
-                      <span key={svc} className="bg-primary/5 text-primary dark:bg-primary/10 dark:text-primary text-xs font-medium px-2.5 py-1 rounded-full">
+                      <span key={svc} className="bg-primary/5 text-primary dark:bg-primary/10 text-xs font-medium px-2.5 py-1 rounded-full">
                         {svc}
                       </span>
                     ))}
@@ -228,7 +228,7 @@ export default function InsightDetailPage() {
                       href={doc.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary dark:text-primary hover:underline"
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline"
                     >
                       <span className="material-symbols-outlined text-base">open_in_new</span>
                       View Original Article
@@ -237,7 +237,7 @@ export default function InsightDetailPage() {
                   <div ref={exportRef} className="relative inline-block">
                     <button
                       onClick={() => setExportOpen(!exportOpen)}
-                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-600 dark:text-text-muted hover:text-primary dark:hover:text-primary transition-colors"
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-600 dark:text-text-muted hover:text-primary transition-colors"
                     >
                       <span className="material-symbols-outlined text-base">download</span>
                       Export
@@ -262,7 +262,7 @@ export default function InsightDetailPage() {
               <div className="flex gap-0">
                 <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 flex-1 min-w-0">
                   <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-text-main uppercase tracking-wide mb-4">
-                    <span className="material-symbols-outlined text-primary dark:text-primary text-lg">auto_awesome</span>
+                    <span className="material-symbols-outlined text-primary text-lg">auto_awesome</span>
                     AI Briefing
                   </h2>
                   <MarkdownRenderer content={stripS3Header(doc.content)} />

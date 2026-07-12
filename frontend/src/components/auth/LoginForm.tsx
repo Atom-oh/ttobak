@@ -56,7 +56,7 @@ export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps
             <span className="hidden dark:inline">Email Address</span>
           </label>
           <div className="relative group">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-text-muted group-focus-within:text-primary dark:group-focus-within:text-primary transition-colors text-lg">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-text-muted group-focus-within:text-primary transition-colors text-lg">
               mail
             </span>
             <input
@@ -92,7 +92,7 @@ export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps
             )}
           </div>
           <div className="relative group">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-text-muted group-focus-within:text-primary dark:group-focus-within:text-primary transition-colors text-lg">
+            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-text-muted group-focus-within:text-primary transition-colors text-lg">
               lock
             </span>
             <input

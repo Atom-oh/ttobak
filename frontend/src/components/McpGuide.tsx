@@ -35,7 +35,7 @@ function CodeBlock({ children }: { children: string }) {
 
 function StepNumber({ n }: { n: number }) {
   return (
-    <div className="shrink-0 w-6 h-6 rounded-full bg-primary/10 dark:bg-primary/10 flex items-center justify-center text-xs font-bold text-primary dark:text-primary">
+    <div className="shrink-0 w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary">
       {n}
     </div>
   );
@@ -76,7 +76,7 @@ export function McpGuide() {
       {/* Toggle */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 text-sm font-semibold text-primary dark:text-primary hover:underline mb-2"
+        className="flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline mb-2"
       >
         <span className="material-symbols-outlined text-base transition-transform" style={{ transform: expanded ? 'rotate(90deg)' : undefined }}>
           chevron_right
@@ -153,7 +153,7 @@ export function McpGuide() {
           {/* Available Tools */}
           <div className="space-y-3">
             <h4 className="text-sm font-semibold text-slate-900 dark:text-text-main flex items-center gap-2">
-              <span className="material-symbols-outlined text-base text-primary dark:text-primary">build</span>
+              <span className="material-symbols-outlined text-base text-primary">build</span>
               Available Tools
             </h4>
             <div className="grid gap-2">
@@ -166,7 +166,7 @@ export function McpGuide() {
                   key={tool}
                   className="flex items-start gap-3 p-3 bg-slate-50 dark:bg-surface-lowest dark:border dark:border-white/10 rounded-lg"
                 >
-                  <code className="shrink-0 text-xs font-semibold text-primary dark:text-primary bg-primary/5 dark:bg-primary/5 px-1.5 py-0.5 rounded">
+                  <code className="shrink-0 text-xs font-semibold text-primary bg-primary/5 px-1.5 py-0.5 rounded">
                     {tool}
                   </code>
                   <div className="min-w-0">
@@ -183,7 +183,7 @@ export function McpGuide() {
           {/* Example Prompts */}
           <div className="space-y-3">
             <h4 className="text-sm font-semibold text-slate-900 dark:text-text-main flex items-center gap-2">
-              <span className="material-symbols-outlined text-base text-primary dark:text-primary">chat</span>
+              <span className="material-symbols-outlined text-base text-primary">chat</span>
               Example Prompts
             </h4>
             <div className="space-y-2">

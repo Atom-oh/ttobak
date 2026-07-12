@@ -351,7 +351,7 @@ export function ChatClient() {
                     key={i}
                     onClick={() => handleAsk(sq)}
                     disabled={isAsking}
-                    className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-200 dark:hover:bg-white/10 hover:border-primary/30 dark:hover:border-primary/30 transition-colors disabled:opacity-50"
+                    className="px-4 py-2 text-sm text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-lg hover:bg-slate-200 dark:hover:bg-white/10 hover:border-primary/30 transition-colors disabled:opacity-50"
                   >
                     {sq}
                   </button>

@@ -78,7 +78,7 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
               onClick={() => setEditing(!editing)}
               className={`p-1.5 rounded-lg transition-colors ${
                 editing
-                  ? 'bg-primary/10 text-primary dark:bg-primary/10 dark:text-primary'
+                  ? 'bg-primary/10 text-primary'
                   : 'text-slate-400 hover:text-slate-600 dark:hover:text-text-secondary'
               }`}
               title={editing ? 'View mode' : 'Edit summary'}

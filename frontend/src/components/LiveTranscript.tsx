@@ -197,7 +197,7 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
 
       {/* Export button — desktop only */}
       <div className="hidden lg:block p-4 border-t border-slate-100 dark:border-white/5">
-        <button className="w-full py-2 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-[#8B8D98] hover:text-primary dark:hover:text-primary transition-colors">
+        <button className="w-full py-2 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-[#8B8D98] hover:text-primary transition-colors">
           Export Transcript
         </button>
       </div>

@@ -18,7 +18,7 @@ export function MobileNav({ activePath }: { activePath: string }) {
           key={item.href}
           href={item.href}
           className={`flex flex-1 flex-col items-center justify-center gap-1 transition-colors ${
-            activePath === item.href ? 'text-primary dark:text-primary' : 'text-slate-400 dark:text-text-muted'
+            activePath === item.href ? 'text-primary' : 'text-slate-400 dark:text-text-muted'
           }`}
         >
           <div className="flex h-8 items-center justify-center">

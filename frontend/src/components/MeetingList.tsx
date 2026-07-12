@@ -351,13 +351,13 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
                 onClick={() => setShowTagFilter(!showTagFilter)}
                 className={`flex items-center gap-1.5 text-sm transition-colors ${
                   selectedTags.length > 0
-                    ? 'text-primary dark:text-primary'
+                    ? 'text-primary'
                     : 'text-slate-400 hover:text-slate-600 dark:text-text-muted dark:hover:text-primary'
                 }`}
               >
                 <span className="material-symbols-outlined text-lg">filter_list</span>
                 {selectedTags.length > 0 && (
-                  <span className="text-[10px] font-bold bg-primary/10 text-primary dark:bg-primary/10 dark:text-primary px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                  <span className="text-[10px] font-bold bg-primary/10 text-primary px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
                     {selectedTags.length}
                   </span>
                 )}
@@ -381,7 +381,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
                   }}
                   className={`text-xs font-bold px-3 py-1.5 rounded-full transition-all ${
                     isSelected
-                      ? 'bg-primary text-white dark:bg-primary dark:text-background-dark ring-2 ring-primary/30 dark:ring-primary/30'
+                      ? 'bg-primary text-white dark:text-background-dark ring-2 ring-primary/30'
                       : getTagColor(tag)
                   }`}
                 >
@@ -440,7 +440,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
                 </p>
                 <button
                   onClick={() => setSelectedTags([])}
-                  className="text-sm font-semibold text-primary dark:text-primary hover:underline"
+                  className="text-sm font-semibold text-primary hover:underline"
                 >
                   Clear filter
                 </button>

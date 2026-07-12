@@ -69,7 +69,7 @@ export default function AccountSection({ meetingId, initialAccountId, initialSha
         <button
           onClick={handleLink}
           disabled={busy || !selected}
-          className="text-primary border border-primary rounded-lg hover:bg-primary/10 text-sm font-semibold px-4 py-2 disabled:opacity-50 dark:border-primary/30 dark:hover:bg-primary/10"
+          className="text-primary border border-primary rounded-lg hover:bg-primary/10 text-sm font-semibold px-4 py-2 disabled:opacity-50 dark:border-primary/30"
         >
           Link (private)
         </button>

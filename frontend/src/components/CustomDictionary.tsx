@@ -392,7 +392,7 @@ export function CustomDictionary() {
         <button
           onClick={handleAdd}
           disabled={!newPhrase.trim()}
-          className="mt-3 flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/10 dark:text-primary dark:hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-40"
+          className="mt-3 flex items-center gap-2 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-40"
         >
           <span className="material-symbols-outlined text-lg">add</span>
           Add Term

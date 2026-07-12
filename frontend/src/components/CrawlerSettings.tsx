@@ -202,7 +202,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                   onClick={() => addKeyword(kw)}
                   className={`px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
                     newsQueries.includes(kw)
-                      ? 'bg-primary text-white dark:bg-primary dark:text-background-dark'
+                      ? 'bg-primary text-white dark:text-background-dark'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-white/5 dark:text-text-muted dark:hover:bg-white/10'
                   }`}
                 >
@@ -218,7 +218,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                   .map((kw) => (
                     <span
                       key={kw}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary dark:bg-primary/10 dark:text-primary rounded-full"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary rounded-full"
                     >
                       {kw}
                       <button
@@ -250,7 +250,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                 type="button"
                 onClick={() => addKeyword()}
                 disabled={!keywordInput.trim()}
-                className="px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10 dark:text-primary dark:hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-40"
+                className="px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10 rounded-lg transition-colors disabled:opacity-40"
               >
                 Add
               </button>
@@ -285,7 +285,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                   .map((svc) => (
                     <span
                       key={svc}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary dark:bg-primary/10 dark:text-primary rounded-lg"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-primary/10 text-primary rounded-lg"
                     >
                       {svc}
                       <button
@@ -316,7 +316,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
               <button
                 type="button"
                 onClick={addCustomService}
-                className="px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10 dark:text-primary dark:hover:bg-primary/10 rounded-lg transition-colors"
+                className="px-3 py-2 text-sm font-medium text-primary hover:bg-primary/10 rounded-lg transition-colors"
               >
                 Add
               </button>
@@ -356,7 +356,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
             <button
               type="button"
               onClick={addUrlField}
-              className="mt-2 flex items-center gap-1 text-sm font-medium text-primary hover:text-primary/80 dark:text-primary dark:hover:text-primary/80 transition-colors"
+              className="mt-2 flex items-center gap-1 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
             >
               <span className="material-symbols-outlined text-lg">add</span>
               Add URL
@@ -669,7 +669,7 @@ export function CrawlerSettings() {
                     {subscription.awsServices.map((svc) => (
                       <span
                         key={svc}
-                        className="px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary dark:bg-primary/10 dark:text-primary rounded-md"
+                        className="px-2 py-0.5 text-xs font-medium bg-primary/10 text-primary rounded-md"
                       >
                         {svc}
                       </span>

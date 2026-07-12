@@ -119,7 +119,7 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
               if (e.key === 'Enter') saveTitle();
               if (e.key === 'Escape') { setEditTitle(meeting.title); setIsEditingTitle(false); }
             }}
-            className="w-full text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-primary mb-4 bg-transparent border-b-2 border-primary dark:border-primary outline-none text-slate-900"
+            className="w-full text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-primary mb-4 bg-transparent border-b-2 border-primary outline-none text-slate-900"
           />
         ) : (
           <h1
@@ -158,7 +158,7 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
           ) : null}
           <button
             onClick={() => setShowLinkPicker(true)}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-dashed border-slate-300 dark:border-white/15 text-slate-500 dark:text-text-muted hover:border-primary/40 hover:text-primary dark:hover:border-primary/40 dark:hover:text-primary transition-colors"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-dashed border-slate-300 dark:border-white/15 text-slate-500 dark:text-text-muted hover:border-primary/40 hover:text-primary transition-colors"
             title="이전 미팅 연결"
           >
             <span className="material-symbols-outlined text-sm">add_link</span>
