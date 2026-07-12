@@ -168,7 +168,7 @@ TTOBAK is a Korean AI meeting assistant. It records audio in the browser, extrac
 | **Storage** | Data | DynamoDB (single-table), S3 |
 | **Query** | RAG Q&A | Bedrock Knowledge Base, OpenSearch Serverless |
 | **Security** | Encryption | KMS (Notion API key), S3 SSE |
-| **Infrastructure** | IaC | AWS CDK TypeScript (10 stacks) |
+| **Infrastructure** | IaC | AWS CDK TypeScript (11 stacks) |
 
 ### Full Architecture Diagram
 

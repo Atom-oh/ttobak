@@ -23,7 +23,7 @@ cd frontend && npm run dev       # local dev server
 cd frontend && npm run lint      # eslint
 
 # CDK
-cd infra && npx cdk synth        # synthesize all 10 stacks
+cd infra && npx cdk synth        # synthesize all 11 stacks
 cd infra && npx cdk deploy --all # deploy everything
 cd infra && npm test             # jest tests
 
@@ -54,8 +54,8 @@ images/ upload → EventBridge → ttobak-process-image → Bedrock Vision → D
 Microphone → AWS Transcribe Streaming (via @aws-sdk/client-transcribe-streaming in browser)
 ```
 
-### CDK Stack Dependency Order (10 stacks)
-Auth + Storage (parallel) → AI → Whisper → Knowledge → EdgeAuth (us-east-1) → Gateway → Frontend
+### CDK Stack Dependency Order (11 stacks)
+WebSearchGateway (us-east-1) + Auth + Storage (parallel) → AI → Whisper → Knowledge → EdgeAuth (us-east-1) → Gateway → Frontend
 
 ### Backend (Go)
 
@@ -92,6 +92,8 @@ Error codes: `BAD_REQUEST` (400), `UNAUTHORIZED` (401), `FORBIDDEN` (403), `NOT_
 ## Lambda Environment Variables
 
 CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE_NAME`, `BUCKET_NAME`, `BEDROCK_MODEL_ID`. The `api` Lambda also gets `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `KB_BUCKET_NAME`, `KMS_KEY_ID`, `FRONTEND_BASE_URL` (deployed frontend origin, built as `https://${ttobak:domainName}` — the `ttobak:domainName` CDK context key in `infra/cdk.json` must be a bare domain, e.g. `ttobak.atomai.click`, with no scheme; used to build absolute links, e.g. rewriting `transcript://`/`#ts-` deep links for Notion export).
+
+The news crawler Lambda (`ttobak-crawler-news`) gets `WEB_SEARCH_GATEWAY_URL` / `WEB_SEARCH_GATEWAY_REGION` (the AgentCore Gateway Web Search connector MCP endpoint — the gateway lives in us-east-1 only, so the ap-northeast-2 crawler calls it cross-region with SigV4, signing service name `bedrock-agentcore`). The research-agent AgentCore Runtime container (deployed **outside CDK** — role `ttobak-agentcore-research-role`) needs the same two env vars injected via its own deploy pipeline, not `infra/lib/crawler-stack.ts`'s `commonEnv`.
 
 ## Known Issues & Decisions
 
