@@ -77,6 +77,27 @@ class TestWebSearch(unittest.TestCase):
         self.assertEqual(parsed['results'], [])
         self.assertNotIn('secret-internal-timeout-detail', raw)
 
+    @mock.patch('tools._sigv4_post')
+    def test_skips_non_text_content_blocks(self, mock_post):
+        mock_post.return_value = json.dumps({
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {
+                'content': [
+                    {'type': 'image', 'data': 'irrelevant'},
+                    {'type': 'text', 'text': json.dumps({
+                        'id': 'x', 'results': [{'text': 't', 'url': 'https://example.com/4'}],
+                    })},
+                ],
+                'isError': False,
+            },
+        })
+
+        raw = tools.web_search('query')
+        parsed = json.loads(raw)
+
+        self.assertEqual(len(parsed['results']), 1)
+        self.assertEqual(parsed['results'][0]['url'], 'https://example.com/4')
+
 
 class TestSigv4PostConfigGuard(unittest.TestCase):
     def test_raises_when_gateway_url_unset(self):
@@ -87,6 +108,17 @@ class TestSigv4PostConfigGuard(unittest.TestCase):
                 tools._sigv4_post('{}')
         finally:
             tools.WEB_SEARCH_GATEWAY_URL = original
+
+
+class TestExtractSseJson(unittest.TestCase):
+    def test_plain_json_passes_through_unchanged(self):
+        body = '{"jsonrpc": "2.0", "id": 1, "result": {}}'
+        self.assertEqual(tools._extract_sse_json(body), body)
+
+    def test_extracts_data_line_from_sse_frame(self):
+        payload = '{"jsonrpc": "2.0", "id": 1, "result": {"isError": false}}'
+        sse_body = f'event: message\ndata: {payload}\n\n'
+        self.assertEqual(tools._extract_sse_json(sse_body), payload)
 
 
 if __name__ == '__main__':

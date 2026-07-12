@@ -315,7 +315,29 @@ class TestSigv4PostConfigGuard(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 7. news_crawler._gateway_web_search
+# 7. news_crawler._extract_sse_json
+# ---------------------------------------------------------------------------
+
+class TestExtractSseJson(unittest.TestCase):
+    """MCP Streamable HTTP servers may answer tools/call with an SSE
+    ("data: {...}") frame instead of a plain JSON body."""
+
+    def test_plain_json_passes_through_unchanged(self):
+        body = '{"jsonrpc": "2.0", "id": 1, "result": {}}'
+        self.assertEqual(news_crawler._extract_sse_json(body), body)
+
+    def test_extracts_data_line_from_sse_frame(self):
+        payload = '{"jsonrpc": "2.0", "id": 1, "result": {"isError": false}}'
+        sse_body = f'event: message\ndata: {payload}\n\n'
+        self.assertEqual(news_crawler._extract_sse_json(sse_body), payload)
+
+    def test_leading_whitespace_before_data_is_tolerated(self):
+        payload = '{"result": {}}'
+        self.assertEqual(news_crawler._extract_sse_json(f'  data: {payload}'), payload)
+
+
+# ---------------------------------------------------------------------------
+# 8. news_crawler._gateway_web_search
 # ---------------------------------------------------------------------------
 
 class TestGatewayWebSearch(unittest.TestCase):
@@ -417,6 +439,38 @@ class TestGatewayWebSearch(unittest.TestCase):
         self.assertEqual(results[0]['url'], 'https://example.com/3')
 
     @mock.patch('news_crawler._sigv4_post')
+    def test_skips_non_text_content_blocks(self, mock_post):
+        """Scans for the first block with type "text" rather than assuming
+        content[0] is always the text block."""
+        mock_post.return_value = json.dumps({
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {
+                'content': [
+                    {'type': 'image', 'data': 'irrelevant'},
+                    {'type': 'text', 'text': json.dumps({
+                        'id': 'x', 'results': [{'text': 't', 'url': 'https://example.com/4'}],
+                    })},
+                ],
+                'isError': False,
+            },
+        })
+
+        results = news_crawler._gateway_web_search('query')
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['url'], 'https://example.com/4')
+
+    @mock.patch('news_crawler._sigv4_post')
+    def test_empty_results_when_no_text_block_present(self, mock_post):
+        mock_post.return_value = json.dumps({
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {'content': [{'type': 'image', 'data': 'irrelevant'}], 'isError': False},
+        })
+
+        results = news_crawler._gateway_web_search('query')
+        self.assertEqual(results, [])
+
+    @mock.patch('news_crawler._sigv4_post')
     def test_empty_results_on_transport_exception(self, mock_post):
         mock_post.side_effect = Exception('connection timeout')
 
@@ -444,7 +498,7 @@ class TestGatewayWebSearch(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 8. news_crawler.process_article -- dedup
+# 9. news_crawler.process_article -- dedup
 # ---------------------------------------------------------------------------
 
 class TestNewsCrawlerDedupSkip(unittest.TestCase):
@@ -506,7 +560,7 @@ class TestProcessArticleGuards(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 9. news_crawler.process_article -- new article
+# 10. news_crawler.process_article -- new article
 # ---------------------------------------------------------------------------
 
 class TestNewsCrawlerNewArticle(unittest.TestCase):
@@ -535,7 +589,7 @@ class TestNewsCrawlerNewArticle(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 10. ingest_trigger.handler -- success
+# 11. ingest_trigger.handler -- success
 # ---------------------------------------------------------------------------
 
 class TestIngestTriggerSuccess(unittest.TestCase):
@@ -601,7 +655,7 @@ class TestIngestTriggerSuccess(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 11. ingest_trigger.handler -- no KB config
+# 12. ingest_trigger.handler -- no KB config
 # ---------------------------------------------------------------------------
 
 class TestIngestTriggerNoKBConfig(unittest.TestCase):

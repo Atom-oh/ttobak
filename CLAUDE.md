@@ -24,7 +24,7 @@ cd frontend && npm run lint      # eslint
 
 # CDK
 cd infra && npx cdk synth        # synthesize all 11 stacks
-cd infra && npx cdk deploy --all # deploy everything (see caveats below — not used for real deploys)
+cd infra && npx cdk deploy TtobakGatewayStack --exclusively # real deploys — see "Known Issues" below for why
 cd infra && npm test             # jest tests
 
 # Deploy frontend to S3 + invalidate CloudFront
@@ -101,9 +101,9 @@ The news crawler Lambda (`ttobak-crawler-news`) gets `WEB_SEARCH_GATEWAY_URL` / 
 - **`updateAttachmentByKey` not implemented** (`process-image/main.go`): Image processing results are not saved to DynamoDB. Needs meetingId parsing from S3 key path.
 
 ### Medium
-- **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID are hardcoded in CDK stacks. Should be extracted to CDK context for multi-account/stage support.
+- **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID, `agentCoreRuntimeArn`, `researchAgentExecutionRoleArn` are hardcoded in CDK stacks. Should be extracted to CDK context for multi-account/stage support.
 - **Single audio file per meeting**: `Meeting.AudioKey` is a single string — uploading a new file overwrites the previous one. Multi-file upload and linked follow-up meetings planned in ADR-014.
-- **`cdk deploy --all` is not actually used for deploys**: real deploys target `TtobakGatewayStack` specifically (`TtobakKnowledgeStack` stages a deliberate, undeployed Bedrock KB teardown that `deploy --all` would apply). `TtobakAiStack` also has an out-of-band precondition — `ttobak-agentcore-research-role` must already exist (see the `WEB_SEARCH_GATEWAY_URL` note above) — so a clean-environment `deploy --all` can fail on that import regardless. Deploy stacks individually in dependency order instead.
+- **`cdk deploy --all` is never used — always deploy `TtobakGatewayStack --exclusively`**: without `--exclusively`, CDK deploys the full dependency chain, which includes `TtobakKnowledgeStack` — it stages a deliberate, undeployed Bedrock KB teardown that `deploy --all` (or a bare `deploy TtobakGatewayStack`) would apply for real. `--exclusively` deploys only the named stack, skipping its dependencies (they're assumed already deployed). Separately, `TtobakAiStack` imports `ttobak-agentcore-research-role` by ARN — that role must already exist (created out-of-band by the research-agent deploy pipeline) before `TtobakAiStack` can deploy.
 
 ### Low
 - Default table/bucket names in Go don't match CDK defaults (no runtime impact since CDK injects env vars)

@@ -91,10 +91,27 @@ class _TextExtractor(HTMLParser):
 # Tools
 # ---------------------------------------------------------------------------
 
+def _extract_sse_json(text: str) -> str:
+    """Extract the JSON payload from an SSE response body. MCP Streamable
+    HTTP servers may respond with either a plain JSON body or an SSE event
+    stream (one or more "event:"/"data:" lines per frame) for the same
+    tools/call request — the client can't pick which one it gets. Returns
+    text unchanged if it's already plain JSON (starts with "{")."""
+    if text.lstrip().startswith("{"):
+        return text
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("data:"):
+            return line[len("data:"):].strip()
+    return text
+
+
 def _sigv4_post(body_json: str) -> str:
-    """POST body_json to the Gateway MCP endpoint, SigV4-signed. Raises on
-    missing config or transport/HTTP failure — callers must not treat a
-    config error the same as a normal "no results" response."""
+    """POST body_json to the Gateway MCP endpoint, SigV4-signed. Returns the
+    response body as a JSON string, unwrapping an SSE ("data: ...") frame if
+    the gateway responds that way instead of plain JSON. Raises on missing
+    config or transport/HTTP failure — callers must not treat a config error
+    the same as a normal "no results" response."""
     if not WEB_SEARCH_GATEWAY_URL:
         raise RuntimeError("WEB_SEARCH_GATEWAY_URL is not set")
     session = botocore.session.get_session()
@@ -112,7 +129,7 @@ def _sigv4_post(body_json: str) -> str:
     body = prepared.body.encode("utf-8") if isinstance(prepared.body, str) else prepared.body
     req = Request(prepared.url, data=body, headers=dict(prepared.headers), method="POST")
     with urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
-        return resp.read().decode("utf-8")
+        return _extract_sse_json(resp.read().decode("utf-8"))
 
 
 @tool
@@ -146,9 +163,10 @@ def web_search(query: str, max_results: int = 10) -> str:
         if result.get("isError"):
             return json.dumps({"results": [], "message": "Search returned an error"})
         content = result.get("content", [])
-        if not content:
+        text_block = next((b for b in content if b.get("type") == "text" and "text" in b), None)
+        if text_block is None:
             return json.dumps({"results": [], "message": "No results found"})
-        inner = json.loads(content[0]["text"])
+        inner = json.loads(text_block["text"])
         results = [r for r in inner.get("results", []) if r.get("url")][:max_results]
         return json.dumps({"results": results}, ensure_ascii=False)
     except Exception as e:

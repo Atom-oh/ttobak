@@ -127,11 +127,27 @@ def _strip_html_tags(text: str) -> str:
     return re.sub(r'<[^>]+>', '', text).strip()
 
 
+def _extract_sse_json(text: str) -> str:
+    """Extract the JSON payload from an SSE response body. MCP Streamable
+    HTTP servers may respond with either a plain JSON body or an SSE event
+    stream (one or more "event:"/"data:" lines per frame) for the same
+    tools/call request — the client can't pick which one it gets. Returns
+    text unchanged if it's already plain JSON (starts with "{")."""
+    if text.lstrip().startswith('{'):
+        return text
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith('data:'):
+            return line[len('data:'):].strip()
+    return text
+
+
 def _sigv4_post(body_json: str) -> str:
     """POST body_json to the Gateway MCP endpoint, SigV4-signed. Returns the
-    raw response body text. Raises on missing config or transport/HTTP
-    failure — callers must not treat a config error the same as a normal
-    "no results" response.
+    response body as a JSON string, unwrapping an SSE ("data: ...") frame if
+    the gateway responds that way instead of plain JSON. Raises on missing
+    config or transport/HTTP failure — callers must not treat a config error
+    the same as a normal "no results" response.
 
     Duplicated in backend/python/research-agent/tools.py (separate Lambda
     vs. AgentCore Runtime container deploy artifacts — not worth a shared
@@ -154,7 +170,7 @@ def _sigv4_post(body_json: str) -> str:
     body = prepared.body.encode('utf-8') if isinstance(prepared.body, str) else prepared.body
     req = Request(prepared.url, data=body, headers=dict(prepared.headers), method='POST')
     with urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
-        return resp.read().decode('utf-8')
+        return _extract_sse_json(resp.read().decode('utf-8'))
 
 
 def _gateway_web_search(query: str, max_results: int = 10) -> list:
@@ -185,9 +201,11 @@ def _gateway_web_search(query: str, max_results: int = 10) -> list:
             logger.warning(f'Web search gateway returned isError for "{query}"')
             return []
         content = result.get('content', [])
-        if not content:
+        text_block = next((b for b in content if b.get('type') == 'text' and 'text' in b), None)
+        if text_block is None:
+            logger.warning(f'Web search gateway returned no text content block for "{query}"')
             return []
-        inner = json.loads(content[0]['text'])
+        inner = json.loads(text_block['text'])
         results = inner.get('results', [])
         return [r for r in results if r.get('url')][:max_results]
     except Exception as e:

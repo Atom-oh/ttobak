@@ -126,7 +126,7 @@ gatewayStack.addDependency(storageStack);
 gatewayStack.addDependency(aiStack);
 gatewayStack.addDependency(knowledgeStack);
 
-// Stack 7.5: Crawler (Step Functions + Lambda) - depends on AI, Storage, Knowledge
+// Stack 7.5: Crawler (Step Functions + Lambda) - depends on AI, Storage, Knowledge, WebSearchGateway
 const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {
   env,
   crossRegionReferences: true,
