@@ -129,14 +129,23 @@ def _strip_html_tags(text: str) -> str:
 
 def _sigv4_post(body_json: str) -> str:
     """POST body_json to the Gateway MCP endpoint, SigV4-signed. Returns the
-    raw response body text. Raises on transport/HTTP failure."""
+    raw response body text. Raises on missing config or transport/HTTP
+    failure — callers must not treat a config error the same as a normal
+    "no results" response.
+
+    Duplicated in backend/python/research-agent/tools.py (separate Lambda
+    vs. AgentCore Runtime container deploy artifacts — not worth a shared
+    package for one function). Keep both copies in sync if this changes.
+    """
+    if not WEB_SEARCH_GATEWAY_URL:
+        raise RuntimeError('WEB_SEARCH_GATEWAY_URL is not set')
     session = botocore.session.get_session()
     credentials = session.get_credentials()
     request = AWSRequest(
         method='POST',
         url=WEB_SEARCH_GATEWAY_URL,
         data=body_json,
-        headers={'Content-Type': 'application/json'},
+        headers={'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream'},
     )
     SigV4Auth(credentials, 'bedrock-agentcore', WEB_SEARCH_GATEWAY_REGION).add_auth(request)
     prepared = request.prepare()
@@ -166,6 +175,9 @@ def _gateway_web_search(query: str, max_results: int = 10) -> list:
         # The MCP CallToolResult (isError/content) is nested under "result"
         # in the JSON-RPC 2.0 envelope; fall back to top-level in case the
         # gateway ever returns the unwrapped result directly.
+        if 'error' in parsed:
+            logger.warning(f'Web search gateway returned a JSON-RPC error for "{query}": {parsed["error"]}')
+            return []
         result = parsed.get('result', parsed)
         if result.get('isError'):
             logger.warning(f'Web search gateway returned isError for "{query}"')
@@ -175,7 +187,7 @@ def _gateway_web_search(query: str, max_results: int = 10) -> list:
             return []
         inner = json.loads(content[0]['text'])
         results = inner.get('results', [])
-        return [r for r in results if r.get('url')]
+        return [r for r in results if r.get('url')][:max_results]
     except Exception as e:
         logger.warning(f'Web search gateway call failed for "{query}": {e}')
         return []
@@ -405,14 +417,24 @@ def handler(event, context):
         nonlocal docs_added
         if url in seen_urls:
             return
-        seen_urls.add(url)
         try:
             if _process_article(source_id, title, url, pub_date, snippet, source_name):
                 docs_added += 1
+                seen_urls.add(url)
+            # A rejected result (missing title/snippet, blocked URL,
+            # already-ingested doc) is NOT marked seen — if the same URL
+            # reappears from a later query with a usable snippet, it still
+            # gets a chance to process. Re-checking a genuine duplicate via
+            # _doc_exists again is cheap and correct either way.
         except Exception as e:
             error_msg = f'{url}: {e}'
             logger.error(f'Article error: {error_msg}', exc_info=True)
             errors.append(error_msg)
+
+    if not WEB_SEARCH_GATEWAY_URL:
+        errors.append('WEB_SEARCH_GATEWAY_URL is not set — skipping all search queries')
+        logger.error('WEB_SEARCH_GATEWAY_URL is not set — skipping all search queries')
+        all_queries = []
 
     # 1. AgentCore Gateway Web Search — one search per generated query
     for query in all_queries:
@@ -426,16 +448,25 @@ def handler(event, context):
     for entry in custom_urls:
         url = entry.get('url', '')
         title = entry.get('title', url)
-        if url:
-            try:
-                html = _fetch_url(url)
-                text = extract_paragraphs(html)
-            except Exception as e:
-                logger.info(f'Could not fetch custom URL body: {e}')
-                text = ''
-            if not text or len(text) < MIN_BODY_LENGTH:
-                logger.info(f'Skipping custom URL with insufficient body: {url}')
-                continue
+        if not url:
+            continue
+        # Check blocked/duplicate before fetching — no reason to make an
+        # outbound request to a paywalled or already-ingested URL.
+        if _is_blocked_url(url):
+            logger.info(f'Skipping paywalled/premium URL: {url}')
+            continue
+        if _doc_exists(source_id, _make_hash(url)):
+            logger.debug(f'Skipping duplicate custom URL: {url}')
+            continue
+        try:
+            html = _fetch_url(url)
+            text = extract_paragraphs(html)
+        except Exception as e:
+            logger.info(f'Could not fetch custom URL body: {e}')
+            text = ''
+        if not text or len(text) < MIN_BODY_LENGTH:
+            logger.info(f'Skipping custom URL with insufficient body: {url}')
+            continue
             _try_process(title, url, '', text)
 
     result = {

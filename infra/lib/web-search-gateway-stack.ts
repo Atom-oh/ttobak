@@ -32,6 +32,11 @@ export class WebSearchGatewayStack extends cdk.Stack {
       }),
       description: 'Service role assumed by the TTOBAK Web Search AgentCore Gateway',
     });
+    // Scoped to gateway/* rather than this specific gateway's ARN: the
+    // gateway doesn't have an ARN yet at role-creation time (chicken-and-egg
+    // — this role is passed into the Gateway construct below). The trust
+    // policy's aws:SourceAccount/SourceArn conditions above already confine
+    // which principal can assume this role in the first place.
     gatewayServiceRole.addToPolicy(new iam.PolicyStatement({
       sid: 'InvokeGateway',
       effect: iam.Effect.ALLOW,

@@ -254,7 +254,36 @@ class TestTechCrawlerNewDoc(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 5. news_crawler._gateway_web_search
+# 5. news_crawler._sigv4_post config guard
+# ---------------------------------------------------------------------------
+
+class TestSigv4PostConfigGuard(unittest.TestCase):
+    """_sigv4_post must raise (not silently return empty) when the gateway
+    URL isn't configured, so a config error is never mistaken for a normal
+    zero-results search."""
+
+    def test_raises_when_gateway_url_unset(self):
+        original = news_crawler.WEB_SEARCH_GATEWAY_URL
+        try:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = ''
+            with self.assertRaises(RuntimeError):
+                news_crawler._sigv4_post('{}')
+        finally:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = original
+
+    def test_handler_records_missing_config_as_error(self):
+        original = news_crawler.WEB_SEARCH_GATEWAY_URL
+        try:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = ''
+            with mock.patch.object(news_crawler, '_doc_exists', return_value=True):
+                result = news_crawler.handler({'sourceId': 's', 'newsQueries': ['q']}, None)
+            self.assertTrue(any('WEB_SEARCH_GATEWAY_URL' in e for e in result['errors']))
+        finally:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = original
+
+
+# ---------------------------------------------------------------------------
+# 6. news_crawler._gateway_web_search
 # ---------------------------------------------------------------------------
 
 class TestGatewayWebSearch(unittest.TestCase):

@@ -92,14 +92,18 @@ class _TextExtractor(HTMLParser):
 # ---------------------------------------------------------------------------
 
 def _sigv4_post(body_json: str) -> str:
-    """POST body_json to the Gateway MCP endpoint, SigV4-signed."""
+    """POST body_json to the Gateway MCP endpoint, SigV4-signed. Raises on
+    missing config or transport/HTTP failure — callers must not treat a
+    config error the same as a normal "no results" response."""
+    if not WEB_SEARCH_GATEWAY_URL:
+        raise RuntimeError("WEB_SEARCH_GATEWAY_URL is not set")
     session = botocore.session.get_session()
     credentials = session.get_credentials()
     request = AWSRequest(
         method="POST",
         url=WEB_SEARCH_GATEWAY_URL,
         data=body_json,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
     )
     SigV4Auth(credentials, "bedrock-agentcore", WEB_SEARCH_GATEWAY_REGION).add_auth(request)
     prepared = request.prepare()
@@ -130,6 +134,9 @@ def web_search(query: str, max_results: int = 10) -> str:
     try:
         raw_response = _sigv4_post(body)
         parsed = json.loads(raw_response)
+        if "error" in parsed:
+            logger.warning(f"Web search gateway returned a JSON-RPC error for '{query}': {parsed['error']}")
+            return json.dumps({"results": [], "message": "Search returned an error"})
         # The MCP CallToolResult (isError/content) is nested under "result"
         # in the JSON-RPC 2.0 envelope; fall back to top-level in case the
         # gateway ever returns the unwrapped result directly.
@@ -140,7 +147,7 @@ def web_search(query: str, max_results: int = 10) -> str:
         if not content:
             return json.dumps({"results": [], "message": "No results found"})
         inner = json.loads(content[0]["text"])
-        results = [r for r in inner.get("results", []) if r.get("url")]
+        results = [r for r in inner.get("results", []) if r.get("url")][:max_results]
         return json.dumps({"results": results}, ensure_ascii=False)
     except Exception as e:
         logger.warning(f"Web search failed for '{query}': {e}")

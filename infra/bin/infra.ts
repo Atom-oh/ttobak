@@ -57,7 +57,11 @@ const knowledgeStack = new KnowledgeStack(app, 'TtobakKnowledgeStack', {
 knowledgeStack.addDependency(storageStack);
 
 // Stack 4: AI (IAM roles) - depends on Storage + Knowledge for bucket/table references
+// research-agent (ttobakResearchContainer) is deployed outside CDK — see
+// backend/python/research-agent/README.md and CLAUDE.md's Gateway env var
+// notes. Both ARNs below are that pre-existing, out-of-band resource.
 const agentCoreRuntimeArn = 'arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/ttobakResearchContainer-o3qbV55ei6';
+const researchAgentExecutionRoleArn = 'arn:aws:iam::180294183052:role/ttobak-agentcore-research-role';
 
 const aiStack = new AiStack(app, 'TtobakAiStack', {
   env,
@@ -69,7 +73,7 @@ const aiStack = new AiStack(app, 'TtobakAiStack', {
   agentCoreRuntimeArn,
   userPoolArn: authStack.userPool.userPoolArn,
   webSearchGatewayArn: webSearchGatewayStack.gateway.gatewayArn,
-  researchAgentExecutionRoleArn: 'arn:aws:iam::180294183052:role/ttobak-agentcore-research-role',
+  researchAgentExecutionRoleArn,
 });
 aiStack.addDependency(storageStack);
 aiStack.addDependency(knowledgeStack);

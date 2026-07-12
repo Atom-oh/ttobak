@@ -78,5 +78,16 @@ class TestWebSearch(unittest.TestCase):
         self.assertNotIn('secret-internal-timeout-detail', raw)
 
 
+class TestSigv4PostConfigGuard(unittest.TestCase):
+    def test_raises_when_gateway_url_unset(self):
+        original = tools.WEB_SEARCH_GATEWAY_URL
+        try:
+            tools.WEB_SEARCH_GATEWAY_URL = ''
+            with self.assertRaises(RuntimeError):
+                tools._sigv4_post('{}')
+        finally:
+            tools.WEB_SEARCH_GATEWAY_URL = original
+
+
 if __name__ == '__main__':
     unittest.main()
