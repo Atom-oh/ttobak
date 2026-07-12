@@ -257,55 +257,74 @@ class TestTechCrawlerNewDoc(unittest.TestCase):
 # 5. news_crawler.fetch_rss (via _parse_rss)
 # ---------------------------------------------------------------------------
 
-class TestNewsCrawlerFetchRss(unittest.TestCase):
-    """Test news_crawler._parse_rss with sample RSS XML."""
+class TestGatewayWebSearch(unittest.TestCase):
+    """Test news_crawler._gateway_web_search parses the AgentCore Gateway MCP response."""
 
-    def test_parse_rss_extracts_articles(self):
-        """Provide sample RSS XML, verify article parsing."""
-        sample_rss = '''<?xml version="1.0" encoding="UTF-8"?>
-        <rss version="2.0">
-          <channel>
-            <title>Google News</title>
-            <item>
-              <title>AWS launches new service</title>
-              <link>https://example.com/article1</link>
-              <pubDate>Mon, 14 Apr 2026 10:00:00 GMT</pubDate>
-            </item>
-            <item>
-              <title>Cloud computing trends 2026</title>
-              <link>https://example.com/article2</link>
-              <pubDate>Sun, 13 Apr 2026 08:00:00 GMT</pubDate>
-            </item>
-            <item>
-              <title>No link article</title>
-            </item>
-          </channel>
-        </rss>'''
+    @mock.patch('news_crawler._sigv4_post')
+    def test_parses_successful_response(self, mock_post):
+        mock_post.return_value = json.dumps({
+            'content': [{
+                'type': 'text',
+                'text': json.dumps({
+                    'id': 'abc123',
+                    'results': [
+                        {'text': 'AI 클라우드 투자 확대', 'url': 'https://example.com/1',
+                         'title': 'Example Article', 'publishedDate': '2026-07-01'},
+                    ],
+                }),
+            }],
+            'isError': False,
+        })
 
-        articles = news_crawler._parse_rss(sample_rss)
+        results = news_crawler._gateway_web_search('우리은행 AI')
 
-        # Should only get 2 articles (3rd has no link)
-        self.assertEqual(len(articles), 2)
-        self.assertEqual(articles[0]['title'], 'AWS launches new service')
-        self.assertEqual(articles[0]['url'], 'https://example.com/article1')
-        self.assertEqual(articles[0]['pubDate'], 'Mon, 14 Apr 2026 10:00:00 GMT')
-        self.assertEqual(articles[1]['title'], 'Cloud computing trends 2026')
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['url'], 'https://example.com/1')
+        self.assertEqual(results[0]['text'], 'AI 클라우드 투자 확대')
+        self.assertEqual(results[0]['publishedDate'], '2026-07-01')
 
-    def test_parse_rss_empty_on_invalid_xml(self):
-        """Invalid XML should return empty list, not crash."""
-        articles = news_crawler._parse_rss('not valid xml <<>>')
-        self.assertEqual(articles, [])
+    @mock.patch('news_crawler._sigv4_post')
+    def test_empty_results_on_no_matches(self, mock_post):
+        mock_post.return_value = json.dumps({
+            'content': [{'type': 'text', 'text': json.dumps({'id': 'x', 'results': []})}],
+            'isError': False,
+        })
 
-    def test_parse_rss_respects_max_limit(self):
-        """Verify MAX_ARTICLES_PER_QUERY limits results."""
-        items = ''.join(
-            f'<item><title>Article {i}</title><link>https://example.com/{i}</link></item>'
-            for i in range(30)
-        )
-        rss = f'<?xml version="1.0"?><rss><channel>{items}</channel></rss>'
+        results = news_crawler._gateway_web_search('존재하지않는검색어유니크12345')
+        self.assertEqual(results, [])
 
-        articles = news_crawler._parse_rss(rss)
-        self.assertLessEqual(len(articles), news_crawler.MAX_ARTICLES_PER_QUERY)
+    @mock.patch('news_crawler._sigv4_post')
+    def test_empty_results_on_gateway_error(self, mock_post):
+        mock_post.return_value = json.dumps({
+            'content': [{'type': 'text', 'text': 'internal error'}],
+            'isError': True,
+        })
+
+        results = news_crawler._gateway_web_search('query')
+        self.assertEqual(results, [])
+
+    @mock.patch('news_crawler._sigv4_post')
+    def test_empty_results_on_transport_exception(self, mock_post):
+        mock_post.side_effect = Exception('connection timeout')
+
+        results = news_crawler._gateway_web_search('query')
+        self.assertEqual(results, [])
+
+    @mock.patch('news_crawler._sigv4_post')
+    def test_query_truncated_to_200_chars_and_max_results_passed(self, mock_post):
+        mock_post.return_value = json.dumps({
+            'content': [{'type': 'text', 'text': json.dumps({'id': 'x', 'results': []})}],
+            'isError': False,
+        })
+
+        long_query = 'a' * 300
+        news_crawler._gateway_web_search(long_query, max_results=3)
+
+        sent_body = json.loads(mock_post.call_args[0][0])
+        self.assertEqual(len(sent_body['params']['arguments']['query']), 200)
+        self.assertEqual(sent_body['params']['arguments']['maxResults'], 3)
+        self.assertEqual(sent_body['params']['name'], 'WebSearch')
+        self.assertEqual(sent_body['method'], 'tools/call')
 
 
 # ---------------------------------------------------------------------------
@@ -317,17 +336,15 @@ class TestNewsCrawlerDedupSkip(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_fetch_url')
     @mock.patch.object(news_crawler, '_doc_exists', return_value=True)
-    def test_dedup_skip(self, mock_exists, mock_fetch, mock_s3, mock_meta):
+    def test_dedup_skip(self, mock_exists, mock_s3, mock_meta):
         """Mock existing doc, verify skip."""
         result = news_crawler._process_article(
-            'tech-news', 'Old Article', 'https://example.com/old', '2026-04-14'
+            'tech-news', 'Old Article', 'https://example.com/old', '2026-04-14', 'snippet text'
         )
 
         self.assertFalse(result)
         mock_exists.assert_called_once()
-        mock_fetch.assert_not_called()
         mock_s3.assert_not_called()
         mock_meta.assert_not_called()
 
@@ -341,26 +358,16 @@ class TestNewsCrawlerNewArticle(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_summarize', return_value='Article summary')
-    @mock.patch.object(news_crawler, '_fetch_url')
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('Article summary', ['AI']))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
-    def test_new_article_writes_s3_and_dynamo(self, mock_exists, mock_fetch,
-                                               mock_summarize, mock_s3, mock_meta):
-        """Verify S3 + DynamoDB writes for a new article with sufficient content."""
-        # Return HTML with enough paragraph text (>50 chars)
-        mock_fetch.return_value = (
-            '<html><body>'
-            '<p>' + 'This is a long enough paragraph for testing. ' * 5 + '</p>'
-            '</body></html>'
-        )
-
+    def test_new_article_writes_s3_and_dynamo(self, mock_exists, mock_summarize, mock_s3, mock_meta):
+        """Verify S3 + DynamoDB writes for a new search-result snippet."""
         result = news_crawler._process_article(
-            'tech-news', 'New AWS Article',
-            'https://example.com/new-article', 'Mon, 14 Apr 2026 10:00:00 GMT'
+            'tech-news', 'New AWS Article', 'https://example.com/new-article',
+            'Mon, 14 Apr 2026 10:00:00 GMT', 'This is the search result snippet text.'
         )
 
         self.assertTrue(result)
-        mock_fetch.assert_called_once_with('https://example.com/new-article')
         mock_summarize.assert_called_once()
         mock_s3.assert_called_once()
         mock_meta.assert_called_once()
@@ -369,24 +376,6 @@ class TestNewsCrawlerNewArticle(unittest.TestCase):
         s3_call_args = mock_s3.call_args
         self.assertEqual(s3_call_args[0][0], 'tech-news')  # source_id
         self.assertEqual(s3_call_args[0][2], 'New AWS Article')  # title
-
-    @mock.patch.object(news_crawler, '_write_metadata')
-    @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_summarize')
-    @mock.patch.object(news_crawler, '_fetch_url')
-    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
-    def test_low_content_article_skipped(self, mock_exists, mock_fetch,
-                                          mock_summarize, mock_s3, mock_meta):
-        """Articles with too little text (<50 chars) should be skipped."""
-        mock_fetch.return_value = '<html><body><p>Short.</p></body></html>'
-
-        result = news_crawler._process_article(
-            'tech-news', 'Thin Article', 'https://example.com/thin', ''
-        )
-
-        self.assertFalse(result)
-        mock_summarize.assert_not_called()
-        mock_s3.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

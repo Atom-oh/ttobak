@@ -14,13 +14,14 @@ import logging
 import os
 import re
 import time
-import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from urllib.error import URLError
-from urllib.parse import quote_plus, urlencode
 from urllib.request import Request, urlopen
 
 import boto3
+import botocore.session
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -29,27 +30,16 @@ TABLE_NAME = os.environ.get('TABLE_NAME', 'ttobak-main')
 KB_BUCKET_NAME = os.environ.get('KB_BUCKET_NAME', 'ttobak-kb')
 SUMMARIZE_MODEL_ID = os.environ.get('SUMMARIZE_MODEL_ID', 'global.anthropic.claude-sonnet-5')
 
+# AgentCore Gateway Web Search connector (us-east-1 only). SigV4-signed MCP
+# tools/call replaces the old Google News / site RSS fetch.
+WEB_SEARCH_GATEWAY_URL = os.environ.get('WEB_SEARCH_GATEWAY_URL', '')
+WEB_SEARCH_GATEWAY_REGION = os.environ.get('WEB_SEARCH_GATEWAY_REGION', 'us-east-1')
+
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
 s3 = boto3.client('s3')
 bedrock = boto3.client('bedrock-runtime')
 
-# RSS sources (Google News as fallback only — returns JS redirect URLs)
-GOOGLE_NEWS_RSS = 'https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko'
-
-# Primary: site-specific RSS feeds that return direct article URLs
-SITE_RSS_FEEDS = {
-    'etnews': 'https://rss.etnews.com/Section901.xml',
-    'hankyung': 'https://www.hankyung.com/feed/it',
-    'mk': 'https://www.mk.co.kr/rss/50300009/',
-    'sedaily': 'https://www.sedaily.com/RSS/IT',
-    'byline': 'https://byline.network/feed/',
-    'aitimes': 'https://www.aitimes.com/rss/allArticle.xml',
-    'techm': 'https://www.techm.kr/rss/allArticle.xml',
-}
-
-MAX_ARTICLES_PER_QUERY = 5
-MAX_ARTICLES_PER_FEED = 5
 FETCH_TIMEOUT_SECONDS = 10
 MAX_CONTENT_LENGTH = 30000
 
@@ -137,84 +127,52 @@ def _strip_html_tags(text: str) -> str:
     return re.sub(r'<[^>]+>', '', text).strip()
 
 
-MAX_RSS_SIZE = 2_000_000
+def _sigv4_post(body_json: str) -> str:
+    """POST body_json to the Gateway MCP endpoint, SigV4-signed. Returns the
+    raw response body text. Raises on transport/HTTP failure."""
+    session = botocore.session.get_session()
+    credentials = session.get_credentials()
+    request = AWSRequest(
+        method='POST',
+        url=WEB_SEARCH_GATEWAY_URL,
+        data=body_json,
+        headers={'Content-Type': 'application/json'},
+    )
+    SigV4Auth(credentials, 'bedrock-agentcore', WEB_SEARCH_GATEWAY_REGION).add_auth(request)
+    prepared = request.prepare()
+    body = prepared.body.encode('utf-8') if isinstance(prepared.body, str) else prepared.body
+    req = Request(prepared.url, data=body, headers=dict(prepared.headers), method='POST')
+    with urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
+        return resp.read().decode('utf-8')
 
-def _parse_rss(xml_text: str, max_items: int = MAX_ARTICLES_PER_QUERY) -> list:
-    articles = []
-    if len(xml_text) > MAX_RSS_SIZE:
-        logger.warning(f'RSS response too large ({len(xml_text)} chars), skipping')
-        return []
+
+def _gateway_web_search(query: str, max_results: int = 10) -> list:
+    """Search via the AgentCore Gateway Web Search connector. Returns
+    [{"text", "url", "title", "publishedDate"}, ...], or [] on any failure
+    (transport error, gateway isError, empty results) — callers must not
+    fall back to RSS."""
+    body = json.dumps({
+        'jsonrpc': '2.0',
+        'id': 1,
+        'method': 'tools/call',
+        'params': {
+            'name': 'WebSearch',
+            'arguments': {'query': query[:200], 'maxResults': max_results},
+        },
+    })
     try:
-        root = ET.fromstring(xml_text)
-        channel = root.find('channel')
-        if channel is None:
-            for ns_prefix in ['', '{http://www.w3.org/2005/Atom}']:
-                entries = root.findall(f'{ns_prefix}entry')
-                for entry in entries:
-                    title_el = entry.find(f'{ns_prefix}title')
-                    link_el = entry.find(f'{ns_prefix}link')
-                    pub_el = entry.find(f'{ns_prefix}published') or entry.find(f'{ns_prefix}updated')
-                    summary_el = entry.find(f'{ns_prefix}summary') or entry.find(f'{ns_prefix}content')
-                    href = ''
-                    if link_el is not None:
-                        href = link_el.get('href', '') or (link_el.text or '')
-                    if title_el is not None and href:
-                        articles.append({
-                            'title': _strip_html_tags(title_el.text or ''),
-                            'url': href,
-                            'pubDate': (pub_el.text if pub_el is not None else ''),
-                            'description': _strip_html_tags(summary_el.text or '') if summary_el is not None else '',
-                        })
-                        if len(articles) >= max_items:
-                            break
-            return articles
-
-        for item in channel.findall('item'):
-            title_el = item.find('title')
-            link_el = item.find('link')
-            pub_el = item.find('pubDate')
-            desc_el = item.find('description')
-            if title_el is not None and link_el is not None:
-                articles.append({
-                    'title': _strip_html_tags(title_el.text or ''),
-                    'url': link_el.text or '',
-                    'pubDate': pub_el.text if pub_el is not None else '',
-                    'description': _strip_html_tags(desc_el.text or '') if desc_el is not None else '',
-                })
-                if len(articles) >= max_items:
-                    break
-    except ET.ParseError as e:
-        logger.warning(f'RSS parse error: {e}')
-    return articles
-
-
-def _search_google_news(query: str) -> list:
-    encoded = quote_plus(query)
-    rss_url = GOOGLE_NEWS_RSS.format(query=encoded)
-    try:
-        xml_text = _fetch_url(rss_url)
-        return _parse_rss(xml_text)
+        raw_response = _sigv4_post(body)
+        parsed = json.loads(raw_response)
+        if parsed.get('isError'):
+            logger.warning(f'Web search gateway returned isError for "{query}"')
+            return []
+        content = parsed.get('content', [])
+        if not content:
+            return []
+        inner = json.loads(content[0]['text'])
+        return inner.get('results', [])
     except Exception as e:
-        logger.warning(f'Google News RSS failed for "{query}": {e}')
-        return []
-
-
-def _is_google_news_redirect(url: str) -> bool:
-    return 'news.google.com/' in url
-
-
-def _fetch_site_rss(feed_url: str, keyword_filter: str = '') -> list:
-    try:
-        xml_text = _fetch_url(feed_url, timeout=15)
-        articles = _parse_rss(xml_text, max_items=20)
-        if keyword_filter:
-            kw_lower = keyword_filter.lower()
-            articles = [a for a in articles
-                        if kw_lower in a.get('title', '').lower()
-                        or kw_lower in a.get('description', '').lower()]
-        return articles[:MAX_ARTICLES_PER_FEED]
-    except Exception as e:
-        logger.warning(f'Site RSS failed for {feed_url}: {e}')
+        logger.warning(f'Web search gateway call failed for "{query}": {e}')
         return []
 
 
@@ -316,7 +274,7 @@ def _doc_exists(source_id: str, doc_hash: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
-                 content: str, summary: str, pub_date: str, tags: list) -> None:
+                 snippet: str, summary: str, pub_date: str, tags: list) -> None:
     tag_line = f'**Tags:** {", ".join(tags)}\n' if tags else ''
     md = (
         f'# {title}\n\n'
@@ -326,8 +284,8 @@ def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
         f'---\n\n'
         f'{summary}\n'
     )
-    if content and len(content) > 50:
-        md += f'\n---\n\n## 원문 발췌\n\n{content[:MAX_CONTENT_LENGTH]}\n'
+    if snippet:
+        md += f'\n---\n\n## 검색 스니펫\n\n{snippet}\n'
     key = f'shared/news/{source_id}/{doc_hash}.md'
     s3.put_object(
         Bucket=KB_BUCKET_NAME,
@@ -377,7 +335,7 @@ def _is_blocked_url(url: str) -> bool:
 
 
 def _process_article(source_id: str, title: str, url: str,
-                     pub_date: str, description: str = '',
+                     pub_date: str, snippet: str = '',
                      crawler_source_name: str = '') -> bool:
     if _is_blocked_url(url):
         logger.info(f'Skipping paywalled/premium URL: {url}')
@@ -389,20 +347,9 @@ def _process_article(source_id: str, title: str, url: str,
         logger.debug(f'Skipping duplicate: {url}')
         return False
 
-    text = ''
-    try:
-        html = _fetch_url(url)
-        text = extract_paragraphs(html)
-    except Exception as e:
-        logger.info(f'Could not fetch article body: {e}')
-
-    if not text or len(text) < MIN_BODY_LENGTH:
-        logger.info(f'Skipping article with insufficient body ({len(text or "")} chars): {title[:60]}')
-        return False
-
-    summary, tags = _summarize_and_tag(title, text, crawler_source_name)
+    summary, tags = _summarize_and_tag(title, snippet, crawler_source_name)
     source_name = _extract_source_name(title)
-    _write_to_s3(source_id, doc_hash, title, url, text, summary, pub_date, tags)
+    _write_to_s3(source_id, doc_hash, title, url, snippet, summary, pub_date, tags)
     _write_metadata(source_id, doc_hash, title, url, pub_date, summary, source_name, tags)
     return True
 
@@ -414,7 +361,7 @@ def _extract_source_name(title: str) -> str:
 
 
 def handler(event, context):
-    """Process news articles from site RSS feeds and Google News.
+    """Process news articles via AgentCore Gateway Web Search + custom URLs.
 
     Expected event:
       {
@@ -424,8 +371,8 @@ def handler(event, context):
         "customUrls": [{"url": "https://...", "title": "..."}]
       }
 
-    Primary: site-specific RSS feeds (direct URLs, reliable).
-    Fallback: Google News RSS (skip articles with unresolvable redirect URLs).
+    Search results come from the AgentCore Web Search connector (snippet
+    only). Custom URLs are still fetched directly and their body extracted.
     """
     source_id = event.get('sourceId', 'unknown')
     source_name = event.get('sourceName', '')
@@ -441,46 +388,42 @@ def handler(event, context):
     errors = []
     seen_urls = set()
 
-    def _try_process(title, url, pub_date='', description=''):
+    def _try_process(title, url, pub_date='', snippet=''):
         nonlocal docs_added
         if url in seen_urls:
             return
-        if _is_google_news_redirect(url):
-            logger.debug(f'Skipping Google News redirect URL: {url[:80]}')
-            return
         seen_urls.add(url)
         try:
-            if _process_article(source_id, title, url, pub_date, description, source_name):
+            if _process_article(source_id, title, url, pub_date, snippet, source_name):
                 docs_added += 1
         except Exception as e:
             error_msg = f'{url}: {e}'
             logger.error(f'Article error: {error_msg}', exc_info=True)
             errors.append(error_msg)
 
-    # 1. Site RSS feeds (primary — direct article URLs, always reliable)
-    for site_key, feed_url in SITE_RSS_FEEDS.items():
-        keyword_filter = source_name if source_name else ''
-        articles = _fetch_site_rss(feed_url, keyword_filter)
-        if articles:
-            logger.info(f'Site RSS {site_key} (filter="{keyword_filter}"): {len(articles)} article(s)')
-            for article in articles:
-                _try_process(article['title'], article['url'],
-                             article.get('pubDate', ''), article.get('description', ''))
-
-    # 2. Google News (fallback — redirect URLs are skipped)
+    # 1. AgentCore Gateway Web Search — one search per generated query
     for query in all_queries:
-        articles = _search_google_news(query)
-        logger.info(f'Google News "{query}": {len(articles)} article(s)')
-        for article in articles:
-            _try_process(article['title'], article['url'],
-                         article.get('pubDate', ''), article.get('description', ''))
+        results = _gateway_web_search(query)
+        logger.info(f'Web search "{query}": {len(results)} result(s)')
+        for r in results:
+            _try_process(r.get('title', ''), r.get('url', ''),
+                         r.get('publishedDate', ''), r.get('text', ''))
 
-    # 3. Custom URLs
+    # 2. Custom URLs (direct fetch — unchanged)
     for entry in custom_urls:
         url = entry.get('url', '')
         title = entry.get('title', url)
         if url:
-            _try_process(title, url)
+            try:
+                html = _fetch_url(url)
+                text = extract_paragraphs(html)
+            except Exception as e:
+                logger.info(f'Could not fetch custom URL body: {e}')
+                text = ''
+            if not text or len(text) < MIN_BODY_LENGTH:
+                logger.info(f'Skipping custom URL with insufficient body: {url}')
+                continue
+            _try_process(title, url, '', text)
 
     result = {
         'docsAdded': docs_added,
