@@ -12,4 +12,4 @@ AWS CDK TypeScript — 11 stacks for the full TTOBAK deployment. See the root `C
 - Lambda@Edge / cross-region stacks (`WebSearchGatewayStack`, `EdgeAuthStack`): must deploy to us-east-1 with `crossRegionReferences: true` on both the producer and any consumer stack
 - IAM: Scope policies to specific resource ARNs where possible
 - Naming: `ttobak-{resource}` prefix for all resource names
-- Build: `npx cdk synth` to validate. **Never `cdk deploy --all`** — always `npx cdk deploy TtobakGatewayStack --exclusively` (see root `CLAUDE.md` Known Issues for why)
+- Build: `npx cdk synth` to validate. **Never `cdk deploy --all`.** Deploy each *changed* stack individually with `--exclusively` (which skips dependencies), in dependency order — a single `deploy TtobakGatewayStack --exclusively` will NOT pick up changes in other stacks. See root `CLAUDE.md` Known Issues for why and for the exact SP1 sequence.

@@ -24,8 +24,10 @@ cd frontend && npm run lint      # eslint
 
 # CDK
 cd infra && npx cdk synth        # synthesize all 11 stacks
-cd infra && npx cdk deploy TtobakGatewayStack --exclusively # real deploys — see "Known Issues" below for why
 cd infra && npm test             # jest tests
+# Deploy: NEVER `--all`. Deploy each CHANGED stack individually with --exclusively,
+# in dependency order. See "Known Issues" below for why and for the SP1 sequence, e.g.:
+#   npx cdk deploy TtobakGatewayStack --exclusively   # (one stack at a time)
 
 # Deploy frontend to S3 + invalidate CloudFront
 aws s3 sync frontend/out/ s3://ttobak-site-180294183052-ap-northeast-2/ --delete
