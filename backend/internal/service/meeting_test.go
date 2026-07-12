@@ -387,6 +387,71 @@ func TestGetMeetingDetail_NotFound(t *testing.T) {
 	}
 }
 
+func TestGetMeetingDetail_ExpiresStuckRecording(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	old := time.Now().Add(-7 * time.Hour)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "user-1", Title: "Abandoned Recording",
+		Status: model.StatusRecording,
+		Date:   old, CreatedAt: old, UpdatedAt: old,
+	})
+
+	detail, err := svc.GetMeetingDetail(context.Background(), "user-1", "m-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if detail.Status != model.StatusError {
+		t.Errorf("expected status %q, got %q", model.StatusError, detail.Status)
+	}
+
+	persisted, _ := repo.GetMeetingByID(context.Background(), "m-1")
+	if persisted.Status != model.StatusError {
+		t.Errorf("expected persisted status %q, got %q", model.StatusError, persisted.Status)
+	}
+}
+
+func TestGetMeetingDetail_RecentRecordingNotExpired(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	recent := time.Now().Add(-10 * time.Minute)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "user-1", Title: "Live Recording",
+		Status: model.StatusRecording,
+		Date:   recent, CreatedAt: recent, UpdatedAt: recent,
+	})
+
+	detail, err := svc.GetMeetingDetail(context.Background(), "user-1", "m-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if detail.Status != model.StatusRecording {
+		t.Errorf("expected status still %q, got %q", model.StatusRecording, detail.Status)
+	}
+}
+
+func TestGetMeetingDetail_ExpiresStuckTranscribing(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	old := time.Now().Add(-31 * time.Minute)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "user-1", Title: "Stuck Transcribing",
+		Status: model.StatusTranscribing,
+		Date:   old, CreatedAt: old, UpdatedAt: old,
+	})
+
+	detail, err := svc.GetMeetingDetail(context.Background(), "user-1", "m-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if detail.Status != model.StatusError {
+		t.Errorf("expected status %q, got %q", model.StatusError, detail.Status)
+	}
+}
+
 func TestUpdateMeeting_OwnerCanUpdate(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)
