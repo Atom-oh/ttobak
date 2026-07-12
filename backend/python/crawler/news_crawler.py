@@ -163,14 +163,19 @@ def _gateway_web_search(query: str, max_results: int = 10) -> list:
     try:
         raw_response = _sigv4_post(body)
         parsed = json.loads(raw_response)
-        if parsed.get('isError'):
+        # The MCP CallToolResult (isError/content) is nested under "result"
+        # in the JSON-RPC 2.0 envelope; fall back to top-level in case the
+        # gateway ever returns the unwrapped result directly.
+        result = parsed.get('result', parsed)
+        if result.get('isError'):
             logger.warning(f'Web search gateway returned isError for "{query}"')
             return []
-        content = parsed.get('content', [])
+        content = result.get('content', [])
         if not content:
             return []
         inner = json.loads(content[0]['text'])
-        return inner.get('results', [])
+        results = inner.get('results', [])
+        return [r for r in results if r.get('url')]
     except Exception as e:
         logger.warning(f'Web search gateway call failed for "{query}": {e}')
         return []
@@ -285,7 +290,7 @@ def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
         f'{summary}\n'
     )
     if snippet:
-        md += f'\n---\n\n## 검색 스니펫\n\n{snippet}\n'
+        md += f'\n---\n\n## 본문 발췌\n\n{snippet[:MAX_CONTENT_LENGTH]}\n'
     key = f'shared/news/{source_id}/{doc_hash}.md'
     s3.put_object(
         Bucket=KB_BUCKET_NAME,
@@ -337,6 +342,14 @@ def _is_blocked_url(url: str) -> bool:
 def _process_article(source_id: str, title: str, url: str,
                      pub_date: str, snippet: str = '',
                      crawler_source_name: str = '') -> bool:
+    if not url or not title:
+        logger.info(f'Skipping result with missing url/title: url={url!r} title={title!r}')
+        return False
+
+    if not snippet:
+        logger.info(f'Skipping result with empty snippet: {url}')
+        return False
+
     if _is_blocked_url(url):
         logger.info(f'Skipping paywalled/premium URL: {url}')
         return False

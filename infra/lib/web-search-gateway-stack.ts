@@ -3,8 +3,6 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import { Construct } from 'constructs';
 
-export interface WebSearchGatewayStackProps extends cdk.StackProps {}
-
 /**
  * AgentCore Gateway fronting the AWS-managed Web Search connector.
  * us-east-1 only (the web-search connector is region-locked). Callers
@@ -16,7 +14,7 @@ export class WebSearchGatewayStack extends cdk.Stack {
   public readonly gatewayId: string;
   public readonly gatewayUrl: string;
 
-  constructor(scope: Construct, id: string, props: WebSearchGatewayStackProps) {
+  constructor(scope: Construct, id: string, props: cdk.StackProps) {
     super(scope, id, props);
 
     // Service role the Gateway assumes to call the Web Search connector.

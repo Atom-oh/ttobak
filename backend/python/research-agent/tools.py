@@ -130,16 +130,21 @@ def web_search(query: str, max_results: int = 10) -> str:
     try:
         raw_response = _sigv4_post(body)
         parsed = json.loads(raw_response)
-        if parsed.get("isError"):
+        # The MCP CallToolResult (isError/content) is nested under "result"
+        # in the JSON-RPC 2.0 envelope; fall back to top-level in case the
+        # gateway ever returns the unwrapped result directly.
+        result = parsed.get("result", parsed)
+        if result.get("isError"):
             return json.dumps({"results": [], "message": "Search returned an error"})
-        content = parsed.get("content", [])
+        content = result.get("content", [])
         if not content:
             return json.dumps({"results": [], "message": "No results found"})
         inner = json.loads(content[0]["text"])
-        return json.dumps({"results": inner.get("results", [])}, ensure_ascii=False)
+        results = [r for r in inner.get("results", []) if r.get("url")]
+        return json.dumps({"results": results}, ensure_ascii=False)
     except Exception as e:
         logger.warning(f"Web search failed for '{query}': {e}")
-        return json.dumps({"results": [], "error": str(e)})
+        return json.dumps({"results": [], "message": "Web search failed"})
 
 
 @tool

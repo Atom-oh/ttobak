@@ -26,8 +26,9 @@ const usEast1Env = {
   region: 'us-east-1',
 };
 
-// Web Search Gateway (us-east-1 only — AWS Web Search connector constraint).
-// Consumed cross-region by the crawler Lambda + research-agent (SigV4 invoke).
+// Stack 0: Web Search Gateway (us-east-1 only — AWS Web Search connector
+// constraint). Consumed cross-region by the crawler Lambda + research-agent
+// (SigV4 invoke).
 const webSearchGatewayStack = new WebSearchGatewayStack(app, 'TtobakWebSearchGatewayStack', {
   env: usEast1Env,
   crossRegionReferences: true,

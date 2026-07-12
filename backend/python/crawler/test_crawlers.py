@@ -254,26 +254,35 @@ class TestTechCrawlerNewDoc(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# 5. news_crawler.fetch_rss (via _parse_rss)
+# 5. news_crawler._gateway_web_search
 # ---------------------------------------------------------------------------
 
 class TestGatewayWebSearch(unittest.TestCase):
-    """Test news_crawler._gateway_web_search parses the AgentCore Gateway MCP response."""
+    """Test news_crawler._gateway_web_search parses the AgentCore Gateway MCP
+    response. The real Gateway wraps the MCP CallToolResult (isError/content)
+    under a top-level "result" key, per the JSON-RPC 2.0 envelope — that's
+    the shape these tests mock. A separate case confirms the unwrapped
+    top-level shape is also accepted, in case the gateway ever returns it
+    directly."""
 
     @mock.patch('news_crawler._sigv4_post')
     def test_parses_successful_response(self, mock_post):
         mock_post.return_value = json.dumps({
-            'content': [{
-                'type': 'text',
-                'text': json.dumps({
-                    'id': 'abc123',
-                    'results': [
-                        {'text': 'AI 클라우드 투자 확대', 'url': 'https://example.com/1',
-                         'title': 'Example Article', 'publishedDate': '2026-07-01'},
-                    ],
-                }),
-            }],
-            'isError': False,
+            'jsonrpc': '2.0',
+            'id': 1,
+            'result': {
+                'content': [{
+                    'type': 'text',
+                    'text': json.dumps({
+                        'id': 'abc123',
+                        'results': [
+                            {'text': 'AI 클라우드 투자 확대', 'url': 'https://example.com/1',
+                             'title': 'Example Article', 'publishedDate': '2026-07-01'},
+                        ],
+                    }),
+                }],
+                'isError': False,
+            },
         })
 
         results = news_crawler._gateway_web_search('우리은행 AI')
@@ -284,10 +293,29 @@ class TestGatewayWebSearch(unittest.TestCase):
         self.assertEqual(results[0]['publishedDate'], '2026-07-01')
 
     @mock.patch('news_crawler._sigv4_post')
+    def test_accepts_unwrapped_top_level_shape(self, mock_post):
+        """Falls back to reading isError/content at the top level if the
+        gateway ever skips the JSON-RPC "result" wrapper."""
+        mock_post.return_value = json.dumps({
+            'content': [{'type': 'text', 'text': json.dumps({
+                'id': 'x', 'results': [{'text': 't', 'url': 'https://example.com/2'}],
+            })}],
+            'isError': False,
+        })
+
+        results = news_crawler._gateway_web_search('query')
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['url'], 'https://example.com/2')
+
+    @mock.patch('news_crawler._sigv4_post')
     def test_empty_results_on_no_matches(self, mock_post):
         mock_post.return_value = json.dumps({
-            'content': [{'type': 'text', 'text': json.dumps({'id': 'x', 'results': []})}],
-            'isError': False,
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {
+                'content': [{'type': 'text', 'text': json.dumps({'id': 'x', 'results': []})}],
+                'isError': False,
+            },
         })
 
         results = news_crawler._gateway_web_search('존재하지않는검색어유니크12345')
@@ -296,12 +324,36 @@ class TestGatewayWebSearch(unittest.TestCase):
     @mock.patch('news_crawler._sigv4_post')
     def test_empty_results_on_gateway_error(self, mock_post):
         mock_post.return_value = json.dumps({
-            'content': [{'type': 'text', 'text': 'internal error'}],
-            'isError': True,
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {
+                'content': [{'type': 'text', 'text': 'internal error'}],
+                'isError': True,
+            },
         })
 
         results = news_crawler._gateway_web_search('query')
         self.assertEqual(results, [])
+
+    @mock.patch('news_crawler._sigv4_post')
+    def test_results_missing_url_are_filtered_out(self, mock_post):
+        mock_post.return_value = json.dumps({
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {
+                'content': [{'type': 'text', 'text': json.dumps({
+                    'id': 'x',
+                    'results': [
+                        {'text': 'no url here'},
+                        {'text': 'has url', 'url': 'https://example.com/3'},
+                    ],
+                })}],
+                'isError': False,
+            },
+        })
+
+        results = news_crawler._gateway_web_search('query')
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['url'], 'https://example.com/3')
 
     @mock.patch('news_crawler._sigv4_post')
     def test_empty_results_on_transport_exception(self, mock_post):
@@ -313,8 +365,11 @@ class TestGatewayWebSearch(unittest.TestCase):
     @mock.patch('news_crawler._sigv4_post')
     def test_query_truncated_to_200_chars_and_max_results_passed(self, mock_post):
         mock_post.return_value = json.dumps({
-            'content': [{'type': 'text', 'text': json.dumps({'id': 'x', 'results': []})}],
-            'isError': False,
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {
+                'content': [{'type': 'text', 'text': json.dumps({'id': 'x', 'results': []})}],
+                'isError': False,
+            },
         })
 
         long_query = 'a' * 300
@@ -345,6 +400,46 @@ class TestNewsCrawlerDedupSkip(unittest.TestCase):
 
         self.assertFalse(result)
         mock_exists.assert_called_once()
+        mock_s3.assert_not_called()
+        mock_meta.assert_not_called()
+
+
+class TestProcessArticleGuards(unittest.TestCase):
+    """Test news_crawler._process_article rejects malformed search results
+    before touching DynamoDB/S3 (missing url/title, empty snippet)."""
+
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    def test_missing_url_skipped(self, mock_exists, mock_s3, mock_meta):
+        result = news_crawler._process_article('tech-news', 'Title', '', '2026-04-14', 'snippet')
+
+        self.assertFalse(result)
+        mock_exists.assert_not_called()
+        mock_s3.assert_not_called()
+        mock_meta.assert_not_called()
+
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    def test_missing_title_skipped(self, mock_exists, mock_s3, mock_meta):
+        result = news_crawler._process_article(
+            'tech-news', '', 'https://example.com/x', '2026-04-14', 'snippet'
+        )
+
+        self.assertFalse(result)
+        mock_exists.assert_not_called()
+        mock_s3.assert_not_called()
+
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    def test_empty_snippet_skipped(self, mock_exists, mock_s3, mock_meta):
+        result = news_crawler._process_article(
+            'tech-news', 'Title', 'https://example.com/x', '2026-04-14', ''
+        )
+
+        self.assertFalse(result)
         mock_s3.assert_not_called()
         mock_meta.assert_not_called()
 

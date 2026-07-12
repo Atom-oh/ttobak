@@ -55,7 +55,7 @@ Microphone → AWS Transcribe Streaming (via @aws-sdk/client-transcribe-streamin
 ```
 
 ### CDK Stack Dependency Order (11 stacks)
-WebSearchGateway (us-east-1) + Auth + Storage (parallel) → AI → Whisper → Knowledge → EdgeAuth (us-east-1) → Gateway → Frontend
+{WebSearchGateway (us-east-1) + Storage} (parallel, no deps) → {Auth, Knowledge} (both depend on Storage) → AI (depends on Storage+Knowledge+Auth+WebSearchGateway) → {EdgeAuth (us-east-1, depends on Auth), Whisper (depends on Storage), ResearchAgent (depends on Storage+Knowledge)} → Gateway (depends on Auth+Storage+AI+Knowledge) → Crawler (depends on AI+Storage+Knowledge+WebSearchGateway) → Frontend (depends on Gateway+EdgeAuth+Auth). See `infra/bin/infra.ts` for the exact `addDependency` calls — this list is the actual graph, not stack creation order.
 
 ### Backend (Go)
 

@@ -26,14 +26,20 @@ import tools
 
 
 class TestWebSearch(unittest.TestCase):
+    """The real Gateway wraps the MCP CallToolResult under a top-level
+    "result" key (JSON-RPC 2.0 envelope) — that's the shape mocked here."""
+
     @mock.patch('tools._sigv4_post')
     def test_returns_results_from_gateway(self, mock_post):
         mock_post.return_value = json.dumps({
-            'content': [{'type': 'text', 'text': json.dumps({
-                'id': 'x',
-                'results': [{'text': 'snippet', 'url': 'https://example.com', 'title': 'T', 'publishedDate': '2026-07-01'}],
-            })}],
-            'isError': False,
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {
+                'content': [{'type': 'text', 'text': json.dumps({
+                    'id': 'x',
+                    'results': [{'text': 'snippet', 'url': 'https://example.com', 'title': 'T', 'publishedDate': '2026-07-01'}],
+                })}],
+                'isError': False,
+            },
         })
 
         raw = tools.web_search('AWS Bedrock')
@@ -43,14 +49,33 @@ class TestWebSearch(unittest.TestCase):
         self.assertEqual(parsed['results'][0]['url'], 'https://example.com')
 
     @mock.patch('tools._sigv4_post')
-    def test_returns_empty_results_on_error(self, mock_post):
-        mock_post.side_effect = Exception('timeout')
+    def test_filters_results_missing_url(self, mock_post):
+        mock_post.return_value = json.dumps({
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {
+                'content': [{'type': 'text', 'text': json.dumps({
+                    'id': 'x',
+                    'results': [{'text': 'no url'}, {'text': 'has url', 'url': 'https://example.com/2'}],
+                })}],
+                'isError': False,
+            },
+        })
+
+        raw = tools.web_search('query')
+        parsed = json.loads(raw)
+
+        self.assertEqual(len(parsed['results']), 1)
+        self.assertEqual(parsed['results'][0]['url'], 'https://example.com/2')
+
+    @mock.patch('tools._sigv4_post')
+    def test_returns_empty_results_on_error_without_leaking_exception_detail(self, mock_post):
+        mock_post.side_effect = Exception('secret-internal-timeout-detail')
 
         raw = tools.web_search('query')
         parsed = json.loads(raw)
 
         self.assertEqual(parsed['results'], [])
-        self.assertIn('error', parsed)
+        self.assertNotIn('secret-internal-timeout-detail', raw)
 
 
 if __name__ == '__main__':

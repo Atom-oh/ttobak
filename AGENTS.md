@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: b89d94bf29f9 · generated-at: 2026-07-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 3c47b7211de3 · generated-at: 2026-07-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -9,7 +9,7 @@ Korean AI meeting assistant for AWS Solutions Architects: record → real-time S
 - **Frontend**: Next.js 16 static SPA (`output: 'export'` in prod), Tailwind v4 (class-based dark mode), TipTap, deployed to S3/CloudFront. TypeScript.
 - **Backend**: Go Lambda (ARM64), chi router + `aws-lambda-go-api-proxy` (API Gateway **payload v1.0** — v2.0 breaks routing). 5 entry points: `cmd/{api,transcribe,summarize,process-image,kb}`.
 - **Q&A**: separate Python Lambda (`backend/python/qa/`) for Bedrock RAG.
-- **Infra**: CDK TypeScript (10 stacks). DynamoDB single-table `ttobak-main`.
+- **Infra**: CDK TypeScript (11 stacks). DynamoDB single-table `ttobak-main`.
 - **Models**: Claude Opus for summarize/vision, Claude Haiku for fast translate/detect.
 
 ## Build · Test · Lint (copy-paste)
