@@ -90,7 +90,6 @@ class TestWebSearch(unittest.TestCase):
 
         self.assertEqual(len(parsed['results']), 1)
         self.assertEqual(parsed['results'][0]['url'], 'https://example.com/2')
-        self.assertEqual(parsed['results'][0]['url'], 'https://example.com/2')
 
     @mock.patch('tools._sigv4_post')
     def test_returns_empty_results_on_error_without_leaking_exception_detail(self, mock_post):

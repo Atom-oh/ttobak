@@ -24,11 +24,16 @@ resource):
 | `WEB_SEARCH_GATEWAY_REGION` | GitHub Actions repo variable `WEB_SEARCH_GATEWAY_REGION` | Gateway's region (`us-east-1`) for SigV4 signing |
 
 **After deploying `TtobakWebSearchGatewayStack`**, set the
-`WEB_SEARCH_GATEWAY_URL`/`WEB_SEARCH_GATEWAY_REGION` GitHub Actions repo
-variables from its `GatewayUrl` CFN output, then re-run
+`WEB_SEARCH_GATEWAY_URL` GitHub Actions repo variable from its `GatewayUrl`
+CFN output (`WEB_SEARCH_GATEWAY_REGION` is always `us-east-1` — a fixed
+value, not something read from a CFN output), then re-run
 `deploy-research-agent.yml` (or push a no-op change to this directory) so
-the running container picks them up. Until that's done, `web_search`
-returns `{"results": [], "message": "Web search is misconfigured"}`.
+the running container picks them up. `deploy-research-agent.yml` fails the
+deploy outright (`exit 1`) if either repo variable is unset — the
+"misconfigured" `web_search` response below only applies to an
+**already-running** container that was deployed before the variables were
+set (e.g. before this repo variable requirement existed):
+`{"results": [], "message": "Web search is misconfigured"}`.
 
 ## IAM
 
