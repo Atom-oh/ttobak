@@ -394,7 +394,7 @@ def _summarize_and_tag(title: str, text: str, source_name: str = '') -> tuple:
         start_idx = response_text.find('{')
         if start_idx >= 0:
             parsed, _ = json.JSONDecoder().raw_decode(response_text, start_idx)
-            summary = parsed.get('summary', '')
+            summary = str(parsed.get('summary', ''))
             tags = parsed.get('tags', [])
             if isinstance(tags, list):
                 tags = [str(t).strip() for t in tags if t][:10]

@@ -645,6 +645,22 @@ class TestSummarizeAndTagDelimiterEscape(unittest.TestCase):
         self.assertEqual(prompt.count('</article>'), 1)
         self.assertEqual(prompt.count('<article>'), 2)
 
+    def test_non_string_summary_from_bedrock_is_coerced(self):
+        # Bedrock returns valid JSON but "summary" isn't guaranteed to be a
+        # string (e.g. a nested object/list) -- _sanitize_snippet's re.sub
+        # calls downstream require a str, so this must not raise.
+        def fake_converse(modelId, messages, inferenceConfig):
+            return {'output': {'message': {'content': [
+                {'text': '{"summary": {"unexpected": "object"}, "tags": []}'}
+            ]}}}
+
+        with mock.patch.object(news_crawler.bedrock, 'converse', side_effect=fake_converse):
+            summary, tags = news_crawler._summarize_and_tag(
+                'Title', 'normal body text that is long enough to pass the length check here',
+            )
+
+        self.assertIsInstance(summary, str)
+
 
 class TestWriteToS3TitleSanitized(unittest.TestCase):
     """_write_to_s3 must sanitize title the same way it sanitizes snippet,
