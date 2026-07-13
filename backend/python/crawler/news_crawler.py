@@ -463,14 +463,18 @@ def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
 def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
                     pub_date: str, summary: str = '', source_name: str = '',
                     tags: list = None) -> None:
+    # title/url/pub_date/summary/tags are untrusted (open web search
+    # result); this metadata is read by the Go API and shown in the
+    # frontend insights UI, so sanitize it the same way as the S3 KB doc in
+    # _write_to_s3 for defense-in-depth consistency between the two sinks.
     crawled_at = int(time.time())
     item = {
         'PK': f'CRAWLER#{source_id}',
         'SK': f'DOC#{doc_hash}',
         'docHash': doc_hash,
-        'url': url,
-        'title': title,
-        'pubDate': pub_date,
+        'url': _strip_newlines(url),
+        'title': _sanitize_snippet(title),
+        'pubDate': _strip_newlines(pub_date),
         'crawledAt': crawled_at,
         'type': 'news',
         's3Key': f'shared/news/{source_id}/{doc_hash}.md',
@@ -480,12 +484,12 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
     }
     item['sourceId'] = source_id
     if summary:
-        item['summary'] = summary
+        item['summary'] = _sanitize_snippet(summary)
     if source_name:
         item['source'] = source_name
         item['sourceName'] = source_name
     if tags:
-        item['tags'] = tags
+        item['tags'] = [_strip_newlines(_sanitize_snippet(t)) for t in tags]
     table.put_item(Item=item)
 
 
