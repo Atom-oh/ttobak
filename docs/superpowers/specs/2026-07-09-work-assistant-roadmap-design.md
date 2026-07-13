@@ -44,7 +44,7 @@ SP5 (독립) ──────────────────┘
 
 권장 순서: **SP1 → SP2 → SP3 → SP4 → SP5 → SP6**. SP1과 SP5는 SP2~4와 독립이라 병렬 진행 가능.
 
-### SP1. AgentCore Web Search 뉴스 크롤링
+### SP1. AgentCore Web Search 뉴스 크롤링 — **Shipped** (2026-07-13, PR #111)
 
 **In**: `news_crawler.py`의 RSS 파싱을 AgentCore Gateway Web Search 커넥터 호출로 교체(크롤러 소스별 검색 쿼리 → 결과 필터 → 기존 Bedrock 요약/태깅 재사용 → 기존 저장 포맷 `shared/news/{sourceId}/{hash}.md` + `CRAWLER#{sourceId}`/`DOC#{hash}` 유지). us-east-1 Gateway 리소스를 CDK로 신설(서울 리전 크롤러 Lambda에서 크로스 리전 MCP 호출). research-agent(`backend/python/research-agent/tools.py`)의 `web_search()`도 같은 Gateway로 교체. 결과에 출처 URL·게시일 표시(Acceptable Use 준수), 기사 전문 대신 snippet+요약만 저장(기존보다 오히려 저장량 감소).
 

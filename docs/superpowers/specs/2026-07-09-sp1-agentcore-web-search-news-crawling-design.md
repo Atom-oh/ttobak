@@ -1,6 +1,6 @@
 # SP1: AgentCore Web Search 기반 뉴스 크롤링
 
-> Status: Draft · Date: 2026-07-09 · Author: (brainstormed with Claude)
+> Status: **Shipped** (2026-07-13, PR #111) · Date: 2026-07-09 · Author: (brainstormed with Claude)
 > Roadmap 참조: [2026-07-09-work-assistant-roadmap-design.md](2026-07-09-work-assistant-roadmap-design.md) SP1
 
 ## 1. Overview (목적)
