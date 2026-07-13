@@ -38,15 +38,6 @@ jobs:
             GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
           done
 
-      - name: Verify ttobak-agentcore-research-role exists
-        run: |
-          # TtobakAiStack imports this role by ARN to attach the Gateway-
-          # invoke policy. It's a manually-created, pre-existing IAM
-          # resource (not produced by any CI pipeline) -- fail fast with a
-          # clear message instead of letting the CFN inline-policy-attach
-          # step fail obscurely mid-deploy.
-          aws iam get-role --role-name ttobak-agentcore-research-role >/dev/null
-
       - name: CDK deploy
         working-directory: infra
         run: |
@@ -59,9 +50,18 @@ jobs:
           # CLAUDE.md Known Issues). Deploy every other stack individually
           # with --exclusively, in dependency order (see infra/bin/infra.ts
           # addDependency calls), so TtobakKnowledgeStack is never touched.
+          # A stack with no changes is a no-op under --exclusively, so
+          # running this same full list every push is safe -- it does not
+          # mean every stack redeploys on every change.
           npx cdk deploy TtobakWebSearchGatewayStack --exclusively --require-approval never
           npx cdk deploy TtobakStorageStack --exclusively --require-approval never
           npx cdk deploy TtobakAuthStack --exclusively --require-approval never
+          # ttobak-agentcore-research-role is a manually-created,
+          # pre-existing IAM resource (not produced by any CI pipeline) --
+          # TtobakAiStack imports it by ARN, so verify it exists right
+          # before that stack to fail fast with a clear message instead of
+          # an obscure CFN inline-policy-attach error mid-deploy.
+          aws iam get-role --role-name ttobak-agentcore-research-role >/dev/null
           npx cdk deploy TtobakAiStack --exclusively --require-approval never
           npx cdk deploy TtobakEdgeAuthStack --exclusively --require-approval never
           npx cdk deploy TtobakGatewayStack --exclusively --require-approval never

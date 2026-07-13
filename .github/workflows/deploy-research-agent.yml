@@ -53,6 +53,10 @@ jobs:
           ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.RESEARCH_ECR_REPO }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          if [ -z "${WEB_SEARCH_GATEWAY_URL}" ] || [ -z "${WEB_SEARCH_GATEWAY_REGION}" ]; then
+            echo "::error::WEB_SEARCH_GATEWAY_URL/WEB_SEARCH_GATEWAY_REGION repo variables are unset -- set them from TtobakWebSearchGatewayStack's GatewayUrl output before deploying, or web_search will report itself misconfigured."
+            exit 1
+          fi
           ARTIFACT=$(jq -n --arg uri "${ECR_URI}:${IMAGE_TAG::8}" '{containerConfiguration:{containerUri:$uri}}')
           ENV_VARS=$(jq -n --arg url "${WEB_SEARCH_GATEWAY_URL}" --arg region "${WEB_SEARCH_GATEWAY_REGION}" \
             '{WEB_SEARCH_GATEWAY_URL:$url, WEB_SEARCH_GATEWAY_REGION:$region}')

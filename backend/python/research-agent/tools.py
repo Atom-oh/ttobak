@@ -165,6 +165,15 @@ def _sanitize_snippet(text: str) -> str:
     return "\n".join(cleaned_lines)
 
 
+def _strip_newlines(text: str) -> str:
+    """Collapse newlines/control chars in untrusted url/date fields before
+    the agent (and possibly save_report()) carries them further -- kept in
+    sync with backend/python/crawler/news_crawler.py's copy."""
+    if not text:
+        return text
+    return " ".join(text.split())
+
+
 def _sigv4_post(body_json: str) -> str:
     """POST body_json to the Gateway MCP endpoint, SigV4-signed. Returns the
     response body as a JSON string, unwrapping an SSE ("data: ...") frame if
@@ -242,6 +251,10 @@ def web_search(query: str, max_results: int = 10) -> str:
                 r["title"] = _sanitize_snippet(r["title"])
             if r.get("text"):
                 r["text"] = _sanitize_snippet(r["text"])
+            if r.get("url"):
+                r["url"] = _strip_newlines(r["url"])
+            if r.get("publishedDate"):
+                r["publishedDate"] = _strip_newlines(r["publishedDate"])
         return json.dumps({"results": results}, ensure_ascii=False)
     except Exception as e:
         logger.warning(f"Web search failed for '{query}': {e}")

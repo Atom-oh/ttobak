@@ -129,6 +129,30 @@ class TestWebSearchSanitizesResults(unittest.TestCase):
         self.assertTrue(result['title'].startswith('[quoted] '))
 
     @mock.patch('tools._sigv4_post')
+    def test_url_and_published_date_newlines_stripped(self, mock_post):
+        mock_post.return_value = json.dumps({
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {
+                'content': [{'type': 'text', 'text': json.dumps({
+                    'id': 'x',
+                    'results': [{
+                        'text': 'snippet',
+                        'url': 'https://example.com/x\nsomething-else',
+                        'title': 'T',
+                        'publishedDate': '2026-07-01\nsomething-else',
+                    }],
+                })}],
+                'isError': False,
+            },
+        })
+
+        raw = tools.web_search('query')
+        result = json.loads(raw)['results'][0]
+
+        self.assertNotIn('\n', result['url'])
+        self.assertNotIn('\n', result['publishedDate'])
+
+    @mock.patch('tools._sigv4_post')
     def test_korean_directive_in_snippet_is_neutralized(self, mock_post):
         mock_post.return_value = json.dumps({
             'jsonrpc': '2.0', 'id': 1,
