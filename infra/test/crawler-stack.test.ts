@@ -27,6 +27,7 @@ describe('CrawlerStack', () => {
       kbBucket,
       knowledgeBaseId: 'test-kb-id',
       dataSourceId: 'test-ds-id',
+      webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
     });
 
     template = Template.fromStack(stack);

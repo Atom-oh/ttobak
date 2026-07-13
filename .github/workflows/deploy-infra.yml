@@ -43,4 +43,41 @@ jobs:
         run: |
           npm ci
           npx cdk diff 2>&1 || true
-          npx cdk deploy --all --require-approval never
+          # Never `--all` and never list stacks without `--exclusively`:
+          # either one pulls in each named stack's full dependency closure,
+          # which includes TtobakKnowledgeStack -- it stages a deliberate,
+          # undeployed Bedrock KB teardown that would apply for real (see
+          # CLAUDE.md Known Issues). Deploy every other stack individually
+          # with --exclusively, in dependency order (see infra/bin/infra.ts
+          # addDependency calls), so TtobakKnowledgeStack is never touched.
+          # A stack with no changes is a no-op under --exclusively, so
+          # running this same full list every push is safe -- it does not
+          # mean every stack redeploys on every change.
+          npx cdk deploy TtobakWebSearchGatewayStack --exclusively --require-approval never
+          npx cdk deploy TtobakStorageStack --exclusively --require-approval never
+          npx cdk deploy TtobakAuthStack --exclusively --require-approval never
+          # ttobak-agentcore-research-role is a manually-created,
+          # pre-existing IAM resource (not produced by any CI pipeline) --
+          # TtobakAiStack imports it by ARN and attaches an inline policy to
+          # it, so this deploy role's credentials must already be able to
+          # mutate IAM roles generally (a strictly higher privilege than
+          # iam:GetRole). Verify existence right before that stack to fail
+          # fast with a clear message instead of an obscure CFN
+          # inline-policy-attach error -- but if the read itself is denied
+          # for some unrelated policy reason, don't let this precondition
+          # check become a NEW failure mode; warn and let the real
+          # CFN deploy be the source of truth.
+          if ! ROLE_CHECK=$(aws iam get-role --role-name ttobak-agentcore-research-role 2>&1); then
+            if echo "$ROLE_CHECK" | grep -q 'NoSuchEntity'; then
+              echo "::error::ttobak-agentcore-research-role does not exist -- create it before deploying TtobakAiStack (see CLAUDE.md Known Issues)."
+              exit 1
+            fi
+            echo "::warning::Could not verify ttobak-agentcore-research-role via iam:GetRole ($ROLE_CHECK) -- proceeding, TtobakAiStack's deploy will surface the real error if the role is actually missing."
+          fi
+          npx cdk deploy TtobakAiStack --exclusively --require-approval never
+          npx cdk deploy TtobakEdgeAuthStack --exclusively --require-approval never
+          npx cdk deploy TtobakGatewayStack --exclusively --require-approval never
+          npx cdk deploy TtobakCrawlerStack --exclusively --require-approval never
+          npx cdk deploy TtobakResearchAgentStack --exclusively --require-approval never
+          npx cdk deploy TtobakWhisperStack --exclusively --require-approval never
+          npx cdk deploy TtobakFrontendStack --exclusively --require-approval never

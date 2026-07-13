@@ -12,6 +12,8 @@ export interface AiStackProps extends cdk.StackProps {
   kbBucket: s3.IBucket;
   agentCoreRuntimeArn?: string;
   userPoolArn: string;
+  webSearchGatewayArn: string;
+  researchAgentExecutionRoleArn: string;
 }
 
 export class AiStack extends cdk.Stack {
@@ -433,6 +435,31 @@ export class AiStack extends cdk.Stack {
       effect: iam.Effect.ALLOW,
       actions: ['bedrock:StartIngestionJob'],
       resources: ['*'],
+    }));
+
+    // News crawler Lambda invokes the us-east-1 Web Search Gateway (SigV4).
+    this.crawlerRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'InvokeWebSearchGateway',
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock-agentcore:InvokeGateway'],
+      resources: [props.webSearchGatewayArn],
+    }));
+
+    // research-agent's actual caller is the AgentCore Runtime container
+    // (ttobakResearchContainer), not researchWorkerRole (that role only
+    // invokes the container itself via InvokeAgentRuntime) — import the
+    // container's real execution role and grant it the same Gateway invoke
+    // permission. That role is managed outside CDK, so this is an import.
+    const researchAgentExecutionRole = iam.Role.fromRoleArn(
+      this, 'ResearchAgentExecutionRole', props.researchAgentExecutionRoleArn,
+    );
+    researchAgentExecutionRole.attachInlinePolicy(new iam.Policy(this, 'ResearchAgentGatewayInvoke', {
+      statements: [new iam.PolicyStatement({
+        sid: 'InvokeWebSearchGateway',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock-agentcore:InvokeGateway'],
+        resources: [props.webSearchGatewayArn],
+      })],
     }));
 
     this.qaRole.addToPolicy(

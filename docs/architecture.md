@@ -28,7 +28,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 | **저장** | 데이터 | DynamoDB (단일 테이블), S3 |
 | **쿼리** | RAG Q&A | Bedrock Knowledge Base, OpenSearch Serverless |
 | **보안** | 암호화 | KMS (Notion API 키), S3 SSE |
-| **인프라** | IaC | AWS CDK TypeScript (10 스택) |
+| **인프라** | IaC | AWS CDK TypeScript (11 스택) |
 
 ### 전체 아키텍처 다이어그램
 
@@ -95,16 +95,17 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 
 | 스택 | 리소스 | 의존성 |
 |------|--------|--------|
-| `TtobakAuthStack` | Cognito User Pool, Client | - |
+| `TtobakWebSearchGatewayStack` | AgentCore Gateway + Web Search 커넥터 (us-east-1) | - |
+| `TtobakAuthStack` | Cognito User Pool, Client | Storage |
 | `TtobakStorageStack` | DynamoDB, S3 (assets) | - |
-| `TtobakAIStack` | IAM Roles, KMS Key | Auth, Storage |
-| `TtobakKnowledgeStack` | S3 (KB), OpenSearch, Bedrock KB | AI |
+| `TtobakAiStack` | IAM Roles, KMS Key | Storage, Knowledge, Auth, WebSearchGateway |
+| `TtobakKnowledgeStack` | S3 (KB), OpenSearch, Bedrock KB | Storage |
 | `TtobakEdgeAuthStack` | Lambda@Edge (us-east-1) | Auth |
-| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 8 Lambdas, EventBridge | AI, Knowledge |
+| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 8 Lambdas, EventBridge | Auth, Storage, AI, Knowledge |
 | `TtobakWhisperStack` | ECS Cluster, ECR, ASG (GPU Spot, min=0, max=10) | Storage |
-| `TtobakCrawlerStack` | Step Functions, 4 크롤러 Lambda, 일일 EventBridge | Knowledge |
-| `TtobakResearchAgentStack` | Bedrock Agent (Deep Research), 도구 Lambda | Knowledge |
-| `TtobakFrontendStack` | CloudFront, S3 (site) | Gateway, EdgeAuth |
+| `TtobakCrawlerStack` | Step Functions, 4 크롤러 Lambda, 일일 EventBridge | AI, Storage, Knowledge, WebSearchGateway |
+| `TtobakResearchAgentStack` | Bedrock Agent (Deep Research), 도구 Lambda | Storage, Knowledge |
+| `TtobakFrontendStack` | CloudFront, S3 (site) | Gateway, EdgeAuth, Auth |
 
 ### 주요 설계 결정
 
@@ -168,7 +169,7 @@ TTOBAK is a Korean AI meeting assistant. It records audio in the browser, extrac
 | **Storage** | Data | DynamoDB (single-table), S3 |
 | **Query** | RAG Q&A | Bedrock Knowledge Base, OpenSearch Serverless |
 | **Security** | Encryption | KMS (Notion API key), S3 SSE |
-| **Infrastructure** | IaC | AWS CDK TypeScript (10 stacks) |
+| **Infrastructure** | IaC | AWS CDK TypeScript (11 stacks) |
 
 ### Full Architecture Diagram
 
@@ -185,16 +186,17 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 
 | Stack | Resources | Dependencies |
 |-------|-----------|-------------|
-| `TtobakAuthStack` | Cognito User Pool, Client | - |
+| `TtobakWebSearchGatewayStack` | AgentCore Gateway + Web Search connector (us-east-1) | - |
+| `TtobakAuthStack` | Cognito User Pool, Client | Storage |
 | `TtobakStorageStack` | DynamoDB, S3 (assets) | - |
-| `TtobakAIStack` | IAM Roles, KMS Key | Auth, Storage |
-| `TtobakKnowledgeStack` | S3 (KB), OpenSearch, Bedrock KB | AI |
+| `TtobakAiStack` | IAM Roles, KMS Key | Storage, Knowledge, Auth, WebSearchGateway |
+| `TtobakKnowledgeStack` | S3 (KB), OpenSearch, Bedrock KB | Storage |
 | `TtobakEdgeAuthStack` | Lambda@Edge (us-east-1) | Auth |
-| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 8 Lambdas, EventBridge | AI, Knowledge |
+| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 8 Lambdas, EventBridge | Auth, Storage, AI, Knowledge |
 | `TtobakWhisperStack` | ECS Cluster, ECR, ASG (GPU Spot, min=0, max=10) | Storage |
-| `TtobakCrawlerStack` | Step Functions, 4 crawler Lambdas, daily EventBridge | Knowledge |
-| `TtobakResearchAgentStack` | Bedrock Agent (Deep Research), tool Lambdas | Knowledge |
-| `TtobakFrontendStack` | CloudFront, S3 (site) | Gateway, EdgeAuth |
+| `TtobakCrawlerStack` | Step Functions, 4 crawler Lambdas, daily EventBridge | AI, Storage, Knowledge, WebSearchGateway |
+| `TtobakResearchAgentStack` | Bedrock Agent (Deep Research), tool Lambdas | Storage, Knowledge |
+| `TtobakFrontendStack` | CloudFront, S3 (site) | Gateway, EdgeAuth, Auth |
 
 ### Key Design Decisions
 

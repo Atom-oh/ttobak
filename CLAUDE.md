@@ -22,10 +22,17 @@ cd frontend && npm run build     # static export to out/
 cd frontend && npm run dev       # local dev server
 cd frontend && npm run lint      # eslint
 
+# Python crawler + research-agent unit tests (stdlib unittest; needs boto3/botocore --
+# present in the Lambda/container runtime, but `pip install boto3` locally if running by hand)
+cd backend/python/crawler && python3 -m unittest test_crawlers -v
+cd backend/python/research-agent && python3 -m unittest test_tools -v
+
 # CDK
-cd infra && npx cdk synth        # synthesize all 10 stacks
-cd infra && npx cdk deploy --all # deploy everything
+cd infra && npx cdk synth        # synthesize all 11 stacks
 cd infra && npm test             # jest tests
+# Deploy: NEVER `--all`. Deploy each CHANGED stack individually with --exclusively,
+# in dependency order. See "Known Issues" below for why and for the SP1 sequence, e.g.:
+#   npx cdk deploy TtobakGatewayStack --exclusively   # (one stack at a time)
 
 # Deploy frontend to S3 + invalidate CloudFront
 aws s3 sync frontend/out/ s3://ttobak-site-180294183052-ap-northeast-2/ --delete
@@ -54,8 +61,8 @@ images/ upload → EventBridge → ttobak-process-image → Bedrock Vision → D
 Microphone → AWS Transcribe Streaming (via @aws-sdk/client-transcribe-streaming in browser)
 ```
 
-### CDK Stack Dependency Order (10 stacks)
-Auth + Storage (parallel) → AI → Whisper → Knowledge → EdgeAuth (us-east-1) → Gateway → Frontend
+### CDK Stack Dependency Order (11 stacks)
+{WebSearchGateway (us-east-1) + Storage} (parallel, no deps) → {Auth, Knowledge} (both depend on Storage) → AI (depends on Storage+Knowledge+Auth+WebSearchGateway) → {EdgeAuth (us-east-1, depends on Auth), Whisper (depends on Storage), ResearchAgent (depends on Storage+Knowledge), Gateway (depends on Auth+Storage+AI+Knowledge), Crawler (depends on AI+Storage+Knowledge+WebSearchGateway)} → Frontend (depends on Gateway+EdgeAuth+Auth). Gateway and Crawler are siblings — both depend on AI but not on each other. See `infra/bin/infra.ts` for the exact `addDependency` calls — this list is the actual graph, not stack creation order.
 
 ### Backend (Go)
 
@@ -93,14 +100,17 @@ Error codes: `BAD_REQUEST` (400), `UNAUTHORIZED` (401), `FORBIDDEN` (403), `NOT_
 
 CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE_NAME`, `BUCKET_NAME`, `BEDROCK_MODEL_ID`. The `api` Lambda also gets `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `KB_BUCKET_NAME`, `KMS_KEY_ID`, `FRONTEND_BASE_URL` (deployed frontend origin, built as `https://${ttobak:domainName}` — the `ttobak:domainName` CDK context key in `infra/cdk.json` must be a bare domain, e.g. `ttobak.atomai.click`, with no scheme; used to build absolute links, e.g. rewriting `transcript://`/`#ts-` deep links for Notion export).
 
+The news crawler Lambda (`ttobak-crawler-news`) gets `WEB_SEARCH_GATEWAY_URL` / `WEB_SEARCH_GATEWAY_REGION` (the AgentCore Gateway Web Search connector MCP endpoint — the gateway lives in us-east-1 only, so the ap-northeast-2 crawler calls it cross-region with SigV4, signing service name `bedrock-agentcore`). The research-agent AgentCore Runtime container (deployed **outside CDK** — role `ttobak-agentcore-research-role`) needs the same two env vars injected via its own deploy pipeline, not `infra/lib/crawler-stack.ts`'s `commonEnv`. **Deploy precondition**: `ttobak-agentcore-research-role` must already exist before `cdk deploy TtobakAiStack` — `AiStack` imports it by ARN (`iam.Role.fromRoleArn`) to attach the Gateway-invoke policy. `deploy-research-agent.yml` only *consumes* this role (`--role-arn` on `update-agent-runtime`); it does not create it — the role is a manually-created, pre-existing IAM resource (created once, out-of-band, when the AgentCore Runtime was first provisioned), not an artifact of any current CI pipeline. `deploy-infra.yml` runs an `aws iam get-role` preflight before `TtobakAiStack` so a missing role fails fast with a clear message instead of a CFN inline-policy-attach error.
+
 ## Known Issues & Decisions
 
 ### HIGH
 - **`updateAttachmentByKey` not implemented** (`process-image/main.go`): Image processing results are not saved to DynamoDB. Needs meetingId parsing from S3 key path.
 
 ### Medium
-- **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID are hardcoded in CDK stacks. Should be extracted to CDK context for multi-account/stage support.
+- **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID, `agentCoreRuntimeArn`, `researchAgentExecutionRoleArn` are hardcoded in CDK stacks. Should be extracted to CDK context for multi-account/stage support.
 - **Single audio file per meeting**: `Meeting.AudioKey` is a single string — uploading a new file overwrites the previous one. Multi-file upload and linked follow-up meetings planned in ADR-014.
+- **`cdk deploy --all` is never used — deploy each changed stack with `--exclusively`**: without `--exclusively`, CDK deploys the full dependency chain, which includes `TtobakKnowledgeStack` — it stages a deliberate, undeployed Bedrock KB teardown that `deploy --all` (or a bare `deploy TtobakGatewayStack`) would apply for real. `--exclusively` deploys only the named stack, skipping its dependencies (assumed already deployed). The flip side: because it skips dependencies, deploying just `TtobakGatewayStack --exclusively` will NOT pick up changes in other stacks — **each changed stack must be deployed individually**. (`deploy-infra.yml` runs the full `--exclusively` list, minus `TtobakKnowledgeStack`, on every push — an unchanged stack is a no-op under `--exclusively`, so this is safe and satisfies "each changed stack" without needing to compute a diff of which stacks actually changed.) For the SP1 Web Search feature the one-time manual sequence (e.g. from a laptop, or the first time CI runs after adding a stack) is: `TtobakWebSearchGatewayStack --exclusively` (us-east-1) → confirm `ttobak-agentcore-research-role` exists (a manually-created, pre-existing IAM resource — not produced by the research-agent pipeline or any other CI job; `TtobakAiStack` imports it by ARN and fails otherwise) → `TtobakAiStack --exclusively` → `TtobakGatewayStack --exclusively` → `TtobakCrawlerStack --exclusively` (order between these two doesn't matter — neither depends on the other, per the "CDK Stack Dependency Order" section above; this matches `deploy-infra.yml`'s order) → set the `WEB_SEARCH_GATEWAY_URL` GitHub Actions repo variable from `TtobakWebSearchGatewayStack`'s `GatewayUrl` output (`WEB_SEARCH_GATEWAY_REGION` is hardcoded to `us-east-1` directly in `deploy-research-agent.yml`, not a repo variable) and re-run `deploy-research-agent.yml` (research-agent's env vars are injected by that workflow via `update-agent-runtime --environment-variables`, not by CDK — see `backend/python/research-agent/README.md`).
 
 ### Low
 - Default table/bucket names in Go don't match CDK defaults (no runtime impact since CDK injects env vars)

@@ -18,6 +18,11 @@ env:
   AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
   RESEARCH_ECR_REPO: ${{ vars.RESEARCH_ECR_REPO }}
   AGENTCORE_RUNTIME_ID: ${{ vars.AGENTCORE_RUNTIME_ID }}
+  WEB_SEARCH_GATEWAY_URL: ${{ vars.WEB_SEARCH_GATEWAY_URL }}
+  # Fixed, not a repo variable: the Web Search Gateway (TtobakWebSearchGatewayStack)
+  # only ever deploys to us-east-1 -- a repo variable here could drift/typo
+  # with no CFN output to catch it, unlike the URL above.
+  WEB_SEARCH_GATEWAY_REGION: us-east-1
 
 jobs:
   build-and-deploy:
@@ -51,8 +56,16 @@ jobs:
           ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.RESEARCH_ECR_REPO }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          if [ -z "${WEB_SEARCH_GATEWAY_URL}" ]; then
+            echo "::error::WEB_SEARCH_GATEWAY_URL repo variable is unset. Set it from TtobakWebSearchGatewayStack's GatewayUrl output, or web_search will report itself misconfigured."
+            exit 1
+          fi
+          ARTIFACT=$(jq -n --arg uri "${ECR_URI}:${IMAGE_TAG::8}" '{containerConfiguration:{containerUri:$uri}}')
+          ENV_VARS=$(jq -n --arg url "${WEB_SEARCH_GATEWAY_URL}" --arg region "${WEB_SEARCH_GATEWAY_REGION}" \
+            '{WEB_SEARCH_GATEWAY_URL:$url, WEB_SEARCH_GATEWAY_REGION:$region}')
           aws bedrock-agentcore-control update-agent-runtime \
             --agent-runtime-id "${AGENTCORE_RUNTIME_ID}" \
             --role-arn "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ttobak-agentcore-research-role" \
             --network-configuration '{"networkMode":"PUBLIC"}' \
-            --agent-runtime-artifact "{\"containerConfiguration\":{\"containerUri\":\"${ECR_URI}:${IMAGE_TAG::8}\"}}"
+            --agent-runtime-artifact "${ARTIFACT}" \
+            --environment-variables "${ENV_VARS}"

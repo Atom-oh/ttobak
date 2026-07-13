@@ -15,6 +15,7 @@ export interface CrawlerStackProps extends cdk.StackProps {
   kbBucket: s3.IBucket;
   knowledgeBaseId?: string;
   dataSourceId?: string;
+  webSearchGatewayUrl: string;
 }
 
 export class CrawlerStack extends cdk.Stack {
@@ -27,6 +28,8 @@ export class CrawlerStack extends cdk.Stack {
       KB_ID: props.knowledgeBaseId || '',
       DATA_SOURCE_ID: props.dataSourceId || '',
       SUMMARIZE_MODEL_ID: 'global.anthropic.claude-sonnet-5',
+      WEB_SEARCH_GATEWAY_URL: props.webSearchGatewayUrl,
+      WEB_SEARCH_GATEWAY_REGION: 'us-east-1',
     };
 
     const orchestrator = new lambda.Function(this, 'OrchestratorFunction', {

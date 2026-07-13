@@ -10,6 +10,7 @@ import { FrontendStack } from '../lib/frontend-stack';
 import { CrawlerStack } from '../lib/crawler-stack';
 import { ResearchAgentStack } from '../lib/research-agent-stack';
 import { WhisperStack } from '../lib/whisper-stack';
+import { WebSearchGatewayStack } from '../lib/web-search-gateway-stack';
 
 const app = new cdk.App();
 
@@ -24,6 +25,15 @@ const usEast1Env = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
   region: 'us-east-1',
 };
+
+// Stack 0: Web Search Gateway (us-east-1 only — AWS Web Search connector
+// constraint). Consumed cross-region by the crawler Lambda + research-agent
+// (SigV4 invoke).
+const webSearchGatewayStack = new WebSearchGatewayStack(app, 'TtobakWebSearchGatewayStack', {
+  env: usEast1Env,
+  crossRegionReferences: true,
+  description: 'TTOBAK AI Meeting Assistant - Web Search Gateway (AgentCore, us-east-1)',
+});
 
 // Stack 1: Storage first (Auth now depends on it for Pre Sign-Up Lambda DynamoDB access)
 const storageStack = new StorageStack(app, 'TtobakStorageStack', {
@@ -47,20 +57,28 @@ const knowledgeStack = new KnowledgeStack(app, 'TtobakKnowledgeStack', {
 knowledgeStack.addDependency(storageStack);
 
 // Stack 4: AI (IAM roles) - depends on Storage + Knowledge for bucket/table references
+// research-agent (ttobakResearchContainer) is deployed outside CDK — see
+// backend/python/research-agent/README.md and CLAUDE.md's Gateway env var
+// notes. Both ARNs below are that pre-existing, out-of-band resource.
 const agentCoreRuntimeArn = 'arn:aws:bedrock-agentcore:ap-northeast-2:180294183052:runtime/ttobakResearchContainer-o3qbV55ei6';
+const researchAgentExecutionRoleArn = 'arn:aws:iam::180294183052:role/ttobak-agentcore-research-role';
 
 const aiStack = new AiStack(app, 'TtobakAiStack', {
   env,
+  crossRegionReferences: true,
   description: 'TTOBAK AI Meeting Assistant - AI Services (IAM roles)',
   bucket: storageStack.bucket,
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
   agentCoreRuntimeArn,
   userPoolArn: authStack.userPool.userPoolArn,
+  webSearchGatewayArn: webSearchGatewayStack.gateway.gatewayArn,
+  researchAgentExecutionRoleArn,
 });
 aiStack.addDependency(storageStack);
 aiStack.addDependency(knowledgeStack);
 aiStack.addDependency(authStack);
+aiStack.addDependency(webSearchGatewayStack);
 
 // Stack 5: Edge Auth (Lambda@Edge in us-east-1 for CloudFront)
 const edgeAuthStack = new EdgeAuthStack(app, 'TtobakEdgeAuthStack', {
@@ -108,19 +126,22 @@ gatewayStack.addDependency(storageStack);
 gatewayStack.addDependency(aiStack);
 gatewayStack.addDependency(knowledgeStack);
 
-// Stack 7.5: Crawler (Step Functions + Lambda) - depends on AI, Storage, Knowledge
+// Stack 7.5: Crawler (Step Functions + Lambda) - depends on AI, Storage, Knowledge, WebSearchGateway
 const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {
   env,
+  crossRegionReferences: true,
   description: 'TTOBAK AI Meeting Assistant - Crawler (Step Functions + Lambda)',
   crawlerRole: aiStack.crawlerRole,
   table: storageStack.table,
   kbBucket: knowledgeStack.kbBucket,
   knowledgeBaseId: knowledgeStack.knowledgeBaseId,
   dataSourceId: knowledgeStack.dataSourceId,
+  webSearchGatewayUrl: webSearchGatewayStack.gatewayUrl,
 });
 crawlerStack.addDependency(aiStack);
 crawlerStack.addDependency(storageStack);
 crawlerStack.addDependency(knowledgeStack);
+crawlerStack.addDependency(webSearchGatewayStack);
 
 // Stack 7.75: Research Agent (Bedrock Agent + tool Lambdas)
 const researchAgentStack = new ResearchAgentStack(app, 'TtobakResearchAgentStack', {
