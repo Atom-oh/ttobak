@@ -22,6 +22,10 @@ cd frontend && npm run build     # static export to out/
 cd frontend && npm run dev       # local dev server
 cd frontend && npm run lint      # eslint
 
+# Python crawler + research-agent unit tests (stdlib unittest, no external deps)
+cd backend/python/crawler && python3 -m unittest test_crawlers -v
+cd backend/python/research-agent && python3 -m unittest test_tools -v
+
 # CDK
 cd infra && npx cdk synth        # synthesize all 11 stacks
 cd infra && npm test             # jest tests
@@ -105,7 +109,7 @@ The news crawler Lambda (`ttobak-crawler-news`) gets `WEB_SEARCH_GATEWAY_URL` / 
 ### Medium
 - **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID, `agentCoreRuntimeArn`, `researchAgentExecutionRoleArn` are hardcoded in CDK stacks. Should be extracted to CDK context for multi-account/stage support.
 - **Single audio file per meeting**: `Meeting.AudioKey` is a single string — uploading a new file overwrites the previous one. Multi-file upload and linked follow-up meetings planned in ADR-014.
-- **`cdk deploy --all` is never used — deploy each changed stack with `--exclusively`**: without `--exclusively`, CDK deploys the full dependency chain, which includes `TtobakKnowledgeStack` — it stages a deliberate, undeployed Bedrock KB teardown that `deploy --all` (or a bare `deploy TtobakGatewayStack`) would apply for real. `--exclusively` deploys only the named stack, skipping its dependencies (assumed already deployed). The flip side: because it skips dependencies, deploying just `TtobakGatewayStack --exclusively` will NOT pick up changes in other stacks — **each changed stack must be deployed individually**. For the SP1 Web Search feature the one-time sequence is: `TtobakWebSearchGatewayStack --exclusively` (us-east-1) → confirm `ttobak-agentcore-research-role` exists (created out-of-band by the research-agent pipeline; `TtobakAiStack` imports it by ARN and fails otherwise) → `TtobakAiStack --exclusively` → `TtobakCrawlerStack --exclusively` → `TtobakGatewayStack --exclusively` → set the `WEB_SEARCH_GATEWAY_URL`/`WEB_SEARCH_GATEWAY_REGION` GitHub Actions repo variables from the Gateway stack's `GatewayUrl` output and re-run `deploy-research-agent.yml` (research-agent's env vars are injected by that workflow via `update-agent-runtime --environment-variables`, not by CDK — see `backend/python/research-agent/README.md`).
+- **`cdk deploy --all` is never used — deploy each changed stack with `--exclusively`**: without `--exclusively`, CDK deploys the full dependency chain, which includes `TtobakKnowledgeStack` — it stages a deliberate, undeployed Bedrock KB teardown that `deploy --all` (or a bare `deploy TtobakGatewayStack`) would apply for real. `--exclusively` deploys only the named stack, skipping its dependencies (assumed already deployed). The flip side: because it skips dependencies, deploying just `TtobakGatewayStack --exclusively` will NOT pick up changes in other stacks — **each changed stack must be deployed individually**. For the SP1 Web Search feature the one-time sequence is: `TtobakWebSearchGatewayStack --exclusively` (us-east-1) → confirm `ttobak-agentcore-research-role` exists (created out-of-band by the research-agent pipeline; `TtobakAiStack` imports it by ARN and fails otherwise) → `TtobakAiStack --exclusively` → `TtobakCrawlerStack --exclusively` → `TtobakGatewayStack --exclusively` → set the `WEB_SEARCH_GATEWAY_URL`/`WEB_SEARCH_GATEWAY_REGION` GitHub Actions repo variables from `TtobakWebSearchGatewayStack`'s `GatewayUrl` output and re-run `deploy-research-agent.yml` (research-agent's env vars are injected by that workflow via `update-agent-runtime --environment-variables`, not by CDK — see `backend/python/research-agent/README.md`).
 
 ### Low
 - Default table/bucket names in Go don't match CDK defaults (no runtime impact since CDK injects env vars)

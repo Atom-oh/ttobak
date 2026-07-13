@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 01f859742be6 · generated-at: 2026-07-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 290b90192f0b · generated-at: 2026-07-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -20,6 +20,8 @@ cd backend && /usr/local/go/bin/go test ./internal/...      # stdlib testing, no
 cd backend && /usr/local/go/bin/go vet ./internal/...
 cd frontend && npm run build      # static export to out/
 cd frontend && npm run lint       # eslint (NO test framework — lint+build only)
+cd backend/python/crawler && python3 -m unittest test_crawlers -v
+cd backend/python/research-agent && python3 -m unittest test_tools -v
 cd infra && npx cdk synth && npm test
 ```
 

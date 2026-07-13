@@ -95,32 +95,47 @@ class _TextExtractor(HTMLParser):
 def _extract_sse_json(text: str) -> str:
     """Extract the JSON payload from an SSE response body. MCP Streamable
     HTTP servers may respond with either a plain JSON body or an SSE event
-    stream (one or more "event:"/"data:" lines per frame) for the same
-    tools/call request — the client can't pick which one it gets. Returns
-    text unchanged if it's already plain JSON (starts with "{"). Among SSE
-    "data:" frames, prefers the one carrying the JSON-RPC response (has a
-    "result" or "error" key) so a leading notification frame doesn't get
-    mistaken for the answer; falls back to the last data frame.
+    stream (one or more "event:"/"data:" lines per frame, each frame ending
+    at a blank line) for the same tools/call request — the client can't pick
+    which one it gets. Returns text unchanged if it's already plain JSON
+    (starts with "{"). Per the SSE spec, a single event's payload can be
+    split across multiple consecutive "data:" lines, which must be
+    newline-joined before parsing as one frame. Among frames, prefers the
+    one carrying the JSON-RPC response (has a "result" or "error" key) so a
+    leading notification frame doesn't get mistaken for the answer; falls
+    back to the last frame.
 
     Kept in sync with backend/python/crawler/news_crawler.py's copy."""
     if text.lstrip().startswith("{"):
         return text
-    data_frames = [
-        line.strip()[len("data:"):].strip()
-        for line in text.splitlines()
-        if line.strip().startswith("data:")
-    ]
-    for frame in data_frames:
+    frames = []
+    current_lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("data:"):
+            current_lines.append(stripped[len("data:"):].strip())
+        elif current_lines:
+            frames.append("\n".join(current_lines))
+            current_lines = []
+    if current_lines:
+        frames.append("\n".join(current_lines))
+    for frame in frames:
         if '"result"' in frame or '"error"' in frame:
             return frame
-    return data_frames[-1] if data_frames else text
+    return frames[-1] if frames else text
 
 
 _DIRECTIVE_RE = re.compile(
-    r'^\s*(system|assistant|user|human|instruction[s]?|ignore\s+(all\s+)?previous'
+    # Role-marker lines ("system: ...") or explicit "ignore instructions"
+    # commands -- not a bare keyword match, which would false-positive on
+    # ordinary prose ("System integrators announced...", "사용자 경험...").
+    r'^\s*((system|assistant|user|human|instruction[s]?)\s*[:\-]'
+    r'|ignore\s+(all\s+)?previous\s+instructions'
     # Korean app, so the English-only patterns above miss the primary attack
     # language.
-    r'|시스템|어시스턴트|사용자|지시\s*사항|이전\s*(모든\s*)?지시|역할\s*(부여|지시))',
+    r'|시스템\s*[:：]'
+    r'|이전\s*(모든\s*)?지시\s*(사항)?\s*(를|을)?\s*(무시|따르지)'
+    r'|지시\s*사항\s*[:：])',
     re.IGNORECASE,
 )
 

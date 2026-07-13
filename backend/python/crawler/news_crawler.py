@@ -130,23 +130,32 @@ def _strip_html_tags(text: str) -> str:
 def _extract_sse_json(text: str) -> str:
     """Extract the JSON payload from an SSE response body. MCP Streamable
     HTTP servers may respond with either a plain JSON body or an SSE event
-    stream (one or more "event:"/"data:" lines per frame) for the same
-    tools/call request — the client can't pick which one it gets. Returns
-    text unchanged if it's already plain JSON (starts with "{"). Among SSE
-    "data:" frames, prefers the one carrying the JSON-RPC response (has a
-    "result" or "error" key) so a leading notification frame doesn't get
-    mistaken for the answer; falls back to the last data frame."""
+    stream (one or more "event:"/"data:" lines per frame, each frame ending
+    at a blank line) for the same tools/call request — the client can't pick
+    which one it gets. Returns text unchanged if it's already plain JSON
+    (starts with "{"). Per the SSE spec, a single event's payload can be
+    split across multiple consecutive "data:" lines, which must be
+    newline-joined before parsing as one frame. Among frames, prefers the
+    one carrying the JSON-RPC response (has a "result" or "error" key) so a
+    leading notification frame doesn't get mistaken for the answer; falls
+    back to the last frame."""
     if text.lstrip().startswith('{'):
         return text
-    data_frames = [
-        line.strip()[len('data:'):].strip()
-        for line in text.splitlines()
-        if line.strip().startswith('data:')
-    ]
-    for frame in data_frames:
+    frames = []
+    current_lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('data:'):
+            current_lines.append(stripped[len('data:'):].strip())
+        elif current_lines:
+            frames.append('\n'.join(current_lines))
+            current_lines = []
+    if current_lines:
+        frames.append('\n'.join(current_lines))
+    for frame in frames:
         if '"result"' in frame or '"error"' in frame:
             return frame
-    return data_frames[-1] if data_frames else text
+    return frames[-1] if frames else text
 
 
 def _sigv4_post(body_json: str) -> str:
@@ -180,11 +189,13 @@ def _sigv4_post(body_json: str) -> str:
         return _extract_sse_json(resp.read().decode('utf-8'))
 
 
-def _gateway_web_search(query: str, max_results: int = 10) -> list:
+def _gateway_web_search(query: str, max_results: int = 10) -> tuple:
     """Search via the AgentCore Gateway Web Search connector. Returns
-    [{"text", "url", "title", "publishedDate"}, ...], or [] on any failure
-    (transport error, gateway isError, empty results) — callers must not
-    fall back to RSS."""
+    (results, error): results is [{"text", "url", "title", "publishedDate"},
+    ...] (possibly empty for a genuine zero-match search), error is None on
+    success or a short reason string on any failure (transport error,
+    gateway isError, malformed response) — callers must surface a non-None
+    error so an IAM/transport outage doesn't look like "0 results found"."""
     body = json.dumps({
         'jsonrpc': '2.0',
         'id': 1,
@@ -201,23 +212,26 @@ def _gateway_web_search(query: str, max_results: int = 10) -> list:
         # in the JSON-RPC 2.0 envelope; fall back to top-level in case the
         # gateway ever returns the unwrapped result directly.
         if 'error' in parsed:
+            msg = f'gateway JSON-RPC error: {parsed["error"]}'
             logger.warning(f'Web search gateway returned a JSON-RPC error for "{query}": {parsed["error"]}')
-            return []
+            return [], msg
         result = parsed.get('result', parsed)
         if result.get('isError'):
+            msg = 'gateway returned isError'
             logger.warning(f'Web search gateway returned isError for "{query}"')
-            return []
+            return [], msg
         content = result.get('content', [])
         text_block = next((b for b in content if b.get('type') == 'text' and 'text' in b), None)
         if text_block is None:
+            msg = 'no text content block in gateway response'
             logger.warning(f'Web search gateway returned no text content block for "{query}"')
-            return []
+            return [], msg
         inner = json.loads(text_block['text'])
         results = inner.get('results', [])
-        return [r for r in results if r.get('url')][:max_results]
+        return [r for r in results if r.get('url')][:max_results], None
     except Exception as e:
         logger.warning(f'Web search gateway call failed for "{query}": {e}')
-        return []
+        return [], f'{e}'
 
 
 KNOWN_OUTLET_NAMES = {
@@ -267,10 +281,16 @@ def _strip_delimiter_tokens(text: str) -> str:
 
 
 _DIRECTIVE_RE = re.compile(
-    r'^\s*(system|assistant|user|human|instruction[s]?|ignore\s+(all\s+)?previous'
+    # Role-marker lines ("system: ...") or explicit "ignore instructions"
+    # commands -- not a bare keyword match, which would false-positive on
+    # ordinary prose ("System integrators announced...", "사용자 경험...").
+    r'^\s*((system|assistant|user|human|instruction[s]?)\s*[:\-]'
+    r'|ignore\s+(all\s+)?previous\s+instructions'
     # Korean app, so the English-only patterns above miss the primary attack
     # language -- this PR's own test payload used a Korean directive.
-    r'|시스템|어시스턴트|사용자|지시\s*사항|이전\s*(모든\s*)?지시|역할\s*(부여|지시))',
+    r'|시스템\s*[:：]'
+    r'|이전\s*(모든\s*)?지시\s*(사항)?\s*(를|을)?\s*(무시|따르지)'
+    r'|지시\s*사항\s*[:：])',
     re.IGNORECASE,
 )
 
@@ -396,14 +416,15 @@ def _strip_newlines(text: str) -> str:
 
 def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
                  snippet: str, summary: str, pub_date: str, tags: list) -> None:
-    tag_line = f'**Tags:** {", ".join(tags)}\n' if tags else ''
-    # title/url/pub_date are untrusted (open web search result); summary is
-    # Bedrock-generated from that same untrusted input. All land in the KB
-    # doc, so sanitize/defang each before writing.
+    # title/url/pub_date are untrusted (open web search result); summary and
+    # tags are Bedrock-generated from that same untrusted input. All land in
+    # the KB doc, so sanitize/defang each before writing.
     safe_title = _sanitize_snippet(title)
     safe_url = _strip_newlines(url)
     safe_pub_date = _strip_newlines(pub_date)
     safe_summary = _sanitize_snippet(summary)
+    safe_tags = [_strip_newlines(_sanitize_snippet(t)) for t in tags]
+    tag_line = f'**Tags:** {", ".join(safe_tags)}\n' if safe_tags else ''
     md = (
         f'# {safe_title}\n\n'
         f'**Published:** {safe_pub_date}\n'
@@ -554,7 +575,9 @@ def handler(event, context):
 
     # 1. AgentCore Gateway Web Search — one search per generated query
     for query in all_queries:
-        results = _gateway_web_search(query)
+        results, search_error = _gateway_web_search(query)
+        if search_error:
+            errors.append(f'web search "{query}": {search_error}')
         logger.info(f'Web search "{query}": {len(results)} result(s)')
         for r in results:
             _try_process(r.get('title', ''), r.get('url', ''),

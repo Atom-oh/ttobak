@@ -164,6 +164,13 @@ class TestSanitizeSnippet(unittest.TestCase):
     def test_empty_string(self):
         self.assertEqual(tools._sanitize_snippet(''), '')
 
+    def test_does_not_false_positive_on_ordinary_prose(self):
+        for text in (
+            'System integrators announced a new partnership today',
+            '사용자 경험 개선을 위한 투자가 늘고 있다',
+        ):
+            self.assertEqual(tools._sanitize_snippet(text), text)
+
 
 class TestSigv4PostConfigGuard(unittest.TestCase):
     def test_raises_when_gateway_url_unset(self):
@@ -185,6 +192,17 @@ class TestExtractSseJson(unittest.TestCase):
         payload = '{"jsonrpc": "2.0", "id": 1, "result": {"isError": false}}'
         sse_body = f'event: message\ndata: {payload}\n\n'
         self.assertEqual(tools._extract_sse_json(sse_body), payload)
+
+    def test_joins_multiline_data_frame(self):
+        sse_body = (
+            'event: message\n'
+            'data: {"jsonrpc": "2.0", "id": 1,\n'
+            'data: "result": {"isError": false}}\n'
+            '\n'
+        )
+        result = tools._extract_sse_json(sse_body)
+        parsed = json.loads(result)
+        self.assertEqual(parsed['result']['isError'], False)
 
 
 if __name__ == '__main__':

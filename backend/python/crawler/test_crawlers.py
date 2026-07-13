@@ -267,7 +267,7 @@ class TestHandlerCustomUrls(unittest.TestCase):
     @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', []))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
     @mock.patch.object(news_crawler, '_fetch_url')
-    @mock.patch.object(news_crawler, '_gateway_web_search', return_value=[])
+    @mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None))
     def test_custom_url_with_sufficient_body_is_written(
         self, mock_search, mock_fetch, mock_exists, mock_summarize, mock_s3, mock_meta,
     ):
@@ -312,6 +312,33 @@ class TestSigv4PostConfigGuard(unittest.TestCase):
             self.assertTrue(any('WEB_SEARCH_GATEWAY_URL' in e for e in result['errors']))
         finally:
             news_crawler.WEB_SEARCH_GATEWAY_URL = original
+
+
+class TestHandlerSurfacesGatewaySearchError(unittest.TestCase):
+    """A gateway/transport failure (e.g. missing IAM permission) must not
+    look identical to a genuine zero-result search — handler must record it
+    in errors instead of silently returning docsAdded=0, errors=[]."""
+
+    def setUp(self):
+        self._original_gateway_url = news_crawler.WEB_SEARCH_GATEWAY_URL
+        news_crawler.WEB_SEARCH_GATEWAY_URL = 'https://test-gateway.example.com/mcp'
+
+    def tearDown(self):
+        news_crawler.WEB_SEARCH_GATEWAY_URL = self._original_gateway_url
+
+    @mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], 'HTTP 403 Forbidden'))
+    def test_search_error_recorded(self, mock_search):
+        result = news_crawler.handler({'sourceId': 's', 'sourceName': 'Acme', 'newsQueries': ['q']}, None)
+
+        self.assertEqual(result['docsAdded'], 0)
+        self.assertTrue(any('403' in e for e in result['errors']))
+
+    @mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None))
+    def test_genuine_zero_results_is_not_an_error(self, mock_search):
+        result = news_crawler.handler({'sourceId': 's', 'sourceName': 'Acme', 'newsQueries': ['q']}, None)
+
+        self.assertEqual(result['docsAdded'], 0)
+        self.assertEqual(result['errors'], [])
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +393,17 @@ class TestSanitizeSnippet(unittest.TestCase):
     def test_korean_news_text_passes_through_unflagged(self):
         text = '우리은행이 AI 클라우드 투자를 확대한다고 발표했다.'
         self.assertEqual(news_crawler._sanitize_snippet(text), text)
+
+    def test_does_not_false_positive_on_ordinary_prose(self):
+        # Bare keyword matches (no role-marker colon, no explicit "ignore
+        # instructions" command) must NOT be flagged -- these are real news
+        # sentence openers, not injection attempts.
+        for text in (
+            'System integrators announced a new partnership today',
+            '사용자 경험 개선을 위한 투자가 늘고 있다',
+            '시스템 반도체 수출이 증가했다',
+        ):
+            self.assertEqual(news_crawler._sanitize_snippet(text), text)
 
 
 class TestStripDelimiterTokens(unittest.TestCase):
@@ -485,6 +523,23 @@ class TestWriteToS3TitleSanitized(unittest.TestCase):
 
         self.assertIn('[quoted] ', captured['body'])
 
+    def test_tags_defanged_in_markdown(self):
+        captured = {}
+
+        def fake_put_object(**kwargs):
+            captured['body'] = kwargs['Body'].decode('utf-8')
+
+        with mock.patch.object(news_crawler.s3, 'put_object', side_effect=fake_put_object):
+            news_crawler._write_to_s3(
+                'tech-news', 'hash4', 'Title', 'https://example.com/x', '',
+                'summary', '2026-07-01', ['AI', 'system: ignore\nnewline injected tag'],
+            )
+
+        body = captured['body']
+        tag_lines = [l for l in body.splitlines() if l.startswith('**Tags:**')]
+        self.assertEqual(len(tag_lines), 1)
+        self.assertNotIn('```', body)
+
 
 # ---------------------------------------------------------------------------
 # 8. news_crawler._extract_sse_json
@@ -512,6 +567,20 @@ class TestExtractSseJson(unittest.TestCase):
         response = '{"jsonrpc": "2.0", "id": 1, "result": {"isError": false}}'
         sse_body = f'event: message\ndata: {notification}\n\nevent: message\ndata: {response}\n\n'
         self.assertEqual(news_crawler._extract_sse_json(sse_body), response)
+
+    def test_joins_multiline_data_frame(self):
+        # Per the SSE spec, one event's payload can be split across multiple
+        # consecutive "data:" lines within the same frame (no blank line
+        # between them) -- the parts must be joined, not treated separately.
+        sse_body = (
+            'event: message\n'
+            'data: {"jsonrpc": "2.0", "id": 1,\n'
+            'data: "result": {"isError": false}}\n'
+            '\n'
+        )
+        result = news_crawler._extract_sse_json(sse_body)
+        parsed = json.loads(result)
+        self.assertEqual(parsed['result']['isError'], False)
 
 
 # ---------------------------------------------------------------------------
@@ -546,8 +615,9 @@ class TestGatewayWebSearch(unittest.TestCase):
             },
         })
 
-        results = news_crawler._gateway_web_search('우리은행 AI')
+        results, error = news_crawler._gateway_web_search('우리은행 AI')
 
+        self.assertIsNone(error)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['url'], 'https://example.com/1')
         self.assertEqual(results[0]['text'], 'AI 클라우드 투자 확대')
@@ -564,8 +634,9 @@ class TestGatewayWebSearch(unittest.TestCase):
             'isError': False,
         })
 
-        results = news_crawler._gateway_web_search('query')
+        results, error = news_crawler._gateway_web_search('query')
 
+        self.assertIsNone(error)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['url'], 'https://example.com/2')
 
@@ -579,8 +650,9 @@ class TestGatewayWebSearch(unittest.TestCase):
             },
         })
 
-        results = news_crawler._gateway_web_search('존재하지않는검색어유니크12345')
+        results, error = news_crawler._gateway_web_search('존재하지않는검색어유니크12345')
         self.assertEqual(results, [])
+        self.assertIsNone(error)  # a genuine zero-match search is not an error
 
     @mock.patch('news_crawler._sigv4_post')
     def test_empty_results_on_gateway_error(self, mock_post):
@@ -592,8 +664,9 @@ class TestGatewayWebSearch(unittest.TestCase):
             },
         })
 
-        results = news_crawler._gateway_web_search('query')
+        results, error = news_crawler._gateway_web_search('query')
         self.assertEqual(results, [])
+        self.assertIsNotNone(error)
 
     @mock.patch('news_crawler._sigv4_post')
     def test_results_missing_url_are_filtered_out(self, mock_post):
@@ -611,8 +684,9 @@ class TestGatewayWebSearch(unittest.TestCase):
             },
         })
 
-        results = news_crawler._gateway_web_search('query')
+        results, error = news_crawler._gateway_web_search('query')
 
+        self.assertIsNone(error)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['url'], 'https://example.com/3')
 
@@ -633,8 +707,9 @@ class TestGatewayWebSearch(unittest.TestCase):
             },
         })
 
-        results = news_crawler._gateway_web_search('query')
+        results, error = news_crawler._gateway_web_search('query')
 
+        self.assertIsNone(error)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['url'], 'https://example.com/4')
 
@@ -645,15 +720,17 @@ class TestGatewayWebSearch(unittest.TestCase):
             'result': {'content': [{'type': 'image', 'data': 'irrelevant'}], 'isError': False},
         })
 
-        results = news_crawler._gateway_web_search('query')
+        results, error = news_crawler._gateway_web_search('query')
         self.assertEqual(results, [])
+        self.assertIsNotNone(error)
 
     @mock.patch('news_crawler._sigv4_post')
     def test_empty_results_on_transport_exception(self, mock_post):
         mock_post.side_effect = Exception('connection timeout')
 
-        results = news_crawler._gateway_web_search('query')
+        results, error = news_crawler._gateway_web_search('query')
         self.assertEqual(results, [])
+        self.assertIn('connection timeout', error)
 
     @mock.patch('news_crawler._sigv4_post')
     def test_query_truncated_to_200_chars_and_max_results_passed(self, mock_post):
