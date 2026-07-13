@@ -1004,7 +1004,7 @@ class TestGatewayWebSearch(unittest.TestCase):
         sent_body = json.loads(mock_post.call_args[0][0])
         self.assertEqual(len(sent_body['params']['arguments']['query']), 200)
         self.assertEqual(sent_body['params']['arguments']['maxResults'], 3)
-        self.assertEqual(sent_body['params']['name'], 'WebSearch')
+        self.assertEqual(sent_body['params']['name'], 'ttobak-web-search-tool___WebSearch')
         self.assertEqual(sent_body['method'], 'tools/call')
 
 

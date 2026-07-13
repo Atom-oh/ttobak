@@ -221,7 +221,11 @@ def web_search(query: str, max_results: int = 10) -> str:
         "id": 1,
         "method": "tools/call",
         "params": {
-            "name": "WebSearch",
+            # The Gateway namespaces tool names as "{targetName}___{configurationName}"
+            # (see infra/lib/web-search-gateway-stack.ts's CfnGatewayTarget
+            # name='ttobak-web-search-tool' + configurations[0].name='WebSearch') --
+            # a bare 'WebSearch' gets "Unknown tool" from tools/call.
+            "name": "ttobak-web-search-tool___WebSearch",
             "arguments": {"query": query[:200], "maxResults": max_results},
         },
     })
