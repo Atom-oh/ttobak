@@ -609,6 +609,14 @@ def handler(event, context):
         if not url:
             continue
         try:
+            # Reject non-http(s) schemes before any outbound call --
+            # urlopen() would otherwise happily follow file://, ftp://,
+            # etc. Checking this only in _process_article (after the
+            # fetch already ran) closes the KB-write path but not the
+            # fetch itself.
+            if not url.lower().startswith(('http://', 'https://')):
+                logger.info(f'Skipping custom URL with non-http(s) scheme: {url!r}')
+                continue
             # Check blocked/duplicate before fetching — no reason to make
             # an outbound request to a paywalled or already-ingested URL.
             # _doc_exists is a DynamoDB call and can raise (e.g. throttling)

@@ -329,6 +329,25 @@ class TestHandlerCustomUrls(unittest.TestCase):
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
     @mock.patch.object(news_crawler, '_fetch_url')
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    def test_custom_url_non_http_scheme_never_fetched(
+        self, mock_exists, mock_fetch, mock_s3, mock_meta,
+    ):
+        # The scheme guard must run before _fetch_url/urlopen, not only in
+        # _process_article afterward -- otherwise a file://, ftp:// (or
+        # similar) customUrls entry still triggers an outbound/local read
+        # even though the result can never be written to the KB.
+        result = news_crawler.handler({
+            'sourceId': 'tech-news',
+            'customUrls': [{'url': 'file:///etc/passwd', 'title': 'Evil'}],
+        }, None)
+
+        mock_fetch.assert_not_called()
+        self.assertEqual(result['docsAdded'], 0)
+
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_fetch_url')
     @mock.patch.object(news_crawler, '_doc_exists', side_effect=Exception('DynamoDB throttled'))
     @mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None))
     def test_doc_exists_failure_is_collected_not_raised(
