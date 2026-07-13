@@ -43,21 +43,20 @@ jobs:
         run: |
           npm ci
           npx cdk diff 2>&1 || true
-          # Never `--all`: that would include TtobakKnowledgeStack, which
-          # stages a deliberate, undeployed Bedrock KB teardown that `--all`
-          # would apply for real (see CLAUDE.md Known Issues). List every
-          # other stack explicitly instead -- cdk still toposorts by
-          # addDependency, so order here doesn't matter, but the omission
-          # of TtobakKnowledgeStack does.
-          npx cdk deploy \
-            TtobakWebSearchGatewayStack \
-            TtobakStorageStack \
-            TtobakAuthStack \
-            TtobakAiStack \
-            TtobakEdgeAuthStack \
-            TtobakGatewayStack \
-            TtobakCrawlerStack \
-            TtobakResearchAgentStack \
-            TtobakWhisperStack \
-            TtobakFrontendStack \
-            --require-approval never
+          # Never `--all` and never list stacks without `--exclusively`:
+          # either one pulls in each named stack's full dependency closure,
+          # which includes TtobakKnowledgeStack -- it stages a deliberate,
+          # undeployed Bedrock KB teardown that would apply for real (see
+          # CLAUDE.md Known Issues). Deploy every other stack individually
+          # with --exclusively, in dependency order (see infra/bin/infra.ts
+          # addDependency calls), so TtobakKnowledgeStack is never touched.
+          npx cdk deploy TtobakWebSearchGatewayStack --exclusively --require-approval never
+          npx cdk deploy TtobakStorageStack --exclusively --require-approval never
+          npx cdk deploy TtobakAuthStack --exclusively --require-approval never
+          npx cdk deploy TtobakAiStack --exclusively --require-approval never
+          npx cdk deploy TtobakEdgeAuthStack --exclusively --require-approval never
+          npx cdk deploy TtobakGatewayStack --exclusively --require-approval never
+          npx cdk deploy TtobakCrawlerStack --exclusively --require-approval never
+          npx cdk deploy TtobakResearchAgentStack --exclusively --require-approval never
+          npx cdk deploy TtobakWhisperStack --exclusively --require-approval never
+          npx cdk deploy TtobakFrontendStack --exclusively --require-approval never

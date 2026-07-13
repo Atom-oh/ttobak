@@ -128,10 +128,13 @@ def _extract_sse_json(text: str) -> str:
 _DIRECTIVE_RE = re.compile(
     # Role-marker ("system: ...") or explicit "ignore instructions" command
     # -- not a bare keyword match, which would false-positive on ordinary
-    # prose ("System integrators announced...", "사용자 경험..."). Uses
-    # search (not match/^-anchored) with a word boundary so the directive is
-    # still caught mid-line, not just when it opens the line.
-    r'\b((system|assistant|user|human|instruction[s]?)\s*[:\-]'
+    # prose ("System integrators announced...", "사용자 경험..."). Colon
+    # only (no hyphen): a hyphen alternative also matches compound words
+    # like "system-wide", "user-generated", "instruction-following", which
+    # are common in tech news and aren't directives. Uses search (not
+    # match/^-anchored) with a word boundary so the directive is still
+    # caught mid-line, not just when it opens the line.
+    r'\b((system|assistant|user|human|instruction[s]?)\s*[:：]'
     r'|ignore\s+(all\s+)?previous\s+instructions'
     # Korean app, so the English-only patterns above miss the primary attack
     # language.

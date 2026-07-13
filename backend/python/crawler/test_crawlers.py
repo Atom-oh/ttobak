@@ -420,6 +420,17 @@ class TestSanitizeSnippet(unittest.TestCase):
         )
         self.assertTrue(out.startswith('[quoted] '))
 
+    def test_does_not_false_positive_on_hyphenated_compounds(self):
+        # A hyphen in the role-marker alternative would match ordinary
+        # compound words common in tech news, not just "role:" directives.
+        for text in (
+            'system-wide outage reported today',
+            'user-generated content platforms grow',
+            'human-like AI responses improve',
+            'instruction-following models advance',
+        ):
+            self.assertEqual(news_crawler._sanitize_snippet(text), text)
+
 
 class TestStripDelimiterTokens(unittest.TestCase):
     """_strip_delimiter_tokens removes the <article> fence tokens used to
