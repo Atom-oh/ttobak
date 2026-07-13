@@ -392,6 +392,33 @@ class TestHandlerCustomUrls(unittest.TestCase):
         self.assertTrue(any('DynamoDB throttled' in e for e in result['errors']))
         mock_s3.assert_not_called()
 
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', []))
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    @mock.patch.object(news_crawler, '_fetch_url')
+    @mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None))
+    def test_customurls_entry_of_unsupported_type_is_collected_not_raised(
+        self, mock_search, mock_fetch, mock_exists, mock_summarize, mock_s3, mock_meta,
+    ):
+        # A customUrls entry that's neither a string nor a dict (e.g. None,
+        # int) must not raise an uncaught AttributeError out of the loop --
+        # that would abort every other customUrls entry and the search-query
+        # loop that follows. It should land in errors[] like any other
+        # per-entry failure.
+        mock_fetch.return_value = (
+            '<html><body><p>' + 'This is a long enough paragraph for testing. ' * 5 + '</p></body></html>'
+        )
+
+        result = news_crawler.handler({
+            'sourceId': 'tech-news',
+            'customUrls': [None, {'url': 'https://example.com/custom', 'title': 'Custom Doc'}],
+        }, None)
+
+        self.assertEqual(result['docsAdded'], 1)
+        self.assertTrue(any('unsupported customUrls entry type' in e for e in result['errors']))
+        mock_fetch.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # 6. news_crawler._sigv4_post config guard
@@ -1023,6 +1050,18 @@ class TestProcessArticleGuards(unittest.TestCase):
     def test_empty_snippet_skipped(self, mock_exists, mock_s3, mock_meta):
         result = news_crawler._process_article(
             'tech-news', 'Title', 'https://example.com/x', '2026-04-14', ''
+        )
+
+        self.assertFalse(result)
+        mock_s3.assert_not_called()
+        mock_meta.assert_not_called()
+
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    def test_whitespace_only_snippet_skipped(self, mock_exists, mock_s3, mock_meta):
+        result = news_crawler._process_article(
+            'tech-news', 'Title', 'https://example.com/x', '2026-04-14', '   \n\t  '
         )
 
         self.assertFalse(result)

@@ -531,7 +531,7 @@ def _process_article(source_id: str, title: str, url: str,
         logger.info(f'Skipping result with non-http(s) URL scheme: {url!r}')
         return False
 
-    if not snippet:
+    if not snippet.strip():
         logger.info(f'Skipping result with empty snippet: {url}')
         return False
 
@@ -621,19 +621,25 @@ def handler(event, context):
     # _doc_exists sees a hash, the snippet version would otherwise "win"
     # and the fuller custom-URL body never gets a chance to be written.
     for entry in custom_urls:
-        # The real config shape (backend/internal/model/meeting.go's
-        # CrawlerSource.CustomUrls, passed through verbatim by
-        # orchestrator.py) is []string -- plain URL strings, not
-        # {"url","title"} dicts. Accept both so a string entry doesn't
-        # crash the whole handler with an unhandled AttributeError.
-        if isinstance(entry, str):
-            url, title = entry, entry
-        else:
-            url = entry.get('url', '')
-            title = entry.get('title', url)
-        if not url:
-            continue
+        url = None  # set inside try; fall back to raw entry in the except below if unset
         try:
+            # The real config shape (backend/internal/model/meeting.go's
+            # CrawlerSource.CustomUrls, passed through verbatim by
+            # orchestrator.py) is []string -- plain URL strings, not
+            # {"url","title"} dicts. Accept both so a string entry doesn't
+            # crash the whole handler with an unhandled AttributeError.
+            # Normalizing inside this try means an unexpected entry type
+            # (e.g. None, int) lands in errors[] instead of aborting the
+            # loop and losing every other customUrls entry / search query.
+            if isinstance(entry, str):
+                url, title = entry, entry
+            elif isinstance(entry, dict):
+                url = entry.get('url', '')
+                title = entry.get('title', url)
+            else:
+                raise TypeError(f'unsupported customUrls entry type: {type(entry).__name__}')
+            if not url:
+                continue
             # Reject non-http(s) schemes before any outbound call --
             # urlopen() would otherwise happily follow file://, ftp://,
             # etc. Checking this only in _process_article (after the
@@ -664,7 +670,7 @@ def handler(event, context):
                 logger.info(f'Skipping custom URL with insufficient body: {url}')
                 continue
         except Exception as e:
-            error_msg = f'{url}: {e}'
+            error_msg = f'{url if url else entry!r}: {e}'
             logger.error(f'Custom URL prefetch error: {error_msg}', exc_info=True)
             errors.append(error_msg)
             continue
