@@ -54,7 +54,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           if [ -z "${WEB_SEARCH_GATEWAY_URL}" ] || [ -z "${WEB_SEARCH_GATEWAY_REGION}" ]; then
-            echo "::error::WEB_SEARCH_GATEWAY_URL/WEB_SEARCH_GATEWAY_REGION repo variables are unset -- set them from TtobakWebSearchGatewayStack's GatewayUrl output before deploying, or web_search will report itself misconfigured."
+            echo "::error::WEB_SEARCH_GATEWAY_URL/WEB_SEARCH_GATEWAY_REGION repo variables are unset. Set WEB_SEARCH_GATEWAY_URL from TtobakWebSearchGatewayStack's GatewayUrl output; WEB_SEARCH_GATEWAY_REGION is always us-east-1 (that stack's fixed region), not a CFN output. Without both, web_search will report itself misconfigured."
             exit 1
           fi
           ARTIFACT=$(jq -n --arg uri "${ECR_URI}:${IMAGE_TAG::8}" '{containerConfiguration:{containerUri:$uri}}')

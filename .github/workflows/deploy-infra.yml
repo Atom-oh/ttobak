@@ -58,10 +58,22 @@ jobs:
           npx cdk deploy TtobakAuthStack --exclusively --require-approval never
           # ttobak-agentcore-research-role is a manually-created,
           # pre-existing IAM resource (not produced by any CI pipeline) --
-          # TtobakAiStack imports it by ARN, so verify it exists right
-          # before that stack to fail fast with a clear message instead of
-          # an obscure CFN inline-policy-attach error mid-deploy.
-          aws iam get-role --role-name ttobak-agentcore-research-role >/dev/null
+          # TtobakAiStack imports it by ARN and attaches an inline policy to
+          # it, so this deploy role's credentials must already be able to
+          # mutate IAM roles generally (a strictly higher privilege than
+          # iam:GetRole). Verify existence right before that stack to fail
+          # fast with a clear message instead of an obscure CFN
+          # inline-policy-attach error -- but if the read itself is denied
+          # for some unrelated policy reason, don't let this precondition
+          # check become a NEW failure mode; warn and let the real
+          # CFN deploy be the source of truth.
+          if ! ROLE_CHECK=$(aws iam get-role --role-name ttobak-agentcore-research-role 2>&1); then
+            if echo "$ROLE_CHECK" | grep -q 'NoSuchEntity'; then
+              echo "::error::ttobak-agentcore-research-role does not exist -- create it before deploying TtobakAiStack (see CLAUDE.md Known Issues)."
+              exit 1
+            fi
+            echo "::warning::Could not verify ttobak-agentcore-research-role via iam:GetRole ($ROLE_CHECK) -- proceeding, TtobakAiStack's deploy will surface the real error if the role is actually missing."
+          fi
           npx cdk deploy TtobakAiStack --exclusively --require-approval never
           npx cdk deploy TtobakEdgeAuthStack --exclusively --require-approval never
           npx cdk deploy TtobakGatewayStack --exclusively --require-approval never

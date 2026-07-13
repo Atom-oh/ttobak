@@ -286,6 +286,48 @@ class TestHandlerCustomUrls(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', []))
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    @mock.patch.object(news_crawler, '_fetch_url')
+    def test_custom_urls_processed_before_search_queries(
+        self, mock_fetch, mock_exists, mock_summarize, mock_s3, mock_meta,
+    ):
+        # customUrls must be processed (and thus dedup-written) before the
+        # search-query loop, so a full-body custom URL fetch isn't blocked
+        # by a snippet-only search result landing first for the same URL.
+        mock_fetch.return_value = (
+            '<html><body><p>' + 'This is a long enough paragraph for testing. ' * 5 + '</p></body></html>'
+        )
+        call_order = []
+
+        def fake_gateway_search(query, max_results=10):
+            call_order.append('search')
+            return [{'title': 'From search', 'url': 'https://example.com/custom', 'text': 'snippet'}], None
+
+        def fake_fetch(url):
+            call_order.append('custom_url')
+            return mock_fetch.return_value
+
+        mock_fetch.side_effect = fake_fetch
+
+        original_gateway_url = news_crawler.WEB_SEARCH_GATEWAY_URL
+        try:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = 'https://test-gateway.example.com/mcp'
+            with mock.patch.object(news_crawler, '_gateway_web_search', side_effect=fake_gateway_search):
+                news_crawler.handler({
+                    'sourceId': 'tech-news',
+                    'sourceName': 'Acme',
+                    'newsQueries': ['AI'],
+                    'customUrls': [{'url': 'https://example.com/custom', 'title': 'Custom Doc'}],
+                }, None)
+        finally:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = original_gateway_url
+
+        self.assertEqual(call_order[0], 'custom_url')
+        self.assertIn('search', call_order[1:])
+
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
     @mock.patch.object(news_crawler, '_fetch_url')
     @mock.patch.object(news_crawler, '_doc_exists', side_effect=Exception('DynamoDB throttled'))
     @mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None))
@@ -841,11 +883,15 @@ class TestGatewayWebSearch(unittest.TestCase):
 
     @mock.patch('news_crawler._sigv4_post')
     def test_empty_results_on_transport_exception(self, mock_post):
+        # Exception detail is logged, not returned to the caller -- mirrors
+        # research-agent/tools.py's web_search, which also doesn't surface
+        # raw exception text.
         mock_post.side_effect = Exception('connection timeout')
 
         results, error = news_crawler._gateway_web_search('query')
         self.assertEqual(results, [])
-        self.assertIn('connection timeout', error)
+        self.assertIsNotNone(error)
+        self.assertNotIn('connection timeout', error)
 
     @mock.patch('news_crawler._sigv4_post')
     def test_query_truncated_to_200_chars_and_max_results_passed(self, mock_post):

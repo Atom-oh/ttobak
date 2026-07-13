@@ -230,8 +230,12 @@ def _gateway_web_search(query: str, max_results: int = 10) -> tuple:
         results = inner.get('results', [])
         return [r for r in results if r.get('url')][:max_results], None
     except Exception as e:
+        # Full exception detail goes to CloudWatch only; the handler's
+        # errors[] (returned in the Step Functions result) gets a generic
+        # reason, matching research-agent/tools.py's web_search policy of
+        # not surfacing raw exception text to the caller.
         logger.warning(f'Web search gateway call failed for "{query}": {e}')
-        return [], f'{e}'
+        return [], 'web search transport failed'
 
 
 KNOWN_OUTLET_NAMES = {
@@ -587,17 +591,11 @@ def handler(event, context):
         logger.error('WEB_SEARCH_GATEWAY_URL is not set — skipping all search queries')
         all_queries = []
 
-    # 1. AgentCore Gateway Web Search — one search per generated query
-    for query in all_queries:
-        results, search_error = _gateway_web_search(query)
-        if search_error:
-            errors.append(f'web search "{query}": {search_error}')
-        logger.info(f'Web search "{query}": {len(results)} result(s)')
-        for r in results:
-            _try_process(r.get('title', ''), r.get('url', ''),
-                         r.get('publishedDate', ''), r.get('text', ''))
-
-    # 2. Custom URLs (direct fetch — unchanged)
+    # 1. Custom URLs (direct fetch, full body) — run before the search
+    # queries below so a full-body custom URL is written before a snippet
+    # -only search result for the same URL could dedup-block it: once
+    # _doc_exists sees a hash, the snippet version would otherwise "win"
+    # and the fuller custom-URL body never gets a chance to be written.
     for entry in custom_urls:
         url = entry.get('url', '')
         title = entry.get('title', url)
@@ -608,8 +606,8 @@ def handler(event, context):
             # an outbound request to a paywalled or already-ingested URL.
             # _doc_exists is a DynamoDB call and can raise (e.g. throttling)
             # -- that must land in errors[] like any other per-URL failure,
-            # not abort the whole handler and lose results already
-            # collected from the search-query loop above.
+            # not abort the whole handler and lose results from other
+            # customUrls entries or the search-query loop that follows.
             if _is_blocked_url(url):
                 logger.info(f'Skipping paywalled/premium URL: {url}')
                 continue
@@ -631,6 +629,16 @@ def handler(event, context):
             errors.append(error_msg)
             continue
         _try_process(title, url, '', text)
+
+    # 2. AgentCore Gateway Web Search — one search per generated query
+    for query in all_queries:
+        results, search_error = _gateway_web_search(query)
+        if search_error:
+            errors.append(f'web search "{query}": {search_error}')
+        logger.info(f'Web search "{query}": {len(results)} result(s)')
+        for r in results:
+            _try_process(r.get('title', ''), r.get('url', ''),
+                         r.get('publishedDate', ''), r.get('text', ''))
 
     result = {
         'docsAdded': docs_added,
