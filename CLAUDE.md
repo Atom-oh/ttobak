@@ -22,7 +22,7 @@ cd frontend && npm run build     # static export to out/
 cd frontend && npm run dev       # local dev server
 cd frontend && npm run lint      # eslint
 
-# Python crawler + research-agent unit tests (stdlib unittest, no external deps)
+# Python crawler + research-agent unit tests (stdlib unittest; needs boto3/botocore, present in the Lambda/container runtime)
 cd backend/python/crawler && python3 -m unittest test_crawlers -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
 

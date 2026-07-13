@@ -43,4 +43,21 @@ jobs:
         run: |
           npm ci
           npx cdk diff 2>&1 || true
-          npx cdk deploy --all --require-approval never
+          # Never `--all`: that would include TtobakKnowledgeStack, which
+          # stages a deliberate, undeployed Bedrock KB teardown that `--all`
+          # would apply for real (see CLAUDE.md Known Issues). List every
+          # other stack explicitly instead -- cdk still toposorts by
+          # addDependency, so order here doesn't matter, but the omission
+          # of TtobakKnowledgeStack does.
+          npx cdk deploy \
+            TtobakWebSearchGatewayStack \
+            TtobakStorageStack \
+            TtobakAuthStack \
+            TtobakAiStack \
+            TtobakEdgeAuthStack \
+            TtobakGatewayStack \
+            TtobakCrawlerStack \
+            TtobakResearchAgentStack \
+            TtobakWhisperStack \
+            TtobakFrontendStack \
+            --require-approval never

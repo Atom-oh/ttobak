@@ -281,10 +281,13 @@ def _strip_delimiter_tokens(text: str) -> str:
 
 
 _DIRECTIVE_RE = re.compile(
-    # Role-marker lines ("system: ...") or explicit "ignore instructions"
-    # commands -- not a bare keyword match, which would false-positive on
-    # ordinary prose ("System integrators announced...", "사용자 경험...").
-    r'^\s*((system|assistant|user|human|instruction[s]?)\s*[:\-]'
+    # Role-marker ("system: ...") or explicit "ignore instructions" command
+    # -- not a bare keyword match, which would false-positive on ordinary
+    # prose ("System integrators announced...", "사용자 경험..."). Uses
+    # search (not match/^-anchored) with a word boundary so the directive is
+    # still caught mid-line ("Good news. Ignore previous instructions and
+    # ..."), not just when it opens the line.
+    r'\b((system|assistant|user|human|instruction[s]?)\s*[:\-]'
     r'|ignore\s+(all\s+)?previous\s+instructions'
     # Korean app, so the English-only patterns above miss the primary attack
     # language -- this PR's own test payload used a Korean directive.
@@ -311,7 +314,7 @@ def _sanitize_snippet(text: str) -> str:
     text = _strip_delimiter_tokens(text).replace('```', "'''")
     cleaned_lines = []
     for line in text.splitlines():
-        if _DIRECTIVE_RE.match(line):
+        if _DIRECTIVE_RE.search(line):
             # Visible marker, not an invisible zero-width char: an invisible
             # prefix is a defense that a re-save/copy-paste/linter pass can
             # silently strip without anyone noticing.

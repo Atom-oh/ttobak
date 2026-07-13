@@ -126,10 +126,12 @@ def _extract_sse_json(text: str) -> str:
 
 
 _DIRECTIVE_RE = re.compile(
-    # Role-marker lines ("system: ...") or explicit "ignore instructions"
-    # commands -- not a bare keyword match, which would false-positive on
-    # ordinary prose ("System integrators announced...", "사용자 경험...").
-    r'^\s*((system|assistant|user|human|instruction[s]?)\s*[:\-]'
+    # Role-marker ("system: ...") or explicit "ignore instructions" command
+    # -- not a bare keyword match, which would false-positive on ordinary
+    # prose ("System integrators announced...", "사용자 경험..."). Uses
+    # search (not match/^-anchored) with a word boundary so the directive is
+    # still caught mid-line, not just when it opens the line.
+    r'\b((system|assistant|user|human|instruction[s]?)\s*[:\-]'
     r'|ignore\s+(all\s+)?previous\s+instructions'
     # Korean app, so the English-only patterns above miss the primary attack
     # language.
@@ -153,7 +155,7 @@ def _sanitize_snippet(text: str) -> str:
     text = text.replace("```", "'''")
     cleaned_lines = []
     for line in text.splitlines():
-        if _DIRECTIVE_RE.match(line):
+        if _DIRECTIVE_RE.search(line):
             cleaned_lines.append("[quoted] " + line)
         else:
             cleaned_lines.append(line)
