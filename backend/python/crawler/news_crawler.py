@@ -266,6 +266,15 @@ def _strip_delimiter_tokens(text: str) -> str:
     return _ARTICLE_TAG_RE.sub('', text)
 
 
+_DIRECTIVE_RE = re.compile(
+    r'^\s*(system|assistant|user|human|instruction[s]?|ignore\s+(all\s+)?previous'
+    # Korean app, so the English-only patterns above miss the primary attack
+    # language -- this PR's own test payload used a Korean directive.
+    r'|시스템|어시스턴트|사용자|지시\s*사항|이전\s*(모든\s*)?지시|역할\s*(부여|지시))',
+    re.IGNORECASE,
+)
+
+
 def _sanitize_snippet(text: str) -> str:
     """Neutralize prompt-injection vectors in untrusted web-search text
     (snippet or title) before it's stored in the KB, where it will later be
@@ -275,18 +284,14 @@ def _sanitize_snippet(text: str) -> str:
     delimiters, so we defang the generic building blocks of an injection:
     the <article> fence tokens, fenced code blocks (```), and any line that
     reads as a role/instruction directive (system:/assistant:/user:/
-    instructions:/ignore previous ...). Content is preserved as readable
-    text; only the structural markers are declawed."""
+    instructions:/ignore previous ... or the Korean equivalents). Content is
+    preserved as readable text; only the structural markers are declawed."""
     if not text:
         return text
     text = _strip_delimiter_tokens(text).replace('```', "'''")
     cleaned_lines = []
-    directive = re.compile(
-        r'^\s*(system|assistant|user|human|instruction[s]?|ignore\s+(all\s+)?previous)\b[:\-]?',
-        re.IGNORECASE,
-    )
     for line in text.splitlines():
-        if directive.match(line):
+        if _DIRECTIVE_RE.match(line):
             # Visible marker, not an invisible zero-width char: an invisible
             # prefix is a defense that a re-save/copy-paste/linter pass can
             # silently strip without anyone noticing.
@@ -381,19 +386,31 @@ def _doc_exists(source_id: str, doc_hash: str) -> bool:
 # Storage
 # ---------------------------------------------------------------------------
 
+def _strip_newlines(text: str) -> str:
+    """Collapse newlines/control chars so an untrusted value inserted into a
+    single markdown line (e.g. **Source:** {url}) can't inject extra lines."""
+    if not text:
+        return text
+    return ' '.join(text.split())
+
+
 def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
                  snippet: str, summary: str, pub_date: str, tags: list) -> None:
     tag_line = f'**Tags:** {", ".join(tags)}\n' if tags else ''
-    # title is untrusted (open web search result) and lands in the KB doc, so
-    # sanitize it the same way as the snippet body below.
+    # title/url/pub_date are untrusted (open web search result); summary is
+    # Bedrock-generated from that same untrusted input. All land in the KB
+    # doc, so sanitize/defang each before writing.
     safe_title = _sanitize_snippet(title)
+    safe_url = _strip_newlines(url)
+    safe_pub_date = _strip_newlines(pub_date)
+    safe_summary = _sanitize_snippet(summary)
     md = (
         f'# {safe_title}\n\n'
-        f'**Published:** {pub_date}\n'
-        f'**Source:** {url}\n'
+        f'**Published:** {safe_pub_date}\n'
+        f'**Source:** {safe_url}\n'
         f'{tag_line}\n'
         f'---\n\n'
-        f'{summary}\n'
+        f'{safe_summary}\n'
     )
     if snippet:
         safe = _sanitize_snippet(snippet[:MAX_CONTENT_LENGTH])

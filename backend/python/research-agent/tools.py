@@ -117,7 +117,10 @@ def _extract_sse_json(text: str) -> str:
 
 
 _DIRECTIVE_RE = re.compile(
-    r'^\s*(system|assistant|user|human|instruction[s]?|ignore\s+(all\s+)?previous)\b[:\-]?',
+    r'^\s*(system|assistant|user|human|instruction[s]?|ignore\s+(all\s+)?previous'
+    # Korean app, so the English-only patterns above miss the primary attack
+    # language.
+    r'|시스템|어시스턴트|사용자|지시\s*사항|이전\s*(모든\s*)?지시|역할\s*(부여|지시))',
     re.IGNORECASE,
 )
 
@@ -126,7 +129,10 @@ def _sanitize_snippet(text: str) -> str:
     """Neutralize prompt-injection building blocks in untrusted web-search
     text (title/snippet) before it reaches the agent's context, since the
     agent can carry it into save_report() and land it in the shared KB.
-    Kept in sync with backend/python/crawler/news_crawler.py's copy."""
+    Directive-line handling is kept in sync with
+    backend/python/crawler/news_crawler.py's copy; the <article>-fence
+    stripping in that copy is NOT replicated here because this module never
+    wraps text in an <article> block."""
     if not text:
         return text
     text = text.replace("```", "'''")
