@@ -248,7 +248,13 @@ def web_search(query: str, max_results: int = 10) -> str:
             # same way news_crawler.py's _gateway_web_search does.
             return json.dumps({"results": [], "message": "No text content block in gateway response"})
         inner = json.loads(text_block["text"])
-        results = [r for r in inner.get("results", []) if r.get("url")][:max_results]
+        # url is untrusted (open web search result); a non-http(s) scheme
+        # (javascript:, data:) could otherwise be carried by the agent into
+        # save_report() and rendered as a link downstream.
+        results = [
+            r for r in inner.get("results", [])
+            if r.get("url", "").lower().startswith(("http://", "https://"))
+        ][:max_results]
         for r in results:
             if r.get("title"):
                 r["title"] = _sanitize_snippet(r["title"])

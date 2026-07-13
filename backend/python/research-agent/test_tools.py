@@ -65,6 +65,31 @@ class TestWebSearch(unittest.TestCase):
         parsed = json.loads(raw)
 
         self.assertEqual(len(parsed['results']), 1)
+
+    @mock.patch('tools._sigv4_post')
+    def test_filters_non_http_url_scheme(self, mock_post):
+        # url is untrusted; a non-http(s) scheme (javascript:, data:) could
+        # otherwise be carried by the agent into save_report() and rendered
+        # as a link downstream.
+        mock_post.return_value = json.dumps({
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {
+                'content': [{'type': 'text', 'text': json.dumps({
+                    'id': 'x',
+                    'results': [
+                        {'text': 'evil', 'url': 'javascript:alert(1)'},
+                        {'text': 'has url', 'url': 'https://example.com/2'},
+                    ],
+                })}],
+                'isError': False,
+            },
+        })
+
+        raw = tools.web_search('query')
+        parsed = json.loads(raw)
+
+        self.assertEqual(len(parsed['results']), 1)
+        self.assertEqual(parsed['results'][0]['url'], 'https://example.com/2')
         self.assertEqual(parsed['results'][0]['url'], 'https://example.com/2')
 
     @mock.patch('tools._sigv4_post')

@@ -513,6 +513,13 @@ def _process_article(source_id: str, title: str, url: str,
         logger.info(f'Skipping result with missing url/title: url={url!r} title={title!r}')
         return False
 
+    if not url.lower().startswith(('http://', 'https://')):
+        # url is untrusted (open web search result) and later renders as a
+        # clickable href in the frontend insights UI -- reject non-http(s)
+        # schemes (javascript:, data:, etc.) before they ever reach S3/DDB.
+        logger.info(f'Skipping result with non-http(s) URL scheme: {url!r}')
+        return False
+
     if not snippet:
         logger.info(f'Skipping result with empty snippet: {url}')
         return False

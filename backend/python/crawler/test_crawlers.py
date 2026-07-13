@@ -974,6 +974,22 @@ class TestProcessArticleGuards(unittest.TestCase):
         mock_s3.assert_not_called()
         mock_meta.assert_not_called()
 
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    def test_non_http_url_scheme_skipped(self, mock_exists, mock_s3, mock_meta):
+        # url is untrusted (open web search result) and later renders as a
+        # clickable href in the frontend insights UI -- a non-http(s)
+        # scheme (javascript:, data:) must never reach S3/DDB.
+        result = news_crawler._process_article(
+            'tech-news', 'Title', 'javascript:alert(1)', '2026-04-14', 'snippet'
+        )
+
+        self.assertFalse(result)
+        mock_exists.assert_not_called()
+        mock_s3.assert_not_called()
+        mock_meta.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # 11. news_crawler.process_article -- new article
