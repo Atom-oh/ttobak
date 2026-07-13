@@ -289,6 +289,32 @@ class TestHandlerCustomUrls(unittest.TestCase):
     @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', []))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
     @mock.patch.object(news_crawler, '_fetch_url')
+    @mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None))
+    def test_custom_url_as_plain_string_is_written(
+        self, mock_search, mock_fetch, mock_exists, mock_summarize, mock_s3, mock_meta,
+    ):
+        # The real config shape is []string (CrawlerSource.CustomUrls in
+        # Go, passed through verbatim by orchestrator.py) -- a plain string
+        # entry must not crash the handler with entry.get() AttributeError.
+        mock_fetch.return_value = (
+            '<html><body><p>' + 'This is a long enough paragraph for testing. ' * 5 + '</p></body></html>'
+        )
+
+        result = news_crawler.handler({
+            'sourceId': 'tech-news',
+            'customUrls': ['https://example.com/custom'],
+        }, None)
+
+        self.assertEqual(result['docsAdded'], 1)
+        self.assertEqual(result['errors'], [])
+        mock_s3.assert_called_once()
+        mock_meta.assert_called_once()
+
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', []))
+    @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
+    @mock.patch.object(news_crawler, '_fetch_url')
     def test_custom_urls_processed_before_search_queries(
         self, mock_fetch, mock_exists, mock_summarize, mock_s3, mock_meta,
     ):
@@ -691,7 +717,7 @@ class TestWriteMetadataSanitized(unittest.TestCase):
         self.assertTrue(item['summary'].startswith('[quoted] '))
         self.assertNotIn('\n', item['url'])
         self.assertNotIn('\n', item['pubDate'])
-        self.assertTrue(any('\n' not in t for t in item['tags']))
+        self.assertTrue(all('\n' not in t for t in item['tags']))
 
 
 # ---------------------------------------------------------------------------
@@ -717,6 +743,16 @@ class TestExtractSseJson(unittest.TestCase):
 
     def test_prefers_result_frame_over_leading_notification_frame(self):
         notification = '{"jsonrpc": "2.0", "method": "notifications/progress"}'
+        response = '{"jsonrpc": "2.0", "id": 1, "result": {"isError": false}}'
+        sse_body = f'event: message\ndata: {notification}\n\nevent: message\ndata: {response}\n\n'
+        self.assertEqual(news_crawler._extract_sse_json(sse_body), response)
+
+    def test_does_not_false_positive_on_result_substring_in_notification(self):
+        # A notification frame whose params happen to contain the literal
+        # text '"result"' (e.g. in a human-readable progress message) must
+        # not be mistaken for the actual JSON-RPC response -- selection is
+        # by parsed top-level key, not substring match.
+        notification = '{"jsonrpc": "2.0", "method": "notifications/progress", "params": {"message": "waiting for result"}}'
         response = '{"jsonrpc": "2.0", "id": 1, "result": {"isError": false}}'
         sse_body = f'event: message\ndata: {notification}\n\nevent: message\ndata: {response}\n\n'
         self.assertEqual(news_crawler._extract_sse_json(sse_body), response)

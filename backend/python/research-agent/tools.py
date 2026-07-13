@@ -120,7 +120,14 @@ def _extract_sse_json(text: str) -> str:
     if current_lines:
         frames.append("\n".join(current_lines))
     for frame in frames:
-        if '"result"' in frame or '"error"' in frame:
+        # Parse-and-check-key instead of a substring match, so a
+        # notification frame whose params happen to contain the literal
+        # text '"result"' isn't mistaken for the JSON-RPC response.
+        try:
+            parsed = json.loads(frame)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and ("result" in parsed or "error" in parsed):
             return frame
     return frames[-1] if frames else text
 

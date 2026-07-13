@@ -153,7 +153,15 @@ def _extract_sse_json(text: str) -> str:
     if current_lines:
         frames.append('\n'.join(current_lines))
     for frame in frames:
-        if '"result"' in frame or '"error"' in frame:
+        # Parse-and-check-key instead of a substring match, so a
+        # notification frame whose params happen to contain the literal
+        # text '"result"' (e.g. as part of a progress message) isn't
+        # mistaken for the JSON-RPC response.
+        try:
+            parsed = json.loads(frame)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and ('result' in parsed or 'error' in parsed):
             return frame
     return frames[-1] if frames else text
 
@@ -490,8 +498,11 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
     if summary:
         item['summary'] = _sanitize_snippet(summary)
     if source_name:
-        item['source'] = source_name
-        item['sourceName'] = source_name
+        # source_name is _extract_source_name(title) -- derived from the
+        # same untrusted title, so it needs the same defanging.
+        safe_source_name = _sanitize_snippet(source_name)
+        item['source'] = safe_source_name
+        item['sourceName'] = safe_source_name
     if tags:
         item['tags'] = [_strip_newlines(_sanitize_snippet(t)) for t in tags]
     table.put_item(Item=item)
@@ -555,8 +566,14 @@ def handler(event, context):
         "sourceId": "wooribank",
         "sourceName": "우리은행",
         "newsQueries": ["AI", "클라우드", "디지털전환"],
-        "customUrls": [{"url": "https://...", "title": "..."}]
+        "customUrls": ["https://...", "https://..."]
       }
+
+    customUrls is a plain list of URL strings in the real config
+    (CrawlerSource.CustomUrls in Go is []string; orchestrator.py passes it
+    through unchanged) -- {"url","title"} dict entries are also accepted
+    for backward compatibility with older event shapes, but []string is
+    what production actually sends.
 
     Search results come from the AgentCore Web Search connector (snippet
     only). Custom URLs are still fetched directly and their body extracted.
@@ -604,8 +621,16 @@ def handler(event, context):
     # _doc_exists sees a hash, the snippet version would otherwise "win"
     # and the fuller custom-URL body never gets a chance to be written.
     for entry in custom_urls:
-        url = entry.get('url', '')
-        title = entry.get('title', url)
+        # The real config shape (backend/internal/model/meeting.go's
+        # CrawlerSource.CustomUrls, passed through verbatim by
+        # orchestrator.py) is []string -- plain URL strings, not
+        # {"url","title"} dicts. Accept both so a string entry doesn't
+        # crash the whole handler with an unhandled AttributeError.
+        if isinstance(entry, str):
+            url, title = entry, entry
+        else:
+            url = entry.get('url', '')
+            title = entry.get('title', url)
         if not url:
             continue
         try:
