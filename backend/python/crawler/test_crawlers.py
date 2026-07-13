@@ -313,6 +313,22 @@ class TestSigv4PostConfigGuard(unittest.TestCase):
         finally:
             news_crawler.WEB_SEARCH_GATEWAY_URL = original
 
+    def test_customurls_only_event_does_not_record_missing_config_error(self):
+        # An event with no newsQueries/sourceName (customUrls-only) never
+        # attempts a search, so a missing WEB_SEARCH_GATEWAY_URL is
+        # irrelevant to it and must not be reported as an error.
+        original = news_crawler.WEB_SEARCH_GATEWAY_URL
+        try:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = ''
+            with mock.patch.object(news_crawler, '_fetch_url', return_value='<html></html>'):
+                result = news_crawler.handler({
+                    'sourceId': 's',
+                    'customUrls': [{'url': 'https://example.com/x', 'title': 'T'}],
+                }, None)
+            self.assertEqual(result['errors'], [])
+        finally:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = original
+
 
 class TestHandlerSurfacesGatewaySearchError(unittest.TestCase):
     """A gateway/transport failure (e.g. missing IAM permission) must not
@@ -607,6 +623,29 @@ class TestExtractSseJson(unittest.TestCase):
         result = news_crawler._extract_sse_json(sse_body)
         parsed = json.loads(result)
         self.assertEqual(parsed['result']['isError'], False)
+
+
+class TestGenerateSearchQueries(unittest.TestCase):
+    """A keyword-only source config (no sourceName) must not silently
+    produce zero queries -- the old RSS path searched regardless of
+    sourceName, and handler's docstring event example implies newsQueries
+    alone is a supported config."""
+
+    def test_keyword_only_source_uses_keywords_as_standalone_queries(self):
+        queries = news_crawler._generate_search_queries('', ['AI', '클라우드'])
+        self.assertEqual(queries, ['AI', '클라우드'])
+
+    def test_source_name_with_keywords_combines_them(self):
+        queries = news_crawler._generate_search_queries('우리은행', ['AI'])
+        self.assertIn('우리은행', queries)
+        self.assertIn('우리은행 AI', queries)
+
+    def test_no_source_name_and_no_keywords_yields_empty(self):
+        self.assertEqual(news_crawler._generate_search_queries('', []), [])
+
+    def test_keyword_only_source_filters_known_outlet_names(self):
+        queries = news_crawler._generate_search_queries('', ['google', 'AI'])
+        self.assertEqual(queries, ['AI'])
 
 
 # ---------------------------------------------------------------------------

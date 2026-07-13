@@ -32,8 +32,12 @@ returns `{"results": [], "message": "Web search is misconfigured"}`.
 
 ## IAM
 
-Runtime execution role `ttobak-agentcore-research-role` is created
-out-of-band by this same deploy pipeline (not CDK) — `TtobakAiStack` imports
-it by ARN to attach the Gateway-invoke policy, so that role must exist
-before `cdk deploy TtobakAiStack`. See root `CLAUDE.md`'s Known Issues for
-the full SP1 deploy sequence.
+Runtime execution role `ttobak-agentcore-research-role` is a manually
+created, pre-existing IAM resource (created once, out-of-band, when the
+AgentCore Runtime was first provisioned) — `deploy-research-agent.yml` only
+*consumes* it (`--role-arn` on `update-agent-runtime`); it does not create
+it, and neither does any other CI pipeline. `TtobakAiStack` imports the
+role by ARN to attach the Gateway-invoke policy, so it must already exist
+before `cdk deploy TtobakAiStack` — `deploy-infra.yml` runs an `aws iam
+get-role` preflight before that deploy to fail fast if it's missing. See
+root `CLAUDE.md`'s Known Issues for the full SP1 deploy sequence.

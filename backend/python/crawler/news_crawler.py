@@ -259,6 +259,10 @@ def _generate_search_queries(source_name: str, keywords: list) -> list:
         else:
             for topic in ['IT', '클라우드', 'AI', '디지털전환']:
                 queries.append(f'{source_name} {topic}')
+    elif valid_keywords:
+        # No source name (keyword-only source config) -- use each keyword
+        # as a standalone query instead of silently producing zero queries.
+        queries.extend(valid_keywords)
 
     return queries
 
@@ -574,7 +578,7 @@ def handler(event, context):
             logger.error(f'Article error: {error_msg}', exc_info=True)
             errors.append(error_msg)
 
-    if not WEB_SEARCH_GATEWAY_URL:
+    if not WEB_SEARCH_GATEWAY_URL and all_queries:
         errors.append('WEB_SEARCH_GATEWAY_URL is not set — skipping all search queries')
         logger.error('WEB_SEARCH_GATEWAY_URL is not set — skipping all search queries')
         all_queries = []

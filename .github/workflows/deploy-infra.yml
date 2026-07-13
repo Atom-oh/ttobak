@@ -38,6 +38,15 @@ jobs:
             GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
           done
 
+      - name: Verify ttobak-agentcore-research-role exists
+        run: |
+          # TtobakAiStack imports this role by ARN to attach the Gateway-
+          # invoke policy. It's a manually-created, pre-existing IAM
+          # resource (not produced by any CI pipeline) -- fail fast with a
+          # clear message instead of letting the CFN inline-policy-attach
+          # step fail obscurely mid-deploy.
+          aws iam get-role --role-name ttobak-agentcore-research-role >/dev/null
+
       - name: CDK deploy
         working-directory: infra
         run: |
