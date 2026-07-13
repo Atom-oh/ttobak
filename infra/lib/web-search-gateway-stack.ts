@@ -62,7 +62,7 @@ export class WebSearchGatewayStack extends cdk.Stack {
     // shape for the Web Search Tool connector.
     new agentcore.CfnGatewayTarget(this, 'WebSearchTarget', {
       gatewayIdentifier: this.gateway.gatewayId,
-      name: 'web-search-tool',
+      name: 'ttobak-web-search-tool',
       targetConfiguration: {
         mcp: {
           connector: {

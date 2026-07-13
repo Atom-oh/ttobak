@@ -8,6 +8,7 @@ import json
 import os
 import logging
 import hashlib
+import re
 from datetime import datetime
 from html.parser import HTMLParser
 from urllib.request import Request, urlopen
@@ -115,6 +116,29 @@ def _extract_sse_json(text: str) -> str:
     return data_frames[-1] if data_frames else text
 
 
+_DIRECTIVE_RE = re.compile(
+    r'^\s*(system|assistant|user|human|instruction[s]?|ignore\s+(all\s+)?previous)\b[:\-]?',
+    re.IGNORECASE,
+)
+
+
+def _sanitize_snippet(text: str) -> str:
+    """Neutralize prompt-injection building blocks in untrusted web-search
+    text (title/snippet) before it reaches the agent's context, since the
+    agent can carry it into save_report() and land it in the shared KB.
+    Kept in sync with backend/python/crawler/news_crawler.py's copy."""
+    if not text:
+        return text
+    text = text.replace("```", "'''")
+    cleaned_lines = []
+    for line in text.splitlines():
+        if _DIRECTIVE_RE.match(line):
+            cleaned_lines.append("[quoted] " + line)
+        else:
+            cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
+
+
 def _sigv4_post(body_json: str) -> str:
     """POST body_json to the Gateway MCP endpoint, SigV4-signed. Returns the
     response body as a JSON string, unwrapping an SSE ("data: ...") frame if
@@ -187,6 +211,11 @@ def web_search(query: str, max_results: int = 10) -> str:
             return json.dumps({"results": [], "message": "No results found"})
         inner = json.loads(text_block["text"])
         results = [r for r in inner.get("results", []) if r.get("url")][:max_results]
+        for r in results:
+            if r.get("title"):
+                r["title"] = _sanitize_snippet(r["title"])
+            if r.get("text"):
+                r["text"] = _sanitize_snippet(r["text"])
         return json.dumps({"results": results}, ensure_ascii=False)
     except Exception as e:
         logger.warning(f"Web search failed for '{query}': {e}")

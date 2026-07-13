@@ -253,13 +253,17 @@ def _generate_search_queries(source_name: str, keywords: list) -> list:
 # Untrusted-input sanitization (open web search results → prompt + KB)
 # ---------------------------------------------------------------------------
 
+_ARTICLE_TAG_RE = re.compile(r'</?article[^>]*>', re.IGNORECASE)
+
+
 def _strip_delimiter_tokens(text: str) -> str:
-    """Remove the <article>/</article> delimiter tokens used to fence
-    untrusted content in the summarize prompt, so a snippet or title that
-    embeds "</article>" can't break out of the data block."""
+    """Remove the <article>/</article> delimiter tokens (and case/attribute
+    variants like <ARTICLE> or </article foo="bar">) used to fence untrusted
+    content in the summarize prompt, so a snippet or title that embeds
+    "</article>" can't break out of the data block."""
     if not text:
         return text
-    return text.replace('</article>', '').replace('<article>', '')
+    return _ARTICLE_TAG_RE.sub('', text)
 
 
 def _sanitize_snippet(text: str) -> str:
@@ -283,7 +287,10 @@ def _sanitize_snippet(text: str) -> str:
     )
     for line in text.splitlines():
         if directive.match(line):
-            line = '​' + line  # zero-width prefix breaks the directive keyword
+            # Visible marker, not an invisible zero-width char: an invisible
+            # prefix is a defense that a re-save/copy-paste/linter pass can
+            # silently strip without anyone noticing.
+            line = '[quoted] ' + line
         cleaned_lines.append(line)
     return '\n'.join(cleaned_lines)
 
