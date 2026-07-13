@@ -50,7 +50,7 @@ class TestOrchestrator(unittest.TestCase):
     """Test orchestrator.handler scans DynamoDB and returns sources."""
 
     def test_handler_returns_sources(self):
-        """Mock DynamoDB scan, verify returns sources list."""
+        """Mock DynamoDB scan, verify returns newsSources + merged techConfig."""
         mock_table = mock.MagicMock()
         mock_table.scan.return_value = {
             'Items': [
@@ -58,7 +58,6 @@ class TestOrchestrator(unittest.TestCase):
                     'PK': 'CRAWLER#aws-docs',
                     'SK': 'CONFIG',
                     'status': 'active',
-                    'type': 'tech',
                     'awsServices': ['lambda', 's3'],
                     'newsQueries': [],
                     'customUrls': [],
@@ -67,7 +66,6 @@ class TestOrchestrator(unittest.TestCase):
                     'PK': 'CRAWLER#tech-news',
                     'SK': 'CONFIG',
                     'status': 'active',
-                    'type': 'news',
                     'awsServices': [],
                     'newsQueries': ['AWS cloud'],
                     'customUrls': [],
@@ -79,30 +77,31 @@ class TestOrchestrator(unittest.TestCase):
         with mock.patch.object(orchestrator, 'table', mock_table):
             result = orchestrator.handler({}, None)
 
-        self.assertIn('sources', result)
-        self.assertEqual(len(result['sources']), 2)
-        self.assertEqual(result['sources'][0]['sourceId'], 'aws-docs')
-        self.assertEqual(result['sources'][0]['type'], 'tech')
-        self.assertEqual(result['sources'][1]['sourceId'], 'tech-news')
-        self.assertEqual(result['sources'][1]['newsQueries'], ['AWS cloud'])
+        self.assertIn('newsSources', result)
+        self.assertEqual(len(result['newsSources']), 2)
+        self.assertEqual(result['newsSources'][0]['sourceId'], 'aws-docs')
+        self.assertEqual(result['newsSources'][1]['sourceId'], 'tech-news')
+        self.assertEqual(result['newsSources'][1]['newsQueries'], ['AWS cloud'])
+        self.assertEqual(result['techConfig']['sourceId'], '__tech__')
+        self.assertEqual(result['techConfig']['awsServices'], ['lambda', 's3'])
 
     def test_handler_paginates(self):
         """Verify orchestrator handles DynamoDB pagination."""
         mock_table = mock.MagicMock()
         mock_table.scan.side_effect = [
             {
-                'Items': [{'PK': 'CRAWLER#src1', 'SK': 'CONFIG', 'status': 'active', 'type': 'tech'}],
+                'Items': [{'PK': 'CRAWLER#src1', 'SK': 'CONFIG', 'status': 'active'}],
                 'LastEvaluatedKey': {'PK': 'CRAWLER#src1', 'SK': 'CONFIG'},
             },
             {
-                'Items': [{'PK': 'CRAWLER#src2', 'SK': 'CONFIG', 'status': 'active', 'type': 'news'}],
+                'Items': [{'PK': 'CRAWLER#src2', 'SK': 'CONFIG', 'status': 'active'}],
             },
         ]
 
         with mock.patch.object(orchestrator, 'table', mock_table):
             result = orchestrator.handler({}, None)
 
-        self.assertEqual(len(result['sources']), 2)
+        self.assertEqual(len(result['newsSources']), 2)
         self.assertEqual(mock_table.scan.call_count, 2)
 
     def test_handler_scan_error(self):
@@ -113,53 +112,45 @@ class TestOrchestrator(unittest.TestCase):
         with mock.patch.object(orchestrator, 'table', mock_table):
             result = orchestrator.handler({}, None)
 
-        self.assertEqual(result['sources'], [])
+        self.assertEqual(result['newsSources'], [])
         self.assertIn('error', result)
 
 
 # ---------------------------------------------------------------------------
-# 2. tech_crawler.discover_docs (via _search_aws_docs)
+# 2. tech_crawler._fetch_whats_new -- RSS fetch + service-keyword filter
 # ---------------------------------------------------------------------------
 
 class TestTechCrawlerDiscover(unittest.TestCase):
-    """Test tech_crawler._search_aws_docs URL parsing."""
+    """Test tech_crawler._fetch_whats_new RSS parsing + filtering."""
 
     @mock.patch.object(tech_crawler, '_fetch_url')
-    def test_search_aws_docs_parses_results(self, mock_fetch):
-        """Mock urlopen, verify URL parsing from AWS docs search API."""
-        mock_fetch.return_value = json.dumps({
-            'items': [
-                {
-                    'title': {'value': 'AWS Lambda Developer Guide'},
-                    'url': 'https://docs.aws.amazon.com/lambda/latest/dg/welcome.html',
-                },
-                {
-                    'title': {'value': 'Lambda Functions'},
-                    'url': '/lambda/latest/dg/lambda-functions.html',
-                },
-                {
-                    'title': 'Plain string title',
-                    'url': 'https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted.html',
-                },
-            ],
-        })
+    def test_fetch_whats_new_parses_and_filters_rss(self, mock_fetch):
+        """Mock the RSS fetch, verify only service-matching items survive."""
+        mock_fetch.return_value = (
+            '<?xml version="1.0"?><rss><channel>'
+            '<item><title>AWS Lambda now supports X</title>'
+            '<link>https://aws.amazon.com/new/1</link>'
+            '<pubDate>Mon, 01 Jan 2026 00:00:00 GMT</pubDate>'
+            '<description>Lambda enhancement</description></item>'
+            '<item><title>Something about S3</title>'
+            '<link>https://aws.amazon.com/new/2</link>'
+            '<pubDate>Mon, 01 Jan 2026 00:00:00 GMT</pubDate>'
+            '<description>S3 stuff</description></item>'
+            '</channel></rss>'
+        )
 
-        results = tech_crawler._search_aws_docs('lambda')
+        results = tech_crawler._fetch_whats_new('lambda')
 
-        self.assertEqual(len(results), 3)
-        self.assertEqual(results[0]['title'], 'AWS Lambda Developer Guide')
-        self.assertIn('https://docs.aws.amazon.com', results[0]['url'])
-        # Relative URL should be converted to absolute
-        self.assertTrue(results[1]['url'].startswith('https://docs.aws.amazon.com'))
-        # Plain string title should work too
-        self.assertEqual(results[2]['title'], 'Plain string title')
+        self.assertEqual(len(results), 1)
+        self.assertIn('Lambda', results[0]['title'])
+        self.assertEqual(results[0]['url'], 'https://aws.amazon.com/new/1')
 
     @mock.patch.object(tech_crawler, '_fetch_url')
-    def test_search_aws_docs_empty_on_error(self, mock_fetch):
-        """Verify empty list on search failure."""
+    def test_fetch_whats_new_empty_on_error(self, mock_fetch):
+        """Verify empty list on fetch failure."""
         mock_fetch.side_effect = Exception('Network error')
 
-        results = tech_crawler._search_aws_docs('lambda')
+        results = tech_crawler._fetch_whats_new('lambda')
         self.assertEqual(results, [])
 
 
@@ -174,11 +165,13 @@ class TestTechCrawlerDedupSkip(unittest.TestCase):
     @mock.patch.object(tech_crawler, '_write_to_s3')
     @mock.patch.object(tech_crawler, '_fetch_url')
     @mock.patch.object(tech_crawler, '_doc_exists', return_value=True)
-    @mock.patch.object(tech_crawler, '_search_aws_docs')
-    def test_dedup_skip(self, mock_search, mock_exists, mock_fetch, mock_s3, mock_meta):
+    @mock.patch.object(tech_crawler, '_fetch_blog_rss', return_value=[])
+    @mock.patch.object(tech_crawler, '_fetch_whats_new')
+    def test_dedup_skip(self, mock_whats_new, mock_blog, mock_exists, mock_fetch, mock_s3, mock_meta):
         """Mock DynamoDB get_item returns existing, verify no S3 write."""
-        mock_search.return_value = [
-            {'title': 'Existing Doc', 'url': 'https://docs.aws.amazon.com/existing'},
+        mock_whats_new.return_value = [
+            {'title': 'Existing Doc', 'url': 'https://docs.aws.amazon.com/existing',
+             'description': '', 'pubDate': ''},
         ]
 
         result = tech_crawler.handler(
@@ -201,16 +194,18 @@ class TestTechCrawlerNewDoc(unittest.TestCase):
 
     @mock.patch.object(tech_crawler, '_write_metadata')
     @mock.patch.object(tech_crawler, '_write_to_s3')
-    @mock.patch.object(tech_crawler, '_summarize', return_value='Test summary')
+    @mock.patch.object(tech_crawler, '_summarize_and_tag', return_value=('Test summary', ['Lambda']))
     @mock.patch.object(tech_crawler, '_fetch_url')
     @mock.patch.object(tech_crawler, '_doc_exists', return_value=False)
-    @mock.patch.object(tech_crawler, '_search_aws_docs')
-    def test_new_doc_writes_s3_and_dynamo(self, mock_search, mock_exists,
+    @mock.patch.object(tech_crawler, '_fetch_blog_rss', return_value=[])
+    @mock.patch.object(tech_crawler, '_fetch_whats_new')
+    def test_new_doc_writes_s3_and_dynamo(self, mock_whats_new, mock_blog, mock_exists,
                                           mock_fetch, mock_summarize,
                                           mock_s3, mock_meta):
         """Mock get_item returns None, mock urlopen, verify S3 put and DDB put called."""
-        mock_search.return_value = [
-            {'title': 'New Lambda Guide', 'url': 'https://docs.aws.amazon.com/new-lambda'},
+        mock_whats_new.return_value = [
+            {'title': 'New Lambda Guide', 'url': 'https://docs.aws.amazon.com/new-lambda',
+             'description': '', 'pubDate': ''},
         ]
         # Return HTML with enough content (>100 chars)
         mock_fetch.return_value = (
@@ -231,16 +226,18 @@ class TestTechCrawlerNewDoc(unittest.TestCase):
 
     @mock.patch.object(tech_crawler, '_write_metadata')
     @mock.patch.object(tech_crawler, '_write_to_s3')
-    @mock.patch.object(tech_crawler, '_summarize')
+    @mock.patch.object(tech_crawler, '_summarize_and_tag')
     @mock.patch.object(tech_crawler, '_fetch_url')
     @mock.patch.object(tech_crawler, '_doc_exists', return_value=False)
-    @mock.patch.object(tech_crawler, '_search_aws_docs')
-    def test_low_content_skipped(self, mock_search, mock_exists,
+    @mock.patch.object(tech_crawler, '_fetch_blog_rss', return_value=[])
+    @mock.patch.object(tech_crawler, '_fetch_whats_new')
+    def test_low_content_skipped(self, mock_whats_new, mock_blog, mock_exists,
                                   mock_fetch, mock_summarize,
                                   mock_s3, mock_meta):
         """Pages with too little text (<100 chars) should be skipped."""
-        mock_search.return_value = [
-            {'title': 'Empty Page', 'url': 'https://docs.aws.amazon.com/empty'},
+        mock_whats_new.return_value = [
+            {'title': 'Empty Page', 'url': 'https://docs.aws.amazon.com/empty',
+             'description': '', 'pubDate': ''},
         ]
         mock_fetch.return_value = '<html><body><p>Short</p></body></html>'
 

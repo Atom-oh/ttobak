@@ -44,3 +44,13 @@ jobs:
       - name: Run tests
         working-directory: backend
         run: go test ./internal/... -count=1
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Run Python crawler + research-agent tests
+        run: |
+          pip install boto3
+          cd backend/python/crawler && python3 -m unittest test_crawlers -v
+          cd ../research-agent && python3 -m unittest test_tools -v
