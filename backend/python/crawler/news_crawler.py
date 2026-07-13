@@ -599,22 +599,32 @@ def handler(event, context):
         title = entry.get('title', url)
         if not url:
             continue
-        # Check blocked/duplicate before fetching — no reason to make an
-        # outbound request to a paywalled or already-ingested URL.
-        if _is_blocked_url(url):
-            logger.info(f'Skipping paywalled/premium URL: {url}')
-            continue
-        if _doc_exists(source_id, _make_hash(url)):
-            logger.debug(f'Skipping duplicate custom URL: {url}')
-            continue
         try:
-            html = _fetch_url(url)
-            text = extract_paragraphs(html)
+            # Check blocked/duplicate before fetching — no reason to make
+            # an outbound request to a paywalled or already-ingested URL.
+            # _doc_exists is a DynamoDB call and can raise (e.g. throttling)
+            # -- that must land in errors[] like any other per-URL failure,
+            # not abort the whole handler and lose results already
+            # collected from the search-query loop above.
+            if _is_blocked_url(url):
+                logger.info(f'Skipping paywalled/premium URL: {url}')
+                continue
+            if _doc_exists(source_id, _make_hash(url)):
+                logger.debug(f'Skipping duplicate custom URL: {url}')
+                continue
+            try:
+                html = _fetch_url(url)
+                text = extract_paragraphs(html)
+            except Exception as e:
+                logger.info(f'Could not fetch custom URL body: {e}')
+                text = ''
+            if not text or len(text) < MIN_BODY_LENGTH:
+                logger.info(f'Skipping custom URL with insufficient body: {url}')
+                continue
         except Exception as e:
-            logger.info(f'Could not fetch custom URL body: {e}')
-            text = ''
-        if not text or len(text) < MIN_BODY_LENGTH:
-            logger.info(f'Skipping custom URL with insufficient body: {url}')
+            error_msg = f'{url}: {e}'
+            logger.error(f'Custom URL prefetch error: {error_msg}', exc_info=True)
+            errors.append(error_msg)
             continue
         _try_process(title, url, '', text)
 

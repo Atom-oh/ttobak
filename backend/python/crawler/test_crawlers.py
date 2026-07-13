@@ -284,6 +284,27 @@ class TestHandlerCustomUrls(unittest.TestCase):
         mock_s3.assert_called_once()
         mock_meta.assert_called_once()
 
+    @mock.patch.object(news_crawler, '_write_metadata')
+    @mock.patch.object(news_crawler, '_write_to_s3')
+    @mock.patch.object(news_crawler, '_fetch_url')
+    @mock.patch.object(news_crawler, '_doc_exists', side_effect=Exception('DynamoDB throttled'))
+    @mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None))
+    def test_doc_exists_failure_is_collected_not_raised(
+        self, mock_search, mock_exists, mock_fetch, mock_s3, mock_meta,
+    ):
+        # _doc_exists is a DynamoDB call in the customUrls prefetch and can
+        # raise (e.g. throttling) -- that must land in errors[] like any
+        # other per-URL failure, not propagate out of handler() and abort
+        # results already collected from other URLs/queries.
+        result = news_crawler.handler({
+            'sourceId': 'tech-news',
+            'customUrls': [{'url': 'https://example.com/custom', 'title': 'Custom Doc'}],
+        }, None)
+
+        self.assertEqual(result['docsAdded'], 0)
+        self.assertTrue(any('DynamoDB throttled' in e for e in result['errors']))
+        mock_s3.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # 6. news_crawler._sigv4_post config guard

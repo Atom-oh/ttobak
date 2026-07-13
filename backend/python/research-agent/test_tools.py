@@ -98,6 +98,19 @@ class TestWebSearch(unittest.TestCase):
         self.assertEqual(len(parsed['results']), 1)
         self.assertEqual(parsed['results'][0]['url'], 'https://example.com/4')
 
+    @mock.patch('tools._sigv4_post')
+    def test_no_text_block_reports_malformed_not_no_results(self, mock_post):
+        mock_post.return_value = json.dumps({
+            'jsonrpc': '2.0', 'id': 1,
+            'result': {'content': [{'type': 'image', 'data': 'irrelevant'}], 'isError': False},
+        })
+
+        raw = tools.web_search('query')
+        parsed = json.loads(raw)
+
+        self.assertEqual(parsed['results'], [])
+        self.assertNotEqual(parsed['message'], 'No results found')
+
 
 class TestWebSearchSanitizesResults(unittest.TestCase):
     """web_search results are untrusted open-web text; the agent can carry

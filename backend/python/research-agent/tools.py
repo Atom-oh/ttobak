@@ -243,7 +243,10 @@ def web_search(query: str, max_results: int = 10) -> str:
         content = result.get("content", [])
         text_block = next((b for b in content if b.get("type") == "text" and "text" in b), None)
         if text_block is None:
-            return json.dumps({"results": [], "message": "No results found"})
+            # No text content block is a malformed/unexpected response
+            # shape, not a genuine zero-match search -- distinguish it the
+            # same way news_crawler.py's _gateway_web_search does.
+            return json.dumps({"results": [], "message": "No text content block in gateway response"})
         inner = json.loads(text_block["text"])
         results = [r for r in inner.get("results", []) if r.get("url")][:max_results]
         for r in results:
