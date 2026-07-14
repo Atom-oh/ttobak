@@ -22,10 +22,12 @@ cd frontend && npm run build     # static export to out/
 cd frontend && npm run dev       # local dev server
 cd frontend && npm run lint      # eslint
 
-# Python crawler + research-agent unit tests (stdlib unittest; needs boto3/botocore --
-# present in the Lambda/container runtime, but `pip install boto3` locally if running by hand)
+# Python crawler + research-agent + whisper unit tests (stdlib unittest; needs boto3/botocore --
+# present in the Lambda/container runtime, but `pip install 'boto3<2'` locally if running by hand.
+# Capped at <2: these tests exercise botocore.auth.SigV4Auth, a quasi-internal API a major bump could change)
 cd backend/python/crawler && python3 -m unittest test_crawlers -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
+cd backend/whisper && python3 -m unittest test_transcribe -v
 
 # CDK
 cd infra && npx cdk synth        # synthesize all 11 stacks
@@ -138,6 +140,7 @@ The news crawler Lambda (`ttobak-crawler-news`) gets `WEB_SEARCH_GATEWAY_URL` / 
 - **Next.js static export**: `output: 'export'` only in production; local dev uses normal SSR for dynamic routes
 - **Bedrock models**: Claude Opus 4.8 for summarize/vision, Claude Haiku for fast translation/detection
 - **STT dual architecture**: Real-time uses browser Web Speech API (free, Korean-only) or AWS Transcribe Streaming (`@aws-sdk/client-transcribe-streaming` in browser via `sttManager.ts`). Batch post-upload always uses Whisper ECS GPU Spot (faster-whisper-large-v3 on g5.xlarge). The transcribe Lambda defaults to `sttProvider: "whisper"` and falls back to AWS Transcribe if Whisper cluster is not configured. `liveSttProvider` controls the real-time engine in the browser.
+- **Speaker diarization** (ADR-019): The Whisper container runs pyannote.audio speaker-diarization-3.1 (sequentially on the same GPU, after transcription) to produce acoustic `speaker` labels per segment — `meeting.Participants`'s length is passed as a `NUM_SPEAKERS` env hint to the ECS task (`backend/cmd/transcribe/main.go`) when non-empty. `RefineTranscript` (`backend/internal/service/bedrock.go`) then runs in **preserve mode** (keeps the given labels, cleans text only) instead of guessing speakers from text when segments carry a `speaker` field; older transcripts / diarization failures fall back to the original text-inference prompt. **One-time bootstrap before first deploy of a new Whisper image**: an operator must accept HuggingFace gating for `pyannote/speaker-diarization-3.1`, `pyannote/segmentation-3.0`, and `pyannote/wespeaker-voxceleb-resnet34-LM`, then run `backend/whisper/upload-diarization-model.sh` with `HF_TOKEN` set to bundle the weights to S3 (same pattern as `upload-model.sh` for the Whisper model itself) — diarization silently no-ops (falls back to text inference) if the S3 bundle is missing, so this never blocks a deploy, only the diarization improvement. To re-run STT for an already-transcribed meeting with a known headcount: `python3 scripts/whisper-rebatch.py --run --num-speakers <N> <meetingId>`.
 - **Auto-expiry**: GetMeeting handler auto-marks stuck `transcribing`/`summarizing` status as `error` after 30 minutes. Long audio files rarely exceed this but be aware when debugging.
 - **Sentinel errors**: `service.ErrForbidden` and `service.ErrNotFound` enable typed error handling in handlers via `errors.Is()`
 

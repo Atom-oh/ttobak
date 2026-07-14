@@ -1098,6 +1098,12 @@ class TestFetchUrlSSRFGuard(unittest.TestCase):
             with self.assertRaises(ValueError):
                 news_crawler._fetch_url('http://localhost/')
 
+    def test_unspecified_address_blocked(self):
+        # 0.0.0.0 / :: is a known loopback-check bypass on some stacks.
+        with mock.patch.object(news_crawler.socket, 'getaddrinfo', return_value=self._addrinfo('0.0.0.0')):
+            with self.assertRaises(ValueError):
+                news_crawler._fetch_url('http://zero.example.com/')
+
     def test_unresolvable_host_blocked(self):
         with mock.patch.object(news_crawler.socket, 'getaddrinfo', side_effect=news_crawler.socket.gaierror):
             with self.assertRaises(ValueError):

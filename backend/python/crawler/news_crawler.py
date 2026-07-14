@@ -124,10 +124,10 @@ def _is_blocked_host(hostname: str) -> bool:
     fetch against SSRF (e.g. the 169.254.169.254 cloud metadata endpoint).
     Fails closed: an unresolvable host is treated as blocked.
 
-    # ponytail: doesn't pin the connection to the checked IP, so a DNS
-    # rebinding attack (different answer between this check and urlopen's
-    # own resolution) isn't covered -- upgrade to an IP-pinned connection
-    # if that threat model matters here.
+    NOTE: doesn't pin the connection to the checked IP, so a DNS rebinding
+    attack (different answer between this check and urlopen's own
+    resolution) isn't covered -- upgrade to an IP-pinned connection if that
+    threat model matters here.
     """
     try:
         addrs = socket.getaddrinfo(hostname, None)
@@ -138,7 +138,8 @@ def _is_blocked_host(hostname: str) -> bool:
             addr = ipaddress.ip_address(sockaddr[0])
         except ValueError:
             return True
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved or addr.is_multicast:
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
             return True
     return False
 
