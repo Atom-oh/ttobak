@@ -540,24 +540,41 @@ func (s *AccountService) getDoc(ctx context.Context, pk, docID string) (*model.A
 	return doc, nil
 }
 
-// updateDoc is a full replace of title/docType/path/markdown/file fields on
-// an existing doc (preserving DocID/SourceUserID/CreatedAt/EntityType),
-// re-running the same validateDocRequest + wikilink parsing as create.
-// Because it's a full replace, converting a slide back to a note (fileKey
-// omitted, markdown supplied) clears the old file fields, and vice versa.
+// updateDoc updates title/docType/path always, and content/file fields only
+// when the request actually supplies one of markdown/fileKey -- unlike
+// create, update tolerates *both* being empty, meaning "don't touch the
+// body" (a title/docType/path-only edit). This is required, not just
+// lenient: AccountDocumentDetail.FileKey is json:"-" (never returned to a
+// client), so a caller that GETs a slide and PUTs back only the fields it
+// actually saw (title, docType, path) cannot possibly know the original
+// fileKey to resend it -- the earlier full-replace-always design made that
+// resave return 400 or accidentally convert the slide into an empty note.
 //
-// The fileKey ownership check only re-runs when the fileKey is actually
+// The fileKey ownership check only runs when the fileKey is actually
 // changing to something new: an account slide can be edited (title, etc.)
 // by any member, not just the member who originally uploaded it, so
 // re-asserting "fileKey must be under docs/{editingUser}/" on every save of
-// an unchanged fileKey would incorrectly 403 a non-uploader's edit.
+// an unchanged (here: omitted, meaning unchanged) fileKey would incorrectly
+// 403 a non-uploader's edit.
 func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
 	existing, err := s.getDoc(ctx, pk, docID)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateDocRequest(req); err != nil {
-		return nil, err
+	if strings.TrimSpace(req.Title) == "" {
+		return nil, ErrInvalidInput
+	}
+	req.Markdown = strings.TrimSpace(req.Markdown)
+	if req.FileKey != "" && req.Markdown != "" {
+		return nil, ErrInvalidInput // a doc is a note/blog or a slide, never both
+	}
+	if req.Markdown != "" {
+		if hasTtobakOriginMarker(req.Markdown) {
+			return nil, ErrLoopGuard
+		}
+		if len(req.Markdown) > maxInlineDocBytes {
+			return nil, ErrInvalidInput
+		}
 	}
 	if req.FileKey != "" && req.FileKey != existing.FileKey {
 		if err := validateFileKeyOwnership(userID, req.FileKey); err != nil {
@@ -567,9 +584,14 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 	existing.Title = strings.TrimSpace(req.Title)
 	existing.DocType = req.DocType
 	existing.Path = req.Path
-	existing.Content = req.Markdown
-	existing.Links = parseWikilinks(req.Markdown)
-	existing.FileKey, existing.FileName, existing.MimeType, existing.FileSize = req.FileKey, req.FileName, req.MimeType, req.FileSize
+	if req.Markdown != "" || req.FileKey != "" {
+		// The caller is actually changing the body -- full replace of the
+		// content/file fields (so e.g. a slide->note conversion correctly
+		// clears the old file fields, and vice versa).
+		existing.Content = req.Markdown
+		existing.Links = parseWikilinks(req.Markdown)
+		existing.FileKey, existing.FileName, existing.MimeType, existing.FileSize = req.FileKey, req.FileName, req.MimeType, req.FileSize
+	}
 	existing.UpdatedAt = time.Now().UTC()
 	if err := s.repo.PutAccountDocument(ctx, existing); err != nil {
 		return nil, err

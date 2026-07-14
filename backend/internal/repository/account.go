@@ -367,13 +367,23 @@ func (r *DynamoDBRepository) GetAccountDocument(ctx context.Context, pk, docID s
 // the service layer) instead of silently succeeding -- matching the 404
 // documented in API-SPEC.md.
 func (r *DynamoDBRepository) DeleteAccountDocument(ctx context.Context, pk, docID string) error {
-	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+	// Same builder-based "item must already exist" condition as
+	// UpdateMeetingFields (dynamodb.go) -- expression.AttributeExists,
+	// not a raw ConditionExpression string.
+	condition := expression.AttributeExists(expression.Name("PK"))
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return fmt.Errorf("build delete condition: %w", err)
+	}
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(r.tableName),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: pk},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docID},
 		},
-		ConditionExpression: aws.String("attribute_exists(PK)"),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException

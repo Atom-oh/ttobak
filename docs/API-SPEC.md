@@ -360,7 +360,7 @@ enum 검증을 하지 않는다). `markdown`에 포함된 `[[문서명]]`, `[[�
 ```
 POST /api/accounts/{accountId}/documents
 { "title": "Email notes", "markdown": "# Prep\n...", "docType": "prep", "path": "Accounts/하나은행/prep.md" }
-{ "title": "발표자료", "docType": "slide", "fileKey": "docs/user-uuid/deck.pdf", "fileName": "deck.pdf", "mimeType": "application/pdf", "fileSize": 123456 }
+{ "title": "발표자료", "docType": "slide", "fileKey": "docs/user-uuid/1234567890_deck.pdf", "fileName": "deck.pdf", "mimeType": "application/pdf", "fileSize": 123456 }
 
 Response: 201 Created
 { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "Accounts/하나은행/prep.md", "links": ["하나은행"], "sourceUserId": "user-uuid", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" }
@@ -450,7 +450,7 @@ Error: 400 Bad Request / 404 Not Found — 위 Account 문서 엔드포인트와
 `"doc"`가 추가되었다. `fileType`은 `application/pdf` 또는 PowerPoint MIME(
 `application/vnd.openxmlformats-officedocument.presentationml.presentation`,
 `application/vnd.ms-powerpoint`)만 허용된다. `meetingId`는 필요 없다 (문서는
-미팅에 종속되지 않음). S3 키는 `docs/{내 userId}/{파일명}` 형태이며, 위
+미팅에 종속되지 않음). S3 키는 `docs/{내 userId}/{타임스탬프}_{파일명}` 형태이며, 위
 Put Document 호출의 `fileKey`로 그대로 전달한다.
 
 ```

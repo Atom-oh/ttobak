@@ -770,22 +770,62 @@ func TestUpdateAccountDocument_RejectsForeignFileKey(t *testing.T) {
 	}
 }
 
-func TestUpdateAccountDocument_RejectsEmptyMarkdownAndFileKey(t *testing.T) {
+func TestUpdateAccountDocument_OmittingBothPreservesContent(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
 
-	// A PUT with neither markdown nor fileKey must be rejected, not silently
-	// blank out the document's content.
-	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{Title: "Note"})
-	if !errors.Is(err, ErrInvalidInput) {
-		t.Errorf("expected ErrInvalidInput, got %v", err)
+	// A PUT with neither markdown nor fileKey is a title/docType/path-only
+	// edit -- it must succeed and leave the existing content untouched, not
+	// be rejected. This is required (not just lenient): FileKey is never
+	// returned to a client (json:"-"), so a title-only update of a *slide*
+	// has no fileKey to resend at all.
+	updated, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{Title: "Note renamed"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updated.Title != "Note renamed" {
+		t.Errorf("expected title updated, got %+v", updated)
 	}
 
 	detail, _ := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
 	if detail.Content != "body" {
-		t.Errorf("content should be unchanged after rejected update, got %q", detail.Content)
+		t.Errorf("content should be unchanged when both markdown and fileKey are omitted, got %q", detail.Content)
+	}
+}
+
+func TestUpdateAccountDocument_SlideTitleOnlyEditWithoutKnowingFileKey(t *testing.T) {
+	// Reproduces the real client flow: GET a slide (FileKey never comes back,
+	// json:"-"), then PUT back only the fields the client actually has.
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", DocType: "slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating slide: %v", err)
+	}
+
+	detail, err := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// FileKey has json:"-" -- a real HTTP client deserializing this
+	// response would never see it. Simulate that by building the update
+	// request from only the DTO fields a client actually has, never
+	// touching detail.FileKey (which IS populated on the Go struct here,
+	// since json:"-" only affects marshaling, not this in-process call).
+	updated, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{
+		Title: "Slide renamed", DocType: detail.DocType, Path: detail.Path,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error updating title-only: %v", err)
+	}
+	if updated.Title != "Slide renamed" || updated.FileName != "deck.pdf" {
+		t.Errorf("expected title updated and file fields preserved, got %+v", updated)
 	}
 }
 

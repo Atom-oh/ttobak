@@ -26,7 +26,7 @@ Accepted — implemented on `feat/sp2-doc-hub-v2`. Extends `AccountDocument` (AD
 ## Consequences
 
 ### Positive
-- Zero new DynamoDB tables/GSIs; zero CDK changes -- verified the api Lambda's S3 access is one bucket-wide `bucket.grantReadWrite(apiRole)` (`infra/lib/ai-stack.ts`), not a per-prefix policy, so the new `docs/` prefix needed no IAM change.
+- Zero new DynamoDB tables/GSIs; zero IAM/CORS changes -- verified the api Lambda's S3 access is one bucket-wide `bucket.grantReadWrite(apiRole)` (`infra/lib/ai-stack.ts`) and the bucket CORS rule is origin-scoped, not prefix-scoped (`storage-stack.ts`), so the new `docs/` prefix needed no policy change. CloudFront's SPA router function (`frontend-stack.ts`) *did* need updating -- it rewrites dynamic-segment URLs (e.g. `/docs/{docId}`) to the static placeholder page Next.js actually built, and didn't know about this PR's new routes yet.
 - MCP `ttobak_put_document` gets wikilink indexing "for free" since it shares the same core path as the web UI.
 - Slide upload reuses the existing presigned-URL pattern (`GeneratePresignedUploadURL`/`GeneratePresignedDownloadURL`) with one new category, not a parallel upload subsystem.
 
@@ -67,7 +67,7 @@ Accepted — implemented on `feat/sp2-doc-hub-v2`. Extends `AccountDocument` (AD
 ## 결과
 
 ### 긍정
-- 신규 DynamoDB 테이블/GSI 없음; CDK 변경 없음 — api Lambda의 S3 접근이 prefix별 정책이 아니라 버킷 전체 대상 `bucket.grantReadWrite(apiRole)`(`infra/lib/ai-stack.ts`) 하나임을 확인, 신규 `docs/` prefix에 IAM 변경 불필요.
+- 신규 DynamoDB 테이블/GSI 없음; IAM/CORS 변경 없음 — api Lambda의 S3 접근이 prefix별 정책이 아니라 버킷 전체 대상 `bucket.grantReadWrite(apiRole)`(`infra/lib/ai-stack.ts`) 하나이고 CORS도 prefix 무관(`storage-stack.ts`)임을 확인, 신규 `docs/` prefix에 정책 변경 불필요. 단 CloudFront SPA 라우터 함수(`frontend-stack.ts`)는 갱신이 필요했다 — 동적 세그먼트 URL(예: `/docs/{docId}`)을 Next.js가 실제로 빌드한 정적 placeholder 페이지로 재작성하는 함수인데, 이 PR의 신규 라우트를 아직 모르고 있었다.
 - MCP `ttobak_put_document`가 웹 UI와 동일한 공용 경로를 지나므로 위키링크 인덱싱을 "공짜로" 획득.
 - 슬라이드 업로드가 기존 presigned-URL 패턴(`GeneratePresignedUploadURL`/`GeneratePresignedDownloadURL`)에 카테고리 하나만 추가 — 병렬 업로드 서브시스템 아님.
 

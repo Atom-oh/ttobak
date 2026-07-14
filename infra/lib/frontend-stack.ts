@@ -86,8 +86,28 @@ function handler(event) {
     request.uri = uri;
   }
 
+  // Dynamic route: /accounts/{id}/docs/{docId} → /accounts/_/docs/_ (check
+  // before the single-segment /accounts/{id} rule below -- same "nested
+  // route first" order as /insights/research/* above).
+  if (uri.match(/^\\/accounts\\/[^\\/]+\\/docs\\/[^\\/]+/) && !uri.match(/^\\/accounts\\/_\\/docs\\/_/)) {
+    uri = uri.replace(/^\\/accounts\\/[^\\/\\.]+\\/docs\\/[^\\/\\.]+/, '/accounts/_/docs/_');
+    request.uri = uri;
+  }
+
+  // Dynamic route: /accounts/{id} → rewrite to /accounts/_
+  if (uri.match(/^\\/accounts\\/[^\\/]+/) && !uri.match(/^\\/accounts\\/_([\\/.])/) && uri !== '/accounts/_') {
+    uri = uri.replace(/^\\/accounts\\/[^\\/\\.]+/, '/accounts/_');
+    request.uri = uri;
+  }
+
+  // Dynamic route: /docs/{docId} → rewrite to /docs/_ (skip the plain /docs list page)
+  if (uri.match(/^\\/docs\\/[^\\/]+/) && !uri.match(/^\\/docs\\/_/)) {
+    uri = uri.replace(/^\\/docs\\/[^\\/\\.]+/, '/docs/_');
+    request.uri = uri;
+  }
+
   // Known static pages → append .html; unknown paths → SPA fallback
-  var knownPages = ['/files', '/kb', '/settings', '/record', '/profile', '/insights', '/meeting/_', '/insights/_/_', '/insights/research/_'];
+  var knownPages = ['/files', '/kb', '/settings', '/record', '/profile', '/insights', '/accounts', '/docs', '/meeting/_', '/insights/_/_', '/insights/research/_', '/accounts/_', '/accounts/_/docs/_', '/docs/_'];
   if (uri !== '/' && !uri.includes('.') && !uri.endsWith('/')) {
     if (knownPages.indexOf(uri) >= 0) {
       request.uri = uri + '.html';
