@@ -44,6 +44,12 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
   // firing between two autosave debounce windows would revert unsaved body
   // edits.
   const latestMarkdownRef = useRef('');
+  // Guards against out-of-order network responses: autosave and title-blur
+  // both fire full-replace PUTs with no cancellation, so a slow, older
+  // request completing after a newer one must not clobber state with
+  // stale title/content. Only the response matching the most recently
+  // *started* save is ever applied.
+  const saveSeqRef = useRef(0);
 
   const fetchAll = useCallback(async () => {
     if (!docId || docId === '_') return;
@@ -71,6 +77,7 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
 
   const saveContent = useCallback(async (markdown: string, nextTitle?: string) => {
     if (!doc) return;
+    const seq = ++saveSeqRef.current;
     setSaving(true);
     setError(null);
     try {
@@ -81,12 +88,14 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
       const updated = accountId
         ? await accountApi.updateDocument(accountId, docId, req)
         : await docApi.update(docId, req);
+      if (seq !== saveSeqRef.current) return; // a newer save has since started; this response is stale
       setDoc((prev) => (prev ? { ...prev, ...updated, content: markdown } : prev));
       setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
+      if (seq !== saveSeqRef.current) return;
       setError(err instanceof Error ? err.message : 'Failed to save document');
     } finally {
-      setSaving(false);
+      if (seq === saveSeqRef.current) setSaving(false);
     }
   }, [accountId, docId, doc, title]);
 

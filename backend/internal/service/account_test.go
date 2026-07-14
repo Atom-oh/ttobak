@@ -503,6 +503,41 @@ func TestPutDocument_MemberStores(t *testing.T) {
 	}
 }
 
+func TestPutDocument_RejectsHybridMarkdownAndFileKey(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Both", Markdown: "body", FileKey: "docs/owner-1/deck.pdf",
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput for markdown+fileKey both set, got %v", err)
+	}
+}
+
+func TestGetAccountDocument_UpdatedAtFallsBackToCreatedAtWhenZero(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+
+	// Simulate a pre-existing document written before UpdatedAt existed.
+	docs := repo.documents[model.PrefixAccount+acc.AccountID]
+	for i := range docs {
+		if docs[i].DocID == created.DocID {
+			docs[i].UpdatedAt = time.Time{}
+		}
+	}
+
+	detail, err := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if detail.UpdatedAt.IsZero() || !detail.UpdatedAt.Equal(detail.CreatedAt) {
+		t.Errorf("expected UpdatedAt to fall back to CreatedAt, got updatedAt=%v createdAt=%v", detail.UpdatedAt, detail.CreatedAt)
+	}
+}
+
 func TestPutDocument_RejectsTtobakOrigin(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)

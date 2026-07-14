@@ -426,28 +426,36 @@ func parseWikilinks(markdown string) []string {
 }
 
 func toDocumentDTO(d *model.AccountDocument) model.AccountDocumentDTO {
+	// UpdatedAt is a new field -- documents written before this shipped have
+	// a zero value. `omitempty` doesn't help here (Go's encoding/json never
+	// omits a zero-value struct like time.Time), so fall back to CreatedAt
+	// instead of surfacing "0001-01-01" to clients.
+	updatedAt := d.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = d.CreatedAt
+	}
 	return model.AccountDocumentDTO{
 		DocID: d.DocID, Title: d.Title, DocType: d.DocType, Path: d.Path,
 		Links: d.Links, FileName: d.FileName, SourceUserID: d.SourceUserID,
-		CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
+		CreatedAt: d.CreatedAt, UpdatedAt: updatedAt,
 	}
 }
 
-// putDoc is the shared create core for both account-scoped (accountID set)
-// and personal (accountID empty, pk is model.PrefixUser+userID) documents. A
-// slide upload carries FileKey instead of Markdown -- ownership of that S3
-// key is enforced here (must be under docs/{userID}/) since it's the only
-// place a client-supplied key gets trusted.
 // validateDocRequest is the single check shared by create (putDoc) and
-// update (updateDoc): a title, and either markdown or a fileKey (never
-// neither). It does NOT check fileKey ownership -- callers do that
-// separately via validateFileKeyOwnership, since update only needs the
-// check when the fileKey is actually changing (see updateDoc).
+// update (updateDoc): a title, and exactly one of markdown or a fileKey (a
+// doc is either a note/blog or a slide, never both, never neither). It does
+// NOT check fileKey ownership -- callers do that separately via
+// validateFileKeyOwnership, since update only needs the check when the
+// fileKey is actually changing (see updateDoc).
 func validateDocRequest(req *model.PutDocumentRequest) error {
 	if strings.TrimSpace(req.Title) == "" {
 		return ErrInvalidInput
 	}
-	if req.FileKey == "" && strings.TrimSpace(req.Markdown) == "" {
+	hasMarkdown := strings.TrimSpace(req.Markdown) != ""
+	if req.FileKey == "" && !hasMarkdown {
+		return ErrInvalidInput
+	}
+	if req.FileKey != "" && hasMarkdown {
 		return ErrInvalidInput
 	}
 	if req.Markdown != "" {
@@ -471,6 +479,11 @@ func validateFileKeyOwnership(userID, fileKey string) error {
 	return nil
 }
 
+// putDoc is the shared create core for both account-scoped (accountID set)
+// and personal (accountID empty, pk is model.PrefixUser+userID) documents. A
+// slide upload carries FileKey instead of Markdown -- ownership of that S3
+// key is enforced here (must be under docs/{userID}/) since it's the only
+// place a client-supplied key gets trusted.
 func (s *AccountService) putDoc(ctx context.Context, userID, pk, accountID string, req *model.PutDocumentRequest, entityType string) (*model.AccountDocumentDTO, error) {
 	if err := validateDocRequest(req); err != nil {
 		return nil, err

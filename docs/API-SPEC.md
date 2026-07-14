@@ -453,6 +453,19 @@ Error: 400 Bad Request / 404 Not Found — 위 Account 문서 엔드포인트와
 미팅에 종속되지 않음). S3 키는 `docs/{내 userId}/{파일명}` 형태이며, 위
 Put Document 호출의 `fileKey`로 그대로 전달한다.
 
+```
+POST /api/upload/presigned
+{ "fileName": "deck.pdf", "fileType": "application/pdf", "category": "doc" }
+
+Response: 200 OK
+{ "uploadUrl": "https://...presigned-put-url...", "key": "docs/user-uuid/1234567890_deck.pdf", "expiresIn": 3600 }
+
+Error: 400 Bad Request (fileType이 pdf/PowerPoint MIME이 아님)
+```
+
+이후 `uploadUrl`로 파일을 직접 PUT하고, 응답의 `key`를 Put Document의
+`fileKey`로 전달한다 — `/api/upload/complete` 호출은 없다.
+
 #### Export Vault (Obsidian 마크다운 내보내기)
 
 본인 소유 미팅과 문서를 Obsidian 친화 마크다운(YAML frontmatter)으로 렌더링해

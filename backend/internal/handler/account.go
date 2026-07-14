@@ -398,7 +398,10 @@ func (h *AccountHandler) DeleteDocument(w http.ResponseWriter, r *http.Request) 
 		case errors.Is(err, service.ErrForbidden):
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 		case errors.Is(err, service.ErrNotFound):
-			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Account not found")
+			// ErrNotFound here means either the account (requireMember) or the
+			// document itself (the delete's conditional-check) doesn't exist --
+			// "Document not found" matches UpdateDocument/API-SPEC's wording.
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Document not found")
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}

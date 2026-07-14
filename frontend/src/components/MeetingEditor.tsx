@@ -39,9 +39,14 @@ function createWikilinkExtension() {
           command: ({ editor, range, props }) => {
             editor.chain().focus().insertContentAt(range, `[[${props}]]`).run();
           },
+          // Positions manually via clientRect rather than the newer
+          // mount()-managed helper -- clientRect is the long-documented,
+          // version-stable field on SuggestionProps ("the escape hatch:
+          // mount the element yourself ... run your own positioning loop
+          // with clientRect"), so this doesn't depend on which
+          // @tiptap/suggestion version is installed.
           render: () => {
             let el: HTMLDivElement | null = null;
-            let unmount: (() => void) | null = null;
             let items: string[] = [];
             let selected = 0;
             let onPick: ((item: string) => void) | null = null;
@@ -65,6 +70,14 @@ function createWikilinkExtension() {
               });
             };
 
+            const position = (clientRect?: (() => DOMRect | null) | null) => {
+              if (!el || !clientRect) return;
+              const rect = clientRect();
+              if (!rect) return;
+              el.style.left = `${rect.left + window.scrollX}px`;
+              el.style.top = `${rect.bottom + window.scrollY + 4}px`;
+            };
+
             return {
               onStart: (p) => {
                 items = p.items;
@@ -72,15 +85,17 @@ function createWikilinkExtension() {
                 onPick = (item) => p.command(item);
                 el = document.createElement('div');
                 el.className =
-                  'z-50 min-w-[160px] max-h-56 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg py-1';
+                  'fixed z-50 min-w-[160px] max-h-56 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg py-1';
+                document.body.appendChild(el);
                 draw();
-                unmount = p.mount(el);
+                position(p.clientRect);
               },
               onUpdate: (p) => {
                 items = p.items;
                 selected = 0;
                 onPick = (item) => p.command(item);
                 draw();
+                position(p.clientRect);
               },
               onKeyDown: ({ event }) => {
                 if (items.length === 0) return false;
@@ -101,7 +116,7 @@ function createWikilinkExtension() {
                 return false;
               },
               onExit: () => {
-                unmount?.();
+                el?.remove();
                 el = null;
               },
             };

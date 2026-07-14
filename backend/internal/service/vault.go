@@ -163,7 +163,16 @@ func (s *VaultService) exportDocuments(ctx context.Context, userID string, nameC
 	for _, m := range memberships {
 		name, ok := nameCache[m.AccountID]
 		if !ok {
-			if acc, err := s.repo.GetAccount(ctx, m.AccountID); err == nil && acc != nil {
+			acc, err := s.repo.GetAccount(ctx, m.AccountID)
+			if err != nil {
+				// Skip this account's documents rather than mis-filing them
+				// under _Private/Docs/ -- accountName == "" reads as
+				// "personal" to docVaultPath, which would misclassify a
+				// shared account's documents as private on a transient
+				// read error.
+				continue
+			}
+			if acc != nil {
 				name = acc.Name
 			}
 			nameCache[m.AccountID] = name
