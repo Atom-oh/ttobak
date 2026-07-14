@@ -98,7 +98,13 @@ kiro_env() {
 # 아래로 자르고, (2) 이 diff 는 public repo 의 PR diff 라 이미 GitHub 에 공개돼 있으므로
 # `ps` 가시성이 새로운 기밀 노출이 아니다(공식 secret 이 아님).
 KIRO_DIFF_CAP="${KIRO_DIFF_CAP:-100000}"
-KIRO_DIFF_TEXT="$(head -c "$KIRO_DIFF_CAP" "$DIFF")"
+# `head -c`는 순수 바이트 절단이라 한글 등 멀티바이트 UTF-8 문자 중간에서 잘릴 수 있다 —
+# 그 결과가 그대로 kiro-cli 의 argv 로 들어가면 "invalid UTF-8 was detected in one or more
+# arguments"로 12개 Kiro 셀이 전부 죽고(코드 문제가 아니라 이 절단 버그), synthesize.sh 의
+# coverage-severe 게이트가 이를 강제 FAIL 시킨다 — PR #113 15차 리뷰에서 직접 재현·확인.
+# `iconv -c`가 잘린 끝의 불완전한 멀티바이트 시퀀스를 조용히 버려 항상 유효한 UTF-8만
+# 남긴다(라틴 문자뿐인 diff에는 영향 없음 — 이미 항상 유효한 UTF-8이라 버릴 게 없다).
+KIRO_DIFF_TEXT="$(head -c "$KIRO_DIFF_CAP" "$DIFF" | iconv -f utf-8 -t utf-8 -c 2>/dev/null)"
 # truncation 자체는 무해(대형 diff 의 의도된 트레이드오프)하지만, 신호 없이 넘어가면 Kiro
 # 셀은 prefix 만 보고도 정상 응답으로 집계돼 "벤더 하나가 diff 일부만 보면 coverage 신호를
 # 남긴다"는 계약을 조용히 어긴다 — synthesize.sh 가 리뷰 본문에 명시하도록 플래그 파일로 전달.
