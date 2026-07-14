@@ -65,7 +65,7 @@ func init() {
 
 	// Initialize services
 	meetingService := service.NewMeetingService(repo)
-	accountService := service.NewAccountService(repo)
+	accountService := service.NewAccountService(repo, s3Client, bucketName)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)

@@ -405,11 +405,17 @@ Error: 404 Not Found (문서 없음)
 
 #### Update / Delete Account Document (멤버 전용)
 
-Update는 title/docType/path/markdown(또는 fileKey류)을 전체 치환한다 —
-`docId`/`sourceUserId`/`createdAt`은 보존, `links`는 재파싱, loop guard도
-재적용된다. `markdown`과 `fileKey`가 둘 다 비어 있으면 거부된다(기존 본문을
-빈 값으로 조용히 지우지 않음); `fileKey`를 생략하고 `markdown`만 보내면
-슬라이드→노트 전환으로 취급해 기존 파일 필드를 지운다(반대로도 동일).
+Update는 필드별 "생략 시 기존 값 보존" 방식이다 — `docId`/`sourceUserId`/
+`createdAt`은 항상 보존된다. `title`만 필수(빈 문자열이면 거부); `docType`/
+`path`는 생략(빈 문자열)하면 기존 값 유지, 값을 보내면 그 값으로 교체된다.
+`markdown`은 JSON 키 자체를 생략하면 본문이 보존되고, 명시적으로 빈 문자열을
+보내면 본문이 지워진다(`*string` — nil=생략, non-nil pointer to ""=명시적
+삭제). `markdown`과 `fileKey`를 둘 다 생략하면 기존 본문/파일이 그대로
+보존된다(더 이상 오류가 아님); 둘 다 값이 있으면 거부된다(노트/블로그이거나
+슬라이드이거나, 둘 다일 수 없음). 값이 있는 `markdown`을 보내면 링크 재파싱과
+loop guard가 적용된다; 값이 있는 `fileKey`가 기존과 다르면 소유권(내 userId
+접두어)이 재검증된다. `fileKey`만 보내 슬라이드→노트/노트→슬라이드 전환도
+가능하다.
 
 ```
 PUT /api/accounts/{accountId}/documents/{docId}
@@ -421,7 +427,7 @@ Response: 200 OK
 DELETE /api/accounts/{accountId}/documents/{docId}
 Response: 204 No Content
 
-Error: 400 Bad Request (title 누락, markdown/fileKey 둘 다 없음, markdown >300KB, 또는 TTOBAK 원본)
+Error: 400 Bad Request (title 누락, markdown과 fileKey가 둘 다 값이 있음, markdown >300KB, 또는 TTOBAK 원본)
 Error: 403 Forbidden (멤버가 아님, 또는 fileKey가 내 userId 접두어가 아님)
 Error: 404 Not Found (문서 없음)
 ```

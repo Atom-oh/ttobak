@@ -147,6 +147,8 @@ func newStubAccountHandler() (*AccountHandler, *mockHandlerAccountRepo) {
 	return &AccountHandler{accountService: svc}, repo
 }
 
+func mdPtr(s string) *string { return &s }
+
 func TestHandlerCreateAccount_Created(t *testing.T) {
 	h, repo := newStubAccountHandler()
 	body, _ := json.Marshal(model.CreateAccountRequest{Name: "하나은행"})
@@ -262,7 +264,7 @@ func TestHandlerPutDocument_Forbidden(t *testing.T) {
 	h, repo := newStubAccountHandler()
 	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
 	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
-	body, _ := json.Marshal(model.PutDocumentRequest{Title: "t", Markdown: "x"})
+	body, _ := json.Marshal(model.PutDocumentRequest{Title: "t", Markdown: mdPtr("x")})
 	r := httptest.NewRequest(http.MethodPost, "/api/accounts/acc-1/documents", bytes.NewReader(body))
 	r = withUserEmailCtx(r, "stranger-9", "s@x.com")
 	r = withChiParam(r, "accountId", "acc-1")
@@ -277,7 +279,7 @@ func seedDocForUpdateDeleteTests(t *testing.T, repo *mockHandlerAccountRepo, h *
 	t.Helper()
 	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
 	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
-	body, _ := json.Marshal(model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+	body, _ := json.Marshal(model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("body")})
 	r := httptest.NewRequest(http.MethodPost, "/api/accounts/acc-1/documents", bytes.NewReader(body))
 	r = withUserEmailCtx(r, "owner-1", "o@x.com")
 	r = withChiParam(r, "accountId", "acc-1")
@@ -292,7 +294,7 @@ func TestHandlerUpdateDocument_OK(t *testing.T) {
 	h, repo := newStubAccountHandler()
 	docID := seedDocForUpdateDeleteTests(t, repo, h)
 
-	body, _ := json.Marshal(model.PutDocumentRequest{Title: "Note v2", Markdown: "updated body"})
+	body, _ := json.Marshal(model.PutDocumentRequest{Title: "Note v2", Markdown: mdPtr("updated body")})
 	r := httptest.NewRequest(http.MethodPut, "/api/accounts/acc-1/documents/"+docID, bytes.NewReader(body))
 	r = withUserEmailCtx(r, "owner-1", "o@x.com")
 	r = withChiParam(r, "accountId", "acc-1")
@@ -315,7 +317,7 @@ func TestHandlerUpdateDocument_Forbidden(t *testing.T) {
 	h, repo := newStubAccountHandler()
 	docID := seedDocForUpdateDeleteTests(t, repo, h)
 
-	body, _ := json.Marshal(model.PutDocumentRequest{Title: "Note v2", Markdown: "updated body"})
+	body, _ := json.Marshal(model.PutDocumentRequest{Title: "Note v2", Markdown: mdPtr("updated body")})
 	r := httptest.NewRequest(http.MethodPut, "/api/accounts/acc-1/documents/"+docID, bytes.NewReader(body))
 	r = withUserEmailCtx(r, "stranger-9", "s@x.com")
 	r = withChiParam(r, "accountId", "acc-1")

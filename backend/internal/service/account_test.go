@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -137,6 +138,10 @@ func (m *mockAccountRepo) DeleteAccountDocument(_ context.Context, pk, docID str
 	}
 	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
 }
+
+// mdPtr always returns a non-nil pointer, unlike strPtr (meeting.go), which
+// collapses "" to nil — Markdown needs "explicit empty" distinguishable from "omitted".
+func mdPtr(s string) *string { return &s }
 
 func TestHasTtobakOriginMarker(t *testing.T) {
 	ttobakDoc := "---\naccount: \"[[하나은행]]\"\nttobak_id: m-123\n---\n\n# 회의록"
@@ -490,7 +495,7 @@ func TestPutDocument_MemberStores(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	dto, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Email notes", DocType: "prep", Markdown: "# Prep\ncontent"})
+	dto, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Email notes", DocType: "prep", Markdown: mdPtr("# Prep\ncontent")})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -508,7 +513,7 @@ func TestPutDocument_RejectsHybridMarkdownAndFileKey(t *testing.T) {
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 	_, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
-		Title: "Both", Markdown: "body", FileKey: "docs/owner-1/deck.pdf",
+		Title: "Both", Markdown: mdPtr("body"), FileKey: "docs/owner-1/deck.pdf",
 	})
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("expected ErrInvalidInput for markdown+fileKey both set, got %v", err)
@@ -520,7 +525,7 @@ func TestPutDocument_SlideWithWhitespaceMarkdownStoresEmptyContent(t *testing.T)
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 	created, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
-		Title: "Slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf", Markdown: "   \n  ",
+		Title: "Slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf", Markdown: mdPtr("   \n  "),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -535,7 +540,7 @@ func TestGetAccountDocument_UpdatedAtFallsBackToCreatedAtWhenZero(t *testing.T) 
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("body")})
 
 	// Simulate a pre-existing document written before UpdatedAt existed.
 	docs := repo.documents[model.PrefixAccount+acc.AccountID]
@@ -558,7 +563,7 @@ func TestPutDocument_RejectsTtobakOrigin(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	_, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "echo", Markdown: "---\nttobak_id: m-1\n---\n# loop"})
+	_, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "echo", Markdown: mdPtr("---\nttobak_id: m-1\n---\n# loop")})
 	if !errors.Is(err, ErrLoopGuard) {
 		t.Errorf("expected ErrLoopGuard, got %v", err)
 	}
@@ -568,7 +573,7 @@ func TestPutDocument_NonMemberForbidden(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	_, err := svc.PutDocument(context.Background(), "stranger-9", acc.AccountID, &model.PutDocumentRequest{Title: "t", Markdown: "x"})
+	_, err := svc.PutDocument(context.Background(), "stranger-9", acc.AccountID, &model.PutDocumentRequest{Title: "t", Markdown: mdPtr("x")})
 	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
 	}
@@ -578,7 +583,7 @@ func TestGetAccountDocument_ReturnsContent(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	dto, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "T", Markdown: "body"})
+	dto, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "T", Markdown: mdPtr("body")})
 	detail, err := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, dto.DocID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -621,7 +626,7 @@ func TestPutDocument_ParsesWikilinksIntoLinks(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	dto, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "meeting with [[토스]]"})
+	dto, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("meeting with [[토스]]")})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -633,7 +638,7 @@ func TestPutDocument_ParsesWikilinksIntoLinks(t *testing.T) {
 func TestPutUserDocument_StoresUnderUserPKNoMembershipCheck(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
-	dto, err := svc.PutUserDocument(context.Background(), "user-1", &model.PutDocumentRequest{Title: "My Note", Markdown: "personal note"})
+	dto, err := svc.PutUserDocument(context.Background(), "user-1", &model.PutDocumentRequest{Title: "My Note", Markdown: mdPtr("personal note")})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -705,10 +710,10 @@ func TestUpdateAccountDocument_PreservesIdentityAndReparsesLinks(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "[[토스]]"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("[[토스]]")})
 	createdAt := created.CreatedAt
 
-	updated, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{Title: "Note v2", Markdown: "now mentions [[하나은행]] instead"})
+	updated, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{Title: "Note v2", Markdown: mdPtr("now mentions [[하나은행]] instead")})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -735,8 +740,8 @@ func TestUpdateAccountDocument_RejectsTtobakOrigin(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
-	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{Title: "Note", Markdown: "---\nttobak_id: m-1\n---\n# loop"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("body")})
+	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("---\nttobak_id: m-1\n---\n# loop")})
 	if !errors.Is(err, ErrLoopGuard) {
 		t.Errorf("expected ErrLoopGuard, got %v", err)
 	}
@@ -746,7 +751,7 @@ func TestUpdateAccountDocument_RejectsForeignFileKey(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("body")})
 
 	// Regression: update must apply the same fileKey-ownership check as
 	// create -- otherwise a caller can point their own doc's fileKey at
@@ -774,7 +779,7 @@ func TestUpdateAccountDocument_OmittingBothPreservesContent(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("body")})
 
 	// A PUT with neither markdown nor fileKey is a title/docType/path-only
 	// edit -- it must succeed and leave the existing content untouched, not
@@ -792,6 +797,51 @@ func TestUpdateAccountDocument_OmittingBothPreservesContent(t *testing.T) {
 	detail, _ := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
 	if detail.Content != "body" {
 		t.Errorf("content should be unchanged when both markdown and fileKey are omitted, got %q", detail.Content)
+	}
+}
+
+func TestUpdateAccountDocument_ExplicitEmptyMarkdownClearsContent(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("body")})
+
+	// A non-nil pointer to "" (the user select-all-deleted in the editor)
+	// must actually clear the content -- distinct from the omitted-field
+	// (nil) "preserve" case tested above.
+	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{
+		Title: "Note", Markdown: mdPtr(""),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	detail, _ := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
+	if detail.Content != "" {
+		t.Errorf("expected content cleared to empty, got %q", detail.Content)
+	}
+	if len(detail.Links) != 0 {
+		t.Errorf("expected links cleared alongside content, got %v", detail.Links)
+	}
+}
+
+func TestUpdateAccountDocument_TitleOnlyEditPreservesDocTypeAndPath(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Note", DocType: "note", Path: "Accounts/하나은행/note.md", Markdown: mdPtr("body"),
+	})
+
+	// Omitting docType/path on an otherwise title-only update must preserve
+	// them, symmetric with how omitting markdown/fileKey preserves the
+	// body -- an unconditional overwrite would silently blank a slide's
+	// docType on every title-only save.
+	updated, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{Title: "Note renamed"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updated.DocType != "note" || updated.Path != "Accounts/하나은행/note.md" {
+		t.Errorf("expected docType/path preserved, got %+v", updated)
 	}
 }
 
@@ -840,7 +890,7 @@ func TestUpdateAccountDocument_SlideToNoteClearsFileFields(t *testing.T) {
 	// Full-replace PUT: switching to markdown-only must clear the old file
 	// fields, not leave a stale fileKey alongside new content.
 	updated, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{
-		Title: "Now a note", DocType: "note", Markdown: "converted to markdown",
+		Title: "Now a note", DocType: "note", Markdown: mdPtr("converted to markdown"),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -859,7 +909,7 @@ func TestDeleteAccountDocument_RemovesDoc(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("body")})
 
 	if err := svc.DeleteAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -867,6 +917,72 @@ func TestDeleteAccountDocument_RemovesDoc(t *testing.T) {
 	_, err := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
+	}
+}
+
+// mockS3Deleter records DeleteObject calls for assertion.
+type mockS3Deleter struct {
+	deletedKeys []string
+	err         error
+}
+
+func (m *mockS3Deleter) DeleteObject(_ context.Context, params *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	m.deletedKeys = append(m.deletedKeys, *params.Key)
+	return &s3.DeleteObjectOutput{}, nil
+}
+
+func TestDeleteAccountDocument_RemovesSlideS3Object(t *testing.T) {
+	repo := newMockAccountRepo()
+	mockS3 := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: mockS3, bucketName: "test-bucket"}
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf",
+	})
+
+	if err := svc.DeleteAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mockS3.deletedKeys) != 1 || mockS3.deletedKeys[0] != "docs/owner-1/deck.pdf" {
+		t.Errorf("expected S3 object docs/owner-1/deck.pdf deleted, got %v", mockS3.deletedKeys)
+	}
+}
+
+func TestDeleteAccountDocument_NoteDeleteSkipsS3(t *testing.T) {
+	repo := newMockAccountRepo()
+	mockS3 := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: mockS3, bucketName: "test-bucket"}
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("body")})
+
+	if err := svc.DeleteAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mockS3.deletedKeys) != 0 {
+		t.Errorf("expected no S3 delete for a note (no FileKey), got %v", mockS3.deletedKeys)
+	}
+}
+
+func TestDeleteAccountDocument_S3FailureDoesNotBlockDelete(t *testing.T) {
+	repo := newMockAccountRepo()
+	mockS3 := &mockS3Deleter{err: errors.New("s3 transient error")}
+	svc := &AccountService{repo: repo, s3: mockS3, bucketName: "test-bucket"}
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf",
+	})
+
+	// S3 cleanup is best-effort: a failure there must not prevent (or
+	// error out) the delete the caller already committed to.
+	if err := svc.DeleteAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected doc deleted from DynamoDB despite S3 failure, got %v", err)
 	}
 }
 
@@ -887,7 +1003,7 @@ func TestDeleteAccountDocument_NonMemberForbidden(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
-	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("body")})
 
 	err := svc.DeleteAccountDocument(context.Background(), "stranger-9", acc.AccountID, created.DocID)
 	if !errors.Is(err, ErrForbidden) {

@@ -3,10 +3,13 @@ package service
 import (
 	"context"
 	"errors"
+	"log"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -71,15 +74,28 @@ type accountRepo interface {
 // AccountRepo is the exported alias for cross-package (handler) tests.
 type AccountRepo = accountRepo
 
+// s3ObjectDeleter is the minimal S3 capability AccountService needs: cleaning
+// up a slide's underlying object when its document is deleted. Matches
+// *s3.Client's DeleteObject method so the real client satisfies it directly;
+// a mock can implement just this one method in tests.
+type s3ObjectDeleter interface {
+	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+}
+
 type AccountService struct {
-	repo accountRepo
+	repo       accountRepo
+	s3         s3ObjectDeleter
+	bucketName string
 }
 
-func NewAccountService(repo *repository.DynamoDBRepository) *AccountService {
-	return &AccountService{repo: repo}
+func NewAccountService(repo *repository.DynamoDBRepository, s3Client *s3.Client, bucketName string) *AccountService {
+	return &AccountService{repo: repo, s3: s3Client, bucketName: bucketName}
 }
 
-// newAccountServiceWithRepo is for same-package (service) tests.
+// newAccountServiceWithRepo is for same-package (service) tests. s3 is left
+// nil -- deleteDoc treats that as "no S3 cleanup available" rather than
+// panicking, so tests that don't care about slide cleanup don't need to
+// wire up an S3 mock.
 func newAccountServiceWithRepo(repo accountRepo) *AccountService {
 	return &AccountService{repo: repo}
 }
@@ -447,27 +463,34 @@ func toDocumentDTO(d *model.AccountDocument) model.AccountDocumentDTO {
 // NOT check fileKey ownership -- callers do that separately via
 // validateFileKeyOwnership, since update only needs the check when the
 // fileKey is actually changing (see updateDoc).
+// trimmedMarkdown reads req.Markdown (nil-safe) and normalizes it. Trimming
+// so a whitespace-only markdown ("   ") can't slip past a mutual-exclusivity
+// check as "no markdown" while still getting stored as non-empty Content on
+// what's meant to be an empty-body slide.
+func trimmedMarkdown(req *model.PutDocumentRequest) string {
+	if req.Markdown == nil {
+		return ""
+	}
+	return strings.TrimSpace(*req.Markdown)
+}
+
 func validateDocRequest(req *model.PutDocumentRequest) error {
 	if strings.TrimSpace(req.Title) == "" {
 		return ErrInvalidInput
 	}
-	// Normalize in place so a whitespace-only markdown ("   ") can't slip
-	// past the mutual-exclusivity check below as "no markdown" while still
-	// getting stored as non-empty Content on what's meant to be an
-	// empty-body slide.
-	req.Markdown = strings.TrimSpace(req.Markdown)
-	hasMarkdown := req.Markdown != ""
+	markdown := trimmedMarkdown(req)
+	hasMarkdown := markdown != ""
 	if req.FileKey == "" && !hasMarkdown {
 		return ErrInvalidInput
 	}
 	if req.FileKey != "" && hasMarkdown {
 		return ErrInvalidInput
 	}
-	if req.Markdown != "" {
-		if hasTtobakOriginMarker(req.Markdown) {
+	if hasMarkdown {
+		if hasTtobakOriginMarker(markdown) {
 			return ErrLoopGuard
 		}
-		if len(req.Markdown) > maxInlineDocBytes {
+		if len(markdown) > maxInlineDocBytes {
 			return ErrInvalidInput
 		}
 	}
@@ -496,13 +519,14 @@ func (s *AccountService) putDoc(ctx context.Context, userID, pk, accountID strin
 	if err := validateFileKeyOwnership(userID, req.FileKey); err != nil {
 		return nil, err
 	}
+	markdown := trimmedMarkdown(req)
 	now := time.Now().UTC()
 	docID := uuid.NewString()
 	doc := &model.AccountDocument{
 		PK: pk, SK: model.PrefixDoc + docID,
 		AccountID: accountID, DocID: docID, Title: strings.TrimSpace(req.Title),
-		DocType: req.DocType, Path: req.Path, Content: req.Markdown,
-		Links:    parseWikilinks(req.Markdown),
+		DocType: req.DocType, Path: req.Path, Content: markdown,
+		Links:    parseWikilinks(markdown),
 		FileKey:  req.FileKey, FileName: req.FileName, MimeType: req.MimeType, FileSize: req.FileSize,
 		SourceUserID: userID, TtobakOrigin: false,
 		CreatedAt: now, UpdatedAt: now, EntityType: entityType,
@@ -540,15 +564,20 @@ func (s *AccountService) getDoc(ctx context.Context, pk, docID string) (*model.A
 	return doc, nil
 }
 
-// updateDoc updates title/docType/path always, and content/file fields only
-// when the request actually supplies one of markdown/fileKey -- unlike
-// create, update tolerates *both* being empty, meaning "don't touch the
-// body" (a title/docType/path-only edit). This is required, not just
-// lenient: AccountDocumentDetail.FileKey is json:"-" (never returned to a
-// client), so a caller that GETs a slide and PUTs back only the fields it
+// updateDoc always updates title; docType/path/body/file fields are each
+// independently "omit to preserve" -- an empty/absent value on any of them
+// means "don't touch this field", not "clear it". This is required, not
+// just lenient: AccountDocumentDetail.FileKey is json:"-" (never returned to
+// a client), so a caller that GETs a slide and PUTs back only the fields it
 // actually saw (title, docType, path) cannot possibly know the original
-// fileKey to resend it -- the earlier full-replace-always design made that
-// resave return 400 or accidentally convert the slide into an empty note.
+// fileKey to resend it -- an always-full-replace design made that resave
+// return 400 or accidentally convert the slide into an empty note, and made
+// a title-only edit silently blank out docType/path too.
+//
+// Markdown is the one field where "omit" and "explicit empty" must be
+// distinguishable (see PutDocumentRequest.Markdown doc) -- a non-nil
+// pointer to "" is an explicit "clear this note's body", honored as such,
+// not silently ignored.
 //
 // The fileKey ownership check only runs when the fileKey is actually
 // changing to something new: an account slide can be edited (title, etc.)
@@ -564,32 +593,40 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 	if strings.TrimSpace(req.Title) == "" {
 		return nil, ErrInvalidInput
 	}
-	req.Markdown = strings.TrimSpace(req.Markdown)
-	if req.FileKey != "" && req.Markdown != "" {
-		return nil, ErrInvalidInput // a doc is a note/blog or a slide, never both
-	}
-	if req.Markdown != "" {
-		if hasTtobakOriginMarker(req.Markdown) {
-			return nil, ErrLoopGuard
+	bodyChanging := req.Markdown != nil || req.FileKey != ""
+	markdown := trimmedMarkdown(req)
+	if bodyChanging {
+		if req.FileKey != "" && markdown != "" {
+			return nil, ErrInvalidInput // a doc is a note/blog or a slide, never both
 		}
-		if len(req.Markdown) > maxInlineDocBytes {
-			return nil, ErrInvalidInput
+		if markdown != "" {
+			if hasTtobakOriginMarker(markdown) {
+				return nil, ErrLoopGuard
+			}
+			if len(markdown) > maxInlineDocBytes {
+				return nil, ErrInvalidInput
+			}
 		}
-	}
-	if req.FileKey != "" && req.FileKey != existing.FileKey {
-		if err := validateFileKeyOwnership(userID, req.FileKey); err != nil {
-			return nil, err
+		if req.FileKey != "" && req.FileKey != existing.FileKey {
+			if err := validateFileKeyOwnership(userID, req.FileKey); err != nil {
+				return nil, err
+			}
 		}
 	}
 	existing.Title = strings.TrimSpace(req.Title)
-	existing.DocType = req.DocType
-	existing.Path = req.Path
-	if req.Markdown != "" || req.FileKey != "" {
+	if req.DocType != "" {
+		existing.DocType = req.DocType
+	}
+	if req.Path != "" {
+		existing.Path = req.Path
+	}
+	if bodyChanging {
 		// The caller is actually changing the body -- full replace of the
 		// content/file fields (so e.g. a slide->note conversion correctly
-		// clears the old file fields, and vice versa).
-		existing.Content = req.Markdown
-		existing.Links = parseWikilinks(req.Markdown)
+		// clears the old file fields, and vice versa; and req.Markdown
+		// pointing to "" correctly clears an existing note to empty).
+		existing.Content = markdown
+		existing.Links = parseWikilinks(markdown)
 		existing.FileKey, existing.FileName, existing.MimeType, existing.FileSize = req.FileKey, req.FileName, req.MimeType, req.FileSize
 	}
 	existing.UpdatedAt = time.Now().UTC()
@@ -635,13 +672,33 @@ func (s *AccountService) UpdateAccountDocument(ctx context.Context, userID, acco
 
 // deleteDoc maps the repository's conditional-check failure (item didn't
 // exist) to ErrNotFound, so a delete of an already-gone/never-existed docID
-// returns 404 as documented, rather than a bare 204.
+// returns 404 as documented, rather than a bare 204. If the document was a
+// slide, its S3 object is also removed -- otherwise a delete only clears
+// the DynamoDB item, leaving a (possibly confidential) file in the bucket
+// indefinitely with nothing left in the app pointing at it.
 func (s *AccountService) deleteDoc(ctx context.Context, pk, docID string) error {
-	err := s.repo.DeleteAccountDocument(ctx, pk, docID)
-	if errors.Is(err, repository.ErrConditionFailed) {
-		return ErrNotFound
+	doc, err := s.getDoc(ctx, pk, docID)
+	if err != nil {
+		return err
 	}
-	return err
+	if err := s.repo.DeleteAccountDocument(ctx, pk, docID); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return ErrNotFound // deleted concurrently between our Get and Delete
+		}
+		return err
+	}
+	if doc.FileKey != "" && s.s3 != nil {
+		// Best-effort: the DynamoDB item is already gone, so a failure here
+		// just leaves an orphaned S3 object rather than blocking (or
+		// un-doing) a delete the caller already committed to.
+		if _, err := s.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(s.bucketName),
+			Key:    aws.String(doc.FileKey),
+		}); err != nil {
+			log.Printf("cleanup S3 object for deleted doc %s (key %s): %v", docID, doc.FileKey, err)
+		}
+	}
+	return nil
 }
 
 func (s *AccountService) DeleteAccountDocument(ctx context.Context, userID, accountID, docID string) error {

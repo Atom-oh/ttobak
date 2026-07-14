@@ -19,7 +19,7 @@ func newStubDocumentHandler() (*DocumentHandler, *mockHandlerAccountRepo) {
 
 func TestHandlerPutUserDocument_Created(t *testing.T) {
 	h, _ := newStubDocumentHandler()
-	body, _ := json.Marshal(model.PutDocumentRequest{Title: "My Note", Markdown: "personal content"})
+	body, _ := json.Marshal(model.PutDocumentRequest{Title: "My Note", Markdown: mdPtr("personal content")})
 	r := httptest.NewRequest(http.MethodPost, "/api/documents", bytes.NewReader(body))
 	r = withUserEmailCtx(r, "user-1", "u@x.com")
 	w := httptest.NewRecorder()
@@ -38,7 +38,7 @@ func TestHandlerPutUserDocument_Created(t *testing.T) {
 
 func TestHandlerPersonalDocument_UpdateAndDelete_NoMembershipNeeded(t *testing.T) {
 	h, _ := newStubDocumentHandler()
-	createBody, _ := json.Marshal(model.PutDocumentRequest{Title: "Note", Markdown: "v1"})
+	createBody, _ := json.Marshal(model.PutDocumentRequest{Title: "Note", Markdown: mdPtr("v1")})
 	createReq := httptest.NewRequest(http.MethodPost, "/api/documents", bytes.NewReader(createBody))
 	createReq = withUserEmailCtx(createReq, "user-1", "u@x.com")
 	createW := httptest.NewRecorder()
@@ -46,7 +46,7 @@ func TestHandlerPersonalDocument_UpdateAndDelete_NoMembershipNeeded(t *testing.T
 	var created model.AccountDocumentDTO
 	json.Unmarshal(createW.Body.Bytes(), &created)
 
-	updateBody, _ := json.Marshal(model.PutDocumentRequest{Title: "Note v2", Markdown: "v2"})
+	updateBody, _ := json.Marshal(model.PutDocumentRequest{Title: "Note v2", Markdown: mdPtr("v2")})
 	updateReq := httptest.NewRequest(http.MethodPut, "/api/documents/"+created.DocID, bytes.NewReader(updateBody))
 	updateReq = withUserEmailCtx(updateReq, "user-1", "u@x.com")
 	updateReq = withChiParam(updateReq, "docId", created.DocID)

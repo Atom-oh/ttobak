@@ -242,14 +242,21 @@ type AccountDocument struct {
 }
 
 type PutDocumentRequest struct {
-	Title    string `json:"title"`
-	DocType  string `json:"docType,omitempty"`
-	Path     string `json:"path,omitempty"`
-	Markdown string `json:"markdown"`
-	FileKey  string `json:"fileKey,omitempty"`
-	FileName string `json:"fileName,omitempty"`
-	MimeType string `json:"mimeType,omitempty"`
-	FileSize int64  `json:"fileSize,omitempty"`
+	Title   string `json:"title"`
+	DocType string `json:"docType,omitempty"`
+	Path    string `json:"path,omitempty"`
+	// Markdown is a pointer so "key omitted from the JSON body" (nil --
+	// don't touch the existing body, an update-only concept) is
+	// distinguishable from "explicitly set to empty string" (non-nil
+	// pointer to "" -- e.g. the user selected-all-and-deleted in the
+	// editor and wants that saved). A plain string can't represent this:
+	// omitted and explicit-empty both unmarshal to "", so update would
+	// silently discard the user's intent to clear the note.
+	Markdown *string `json:"markdown"`
+	FileKey  string  `json:"fileKey,omitempty"`
+	FileName string  `json:"fileName,omitempty"`
+	MimeType string  `json:"mimeType,omitempty"`
+	FileSize int64   `json:"fileSize,omitempty"`
 }
 
 type AccountDocumentDTO struct {
