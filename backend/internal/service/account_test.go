@@ -660,6 +660,79 @@ func TestUpdateAccountDocument_RejectsTtobakOrigin(t *testing.T) {
 	}
 }
 
+func TestUpdateAccountDocument_RejectsForeignFileKey(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+
+	// Regression: update must apply the same fileKey-ownership check as
+	// create -- otherwise a caller can point their own doc's fileKey at
+	// another user's S3 object and later fetch a presigned download URL
+	// for it via GetAccountDocument.
+	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{
+		Title: "Note", FileKey: "docs/someone-else/deck.pdf", FileName: "deck.pdf",
+	})
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden for foreign fileKey on update, got %v", err)
+	}
+
+	// The doc must still carry no fileKey after the rejected update --
+	// GetAccountDocument's presigned download URL must not leak.
+	detail, err := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if detail.FileKey != "" {
+		t.Errorf("fileKey should not have been persisted, got %q", detail.FileKey)
+	}
+}
+
+func TestUpdateAccountDocument_RejectsEmptyMarkdownAndFileKey(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+
+	// A PUT with neither markdown nor fileKey must be rejected, not silently
+	// blank out the document's content.
+	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{Title: "Note"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput, got %v", err)
+	}
+
+	detail, _ := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
+	if detail.Content != "body" {
+		t.Errorf("content should be unchanged after rejected update, got %q", detail.Content)
+	}
+}
+
+func TestUpdateAccountDocument_SlideToNoteClearsFileFields(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", DocType: "slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf",
+	})
+
+	// Full-replace PUT: switching to markdown-only must clear the old file
+	// fields, not leave a stale fileKey alongside new content.
+	updated, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{
+		Title: "Now a note", DocType: "note", Markdown: "converted to markdown",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updated.FileName != "" {
+		t.Errorf("expected fileName cleared on slide->note conversion, got %q", updated.FileName)
+	}
+
+	detail, _ := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
+	if detail.FileKey != "" || detail.Content != "converted to markdown" {
+		t.Errorf("expected file fields cleared and content set, got fileKey=%q content=%q", detail.FileKey, detail.Content)
+	}
+}
+
 func TestDeleteAccountDocument_RemovesDoc(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)

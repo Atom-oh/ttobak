@@ -69,7 +69,7 @@ Microphone → AWS Transcribe Streaming (via @aws-sdk/client-transcribe-streamin
 5 Lambda entry points in `backend/cmd/{api,transcribe,summarize,process-image,kb}/main.go`. `api` uses chi router + `aws-lambda-go-api-proxy` (payload v1.0). Q&A (`/api/qa/*`) is a separate Python Lambda (`backend/python/qa/`). Shared code in `backend/internal/` (handler, service, repository, model, middleware). Service layer uses sentinel errors (`ErrForbidden`, `ErrNotFound`) for typed error handling.
 
 ### DynamoDB & S3
-Table `ttobak-main`, single-table design. Key schema and GSIs in `backend/internal/model/meeting.go`. S3 keys: `{audio|images|transcripts}/{userId|meetingId}/...`
+Table `ttobak-main`, single-table design. Key schema and GSIs in `backend/internal/model/meeting.go`. S3 keys: `{audio|images|transcripts}/{userId|meetingId}/...`; account/personal document uploads (slides) use `docs/{userId}/{fileName}` — no meetingId, since a document isn't tied to a meeting.
 
 ### Frontend (Next.js 16)
 Static export (`output: 'export'` prod only). Auth via Cognito SDK (`src/lib/auth.ts`), API client (`src/lib/api.ts`). Dynamic routes use `generateStaticParams` + CloudFront 404→index.html SPA fallback. Tailwind v4 with class-based dark mode (`@custom-variant dark` in `globals.css`), TipTap editor, Material Symbols. Client-side AWS Transcribe Streaming via `@aws-sdk/client-transcribe-streaming`.

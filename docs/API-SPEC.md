@@ -377,7 +377,10 @@ Error: 404 Not Found (Account 없음)
 GET /api/accounts/{accountId}/documents?docType=prep
 
 Response: 200 OK
-{ "documents": [ { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": [], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" } ] }
+{ "documents": [ { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" } ] }
+
+`links`/`fileName`은 값이 있을 때만 나타난다(`omitempty`) — 위키링크나
+파일이 없는 문서는 필드 자체가 응답에서 생략된다(빈 배열/`null`이 아님).
 
 Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (Account 없음)
@@ -391,10 +394,10 @@ Error: 404 Not Found (Account 없음)
 GET /api/accounts/{accountId}/documents/{docId}
 
 Response: 200 OK
-{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": [], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n...", "downloadUrl": null }
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": ["하나은행"], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n..." }
 
-슬라이드(`fileName` 있는 문서)는 `content`가 빈 문자열이고 `downloadUrl`에
-1시간 유효 presigned GET URL이 채워진다.
+슬라이드(`fileName` 있는 문서)는 `content`가 빈 문자열이고 `downloadUrl`(1시간
+유효 presigned GET URL, 없으면 필드 생략)이 채워진다.
 
 Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (문서 없음)
@@ -403,7 +406,10 @@ Error: 404 Not Found (문서 없음)
 #### Update / Delete Account Document (멤버 전용)
 
 Update는 title/docType/path/markdown(또는 fileKey류)을 전체 치환한다 —
-`docId`/`sourceUserId`/`createdAt`은 보존, `links`는 재파싱, loop guard도 재적용된다.
+`docId`/`sourceUserId`/`createdAt`은 보존, `links`는 재파싱, loop guard도
+재적용된다. `markdown`과 `fileKey`가 둘 다 비어 있으면 거부된다(기존 본문을
+빈 값으로 조용히 지우지 않음); `fileKey`를 생략하고 `markdown`만 보내면
+슬라이드→노트 전환으로 취급해 기존 파일 필드를 지운다(반대로도 동일).
 
 ```
 PUT /api/accounts/{accountId}/documents/{docId}
@@ -415,8 +421,8 @@ Response: 200 OK
 DELETE /api/accounts/{accountId}/documents/{docId}
 Response: 204 No Content
 
-Error: 400 Bad Request (title 누락, TTOBAK 원본)
-Error: 403 Forbidden (멤버가 아님)
+Error: 400 Bad Request (title 누락, markdown/fileKey 둘 다 없음, markdown >300KB, 또는 TTOBAK 원본)
+Error: 403 Forbidden (멤버가 아님, 또는 fileKey가 내 userId 접두어가 아님)
 Error: 404 Not Found (문서 없음)
 ```
 
@@ -434,7 +440,8 @@ PUT    /api/documents/{docId}         { "title": "...", "markdown": "..." }
 DELETE /api/documents/{docId}         → 204 No Content
 
 Error: 400 Bad Request / 404 Not Found — 위 Account 문서 엔드포인트와 동일한 의미
-(단, "멤버가 아님" 403은 발생하지 않음 — PK가 곧 소유권 증명)
+(멤버십 확인 자체가 없어 "멤버가 아님" 403은 없지만, foreign fileKey는 여전히
+403 Forbidden — PK가 소유권 증명일 뿐, fileKey 접두어 검증은 별도로 적용됨)
 ```
 
 #### Slide Upload (문서용 presigned URL)
@@ -448,15 +455,23 @@ Put Document 호출의 `fileKey`로 그대로 전달한다.
 
 #### Export Vault (Obsidian 마크다운 내보내기)
 
-본인 소유 미팅을 Obsidian 친화 마크다운(YAML frontmatter)으로 렌더링해
-`Accounts/{name}/`(Account 공유) 또는 `_Private/Meetings/`(비공개) 경로의
+본인 소유 미팅과 문서를 Obsidian 친화 마크다운(YAML frontmatter)으로 렌더링해
 파일 목록으로 반환한다. MCP 클라이언트가 각 파일을 로컬 vault에 기록한다.
+
+- 미팅: `Accounts/{name}/`(Account 공유) 또는 `_Private/Meetings/`(비공개)
+- 문서(마크다운 본문이 있는 것만 — 슬라이드는 제외): `Accounts/{name}/Docs/`
+  (계정 멤버십별) 또는 `_Private/Docs/`(개인 문서). frontmatter에 `doc_type`,
+  `links`, `ttobak_id`를 포함(ADR-020 참조) — 재인제스트 시 ADR-017과 동일한
+  loop guard가 적용된다.
 
 ```
 GET /api/vault/export
 
 Response: 200 OK
-{ "files": [ { "path": "Accounts/하나은행/2026-05-12 ROSA 리뷰.md", "markdown": "---\naccount: \"[[하나은행]]\"\n...\n---\n\n# ROSA 리뷰\n..." } ] }
+{ "files": [
+  { "path": "Accounts/하나은행/2026-05-12 ROSA 리뷰.md", "markdown": "---\naccount: \"[[하나은행]]\"\n...\n---\n\n# ROSA 리뷰\n..." },
+  { "path": "Accounts/하나은행/Docs/회의 준비.md", "markdown": "---\ndoc_type: note\nttobak_id: doc-uuid\n---\n\n준비 내용..." }
+] }
 
 Error: 403 Forbidden
 ```

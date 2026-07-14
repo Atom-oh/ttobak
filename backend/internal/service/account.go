@@ -438,24 +438,38 @@ func toDocumentDTO(d *model.AccountDocument) model.AccountDocumentDTO {
 // slide upload carries FileKey instead of Markdown -- ownership of that S3
 // key is enforced here (must be under docs/{userID}/) since it's the only
 // place a client-supplied key gets trusted.
-func (s *AccountService) putDoc(ctx context.Context, userID, pk, accountID string, req *model.PutDocumentRequest, entityType string) (*model.AccountDocumentDTO, error) {
+// validateDocRequest is the single check shared by create (putDoc) and
+// update (updateDoc) so both enforce the same invariants: a title, either
+// markdown or a fileKey (never neither), and -- critically -- that a
+// caller-supplied fileKey is actually owned by userID. This is the only
+// place a client-supplied S3 key is trusted (see ADR-020); skipping it on
+// update would let a caller point their own doc's fileKey at another
+// user's object and get a presigned download URL for it.
+func validateDocRequest(userID string, req *model.PutDocumentRequest) error {
 	if strings.TrimSpace(req.Title) == "" {
-		return nil, ErrInvalidInput
+		return ErrInvalidInput
 	}
 	if req.FileKey != "" {
 		if !strings.HasPrefix(req.FileKey, "docs/"+userID+"/") {
-			return nil, ErrForbidden
+			return ErrForbidden
 		}
 	} else if strings.TrimSpace(req.Markdown) == "" {
-		return nil, ErrInvalidInput
+		return ErrInvalidInput
 	}
 	if req.Markdown != "" {
 		if hasTtobakOriginMarker(req.Markdown) {
-			return nil, ErrLoopGuard
+			return ErrLoopGuard
 		}
 		if len(req.Markdown) > maxInlineDocBytes {
-			return nil, ErrInvalidInput
+			return ErrInvalidInput
 		}
+	}
+	return nil
+}
+
+func (s *AccountService) putDoc(ctx context.Context, userID, pk, accountID string, req *model.PutDocumentRequest, entityType string) (*model.AccountDocumentDTO, error) {
+	if err := validateDocRequest(userID, req); err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC()
 	docID := uuid.NewString()
@@ -501,33 +515,27 @@ func (s *AccountService) getDoc(ctx context.Context, pk, docID string) (*model.A
 	return doc, nil
 }
 
-// updateDoc overwrites title/docType/path/markdown/file fields on an
-// existing doc, preserving DocID/SourceUserID/CreatedAt/EntityType and
-// re-running the same loop-guard + wikilink parsing as create.
-func (s *AccountService) updateDoc(ctx context.Context, pk, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
+// updateDoc is a full replace of title/docType/path/markdown/file fields on
+// an existing doc (preserving DocID/SourceUserID/CreatedAt/EntityType),
+// re-running the same validateDocRequest + wikilink parsing as create --
+// including the fileKey ownership check, since PUT accepts a fileKey just
+// like POST does. Because it's a full replace, converting a slide back to
+// a note (fileKey omitted, markdown supplied) clears the old file fields,
+// and vice versa.
+func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
 	existing, err := s.getDoc(ctx, pk, docID)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(req.Title) == "" {
-		return nil, ErrInvalidInput
-	}
-	if req.Markdown != "" {
-		if hasTtobakOriginMarker(req.Markdown) {
-			return nil, ErrLoopGuard
-		}
-		if len(req.Markdown) > maxInlineDocBytes {
-			return nil, ErrInvalidInput
-		}
+	if err := validateDocRequest(userID, req); err != nil {
+		return nil, err
 	}
 	existing.Title = strings.TrimSpace(req.Title)
 	existing.DocType = req.DocType
 	existing.Path = req.Path
 	existing.Content = req.Markdown
 	existing.Links = parseWikilinks(req.Markdown)
-	if req.FileKey != "" {
-		existing.FileKey, existing.FileName, existing.MimeType, existing.FileSize = req.FileKey, req.FileName, req.MimeType, req.FileSize
-	}
+	existing.FileKey, existing.FileName, existing.MimeType, existing.FileSize = req.FileKey, req.FileName, req.MimeType, req.FileSize
 	existing.UpdatedAt = time.Now().UTC()
 	if err := s.repo.PutAccountDocument(ctx, existing); err != nil {
 		return nil, err
@@ -566,7 +574,7 @@ func (s *AccountService) UpdateAccountDocument(ctx context.Context, userID, acco
 	if err := s.requireMember(ctx, userID, accountID); err != nil {
 		return nil, err
 	}
-	return s.updateDoc(ctx, model.PrefixAccount+accountID, docID, req)
+	return s.updateDoc(ctx, userID, model.PrefixAccount+accountID, docID, req)
 }
 
 func (s *AccountService) DeleteAccountDocument(ctx context.Context, userID, accountID, docID string) error {
@@ -597,7 +605,7 @@ func (s *AccountService) GetUserDocument(ctx context.Context, userID, docID stri
 }
 
 func (s *AccountService) UpdateUserDocument(ctx context.Context, userID, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
-	return s.updateDoc(ctx, model.PrefixUser+userID, docID, req)
+	return s.updateDoc(ctx, userID, model.PrefixUser+userID, docID, req)
 }
 
 func (s *AccountService) DeleteUserDocument(ctx context.Context, userID, docID string) error {

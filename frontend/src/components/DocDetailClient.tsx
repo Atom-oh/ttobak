@@ -64,6 +64,7 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
   const saveContent = useCallback(async (markdown: string, nextTitle?: string) => {
     if (!doc) return;
     setSaving(true);
+    setError(null);
     try {
       const req = { title: nextTitle ?? title, docType: doc.docType, markdown };
       const updated = accountId
@@ -71,6 +72,8 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
         : await docApi.update(docId, req);
       setDoc((prev) => (prev ? { ...prev, ...updated, content: markdown } : prev));
       setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save document');
     } finally {
       setSaving(false);
     }
@@ -86,7 +89,7 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
     }
   }, [doc, title, saveContent]);
 
-  if (isLoading || loading) {
+  if (isLoading) {
     return (
       <AppLayout activePath={accountId ? '/accounts' : '/docs'}>
         <div className="p-6 animate-pulse bg-slate-100 dark:bg-slate-800 rounded-xl h-64" />
@@ -94,7 +97,20 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
     );
   }
 
-  if (error || !doc) {
+  if (!isAuthenticated) {
+    if (typeof window !== 'undefined') window.location.href = '/';
+    return null;
+  }
+
+  if (loading) {
+    return (
+      <AppLayout activePath={accountId ? '/accounts' : '/docs'}>
+        <div className="p-6 animate-pulse bg-slate-100 dark:bg-slate-800 rounded-xl h-64" />
+      </AppLayout>
+    );
+  }
+
+  if (!doc) {
     return (
       <AppLayout activePath={accountId ? '/accounts' : '/docs'}>
         <div className="p-6 text-red-500">{error || 'Document not found'}</div>
@@ -108,6 +124,11 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
   return (
     <AppLayout activePath={accountId ? '/accounts' : '/docs'}>
       <div className="max-w-3xl mx-auto p-6">
+        {error && (
+          <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
+            {error}
+          </div>
+        )}
         <div className="flex items-center gap-3 mb-6">
           <input
             value={title}
