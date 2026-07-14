@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 30793de0bf2b · generated-at: 2026-07-13 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 30793de0bf2b · generated-at: 2026-07-14 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -20,6 +20,7 @@ cd backend && /usr/local/go/bin/go test ./internal/...      # stdlib testing, no
 cd backend && /usr/local/go/bin/go vet ./internal/...
 cd frontend && npm run build      # static export to out/
 cd frontend && npm run lint       # eslint (NO test framework — lint+build only)
+pip install 'boto3<2'             # prerequisite for both Python suites below
 cd backend/python/crawler && python3 -m unittest test_crawlers -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
 cd infra && npx cdk synth && npm test
@@ -49,6 +50,6 @@ cd infra && npx cdk synth && npm test
 ## Known False-Positives (do NOT report)
 - **`updateAttachmentByKey` not implemented** (`process-image/main.go`, tracked HIGH): image-processing results aren't yet saved to DynamoDB (needs meetingId parsing from the S3 key path). Known gap, not a new bug to flag.
 - **JWT signature verification**: `middleware.ParseVerifiedJWT` verifies signatures against Cognito JWKS (RS256, issuer + exp checked) — this is not a gap; don't re-raise "unverified JWT" findings.
-- **Hardcoded ACM ARN / domain / CORS origin / KB id in CDK**: known tech-debt, tracked; not a new-PR blocker unless the diff worsens it.
+- **Hardcoded ACM ARN / domain / CORS origin / KB id / `agentCoreRuntimeArn` / `researchAgentExecutionRoleArn` in CDK**: known tech-debt, tracked; not a new-PR blocker unless the diff worsens it.
 - **`cdk deploy --all` is never used — deploy each changed stack with `--exclusively`**: without `--exclusively`, CDK deploys the full dependency chain including `TtobakKnowledgeStack`, which stages a deliberate (undeployed) Bedrock KB teardown that would apply for real. But `--exclusively` skips dependencies, so a single `TtobakGatewayStack --exclusively` won't pick up sibling-stack changes — each changed stack is deployed individually in dependency order. `TtobakAiStack` also imports `ttobak-agentcore-research-role` by ARN — that role is a manually-created, pre-existing IAM resource (not produced by any CI pipeline; `deploy-research-agent.yml` only consumes it via `--role-arn`) and must exist first, checked by an `aws iam get-role` preflight in `deploy-infra.yml`. The research-agent container's env vars are injected by `deploy-research-agent.yml` (`update-agent-runtime --environment-variables`), not by CDK — don't flag that as a missing CDK wiring gap. Don't flag the KnowledgeStack drift or the role import as regressions.
 - Default table/bucket names in Go differing from CDK defaults — no runtime impact (CDK injects env vars).
