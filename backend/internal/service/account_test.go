@@ -986,6 +986,86 @@ func TestDeleteAccountDocument_S3FailureDoesNotBlockDelete(t *testing.T) {
 	}
 }
 
+func TestUpdateAccountDocument_ReplacingSlideFileKeyCleansUpOldS3Object(t *testing.T) {
+	repo := newMockAccountRepo()
+	mockS3 := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: mockS3, bucketName: "test-bucket"}
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", FileKey: "docs/owner-1/old.pdf", FileName: "old.pdf",
+	})
+
+	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{
+		Title: "Slide v2", FileKey: "docs/owner-1/new.pdf", FileName: "new.pdf",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mockS3.deletedKeys) != 1 || mockS3.deletedKeys[0] != "docs/owner-1/old.pdf" {
+		t.Errorf("expected old S3 object docs/owner-1/old.pdf cleaned up, got %v", mockS3.deletedKeys)
+	}
+}
+
+func TestUpdateAccountDocument_SlideToNoteCleansUpOldS3Object(t *testing.T) {
+	repo := newMockAccountRepo()
+	mockS3 := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: mockS3, bucketName: "test-bucket"}
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", FileKey: "docs/owner-1/old.pdf", FileName: "old.pdf",
+	})
+
+	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{
+		Title: "Now a note", Markdown: mdPtr("body"),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mockS3.deletedKeys) != 1 || mockS3.deletedKeys[0] != "docs/owner-1/old.pdf" {
+		t.Errorf("expected old S3 object docs/owner-1/old.pdf cleaned up, got %v", mockS3.deletedKeys)
+	}
+}
+
+func TestUpdateAccountDocument_KeepingSameFileKeyDoesNotDeleteS3Object(t *testing.T) {
+	repo := newMockAccountRepo()
+	mockS3 := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: mockS3, bucketName: "test-bucket"}
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf",
+	})
+
+	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{
+		Title: "Slide v2", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mockS3.deletedKeys) != 0 {
+		t.Errorf("expected no S3 delete when fileKey is unchanged, got %v", mockS3.deletedKeys)
+	}
+}
+
+func TestUpdateAccountDocument_TitleOnlyEditOfSlideDoesNotDeleteS3Object(t *testing.T) {
+	repo := newMockAccountRepo()
+	mockS3 := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: mockS3, bucketName: "test-bucket"}
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf",
+	})
+
+	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{
+		Title: "Slide renamed",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mockS3.deletedKeys) != 0 {
+		t.Errorf("expected no S3 delete for a title-only edit, got %v", mockS3.deletedKeys)
+	}
+}
+
 func TestDeleteAccountDocument_NonexistentDocReturnsNotFound(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)

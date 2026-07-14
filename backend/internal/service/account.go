@@ -620,6 +620,7 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 	if req.Path != "" {
 		existing.Path = req.Path
 	}
+	oldFileKey := existing.FileKey
 	if bodyChanging {
 		// The caller is actually changing the body -- full replace of the
 		// content/file fields (so e.g. a slide->note conversion correctly
@@ -632,6 +633,17 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 	existing.UpdatedAt = time.Now().UTC()
 	if err := s.repo.PutAccountDocument(ctx, existing); err != nil {
 		return nil, err
+	}
+	if oldFileKey != "" && oldFileKey != existing.FileKey && s.s3 != nil {
+		// Best-effort, same as deleteDoc: the DB row is already committed to
+		// the new fileKey, so a failure here just leaves the superseded S3
+		// object orphaned rather than blocking (or un-doing) the update.
+		if _, err := s.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(s.bucketName),
+			Key:    aws.String(oldFileKey),
+		}); err != nil {
+			log.Printf("cleanup superseded S3 object for doc %s (key %s): %v", docID, oldFileKey, err)
+		}
 	}
 	dto := toDocumentDTO(existing)
 	return &dto, nil

@@ -44,12 +44,14 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
   // firing between two autosave debounce windows would revert unsaved body
   // edits.
   const latestMarkdownRef = useRef('');
-  // Guards against out-of-order network responses: autosave and title-blur
-  // both fire full-replace PUTs with no cancellation, so a slow, older
-  // request completing after a newer one must not clobber state with
-  // stale title/content. Only the response matching the most recently
-  // *started* save is ever applied.
-  const saveSeqRef = useRef(0);
+  // Serializes saves: autosave and title-blur both fire full-replace PUTs,
+  // so two in-flight requests could reach the server out of order and have
+  // the older one's stale content win the last-write-wins race. Only one
+  // PUT is ever in flight; a save requested while one is in flight is
+  // queued (latest wins) and fires immediately after the current one
+  // settles, so the server always sees saves in the order they were made.
+  const saveInFlightRef = useRef(false);
+  const pendingSaveRef = useRef<{ markdown: string; nextTitle?: string } | null>(null);
 
   const fetchAll = useCallback(async () => {
     if (!docId || docId === '_') return;
@@ -77,7 +79,13 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
 
   const saveContent = useCallback(async (markdown: string, nextTitle?: string) => {
     if (!doc) return;
-    const seq = ++saveSeqRef.current;
+    if (saveInFlightRef.current) {
+      // A save is already in flight -- queue this one instead of firing a
+      // second concurrent PUT (only the latest queued call survives).
+      pendingSaveRef.current = { markdown, nextTitle };
+      return;
+    }
+    saveInFlightRef.current = true;
     setSaving(true);
     setError(null);
     try {
@@ -88,7 +96,6 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
       const updated = accountId
         ? await accountApi.updateDocument(accountId, docId, req)
         : await docApi.update(docId, req);
-      if (seq !== saveSeqRef.current) return; // a newer save has since started; this response is stale
       // Deliberately do NOT write `markdown` into doc.content here (same
       // as AISummaryCard's handleAutoSave) -- MeetingEditor's own effect
       // resets its DOM to the `content` prop whenever that prop changes.
@@ -100,10 +107,15 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
       setDoc((prev) => (prev ? { ...prev, ...updated } : prev));
       setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
-      if (seq !== saveSeqRef.current) return;
       setError(err instanceof Error ? err.message : 'Failed to save document');
     } finally {
-      if (seq === saveSeqRef.current) setSaving(false);
+      saveInFlightRef.current = false;
+      setSaving(false);
+      const pending = pendingSaveRef.current;
+      if (pending) {
+        pendingSaveRef.current = null;
+        saveContent(pending.markdown, pending.nextTitle);
+      }
     }
   }, [accountId, docId, doc, title]);
 
@@ -150,7 +162,10 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
     );
   }
 
-  const isSlide = !!doc.fileName;
+  // downloadUrl mirrors the backend's canonical fileKey check (server only
+  // presigns one when FileKey is set) -- more reliable than fileName alone,
+  // which a client could in principle omit while still sending a fileKey.
+  const isSlide = !!doc.downloadUrl || doc.docType === 'slide';
   const isPdf = (doc.fileName ?? '').toLowerCase().endsWith('.pdf');
 
   return (
