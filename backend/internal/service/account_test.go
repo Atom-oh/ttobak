@@ -515,6 +515,22 @@ func TestPutDocument_RejectsHybridMarkdownAndFileKey(t *testing.T) {
 	}
 }
 
+func TestPutDocument_SlideWithWhitespaceMarkdownStoresEmptyContent(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf", Markdown: "   \n  ",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	doc, _ := repo.GetAccountDocument(context.Background(), model.PrefixAccount+acc.AccountID, created.DocID)
+	if doc.Content != "" {
+		t.Errorf("expected empty Content for slide with whitespace-only markdown, got %q", doc.Content)
+	}
+}
+
 func TestGetAccountDocument_UpdatedAtFallsBackToCreatedAtWhenZero(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)

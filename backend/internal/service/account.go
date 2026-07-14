@@ -451,7 +451,12 @@ func validateDocRequest(req *model.PutDocumentRequest) error {
 	if strings.TrimSpace(req.Title) == "" {
 		return ErrInvalidInput
 	}
-	hasMarkdown := strings.TrimSpace(req.Markdown) != ""
+	// Normalize in place so a whitespace-only markdown ("   ") can't slip
+	// past the mutual-exclusivity check below as "no markdown" while still
+	// getting stored as non-empty Content on what's meant to be an
+	// empty-body slide.
+	req.Markdown = strings.TrimSpace(req.Markdown)
+	hasMarkdown := req.Markdown != ""
 	if req.FileKey == "" && !hasMarkdown {
 		return ErrInvalidInput
 	}

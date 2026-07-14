@@ -161,6 +161,36 @@ func TestExportVault_IncludesDocuments(t *testing.T) {
 	}
 }
 
+func TestExportVault_SkipsAccountScopeWhenAccountDeleted(t *testing.T) {
+	// A membership row can outlive the account it points at (or GetAccount
+	// can transiently error). Either way, exportDocuments must skip that
+	// account's documents rather than falling through with accountName=""
+	// -- which docVaultPath reads as "personal" and would mis-file a
+	// shared account's documents under _Private/Docs/.
+	sharedNote := model.AccountDocument{
+		PK: model.PrefixAccount + "acc-deleted", DocID: "doc-9", Title: "고아 문서",
+		Content: "본문", EntityType: model.EntityTypeAccountDoc,
+	}
+	repo := &mockVaultRepo{
+		accounts:    map[string]*model.Account{}, // acc-deleted intentionally absent -> GetAccount returns nil
+		memberships: []model.AccountMember{{AccountID: "acc-deleted", UserID: "u1"}},
+		documents: map[string][]model.AccountDocument{
+			model.PrefixAccount + "acc-deleted": {sharedNote},
+		},
+	}
+	svc := newVaultServiceWithRepo(repo)
+
+	files, err := svc.ExportVault(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, f := range files {
+		if strings.Contains(f.Path, "_Private") {
+			t.Errorf("account doc must not be exported under _Private when its account is gone, got %q", f.Path)
+		}
+	}
+}
+
 func TestExportVault_CapsLargeCorpus(t *testing.T) {
 	orig := maxVaultMeetings
 	maxVaultMeetings = 2

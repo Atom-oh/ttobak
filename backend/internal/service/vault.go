@@ -163,19 +163,20 @@ func (s *VaultService) exportDocuments(ctx context.Context, userID string, nameC
 	for _, m := range memberships {
 		name, ok := nameCache[m.AccountID]
 		if !ok {
+			// Skip this account's documents entirely -- on a transient read
+			// error OR a nil account (membership row outlived a deleted
+			// account) -- rather than falling through with accountName ==
+			// "", which docVaultPath reads as "personal" and would mis-file
+			// a shared account's documents under _Private/Docs/.
 			acc, err := s.repo.GetAccount(ctx, m.AccountID)
-			if err != nil {
-				// Skip this account's documents rather than mis-filing them
-				// under _Private/Docs/ -- accountName == "" reads as
-				// "personal" to docVaultPath, which would misclassify a
-				// shared account's documents as private on a transient
-				// read error.
+			if err != nil || acc == nil {
 				continue
 			}
-			if acc != nil {
-				name = acc.Name
-			}
+			name = acc.Name
 			nameCache[m.AccountID] = name
+		}
+		if name == "" {
+			continue
 		}
 		scopes = append(scopes, docScope{pk: model.PrefixAccount + m.AccountID, accountName: name})
 	}
@@ -187,7 +188,10 @@ func (s *VaultService) exportDocuments(ctx context.Context, userID string, nameC
 			return nil, err
 		}
 		for _, stub := range stubs {
-			if stub.FileName != "" {
+			// FileKey (not FileName) is the canonical slide marker
+			// elsewhere (validateDocRequest/validateFileKeyOwnership) --
+			// use the same one here for consistency.
+			if stub.FileKey != "" {
 				continue // slide -- no markdown content to export
 			}
 			full, err := s.repo.GetAccountDocument(ctx, scope.pk, stub.DocID)

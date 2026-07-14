@@ -89,7 +89,15 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
         ? await accountApi.updateDocument(accountId, docId, req)
         : await docApi.update(docId, req);
       if (seq !== saveSeqRef.current) return; // a newer save has since started; this response is stale
-      setDoc((prev) => (prev ? { ...prev, ...updated, content: markdown } : prev));
+      // Deliberately do NOT write `markdown` into doc.content here (same
+      // as AISummaryCard's handleAutoSave) -- MeetingEditor's own effect
+      // resets its DOM to the `content` prop whenever that prop changes.
+      // If content changed while this save's network round-trip was in
+      // flight (the user kept typing), feeding this save's markdown back
+      // in would revert those newer, not-yet-saved keystrokes. Once
+      // mounted, the editor is the sole owner of live content between
+      // saves; only non-content metadata needs syncing here.
+      setDoc((prev) => (prev ? { ...prev, ...updated } : prev));
       setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
       if (seq !== saveSeqRef.current) return;
