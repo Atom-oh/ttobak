@@ -150,9 +150,11 @@ class _SSRFSafeRedirectHandler(HTTPRedirectHandler):
     never sees."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        hostname = urlparse(newurl).hostname
-        if not hostname or _is_blocked_host(hostname):
-            raise URLError(f'Blocked redirect host: {hostname!r}')
+        parsed = urlparse(newurl)
+        if parsed.scheme not in ('http', 'https'):
+            raise ValueError(f'Unsupported redirect scheme: {newurl[:30]!r}')
+        if not parsed.hostname or _is_blocked_host(parsed.hostname):
+            raise ValueError(f'Blocked redirect host: {parsed.hostname!r}')
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 

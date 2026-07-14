@@ -1128,6 +1128,32 @@ class TestFetchUrlSSRFGuard(unittest.TestCase):
         self.assertIn('ok', text)
 
 
+class TestSSRFSafeRedirectHandler(unittest.TestCase):
+    """_SSRFSafeRedirectHandler.redirect_request must re-check both scheme
+    and host on the redirect target -- a public host's 30x could otherwise
+    point at a blocked host or a non-http(s) scheme that _fetch_url's own
+    upfront check on the *original* URL never sees."""
+
+    def _addrinfo(self, ip):
+        return [(None, None, None, None, (ip, 0))]
+
+    def _handler(self):
+        return news_crawler._SSRFSafeRedirectHandler()
+
+    def test_blocks_redirect_to_private_host(self):
+        with mock.patch.object(news_crawler.socket, 'getaddrinfo', return_value=self._addrinfo('10.0.0.5')):
+            with self.assertRaises(ValueError):
+                self._handler().redirect_request(
+                    mock.MagicMock(), None, 302, 'Found', {}, 'http://internal.example.com/',
+                )
+
+    def test_blocks_redirect_to_non_http_scheme(self):
+        with self.assertRaises(ValueError):
+            self._handler().redirect_request(
+                mock.MagicMock(), None, 302, 'Found', {}, 'ftp://example.com/',
+            )
+
+
 class TestProcessArticleGuards(unittest.TestCase):
     """Test news_crawler._process_article rejects malformed search results
     before touching DynamoDB/S3 (missing url/title, empty snippet)."""
