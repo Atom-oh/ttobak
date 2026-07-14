@@ -9,14 +9,17 @@ Dependencies: stdlib + boto3 only.
 """
 
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import re
+import socket
 import time
 from html.parser import HTMLParser
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 import boto3
 import botocore.session
@@ -53,7 +56,12 @@ MIN_BODY_LENGTH = 100
 
 
 def _make_hash(url: str) -> str:
-    return hashlib.sha256(f'news:{url}'.encode('utf-8')).hexdigest()[:16]
+    # Normalize the same way _write_to_s3/_write_metadata do before storing
+    # the url (_strip_newlines) -- otherwise a url with embedded whitespace
+    # hashes differently than the sanitized url actually written, so a
+    # second occurrence of "the same" url (just with different incidental
+    # whitespace) would dedup-hash to a different key and get re-ingested.
+    return hashlib.sha256(f'news:{_strip_newlines(url)}'.encode('utf-8')).hexdigest()[:16]
 
 
 # ---------------------------------------------------------------------------
@@ -110,15 +118,61 @@ def extract_paragraphs(html: str) -> str:
 # HTTP + RSS helpers
 # ---------------------------------------------------------------------------
 
+def _is_blocked_host(hostname: str) -> bool:
+    """Resolve hostname and reject if any resolved address is
+    private/loopback/link-local/reserved -- defends customUrls' direct
+    fetch against SSRF (e.g. the 169.254.169.254 cloud metadata endpoint).
+    Fails closed: an unresolvable host is treated as blocked.
+
+    NOTE: doesn't pin the connection to the checked IP, so a DNS rebinding
+    attack (different answer between this check and urlopen's own
+    resolution) isn't covered -- upgrade to an IP-pinned connection if that
+    threat model matters here.
+    """
+    try:
+        addrs = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return True
+    for *_, sockaddr in addrs:
+        try:
+            addr = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            return True
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            return True
+    return False
+
+
+class _SSRFSafeRedirectHandler(HTTPRedirectHandler):
+    """Re-checks the redirect target host so a customUrls entry can't reach
+    a blocked host indirectly via a 30x that _fetch_url's own upfront check
+    never sees."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urlparse(newurl)
+        if parsed.scheme not in ('http', 'https'):
+            raise ValueError(f'Unsupported redirect scheme: {newurl[:30]!r}')
+        if not parsed.hostname or _is_blocked_host(parsed.hostname):
+            raise ValueError(f'Blocked redirect host: {parsed.hostname!r}')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_ssrf_safe_opener = build_opener(_SSRFSafeRedirectHandler)
+
+
 def _fetch_url(url: str, timeout: int = FETCH_TIMEOUT_SECONDS) -> str:
     if not url.startswith(('http://', 'https://')):
         raise ValueError(f'Unsupported URL scheme: {url[:30]}')
+    hostname = urlparse(url).hostname
+    if not hostname or _is_blocked_host(hostname):
+        raise ValueError(f'Blocked host (private/loopback/link-local): {hostname!r}')
     req = Request(url, headers={
         'User-Agent': 'Mozilla/5.0 (compatible; TtobakCrawler/2.0)',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.5',
     })
-    with urlopen(req, timeout=timeout) as resp:
+    with _ssrf_safe_opener.open(req, timeout=timeout) as resp:
         charset = resp.headers.get_content_charset() or 'utf-8'
         return resp.read().decode(charset, errors='replace')
 
@@ -445,7 +499,7 @@ def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
     # title/url/pub_date are untrusted (open web search result); summary and
     # tags are Bedrock-generated from that same untrusted input. All land in
     # the KB doc, so sanitize/defang each before writing.
-    safe_title = _sanitize_snippet(title)
+    safe_title = _strip_newlines(_sanitize_snippet(title))
     safe_url = _strip_newlines(url)
     safe_pub_date = _strip_newlines(pub_date)
     safe_summary = _sanitize_snippet(summary)
@@ -489,7 +543,7 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
         'SK': f'DOC#{doc_hash}',
         'docHash': doc_hash,
         'url': _strip_newlines(url),
-        'title': _sanitize_snippet(title),
+        'title': _strip_newlines(_sanitize_snippet(title)),
         'pubDate': _strip_newlines(pub_date),
         'crawledAt': crawled_at,
         'type': 'news',

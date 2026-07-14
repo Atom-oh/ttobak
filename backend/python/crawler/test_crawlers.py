@@ -730,6 +730,25 @@ class TestWriteToS3TitleSanitized(unittest.TestCase):
         self.assertEqual(len(tag_lines), 1)
         self.assertNotIn('```', body)
 
+    def test_multiline_title_collapsed_to_single_heading_line(self):
+        # A title containing a newline must not be able to break out of the
+        # single "# {title}" heading line and inject a second markdown line.
+        captured = {}
+
+        def fake_put_object(**kwargs):
+            captured['body'] = kwargs['Body'].decode('utf-8')
+
+        with mock.patch.object(news_crawler.s3, 'put_object', side_effect=fake_put_object):
+            news_crawler._write_to_s3(
+                'tech-news', 'hash6', 'Real Title\n# Injected Heading',
+                'https://example.com/x', '', 'summary', '2026-07-01', [],
+            )
+
+        body = captured['body']
+        heading_lines = [l for l in body.splitlines() if l.startswith('# ')]
+        self.assertEqual(len(heading_lines), 1)
+        self.assertIn('Injected Heading', heading_lines[0])
+
 
 class TestWriteMetadataSanitized(unittest.TestCase):
     """_write_metadata is a second sink for untrusted title/url/pub_date/
@@ -758,6 +777,19 @@ class TestWriteMetadataSanitized(unittest.TestCase):
         self.assertNotIn('\n', item['url'])
         self.assertNotIn('\n', item['pubDate'])
         self.assertTrue(all('\n' not in t for t in item['tags']))
+
+    def test_multiline_title_newline_stripped(self):
+        captured = {}
+
+        def fake_put_item(**kwargs):
+            captured['item'] = kwargs['Item']
+
+        with mock.patch.object(news_crawler.table, 'put_item', side_effect=fake_put_item):
+            news_crawler._write_metadata(
+                'tech-news', 'hash7', 'Title\nline two', 'https://example.com/x', '2026-07-01',
+            )
+
+        self.assertNotIn('\n', captured['item']['title'])
 
 
 # ---------------------------------------------------------------------------
@@ -1028,6 +1060,98 @@ class TestNewsCrawlerDedupSkip(unittest.TestCase):
         mock_exists.assert_called_once()
         mock_s3.assert_not_called()
         mock_meta.assert_not_called()
+
+
+class TestMakeHashNormalizesUrl(unittest.TestCase):
+    """_make_hash must normalize the url the same way _write_to_s3/
+    _write_metadata do before storing it -- otherwise the dedup hash can
+    diverge from the hash of the url actually written, letting the "same"
+    url (differing only in incidental whitespace) be re-ingested."""
+
+    def test_newline_variant_hashes_the_same_as_clean_url(self):
+        clean = news_crawler._make_hash('https://example.com/a')
+        with_newline = news_crawler._make_hash('https://example.com/a\n')
+        self.assertEqual(clean, with_newline)
+
+
+class TestFetchUrlSSRFGuard(unittest.TestCase):
+    """_fetch_url must reject hosts that resolve to a private/loopback/
+    link-local/reserved address before making the outbound request --
+    otherwise a customUrls entry can reach internal services (e.g. cloud
+    metadata at 169.254.169.254)."""
+
+    def _addrinfo(self, ip):
+        return [(None, None, None, None, (ip, 0))]
+
+    def test_link_local_metadata_host_blocked(self):
+        with mock.patch.object(news_crawler.socket, 'getaddrinfo', return_value=self._addrinfo('169.254.169.254')):
+            with self.assertRaises(ValueError):
+                news_crawler._fetch_url('http://169.254.169.254/latest/meta-data/')
+
+    def test_private_ip_host_blocked(self):
+        with mock.patch.object(news_crawler.socket, 'getaddrinfo', return_value=self._addrinfo('10.0.0.5')):
+            with self.assertRaises(ValueError):
+                news_crawler._fetch_url('http://internal.example.com/')
+
+    def test_loopback_hostname_blocked(self):
+        with mock.patch.object(news_crawler.socket, 'getaddrinfo', return_value=self._addrinfo('127.0.0.1')):
+            with self.assertRaises(ValueError):
+                news_crawler._fetch_url('http://localhost/')
+
+    def test_unspecified_address_blocked(self):
+        # 0.0.0.0 / :: is a known loopback-check bypass on some stacks.
+        with mock.patch.object(news_crawler.socket, 'getaddrinfo', return_value=self._addrinfo('0.0.0.0')):
+            with self.assertRaises(ValueError):
+                news_crawler._fetch_url('http://zero.example.com/')
+
+    def test_unresolvable_host_blocked(self):
+        with mock.patch.object(news_crawler.socket, 'getaddrinfo', side_effect=news_crawler.socket.gaierror):
+            with self.assertRaises(ValueError):
+                news_crawler._fetch_url('http://nonexistent.invalid/')
+
+    def test_public_ip_host_allowed_through(self):
+        fake_resp = io.BytesIO(b'<html><body>ok</body></html>')
+        fake_resp.headers = mock.MagicMock()
+        fake_resp.headers.get_content_charset.return_value = 'utf-8'
+
+        class _CM:
+            def __enter__(self):
+                return fake_resp
+
+            def __exit__(self, *a):
+                return False
+
+        with mock.patch.object(news_crawler.socket, 'getaddrinfo', return_value=self._addrinfo('93.184.216.34')):
+            with mock.patch.object(news_crawler._ssrf_safe_opener, 'open', return_value=_CM()):
+                text = news_crawler._fetch_url('http://example.com/')
+
+        self.assertIn('ok', text)
+
+
+class TestSSRFSafeRedirectHandler(unittest.TestCase):
+    """_SSRFSafeRedirectHandler.redirect_request must re-check both scheme
+    and host on the redirect target -- a public host's 30x could otherwise
+    point at a blocked host or a non-http(s) scheme that _fetch_url's own
+    upfront check on the *original* URL never sees."""
+
+    def _addrinfo(self, ip):
+        return [(None, None, None, None, (ip, 0))]
+
+    def _handler(self):
+        return news_crawler._SSRFSafeRedirectHandler()
+
+    def test_blocks_redirect_to_private_host(self):
+        with mock.patch.object(news_crawler.socket, 'getaddrinfo', return_value=self._addrinfo('10.0.0.5')):
+            with self.assertRaises(ValueError):
+                self._handler().redirect_request(
+                    mock.MagicMock(), None, 302, 'Found', {}, 'http://internal.example.com/',
+                )
+
+    def test_blocks_redirect_to_non_http_scheme(self):
+        with self.assertRaises(ValueError):
+            self._handler().redirect_request(
+                mock.MagicMock(), None, 302, 'Found', {}, 'ftp://example.com/',
+            )
 
 
 class TestProcessArticleGuards(unittest.TestCase):
