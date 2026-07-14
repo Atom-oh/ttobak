@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { Marked } from 'marked';
@@ -37,6 +37,13 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  // Tracks the freshest in-editor markdown (updated on every keystroke via
+  // MeetingEditor's onChange, not just the debounced autosave) so a title
+  // blur mid-edit sends the content the user is actually looking at instead
+  // of the last-saved snapshot in `doc.content` -- otherwise a title save
+  // firing between two autosave debounce windows would revert unsaved body
+  // edits.
+  const latestMarkdownRef = useRef('');
 
   const fetchAll = useCallback(async () => {
     if (!docId || docId === '_') return;
@@ -49,6 +56,7 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
       ]);
       setDoc(detail);
       setTitle(detail.title);
+      latestMarkdownRef.current = detail.content ?? '';
       setTitles((list?.documents ?? []).filter((d) => d.docId !== docId).map((d) => d.title));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load document');
@@ -66,7 +74,10 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
     setSaving(true);
     setError(null);
     try {
-      const req = { title: nextTitle ?? title, docType: doc.docType, markdown };
+      // Full-replace PUT: send every field the backend would otherwise
+      // overwrite with an empty value (path in particular -- update is not
+      // a partial patch, see ADR-020).
+      const req = { title: nextTitle ?? title, docType: doc.docType, path: doc.path, markdown };
       const updated = accountId
         ? await accountApi.updateDocument(accountId, docId, req)
         : await docApi.update(docId, req);
@@ -79,13 +90,17 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
     }
   }, [accountId, docId, doc, title]);
 
+  const handleChange = useCallback((html: string) => {
+    latestMarkdownRef.current = turndown.turndown(html);
+  }, []);
+
   const handleAutoSave = useCallback((html: string) => {
     saveContent(turndown.turndown(html));
   }, [saveContent]);
 
   const handleTitleBlur = useCallback(() => {
     if (doc && title.trim() && title !== doc.title) {
-      saveContent(doc.content ?? '', title.trim());
+      saveContent(latestMarkdownRef.current, title.trim());
     }
   }, [doc, title, saveContent]);
 
@@ -174,6 +189,7 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
         ) : (
           <MeetingEditor
             content={marked.parse(doc.content ?? '', { async: false }) as string}
+            onChange={handleChange}
             onAutoSave={handleAutoSave}
             autoSaveDelay={2000}
             wikilinkTitles={titles}

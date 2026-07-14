@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -361,6 +362,10 @@ func (r *DynamoDBRepository) GetAccountDocument(ctx context.Context, pk, docID s
 	return &doc, nil
 }
 
+// DeleteAccountDocument requires the item to already exist so a delete of a
+// non-existent docID surfaces ErrConditionFailed (mapped to ErrNotFound in
+// the service layer) instead of silently succeeding -- matching the 404
+// documented in API-SPEC.md.
 func (r *DynamoDBRepository) DeleteAccountDocument(ctx context.Context, pk, docID string) error {
 	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(r.tableName),
@@ -368,8 +373,13 @@ func (r *DynamoDBRepository) DeleteAccountDocument(ctx context.Context, pk, docI
 			"PK": &types.AttributeValueMemberS{Value: pk},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docID},
 		},
+		ConditionExpression: aws.String("attribute_exists(PK)"),
 	})
 	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: doc %s not found", ErrConditionFailed, docID)
+		}
 		return fmt.Errorf("delete account doc: %w", err)
 	}
 	return nil

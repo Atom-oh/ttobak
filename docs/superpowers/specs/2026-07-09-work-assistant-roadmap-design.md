@@ -4,7 +4,7 @@
 
 ## 1. Overview (목적)
 
-TTOBAK은 현재 "미팅 녹음 → STT → 요약 → Q&A" 중심의 미팅록 관리 도구이며, [account-insight-substrate 설계](2026-05-30-account-insight-substrate-design.md)를 통해 Account를 1급 엔티티로 승격하고 Insight Substrate, MCP back-data 도구, Obsidian Vault export/inbound ingest([ADR-017](../decisions/ADR-017-vault-export-and-inbound-ingest.md))까지 갖췄다.
+TTOBAK은 현재 "미팅 녹음 → STT → 요약 → Q&A" 중심의 미팅록 관리 도구이며, [account-insight-substrate 설계](2026-05-30-account-insight-substrate-design.md)를 통해 Account를 1급 엔티티로 승격하고 Insight Substrate, MCP back-data 도구, Obsidian Vault export/inbound ingest([ADR-017](../../decisions/ADR-017-vault-export-and-inbound-ingest.md))까지 갖췄다.
 
 이번 로드맵은 그 위에 TTOBAK을 **개인 업무 도우미 워크스페이스**로 확장한다: 실시간 웹 검색 기반 자료조사, 노트/블로그/슬라이드를 아우르는 문서 허브, 위키링크 그래프 뷰, 고객에게 미인증으로 공개하는 페이지, Salesforce Opportunity 연동, 그리고 이 모든 것의 KB 통합. Notion과 유사한 형태지만 뉴스 자료조사·협업·내부 문서·영업 정보를 SA 업무 흐름에 맞춰 통합한다는 점이 다르다.
 
@@ -58,7 +58,7 @@ SP5 (독립) ──────────────────┘
 
 **Out**: 슬라이드 제작/편집 기능, 실시간 공동편집, PPTX→PDF 자동 변환(사용자가 직접 PDF로 export해서 올리는 것을 기본 흐름으로 함 — 자동 변환은 후속 검토).
 
-**해소됨**: PDF 뷰어는 PDF.js 대신 presigned GET URL의 브라우저 네이티브 `<iframe>`으로 구현(의존성/번들 크기 절감, iOS Safari 1페이지 한계는 상시 노출되는 다운로드 버튼이 커버) — 상세는 [ADR-020](../decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) 참조. 위키링크 broken link 표시는 이번 범위에서 최소 처리(비클릭 muted 텍스트)로 마무리, 정교한 표시는 SP4(그래프 뷰)와 함께 재검토.
+**해소됨**: PDF 뷰어는 PDF.js 대신 presigned GET URL의 브라우저 네이티브 `<iframe>`으로 구현(의존성/번들 크기 절감, iOS Safari 1페이지 한계는 상시 노출되는 다운로드 버튼이 커버) — 상세는 [ADR-020](../../decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) 참조. 위키링크 broken link 표시는 이번 범위에서 최소 처리(비클릭 muted 텍스트)로 마무리, 정교한 표시는 SP4(그래프 뷰)와 함께 재검토.
 
 ### SP3. Public 페이지 (비밀 토큰 URL)
 

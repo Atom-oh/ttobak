@@ -33,8 +33,11 @@ function createWikilinkExtension() {
           },
           // Plain text insert: turndown round-trips "[[제목]]" back out as
           // literal markdown, no custom node/mark needed.
+          // `range` spans the trigger char through the query (i.e. includes
+          // the opening "[["), so the replacement must re-add it -- or the
+          // inserted text loses its opening bracket.
           command: ({ editor, range, props }) => {
-            editor.chain().focus().insertContentAt(range, `${props}]]`).run();
+            editor.chain().focus().insertContentAt(range, `[[${props}]]`).run();
           },
           render: () => {
             let el: HTMLDivElement | null = null;

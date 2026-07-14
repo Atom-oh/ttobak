@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -136,7 +138,7 @@ func (m *mockHandlerAccountRepo) DeleteAccountDocument(_ context.Context, pk, do
 			return nil
 		}
 	}
-	return nil
+	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
 }
 
 func newStubAccountHandler() (*AccountHandler, *mockHandlerAccountRepo) {

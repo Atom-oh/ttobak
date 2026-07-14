@@ -405,7 +405,7 @@ func (s *AccountService) requireMember(ctx context.Context, userID, accountID st
 // wikilinkRE matches [[target]], [[target|alias]], and [[target#heading]] --
 // only target is captured; alias/heading are Obsidian-style suffixes that
 // don't change which document the link points at.
-var wikilinkRE = regexp.MustCompile(`\[\[([^\[\]|#]+)`)
+var wikilinkRE = regexp.MustCompile(`\[\[([^\[\]|#]+)(?:[|#][^\[\]]*)?\]\]`)
 
 // parseWikilinks extracts normalized, deduplicated (order-preserving) link
 // targets from markdown. This is the data source for a future graph view --
@@ -439,21 +439,15 @@ func toDocumentDTO(d *model.AccountDocument) model.AccountDocumentDTO {
 // key is enforced here (must be under docs/{userID}/) since it's the only
 // place a client-supplied key gets trusted.
 // validateDocRequest is the single check shared by create (putDoc) and
-// update (updateDoc) so both enforce the same invariants: a title, either
-// markdown or a fileKey (never neither), and -- critically -- that a
-// caller-supplied fileKey is actually owned by userID. This is the only
-// place a client-supplied S3 key is trusted (see ADR-020); skipping it on
-// update would let a caller point their own doc's fileKey at another
-// user's object and get a presigned download URL for it.
-func validateDocRequest(userID string, req *model.PutDocumentRequest) error {
+// update (updateDoc): a title, and either markdown or a fileKey (never
+// neither). It does NOT check fileKey ownership -- callers do that
+// separately via validateFileKeyOwnership, since update only needs the
+// check when the fileKey is actually changing (see updateDoc).
+func validateDocRequest(req *model.PutDocumentRequest) error {
 	if strings.TrimSpace(req.Title) == "" {
 		return ErrInvalidInput
 	}
-	if req.FileKey != "" {
-		if !strings.HasPrefix(req.FileKey, "docs/"+userID+"/") {
-			return ErrForbidden
-		}
-	} else if strings.TrimSpace(req.Markdown) == "" {
+	if req.FileKey == "" && strings.TrimSpace(req.Markdown) == "" {
 		return ErrInvalidInput
 	}
 	if req.Markdown != "" {
@@ -467,8 +461,21 @@ func validateDocRequest(userID string, req *model.PutDocumentRequest) error {
 	return nil
 }
 
+// validateFileKeyOwnership is the only place a client-supplied S3 key is
+// trusted (see ADR-020) -- it must be prefixed with the caller's own
+// docs/{userID}/ segment.
+func validateFileKeyOwnership(userID, fileKey string) error {
+	if fileKey != "" && !strings.HasPrefix(fileKey, "docs/"+userID+"/") {
+		return ErrForbidden
+	}
+	return nil
+}
+
 func (s *AccountService) putDoc(ctx context.Context, userID, pk, accountID string, req *model.PutDocumentRequest, entityType string) (*model.AccountDocumentDTO, error) {
-	if err := validateDocRequest(userID, req); err != nil {
+	if err := validateDocRequest(req); err != nil {
+		return nil, err
+	}
+	if err := validateFileKeyOwnership(userID, req.FileKey); err != nil {
 		return nil, err
 	}
 	now := time.Now().UTC()
@@ -517,18 +524,27 @@ func (s *AccountService) getDoc(ctx context.Context, pk, docID string) (*model.A
 
 // updateDoc is a full replace of title/docType/path/markdown/file fields on
 // an existing doc (preserving DocID/SourceUserID/CreatedAt/EntityType),
-// re-running the same validateDocRequest + wikilink parsing as create --
-// including the fileKey ownership check, since PUT accepts a fileKey just
-// like POST does. Because it's a full replace, converting a slide back to
-// a note (fileKey omitted, markdown supplied) clears the old file fields,
-// and vice versa.
+// re-running the same validateDocRequest + wikilink parsing as create.
+// Because it's a full replace, converting a slide back to a note (fileKey
+// omitted, markdown supplied) clears the old file fields, and vice versa.
+//
+// The fileKey ownership check only re-runs when the fileKey is actually
+// changing to something new: an account slide can be edited (title, etc.)
+// by any member, not just the member who originally uploaded it, so
+// re-asserting "fileKey must be under docs/{editingUser}/" on every save of
+// an unchanged fileKey would incorrectly 403 a non-uploader's edit.
 func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
 	existing, err := s.getDoc(ctx, pk, docID)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateDocRequest(userID, req); err != nil {
+	if err := validateDocRequest(req); err != nil {
 		return nil, err
+	}
+	if req.FileKey != "" && req.FileKey != existing.FileKey {
+		if err := validateFileKeyOwnership(userID, req.FileKey); err != nil {
+			return nil, err
+		}
 	}
 	existing.Title = strings.TrimSpace(req.Title)
 	existing.DocType = req.DocType
@@ -577,11 +593,22 @@ func (s *AccountService) UpdateAccountDocument(ctx context.Context, userID, acco
 	return s.updateDoc(ctx, userID, model.PrefixAccount+accountID, docID, req)
 }
 
+// deleteDoc maps the repository's conditional-check failure (item didn't
+// exist) to ErrNotFound, so a delete of an already-gone/never-existed docID
+// returns 404 as documented, rather than a bare 204.
+func (s *AccountService) deleteDoc(ctx context.Context, pk, docID string) error {
+	err := s.repo.DeleteAccountDocument(ctx, pk, docID)
+	if errors.Is(err, repository.ErrConditionFailed) {
+		return ErrNotFound
+	}
+	return err
+}
+
 func (s *AccountService) DeleteAccountDocument(ctx context.Context, userID, accountID, docID string) error {
 	if err := s.requireMember(ctx, userID, accountID); err != nil {
 		return err
 	}
-	return s.repo.DeleteAccountDocument(ctx, model.PrefixAccount+accountID, docID)
+	return s.deleteDoc(ctx, model.PrefixAccount+accountID, docID)
 }
 
 // Personal (account-less) documents: ownership is implicit in the PK, which
@@ -609,5 +636,5 @@ func (s *AccountService) UpdateUserDocument(ctx context.Context, userID, docID s
 }
 
 func (s *AccountService) DeleteUserDocument(ctx context.Context, userID, docID string) error {
-	return s.repo.DeleteAccountDocument(ctx, model.PrefixUser+userID, docID)
+	return s.deleteDoc(ctx, model.PrefixUser+userID, docID)
 }

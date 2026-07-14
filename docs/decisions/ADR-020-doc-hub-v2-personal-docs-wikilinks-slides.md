@@ -26,7 +26,7 @@ Accepted — implemented on `feat/sp2-doc-hub-v2`. Extends `AccountDocument` (AD
 ## Consequences
 
 ### Positive
-- Zero new DynamoDB tables/GSIs; zero CDK changes.
+- Zero new DynamoDB tables/GSIs; zero CDK changes -- verified the api Lambda's S3 access is one bucket-wide `bucket.grantReadWrite(apiRole)` (`infra/lib/ai-stack.ts`), not a per-prefix policy, so the new `docs/` prefix needed no IAM change.
 - MCP `ttobak_put_document` gets wikilink indexing "for free" since it shares the same core path as the web UI.
 - Slide upload reuses the existing presigned-URL pattern (`GeneratePresignedUploadURL`/`GeneratePresignedDownloadURL`) with one new category, not a parallel upload subsystem.
 
@@ -67,7 +67,7 @@ Accepted — implemented on `feat/sp2-doc-hub-v2`. Extends `AccountDocument` (AD
 ## 결과
 
 ### 긍정
-- 신규 DynamoDB 테이블/GSI 없음; CDK 변경 없음.
+- 신규 DynamoDB 테이블/GSI 없음; CDK 변경 없음 — api Lambda의 S3 접근이 prefix별 정책이 아니라 버킷 전체 대상 `bucket.grantReadWrite(apiRole)`(`infra/lib/ai-stack.ts`) 하나임을 확인, 신규 `docs/` prefix에 IAM 변경 불필요.
 - MCP `ttobak_put_document`가 웹 UI와 동일한 공용 경로를 지나므로 위키링크 인덱싱을 "공짜로" 획득.
 - 슬라이드 업로드가 기존 presigned-URL 패턴(`GeneratePresignedUploadURL`/`GeneratePresignedDownloadURL`)에 카테고리 하나만 추가 — 병렬 업로드 서브시스템 아님.
 

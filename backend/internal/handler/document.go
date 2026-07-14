@@ -14,7 +14,8 @@ import (
 // DocumentHandler serves personal (account-less) documents -- PK: USER#{userId}.
 // Ownership is implicit in the PK (always built from the authenticated
 // userID), so unlike AccountHandler's document methods there's no membership
-// check to fail with ErrForbidden/ErrNotFound.
+// check -- but ErrNotFound (missing doc) and ErrForbidden (a fileKey not
+// prefixed docs/{userID}/) can still occur and map to 404/403 as usual.
 type DocumentHandler struct {
 	accountService *service.AccountService
 	uploadService  *service.UploadService

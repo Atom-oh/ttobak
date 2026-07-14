@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 // mockAccountRepo implements accountRepo with in-memory maps.
@@ -133,7 +135,7 @@ func (m *mockAccountRepo) DeleteAccountDocument(_ context.Context, pk, docID str
 			return nil
 		}
 	}
-	return nil
+	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
 }
 
 func TestHasTtobakOriginMarker(t *testing.T) {
@@ -547,6 +549,7 @@ func TestParseWikilinks(t *testing.T) {
 		{"heading", "see [[하나은행#개요]] for details", []string{"하나은행"}},
 		{"dedupe", "[[하나은행]] and again [[하나은행]]", []string{"하나은행"}},
 		{"multiple", "[[하나은행]] met with [[토스]]", []string{"하나은행", "토스"}},
+		{"unclosed", "typing [[하나은행", nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -616,6 +619,34 @@ func TestPutDocument_SlideAllowsEmptyMarkdown(t *testing.T) {
 	}
 	if dto.FileName != "deck.pdf" {
 		t.Errorf("expected fileName deck.pdf, got %+v", dto)
+	}
+}
+
+func TestUpdateAccountDocument_NonUploaderMemberCanEditSlide(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	repo.PutMember(context.Background(), &model.AccountMember{AccountID: acc.AccountID, UserID: "member-2", Role: model.RoleSSA})
+
+	created, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", DocType: "slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating slide: %v", err)
+	}
+
+	// A different member re-saving the SAME (unchanged) fileKey must not be
+	// 403'd just because the key isn't under their own docs/{userID}/ --
+	// only a fileKey actually changing to something new re-triggers the
+	// ownership check.
+	updated, err := svc.UpdateAccountDocument(context.Background(), "member-2", acc.AccountID, created.DocID, &model.PutDocumentRequest{
+		Title: "Slide (renamed)", DocType: "slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updated.Title != "Slide (renamed)" {
+		t.Errorf("expected title updated, got %+v", updated)
 	}
 }
 
@@ -745,6 +776,19 @@ func TestDeleteAccountDocument_RemovesDoc(t *testing.T) {
 	_, err := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
+	}
+}
+
+func TestDeleteAccountDocument_NonexistentDocReturnsNotFound(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	// Deleting a docId that was never created must 404, not silently
+	// succeed -- matches the documented API-SPEC contract.
+	err := svc.DeleteAccountDocument(context.Background(), "owner-1", acc.AccountID, "never-existed")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
 
