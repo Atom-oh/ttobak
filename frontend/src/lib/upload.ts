@@ -15,7 +15,7 @@ export interface UploadResult {
 
 export async function uploadToS3(
   file: File,
-  category: 'audio' | 'image' | 'file',
+  category: 'audio' | 'image' | 'file' | 'doc',
   onProgress?: (progress: UploadProgress) => void,
   meetingId?: string,
   partIndex?: number,
@@ -83,6 +83,16 @@ export async function uploadImage(
   onProgress?: (progress: UploadProgress) => void
 ): Promise<UploadResult> {
   return uploadToS3(file, 'image', onProgress);
+}
+
+/** Upload a slide (PDF/PPTX) for a note/blog document. No meetingId, no
+ * /api/upload/complete step -- the docApi/accountApi put call with the
+ * returned key IS the completion record. */
+export async function uploadDocFile(
+  file: File,
+  onProgress?: (progress: UploadProgress) => void
+): Promise<UploadResult> {
+  return uploadToS3(file, 'doc', onProgress);
 }
 
 function getCategoryFromMime(mimeType: string): 'image' | 'file' {

@@ -207,21 +207,33 @@ type AccountBrief struct {
 	Meetings       []MeetingRefDTO                `json:"meetings"`
 }
 
-const EntityTypeAccountDoc = "ACCOUNT_DOC" // SK uses existing model.PrefixDoc ("DOC#")
+const (
+	EntityTypeAccountDoc = "ACCOUNT_DOC" // SK uses existing model.PrefixDoc ("DOC#"), PK: ACCOUNT#{id}
+	EntityTypeUserDoc    = "USER_DOC"    // personal (account-less) doc, PK: USER#{userId}
+)
 
-// AccountDocument is a locally-authored (email/calendar/prep) doc ingested into
-// an account so non-Obsidian teammates can read it in TTOBAK. PK: ACCOUNT#{id},
-// SK: DOC#{docId}. Content is inline markdown (<=300KB). Loop guard: only
-// local-origin docs (no ttobak_id frontmatter) are accepted, so TtobakOrigin=false.
+// AccountDocument is a locally-authored (email/calendar/prep/note/blog/slide)
+// doc, either shared to an account (PK: ACCOUNT#{id}, EntityType
+// EntityTypeAccountDoc) or personal (PK: USER#{userId}, EntityType
+// EntityTypeUserDoc). SK: DOC#{docId} either way. Content is inline markdown
+// (<=300KB); a slide instead carries FileKey (S3, Content empty). Loop guard:
+// only local-origin docs (no ttobak_id frontmatter) are accepted, so
+// TtobakOrigin=false. Links holds normalized [[wikilink]] targets parsed out
+// of Content on every put/update -- a future graph view's data source.
 type AccountDocument struct {
 	PK           string    `dynamodbav:"PK"`
 	SK           string    `dynamodbav:"SK"`
-	AccountID    string    `dynamodbav:"accountId"`
+	AccountID    string    `dynamodbav:"accountId,omitempty"`
 	DocID        string    `dynamodbav:"docId"`
 	Title        string    `dynamodbav:"title"`
-	DocType      string    `dynamodbav:"docType,omitempty"` // "prep" | "reference" | ...
+	DocType      string    `dynamodbav:"docType,omitempty"` // "prep" | "reference" | "note" | "blog" | "slide" | ...
 	Path         string    `dynamodbav:"path,omitempty"`    // original vault path
-	Content      string    `dynamodbav:"content"`           // inline markdown
+	Content      string    `dynamodbav:"content"`           // inline markdown; empty for a slide
+	Links        []string  `dynamodbav:"links,omitempty"`   // normalized [[wikilink]] targets found in Content
+	FileKey      string    `dynamodbav:"fileKey,omitempty"` // S3 key under docs/{userId}/... for a slide upload
+	FileName     string    `dynamodbav:"fileName,omitempty"`
+	MimeType     string    `dynamodbav:"mimeType,omitempty"`
+	FileSize     int64     `dynamodbav:"fileSize,omitempty"`
 	SourceUserID string    `dynamodbav:"sourceUserId"`
 	TtobakOrigin bool      `dynamodbav:"ttobakOrigin"`
 	CreatedAt    time.Time `dynamodbav:"createdAt"`
@@ -234,6 +246,10 @@ type PutDocumentRequest struct {
 	DocType  string `json:"docType,omitempty"`
 	Path     string `json:"path,omitempty"`
 	Markdown string `json:"markdown"`
+	FileKey  string `json:"fileKey,omitempty"`
+	FileName string `json:"fileName,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+	FileSize int64  `json:"fileSize,omitempty"`
 }
 
 type AccountDocumentDTO struct {
@@ -241,13 +257,18 @@ type AccountDocumentDTO struct {
 	Title        string    `json:"title"`
 	DocType      string    `json:"docType,omitempty"`
 	Path         string    `json:"path,omitempty"`
+	Links        []string  `json:"links,omitempty"`
+	FileName     string    `json:"fileName,omitempty"`
 	SourceUserID string    `json:"sourceUserId"`
 	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 type AccountDocumentDetail struct {
 	AccountDocumentDTO
-	Content string `json:"content"`
+	Content     string `json:"content"`
+	FileKey     string `json:"-"` // internal only; handler presigns this into DownloadURL
+	DownloadURL string `json:"downloadUrl,omitempty"`
 }
 
 // VaultFile is one Obsidian note in an export bundle.

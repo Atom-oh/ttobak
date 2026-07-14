@@ -12,9 +12,11 @@ import (
 )
 
 type mockVaultRepo struct {
-	owned    []model.Meeting
-	full     map[string]*model.Meeting
-	accounts map[string]*model.Account
+	owned       []model.Meeting
+	full        map[string]*model.Meeting
+	accounts    map[string]*model.Account
+	memberships []model.AccountMember
+	documents   map[string][]model.AccountDocument // PK -> docs
 }
 
 func (m *mockVaultRepo) ListMeetings(_ context.Context, _ repository.ListMeetingsParams) (*repository.ListMeetingsResult, error) {
@@ -28,6 +30,21 @@ func (m *mockVaultRepo) ListAttachments(_ context.Context, _ string) ([]model.At
 }
 func (m *mockVaultRepo) GetAccount(_ context.Context, accountID string) (*model.Account, error) {
 	return m.accounts[accountID], nil
+}
+func (m *mockVaultRepo) ListAccountsForUser(_ context.Context, _ string) ([]model.AccountMember, error) {
+	return m.memberships, nil
+}
+func (m *mockVaultRepo) ListAccountDocuments(_ context.Context, pk string) ([]model.AccountDocument, error) {
+	return m.documents[pk], nil
+}
+func (m *mockVaultRepo) GetAccountDocument(_ context.Context, pk, docID string) (*model.AccountDocument, error) {
+	for _, d := range m.documents[pk] {
+		if d.DocID == docID {
+			cp := d
+			return &cp, nil
+		}
+	}
+	return nil, nil
 }
 
 func TestSanitizeFilename_PathTraversal(t *testing.T) {
@@ -85,6 +102,62 @@ func TestExportVault_PlacesSharedAndPrivate(t *testing.T) {
 	}
 	if _, ok := byPath["_Private/Meetings/2026-05-12 개인 메모.md"]; !ok {
 		t.Fatalf("private meeting not under _Private; paths=%v", byPath)
+	}
+}
+
+func TestExportVault_IncludesDocuments(t *testing.T) {
+	personalNote := model.AccountDocument{
+		PK: model.PrefixUser + "u1", DocID: "doc-1", Title: "개인 노트",
+		Content: "본문", EntityType: model.EntityTypeUserDoc,
+	}
+	accountNote := model.AccountDocument{
+		PK: model.PrefixAccount + "acc-1", DocID: "doc-2", Title: "회의 준비",
+		DocType: "note", Content: "준비 내용", Links: []string{"하나은행"},
+		EntityType: model.EntityTypeAccountDoc,
+	}
+	slide := model.AccountDocument{
+		PK: model.PrefixAccount + "acc-1", DocID: "doc-3", Title: "발표자료",
+		DocType: "slide", FileName: "deck.pdf", EntityType: model.EntityTypeAccountDoc,
+	}
+	repo := &mockVaultRepo{
+		accounts:    map[string]*model.Account{"acc-1": {AccountID: "acc-1", Name: "하나은행"}},
+		memberships: []model.AccountMember{{AccountID: "acc-1", UserID: "u1"}},
+		documents: map[string][]model.AccountDocument{
+			model.PrefixUser + "u1":    {personalNote},
+			model.PrefixAccount + "acc-1": {accountNote, slide},
+		},
+	}
+	svc := newVaultServiceWithRepo(repo)
+
+	files, err := svc.ExportVault(context.Background(), "u1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	byPath := map[string]string{}
+	for _, f := range files {
+		byPath[f.Path] = f.Markdown
+	}
+
+	personalMd, ok := byPath["_Private/Docs/개인 노트.md"]
+	if !ok {
+		t.Fatalf("personal doc not under _Private/Docs; paths=%v", byPath)
+	}
+	if !strings.Contains(personalMd, "ttobak_id: doc-1") || !strings.Contains(personalMd, "본문") {
+		t.Errorf("personal doc missing frontmatter/content:\n%s", personalMd)
+	}
+
+	accountMd, ok := byPath["Accounts/하나은행/Docs/회의 준비.md"]
+	if !ok {
+		t.Fatalf("account doc not under Accounts/.../Docs; paths=%v", byPath)
+	}
+	if !strings.Contains(accountMd, "doc_type: note") || !strings.Contains(accountMd, `links: ["[[하나은행]]"]`) {
+		t.Errorf("account doc missing frontmatter:\n%s", accountMd)
+	}
+
+	for path := range byPath {
+		if strings.Contains(path, "발표자료") {
+			t.Errorf("slide doc should not be exported as markdown, got path %q", path)
+		}
 	}
 }
 

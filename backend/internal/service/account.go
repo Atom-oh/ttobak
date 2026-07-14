@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -62,8 +63,9 @@ type accountRepo interface {
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
 	ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error)
 	PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error
-	ListAccountDocuments(ctx context.Context, accountID string) ([]model.AccountDocument, error)
-	GetAccountDocument(ctx context.Context, accountID, docID string) (*model.AccountDocument, error)
+	ListAccountDocuments(ctx context.Context, pk string) ([]model.AccountDocument, error)
+	GetAccountDocument(ctx context.Context, pk, docID string) (*model.AccountDocument, error)
+	DeleteAccountDocument(ctx context.Context, pk, docID string) error
 }
 
 // AccountRepo is the exported alias for cross-package (handler) tests.
@@ -400,39 +402,81 @@ func (s *AccountService) requireMember(ctx context.Context, userID, accountID st
 	return ErrForbidden
 }
 
-func (s *AccountService) PutDocument(ctx context.Context, userID, accountID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
-	if err := s.requireMember(ctx, userID, accountID); err != nil {
-		return nil, err
+// wikilinkRE matches [[target]], [[target|alias]], and [[target#heading]] --
+// only target is captured; alias/heading are Obsidian-style suffixes that
+// don't change which document the link points at.
+var wikilinkRE = regexp.MustCompile(`\[\[([^\[\]|#]+)`)
+
+// parseWikilinks extracts normalized, deduplicated (order-preserving) link
+// targets from markdown. This is the data source for a future graph view --
+// no edge items are stored yet, just this list on the document itself.
+func parseWikilinks(markdown string) []string {
+	matches := wikilinkRE.FindAllStringSubmatch(markdown, -1)
+	seen := make(map[string]bool, len(matches))
+	links := make([]string, 0, len(matches))
+	for _, m := range matches {
+		target := strings.TrimSpace(m[1])
+		if target == "" || seen[target] {
+			continue
+		}
+		seen[target] = true
+		links = append(links, target)
 	}
-	if strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.Markdown) == "" {
+	return links
+}
+
+func toDocumentDTO(d *model.AccountDocument) model.AccountDocumentDTO {
+	return model.AccountDocumentDTO{
+		DocID: d.DocID, Title: d.Title, DocType: d.DocType, Path: d.Path,
+		Links: d.Links, FileName: d.FileName, SourceUserID: d.SourceUserID,
+		CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
+	}
+}
+
+// putDoc is the shared create core for both account-scoped (accountID set)
+// and personal (accountID empty, pk is model.PrefixUser+userID) documents. A
+// slide upload carries FileKey instead of Markdown -- ownership of that S3
+// key is enforced here (must be under docs/{userID}/) since it's the only
+// place a client-supplied key gets trusted.
+func (s *AccountService) putDoc(ctx context.Context, userID, pk, accountID string, req *model.PutDocumentRequest, entityType string) (*model.AccountDocumentDTO, error) {
+	if strings.TrimSpace(req.Title) == "" {
 		return nil, ErrInvalidInput
 	}
-	if hasTtobakOriginMarker(req.Markdown) {
-		return nil, ErrLoopGuard
-	}
-	if len(req.Markdown) > maxInlineDocBytes {
+	if req.FileKey != "" {
+		if !strings.HasPrefix(req.FileKey, "docs/"+userID+"/") {
+			return nil, ErrForbidden
+		}
+	} else if strings.TrimSpace(req.Markdown) == "" {
 		return nil, ErrInvalidInput
+	}
+	if req.Markdown != "" {
+		if hasTtobakOriginMarker(req.Markdown) {
+			return nil, ErrLoopGuard
+		}
+		if len(req.Markdown) > maxInlineDocBytes {
+			return nil, ErrInvalidInput
+		}
 	}
 	now := time.Now().UTC()
 	docID := uuid.NewString()
 	doc := &model.AccountDocument{
-		PK: model.PrefixAccount + accountID, SK: model.PrefixDoc + docID,
+		PK: pk, SK: model.PrefixDoc + docID,
 		AccountID: accountID, DocID: docID, Title: strings.TrimSpace(req.Title),
 		DocType: req.DocType, Path: req.Path, Content: req.Markdown,
+		Links:    parseWikilinks(req.Markdown),
+		FileKey:  req.FileKey, FileName: req.FileName, MimeType: req.MimeType, FileSize: req.FileSize,
 		SourceUserID: userID, TtobakOrigin: false,
-		CreatedAt: now, UpdatedAt: now, EntityType: model.EntityTypeAccountDoc,
+		CreatedAt: now, UpdatedAt: now, EntityType: entityType,
 	}
 	if err := s.repo.PutAccountDocument(ctx, doc); err != nil {
 		return nil, err
 	}
-	return &model.AccountDocumentDTO{DocID: docID, Title: doc.Title, DocType: doc.DocType, Path: doc.Path, SourceUserID: userID, CreatedAt: now}, nil
+	dto := toDocumentDTO(doc)
+	return &dto, nil
 }
 
-func (s *AccountService) ListAccountDocuments(ctx context.Context, userID, accountID, docType string) ([]model.AccountDocumentDTO, error) {
-	if err := s.requireMember(ctx, userID, accountID); err != nil {
-		return nil, err
-	}
-	docs, err := s.repo.ListAccountDocuments(ctx, accountID)
+func (s *AccountService) listDocs(ctx context.Context, pk, docType string) ([]model.AccountDocumentDTO, error) {
+	docs, err := s.repo.ListAccountDocuments(ctx, pk)
 	if err != nil {
 		return nil, err
 	}
@@ -441,24 +485,121 @@ func (s *AccountService) ListAccountDocuments(ctx context.Context, userID, accou
 		if docType != "" && d.DocType != docType {
 			continue
 		}
-		out = append(out, model.AccountDocumentDTO{DocID: d.DocID, Title: d.Title, DocType: d.DocType, Path: d.Path, SourceUserID: d.SourceUserID, CreatedAt: d.CreatedAt})
+		out = append(out, toDocumentDTO(&d))
 	}
 	return out, nil
 }
 
-func (s *AccountService) GetAccountDocument(ctx context.Context, userID, accountID, docID string) (*model.AccountDocumentDetail, error) {
-	if err := s.requireMember(ctx, userID, accountID); err != nil {
-		return nil, err
-	}
-	doc, err := s.repo.GetAccountDocument(ctx, accountID, docID)
+func (s *AccountService) getDoc(ctx context.Context, pk, docID string) (*model.AccountDocument, error) {
+	doc, err := s.repo.GetAccountDocument(ctx, pk, docID)
 	if err != nil {
 		return nil, err
 	}
 	if doc == nil {
 		return nil, ErrNotFound
 	}
-	return &model.AccountDocumentDetail{
-		AccountDocumentDTO: model.AccountDocumentDTO{DocID: doc.DocID, Title: doc.Title, DocType: doc.DocType, Path: doc.Path, SourceUserID: doc.SourceUserID, CreatedAt: doc.CreatedAt},
-		Content:            doc.Content,
-	}, nil
+	return doc, nil
+}
+
+// updateDoc overwrites title/docType/path/markdown/file fields on an
+// existing doc, preserving DocID/SourceUserID/CreatedAt/EntityType and
+// re-running the same loop-guard + wikilink parsing as create.
+func (s *AccountService) updateDoc(ctx context.Context, pk, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
+	existing, err := s.getDoc(ctx, pk, docID)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		return nil, ErrInvalidInput
+	}
+	if req.Markdown != "" {
+		if hasTtobakOriginMarker(req.Markdown) {
+			return nil, ErrLoopGuard
+		}
+		if len(req.Markdown) > maxInlineDocBytes {
+			return nil, ErrInvalidInput
+		}
+	}
+	existing.Title = strings.TrimSpace(req.Title)
+	existing.DocType = req.DocType
+	existing.Path = req.Path
+	existing.Content = req.Markdown
+	existing.Links = parseWikilinks(req.Markdown)
+	if req.FileKey != "" {
+		existing.FileKey, existing.FileName, existing.MimeType, existing.FileSize = req.FileKey, req.FileName, req.MimeType, req.FileSize
+	}
+	existing.UpdatedAt = time.Now().UTC()
+	if err := s.repo.PutAccountDocument(ctx, existing); err != nil {
+		return nil, err
+	}
+	dto := toDocumentDTO(existing)
+	return &dto, nil
+}
+
+func (s *AccountService) PutDocument(ctx context.Context, userID, accountID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
+	if err := s.requireMember(ctx, userID, accountID); err != nil {
+		return nil, err
+	}
+	return s.putDoc(ctx, userID, model.PrefixAccount+accountID, accountID, req, model.EntityTypeAccountDoc)
+}
+
+func (s *AccountService) ListAccountDocuments(ctx context.Context, userID, accountID, docType string) ([]model.AccountDocumentDTO, error) {
+	if err := s.requireMember(ctx, userID, accountID); err != nil {
+		return nil, err
+	}
+	return s.listDocs(ctx, model.PrefixAccount+accountID, docType)
+}
+
+func (s *AccountService) GetAccountDocument(ctx context.Context, userID, accountID, docID string) (*model.AccountDocumentDetail, error) {
+	if err := s.requireMember(ctx, userID, accountID); err != nil {
+		return nil, err
+	}
+	doc, err := s.getDoc(ctx, model.PrefixAccount+accountID, docID)
+	if err != nil {
+		return nil, err
+	}
+	dto := toDocumentDTO(doc)
+	return &model.AccountDocumentDetail{AccountDocumentDTO: dto, Content: doc.Content, FileKey: doc.FileKey}, nil
+}
+
+func (s *AccountService) UpdateAccountDocument(ctx context.Context, userID, accountID, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
+	if err := s.requireMember(ctx, userID, accountID); err != nil {
+		return nil, err
+	}
+	return s.updateDoc(ctx, model.PrefixAccount+accountID, docID, req)
+}
+
+func (s *AccountService) DeleteAccountDocument(ctx context.Context, userID, accountID, docID string) error {
+	if err := s.requireMember(ctx, userID, accountID); err != nil {
+		return err
+	}
+	return s.repo.DeleteAccountDocument(ctx, model.PrefixAccount+accountID, docID)
+}
+
+// Personal (account-less) documents: ownership is implicit in the PK, which
+// is always built from the authenticated userID -- no membership check needed.
+
+func (s *AccountService) PutUserDocument(ctx context.Context, userID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
+	return s.putDoc(ctx, userID, model.PrefixUser+userID, "", req, model.EntityTypeUserDoc)
+}
+
+func (s *AccountService) ListUserDocuments(ctx context.Context, userID, docType string) ([]model.AccountDocumentDTO, error) {
+	return s.listDocs(ctx, model.PrefixUser+userID, docType)
+}
+
+func (s *AccountService) GetUserDocument(ctx context.Context, userID, docID string) (*model.AccountDocumentDetail, error) {
+	doc, err := s.getDoc(ctx, model.PrefixUser+userID, docID)
+	if err != nil {
+		return nil, err
+	}
+	dto := toDocumentDTO(doc)
+	return &model.AccountDocumentDetail{AccountDocumentDTO: dto, Content: doc.Content, FileKey: doc.FileKey}, nil
+}
+
+func (s *AccountService) UpdateUserDocument(ctx context.Context, userID, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
+	return s.updateDoc(ctx, model.PrefixUser+userID, docID, req)
+}
+
+func (s *AccountService) DeleteUserDocument(ctx context.Context, userID, docID string) error {
+	return s.repo.DeleteAccountDocument(ctx, model.PrefixUser+userID, docID)
 }

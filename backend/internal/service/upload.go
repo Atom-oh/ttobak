@@ -80,6 +80,12 @@ func (s *UploadService) GeneratePresignedUploadURL(
 			return nil, fmt.Errorf("meetingId is required for file uploads")
 		}
 		s3Key = fmt.Sprintf("files/%s/%s/%s", userID, req.MeetingID, s.sanitizeFileName(req.FileName))
+	case "doc":
+		// No meetingId -- a slide document isn't tied to a meeting. The
+		// document create call itself (accountApi/docApi put with this
+		// fileKey) is the "upload complete" record; there's no separate
+		// /api/upload/complete step for this category.
+		s3Key = fmt.Sprintf("docs/%s/%s", userID, s.sanitizeFileName(req.FileName))
 	default:
 		return nil, fmt.Errorf("unsupported category: %s", req.Category)
 	}

@@ -348,16 +348,26 @@ Error: 404 Not Found (Account 없음)
 (≤300KB)으로 저장해 비-Obsidian 팀원도 TTOBAK에서 열람한다. 출처 규칙 루프 차단:
 `ttobak_id` frontmatter가 있는 TTOBAK-원본 문서는 거부한다.
 
+`docType`은 자유 문자열이다 (`"prep"`/`"reference"` 등 기존 값과 문서 허브 v2가
+UI에 노출하는 `"note"`/`"blog"`/`"slide"`가 모두 동일 필드를 공유하며, 서버는
+enum 검증을 하지 않는다). `markdown`에 포함된 `[[문서명]]`, `[[문서명|별칭]]`,
+`[[문서명#절]]` 형태의 위키링크는 저장 시 서버가 파싱해 정규화된 제목 목록을
+`links`에 저장한다 (그래프 뷰 등 향후 기능의 데이터 소스). 슬라이드(PPTX/PDF)는
+`markdown` 대신 `fileKey`(사전 발급된 presigned PUT로 업로드한 S3 키, 반드시
+`docs/{내 userId}/` 접두어)를 전달한다 — 이 put 호출 자체가 업로드 완료 기록이며
+별도의 `/api/upload/complete` 단계는 없다.
+
 ```
 POST /api/accounts/{accountId}/documents
 { "title": "Email notes", "markdown": "# Prep\n...", "docType": "prep", "path": "Accounts/하나은행/prep.md" }
+{ "title": "발표자료", "docType": "slide", "fileKey": "docs/user-uuid/deck.pdf", "fileName": "deck.pdf", "mimeType": "application/pdf", "fileSize": 123456 }
 
 Response: 201 Created
-{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "Accounts/하나은행/prep.md", "sourceUserId": "user-uuid", "createdAt": "2026-05-30T09:00:00Z" }
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "Accounts/하나은행/prep.md", "links": ["하나은행"], "sourceUserId": "user-uuid", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" }
 
-Error: 400 Bad Request (title/markdown 누락 또는 >300KB)
+Error: 400 Bad Request (title 누락, markdown/fileKey 둘 다 없음, 또는 markdown >300KB)
 Error: 400 Bad Request (TTOBAK 원본 — loop guard)
-Error: 403 Forbidden (멤버가 아님)
+Error: 403 Forbidden (멤버가 아님, 또는 fileKey가 내 userId 접두어가 아님)
 Error: 404 Not Found (Account 없음)
 ```
 
@@ -367,11 +377,13 @@ Error: 404 Not Found (Account 없음)
 GET /api/accounts/{accountId}/documents?docType=prep
 
 Response: 200 OK
-{ "documents": [ { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z" } ] }
+{ "documents": [ { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": [], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" } ] }
 
 Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (Account 없음)
 ```
+
+목록은 `content`를 포함하지 않는다 (본문은 Get으로 개별 조회).
 
 #### Get Account Document (전체 내용 — 멤버 전용)
 
@@ -379,11 +391,60 @@ Error: 404 Not Found (Account 없음)
 GET /api/accounts/{accountId}/documents/{docId}
 
 Response: 200 OK
-{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "content": "# Prep\n..." }
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": [], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n...", "downloadUrl": null }
+
+슬라이드(`fileName` 있는 문서)는 `content`가 빈 문자열이고 `downloadUrl`에
+1시간 유효 presigned GET URL이 채워진다.
 
 Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (문서 없음)
 ```
+
+#### Update / Delete Account Document (멤버 전용)
+
+Update는 title/docType/path/markdown(또는 fileKey류)을 전체 치환한다 —
+`docId`/`sourceUserId`/`createdAt`은 보존, `links`는 재파싱, loop guard도 재적용된다.
+
+```
+PUT /api/accounts/{accountId}/documents/{docId}
+{ "title": "Email notes v2", "markdown": "# Prep v2\n..." }
+
+Response: 200 OK
+{ "docId": "doc-uuid", "title": "Email notes v2", ... }
+
+DELETE /api/accounts/{accountId}/documents/{docId}
+Response: 204 No Content
+
+Error: 400 Bad Request (title 누락, TTOBAK 원본)
+Error: 403 Forbidden (멤버가 아님)
+Error: 404 Not Found (문서 없음)
+```
+
+#### Personal Documents (Account 미소속 — 소유자 전용)
+
+`ttobak_ask`/문서 허브 v2의 개인 노트/블로그/슬라이드. `PK: USER#{내 userId}`로
+저장되므로 소유권이 키에 내재해 있고 Account 멤버십 확인이 필요 없다. 요청/응답
+스키마는 Account 문서와 동일 (accountId 경로 세그먼트만 없음).
+
+```
+POST   /api/documents                 { "title": "...", "markdown": "...", "docType": "note" }
+GET    /api/documents?docType=note    → { "documents": [ AccountDocumentDTO, ... ] }
+GET    /api/documents/{docId}         → AccountDocumentDetail
+PUT    /api/documents/{docId}         { "title": "...", "markdown": "..." }
+DELETE /api/documents/{docId}         → 204 No Content
+
+Error: 400 Bad Request / 404 Not Found — 위 Account 문서 엔드포인트와 동일한 의미
+(단, "멤버가 아님" 403은 발생하지 않음 — PK가 곧 소유권 증명)
+```
+
+#### Slide Upload (문서용 presigned URL)
+
+기존 presigned 업로드 엔드포인트(`POST /api/upload/presigned`)의 `category`에
+`"doc"`가 추가되었다. `fileType`은 `application/pdf` 또는 PowerPoint MIME(
+`application/vnd.openxmlformats-officedocument.presentationml.presentation`,
+`application/vnd.ms-powerpoint`)만 허용된다. `meetingId`는 필요 없다 (문서는
+미팅에 종속되지 않음). S3 키는 `docs/{내 userId}/{파일명}` 형태이며, 위
+Put Document 호출의 `fileKey`로 그대로 전달한다.
 
 #### Export Vault (Obsidian 마크다운 내보내기)
 

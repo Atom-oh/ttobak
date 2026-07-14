@@ -105,20 +105,38 @@ func (m *mockHandlerAccountRepo) ListInsightsForAccount(_ context.Context, accou
 	return append([]model.AccountInsight(nil), m.insightsByAccount[accountID]...), nil
 }
 func (m *mockHandlerAccountRepo) PutAccountDocument(_ context.Context, doc *model.AccountDocument) error {
-	m.documents[doc.AccountID] = append(m.documents[doc.AccountID], *doc)
+	docs := m.documents[doc.PK]
+	for i, d := range docs {
+		if d.DocID == doc.DocID {
+			docs[i] = *doc
+			m.documents[doc.PK] = docs
+			return nil
+		}
+	}
+	m.documents[doc.PK] = append(docs, *doc)
 	return nil
 }
-func (m *mockHandlerAccountRepo) ListAccountDocuments(_ context.Context, accountID string) ([]model.AccountDocument, error) {
-	return append([]model.AccountDocument(nil), m.documents[accountID]...), nil
+func (m *mockHandlerAccountRepo) ListAccountDocuments(_ context.Context, pk string) ([]model.AccountDocument, error) {
+	return append([]model.AccountDocument(nil), m.documents[pk]...), nil
 }
-func (m *mockHandlerAccountRepo) GetAccountDocument(_ context.Context, accountID, docID string) (*model.AccountDocument, error) {
-	for _, d := range m.documents[accountID] {
+func (m *mockHandlerAccountRepo) GetAccountDocument(_ context.Context, pk, docID string) (*model.AccountDocument, error) {
+	for _, d := range m.documents[pk] {
 		if d.DocID == docID {
 			cp := d
 			return &cp, nil
 		}
 	}
 	return nil, nil
+}
+func (m *mockHandlerAccountRepo) DeleteAccountDocument(_ context.Context, pk, docID string) error {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			m.documents[pk] = append(docs[:i], docs[i+1:]...)
+			return nil
+		}
+	}
+	return nil
 }
 
 func newStubAccountHandler() (*AccountHandler, *mockHandlerAccountRepo) {
@@ -248,6 +266,96 @@ func TestHandlerPutDocument_Forbidden(t *testing.T) {
 	r = withChiParam(r, "accountId", "acc-1")
 	w := httptest.NewRecorder()
 	h.PutDocument(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+func seedDocForUpdateDeleteTests(t *testing.T, repo *mockHandlerAccountRepo, h *AccountHandler) string {
+	t.Helper()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	body, _ := json.Marshal(model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+	r := httptest.NewRequest(http.MethodPost, "/api/accounts/acc-1/documents", bytes.NewReader(body))
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	w := httptest.NewRecorder()
+	h.PutDocument(w, r)
+	var dto model.AccountDocumentDTO
+	json.Unmarshal(w.Body.Bytes(), &dto)
+	return dto.DocID
+}
+
+func TestHandlerUpdateDocument_OK(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	docID := seedDocForUpdateDeleteTests(t, repo, h)
+
+	body, _ := json.Marshal(model.PutDocumentRequest{Title: "Note v2", Markdown: "updated body"})
+	r := httptest.NewRequest(http.MethodPut, "/api/accounts/acc-1/documents/"+docID, bytes.NewReader(body))
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "docId", docID)
+	w := httptest.NewRecorder()
+
+	h.UpdateDocument(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var dto model.AccountDocumentDTO
+	json.Unmarshal(w.Body.Bytes(), &dto)
+	if dto.Title != "Note v2" {
+		t.Errorf("unexpected dto: %+v", dto)
+	}
+}
+
+func TestHandlerUpdateDocument_Forbidden(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	docID := seedDocForUpdateDeleteTests(t, repo, h)
+
+	body, _ := json.Marshal(model.PutDocumentRequest{Title: "Note v2", Markdown: "updated body"})
+	r := httptest.NewRequest(http.MethodPut, "/api/accounts/acc-1/documents/"+docID, bytes.NewReader(body))
+	r = withUserEmailCtx(r, "stranger-9", "s@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "docId", docID)
+	w := httptest.NewRecorder()
+
+	h.UpdateDocument(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerDeleteDocument_OK(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	docID := seedDocForUpdateDeleteTests(t, repo, h)
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/documents/"+docID, nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "docId", docID)
+	w := httptest.NewRecorder()
+
+	h.DeleteDocument(w, r)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerDeleteDocument_Forbidden(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	docID := seedDocForUpdateDeleteTests(t, repo, h)
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/documents/"+docID, nil)
+	r = withUserEmailCtx(r, "stranger-9", "s@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "docId", docID)
+	w := httptest.NewRecorder()
+
+	h.DeleteDocument(w, r)
+
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
 	}

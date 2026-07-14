@@ -75,7 +75,8 @@ func init() {
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler()
 	meetingHandler := handler.NewMeetingHandler(meetingService, repo, uploadService)
-	accountHandler := handler.NewAccountHandler(accountService)
+	accountHandler := handler.NewAccountHandler(accountService, uploadService)
+	documentHandler := handler.NewDocumentHandler(accountService, uploadService)
 	vaultHandler := handler.NewVaultHandler(vaultService)
 	shareHandler := handler.NewShareHandler(meetingService)
 	uploadHandler := handler.NewUploadHandler(uploadService)
@@ -138,6 +139,15 @@ func init() {
 		r.Post("/api/accounts/{accountId}/documents", accountHandler.PutDocument)
 		r.Get("/api/accounts/{accountId}/documents", accountHandler.ListDocuments)
 		r.Get("/api/accounts/{accountId}/documents/{docId}", accountHandler.GetDocument)
+		r.Put("/api/accounts/{accountId}/documents/{docId}", accountHandler.UpdateDocument)
+		r.Delete("/api/accounts/{accountId}/documents/{docId}", accountHandler.DeleteDocument)
+
+		// Personal (account-less) document routes
+		r.Post("/api/documents", documentHandler.PutDocument)
+		r.Get("/api/documents", documentHandler.ListDocuments)
+		r.Get("/api/documents/{docId}", documentHandler.GetDocument)
+		r.Put("/api/documents/{docId}", documentHandler.UpdateDocument)
+		r.Delete("/api/documents/{docId}", documentHandler.DeleteDocument)
 		r.Get("/api/vault/export", vaultHandler.ExportVault)
 		r.Post("/api/meetings/{meetingId}/account", meetingHandler.LinkToAccount)
 		r.Post("/api/meetings/{meetingId}/share-account", shareHandler.ShareToAccount)

@@ -141,6 +141,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-016: MeetingRef 기반 미팅↔Account 연결 및 팀 공유](decisions/ADR-016-meeting-account-linking-and-sharing.md) (승인됨)
 - [ADR-017: Obsidian Vault 내보내기 및 인바운드 문서 인제스트(루프 가드)](decisions/ADR-017-vault-export-and-inbound-ingest.md) (승인됨)
 - [ADR-018: 양방향 MCP back-data 도구](decisions/ADR-018-mcp-back-data-tools.md) (승인됨)
+- [ADR-020: 문서 허브 v2 — 개인 문서, 위키링크 인덱스, 슬라이드 업로드](decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) (승인됨)
 
 ### 운영
 
@@ -232,6 +233,7 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-016: Meeting↔Account Linking and Team Sharing via MeetingRef](decisions/ADR-016-meeting-account-linking-and-sharing.md) (Accepted)
 - [ADR-017: Obsidian Vault Export and Inbound Document Ingest with Loop-Guard](decisions/ADR-017-vault-export-and-inbound-ingest.md) (Accepted)
 - [ADR-018: Bidirectional MCP Back-Data Tools](decisions/ADR-018-mcp-back-data-tools.md) (Accepted)
+- [ADR-020: Document Hub v2 — Personal Documents, Wikilink Index, Slide Uploads](decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) (Accepted)
 
 ### Operations
 

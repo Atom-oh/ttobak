@@ -16,7 +16,7 @@ type mockAccountRepo struct {
 	users    map[string]*model.User          // email
 	meetingRefs map[string][]model.MeetingRef // accountID -> refs
 	insightsByAccount map[string][]model.AccountInsight
-	documents map[string][]model.AccountDocument // accountID -> docs
+	documents map[string][]model.AccountDocument // PK -> docs
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -102,20 +102,38 @@ func (m *mockAccountRepo) ListInsightsForAccount(_ context.Context, accountID st
 }
 
 func (m *mockAccountRepo) PutAccountDocument(_ context.Context, doc *model.AccountDocument) error {
-	m.documents[doc.AccountID] = append(m.documents[doc.AccountID], *doc)
+	docs := m.documents[doc.PK]
+	for i, d := range docs {
+		if d.DocID == doc.DocID {
+			docs[i] = *doc
+			m.documents[doc.PK] = docs
+			return nil
+		}
+	}
+	m.documents[doc.PK] = append(docs, *doc)
 	return nil
 }
-func (m *mockAccountRepo) ListAccountDocuments(_ context.Context, accountID string) ([]model.AccountDocument, error) {
-	return append([]model.AccountDocument(nil), m.documents[accountID]...), nil
+func (m *mockAccountRepo) ListAccountDocuments(_ context.Context, pk string) ([]model.AccountDocument, error) {
+	return append([]model.AccountDocument(nil), m.documents[pk]...), nil
 }
-func (m *mockAccountRepo) GetAccountDocument(_ context.Context, accountID, docID string) (*model.AccountDocument, error) {
-	for _, d := range m.documents[accountID] {
+func (m *mockAccountRepo) GetAccountDocument(_ context.Context, pk, docID string) (*model.AccountDocument, error) {
+	for _, d := range m.documents[pk] {
 		if d.DocID == docID {
 			cp := d
 			return &cp, nil
 		}
 	}
 	return nil, nil
+}
+func (m *mockAccountRepo) DeleteAccountDocument(_ context.Context, pk, docID string) error {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			m.documents[pk] = append(docs[:i], docs[i+1:]...)
+			return nil
+		}
+	}
+	return nil
 }
 
 func TestHasTtobakOriginMarker(t *testing.T) {
@@ -477,7 +495,7 @@ func TestPutDocument_MemberStores(t *testing.T) {
 	if dto.DocID == "" || dto.Title != "Email notes" {
 		t.Errorf("unexpected dto: %+v", dto)
 	}
-	docs, _ := repo.ListAccountDocuments(context.Background(), acc.AccountID)
+	docs, _ := repo.ListAccountDocuments(context.Background(), model.PrefixAccount+acc.AccountID)
 	if len(docs) != 1 || docs[0].Content != "# Prep\ncontent" || docs[0].TtobakOrigin {
 		t.Errorf("doc not stored correctly: %+v", docs)
 	}
@@ -514,5 +532,157 @@ func TestGetAccountDocument_ReturnsContent(t *testing.T) {
 	}
 	if detail.Content != "body" {
 		t.Errorf("expected content body, got %q", detail.Content)
+	}
+}
+
+func TestParseWikilinks(t *testing.T) {
+	cases := []struct {
+		name string
+		md   string
+		want []string
+	}{
+		{"none", "plain text, no links", nil},
+		{"simple", "see [[하나은행]] for details", []string{"하나은행"}},
+		{"alias", "see [[하나은행|은행]] for details", []string{"하나은행"}},
+		{"heading", "see [[하나은행#개요]] for details", []string{"하나은행"}},
+		{"dedupe", "[[하나은행]] and again [[하나은행]]", []string{"하나은행"}},
+		{"multiple", "[[하나은행]] met with [[토스]]", []string{"하나은행", "토스"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := parseWikilinks(c.md)
+			if len(got) != len(c.want) {
+				t.Fatalf("parseWikilinks(%q) = %v, want %v", c.md, got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("parseWikilinks(%q)[%d] = %q, want %q", c.md, i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestPutDocument_ParsesWikilinksIntoLinks(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	dto, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "meeting with [[토스]]"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(dto.Links) != 1 || dto.Links[0] != "토스" {
+		t.Errorf("expected links [토스], got %v", dto.Links)
+	}
+}
+
+func TestPutUserDocument_StoresUnderUserPKNoMembershipCheck(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	dto, err := svc.PutUserDocument(context.Background(), "user-1", &model.PutDocumentRequest{Title: "My Note", Markdown: "personal note"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	docs, _ := repo.ListAccountDocuments(context.Background(), model.PrefixUser+"user-1")
+	if len(docs) != 1 || docs[0].DocID != dto.DocID {
+		t.Errorf("doc not stored under USER# pk: %+v", docs)
+	}
+	if docs[0].AccountID != "" || docs[0].EntityType != model.EntityTypeUserDoc {
+		t.Errorf("expected personal doc metadata, got %+v", docs[0])
+	}
+}
+
+func TestPutDocument_SlideRejectsForeignFileKey(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	_, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", FileKey: "docs/someone-else/deck.pdf", FileName: "deck.pdf",
+	})
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden for foreign fileKey, got %v", err)
+	}
+}
+
+func TestPutDocument_SlideAllowsEmptyMarkdown(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	dto, err := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", DocType: "slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf", MimeType: "application/pdf",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dto.FileName != "deck.pdf" {
+		t.Errorf("expected fileName deck.pdf, got %+v", dto)
+	}
+}
+
+func TestUpdateAccountDocument_PreservesIdentityAndReparsesLinks(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "[[토스]]"})
+	createdAt := created.CreatedAt
+
+	updated, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{Title: "Note v2", Markdown: "now mentions [[하나은행]] instead"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updated.DocID != created.DocID {
+		t.Errorf("DocID changed on update: %s -> %s", created.DocID, updated.DocID)
+	}
+	if !updated.CreatedAt.Equal(createdAt) {
+		t.Errorf("CreatedAt changed on update: %v -> %v", createdAt, updated.CreatedAt)
+	}
+	if updated.Title != "Note v2" {
+		t.Errorf("title not updated: %+v", updated)
+	}
+	if len(updated.Links) != 1 || updated.Links[0] != "하나은행" {
+		t.Errorf("links not reparsed on update: %v", updated.Links)
+	}
+
+	doc, _ := repo.GetAccountDocument(context.Background(), model.PrefixAccount+acc.AccountID, created.DocID)
+	if doc.SourceUserID != "owner-1" {
+		t.Errorf("SourceUserID changed on update: %+v", doc)
+	}
+}
+
+func TestUpdateAccountDocument_RejectsTtobakOrigin(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{Title: "Note", Markdown: "---\nttobak_id: m-1\n---\n# loop"})
+	if !errors.Is(err, ErrLoopGuard) {
+		t.Errorf("expected ErrLoopGuard, got %v", err)
+	}
+}
+
+func TestDeleteAccountDocument_RemovesDoc(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+
+	if err := svc.DeleteAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound after delete, got %v", err)
+	}
+}
+
+func TestDeleteAccountDocument_NonMemberForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{Title: "Note", Markdown: "body"})
+
+	err := svc.DeleteAccountDocument(context.Background(), "stranger-9", acc.AccountID, created.DocID)
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
 	}
 }

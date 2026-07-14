@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -15,10 +17,29 @@ import (
 
 type AccountHandler struct {
 	accountService *service.AccountService
+	uploadService  *service.UploadService
 }
 
-func NewAccountHandler(accountService *service.AccountService) *AccountHandler {
-	return &AccountHandler{accountService: accountService}
+func NewAccountHandler(accountService *service.AccountService, uploadService *service.UploadService) *AccountHandler {
+	return &AccountHandler{accountService: accountService, uploadService: uploadService}
+}
+
+// withDownloadURL presigns detail.FileKey (if set -- a slide doc) into
+// DownloadURL before the handler serializes the response. Presign failure
+// is logged and swallowed: the caller still gets the doc metadata, just
+// without a working download link, rather than a 500 for an unrelated S3
+// hiccup.
+func (h *AccountHandler) withDownloadURL(ctx context.Context, detail *model.AccountDocumentDetail) *model.AccountDocumentDetail {
+	if detail.FileKey == "" {
+		return detail
+	}
+	url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, detail.FileKey)
+	if err != nil {
+		log.Printf("presign download URL for doc %s: %v", detail.DocID, err)
+		return detail
+	}
+	detail.DownloadURL = url
+	return detail
 }
 
 func (h *AccountHandler) CreateAccount(w http.ResponseWriter, r *http.Request) {
@@ -327,5 +348,61 @@ func (h *AccountHandler) GetDocument(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, h.withDownloadURL(ctx, detail))
+}
+
+func (h *AccountHandler) UpdateDocument(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	docID := chi.URLParam(r, "docId")
+	if accountID == "" || docID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID and Document ID are required")
+		return
+	}
+	var req model.PutDocumentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+	dto, err := h.accountService.UpdateAccountDocument(ctx, userID, accountID, docID, &req)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Document not found")
+		case errors.Is(err, service.ErrLoopGuard):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Document originated from TTOBAK (loop guard)")
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "title required, markdown <=300KB")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
+}
+
+func (h *AccountHandler) DeleteDocument(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	docID := chi.URLParam(r, "docId")
+	if accountID == "" || docID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID and Document ID are required")
+		return
+	}
+	if err := h.accountService.DeleteAccountDocument(ctx, userID, accountID, docID); err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Account not found")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

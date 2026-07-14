@@ -54,11 +54,11 @@ SP5 (독립) ──────────────────┘
 
 ### SP2. 문서 허브 v2 (노트/블로그/슬라이드/위키링크)
 
-**In**: `AccountDocument`에 `docType: note|blog|slide` 추가, Account 미소속 개인 문서 허용. 노트/블로그는 TipTap 에디터(`MeetingEditor.tsx` 재사용) + 위키링크 자동완성(`[[문서명]]` 입력 시 후보 검색) + 저장 시 링크 파싱·인덱싱(그래프의 데이터 소스). 슬라이드는 PPTX/PDF를 기존 KB presigned-upload 패턴으로 S3 업로드 + PDF.js 뷰어 + 다운로드 버튼. `VaultService.ExportVault`에 신규 타입 포함.
+**In**: `AccountDocument`에 `docType: note|blog|slide` 추가, Account 미소속 개인 문서 허용. 노트/블로그는 TipTap 에디터(`MeetingEditor.tsx` 재사용) + 위키링크 자동완성(`[[문서명]]` 입력 시 후보 검색) + 저장 시 링크 파싱·인덱싱(그래프의 데이터 소스). 슬라이드는 PPTX/PDF를 기존 presigned-upload 패턴(신규 `doc` 카테고리)으로 S3 업로드 + 다운로드 버튼. `VaultService.ExportVault`에 신규 타입 포함.
 
 **Out**: 슬라이드 제작/편집 기능, 실시간 공동편집, PPTX→PDF 자동 변환(사용자가 직접 PDF로 export해서 올리는 것을 기본 흐름으로 함 — 자동 변환은 후속 검토).
 
-**열린 질문**: 위키링크 대상이 삭제되면 broken link 표시 방식(붉은 링크 vs 무시) — SP2 상세 설계에서 결정.
+**해소됨**: PDF 뷰어는 PDF.js 대신 presigned GET URL의 브라우저 네이티브 `<iframe>`으로 구현(의존성/번들 크기 절감, iOS Safari 1페이지 한계는 상시 노출되는 다운로드 버튼이 커버) — 상세는 [ADR-020](../decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) 참조. 위키링크 broken link 표시는 이번 범위에서 최소 처리(비클릭 muted 텍스트)로 마무리, 정교한 표시는 SP4(그래프 뷰)와 함께 재검토.
 
 ### SP3. Public 페이지 (비밀 토큰 URL)
 
