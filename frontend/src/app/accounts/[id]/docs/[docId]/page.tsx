@@ -5,6 +5,6 @@ export async function generateStaticParams() {
 }
 
 export default async function Page(props: { params: Promise<{ id: string; docId: string }> }) {
-  const { id } = await props.params;
-  return <DocDetailClient accountId={id} />;
+  await props.params;
+  return <DocDetailClient accountScoped />;
 }

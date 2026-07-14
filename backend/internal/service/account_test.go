@@ -824,6 +824,33 @@ func TestUpdateAccountDocument_ExplicitEmptyMarkdownClearsContent(t *testing.T) 
 	}
 }
 
+func TestUpdateAccountDocument_SlideExplicitEmptyMarkdownWithoutFileKeyRejected(t *testing.T) {
+	repo := newMockAccountRepo()
+	mockS3 := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: mockS3, bucketName: "test-bucket"}
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", FileKey: "docs/owner-1/deck.pdf", FileName: "deck.pdf",
+	})
+
+	// Explicit empty markdown with no fileKey would otherwise silently
+	// convert the slide into a content-less, file-less document AND
+	// irreversibly delete the S3 object -- must be rejected instead.
+	_, err := svc.UpdateAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID, &model.PutDocumentRequest{
+		Title: "Slide", Markdown: mdPtr(""),
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput, got %v", err)
+	}
+	if len(mockS3.deletedKeys) != 0 {
+		t.Errorf("expected no S3 delete on a rejected update, got %v", mockS3.deletedKeys)
+	}
+	detail, _ := svc.GetAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID)
+	if detail.FileKey != "docs/owner-1/deck.pdf" {
+		t.Errorf("expected slide fileKey untouched after rejected update, got %q", detail.FileKey)
+	}
+}
+
 func TestUpdateAccountDocument_TitleOnlyEditPreservesDocTypeAndPath(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)

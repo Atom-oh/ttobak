@@ -21,13 +21,20 @@ const marked = new Marked();
 const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', hr: '---' });
 
 interface DocDetailClientProps {
-  /** Omit for a personal (account-less) document. */
-  accountId?: string;
+  /** Set for the /accounts/{id}/docs/{docId} route; omit for a personal (account-less) /docs/{docId} route. */
+  accountScoped?: boolean;
 }
 
-export function DocDetailClient({ accountId }: DocDetailClientProps) {
+export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
   const pathname = usePathname();
-  const docId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
+  // Parse both ids from the live pathname rather than trusting the route's
+  // params prop -- this is a static export, so the placeholder page's
+  // generateStaticParams value ('_') gets baked into that prop at build
+  // time, and only usePathname() reflects the real browser URL on a fresh
+  // load/refresh (same pattern as AccountDetailClient.tsx).
+  const segments = pathname.split('/').filter(Boolean).map(decodeURIComponent);
+  const docId = segments[segments.length - 1] || '';
+  const accountId = accountScoped ? segments[segments.length - 3] : undefined;
   const { isLoading, isAuthenticated } = useAuth();
 
   const [doc, setDoc] = useState<AccountDocument | null>(null);
@@ -81,8 +88,11 @@ export function DocDetailClient({ accountId }: DocDetailClientProps) {
     if (!doc) return;
     if (saveInFlightRef.current) {
       // A save is already in flight -- queue this one instead of firing a
-      // second concurrent PUT (only the latest queued call survives).
-      pendingSaveRef.current = { markdown, nextTitle };
+      // second concurrent PUT (latest markdown wins). nextTitle falls back
+      // to whatever was already queued (not the bare argument) so a title
+      // rename queued by a blur isn't lost if a title-less body autosave
+      // queues again before the in-flight save drains it.
+      pendingSaveRef.current = { markdown, nextTitle: nextTitle ?? pendingSaveRef.current?.nextTitle };
       return;
     }
     saveInFlightRef.current = true;

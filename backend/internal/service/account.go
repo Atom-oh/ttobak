@@ -599,6 +599,17 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 		if req.FileKey != "" && markdown != "" {
 			return nil, ErrInvalidInput // a doc is a note/blog or a slide, never both
 		}
+		if req.FileKey == "" && markdown == "" && existing.FileKey != "" {
+			// The doc is currently a slide and the caller is explicitly
+			// touching the body (Markdown key present, or FileKey sent)
+			// but supplies neither replacement markdown nor a fileKey --
+			// silently landing there would irreversibly delete the S3
+			// object below while leaving a document with no content and
+			// no file, a state create() never allows. Require the caller
+			// to be explicit: send non-empty markdown to convert to a
+			// note, or a new fileKey to replace the file.
+			return nil, ErrInvalidInput
+		}
 		if markdown != "" {
 			if hasTtobakOriginMarker(markdown) {
 				return nil, ErrLoopGuard
