@@ -33,7 +33,7 @@ export function DesktopHeader({ activePath, breadcrumbs, isRecording }: DesktopH
     <header className="h-16 border-b border-slate-200 dark:border-white/5 bg-white/80 dark:bg-transparent backdrop-blur-md dark:backdrop-blur-xl flex items-center justify-between px-8 shrink-0">
       {/* Breadcrumbs */}
       <div className="flex items-center gap-3">
-        <nav className="flex items-center gap-2 text-slate-500 dark:text-[#8B8D98] text-sm">
+        <nav className="flex items-center gap-2 text-slate-500 dark:text-text-muted text-sm">
           {resolvedBreadcrumbs.map((crumb, index) => (
             <span key={index} className="flex items-center gap-2">
               {index > 0 && (
@@ -68,7 +68,7 @@ export function DesktopHeader({ activePath, breadcrumbs, isRecording }: DesktopH
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-1.5 text-sm bg-slate-100 dark:bg-white/5 border-none rounded-lg dark:rounded-full dark:border dark:border-white/10 focus:ring-2 focus:ring-primary/20 placeholder:text-slate-500 dark:placeholder:text-text-muted text-slate-900 dark:text-text-main"
+            className="w-full pl-10 pr-4 py-1.5 text-sm bg-slate-100 dark:bg-white/5 border border-transparent dark:border-white/10 rounded-lg focus:ring-2 focus:ring-primary/20 placeholder:text-slate-500 dark:placeholder:text-text-muted text-slate-900 dark:text-text-main"
             placeholder="Search notes..."
           />
         </div>

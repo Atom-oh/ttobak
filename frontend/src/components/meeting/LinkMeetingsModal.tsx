@@ -211,7 +211,7 @@ export function LinkMeetingsModal({
                         }`}
                       >
                         {isSelected && (
-                          <span className="material-symbols-outlined text-white dark:text-background-dark text-[14px]">
+                          <span className="material-symbols-outlined text-white text-[14px]">
                             check
                           </span>
                         )}
@@ -255,7 +255,7 @@ export function LinkMeetingsModal({
             <button
               onClick={handleSave}
               disabled={saving || loading}
-              className="px-4 py-1.5 text-sm font-medium bg-primary text-white dark:text-background-dark rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+              className="px-4 py-1.5 text-sm font-medium bg-primary text-white rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
             >
               {saving ? '저장 중…' : '저장'}
             </button>

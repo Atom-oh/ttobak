@@ -18,9 +18,12 @@ interface QAChatMessageProps {
   usedDocs?: boolean;
   toolsUsed?: string[];
   isStreaming?: boolean;
+  /** When provided, shows a "save to meeting notes" action on completed answers */
+  onSaveToNotes?: () => void;
+  isSavedToNotes?: boolean;
 }
 
-export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, toolsUsed, isStreaming }: QAChatMessageProps) {
+export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, toolsUsed, isStreaming, onSaveToNotes, isSavedToNotes }: QAChatMessageProps) {
   const isLoading = !answer && !isStreaming;
 
   return (
@@ -132,6 +135,26 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
                       )
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Save to meeting notes */}
+              {onSaveToNotes && !isStreaming && answer && (
+                <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700 flex justify-end">
+                  <button
+                    onClick={onSaveToNotes}
+                    disabled={isSavedToNotes}
+                    className={`flex items-center gap-1 text-[11px] font-medium px-2 py-1 rounded-md transition-colors ${
+                      isSavedToNotes
+                        ? 'text-emerald-500 cursor-default'
+                        : 'text-slate-500 dark:text-text-muted hover:text-primary hover:bg-primary/5'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-sm">
+                      {isSavedToNotes ? 'check_circle' : 'note_add'}
+                    </span>
+                    {isSavedToNotes ? '노트에 저장됨' : '노트에 저장'}
+                  </button>
                 </div>
               )}
             </>

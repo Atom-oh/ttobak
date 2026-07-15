@@ -83,11 +83,11 @@ const components: Components = {
   },
 
   ul({ children }: { children?: ReactNode }) {
-    return <ul className="list-disc pl-6 my-3 space-y-1 marker:text-[#849396]">{children}</ul>;
+    return <ul className="list-disc pl-6 my-3 space-y-1 marker:text-text-muted">{children}</ul>;
   },
 
   ol({ children }: { children?: ReactNode }) {
-    return <ol className="list-decimal pl-6 my-3 space-y-1 marker:text-[#849396]">{children}</ol>;
+    return <ol className="list-decimal pl-6 my-3 space-y-1 marker:text-text-muted">{children}</ol>;
   },
 
   li({ children }: { children?: ReactNode }) {

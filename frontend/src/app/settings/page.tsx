@@ -54,7 +54,7 @@ export default function SettingsPage() {
           {/* Profile Section */}
           <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
             <h3 className="section-header mb-4">Profile</h3>
-            <div className="flex items-center gap-4 dark:glass-panel dark:rounded-xl dark:p-4">
+            <div className="flex items-center gap-4 dark:glass-panel dark:p-4">
               <div className="w-14 h-14 rounded-full bg-slate-100 dark:bg-white/5 flex items-center justify-center text-slate-600 dark:text-primary text-xl font-bold">
                 {user?.name?.charAt(0) || user?.email?.charAt(0).toUpperCase() || '?'}
               </div>

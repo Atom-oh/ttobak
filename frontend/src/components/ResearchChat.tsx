@@ -27,7 +27,7 @@ function SubPageInput({ onSubmit, disabled }: { onSubmit: (topic: string) => voi
     return (
       <button
         onClick={() => setOpen(true)}
-        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-[#00E5FF]/30 text-[#00E5FF] text-xs font-semibold hover:bg-[#00E5FF]/10 disabled:opacity-50 transition-colors"
+        className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-primary/30 text-primary text-xs font-semibold hover:bg-primary/10 disabled:opacity-50 transition-colors"
       >
         <span className="material-symbols-outlined text-sm">add_circle</span>
         하위 페이지 추가
@@ -48,12 +48,12 @@ function SubPageInput({ onSubmit, disabled }: { onSubmit: (topic: string) => voi
         }}
         disabled={disabled}
         placeholder="하위 주제 입력..."
-        className="flex-1 min-w-0 bg-white/[0.05] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50"
+        className="flex-1 min-w-0 bg-white/[0.05] border border-white/10 rounded-lg px-2.5 py-2 text-xs text-text-main placeholder:text-text-muted/60 focus:outline-none focus:border-primary/50 disabled:opacity-50"
       />
       <button
         onClick={handleSubmit}
         disabled={!topic.trim() || disabled}
-        className="p-2 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors"
+        className="p-2 rounded-lg bg-primary/20 text-primary hover:bg-primary/30 disabled:opacity-30 transition-colors"
       >
         <span className="material-symbols-outlined text-sm">send</span>
       </button>
@@ -177,14 +177,14 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
   const isFullWidth = status === 'planning';
 
   return (
-    <div className={`flex flex-col bg-[#0e0e13] border-l border-white/10 h-full ${isFullWidth ? 'w-full' : 'w-[400px] flex-shrink-0'}`}>
+    <div className={`flex flex-col bg-surface-lowest border-l border-white/10 h-full ${isFullWidth ? 'w-full' : 'w-[400px] flex-shrink-0'}`}>
       {/* Header */}
       <div className="px-5 py-3 border-b border-white/10">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-[#e4e1e9]">Research Assistant</h3>
+          <h3 className="text-sm font-semibold text-text-main">Research Assistant</h3>
           <div className="flex items-center gap-2">
             <span className={`w-2 h-2 rounded-full ${si.color}`} />
-            <span className="text-xs text-[#849396]">{si.label}</span>
+            <span className="text-xs text-text-muted">{si.label}</span>
           </div>
         </div>
       </div>
@@ -197,8 +197,8 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
       >
         {messages.length === 0 && (
           <div className="text-center py-12">
-            <span className="material-symbols-outlined text-4xl text-[#849396]/30">forum</span>
-            <p className="text-sm text-[#849396] mt-3">
+            <span className="material-symbols-outlined text-4xl text-text-muted/30">forum</span>
+            <p className="text-sm text-text-muted mt-3">
               {status === 'planning' ? '에이전트가 연구 계획을 작성 중입니다...' : '메시지가 없습니다'}
             </p>
           </div>
@@ -211,12 +211,12 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
                 isFullWidth ? 'max-w-[700px]' : 'max-w-[90%]'
               } ${
                 msg.role === 'user'
-                  ? 'bg-[#00E5FF]/10 text-[#e4e1e9]'
-                  : 'bg-white/[0.04] text-[#bac9cc]'
+                  ? 'bg-primary/10 text-text-main'
+                  : 'bg-white/[0.04] text-text-secondary'
               }`}
             >
               {msg.role === 'agent' ? (
-                <div className="prose prose-sm prose-invert max-w-none [&_h1]:text-lg [&_h1]:font-bold [&_h1]:mb-2 [&_h2]:text-base [&_h2]:font-bold [&_h2]:mt-4 [&_h2]:mb-2 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1 [&_p]:text-sm [&_p]:leading-relaxed [&_p]:mb-2 [&_li]:text-sm [&_li]:leading-relaxed [&_strong]:text-[#e4e1e9] [&_ul]:pl-4 [&_ol]:pl-4 [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_hr]:border-white/10 [&_hr]:my-3">
+                <div className="prose prose-sm prose-invert max-w-none [&_h1]:text-lg [&_h1]:font-bold [&_h1]:mb-2 [&_h2]:text-base [&_h2]:font-bold [&_h2]:mt-4 [&_h2]:mb-2 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-3 [&_h3]:mb-1 [&_p]:text-sm [&_p]:leading-relaxed [&_p]:mb-2 [&_li]:text-sm [&_li]:leading-relaxed [&_strong]:text-text-main [&_ul]:pl-4 [&_ol]:pl-4 [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-xs [&_hr]:border-white/10 [&_hr]:my-3">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                 </div>
               ) : (
@@ -227,14 +227,14 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
                 <button
                   onClick={handleApprove}
                   disabled={sending}
-                  className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#00E5FF] text-[#0e0e13] text-sm font-semibold hover:bg-[#00E5FF]/80 disabled:opacity-50 transition-colors"
+                  className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-surface-lowest text-sm font-semibold hover:bg-primary/80 disabled:opacity-50 transition-colors"
                 >
                   <span className="material-symbols-outlined text-base">check_circle</span>
                   이 구조로 진행
                 </button>
               )}
 
-              <span className="block text-[10px] text-[#849396]/40 mt-2">
+              <span className="block text-[10px] text-text-muted/40 mt-2">
                 {new Date(msg.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
               </span>
             </div>
@@ -244,7 +244,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
         {!autoScroll && messages.length > 0 && (
           <button
             onClick={() => { setAutoScroll(true); messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }}
-            className="sticky bottom-2 mx-auto flex items-center gap-1 px-3 py-1 rounded-full bg-[#00E5FF]/20 text-[#00E5FF] text-xs font-medium hover:bg-[#00E5FF]/30 transition-colors"
+            className="sticky bottom-2 mx-auto flex items-center gap-1 px-3 py-1 rounded-full bg-primary/20 text-primary text-xs font-medium hover:bg-primary/30 transition-colors"
           >
             <span className="material-symbols-outlined text-sm">arrow_downward</span>
             최신 메시지
@@ -275,12 +275,12 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
                 : status === 'approved' ? '리서치 시작 대기 중...'
                 : '질문이나 수정사항을 입력하세요...'
             }
-            className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2.5 text-sm text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50"
+            className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2.5 text-sm text-text-main placeholder:text-text-muted/60 focus:outline-none focus:border-primary/50 disabled:opacity-50"
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || sending || inputDisabled}
-            className="p-2.5 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors"
+            className="p-2.5 rounded-lg bg-primary/20 text-primary hover:bg-primary/30 disabled:opacity-30 transition-colors"
           >
             <span className="material-symbols-outlined text-lg">send</span>
           </button>

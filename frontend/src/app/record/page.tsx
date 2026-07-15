@@ -14,6 +14,7 @@ import { LiveSummary } from '@/components/LiveSummary';
 import { LiveQAPanel } from '@/components/LiveQAPanel';
 import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingConfig';
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
+import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { supportsTabAudioCapture } from '@/lib/device';
 import { isTauri } from '@/lib/tauri';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
@@ -66,6 +67,17 @@ function RecordPageInner() {
   const [isQAOpen, setIsQAOpen] = useState(false);
   const [detectedCount, setDetectedCount] = useState(0);
 
+  // In-meeting note-taking
+  const [notes, setNotes] = useState('');
+  const [notesSaveStatus, setNotesSaveStatus] = useState<NotesSaveStatus>('idle');
+  const lastSavedNotesRef = useRef('');
+
+  // Meeting context (agenda / customer background) — fed to AI Q&A
+  const [contextText, setContextText] = useState('');
+
+  // Desktop transcript panel collapse state
+  const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
+
   // --- Hooks ---
   const summary = useLiveSummary({ summaryInterval });
 
@@ -86,6 +98,36 @@ function RecordPageInner() {
   });
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
+
+  // Autosave in-meeting notes (debounced) to the draft meeting
+  useEffect(() => {
+    if (!postRecording.serverMeetingId) return;
+    if (notes === lastSavedNotesRef.current) return;
+    const meetingId = postRecording.serverMeetingId;
+    const timer = setTimeout(async () => {
+      setNotesSaveStatus('saving');
+      try {
+        await meetingsApi.update(meetingId, { notes });
+        lastSavedNotesRef.current = notes;
+        setNotesSaveStatus('saved');
+      } catch {
+        setNotesSaveStatus('error');
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [notes, postRecording.serverMeetingId]);
+
+  // Q&A context = user-provided meeting context + live transcript
+  const qaContext = contextText.trim()
+    ? `[미팅 배경 정보]\n${contextText.trim()}\n\n${session.transcriptContext || ''}`
+    : session.transcriptContext;
+
+  // Append a Q&A entry to the meeting notes
+  const handleSaveQAToNotes = useCallback((question: string, answer: string) => {
+    setNotes((prev) =>
+      `${prev ? prev.trimEnd() + '\n\n' : ''}**Q. ${question}**\n\n${answer}\n`,
+    );
+  }, []);
 
   // Mic preview: create AudioContext + AnalyserNode when device changes (not recording)
   useEffect(() => {
@@ -142,6 +184,9 @@ function RecordPageInner() {
       setTabSharingLabel(label);
     }
     summary.reset();
+    setNotes('');
+    lastSavedNotesRef.current = '';
+    setNotesSaveStatus('idle');
     // Create draft meeting immediately so the post-recording flow has a
     // server meetingId to attach the audio to. This is required for both
     // browser (mic/tab) and Tauri native (system audio) modes — without it,
@@ -367,7 +412,6 @@ function RecordPageInner() {
         {isUploadMode && !postRecording.step && !session.isRecording && (
           <div className="flex flex-col items-center gap-6 py-8">
             <div className="hidden lg:block mb-2">
-              <span className="hidden dark:block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8B8D98] text-center mb-2">Upload</span>
               <input
                 type="text"
                 value={meetingTitle}
@@ -420,7 +464,6 @@ function RecordPageInner() {
           <div className="flex flex-col items-center gap-3">
             {/* Desktop: editable title */}
             <div className="hidden lg:block mb-4">
-              <span className="hidden dark:block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8B8D98] text-center mb-2">Studio</span>
               <input
                 type="text"
                 value={meetingTitle}
@@ -439,7 +482,7 @@ function RecordPageInner() {
                     onClick={() => setAudioSource('mic')}
                     className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold transition-colors ${
                       audioSource === 'mic'
-                        ? 'bg-primary text-white dark:text-background-dark'
+                        ? 'bg-primary text-white'
                         : 'text-slate-600 dark:text-text-muted hover:bg-slate-50 dark:hover:bg-white/5'
                     }`}
                   >
@@ -451,7 +494,7 @@ function RecordPageInner() {
                       onClick={() => setAudioSource('tab')}
                       className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold transition-colors ${
                         audioSource === 'tab'
-                          ? 'bg-primary text-white dark:text-background-dark'
+                          ? 'bg-primary text-white'
                           : 'text-slate-600 dark:text-text-muted hover:bg-slate-50 dark:hover:bg-white/5'
                       }`}
                     >
@@ -464,7 +507,7 @@ function RecordPageInner() {
                       onClick={() => setAudioSource('system')}
                       className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold transition-colors ${
                         audioSource === 'system'
-                          ? 'bg-primary text-white dark:text-background-dark'
+                          ? 'bg-primary text-white'
                           : 'text-slate-600 dark:text-text-muted hover:bg-slate-50 dark:hover:bg-white/5'
                       }`}
                     >
@@ -507,13 +550,26 @@ function RecordPageInner() {
               activeProvider={session.activeProvider}
               isRecording={session.isRecording}
             />
+            {/* Meeting context — optional, fed to AI Q&A during the meeting */}
+            <div className="w-full max-w-md mt-2">
+              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-text-muted uppercase tracking-wide mb-1.5">
+                <span className="material-symbols-outlined text-sm">info</span>
+                미팅 컨텍스트 (선택)
+              </label>
+              <textarea
+                value={contextText}
+                onChange={(e) => setContextText(e.target.value)}
+                placeholder="아젠다, 고객사 배경, 참석자 등 미팅 배경 정보를 입력하면 AI 어시스턴트가 답변에 활용합니다."
+                rows={3}
+                className="w-full rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest px-3 py-2 text-sm text-slate-900 dark:text-text-main placeholder:text-slate-400 dark:placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
+              />
+            </div>
           </div>
         )}
 
         {/* Desktop: Meeting title during recording */}
         {session.isRecording && (
           <div className="hidden lg:block mb-4">
-            <p className="hidden dark:block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8B8D98] text-center mb-1">Studio</p>
             <h1 className="text-xl font-bold text-slate-900 dark:text-white dark:font-headline text-center tracking-tight">
               {meetingTitle || 'Untitled Meeting'}
             </h1>
@@ -565,13 +621,59 @@ function RecordPageInner() {
           />
         </div>}
 
-        {/* Desktop: Live Transcript in main content (centered) during recording */}
+        {/* Desktop: Summary (hero) + Notes side by side, transcript as collapsible strip */}
         {session.isRecording && (
-          <div className="hidden lg:flex lg:flex-col" style={{ height: '50vh' }}>
-            <LiveTranscript
-              transcripts={session.displayTranscripts}
-              wordCount={session.totalWordCount}
-            />
+          <div className="hidden lg:flex lg:flex-col gap-4">
+            <div className="grid grid-cols-2 gap-4" style={{ height: '48vh' }}>
+              <LiveSummary
+                summary={summary.liveSummary}
+                isGenerating={summary.isGenerating}
+                wordCount={session.totalWordCount}
+                lastSummaryWordCount={summary.lastSummaryWordCount}
+                summaryInterval={summaryInterval}
+                fill
+              />
+              <LiveNotes
+                value={notes}
+                onChange={setNotes}
+                saveStatus={notesSaveStatus}
+                fill
+              />
+            </div>
+
+            {/* Collapsible Live Transcript */}
+            <div className="bg-white dark:bg-surface-lowest rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
+              <button
+                onClick={() => setIsTranscriptOpen(!isTranscriptOpen)}
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors text-left"
+              >
+                <span className="material-symbols-outlined text-primary text-xl">graphic_eq</span>
+                <span className="text-sm font-semibold text-slate-900 dark:text-text-main shrink-0">실시간 자막</span>
+                {session.totalWordCount > 0 && (
+                  <span className="text-xs text-slate-500 dark:text-text-muted bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full shrink-0">
+                    {session.totalWordCount.toLocaleString()} words
+                  </span>
+                )}
+                {!isTranscriptOpen && (
+                  <span className="flex-1 text-sm text-slate-500 dark:text-text-secondary truncate">
+                    {session.displayTranscripts.length > 0
+                      ? session.displayTranscripts[session.displayTranscripts.length - 1].text
+                      : '음성을 기다리는 중...'}
+                  </span>
+                )}
+                <span className="material-symbols-outlined text-slate-400 dark:text-text-muted ml-auto shrink-0">
+                  {isTranscriptOpen ? 'expand_less' : 'expand_more'}
+                </span>
+              </button>
+              {isTranscriptOpen && (
+                <div className="border-t border-slate-100 dark:border-white/5" style={{ height: '38vh' }}>
+                  <LiveTranscript
+                    transcripts={session.displayTranscripts}
+                    wordCount={session.totalWordCount}
+                  />
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -612,20 +714,42 @@ function RecordPageInner() {
                   summaryInterval={summaryInterval}
                 />
               }
+              notesContent={
+                <LiveNotes
+                  value={notes}
+                  onChange={setNotes}
+                  saveStatus={notesSaveStatus}
+                />
+              }
             />
           </div>
         )}
 
-        {/* File Attachments — shown during recording only */}
+        {/* Files & Context — shown during recording only */}
         {!postRecording.step && session.isRecording && (
           <section className="mt-8">
             <div className="flex items-center justify-between mb-4 px-1">
-              <h3 className="font-bold text-slate-800 dark:text-slate-200">첨부 파일</h3>
+              <h3 className="font-bold text-slate-800 dark:text-text-main">자료 · 컨텍스트</h3>
               {attachments.length > 0 && (
-                <span className="text-xs text-slate-500 dark:text-slate-400">
+                <span className="text-xs text-slate-500 dark:text-text-muted">
                   {attachments.length}개 파일
                 </span>
               )}
+            </div>
+
+            {/* Meeting context input */}
+            <div className="mb-4">
+              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-text-muted uppercase tracking-wide mb-1.5">
+                <span className="material-symbols-outlined text-sm">info</span>
+                미팅 컨텍스트
+              </label>
+              <textarea
+                value={contextText}
+                onChange={(e) => setContextText(e.target.value)}
+                placeholder="아젠다, 고객사 배경 등 텍스트 컨텍스트를 입력하면 AI 어시스턴트가 답변에 활용합니다."
+                rows={2}
+                className="w-full rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest px-3 py-2 text-sm text-slate-900 dark:text-text-main placeholder:text-slate-400 dark:placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
+              />
             </div>
 
             {/* Attachment thumbnails grid */}
@@ -719,24 +843,17 @@ function RecordPageInner() {
         )}
       </main>
 
-      {/* Desktop Side Panel: Q&A Hero + Summary during recording */}
+      {/* Desktop Side Panel: AI Q&A during recording */}
       {session.isRecording && (
         <aside className="hidden lg:flex w-96 shrink-0 border-l border-slate-200 dark:border-white/10 flex-col">
           <div className="flex-1 min-h-0 flex flex-col">
             <LiveQAPanel
-              transcriptContext={session.transcriptContext}
+              transcriptContext={qaContext}
+              meetingId={postRecording.serverMeetingId || undefined}
               onDetectedQuestionsChange={setDetectedCount}
               serverDetectedQuestions={summary.detectedQuestions}
               onAskedQuestion={summary.addAskedQuestion}
-            />
-          </div>
-          <div className="shrink-0 border-t border-slate-200 dark:border-white/10 max-h-[35%] overflow-y-auto">
-            <LiveSummary
-              summary={summary.liveSummary}
-              isGenerating={summary.isGenerating}
-              wordCount={session.totalWordCount}
-              lastSummaryWordCount={summary.lastSummaryWordCount}
-              summaryInterval={summaryInterval}
+              onSaveToNotes={handleSaveQAToNotes}
             />
           </div>
         </aside>
@@ -752,6 +869,7 @@ function RecordPageInner() {
           onDismiss={() => { postRecording.handleRetry(); router.push('/'); }}
           onNotesSubmit={postRecording.handleNotesSubmit}
           onNotesSkip={postRecording.handleNotesSkip}
+          initialNotes={notes}
         />
       )}
 
@@ -780,10 +898,12 @@ function RecordPageInner() {
             </button>
             <div className="flex-1 min-h-0">
               <LiveQAPanel
-                transcriptContext={session.transcriptContext}
+                transcriptContext={qaContext}
+                meetingId={postRecording.serverMeetingId || undefined}
                 onDetectedQuestionsChange={setDetectedCount}
                 serverDetectedQuestions={summary.detectedQuestions}
                 onAskedQuestion={summary.addAskedQuestion}
+                onSaveToNotes={handleSaveQAToNotes}
               />
             </div>
           </div>

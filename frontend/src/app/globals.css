@@ -4,9 +4,10 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ═══════════════════════════════════════════════
-   Ttobak Design Tokens
-   Light: Clean Professional (#3211d4 primary)
-   Dark: Neon Glassmorphism (#00E5FF primary)
+   Ttobak Design Tokens — Unified Brand
+   One brand (indigo/violet) across light & dark.
+   Dark mode = same palette, inverted surfaces.
+   No neon, no glow — calm premium (Linear/Vercel-like).
    ═══════════════════════════════════════════════ */
 
 :root {
@@ -15,7 +16,7 @@
   --accent: #7c3aed;
   --secondary: #a78bfa;
   --background-light: #f6f6f8;
-  --background-dark: #09090E;
+  --background-dark: #0b0b0f;
   --surface-lowest: #ffffff;
   --surface: #f8fafc;
   --surface-container: #f1f5f9;
@@ -23,6 +24,7 @@
   --text-main: #0f172a;
   --text-muted: #94a3b8;
   --text-secondary: #64748b;
+  --border-subtle: #e2e8f0;
   --error: #dc2626;
 }
 
@@ -41,6 +43,7 @@
   --color-text-main: var(--text-main);
   --color-text-muted: var(--text-muted);
   --color-text-secondary: var(--text-secondary);
+  --color-border-subtle: var(--border-subtle);
   --color-error: var(--error);
 
   /* next/font CSS vars are already font stacks; @theme inline just re-exposes them
@@ -50,21 +53,22 @@
 }
 
 /* ═══════════════════════════════════════════════
-   Dark Mode — Neon Glassmorphism
+   Dark Mode — same brand, calm surfaces
    ═══════════════════════════════════════════════ */
 .dark {
-  --primary: #00E5FF;
-  --primary-hover: #00c8e0;
-  --accent: #B026FF;
-  --secondary: #e5b5ff;
-  --surface-lowest: #0e0e13;
+  --primary: #8b85f7;
+  --primary-hover: #a5a0f9;
+  --accent: #a78bfa;
+  --secondary: #c4b5fd;
+  --surface-lowest: #101014;
   --surface: #131318;
-  --surface-container: #1f1f25;
-  --surface-high: #35343a;
-  --text-main: #e4e1e9;
-  --text-muted: #849396;
-  --text-secondary: #bac9cc;
-  --error: #ffb4ab;
+  --surface-container: #1c1c22;
+  --surface-high: #2a2a32;
+  --text-main: #e7e7ec;
+  --text-muted: #8a8f98;
+  --text-secondary: #b3b8c2;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --error: #f87171;
 }
 
 /* ═══════════════════════════════════════════════
@@ -72,19 +76,15 @@
    ═══════════════════════════════════════════════ */
 body {
   background: var(--background-light);
-  color: #0f172a;
+  color: var(--text-main);
   font-family: var(--font-inter), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 .dark body {
-  background-color: #09090E;
-  color: #e4e1e9;
-  background-image:
-    radial-gradient(circle at 15% 50%, rgba(0, 229, 255, 0.06), transparent 40%),
-    radial-gradient(circle at 85% 30%, rgba(176, 38, 255, 0.06), transparent 40%);
-  background-attachment: fixed;
+  background: var(--background-dark);
+  color: var(--text-main);
 }
 
 /* Material Symbols */
@@ -97,80 +97,33 @@ body {
 }
 
 /* ═══════════════════════════════════════════════
-   Glass Panel — Dark mode surfaces
+   Card / Panel — legacy class names kept for compat,
+   redefined as calm flat surfaces (no blur, no glow)
    ═══════════════════════════════════════════════ */
 .glass-panel {
-  background: rgba(255, 255, 255, 0.03);
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0) 100%);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--surface-lowest);
+  border: 1px solid var(--border-subtle);
 }
 
-/* Light mode: glass-panel = normal white card */
-:root:not(.dark) .glass-panel {
-  background: white;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  border: 1px solid #e2e8f0;
-}
-
-/* ═══════════════════════════════════════════════
-   Glow Effects — Neon dark mode accents
-   ═══════════════════════════════════════════════ */
-.glow-primary {
-  box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
-}
-
-.glow-accent {
-  box-shadow: 0 0 15px rgba(176, 38, 255, 0.3);
-}
-
-.glow-primary-subtle {
-  box-shadow: 0 0 10px rgba(0, 229, 255, 0.15);
-}
-
+/* Legacy glow utilities — intentionally no-op (neon removed) */
+.glow-primary,
+.glow-accent,
+.glow-primary-subtle,
 .glow-secondary {
-  box-shadow: 0 0 15px rgba(229, 181, 255, 0.3);
-}
-
-/* Only apply glow in dark mode */
-:root:not(.dark) .glow-primary,
-:root:not(.dark) .glow-accent,
-:root:not(.dark) .glow-primary-subtle,
-:root:not(.dark) .glow-secondary {
   box-shadow: none;
 }
 
-/* ═══════════════════════════════════════════════
-   Neon Utilities — Stitch design system
-   ═══════════════════════════════════════════════ */
-
-/* Active sidebar tab — purple neon pill */
 .active-pill {
-  box-shadow: -4px 0 12px rgba(176, 38, 255, 0.6);
-}
-:root:not(.dark) .active-pill {
   box-shadow: none;
 }
 
-/* Ghost border — subtle glass edge */
 .ghost-border {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-:root:not(.dark) .ghost-border {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border-subtle);
 }
 
-/* Neon text glow */
-.neon-text-cyan {
-  text-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
-}
+/* Legacy neon text utilities — intentionally no-op */
+.neon-text-cyan,
 .neon-text-purple {
-  text-shadow: 0 0 8px rgba(176, 38, 255, 0.4);
-}
-:root:not(.dark) .neon-text-cyan,
-:root:not(.dark) .neon-text-purple {
   text-shadow: none;
 }
 
@@ -195,12 +148,12 @@ body {
 }
 
 .dark ::-webkit-scrollbar-thumb {
-  background: rgba(181, 191, 194, 0.2);
+  background: rgba(255, 255, 255, 0.14);
   border-radius: 10px;
 }
 
 .dark ::-webkit-scrollbar-thumb:hover {
-  background: rgba(181, 191, 194, 0.35);
+  background: rgba(255, 255, 255, 0.25);
 }
 
 /* ═══════════════════════════════════════════════
@@ -209,7 +162,7 @@ body {
 .prose {
   --tw-prose-body: #334155;
   --tw-prose-headings: #0f172a;
-  --tw-prose-links: #3211d4;
+  --tw-prose-links: var(--primary);
   --tw-prose-bold: #0f172a;
   --tw-prose-quotes: #475569;
   --tw-prose-code: #0f172a;
@@ -217,22 +170,19 @@ body {
 }
 
 .dark .prose {
-  --tw-prose-body: #bac9cc;
-  --tw-prose-headings: #e4e1e9;
-  --tw-prose-links: #00E5FF;
-  --tw-prose-bold: #e4e1e9;
-  --tw-prose-quotes: #849396;
-  --tw-prose-code: #e4e1e9;
+  --tw-prose-body: var(--text-secondary);
+  --tw-prose-headings: var(--text-main);
+  --tw-prose-links: var(--primary);
+  --tw-prose-bold: var(--text-main);
+  --tw-prose-quotes: var(--text-muted);
+  --tw-prose-code: var(--text-main);
   --tw-prose-pre-bg: rgba(255, 255, 255, 0.05);
 }
 
-/* AI Summary card headings — every h1/h2/h3 in a multi-heading summary lit up
-   full neon cyan with a glow read as gaudy rather than premium repeated over
-   and over. Keep the AI-summary accent (violet, matching the card's own
-   border-l-accent stripe) as a subtle left rule instead of full-color glow. */
-.dark .ai-summary-prose h1,
-.dark .ai-summary-prose h2,
-.dark .ai-summary-prose h3 {
+/* AI Summary card headings — subtle accent left rule (consistent in both modes) */
+.ai-summary-prose h1,
+.ai-summary-prose h2,
+.ai-summary-prose h3 {
   color: var(--text-main);
   border-left: 2px solid var(--accent);
   padding-left: 0.6em;
@@ -261,15 +211,11 @@ body {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: #94a3b8;
-}
-
-.dark .section-header {
-  color: #849396;
+  color: var(--text-muted);
 }
 
 /* ═══════════════════════════════════════════════
-   Waveform — Recording visualization
+   Waveform — Recording visualization (brand gradient, no glow)
    ═══════════════════════════════════════════════ */
 @keyframes waveform {
   0%, 100% { height: 4px; }
@@ -277,14 +223,8 @@ body {
 }
 
 .waveform-bar {
-  background: linear-gradient(to top, #3211d4 0%, #5b21b6 33%, #7c3aed 66%, #a78bfa 100%);
-  box-shadow: 0 0 6px rgba(50, 17, 212, 0.3);
+  background: linear-gradient(to top, var(--primary) 0%, var(--accent) 60%, var(--secondary) 100%);
   border-radius: 9999px;
-}
-
-.dark .waveform-bar {
-  background: linear-gradient(to top, #00E5FF 0%, #00c8e0 30%, #B026FF 70%, #c084fc 100%);
-  box-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
 }
 
 /* ═══════════════════════════════════════════════
@@ -303,7 +243,7 @@ body {
   position: absolute;
   left: 0;
   top: 0.1em;
-  color: #00E5FF;
+  color: var(--primary);
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
 }
 
