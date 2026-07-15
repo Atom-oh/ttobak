@@ -46,6 +46,9 @@ export function MemberPicker({ excludeUserIds, onPick, placeholder = 'Search by 
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.preventDefault();
+        }}
         placeholder={placeholder}
         className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
       />

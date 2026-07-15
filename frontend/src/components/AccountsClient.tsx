@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/components/auth/AuthProvider';
 import { accountApi } from '@/lib/api';
 import { MemberPicker } from '@/components/MemberPicker';
 import type { AccountSummary, User } from '@/types/meeting';
@@ -12,6 +13,7 @@ interface PendingMember extends User {
 
 export default function AccountsClient() {
   const router = useRouter();
+  const { user } = useAuth();
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +68,12 @@ export default function AccountsClient() {
       setIndustry('');
       setPendingMembers([]);
       if (failed.length > 0) {
-        setError(`Account created, but failed to add: ${failed.join(', ')}. You can retry on the account page.`);
+        // Stay on the accounts list so the error is actually visible -- the account
+        // still exists and is reachable from the (refreshed) list below, where the
+        // owner can open it and retry adding the failed members from its detail page.
+        setError(`Account created, but failed to add: ${failed.join(', ')}. Open the account below and retry.`);
+        await fetchAccounts();
+        return;
       }
       router.push(`/accounts/${created.accountId}`);
     } catch (err) {
@@ -120,7 +127,7 @@ export default function AccountsClient() {
             <div className="flex gap-2">
               <div className="flex-1">
                 <MemberPicker
-                  excludeUserIds={pendingMembers.map((m) => m.userId)}
+                  excludeUserIds={user ? [user.userId, ...pendingMembers.map((m) => m.userId)] : pendingMembers.map((m) => m.userId)}
                   onPick={(u) => setPendingMembers((prev) => [...prev, { ...u, role: pendingRole }])}
                   placeholder="Search colleague by name or email"
                 />
