@@ -1139,6 +1139,35 @@ func TestDeleteAccountDocument_NonUploaderDeleteDoesNotDeleteS3Object(t *testing
 	}
 }
 
+func TestDeleteAccountDocument_OriginalUploaderCannotDeleteAnotherMembersReplacementFile(t *testing.T) {
+	repo := newMockAccountRepo()
+	mockS3 := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: mockS3, bucketName: "test-bucket"}
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	repo.PutMember(context.Background(), &model.AccountMember{AccountID: acc.AccountID, UserID: "member-2", Role: model.RoleSSA})
+	created, _ := svc.PutDocument(context.Background(), "owner-1", acc.AccountID, &model.PutDocumentRequest{
+		Title: "Slide", FileKey: "docs/owner-1/old.pdf", FileName: "old.pdf",
+	})
+	// member-2 replaces the file -- the doc's SourceUserID stays "owner-1"
+	// (fixed at creation) but its current FileKey now belongs to member-2.
+	_, err := svc.UpdateAccountDocument(context.Background(), "member-2", acc.AccountID, created.DocID, &model.PutDocumentRequest{
+		Title: "Slide v2", FileKey: "docs/member-2/new.pdf", FileName: "new.pdf",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// owner-1 (the original SourceUserID) deletes the doc. A SourceUserID-
+	// based check would wrongly authorize this to delete member-2's file --
+	// ownership must follow the CURRENT fileKey's own prefix instead.
+	if err := svc.DeleteAccountDocument(context.Background(), "owner-1", acc.AccountID, created.DocID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mockS3.deletedKeys) != 0 {
+		t.Errorf("expected owner-1's delete to NOT remove member-2's docs/member-2/new.pdf, got %v", mockS3.deletedKeys)
+	}
+}
+
 func TestDeleteAccountDocument_NonexistentDocReturnsNotFound(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)

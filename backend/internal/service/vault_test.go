@@ -15,6 +15,7 @@ type mockVaultRepo struct {
 	owned       []model.Meeting
 	full        map[string]*model.Meeting
 	accounts    map[string]*model.Account
+	accountErr  error
 	memberships []model.AccountMember
 	documents   map[string][]model.AccountDocument // PK -> docs
 }
@@ -29,6 +30,9 @@ func (m *mockVaultRepo) ListAttachments(_ context.Context, _ string) ([]model.At
 	return nil, nil
 }
 func (m *mockVaultRepo) GetAccount(_ context.Context, accountID string) (*model.Account, error) {
+	if m.accountErr != nil {
+		return nil, m.accountErr
+	}
 	return m.accounts[accountID], nil
 }
 func (m *mockVaultRepo) ListAccountsForUser(_ context.Context, _ string) ([]model.AccountMember, error) {
@@ -162,11 +166,13 @@ func TestExportVault_IncludesDocuments(t *testing.T) {
 }
 
 func TestExportVault_SkipsAccountScopeWhenAccountDeleted(t *testing.T) {
-	// A membership row can outlive the account it points at (or GetAccount
-	// can transiently error). Either way, exportDocuments must skip that
-	// account's documents rather than falling through with accountName=""
-	// -- which docVaultPath reads as "personal" and would mis-file a
-	// shared account's documents under _Private/Docs/.
+	// A membership row can outlive the account it points at (GetAccount
+	// returns nil, no error). exportDocuments must skip that account's
+	// documents rather than falling through with accountName="" -- which
+	// docVaultPath reads as "personal" and would mis-file a shared
+	// account's documents under _Private/Docs/. A transient GetAccount
+	// *error* is a different case -- see
+	// TestExportVault_FailsLoudlyOnTransientGetAccountError below.
 	sharedNote := model.AccountDocument{
 		PK: model.PrefixAccount + "acc-deleted", DocID: "doc-9", Title: "고아 문서",
 		Content: "본문", EntityType: model.EntityTypeAccountDoc,
@@ -188,6 +194,24 @@ func TestExportVault_SkipsAccountScopeWhenAccountDeleted(t *testing.T) {
 		if strings.Contains(f.Path, "_Private") {
 			t.Errorf("account doc must not be exported under _Private when its account is gone, got %q", f.Path)
 		}
+	}
+}
+
+func TestExportVault_FailsLoudlyOnTransientGetAccountError(t *testing.T) {
+	// A transient GetAccount error must fail the export, not be treated the
+	// same as "account was deleted" (nil, no error) -- silently continuing
+	// would produce an export that looks complete but is missing that
+	// account's documents entirely (AGENTS.md: no silent failures).
+	repo := &mockVaultRepo{
+		accounts:    map[string]*model.Account{},
+		accountErr:  fmt.Errorf("dynamodb: transient read error"),
+		memberships: []model.AccountMember{{AccountID: "acc-1", UserID: "u1"}},
+	}
+	svc := newVaultServiceWithRepo(repo)
+
+	_, err := svc.ExportVault(context.Background(), "u1")
+	if err == nil {
+		t.Fatal("expected export to fail on a transient GetAccount error, got nil")
 	}
 }
 

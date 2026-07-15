@@ -163,13 +163,20 @@ func (s *VaultService) exportDocuments(ctx context.Context, userID string, nameC
 	for _, m := range memberships {
 		name, ok := nameCache[m.AccountID]
 		if !ok {
-			// Skip this account's documents entirely -- on a transient read
-			// error OR a nil account (membership row outlived a deleted
-			// account) -- rather than falling through with accountName ==
-			// "", which docVaultPath reads as "personal" and would mis-file
-			// a shared account's documents under _Private/Docs/.
 			acc, err := s.repo.GetAccount(ctx, m.AccountID)
-			if err != nil || acc == nil {
+			if err != nil {
+				// A transient read error must fail the whole export loudly
+				// (AGENTS.md: no silent failures) -- swallowing it here
+				// would produce an export that looks complete but is
+				// silently missing this account's documents entirely.
+				return nil, err
+			}
+			if acc == nil {
+				// Membership row outlived a deleted account -- skip just
+				// this account's documents rather than falling through
+				// with accountName == "", which docVaultPath reads as
+				// "personal" and would mis-file a shared account's
+				// documents under _Private/Docs/.
 				continue
 			}
 			name = acc.Name

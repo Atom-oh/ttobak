@@ -501,10 +501,20 @@ func validateDocRequest(req *model.PutDocumentRequest) error {
 // trusted (see ADR-020) -- it must be prefixed with the caller's own
 // docs/{userID}/ segment.
 func validateFileKeyOwnership(userID, fileKey string) error {
-	if fileKey != "" && !strings.HasPrefix(fileKey, "docs/"+userID+"/") {
+	if fileKey != "" && !ownsFileKey(userID, fileKey) {
 		return ErrForbidden
 	}
 	return nil
+}
+
+// ownsFileKey reports whether fileKey lives under userID's own docs/
+// prefix -- the key path itself is the source of truth for who a slide's
+// S3 object belongs to. A document's SourceUserID is NOT a safe proxy for
+// this: it's fixed at doc creation and never updated when a later editor
+// replaces the fileKey, so after such a replacement it can point at a
+// completely different user's file than the one now stored on the doc.
+func ownsFileKey(userID, fileKey string) bool {
+	return strings.HasPrefix(fileKey, "docs/"+userID+"/")
 }
 
 // putDoc is the shared create core for both account-scoped (accountID set)
@@ -645,14 +655,15 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 	if err := s.repo.PutAccountDocument(ctx, existing); err != nil {
 		return nil, err
 	}
-	if oldFileKey != "" && oldFileKey != existing.FileKey && existing.SourceUserID == userID && s.s3 != nil {
+	if oldFileKey != "" && oldFileKey != existing.FileKey && ownsFileKey(userID, oldFileKey) && s.s3 != nil {
 		// Best-effort, same as deleteDoc: the DB row is already committed to
 		// the new fileKey, so a failure here just leaves the superseded S3
 		// object orphaned rather than blocking (or un-doing) the update.
-		// SourceUserID check mirrors deleteDoc's -- oldFileKey is scoped to
-		// its uploader, not to the account, so only that uploader's own
-		// edit can trigger its cleanup (ponytail: same accepted orphan
-		// trade-off as deleteDoc when a non-uploader member replaces it).
+		// ownsFileKey (not SourceUserID -- see deleteDoc's comment) mirrors
+		// deleteDoc's check: oldFileKey is scoped to its own owner, not to
+		// the account, so only that owner's edit can trigger its cleanup
+		// (ponytail: same accepted orphan trade-off as deleteDoc when a
+		// non-owner member replaces it).
 		if _, err := s.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
 			Bucket: aws.String(s.bucketName),
 			Key:    aws.String(oldFileKey),
@@ -700,20 +711,24 @@ func (s *AccountService) UpdateAccountDocument(ctx context.Context, userID, acco
 // deleteDoc maps the repository's conditional-check failure (item didn't
 // exist) to ErrNotFound, so a delete of an already-gone/never-existed docID
 // returns 404 as documented, rather than a bare 204. If the document was a
-// slide AND the caller is its own uploader, its S3 object is also removed
-// -- otherwise a delete only clears the DynamoDB item, leaving a (possibly
-// confidential) file in the bucket indefinitely with nothing left in the
-// app pointing at it.
+// slide AND the caller owns its current fileKey (docs/{userID}/ prefix),
+// its S3 object is also removed -- otherwise a delete only clears the
+// DynamoDB item, leaving a (possibly confidential) file in the bucket
+// indefinitely with nothing left in the app pointing at it.
 //
-// The uploader check matters for account docs: FileKey is scoped to
-// docs/{uploader}/, not to the account, but any account member can delete
-// an account doc. Without this check, a non-uploader member could trigger
-// a DeleteObject on a key that's actually the uploader's own -- and if the
-// uploader (deliberately or by coincidence) reused that same key on an
+// The ownership check matters for account docs: FileKey is scoped to
+// docs/{its own owner}/, not to the account, but any account member can
+// delete an account doc. Without this check, a non-uploader member could
+// trigger a DeleteObject on a key that's actually another user's -- and if
+// that user (deliberately or by coincidence) reused the same key on an
 // unrelated personal document, this delete would destroy it too, which
-// account-level delete permission was never meant to authorize.
+// account-level delete permission was never meant to authorize. This must
+// check the key's OWN prefix, not doc.SourceUserID -- SourceUserID is
+// fixed at doc creation and never updated when a later editor replaces the
+// fileKey, so it can drift to point at a different user than the one the
+// current fileKey actually belongs to.
 // ponytail: this leaves such a slide's S3 object orphaned when a non-
-// uploader member deletes it (no cleanup at all, not just skipped-for-now)
+// owner member deletes it (no cleanup at all, not just skipped-for-now)
 // -- accepted since the safe alternative (fixing it) needs a real owner/
 // reference-count check the domain doesn't have yet. Upgrade path: an S3
 // lifecycle rule on docs/, or a fileKey usage-count check before delete.
@@ -728,7 +743,7 @@ func (s *AccountService) deleteDoc(ctx context.Context, userID, pk, docID string
 		}
 		return err
 	}
-	if doc.FileKey != "" && doc.SourceUserID == userID && s.s3 != nil {
+	if doc.FileKey != "" && ownsFileKey(userID, doc.FileKey) && s.s3 != nil {
 		// Best-effort: the DynamoDB item is already gone, so a failure here
 		// just leaves an orphaned S3 object rather than blocking (or
 		// un-doing) a delete the caller already committed to.

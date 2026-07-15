@@ -84,6 +84,13 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
     if (isAuthenticated) fetchAll();
   }, [isAuthenticated, fetchAll]);
 
+  // saveContent always sends markdown (even "" for a slide, whose content
+  // is always empty) -- that's safe only because the title input below is
+  // disabled for slides (isSlide), so handleTitleBlur, the only other
+  // caller that could reach a slide with no fileKey change, can never
+  // fire for one. If slide titles ever become editable, this must switch
+  // to omitting markdown for that save instead of sending "" (which would
+  // trip updateDoc's slide-destructive-conversion guard).
   const saveContent = useCallback(async (markdown: string, nextTitle?: string) => {
     if (!doc) return;
     if (saveInFlightRef.current) {
@@ -191,6 +198,9 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
           </div>
         )}
         <div className="flex items-center gap-3 mb-6">
+          {/* disabled for slides so handleTitleBlur (and its saveContent
+              call sending markdown: "") can never fire on one -- see the
+              comment on saveContent before removing this. */}
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}

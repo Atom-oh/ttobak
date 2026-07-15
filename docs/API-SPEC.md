@@ -359,7 +359,7 @@ enum 검증을 하지 않는다). `markdown`에 포함된 `[[문서명]]`, `[[�
 
 ```
 POST /api/accounts/{accountId}/documents
-{ "title": "Email notes", "markdown": "# Prep\n...", "docType": "prep", "path": "Accounts/하나은행/prep.md" }
+{ "title": "Email notes", "markdown": "# Prep\n\n[[하나은행]] 미팅 준비...", "docType": "prep", "path": "Accounts/하나은행/prep.md" }
 { "title": "발표자료", "docType": "slide", "fileKey": "docs/user-uuid/1234567890_deck.pdf", "fileName": "deck.pdf", "mimeType": "application/pdf", "fileSize": 123456 }
 
 Response: 201 Created
@@ -394,7 +394,7 @@ Error: 404 Not Found (Account 없음)
 GET /api/accounts/{accountId}/documents/{docId}
 
 Response: 200 OK
-{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": ["하나은행"], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n..." }
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": ["하나은행"], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n\n[[하나은행]] 미팅 준비..." }
 
 슬라이드(`fileName` 있는 문서)는 `content`가 빈 문자열이고 `downloadUrl`(1시간
 유효 presigned GET URL, 없으면 필드 생략)이 채워진다.
