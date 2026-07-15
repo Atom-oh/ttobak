@@ -52,7 +52,7 @@ SP5 (독립) ──────────────────┘
 
 **해소됨**: us-east-1 Gateway는 신규 `web-search-gateway-stack.ts`로 확정 — 상세는 [SP1 설계](2026-07-09-sp1-agentcore-web-search-news-crawling-design.md) §4/§5.3 참조.
 
-### SP2. 문서 허브 v2 (노트/블로그/슬라이드/위키링크)
+### SP2. 문서 허브 v2 (노트/블로그/슬라이드/위키링크) — **Shipped** (2026-07-15, PR #113)
 
 **In**: `AccountDocument`에 `docType: note|blog|slide` 추가, Account 미소속 개인 문서 허용. 노트/블로그는 TipTap 에디터(`MeetingEditor.tsx` 재사용) + 위키링크 자동완성(`[[문서명]]` 입력 시 후보 검색) + 저장 시 링크 파싱·인덱싱(그래프의 데이터 소스). 슬라이드는 PPTX/PDF를 기존 presigned-upload 패턴(신규 `doc` 카테고리)으로 S3 업로드 + 다운로드 버튼. `VaultService.ExportVault`에 신규 타입 포함.
 
