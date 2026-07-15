@@ -64,7 +64,7 @@ type meetingRepo interface {
 	BatchGetMeetings(ctx context.Context, keys []repository.MeetingKey) ([]*model.Meeting, error)
 	GetOrCreateUser(ctx context.Context, userID, email, name string) (*model.User, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
-	CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error)
+	CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, origin string) (*model.Share, error)
 	DeleteShare(ctx context.Context, sharedToID, meetingID string) error
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
@@ -130,11 +130,13 @@ func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID stri
 		}
 	}
 
-	// Account-membership grants LIVE read access to meetings shared to an account:
-	// a teammate added AFTER the meeting was shared can still read it, and a removed
-	// member loses access automatically (no stale per-user Share snapshot). Only
-	// SharedToAccount meetings qualify — a Link-only (AccountID set, not shared)
-	// meeting stays private.
+	// Account membership grants live read access when no per-user Share exists,
+	// so a member added after the account share can read it immediately. A Share
+	// written by ShareMeetingToAccount is checked above and remains effective
+	// until RemoveMember's synchronous, best-effort cleanup reaches this meeting;
+	// cleanup across all account meetings is neither instantaneous nor
+	// transactional with membership deletion. Only SharedToAccount meetings
+	// qualify -- a Link-only (AccountID set, not shared) meeting stays private.
 	byID, err := s.repo.GetMeetingByID(ctx, meetingID)
 	if err != nil {
 		return nil, "", err
@@ -441,7 +443,7 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, owner
 		return nil, fmt.Errorf("cannot share with yourself")
 	}
 
-	return s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, targetUser.UserID, targetEmail, permission)
+	return s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, targetUser.UserID, targetEmail, permission, "")
 }
 
 // RevokeShare revokes a share (owner only)
@@ -712,7 +714,14 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 		if m.UserID == ownerID {
 			continue
 		}
-		if _, err := s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, m.UserID, m.Email, model.PermissionRead); err != nil {
+		member, err := s.repo.GetMember(ctx, accountID, m.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if member == nil {
+			continue
+		}
+		if _, err := s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, m.UserID, m.Email, model.PermissionRead, model.ShareOriginAccount); err != nil {
 			return nil, err
 		}
 		shared++

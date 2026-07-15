@@ -66,6 +66,8 @@ type accountRepo interface {
 	ListAccountsForUser(ctx context.Context, userID string) ([]model.AccountMember, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
+	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
+	DeleteShare(ctx context.Context, sharedToID, meetingID string) error
 	ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error)
 	PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error
 	ListAccountDocuments(ctx context.Context, pk string) ([]model.AccountDocument, error)
@@ -288,6 +290,25 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 			return ErrNotFound // removed concurrently between our Get and Delete
 		}
 		return err
+	}
+
+	refs, err := s.repo.ListMeetingRefsForAccount(ctx, accountID)
+	if err != nil {
+		log.Printf("cleanup shares for removed member %s in account %s: list meeting refs: %v", targetUserID, accountID, err)
+		return nil
+	}
+	for _, ref := range refs {
+		share, err := s.repo.GetShare(ctx, targetUserID, ref.MeetingID)
+		if err != nil {
+			log.Printf("cleanup share for removed member %s (meeting %s): get share: %v", targetUserID, ref.MeetingID, err)
+			continue
+		}
+		if share == nil || share.Origin != model.ShareOriginAccount {
+			continue
+		}
+		if err := s.repo.DeleteShare(ctx, targetUserID, ref.MeetingID); err != nil {
+			log.Printf("cleanup share for removed member %s (meeting %s): delete share: %v", targetUserID, ref.MeetingID, err)
+		}
 	}
 	return nil
 }

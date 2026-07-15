@@ -297,7 +297,9 @@ Error: 404 Not Found (해당 멤버 없음)
 Error: 400 Bad Request (owner는 제거 불가)
 ```
 
-> **Known limitation**: 멤버 제거는 해당 멤버에게 이미 `share-account`로 부여된 개별 미팅의 per-user Share 레코드를 회수하지 않습니다 — 제거 이후 새로 계정에 공유되는 미팅은 즉시 차단되지만(동적 멤버십 검사), 제거 시점에 이미 공유되어 있던 미팅에 대한 과거 Share 레코드는 그대로 남습니다. 모든 미팅을 스캔해 회수하는 비용이 과도하다고 판단해 의도적으로 수용한 제약입니다.
+> 멤버십 삭제는 per-user Share 레코드가 없는 미팅에 대한 새 접근을 즉시 차단합니다. 기존 Share 레코드가 있는 미팅은 같은 `RemoveMember` 요청 안에서 account의 전체 MeetingRef 목록을 순회하는 best-effort cleanup이 account-origin Share만 회수합니다. 이 처리는 N개 미팅 전체에 대해 즉시 완료되는 작업이 아니며 멤버십 삭제와 트랜잭션으로 묶이지 않습니다. 특정 미팅의 cleanup 실패는 로그로 남기고 멤버 제거 요청 자체는 성공하며, 소유자가 별도로 부여한 direct Share는 삭제하지 않습니다.
+>
+> **Known limitation**: 이 수정 배포 전에 `share-account`가 생성한 Share 레코드는 origin 태그가 없어 direct grant로 취급됩니다. 따라서 수정 배포 후 멤버를 제거해도 해당 과거 레코드는 cleanup 대상이 아닙니다.
 
 #### List Account Meetings (공유된 미팅 목록 — 멤버 전용)
 

@@ -91,6 +91,12 @@ func (m *mockHandlerAccountRepo) UpdateMemberRole(_ context.Context, accountID, 
 	member.Role = role
 	return nil
 }
+func (m *mockHandlerAccountRepo) GetShare(_ context.Context, sharedToID, meetingID string) (*model.Share, error) {
+	return nil, nil
+}
+func (m *mockHandlerAccountRepo) DeleteShare(_ context.Context, sharedToID, meetingID string) error {
+	return nil
+}
 func (m *mockHandlerAccountRepo) ListAccountMembers(_ context.Context, accountID string) ([]model.AccountMember, error) {
 	out := []model.AccountMember{}
 	for _, v := range m.members {

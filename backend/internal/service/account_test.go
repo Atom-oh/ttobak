@@ -20,6 +20,12 @@ type mockAccountRepo struct {
 	meetingRefs map[string][]model.MeetingRef // accountID -> refs
 	insightsByAccount map[string][]model.AccountInsight
 	documents map[string][]model.AccountDocument // PK -> docs
+	shares    map[string]*model.Share            // "sharedToID|meetingID" -> share
+
+	// shareOpErr, when non-nil, is returned by GetShare/DeleteShare for the
+	// specific meetingID it's keyed to test cleanup-failure handling without
+	// affecting every meeting in a multi-meeting test.
+	shareOpErr map[string]error // meetingID -> forced error
 
 	// deleteAfterGet simulates a concurrent RemoveMember landing in the gap
 	// right after a GetMember read returns: when non-empty and matching the
@@ -37,8 +43,12 @@ func newMockAccountRepo() *mockAccountRepo {
 		meetingRefs: make(map[string][]model.MeetingRef),
 		insightsByAccount: make(map[string][]model.AccountInsight),
 		documents: make(map[string][]model.AccountDocument),
+		shares:    make(map[string]*model.Share),
+		shareOpErr: make(map[string]error),
 	}
 }
+
+func acctShareKey(sharedToID, meetingID string) string { return sharedToID + "|" + meetingID }
 
 func memberKey(accountID, userID string) string { return accountID + "|" + userID }
 
@@ -94,6 +104,26 @@ func (m *mockAccountRepo) UpdateMemberRole(_ context.Context, accountID, userID,
 		return fmt.Errorf("%w: member %s not found", repository.ErrConditionFailed, userID)
 	}
 	member.Role = role
+	return nil
+}
+
+func (m *mockAccountRepo) GetShare(_ context.Context, sharedToID, meetingID string) (*model.Share, error) {
+	if err, ok := m.shareOpErr[meetingID]; ok {
+		return nil, err
+	}
+	sh, ok := m.shares[acctShareKey(sharedToID, meetingID)]
+	if !ok {
+		return nil, nil
+	}
+	cp := *sh
+	return &cp, nil
+}
+
+func (m *mockAccountRepo) DeleteShare(_ context.Context, sharedToID, meetingID string) error {
+	if err, ok := m.shareOpErr[meetingID]; ok {
+		return err
+	}
+	delete(m.shares, acctShareKey(sharedToID, meetingID))
 	return nil
 }
 
@@ -410,6 +440,61 @@ func TestRemoveMember_MissingMemberNotFound(t *testing.T) {
 	err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "ghost-1")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestRemoveMember_RevokesAccountOriginShare(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+
+	if err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.shares[acctShareKey("tam-1", "m-1")] != nil {
+		t.Error("expected account-origin share to be revoked")
+	}
+}
+
+func TestRemoveMember_PreservesDirectShare(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // direct share
+	}
+
+	if err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.shares[acctShareKey("tam-1", "m-1")] == nil {
+		t.Error("expected direct share to be preserved (not account-origin)")
+	}
+}
+
+func TestRemoveMember_CleanupFailureDoesNotFailRemoval(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.shareOpErr["m-1"] = errors.New("simulated transient DynamoDB error")
+
+	if err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+		t.Fatalf("expected RemoveMember to succeed despite share-cleanup failure, got: %v", err)
+	}
+	if mem, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1"); mem != nil {
+		t.Errorf("expected member to remain removed despite cleanup failure, got %+v", mem)
 	}
 }
 

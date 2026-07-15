@@ -1039,7 +1039,17 @@ func (r *DynamoDBRepository) GetAttachment(ctx context.Context, meetingID, attac
 }
 
 // CreateShare creates share records (both recipient and meeting lookup)
-func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error) {
+func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, origin string) (*model.Share, error) {
+	if origin == model.ShareOriginAccount {
+		existing, err := r.GetShare(ctx, sharedToID, meetingID)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil && existing.Origin != model.ShareOriginAccount {
+			return existing, nil
+		}
+	}
+
 	now := time.Now().UTC()
 
 	// Share record for recipient lookup: PK=USER#{sharedToId}, SK=SHARED#{meetingId}
@@ -1052,6 +1062,7 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 		SharedToID: sharedToID,
 		Email:      email,
 		Permission: permission,
+		Origin:     origin,
 		CreatedAt:  now,
 		EntityType: "SHARE",
 	}
@@ -1071,6 +1082,7 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 		SharedToID: sharedToID,
 		Email:      email,
 		Permission: permission,
+		Origin:     origin,
 		CreatedAt:  now,
 		EntityType: "SHARE",
 	}

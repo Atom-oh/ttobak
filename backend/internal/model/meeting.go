@@ -80,9 +80,19 @@ type Share struct {
 	SharedToID string    `dynamodbav:"sharedToId"`
 	Email      string    `dynamodbav:"email"`
 	Permission string    `dynamodbav:"permission"` // "read" or "edit"
+	// Origin distinguishes a share created by ShareMeetingToAccount ("account")
+	// from one created by the owner directly via ShareMeetingByEmail (""/direct).
+	// RemoveMember's cleanup must only ever delete "account"-origin shares -- a
+	// direct share is a separate grant the owner made explicitly and removing a
+	// team member must never silently revoke it.
+	Origin     string    `dynamodbav:"origin,omitempty"`
 	CreatedAt  time.Time `dynamodbav:"createdAt"`
 	EntityType string    `dynamodbav:"entityType"` // "SHARE"
 }
+
+const (
+	ShareOriginAccount = "account"
+)
 
 // User represents a user record (for search functionality)
 // PK: USER#{userId}, SK: PROFILE
