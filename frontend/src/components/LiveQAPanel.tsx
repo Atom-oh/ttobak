@@ -24,6 +24,8 @@ interface QAEntry {
   usedDocs?: boolean;
   toolsUsed?: string[];
   isStreaming?: boolean;
+  /** AI-suggested follow-up questions for this answer */
+  followUps?: string[];
 }
 
 const suggestedQuestions = [
@@ -68,6 +70,34 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       }
     }
   }, [serverDetectedQuestions, askedQuestions, onDetectedQuestionsChange]);
+
+  // Fetch follow-up question suggestions for each completed answer.
+  // Reuses the detect-questions endpoint (its prompt already generates
+  // "questions a practitioner would ask next" from context). Fetched at
+  // most once per entry; failures are silent (cards simply don't appear).
+  const followUpFetchedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const target = qaHistory.find(
+      (e) => !e.isStreaming && e.answer && !followUpFetchedRef.current.has(e.id),
+    );
+    if (!target) return;
+    followUpFetchedRef.current.add(target.id);
+    // Skip error placeholders — no useful context to suggest from
+    if (target.answer.startsWith('답변을 가져오지') || target.answer.startsWith('답변 생성 중 오류')) return;
+
+    const context = `질문: ${target.question}\n답변: ${target.answer}`.slice(0, 2000);
+    qaApi.detectQuestions(context, askedQuestions)
+      .then((res) => {
+        if (res.questions.length > 0) {
+          setQaHistory((prev) =>
+            prev.map((e) =>
+              e.id === target.id ? { ...e, followUps: res.questions.slice(0, 3) } : e,
+            ),
+          );
+        }
+      })
+      .catch(() => {}); // silent fail
+  }, [qaHistory, askedQuestions]);
 
   const handleStreamMessage = useCallback((msg: WebSocketMessage) => {
     const entryId = activeEntryIdRef.current;
@@ -253,6 +283,9 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
                   : undefined
               }
               isSavedToNotes={savedEntryIds.has(entry.id)}
+              followUps={entry.followUps}
+              onAskFollowUp={handleAsk}
+              followUpsDisabled={isAsking}
             />
           ))
         )}

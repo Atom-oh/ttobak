@@ -15,6 +15,7 @@ import { LiveQAPanel } from '@/components/LiveQAPanel';
 import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingConfig';
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
+import { MeetingContextInput } from '@/components/record/MeetingContextInput';
 import { supportsTabAudioCapture } from '@/lib/device';
 import { isTauri } from '@/lib/tauri';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
@@ -107,11 +108,25 @@ function RecordPageInner() {
   // one is in flight is queued (latest wins) and fires right after the
   // current one settles, so the server always sees saves in order.
   const notesSaveInFlightRef = useRef(false);
-  const pendingNotesRef = useRef<string | null>(null);
+  // Carries meetingId alongside the queued notes -- if a save for a NEW
+  // meeting queues while an OLDER meeting's save is still in flight (e.g.
+  // right after starting a second recording without reloading), draining
+  // the queue must PUT to the meeting the queued notes actually belong to,
+  // not whichever meetingId the in-flight call's own closure captured.
+  const pendingNotesRef = useRef<{ meetingId: string; notes: string } | null>(null);
+  const notesDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const saveNotes = useCallback(async (meetingId: string, notesToSave: string) => {
     if (notesSaveInFlightRef.current) {
-      pendingNotesRef.current = notesToSave;
+      pendingNotesRef.current = { meetingId, notes: notesToSave };
+      return;
+    }
+    if (!notesToSave.trim()) {
+      // The backend ignores an empty `notes` string on UpdateMeeting (it
+      // only applies non-empty values), so a PUT here would silently no-op
+      // server-side while we still showed "saved" -- lying about a clear
+      // that didn't actually happen. Skip the request rather than claim
+      // success for something the server can't currently represent.
       return;
     }
     notesSaveInFlightRef.current = true;
@@ -127,7 +142,7 @@ function RecordPageInner() {
       const pending = pendingNotesRef.current;
       if (pending !== null) {
         pendingNotesRef.current = null;
-        saveNotes(meetingId, pending);
+        await saveNotes(pending.meetingId, pending.notes);
       }
     }
   }, []);
@@ -137,9 +152,42 @@ function RecordPageInner() {
     if (!postRecording.serverMeetingId) return;
     if (notes === lastSavedNotesRef.current) return;
     const meetingId = postRecording.serverMeetingId;
-    const timer = setTimeout(() => saveNotes(meetingId, notes), 1500);
-    return () => clearTimeout(timer);
+    notesDebounceTimerRef.current = setTimeout(() => {
+      notesDebounceTimerRef.current = null;
+      saveNotes(meetingId, notes);
+    }, 1500);
+    return () => {
+      if (notesDebounceTimerRef.current) {
+        clearTimeout(notesDebounceTimerRef.current);
+        notesDebounceTimerRef.current = null;
+      }
+    };
   }, [notes, postRecording.serverMeetingId, saveNotes]);
+
+  // Flushes the debounce timer and any in-flight/queued autosave before the
+  // post-recording notes step's own PUT fires. Without this, a lingering
+  // autosave from during the recording could land on the server AFTER the
+  // banner's final submit and overwrite it with older content -- the two
+  // paths write independently with no shared ordering otherwise.
+  const flushNotesQueue = useCallback(async (meetingId: string, latestNotes: string) => {
+    if (notesDebounceTimerRef.current) {
+      clearTimeout(notesDebounceTimerRef.current);
+      notesDebounceTimerRef.current = null;
+    }
+    if (latestNotes !== lastSavedNotesRef.current) {
+      await saveNotes(meetingId, latestNotes);
+    }
+  }, [saveNotes]);
+
+  // Flush before handing off to the banner's own (separately-timed) save,
+  // so that save is always the last one to reach the server.
+  const handleFinalNotesSubmit = useCallback(async (finalNotes: string) => {
+    const meetingId = postRecording.serverMeetingId;
+    if (meetingId) {
+      await flushNotesQueue(meetingId, finalNotes);
+    }
+    await postRecording.handleNotesSubmit(finalNotes);
+  }, [flushNotesQueue, postRecording]);
 
   // Q&A context = user-provided meeting context + live transcript
   const qaContext = contextText.trim()
@@ -211,7 +259,11 @@ function RecordPageInner() {
     setNotes('');
     lastSavedNotesRef.current = '';
     setNotesSaveStatus('idle');
-    setContextText('');
+    // contextText is NOT reset here -- it's filled in during setup, before
+    // this handler fires, specifically so THIS session's Q&A can use it.
+    // Clearing it on start would delete the very input the user just
+    // typed. It's reset instead where a session actually ends and the
+    // user returns to a fresh setup screen (see the dismiss handler below).
     // Create draft meeting immediately so the post-recording flow has a
     // server meetingId to attach the audio to. This is required for both
     // browser (mic/tab) and Tauri native (system audio) modes — without it,
@@ -577,17 +629,7 @@ function RecordPageInner() {
             />
             {/* Meeting context — optional, fed to AI Q&A during the meeting */}
             <div className="w-full max-w-md mt-2">
-              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-text-muted uppercase tracking-wide mb-1.5">
-                <span className="material-symbols-outlined text-sm">info</span>
-                미팅 컨텍스트 (선택)
-              </label>
-              <textarea
-                value={contextText}
-                onChange={(e) => setContextText(e.target.value)}
-                placeholder="아젠다, 고객사 배경, 참석자 등 미팅 배경 정보를 입력하면 AI 어시스턴트가 답변에 활용합니다."
-                rows={3}
-                className="w-full rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest px-3 py-2 text-sm text-slate-900 dark:text-text-main placeholder:text-slate-400 dark:placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
-              />
+              <MeetingContextInput value={contextText} onChange={setContextText} optional rows={3} />
             </div>
           </div>
         )}
@@ -764,17 +806,7 @@ function RecordPageInner() {
 
             {/* Meeting context input */}
             <div className="mb-4">
-              <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-text-muted uppercase tracking-wide mb-1.5">
-                <span className="material-symbols-outlined text-sm">info</span>
-                미팅 컨텍스트
-              </label>
-              <textarea
-                value={contextText}
-                onChange={(e) => setContextText(e.target.value)}
-                placeholder="아젠다, 고객사 배경 등 텍스트 컨텍스트를 입력하면 AI 어시스턴트가 답변에 활용합니다."
-                rows={2}
-                className="w-full rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest px-3 py-2 text-sm text-slate-900 dark:text-text-main placeholder:text-slate-400 dark:placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-none"
-              />
+              <MeetingContextInput value={contextText} onChange={setContextText} rows={2} />
             </div>
 
             {/* Attachment thumbnails grid */}
@@ -891,8 +923,8 @@ function RecordPageInner() {
           step={postRecording.step}
           errorMessage={postRecording.errorMessage}
           onRetry={handleRetry}
-          onDismiss={() => { postRecording.handleRetry(); router.push('/'); }}
-          onNotesSubmit={postRecording.handleNotesSubmit}
+          onDismiss={() => { postRecording.handleRetry(); setContextText(''); router.push('/'); }}
+          onNotesSubmit={handleFinalNotesSubmit}
           onNotesSkip={postRecording.handleNotesSkip}
           initialNotes={notes}
         />

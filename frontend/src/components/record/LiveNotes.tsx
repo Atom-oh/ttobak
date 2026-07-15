@@ -16,7 +16,7 @@ const STATUS_LABEL: Record<NotesSaveStatus, { label: string; icon: string; class
   idle: { label: '', icon: '', className: '' },
   saving: { label: '저장 중...', icon: 'sync', className: 'text-slate-400 dark:text-text-muted' },
   saved: { label: '저장됨', icon: 'cloud_done', className: 'text-emerald-500' },
-  error: { label: '저장 실패 — 재시도 예정', icon: 'cloud_off', className: 'text-error' },
+  error: { label: '저장 실패 · 입력 시 재시도', icon: 'cloud_off', className: 'text-error' },
 };
 
 /**

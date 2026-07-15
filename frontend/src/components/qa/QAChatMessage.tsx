@@ -21,9 +21,13 @@ interface QAChatMessageProps {
   /** When provided, shows a "save to meeting notes" action on completed answers */
   onSaveToNotes?: () => void;
   isSavedToNotes?: boolean;
+  /** AI-suggested follow-up questions for this answer */
+  followUps?: string[];
+  onAskFollowUp?: (question: string) => void;
+  followUpsDisabled?: boolean;
 }
 
-export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, toolsUsed, isStreaming, onSaveToNotes, isSavedToNotes }: QAChatMessageProps) {
+export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, toolsUsed, isStreaming, onSaveToNotes, isSavedToNotes, followUps, onAskFollowUp, followUpsDisabled }: QAChatMessageProps) {
   const isLoading = !answer && !isStreaming;
 
   return (
@@ -155,6 +159,28 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
                     </span>
                     {isSavedToNotes ? '노트에 저장됨' : '노트에 저장'}
                   </button>
+                </div>
+              )}
+
+              {/* Follow-up question cards */}
+              {followUps && followUps.length > 0 && onAskFollowUp && !isStreaming && (
+                <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-slate-700">
+                  <p className="flex items-center gap-1 text-[10px] font-semibold text-slate-400 dark:text-text-muted uppercase mb-1.5">
+                    <span className="material-symbols-outlined text-xs">forum</span>
+                    추가 질문
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    {followUps.map((q) => (
+                      <button
+                        key={q}
+                        onClick={() => onAskFollowUp(q)}
+                        disabled={followUpsDisabled}
+                        className="text-left text-xs px-2.5 py-1.5 rounded-lg border border-primary/20 bg-primary/5 text-primary hover:bg-primary/10 hover:border-primary/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </>
