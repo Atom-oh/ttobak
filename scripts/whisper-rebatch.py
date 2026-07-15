@@ -6,9 +6,11 @@ then triggers Whisper ECS tasks for each. The existing pipeline handles
 the rest: Whisper → S3 transcripts/ → EventBridge → summarize Lambda.
 
 Usage:
-  python3 scripts/whisper-rebatch.py              # dry-run: list meetings
-  python3 scripts/whisper-rebatch.py --run         # trigger ECS tasks
-  python3 scripts/whisper-rebatch.py --run <id>    # single meeting
+  python3 scripts/whisper-rebatch.py                                    # dry-run: list meetings
+  python3 scripts/whisper-rebatch.py --run                              # trigger ECS tasks
+  python3 scripts/whisper-rebatch.py --run <id>                         # single meeting
+  python3 scripts/whisper-rebatch.py --run --num-speakers 8 <id>        # hint speaker count
+                                                                         # for the diarization pipeline
 """
 import argparse
 import json
@@ -84,19 +86,24 @@ def get_meeting(meeting_id):
     return None
 
 
-def run_whisper_task(meeting_id, user_id, audio_key):
+def run_whisper_task(meeting_id, user_id, audio_key, num_speakers=None):
     """Trigger ECS Whisper task for a single meeting."""
     nfc_key = unicodedata.normalize("NFC", audio_key)
+    environment = [
+        {"name": "AUDIO_KEY", "value": nfc_key},
+        {"name": "MEETING_ID", "value": meeting_id},
+        {"name": "USER_ID", "value": user_id},
+        {"name": "BUCKET_NAME", "value": BUCKET},
+        {"name": "TABLE_NAME", "value": TABLE},
+    ]
+    if num_speakers:
+        # Hints pyannote's num_speakers in the container so diarization
+        # doesn't have to auto-detect the speaker count.
+        environment.append({"name": "NUM_SPEAKERS", "value": str(num_speakers)})
     overrides = {
         "containerOverrides": [{
             "name": CONTAINER,
-            "environment": [
-                {"name": "AUDIO_KEY", "value": nfc_key},
-                {"name": "MEETING_ID", "value": meeting_id},
-                {"name": "USER_ID", "value": user_id},
-                {"name": "BUCKET_NAME", "value": BUCKET},
-                {"name": "TABLE_NAME", "value": TABLE},
-            ],
+            "environment": environment,
         }],
     }
 
@@ -124,8 +131,16 @@ def run_whisper_task(meeting_id, user_id, audio_key):
 def main():
     parser = argparse.ArgumentParser(description="Re-batch existing meetings through Whisper ECS")
     parser.add_argument("--run", action="store_true", help="Actually trigger ECS tasks (default: dry-run)")
+    parser.add_argument("--num-speakers", type=int, default=None,
+                         help="Hint the exact speaker count to the diarization pipeline "
+                              "(only meaningful with a single meeting_id)")
     parser.add_argument("meeting_id", nargs="?", help="Process single meeting ID")
     args = parser.parse_args()
+
+    if args.num_speakers and not args.meeting_id:
+        print("ERROR: --num-speakers requires a single meeting_id (it would apply the same "
+              "speaker count to every re-batched meeting otherwise)", file=sys.stderr)
+        sys.exit(1)
 
     print(f"Whisper Re-Batch — {'RUN' if args.run else 'DRY RUN'}")
     print(f"Cluster: {CLUSTER} | Task: {TASK_DEF}")
@@ -169,7 +184,7 @@ def main():
             ExpressionAttributeValues={":s": "transcribing", ":p": "whisper"},
         )
 
-        if run_whisper_task(t["meeting_id"], t["user_id"], t["key"]):
+        if run_whisper_task(t["meeting_id"], t["user_id"], t["key"], args.num_speakers):
             success += 1
         time.sleep(2)
 

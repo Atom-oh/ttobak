@@ -359,11 +359,16 @@ ADR-013 — 트랜스크립트 딥 링크:
 	return content, nil
 }
 
-// WhisperSegment represents a timestamped text segment from Whisper output
+// WhisperSegment represents a timestamped text segment from Whisper output.
+// Speaker is populated by the Whisper container's pyannote acoustic
+// diarization pass when available; empty for older transcripts or when
+// diarization failed/was unavailable, in which case refineChunk falls back
+// to inferring speakers from text.
 type WhisperSegment struct {
-	Start float64 `json:"start"`
-	End   float64 `json:"end"`
-	Text  string  `json:"text"`
+	Start   float64 `json:"start"`
+	End     float64 `json:"end"`
+	Text    string  `json:"text"`
+	Speaker string  `json:"speaker,omitempty"`
 }
 
 // RefinedSegment represents a cleaned-up transcript segment with inferred speaker turns
@@ -543,27 +548,69 @@ func buildSpeakerHintTail(segments []RefinedSegment) []RefinedSegment {
 	return hints
 }
 
-func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int, prevTail []RefinedSegment) ([]RefinedSegment, error) {
-	var sb strings.Builder
+// hasAcousticSpeakers reports whether any segment in the chunk carries a
+// speaker label from acoustic diarization. A single Whisper transcript is
+// either all-labeled or all-unlabeled (diarization runs once over the whole
+// audio), but "any" is used defensively in case of partial-chunk boundary
+// weirdness rather than requiring every segment to match.
+func hasAcousticSpeakers(segments []WhisperSegment) bool {
 	for _, seg := range segments {
-		sb.WriteString(fmt.Sprintf("[%.1f-%.1f] %s\n", seg.Start, seg.End, seg.Text))
+		if seg.Speaker != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// buildRefineSystemPrompt returns the refineChunk system prompt for the
+// given mode. Split out from refineChunk so the preserve-vs-infer branching
+// is testable without a Bedrock client.
+func buildRefineSystemPrompt(preserveSpeakers bool) string {
+	var speakerTask string
+	if preserveSpeakers {
+		speakerTask = `4. **Preserve speaker labels**: Each input line is prefixed with its speaker label (e.g. "spk_2:"), assigned by acoustic diarization on the audio. These labels are AUTHORITATIVE — copy each one to its output segment exactly as given, do not relabel, merge, or reassign it based on what the text seems to say.
+   - You may merge consecutive input lines into one output segment ONLY if they have the same speaker label.
+   - Never combine text from two different speaker labels into a single output segment.`
+	} else {
+		speakerTask = `4. **Infer speaker turns**: Based on conversation flow, assign speaker labels "spk_0", "spk_1", "spk_2", "spk_3", "spk_4", "spk_5", etc.
+   - **Meetings typically have 3-8 participants.** Do NOT assume only 2-3 speakers. Pay close attention to: different speaking styles, distinct viewpoints, question-answer patterns, self-introductions, role references, and turn-taking pauses.
+   - **When uncertain, prefer splitting into a new speaker over merging.** It is better to over-estimate speaker count than to conflate different people into one label.
+   - If previous context is provided, reuse the same speaker labels for the same speakers.`
 	}
 
-	systemPrompt := `You are a Korean meeting transcript editor. You receive raw Whisper STT segments with timestamps and must produce clean, readable transcript segments.
+	return fmt.Sprintf(`You are a Korean meeting transcript editor. You receive raw Whisper STT segments with timestamps and must produce clean, readable transcript segments.
 
 Your tasks:
 1. **Merge fragmented sentences**: Whisper often splits one speaker's continuous speech into many short fragments. Merge them into natural sentence units.
 2. **Fix misrecognized words**: Correct obvious STT errors (e.g. "상침" → "상세" or "상위", "아키드" → "아키텍트", "채우해" → "셰어해"). Use surrounding context to infer correct words.
 3. **Remove hallucinations**: Whisper sometimes repeats words/phrases (e.g. "법인으로 법인으로 법인으로"). Keep only one instance.
-4. **Infer speaker turns**: Based on conversation flow, assign speaker labels "spk_0", "spk_1", "spk_2", "spk_3", "spk_4", "spk_5", etc.
-   - **Meetings typically have 3-8 participants.** Do NOT assume only 2-3 speakers. Pay close attention to: different speaking styles, distinct viewpoints, question-answer patterns, self-introductions, role references, and turn-taking pauses.
-   - **When uncertain, prefer splitting into a new speaker over merging.** It is better to over-estimate speaker count than to conflate different people into one label.
-   - If previous context is provided, reuse the same speaker labels for the same speakers.
+%s
 5. **Preserve timestamps**: Each output segment should have the start time of its first source segment and end time of its last source segment.
 6. **Remove filler words**: Clean up meaningless fillers ("음", "어", "그") but keep discourse markers that carry meaning.
 
 Output ONLY a JSON array. Each element: {"speaker":"spk_0","text":"정제된 문장","startTime":0.0,"endTime":6.5}
-Do NOT include any text outside the JSON array. No markdown fences.`
+Do NOT include any text outside the JSON array. No markdown fences.`, speakerTask)
+}
+
+// buildRefineSegmentLines renders the raw-segment block of the user prompt,
+// prefixing each line with its acoustic speaker label in preserve mode.
+func buildRefineSegmentLines(segments []WhisperSegment, preserveSpeakers bool) string {
+	var sb strings.Builder
+	for _, seg := range segments {
+		if preserveSpeakers {
+			sb.WriteString(fmt.Sprintf("[%.1f-%.1f] %s: %s\n", seg.Start, seg.End, seg.Speaker, seg.Text))
+		} else {
+			sb.WriteString(fmt.Sprintf("[%.1f-%.1f] %s\n", seg.Start, seg.End, seg.Text))
+		}
+	}
+	return sb.String()
+}
+
+func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int, prevTail []RefinedSegment) ([]RefinedSegment, error) {
+	preserveSpeakers := hasAcousticSpeakers(segments)
+	sb := strings.Builder{}
+	sb.WriteString(buildRefineSegmentLines(segments, preserveSpeakers))
+	systemPrompt := buildRefineSystemPrompt(preserveSpeakers)
 
 	var userPrompt string
 	if len(prevTail) > 0 {

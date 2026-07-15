@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -13,6 +16,8 @@ TABLE = os.environ["TABLE_NAME"]
 VOCAB_KEY = os.environ.get("VOCAB_KEY", "config/custom-vocabulary.txt")
 MODEL_S3_KEY = os.environ.get("MODEL_S3_KEY", "models/faster-whisper-large-v3.tar.gz")
 MODEL_LOCAL_DIR = "/tmp/whisper-model"
+DIARIZATION_S3_KEY = os.environ.get("DIARIZATION_S3_KEY", "models/pyannote-diarization-3.1.tar.gz")
+DIARIZATION_LOCAL_DIR = "/tmp/diarization-model"
 
 # Audio discovery filters — exclude empty/placeholder uploads and progress/checkpoint sidecars.
 MIN_AUDIO_SIZE_BYTES = 1024
@@ -41,6 +46,100 @@ def _ensure_model() -> str:
     elapsed = time.time() - start
     print(f"Model ready ({elapsed:.0f}s)")
     return MODEL_LOCAL_DIR
+
+
+def _ensure_diarization_model() -> str | None:
+    """Returns the local pipeline config.yaml path, or None if the S3 bundle
+    is missing/unreadable. Diarization is best-effort: transcription must
+    never fail because the diarization bundle isn't there yet."""
+    config_path = os.path.join(DIARIZATION_LOCAL_DIR, "pipeline", "config.yaml")
+    if os.path.exists(config_path):
+        print("Diarization model already cached locally")
+        return config_path
+
+    print(f"Downloading diarization model from s3://{BUCKET}/{DIARIZATION_S3_KEY}")
+    try:
+        start = time.time()
+        archive = "/tmp/diarization-model.tar.gz"
+        s3.download_file(BUCKET, DIARIZATION_S3_KEY, archive)
+        os.makedirs(DIARIZATION_LOCAL_DIR, exist_ok=True)
+
+        import tarfile
+        with tarfile.open(archive) as tar:
+            tar.extractall(DIARIZATION_LOCAL_DIR)
+        os.remove(archive)
+        elapsed = time.time() - start
+        print(f"Diarization model ready ({elapsed:.0f}s)")
+        return config_path
+    except Exception as e:
+        print(f"Diarization model unavailable, skipping diarization: {e}")
+        return None
+
+
+def _to_mono16k_wav(input_path: str) -> str:
+    """pyannote needs a decodable waveform; the uploaded audio can be
+    webm/opus/m4a etc. ffmpeg is already in the image for this."""
+    wav_path = "/tmp/audio-16k-mono.wav"
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", input_path, "-ar", "16000", "-ac", "1", wav_path],
+        check=True, capture_output=True,
+    )
+    return wav_path
+
+
+def _diarize(config_path: str, wav_path: str, num_speakers: int | None):
+    """Runs pyannote diarization. Returns a list of (start, end, label)
+    turns, or [] if diarization fails for any reason (caller falls back to
+    unlabeled segments -- never let this abort the transcription)."""
+    try:
+        import torch
+        from pyannote.audio import Pipeline
+
+        pipeline = Pipeline.from_pretrained(config_path)
+        pipeline.to(torch.device("cuda"))
+        kwargs = {"num_speakers": num_speakers} if num_speakers else {}
+        diarization = pipeline(wav_path, **kwargs)
+        return [
+            (turn.start, turn.end, label)
+            for turn, _, label in diarization.itertracks(yield_label=True)
+        ]
+    except Exception as e:
+        print(f"Diarization failed, falling back to unlabeled segments: {e}")
+        return []
+
+
+def _assign_speakers(segments: list[dict], turns: list[tuple]) -> list[dict]:
+    """Assigns each Whisper segment the speaker of the diarization turn with
+    maximum time overlap. Segments with zero overlap (e.g. a turn boundary
+    falls mid-segment) fall back to the turn whose midpoint is closest.
+    Raw pyannote labels ("SPEAKER_00") are normalized to "spk_N" in
+    first-appearance order, matching the existing spk_N/speakerMap
+    convention used by RefineTranscript and the frontend. Pure function --
+    no pyannote/torch import, so it's importable in unit tests without the
+    heavy runtime deps."""
+    if not turns:
+        return segments
+
+    label_order: list[str] = []
+
+    def _normalize(raw_label: str) -> str:
+        if raw_label not in label_order:
+            label_order.append(raw_label)
+        return f"spk_{label_order.index(raw_label)}"
+
+    for seg in segments:
+        best_label, best_overlap = None, 0.0
+        for turn_start, turn_end, label in turns:
+            overlap = min(seg["end"], turn_end) - max(seg["start"], turn_start)
+            if overlap > best_overlap:
+                best_label, best_overlap = label, overlap
+        if best_label is None:
+            seg_mid = (seg["start"] + seg["end"]) / 2
+            best_label = min(
+                turns, key=lambda t: abs((t[0] + t[1]) / 2 - seg_mid)
+            )[2]
+        seg["speaker"] = _normalize(best_label)
+    return segments
 
 
 def _load_custom_vocab_prompt() -> str:
@@ -156,6 +255,27 @@ def main():
     transcript_text = " ".join(s["text"] for s in all_segments)
     print(f"Done: {len(transcript_text):,} chars in {elapsed:.1f}s")
 
+    num_speakers_env = os.environ.get("NUM_SPEAKERS", "").strip()
+    num_speakers = int(num_speakers_env) if num_speakers_env.isdigit() else None
+
+    diarization_config = _ensure_diarization_model()
+    num_speakers_detected = 0
+    if diarization_config and all_segments:
+        print("Diarizing...")
+        diarize_start = time.time()
+        wav_path = _to_mono16k_wav(local_path)
+        turns = _diarize(diarization_config, wav_path, num_speakers)
+        if turns:
+            all_segments = _assign_speakers(all_segments, turns)
+            num_speakers_detected = len({t[2] for t in turns})
+            print(f"Diarization done in {time.time() - diarize_start:.1f}s, "
+                  f"{num_speakers_detected} speaker(s) detected")
+        else:
+            print("Diarization produced no turns; segments left unlabeled")
+    elif not diarization_config:
+        print("Diarization model unavailable; segments left unlabeled "
+              "(summarize Lambda will infer speakers from text)")
+
     result = {
         "results": {
             "transcripts": [{"transcript": transcript_text}],
@@ -167,10 +287,17 @@ def main():
             "language_probability": round(info.language_probability, 3),
             "duration_seconds": round(elapsed, 1),
             "segments": all_segments,
+            "diarization": {
+                "enabled": bool(diarization_config),
+                "num_speakers_detected": num_speakers_detected,
+            },
         },
     }
 
-    output_key = f"transcripts/{meeting_id}.json"
+    # OUTPUT_KEY lets the transcribe Lambda route multi-part audio to a
+    # per-part key; without honoring it, every part would overwrite the same
+    # transcripts/{meeting_id}.json.
+    output_key = os.environ.get("OUTPUT_KEY", "").strip() or f"transcripts/{meeting_id}.json"
     s3.put_object(
         Bucket=BUCKET,
         Key=output_key,

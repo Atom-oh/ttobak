@@ -27,6 +27,7 @@ cd frontend && npm run lint      # eslint
 # Capped at <2: these tests exercise botocore.auth.SigV4Auth, a quasi-internal API a major bump could change)
 cd backend/python/crawler && python3 -m unittest test_crawlers -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
+cd backend/whisper && python3 -m unittest test_transcribe -v
 
 # CDK
 cd infra && npx cdk synth        # synthesize all 11 stacks
@@ -139,6 +140,7 @@ The news crawler Lambda (`ttobak-crawler-news`) gets `WEB_SEARCH_GATEWAY_URL` / 
 - **Next.js static export**: `output: 'export'` only in production; local dev uses normal SSR for dynamic routes
 - **Bedrock models**: Claude Opus 4.8 for summarize/vision, Claude Haiku for fast translation/detection
 - **STT dual architecture**: Real-time uses browser Web Speech API (free, Korean-only) or AWS Transcribe Streaming (`@aws-sdk/client-transcribe-streaming` in browser via `sttManager.ts`). Batch post-upload always uses Whisper ECS GPU Spot (faster-whisper-large-v3 on g5.xlarge). The transcribe Lambda defaults to `sttProvider: "whisper"` and falls back to AWS Transcribe if Whisper cluster is not configured. `liveSttProvider` controls the real-time engine in the browser.
+- **Speaker diarization (ADR-019)**: The Whisper container runs pyannote.audio speaker-diarization-3.1 (acoustic, voice-based) after transcription, on the same GPU; segments get a `speaker` field assigned by max-time-overlap with diarization turns. `meeting.Participants` headcount flows through as a `NUM_SPEAKERS` env hint (`backend/cmd/transcribe/main.go` → ECS task override). When segments carry acoustic labels, `RefineTranscript` (`backend/internal/service/bedrock.go`) switches to "preserve mode" — labels are authoritative, LLM only cleans up text; without them (older transcripts, diarization failure) it falls back to the original text-inference prompt. One-time operator bootstrap required before first deploy: accept HuggingFace gating for the 3 pyannote model repos, then run `backend/whisper/upload-diarization-model.sh` with `HF_TOKEN` to bundle weights to S3 (same pattern as the Whisper model itself — zero HF dependency at runtime after that). Backfill a specific meeting with `python3 scripts/whisper-rebatch.py --run --num-speakers N <meetingId>`.
 - **Auto-expiry**: GetMeeting handler auto-marks stuck `transcribing`/`summarizing` status as `error` after 30 minutes. Long audio files rarely exceed this but be aware when debugging.
 - **Sentinel errors**: `service.ErrForbidden` and `service.ErrNotFound` enable typed error handling in handlers via `errors.Is()`
 

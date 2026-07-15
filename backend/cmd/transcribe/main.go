@@ -182,7 +182,14 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 					log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
 				}
 			}
-			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt, outputKey)
+			// Participant count hints pyannote's num_speakers so it doesn't
+			// have to auto-detect; 0 (Participants empty/unset) means "let
+			// pyannote auto-detect" -- see startWhisperTask.
+			numSpeakers := 0
+			if meeting != nil {
+				numSpeakers = len(meeting.Participants)
+			}
+			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt, outputKey, numSpeakers)
 			jobName = "whisper-ecs-" + meetingID
 		}
 	case "nova-sonic":
@@ -205,7 +212,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	return nil
 }
 
-func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string) error {
+func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int) error {
 	envOverrides := []ecsTypes.KeyValuePair{
 		{Name: aws.String("AUDIO_KEY"), Value: aws.String(audioKey)},
 		{Name: aws.String("MEETING_ID"), Value: aws.String(meetingID)},
@@ -219,6 +226,13 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialP
 	if outputKey != "" {
 		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{
 			Name: aws.String("OUTPUT_KEY"), Value: aws.String(outputKey),
+		})
+	}
+	if numSpeakers > 0 {
+		// Hints pyannote's num_speakers so diarization doesn't have to
+		// auto-detect the speaker count. Omitted (0) lets pyannote auto-detect.
+		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{
+			Name: aws.String("NUM_SPEAKERS"), Value: aws.String(strconv.Itoa(numSpeakers)),
 		})
 	}
 
