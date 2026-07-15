@@ -291,9 +291,24 @@ export interface AccountDocument {
   title: string;
   docType?: string;
   path?: string;
+  links?: string[];
+  fileName?: string;
   sourceUserId: string;
   createdAt: string;
+  updatedAt?: string;
   content?: string;
+  downloadUrl?: string;
+}
+
+export interface PutDocumentRequest {
+  title: string;
+  docType?: string;
+  path?: string;
+  markdown?: string;
+  fileKey?: string;
+  fileName?: string;
+  mimeType?: string;
+  fileSize?: number;
 }
 
 export const INSIGHT_TYPES = [

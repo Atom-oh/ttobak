@@ -23,9 +23,16 @@ func withUserCtx(r *http.Request, userID string) *http.Request {
 	return r.WithContext(ctx)
 }
 
-// withChiParam injects a chi URL param for testing.
+// withChiParam injects a chi URL param for testing. Reuses an existing
+// route context already on the request (if one was set by a prior
+// withChiParam call) so chained calls accumulate params instead of each one
+// replacing the last -- routes with two path params (e.g. accountId+docId)
+// need both set on the same request.
 func withChiParam(r *http.Request, key, val string) *http.Request {
-	rctx := chi.NewRouteContext()
+	rctx := chi.RouteContext(r.Context())
+	if rctx == nil {
+		rctx = chi.NewRouteContext()
+	}
 	rctx.URLParams.Add(key, val)
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }

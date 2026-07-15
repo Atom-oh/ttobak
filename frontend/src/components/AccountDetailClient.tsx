@@ -1,17 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
-import { usePathname } from 'next/navigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi } from '@/lib/api';
+import { uploadDocFile } from '@/lib/upload';
 import { INSIGHT_TYPES } from '@/types/meeting';
 import type { Account, AccountInsight, AccountMeetingRef, AccountDocument } from '@/types/meeting';
 
 export default function AccountDetailClient() {
   const pathname = usePathname();
+  const router = useRouter();
   const accountId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
   const { isLoading, isAuthenticated } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [account, setAccount] = useState<Account | null>(null);
   const [meetings, setMeetings] = useState<AccountMeetingRef[]>([]);
@@ -20,6 +23,7 @@ export default function AccountDetailClient() {
   const [activeType, setActiveType] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [uploadingSlide, setUploadingSlide] = useState(false);
 
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('SSA');
@@ -64,6 +68,41 @@ export default function AccountDetailClient() {
       setError(err instanceof Error ? err.message : 'Failed to add member');
     } finally {
       setInviting(false);
+    }
+  };
+
+  const handleCreateNote = async () => {
+    try {
+      const created = await accountApi.putDocument(accountId, {
+        title: '새 노트', docType: 'note', markdown: '# 새 노트\n\n',
+      });
+      router.push(`/accounts/${accountId}/docs/${created.docId}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create note');
+    }
+  };
+
+  const handleSlideUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploadingSlide(true);
+    setError(null);
+    try {
+      const { key } = await uploadDocFile(file);
+      const created = await accountApi.putDocument(accountId, {
+        title: file.name.replace(/\.[^.]+$/, ''),
+        docType: 'slide',
+        fileKey: key,
+        fileName: file.name,
+        mimeType: file.type,
+        fileSize: file.size,
+      });
+      router.push(`/accounts/${accountId}/docs/${created.docId}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to upload slide');
+    } finally {
+      setUploadingSlide(false);
     }
   };
 
@@ -200,17 +239,42 @@ export default function AccountDetailClient() {
 
             {/* Documents */}
             <section className="mb-8">
-              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Documents</h3>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-base font-bold text-slate-900 dark:text-text-main">Documents</h3>
+                <div className="flex items-center gap-2">
+                  <input ref={fileInputRef} type="file" accept=".pdf,.pptx,.ppt" className="hidden" onChange={handleSlideUpload} />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingSlide}
+                    className="text-xs border border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-secondary rounded-lg px-2.5 py-1.5 flex items-center gap-1 disabled:opacity-50"
+                  >
+                    <span className="material-symbols-outlined text-sm">upload_file</span>
+                    {uploadingSlide ? 'Uploading…' : 'Slide'}
+                  </button>
+                  <button
+                    onClick={handleCreateNote}
+                    className="text-xs bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg px-2.5 py-1.5 flex items-center gap-1"
+                  >
+                    <span className="material-symbols-outlined text-sm">add</span>Note
+                  </button>
+                </div>
+              </div>
               {documents.length === 0 ? (
                 <p className="text-sm text-slate-400 dark:text-text-muted">No documents.</p>
               ) : (
                 <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
                   {documents.map((d) => (
-                    <div key={d.docId} className="flex items-center gap-2 p-3 text-sm">
-                      <span className="material-symbols-outlined text-primary text-lg">description</span>
+                    <a
+                      key={d.docId}
+                      href={`/accounts/${accountId}/docs/${d.docId}`}
+                      className="flex items-center gap-2 p-3 text-sm hover:bg-slate-50 dark:hover:bg-white/5"
+                    >
+                      <span className="material-symbols-outlined text-primary text-lg">
+                        {d.docType === 'slide' ? 'slideshow' : 'description'}
+                      </span>
                       <span className="text-slate-700 dark:text-text-secondary">{d.title}</span>
                       {d.docType && <span className="text-xs text-slate-400 dark:text-text-muted">({d.docType})</span>}
-                    </div>
+                    </a>
                   ))}
                 </div>
               )}

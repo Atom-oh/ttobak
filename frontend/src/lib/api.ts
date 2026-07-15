@@ -2,7 +2,7 @@
 
 import { getIdToken, refreshSession } from './auth';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
-import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument } from '@/types/meeting';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -183,7 +183,7 @@ export const meetingsApi = {
 
 // Presigned URL for uploads
 export const uploadsApi = {
-  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image' | 'file'; meetingId?: string; partIndex?: number; totalParts?: number }) =>
+  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image' | 'file' | 'doc'; meetingId?: string; partIndex?: number; totalParts?: number }) =>
     api.post<{ uploadUrl: string; key: string; expiresIn: number }>('/api/upload/presigned', data),
 
   notifyComplete: (data: { meetingId: string; key: string; category: 'audio' | 'image' | 'file'; fileName?: string; fileSize?: number; mimeType?: string; partIndex?: number; totalParts?: number }) =>
@@ -417,6 +417,28 @@ export const accountApi = {
   getDocument: (id: string, docId: string) =>
     api.get<AccountDocument>(
       `/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
+  putDocument: (id: string, data: PutDocumentRequest) =>
+    api.post<AccountDocument>(`/api/accounts/${encodeURIComponent(id)}/documents`, data),
+  updateDocument: (id: string, docId: string, data: PutDocumentRequest) =>
+    api.put<AccountDocument>(
+      `/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`, data),
+  deleteDocument: (id: string, docId: string) =>
+    api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
+};
+
+// Personal (account-less) document API endpoints
+export const docApi = {
+  list: (docType?: string) => {
+    const q = new URLSearchParams();
+    if (docType) q.set('docType', docType);
+    const qs = q.toString();
+    return api.get<{ documents: AccountDocument[] }>(`/api/documents${qs ? `?${qs}` : ''}`);
+  },
+  get: (docId: string) => api.get<AccountDocument>(`/api/documents/${encodeURIComponent(docId)}`),
+  put: (data: PutDocumentRequest) => api.post<AccountDocument>('/api/documents', data),
+  update: (docId: string, data: PutDocumentRequest) =>
+    api.put<AccountDocument>(`/api/documents/${encodeURIComponent(docId)}`, data),
+  delete: (docId: string) => api.delete<void>(`/api/documents/${encodeURIComponent(docId)}`),
 };
 
 export const meetingAccountApi = {

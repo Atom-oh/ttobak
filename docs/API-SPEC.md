@@ -348,16 +348,26 @@ Error: 404 Not Found (Account 없음)
 (≤300KB)으로 저장해 비-Obsidian 팀원도 TTOBAK에서 열람한다. 출처 규칙 루프 차단:
 `ttobak_id` frontmatter가 있는 TTOBAK-원본 문서는 거부한다.
 
+`docType`은 자유 문자열이다 (`"prep"`/`"reference"` 등 기존 값과 문서 허브 v2가
+UI에 노출하는 `"note"`/`"blog"`/`"slide"`가 모두 동일 필드를 공유하며, 서버는
+enum 검증을 하지 않는다). `markdown`에 포함된 `[[문서명]]`, `[[문서명|별칭]]`,
+`[[문서명#절]]` 형태의 위키링크는 저장 시 서버가 파싱해 정규화된 제목 목록을
+`links`에 저장한다 (그래프 뷰 등 향후 기능의 데이터 소스). 슬라이드(PPTX/PDF)는
+`markdown` 대신 `fileKey`(사전 발급된 presigned PUT로 업로드한 S3 키, 반드시
+`docs/{내 userId}/` 접두어)를 전달한다 — 이 put 호출 자체가 업로드 완료 기록이며
+별도의 `/api/upload/complete` 단계는 없다.
+
 ```
 POST /api/accounts/{accountId}/documents
-{ "title": "Email notes", "markdown": "# Prep\n...", "docType": "prep", "path": "Accounts/하나은행/prep.md" }
+{ "title": "Email notes", "markdown": "# Prep\n\n[[하나은행]] 미팅 준비...", "docType": "prep", "path": "Accounts/하나은행/prep.md" }
+{ "title": "발표자료", "docType": "slide", "fileKey": "docs/user-uuid/1234567890_deck.pdf", "fileName": "deck.pdf", "mimeType": "application/pdf", "fileSize": 123456 }
 
 Response: 201 Created
-{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "Accounts/하나은행/prep.md", "sourceUserId": "user-uuid", "createdAt": "2026-05-30T09:00:00Z" }
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "Accounts/하나은행/prep.md", "links": ["하나은행"], "sourceUserId": "user-uuid", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" }
 
-Error: 400 Bad Request (title/markdown 누락 또는 >300KB)
+Error: 400 Bad Request (title 누락, markdown/fileKey 둘 다 없음, 또는 markdown >300KB)
 Error: 400 Bad Request (TTOBAK 원본 — loop guard)
-Error: 403 Forbidden (멤버가 아님)
+Error: 403 Forbidden (멤버가 아님, 또는 fileKey가 내 userId 접두어가 아님)
 Error: 404 Not Found (Account 없음)
 ```
 
@@ -367,11 +377,16 @@ Error: 404 Not Found (Account 없음)
 GET /api/accounts/{accountId}/documents?docType=prep
 
 Response: 200 OK
-{ "documents": [ { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z" } ] }
+{ "documents": [ { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" } ] }
+
+`links`/`fileName`은 값이 있을 때만 나타난다(`omitempty`) — 위키링크나
+파일이 없는 문서는 필드 자체가 응답에서 생략된다(빈 배열/`null`이 아님).
 
 Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (Account 없음)
 ```
+
+목록은 `content`를 포함하지 않는다 (본문은 Get으로 개별 조회).
 
 #### Get Account Document (전체 내용 — 멤버 전용)
 
@@ -379,23 +394,104 @@ Error: 404 Not Found (Account 없음)
 GET /api/accounts/{accountId}/documents/{docId}
 
 Response: 200 OK
-{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "content": "# Prep\n..." }
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": ["하나은행"], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n\n[[하나은행]] 미팅 준비..." }
+
+슬라이드(`fileName` 있는 문서)는 `content`가 빈 문자열이고 `downloadUrl`(1시간
+유효 presigned GET URL, 없으면 필드 생략)이 채워진다.
 
 Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (문서 없음)
 ```
 
+#### Update / Delete Account Document (멤버 전용)
+
+Update는 필드별 "생략 시 기존 값 보존" 방식이다 — `docId`/`sourceUserId`/
+`createdAt`은 항상 보존된다. `title`만 필수(빈 문자열이면 거부); `docType`/
+`path`는 생략(빈 문자열)하면 기존 값 유지, 값을 보내면 그 값으로 교체된다.
+`markdown`은 JSON 키 자체를 생략하면 본문이 보존되고, 명시적으로 빈 문자열을
+보내면 본문이 지워진다(`*string` — nil=생략, non-nil pointer to ""=명시적
+삭제). `markdown`과 `fileKey`를 둘 다 생략하면 기존 본문/파일이 그대로
+보존된다(더 이상 오류가 아님); 둘 다 값이 있으면 거부된다(노트/블로그이거나
+슬라이드이거나, 둘 다일 수 없음). 값이 있는 `markdown`을 보내면 링크 재파싱과
+loop guard가 적용된다; 값이 있는 `fileKey`가 기존과 다르면 소유권(내 userId
+접두어)이 재검증된다. 슬라이드→노트 전환은 `markdown`만 보내면 되고(기존
+파일 필드가 함께 지워진다); 노트→슬라이드 전환은 `fileKey`만 보내면 된다
+(기존 본문이 함께 지워진다).
+
+```
+PUT /api/accounts/{accountId}/documents/{docId}
+{ "title": "Email notes v2", "markdown": "# Prep v2\n..." }
+
+Response: 200 OK
+{ "docId": "doc-uuid", "title": "Email notes v2", ... }
+
+DELETE /api/accounts/{accountId}/documents/{docId}
+Response: 204 No Content
+
+Error: 400 Bad Request (title 누락, markdown과 fileKey가 둘 다 값이 있음, markdown >300KB, 또는 TTOBAK 원본)
+Error: 403 Forbidden (멤버가 아님, 또는 fileKey가 내 userId 접두어가 아님)
+Error: 404 Not Found (문서 없음)
+```
+
+#### Personal Documents (Account 미소속 — 소유자 전용)
+
+`ttobak_ask`/문서 허브 v2의 개인 노트/블로그/슬라이드. `PK: USER#{내 userId}`로
+저장되므로 소유권이 키에 내재해 있고 Account 멤버십 확인이 필요 없다. 요청/응답
+스키마는 Account 문서와 동일 (accountId 경로 세그먼트만 없음).
+
+```
+POST   /api/documents                 { "title": "...", "markdown": "...", "docType": "note" }
+GET    /api/documents?docType=note    → { "documents": [ AccountDocumentDTO, ... ] }
+GET    /api/documents/{docId}         → AccountDocumentDetail
+PUT    /api/documents/{docId}         { "title": "...", "markdown": "..." }
+DELETE /api/documents/{docId}         → 204 No Content
+
+Error: 400 Bad Request / 404 Not Found — 위 Account 문서 엔드포인트와 동일한 의미
+(멤버십 확인 자체가 없어 "멤버가 아님" 403은 없지만, foreign fileKey는 여전히
+403 Forbidden — PK가 소유권 증명일 뿐, fileKey 접두어 검증은 별도로 적용됨)
+```
+
+#### Slide Upload (문서용 presigned URL)
+
+기존 presigned 업로드 엔드포인트(`POST /api/upload/presigned`)의 `category`에
+`"doc"`가 추가되었다. `fileType`은 `application/pdf` 또는 PowerPoint MIME(
+`application/vnd.openxmlformats-officedocument.presentationml.presentation`,
+`application/vnd.ms-powerpoint`)만 허용된다. `meetingId`는 필요 없다 (문서는
+미팅에 종속되지 않음). S3 키는 `docs/{내 userId}/{타임스탬프}_{파일명}` 형태이며, 위
+Put Document 호출의 `fileKey`로 그대로 전달한다.
+
+```
+POST /api/upload/presigned
+{ "fileName": "deck.pdf", "fileType": "application/pdf", "category": "doc" }
+
+Response: 200 OK
+{ "uploadUrl": "https://...presigned-put-url...", "key": "docs/user-uuid/1234567890_deck.pdf", "expiresIn": 3600 }
+
+Error: 400 Bad Request (fileType이 pdf/PowerPoint MIME이 아님)
+```
+
+이후 `uploadUrl`로 파일을 직접 PUT하고, 응답의 `key`를 Put Document의
+`fileKey`로 전달한다 — `/api/upload/complete` 호출은 없다.
+
 #### Export Vault (Obsidian 마크다운 내보내기)
 
-본인 소유 미팅을 Obsidian 친화 마크다운(YAML frontmatter)으로 렌더링해
-`Accounts/{name}/`(Account 공유) 또는 `_Private/Meetings/`(비공개) 경로의
+본인 소유 미팅과 문서를 Obsidian 친화 마크다운(YAML frontmatter)으로 렌더링해
 파일 목록으로 반환한다. MCP 클라이언트가 각 파일을 로컬 vault에 기록한다.
+
+- 미팅: `Accounts/{name}/`(Account 공유) 또는 `_Private/Meetings/`(비공개)
+- 문서(마크다운 본문이 있는 것만 — 슬라이드는 제외): `Accounts/{name}/Docs/`
+  (계정 멤버십별) 또는 `_Private/Docs/`(개인 문서). frontmatter에 `doc_type`,
+  `links`, `ttobak_id`를 포함(ADR-020 참조) — 재인제스트 시 ADR-017과 동일한
+  loop guard가 적용된다.
 
 ```
 GET /api/vault/export
 
 Response: 200 OK
-{ "files": [ { "path": "Accounts/하나은행/2026-05-12 ROSA 리뷰.md", "markdown": "---\naccount: \"[[하나은행]]\"\n...\n---\n\n# ROSA 리뷰\n..." } ] }
+{ "files": [
+  { "path": "Accounts/하나은행/2026-05-12 ROSA 리뷰.md", "markdown": "---\naccount: \"[[하나은행]]\"\n...\n---\n\n# ROSA 리뷰\n..." },
+  { "path": "Accounts/하나은행/Docs/회의 준비.md", "markdown": "---\ndoc_type: note\nttobak_id: doc-uuid\n---\n\n준비 내용..." }
+] }
 
 Error: 403 Forbidden
 ```

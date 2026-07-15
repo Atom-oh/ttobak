@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -301,16 +302,30 @@ func (r *DynamoDBRepository) PutAccountDocument(ctx context.Context, doc *model.
 	return nil
 }
 
-func (r *DynamoDBRepository) ListAccountDocuments(ctx context.Context, accountID string) ([]model.AccountDocument, error) {
-	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+// ListAccountDocuments lists documents under pk (either model.PrefixAccount+id
+// for a shared account doc or model.PrefixUser+id for a personal doc). Content
+// is excluded via ProjectionExpression -- callers needing the body use
+// GetAccountDocument for a single doc, matching how AccountDocumentDTO never
+// carries Content either.
+func (r *DynamoDBRepository) ListAccountDocuments(ctx context.Context, pk string) ([]model.AccountDocument, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(pk)).
 		And(expression.Key("SK").BeginsWith(model.PrefixDoc))
-	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	proj := expression.NamesList(
+		expression.Name("PK"), expression.Name("SK"), expression.Name("accountId"),
+		expression.Name("docId"), expression.Name("title"), expression.Name("docType"),
+		expression.Name("path"), expression.Name("links"), expression.Name("fileKey"),
+		expression.Name("fileName"), expression.Name("mimeType"), expression.Name("fileSize"),
+		expression.Name("sourceUserId"), expression.Name("ttobakOrigin"),
+		expression.Name("createdAt"), expression.Name("updatedAt"), expression.Name("entityType"),
+	)
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).WithProjection(proj).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build docs query: %w", err)
 	}
 	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
+		ProjectionExpression:      expr.Projection(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		ScanIndexForward:          aws.Bool(false),
@@ -325,12 +340,12 @@ func (r *DynamoDBRepository) ListAccountDocuments(ctx context.Context, accountID
 	return docs, nil
 }
 
-func (r *DynamoDBRepository) GetAccountDocument(ctx context.Context, accountID, docID string) (*model.AccountDocument, error) {
+func (r *DynamoDBRepository) GetAccountDocument(ctx context.Context, pk, docID string) (*model.AccountDocument, error) {
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName:      aws.String(r.tableName),
 		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
+			"PK": &types.AttributeValueMemberS{Value: pk},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docID},
 		},
 	})
@@ -345,4 +360,37 @@ func (r *DynamoDBRepository) GetAccountDocument(ctx context.Context, accountID, 
 		return nil, fmt.Errorf("unmarshal account doc: %w", err)
 	}
 	return &doc, nil
+}
+
+// DeleteAccountDocument requires the item to already exist so a delete of a
+// non-existent docID surfaces ErrConditionFailed (mapped to ErrNotFound in
+// the service layer) instead of silently succeeding -- matching the 404
+// documented in API-SPEC.md.
+func (r *DynamoDBRepository) DeleteAccountDocument(ctx context.Context, pk, docID string) error {
+	// Same builder-based "item must already exist" condition as
+	// UpdateMeetingFields (dynamodb.go) -- expression.AttributeExists,
+	// not a raw ConditionExpression string.
+	condition := expression.AttributeExists(expression.Name("PK"))
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return fmt.Errorf("build delete condition: %w", err)
+	}
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docID},
+		},
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: doc %s not found", ErrConditionFailed, docID)
+		}
+		return fmt.Errorf("delete account doc: %w", err)
+	}
+	return nil
 }

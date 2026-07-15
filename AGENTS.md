@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: ae8cfe0aff20 · generated-at: 2026-07-14 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 6ad04d5e2873 · generated-at: 2026-07-15 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -29,7 +29,7 @@ cd infra && npx cdk synth && npm test
 ## Architectural Boundaries (what may import what)
 - **Layering**: `handler/` → `service/` → `repository/` → DynamoDB. Handlers do HTTP only; business logic lives in `service/`; all DynamoDB access goes through `repository/` using the expression builder (never raw strings).
 - **Sentinel errors**: services return `service.ErrForbidden` / `service.ErrNotFound`; handlers branch with `errors.Is()` and map to HTTP status (403/404). Do NOT string-match error text for control flow.
-- **DynamoDB single-table**: key schemas in `backend/internal/model/`. `ACCOUNT#{id}` is a shared partition (outside `USER#`); meetings under `USER#{id}`; GSI1 (`GSI1PK`/`GSI1SK`) for reverse lookup. S3 keys: `{audio|images|files}/{userId}/{meetingId}/...`.
+- **DynamoDB single-table**: key schemas in `backend/internal/model/`. `ACCOUNT#{id}` is a shared partition (outside `USER#`); meetings under `USER#{id}`; GSI1 (`GSI1PK`/`GSI1SK`) for reverse lookup. S3 keys: `{audio|images|files}/{userId}/{meetingId}/...`; the STT pipeline writes a separate `transcripts/{meetingId}.json` / `transcripts/{meetingId}_part_{NNN}.json` prefix with no `{userId}` segment; document/slide uploads use `docs/{userId}/{timestamp}_{fileName}` (no meetingId) -- all share one bucket-wide IAM grant + origin-scoped CORS, no per-prefix policy. A new *static* frontend route still needs the CloudFront SPA router CloudFront Function (`frontend-stack.ts`) updated -- it only recognizes routes explicitly listed in `knownPages`/its dynamic-segment rewrites.
 - **Frontend**: API via `src/lib/api.ts` (Bearer token, auto-refresh on 401); auth via Cognito SDK in `src/lib/auth.ts`; runtime config from `/config.json` (NOT build-time env). Error shape `{ error: { code, message } }`.
 - **Admin gating**: `middleware.RequireAdmin` checks the `admins` entry in the JWT's `cognito:groups` claim (backend-verified — see below). Admin-only endpoints (e.g. `POST /api/settings/invite-user`) sit behind it; frontend `isAdmin` display state is cosmetic only, never a substitute for this check.
 

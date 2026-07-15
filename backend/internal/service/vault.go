@@ -16,6 +16,9 @@ type vaultRepo interface {
 	GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error)
 	ListAttachments(ctx context.Context, meetingID string) ([]model.Attachment, error)
 	GetAccount(ctx context.Context, accountID string) (*model.Account, error)
+	ListAccountsForUser(ctx context.Context, userID string) ([]model.AccountMember, error)
+	ListAccountDocuments(ctx context.Context, pk string) ([]model.AccountDocument, error)
+	GetAccountDocument(ctx context.Context, pk, docID string) (*model.AccountDocument, error)
 }
 
 // VaultRepo is the exported alias for cross-package tests.
@@ -99,6 +102,119 @@ func vaultPath(meeting *model.Meeting, accountName string) string {
 	return "_Private/Meetings/" + fname
 }
 
+// buildDocFrontmatter mirrors buildFrontmatter for a note/blog document.
+// ttobak_id closes the ADR-017 loop guard: re-ingesting this exported file
+// via PutDocument/UpdateDocument is rejected as TTOBAK-origin.
+func buildDocFrontmatter(doc *model.AccountDocument) string {
+	var b strings.Builder
+	b.WriteString("---\n")
+	if doc.DocType != "" {
+		b.WriteString(fmt.Sprintf("doc_type: %s\n", doc.DocType))
+	}
+	if len(doc.Links) > 0 {
+		links := make([]string, len(doc.Links))
+		for i, l := range doc.Links {
+			links[i] = fmt.Sprintf("\"[[%s]]\"", l)
+		}
+		b.WriteString(fmt.Sprintf("links: [%s]\n", strings.Join(links, ", ")))
+	}
+	b.WriteString(fmt.Sprintf("ttobak_id: %s\n", doc.DocID))
+	b.WriteString("---\n\n")
+	return b.String()
+}
+
+// docVaultPath places a doc under Accounts/{name}/Docs/ (shared) or
+// _Private/Docs/ (personal). seen tracks paths already emitted this export
+// so two same-titled docs don't collide.
+func docVaultPath(doc *model.AccountDocument, accountName string, seen map[string]bool) string {
+	title := sanitizeFilename(doc.Title)
+	if title == "" {
+		title = doc.DocID
+	}
+	dir := "_Private/Docs"
+	if accountName != "" {
+		dir = fmt.Sprintf("Accounts/%s/Docs", sanitizeFilename(accountName))
+	}
+	path := fmt.Sprintf("%s/%s.md", dir, title)
+	if seen[path] {
+		path = fmt.Sprintf("%s/%s %s.md", dir, title, doc.DocID[:8])
+	}
+	seen[path] = true
+	return path
+}
+
+// docScope is one PK to sweep for documents: personal (accountName == "") or
+// one account membership.
+type docScope struct {
+	pk          string
+	accountName string
+}
+
+// exportDocuments appends every note/blog document (personal + each account
+// membership) to files. Slides (FileName set, no markdown Content) are
+// skipped -- the vault export is markdown-only.
+func (s *VaultService) exportDocuments(ctx context.Context, userID string, nameCache map[string]string) ([]model.VaultFile, error) {
+	files := []model.VaultFile{}
+	scopes := []docScope{{pk: model.PrefixUser + userID}}
+	memberships, err := s.repo.ListAccountsForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range memberships {
+		name, ok := nameCache[m.AccountID]
+		if !ok {
+			acc, err := s.repo.GetAccount(ctx, m.AccountID)
+			if err != nil {
+				// A transient read error must fail the whole export loudly
+				// (AGENTS.md: no silent failures) -- swallowing it here
+				// would produce an export that looks complete but is
+				// silently missing this account's documents entirely.
+				return nil, err
+			}
+			if acc == nil {
+				// Membership row outlived a deleted account -- skip just
+				// this account's documents rather than falling through
+				// with accountName == "", which docVaultPath reads as
+				// "personal" and would mis-file a shared account's
+				// documents under _Private/Docs/.
+				continue
+			}
+			name = acc.Name
+			nameCache[m.AccountID] = name
+		}
+		if name == "" {
+			continue
+		}
+		scopes = append(scopes, docScope{pk: model.PrefixAccount + m.AccountID, accountName: name})
+	}
+
+	seenPaths := map[string]bool{}
+	for _, scope := range scopes {
+		stubs, err := s.repo.ListAccountDocuments(ctx, scope.pk)
+		if err != nil {
+			return nil, err
+		}
+		for _, stub := range stubs {
+			// FileKey (not FileName) is the canonical slide marker
+			// elsewhere (validateDocRequest/validateFileKeyOwnership) --
+			// use the same one here for consistency.
+			if stub.FileKey != "" {
+				continue // slide -- no markdown content to export
+			}
+			full, err := s.repo.GetAccountDocument(ctx, scope.pk, stub.DocID)
+			if err != nil {
+				return nil, err
+			}
+			if full == nil || full.Content == "" {
+				continue
+			}
+			md := buildDocFrontmatter(full) + full.Content
+			files = append(files, model.VaultFile{Path: docVaultPath(full, scope.accountName, seenPaths), Markdown: md})
+		}
+	}
+	return files, nil
+}
+
 // ExportVault renders the user's owned meetings as Obsidian-ready markdown files,
 // placed under Accounts/{name}/ (if shared to an account) or _Private/Meetings/.
 // Account names are resolved once and cached. (Account MOC files are a follow-up;
@@ -160,5 +276,12 @@ exportLoop:
 			Markdown: fmt.Sprintf("# Export truncated\n\nCapped at %d meetings to bound memory. Older meetings were omitted — narrow the range or export per-account to retrieve them.\n", maxVaultMeetings),
 		})
 	}
+
+	docFiles, err := s.exportDocuments(ctx, userID, nameCache)
+	if err != nil {
+		return nil, err
+	}
+	files = append(files, docFiles...)
+
 	return files, nil
 }
