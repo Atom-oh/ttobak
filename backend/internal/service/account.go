@@ -60,6 +60,7 @@ type accountRepo interface {
 	GetAccount(ctx context.Context, accountID string) (*model.Account, error)
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	PutMember(ctx context.Context, member *model.AccountMember) error
+	DeleteMember(ctx context.Context, accountID, userID string) error
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	ListAccountsForUser(ctx context.Context, userID string) ([]model.AccountMember, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
@@ -258,6 +259,66 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 		return nil, err
 	}
 	return &model.AccountMemberDTO{UserID: user.UserID, Email: user.Email, Role: req.Role}, nil
+}
+
+// RemoveMember deletes a non-owner member. Only the account owner may call
+// this; the owner member itself can never be removed (an account must never
+// exist without an owner -- see CreateAccount's transactional invariant).
+func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, accountID, targetUserID string) error {
+	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
+	if err != nil {
+		return err
+	}
+	if requester == nil || requester.Role != model.RoleOwner {
+		return ErrForbidden
+	}
+	target, err := s.repo.GetMember(ctx, accountID, targetUserID)
+	if err != nil {
+		return err
+	}
+	if target == nil {
+		return ErrNotFound
+	}
+	if target.Role == model.RoleOwner {
+		return ErrInvalidInput
+	}
+	if err := s.repo.DeleteMember(ctx, accountID, targetUserID); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return ErrNotFound // removed concurrently between our Get and Delete
+		}
+		return err
+	}
+	return nil
+}
+
+// UpdateMemberRole changes a non-owner member's role. Only the account owner
+// may call this; the owner's own role can never be changed via this path.
+func (s *AccountService) UpdateMemberRole(ctx context.Context, requesterUserID, accountID, targetUserID string, req *model.UpdateMemberRequest) (*model.AccountMemberDTO, error) {
+	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
+	if err != nil {
+		return nil, err
+	}
+	if requester == nil || requester.Role != model.RoleOwner {
+		return nil, ErrForbidden
+	}
+	if !isAssignableRole(req.Role) {
+		return nil, ErrInvalidInput
+	}
+	target, err := s.repo.GetMember(ctx, accountID, targetUserID)
+	if err != nil {
+		return nil, err
+	}
+	if target == nil {
+		return nil, ErrNotFound
+	}
+	if target.Role == model.RoleOwner {
+		return nil, ErrInvalidInput
+	}
+	target.Role = req.Role
+	if err := s.repo.PutMember(ctx, target); err != nil {
+		return nil, err
+	}
+	return &model.AccountMemberDTO{UserID: target.UserID, Email: target.Email, Role: target.Role}, nil
 }
 
 // ListAccountMeetings returns the shared-meeting references for an account.

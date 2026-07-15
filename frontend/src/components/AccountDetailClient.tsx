@@ -6,14 +6,15 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi } from '@/lib/api';
 import { uploadDocFile } from '@/lib/upload';
+import { MemberPicker } from '@/components/MemberPicker';
 import { INSIGHT_TYPES } from '@/types/meeting';
-import type { Account, AccountInsight, AccountMeetingRef, AccountDocument } from '@/types/meeting';
+import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, User } from '@/types/meeting';
 
 export default function AccountDetailClient() {
   const pathname = usePathname();
   const router = useRouter();
   const accountId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
-  const { isLoading, isAuthenticated } = useAuth();
+  const { user, isLoading, isAuthenticated } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [account, setAccount] = useState<Account | null>(null);
@@ -25,7 +26,6 @@ export default function AccountDetailClient() {
   const [error, setError] = useState<string | null>(null);
   const [uploadingSlide, setUploadingSlide] = useState(false);
 
-  const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('SSA');
   const [inviting, setInviting] = useState(false);
 
@@ -55,19 +55,37 @@ export default function AccountDetailClient() {
     if (isAuthenticated) fetchAll();
   }, [isAuthenticated, fetchAll]);
 
-  const handleInvite = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inviteEmail.trim()) return;
+  const handlePickMember = async (picked: User) => {
     setInviting(true);
     setError(null);
     try {
-      await accountApi.addMember(accountId, { email: inviteEmail.trim(), role: inviteRole });
-      setInviteEmail('');
+      await accountApi.addMember(accountId, { email: picked.email, role: inviteRole });
       await fetchAll();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add member');
     } finally {
       setInviting(false);
+    }
+  };
+
+  const handleRoleChange = async (userId: string, role: string) => {
+    setError(null);
+    try {
+      await accountApi.updateMember(accountId, userId, { role });
+      await fetchAll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update role');
+    }
+  };
+
+  const handleRemoveMember = async (userId: string) => {
+    if (!confirm('Remove this member?')) return;
+    setError(null);
+    try {
+      await accountApi.removeMember(accountId, userId);
+      await fetchAll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to remove member');
     }
   };
 
@@ -148,36 +166,60 @@ export default function AccountDetailClient() {
             <section className="mb-8">
               <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Members</h3>
               <div className="glass-panel rounded-xl p-4 space-y-2">
-                {account.members.map((m) => (
-                  <div key={m.userId} className="flex items-center justify-between text-sm">
-                    <span className="text-slate-700 dark:text-text-secondary">{m.email || m.userId}</span>
-                    <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary">{m.role}</span>
+                {account.members.map((m) => {
+                  const isOwnerRow = m.userId === account.ownerUserId;
+                  const isOwner = user?.userId === account.ownerUserId;
+                  return (
+                    <div key={m.userId} className="flex items-center justify-between text-sm gap-2">
+                      <span className="text-slate-700 dark:text-text-secondary truncate">{m.email || m.userId}</span>
+                      {isOwnerRow ? (
+                        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary shrink-0">owner</span>
+                      ) : isOwner ? (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <select
+                            value={m.role}
+                            onChange={(e) => handleRoleChange(m.userId, e.target.value)}
+                            className="text-xs px-2 py-1 rounded-full border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-primary font-semibold"
+                          >
+                            <option value="AM">AM</option>
+                            <option value="TAM">TAM</option>
+                            <option value="SSA">SSA</option>
+                          </select>
+                          <button
+                            onClick={() => handleRemoveMember(m.userId)}
+                            className="text-slate-400 hover:text-red-500"
+                            title="Remove member"
+                          >
+                            <span className="material-symbols-outlined text-lg">close</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary shrink-0">{m.role}</span>
+                      )}
+                    </div>
+                  );
+                })}
+                {user?.userId === account.ownerUserId && (
+                  <div className="flex gap-2 pt-2">
+                    <div className="flex-1">
+                      <MemberPicker
+                        excludeUserIds={account.members.map((m) => m.userId)}
+                        onPick={handlePickMember}
+                        placeholder="Search colleague by name or email"
+                      />
+                    </div>
+                    <select
+                      value={inviteRole}
+                      onChange={(e) => setInviteRole(e.target.value)}
+                      disabled={inviting}
+                      className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm h-fit"
+                    >
+                      <option value="AM">AM</option>
+                      <option value="TAM">TAM</option>
+                      <option value="SSA">SSA</option>
+                    </select>
                   </div>
-                ))}
-                <form onSubmit={handleInvite} className="flex gap-2 pt-2">
-                  <input
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                    placeholder="colleague@company.com"
-                    className="flex-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
-                  />
-                  <select
-                    value={inviteRole}
-                    onChange={(e) => setInviteRole(e.target.value)}
-                    className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
-                  >
-                    <option value="AM">AM</option>
-                    <option value="TAM">TAM</option>
-                    <option value="SSA">SSA</option>
-                  </select>
-                  <button
-                    type="submit"
-                    disabled={inviting || !inviteEmail.trim()}
-                    className="bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg font-semibold text-sm px-4 disabled:opacity-50"
-                  >
-                    Add
-                  </button>
-                </form>
+                )}
               </div>
             </section>
 

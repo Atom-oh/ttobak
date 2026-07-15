@@ -74,6 +74,14 @@ func (m *mockHandlerAccountRepo) PutMember(_ context.Context, member *model.Acco
 	m.members[acctMemberKey(member.AccountID, member.UserID)] = &c
 	return nil
 }
+func (m *mockHandlerAccountRepo) DeleteMember(_ context.Context, accountID, userID string) error {
+	key := acctMemberKey(accountID, userID)
+	if _, ok := m.members[key]; !ok {
+		return fmt.Errorf("%w: member %s not found", repository.ErrConditionFailed, userID)
+	}
+	delete(m.members, key)
+	return nil
+}
 func (m *mockHandlerAccountRepo) ListAccountMembers(_ context.Context, accountID string) ([]model.AccountMember, error) {
 	out := []model.AccountMember{}
 	for _, v := range m.members {
@@ -200,6 +208,91 @@ func TestHandlerListAccountMeetings_Forbidden(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	h.ListAccountMeetings(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerRemoveMember_NoContent(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d (%s)", w.Code, w.Body.String())
+	}
+	if _, ok := repo.members[acctMemberKey("acc-1", "tam-1")]; ok {
+		t.Error("member not removed")
+	}
+}
+
+func TestHandlerRemoveMember_OwnerTargetBadRequest(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/owner-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "owner-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerUpdateMemberRole_OK(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Email: "tam@x.com", Role: model.RoleTAM}
+
+	body, _ := json.Marshal(model.UpdateMemberRequest{Role: model.RoleSSA})
+	r := httptest.NewRequest(http.MethodPut, "/api/accounts/acc-1/members/tam-1", bytes.NewReader(body))
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.UpdateMemberRole(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var dto model.AccountMemberDTO
+	json.Unmarshal(w.Body.Bytes(), &dto)
+	if dto.Role != model.RoleSSA {
+		t.Errorf("unexpected dto: %+v", dto)
+	}
+}
+
+func TestHandlerUpdateMemberRole_NonOwnerForbidden(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+
+	body, _ := json.Marshal(model.UpdateMemberRequest{Role: model.RoleSSA})
+	r := httptest.NewRequest(http.MethodPut, "/api/accounts/acc-1/members/tam-1", bytes.NewReader(body))
+	r = withUserEmailCtx(r, "tam-1", "tam@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.UpdateMemberRole(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())

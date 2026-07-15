@@ -396,6 +396,11 @@ export const accountApi = {
     api.post<Account>('/api/accounts', data),
   addMember: (id: string, data: { email: string; role: string }) =>
     api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/members`, data),
+  updateMember: (id: string, userId: string, data: { role: string }) =>
+    api.put<AccountMember>(
+      `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, data),
+  removeMember: (id: string, userId: string) =>
+    api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`),
   meetings: (id: string) =>
     api.get<{ meetings: AccountMeetingRef[] }>(`/api/accounts/${encodeURIComponent(id)}/meetings`),
   insights: (id: string, params?: { from?: string; to?: string; types?: string[] }) => {

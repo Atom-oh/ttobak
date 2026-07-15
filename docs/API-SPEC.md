@@ -264,6 +264,41 @@ Error: 404 Not Found (해당 이메일의 사용자 없음)
 Error: 400 Bad Request (이미 멤버이거나 잘못된 역할)
 ```
 
+#### Update Member Role (owner 전용)
+
+```
+PUT /api/accounts/{accountId}/members/{userId}
+Request:
+{
+  "role": "AM"                  // AM | TAM | SSA (owner로는 변경 불가)
+}
+
+Response: 200 OK
+{
+  "userId": "tam-uuid",
+  "email": "tam@example.com",
+  "role": "AM"
+}
+
+Error: 403 Forbidden (owner가 아님)
+Error: 404 Not Found (해당 멤버 없음)
+Error: 400 Bad Request (잘못된 역할이거나 대상이 owner)
+```
+
+#### Remove Member (owner 전용)
+
+```
+DELETE /api/accounts/{accountId}/members/{userId}
+
+Response: 204 No Content
+
+Error: 403 Forbidden (owner가 아님)
+Error: 404 Not Found (해당 멤버 없음)
+Error: 400 Bad Request (owner는 제거 불가)
+```
+
+> **Known limitation**: 멤버 제거는 해당 멤버에게 이미 `share-account`로 부여된 개별 미팅의 per-user Share 레코드를 회수하지 않습니다 — 제거 이후 새로 계정에 공유되는 미팅은 즉시 차단되지만(동적 멤버십 검사), 제거 시점에 이미 공유되어 있던 미팅에 대한 과거 Share 레코드는 그대로 남습니다. 모든 미팅을 스캔해 회수하는 비용이 과도하다고 판단해 의도적으로 수용한 제약입니다.
+
 #### List Account Meetings (공유된 미팅 목록 — 멤버 전용)
 
 ```

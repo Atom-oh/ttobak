@@ -67,6 +67,15 @@ func (m *mockAccountRepo) PutMember(_ context.Context, member *model.AccountMemb
 	return nil
 }
 
+func (m *mockAccountRepo) DeleteMember(_ context.Context, accountID, userID string) error {
+	key := memberKey(accountID, userID)
+	if _, ok := m.members[key]; !ok {
+		return fmt.Errorf("%w: member %s not found", repository.ErrConditionFailed, userID)
+	}
+	delete(m.members, key)
+	return nil
+}
+
 func (m *mockAccountRepo) ListAccountMembers(_ context.Context, accountID string) ([]model.AccountMember, error) {
 	out := []model.AccountMember{}
 	for _, mem := range m.members {
@@ -327,6 +336,119 @@ func TestAddMember_DuplicateRejected(t *testing.T) {
 	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleSSA})
 	if !errors.Is(err, ErrMemberExists) {
 		t.Errorf("expected ErrMemberExists, got %v", err)
+	}
+}
+
+func TestRemoveMember_OwnerRemovesMember(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+
+	if err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	mem, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1")
+	if mem != nil {
+		t.Errorf("expected member removed, got %+v", mem)
+	}
+}
+
+func TestRemoveMember_NonOwnerForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	seedUser(repo, "ssa-1", "ssa@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ssa@x.com", Role: model.RoleSSA})
+
+	err := svc.RemoveMember(context.Background(), "tam-1", acc.AccountID, "ssa-1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestRemoveMember_OwnerCannotBeRemoved(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "owner-1")
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestRemoveMember_MissingMemberNotFound(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "ghost-1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestUpdateMemberRole_OwnerChangesRole(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	before, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1")
+
+	dto, err := svc.UpdateMemberRole(context.Background(), "owner-1", acc.AccountID, "tam-1", &model.UpdateMemberRequest{Role: model.RoleSSA})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dto.Role != model.RoleSSA {
+		t.Errorf("expected role SSA, got %+v", dto)
+	}
+	after, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1")
+	if !after.AddedAt.Equal(before.AddedAt) {
+		t.Errorf("expected AddedAt preserved, before=%v after=%v", before.AddedAt, after.AddedAt)
+	}
+}
+
+func TestUpdateMemberRole_InvalidRoleRejected(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+
+	_, err := svc.UpdateMemberRole(context.Background(), "owner-1", acc.AccountID, "tam-1", &model.UpdateMemberRequest{Role: "owner"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestUpdateMemberRole_OwnerTargetRejected(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	_, err := svc.UpdateMemberRole(context.Background(), "owner-1", acc.AccountID, "owner-1", &model.UpdateMemberRequest{Role: model.RoleTAM})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestUpdateMemberRole_NonOwnerForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	seedUser(repo, "ssa-1", "ssa@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ssa@x.com", Role: model.RoleSSA})
+
+	_, err := svc.UpdateMemberRole(context.Background(), "tam-1", acc.AccountID, "ssa-1", &model.UpdateMemberRequest{Role: model.RoleAM})
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
 	}
 }
 

@@ -141,6 +141,62 @@ func (h *AccountHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, dto)
 }
 
+func (h *AccountHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	targetUserID := chi.URLParam(r, "userId")
+	if accountID == "" || targetUserID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID and user ID are required")
+		return
+	}
+	var req model.UpdateMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+	dto, err := h.accountService.UpdateMemberRole(ctx, userID, accountID, targetUserID, &req)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can change member roles")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Member not found")
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid role (AM/TAM/SSA) or target is the owner")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
+}
+
+func (h *AccountHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	targetUserID := chi.URLParam(r, "userId")
+	if accountID == "" || targetUserID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID and user ID are required")
+		return
+	}
+	if err := h.accountService.RemoveMember(ctx, userID, accountID, targetUserID); err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can remove members")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Member not found")
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "The owner cannot be removed")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *AccountHandler) ListAccountMeetings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := middleware.GetUserID(ctx)
