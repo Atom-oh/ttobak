@@ -108,6 +108,20 @@ def _diarize(config_path: str, wav_path: str, num_speakers: int | None):
         return []
 
 
+def _safe_diarize(config_path: str, local_path: str, num_speakers: int | None) -> list[tuple]:
+    """Converts local_path to a diarization-ready wav and runs _diarize, but
+    never lets a conversion failure (e.g. ffmpeg choking on an unusual codec)
+    propagate out of main() -- diarization must be best-effort, same
+    guarantee _diarize itself already provides for the pyannote call.
+    Returns [] on any failure."""
+    try:
+        wav_path = _to_mono16k_wav(local_path)
+        return _diarize(config_path, wav_path, num_speakers)
+    except Exception as e:
+        print(f"Audio conversion for diarization failed, skipping diarization: {e}")
+        return []
+
+
 def _assign_speakers(segments: list[dict], turns: list[tuple]) -> list[dict]:
     """Assigns each Whisper segment the speaker of the diarization turn with
     maximum time overlap. Segments with zero overlap (e.g. a turn boundary
@@ -263,8 +277,7 @@ def main():
     if diarization_config and all_segments:
         print("Diarizing...")
         diarize_start = time.time()
-        wav_path = _to_mono16k_wav(local_path)
-        turns = _diarize(diarization_config, wav_path, num_speakers)
+        turns = _safe_diarize(diarization_config, local_path, num_speakers)
         if turns:
             all_segments = _assign_speakers(all_segments, turns)
             num_speakers_detected = len({t[2] for t in turns})

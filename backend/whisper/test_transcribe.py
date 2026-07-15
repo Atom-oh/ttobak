@@ -97,5 +97,29 @@ class TestAssignSpeakers(unittest.TestCase):
         self.assertEqual(result[2]['speaker'], 'spk_0')
 
 
+class TestSafeDiarize(unittest.TestCase):
+    """_safe_diarize wraps audio-conversion + diarization so that an
+    ffmpeg failure (bad/unusual codec) never aborts the whole transcription
+    job -- it must return [] on any failure, matching _diarize's own
+    existing best-effort contract, instead of letting subprocess.run's
+    CalledProcessError propagate out of main()."""
+
+    def test_returns_empty_list_when_wav_conversion_fails(self):
+        with mock.patch.object(
+            transcribe, '_to_mono16k_wav',
+            side_effect=__import__('subprocess').CalledProcessError(1, ['ffmpeg']),
+        ):
+            result = transcribe._safe_diarize('config.yaml', '/tmp/audio.webm', None)
+
+        self.assertEqual(result, [])
+
+    def test_returns_diarize_result_on_success(self):
+        with mock.patch.object(transcribe, '_to_mono16k_wav', return_value='/tmp/audio-16k-mono.wav'), \
+             mock.patch.object(transcribe, '_diarize', return_value=[(0.0, 1.0, 'SPEAKER_00')]):
+            result = transcribe._safe_diarize('config.yaml', '/tmp/audio.webm', None)
+
+        self.assertEqual(result, [(0.0, 1.0, 'SPEAKER_00')])
+
+
 if __name__ == '__main__':
     unittest.main()
