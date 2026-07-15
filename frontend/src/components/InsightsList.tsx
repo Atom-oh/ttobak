@@ -457,7 +457,7 @@ export function InsightsList() {
                         }`}
                       >
                         <div>{opt.label}</div>
-                        <div className={`text-xs ${researchMode === opt.value ? 'text-white/70/70' : 'text-slate-400 dark:text-text-muted/60'}`}>
+                        <div className={`text-xs ${researchMode === opt.value ? 'text-white/70' : 'text-slate-400 dark:text-text-muted/60'}`}>
                           {opt.desc}
                         </div>
                       </button>

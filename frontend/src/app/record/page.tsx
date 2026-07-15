@@ -99,23 +99,47 @@ function RecordPageInner() {
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
 
+  // Serializes notes autosave PUTs: two in-flight requests could reach the
+  // server out of order and let an older save's stale notes win the
+  // last-write-wins race (the effect's own debounce only prevents firing
+  // two timers back-to-back, not two overlapping in-flight requests when
+  // one is slow). Only one PUT is ever in flight; a save requested while
+  // one is in flight is queued (latest wins) and fires right after the
+  // current one settles, so the server always sees saves in order.
+  const notesSaveInFlightRef = useRef(false);
+  const pendingNotesRef = useRef<string | null>(null);
+
+  const saveNotes = useCallback(async (meetingId: string, notesToSave: string) => {
+    if (notesSaveInFlightRef.current) {
+      pendingNotesRef.current = notesToSave;
+      return;
+    }
+    notesSaveInFlightRef.current = true;
+    setNotesSaveStatus('saving');
+    try {
+      await meetingsApi.update(meetingId, { notes: notesToSave });
+      lastSavedNotesRef.current = notesToSave;
+      setNotesSaveStatus('saved');
+    } catch {
+      setNotesSaveStatus('error');
+    } finally {
+      notesSaveInFlightRef.current = false;
+      const pending = pendingNotesRef.current;
+      if (pending !== null) {
+        pendingNotesRef.current = null;
+        saveNotes(meetingId, pending);
+      }
+    }
+  }, []);
+
   // Autosave in-meeting notes (debounced) to the draft meeting
   useEffect(() => {
     if (!postRecording.serverMeetingId) return;
     if (notes === lastSavedNotesRef.current) return;
     const meetingId = postRecording.serverMeetingId;
-    const timer = setTimeout(async () => {
-      setNotesSaveStatus('saving');
-      try {
-        await meetingsApi.update(meetingId, { notes });
-        lastSavedNotesRef.current = notes;
-        setNotesSaveStatus('saved');
-      } catch {
-        setNotesSaveStatus('error');
-      }
-    }, 1500);
+    const timer = setTimeout(() => saveNotes(meetingId, notes), 1500);
     return () => clearTimeout(timer);
-  }, [notes, postRecording.serverMeetingId]);
+  }, [notes, postRecording.serverMeetingId, saveNotes]);
 
   // Q&A context = user-provided meeting context + live transcript
   const qaContext = contextText.trim()
@@ -187,6 +211,7 @@ function RecordPageInner() {
     setNotes('');
     lastSavedNotesRef.current = '';
     setNotesSaveStatus('idle');
+    setContextText('');
     // Create draft meeting immediately so the post-recording flow has a
     // server meetingId to attach the audio to. This is required for both
     // browser (mic/tab) and Tauri native (system audio) modes — without it,
