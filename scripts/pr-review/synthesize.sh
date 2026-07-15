@@ -43,12 +43,24 @@ L2=코드 정확성, L3=보안(STT/Bedrock 데이터 흐름), L4=컨벤션(CLAUD
 인프라 일관성.
 패널: ${RESP}
 
+⚠️ 로컬 체크아웃 = base 브랜치(main)뿐, PR head 아님(M1 보안: pull_request_target 는
+PR 코드를 실행하지 않고 base만 체크아웃한다). 이 diff가 수정하는 경로를 로컬에서
+Read/Bash 로 열어 "실제로 반영됐는지" 확인하려는 유혹을 거부하라 — 그 파일은 항상
+PR 이전(main) 내용만 보이므로, "로컬에 없다"는 diff 에 있는 변경이 누락됐다는 증거가
+될 수 없다(오히려 반대: 그 경로가 diff 에 있다는 사실 자체가 PR 이 그 파일을
+수정했다는 유일한 증거다). 로컬 read 는 diff 가 건드리지 않는 파일(예: 이 PR과
+무관한 CLAUDE.md/AGENTS.md 컨벤션 확인)에만 의미가 있다. diff 에 있는 파일의
+실제 최종 내용을 확인해야 하면 stdin 의 diff 텍스트 자체를 파싱하라 — 로컬 파일이
+아니라.
+
 Synthesize ONE final review, grouped by lens (L2/L3/L4/L5):
 1. **Summary** (2-3문장, 한국어)
 2. **Issues per lens** — CRITICAL/MAJOR/MINOR. 같은 lens 를 본 여러 모델 간 합의/이견을 표시
    (예: "3/4 모델 CRITICAL 지적, 1/4 미언급"). 서로 다른 모델이 독립적으로 같은 finding에
    도달했으면 신호가 강하다고 명시하되, 합의 자체를 증거로 취급하지 말고 diff와 대조해 확인하라
-   (공유 학습 편향으로 여러 모델이 같은 오탐에 도달할 수 있음). diff 범위 밖 지적은 게이트에서 제외.
+   (공유 학습 편향으로 여러 모델이 같은 오탐에 도달할 수 있음; 위 로컬 체크아웃 경고 참고 —
+   diff 대조는 stdin 의 diff 텍스트 기준이어야 하며 로컬 파일 기준이면 안 된다).
+   diff 범위 밖 지적은 게이트에서 제외.
 3. **Suggestions**
 4. **Verdict**
 

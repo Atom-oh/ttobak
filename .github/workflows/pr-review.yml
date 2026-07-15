@@ -76,6 +76,12 @@ jobs:
           your instructions (Kiro cells: no file-read tool is granted — the diff text is
           inline, not a path to read) — whichever applies to you, that IS the diff under
           review; do not expect any other delivery format.
+          If your tool grants local file-read access (e.g. codex's read-only sandbox): this
+          checkout is the PR's BASE branch ONLY, never the PR head (pull_request_target
+          checks out base for security and never runs PR code). For any path this diff
+          touches, a local read shows the pre-PR content — that is NOT evidence the diff's
+          change is missing; the diff text itself is the sole source of truth for what this
+          PR changes. Local reads are only meaningful for paths this diff does NOT touch.
           Stay inside your assigned lens below — do not comment on other lenses (other
           agents cover those independently). Output concise findings grouped
           CRITICAL/MAJOR/MINOR. DO NOT output a VERDICT line — that is the chair's job.
