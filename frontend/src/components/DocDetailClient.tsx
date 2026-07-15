@@ -175,7 +175,11 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
   // downloadUrl mirrors the backend's canonical fileKey check (server only
   // presigns one when FileKey is set) -- more reliable than fileName alone,
   // which a client could in principle omit while still sending a fileKey.
-  const isSlide = !!doc.downloadUrl || doc.docType === 'slide';
+  // docType is a free string the server never enforces (e.g. via MCP), so
+  // it's deliberately NOT used here -- a docType:"slide" doc that actually
+  // has markdown and no file must still open in the editor, not be hidden
+  // behind a slide view with nothing to show.
+  const isSlide = !!doc.downloadUrl;
   const isPdf = (doc.fileName ?? '').toLowerCase().endsWith('.pdf');
 
   return (
