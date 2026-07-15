@@ -144,6 +144,38 @@ func (r *DynamoDBRepository) DeleteMember(ctx context.Context, accountID, userID
 	return nil
 }
 
+// UpdateMemberRole conditionally updates a member's role, requiring the item
+// to already exist -- a concurrent RemoveMember between the service's
+// GetMember check and this call surfaces ErrConditionFailed (mapped to
+// ErrNotFound) instead of silently resurrecting a deleted membership row.
+func (r *DynamoDBRepository) UpdateMemberRole(ctx context.Context, accountID, userID, role string) error {
+	condition := expression.AttributeExists(expression.Name("PK"))
+	update := expression.Set(expression.Name("role"), expression.Value(role))
+	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
+	if err != nil {
+		return fmt.Errorf("build update member role condition: %w", err)
+	}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMember + userID},
+		},
+		ConditionExpression:       expr.Condition(),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: member %s not found", ErrConditionFailed, userID)
+		}
+		return fmt.Errorf("update member role: %w", err)
+	}
+	return nil
+}
+
 // ListAccountMembers queries the account partition for MEMBER# items.
 func (r *DynamoDBRepository) ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error) {
 	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).

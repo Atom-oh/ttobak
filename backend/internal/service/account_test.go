@@ -20,6 +20,13 @@ type mockAccountRepo struct {
 	meetingRefs map[string][]model.MeetingRef // accountID -> refs
 	insightsByAccount map[string][]model.AccountInsight
 	documents map[string][]model.AccountDocument // PK -> docs
+
+	// deleteAfterGet simulates a concurrent RemoveMember landing in the gap
+	// right after a GetMember read returns: when non-empty and matching the
+	// requested memberKey, the member is deleted from the map AFTER building
+	// the returned copy (so the caller's GetMember still sees the member, but
+	// any subsequent write in the same service call hits a since-deleted row).
+	deleteAfterGet string
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -53,11 +60,15 @@ func (m *mockAccountRepo) GetAccount(_ context.Context, accountID string) (*mode
 }
 
 func (m *mockAccountRepo) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
-	mem, ok := m.members[memberKey(accountID, userID)]
+	key := memberKey(accountID, userID)
+	mem, ok := m.members[key]
 	if !ok {
 		return nil, nil
 	}
 	cp := *mem
+	if m.deleteAfterGet != "" && m.deleteAfterGet == key {
+		delete(m.members, key)
+	}
 	return &cp, nil
 }
 
@@ -73,6 +84,16 @@ func (m *mockAccountRepo) DeleteMember(_ context.Context, accountID, userID stri
 		return fmt.Errorf("%w: member %s not found", repository.ErrConditionFailed, userID)
 	}
 	delete(m.members, key)
+	return nil
+}
+
+func (m *mockAccountRepo) UpdateMemberRole(_ context.Context, accountID, userID, role string) error {
+	key := memberKey(accountID, userID)
+	member, ok := m.members[key]
+	if !ok {
+		return fmt.Errorf("%w: member %s not found", repository.ErrConditionFailed, userID)
+	}
+	member.Role = role
 	return nil
 }
 
@@ -410,6 +431,27 @@ func TestUpdateMemberRole_OwnerChangesRole(t *testing.T) {
 	after, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1")
 	if !after.AddedAt.Equal(before.AddedAt) {
 		t.Errorf("expected AddedAt preserved, before=%v after=%v", before.AddedAt, after.AddedAt)
+	}
+}
+
+func TestUpdateMemberRole_ConcurrentlyRemovedMemberNotFound(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+
+	// Simulate a concurrent RemoveMember completing in the gap right after
+	// UpdateMemberRole's own GetMember(target) call returns -- the read sees
+	// the member, but the write below must not resurrect it.
+	repo.deleteAfterGet = memberKey(acc.AccountID, "tam-1")
+
+	_, err := svc.UpdateMemberRole(context.Background(), "owner-1", acc.AccountID, "tam-1", &model.UpdateMemberRequest{Role: model.RoleSSA})
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+	if mem, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1"); mem != nil {
+		t.Errorf("expected member to remain deleted, got %+v", mem)
 	}
 }
 

@@ -82,6 +82,15 @@ func (m *mockHandlerAccountRepo) DeleteMember(_ context.Context, accountID, user
 	delete(m.members, key)
 	return nil
 }
+func (m *mockHandlerAccountRepo) UpdateMemberRole(_ context.Context, accountID, userID, role string) error {
+	key := acctMemberKey(accountID, userID)
+	member, ok := m.members[key]
+	if !ok {
+		return fmt.Errorf("%w: member %s not found", repository.ErrConditionFailed, userID)
+	}
+	member.Role = role
+	return nil
+}
 func (m *mockHandlerAccountRepo) ListAccountMembers(_ context.Context, accountID string) ([]model.AccountMember, error) {
 	out := []model.AccountMember{}
 	for _, v := range m.members {

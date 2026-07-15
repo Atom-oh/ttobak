@@ -61,6 +61,7 @@ type accountRepo interface {
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	PutMember(ctx context.Context, member *model.AccountMember) error
 	DeleteMember(ctx context.Context, accountID, userID string) error
+	UpdateMemberRole(ctx context.Context, accountID, userID, role string) error
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	ListAccountsForUser(ctx context.Context, userID string) ([]model.AccountMember, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
@@ -314,11 +315,13 @@ func (s *AccountService) UpdateMemberRole(ctx context.Context, requesterUserID, 
 	if target.Role == model.RoleOwner {
 		return nil, ErrInvalidInput
 	}
-	target.Role = req.Role
-	if err := s.repo.PutMember(ctx, target); err != nil {
+	if err := s.repo.UpdateMemberRole(ctx, accountID, targetUserID, req.Role); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil, ErrNotFound // removed concurrently between our Get and Update
+		}
 		return nil, err
 	}
-	return &model.AccountMemberDTO{UserID: target.UserID, Email: target.Email, Role: target.Role}, nil
+	return &model.AccountMemberDTO{UserID: target.UserID, Email: target.Email, Role: req.Role}, nil
 }
 
 // ListAccountMeetings returns the shared-meeting references for an account.
