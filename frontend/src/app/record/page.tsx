@@ -121,14 +121,6 @@ function RecordPageInner() {
       pendingNotesRef.current = { meetingId, notes: notesToSave };
       return;
     }
-    if (!notesToSave.trim()) {
-      // The backend ignores an empty `notes` string on UpdateMeeting (it
-      // only applies non-empty values), so a PUT here would silently no-op
-      // server-side while we still showed "saved" -- lying about a clear
-      // that didn't actually happen. Skip the request rather than claim
-      // success for something the server can't currently represent.
-      return;
-    }
     notesSaveInFlightRef.current = true;
     setNotesSaveStatus('saving');
     try {
@@ -179,8 +171,13 @@ function RecordPageInner() {
     }
   }, [saveNotes]);
 
-  // Flush before handing off to the banner's own (separately-timed) save,
-  // so that save is always the last one to reach the server.
+  // Flush before handing off to the banner's own (separately-timed) save --
+  // this awaits the flush before firing the banner's PUT, so on the normal
+  // path the banner's save is the last one to reach the server. It isn't an
+  // absolute guarantee: if an earlier autosave was already in flight when
+  // this fires, flushNotesQueue's own save just queues behind it (per
+  // saveNotes' in-flight guard) and awaits that queued drain -- a network-
+  // level failure of that queued send is still possible, same as any PUT.
   const handleFinalNotesSubmit = useCallback(async (finalNotes: string) => {
     const meetingId = postRecording.serverMeetingId;
     if (meetingId) {

@@ -316,8 +316,8 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	if req.Content != "" {
 		meeting.Content = req.Content
 	}
-	if req.Notes != "" {
-		meeting.Notes = req.Notes
+	if req.Notes != nil {
+		meeting.Notes = *req.Notes
 	}
 	if req.TranscriptA != "" {
 		meeting.TranscriptA = req.TranscriptA

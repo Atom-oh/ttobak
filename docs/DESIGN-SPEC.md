@@ -26,7 +26,7 @@
 --border-subtle: #e2e8f0;
 --error: #dc2626;
 
-/* .dark — 같은 변수명을 override (primary/accent/secondary/surface-*/text-*/border-subtle/error) */
+/* .dark — 같은 변수명을 override (primary · accent · secondary · surface-* · text-* · border-subtle · error) */
 --primary: #8b85f7;
 --primary-hover: #a5a0f9;
 --accent: #a78bfa;

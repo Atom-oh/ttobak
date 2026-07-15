@@ -476,6 +476,47 @@ func TestUpdateMeeting_OwnerCanUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdateMeeting_OmittedNotesPreservesExisting(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "user-1", Title: "Title", Notes: "existing notes",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	_, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{Title: "Title"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.meetingsByID["m-1"].Notes != "existing notes" {
+		t.Errorf("expected notes preserved when omitted, got %q", repo.meetingsByID["m-1"].Notes)
+	}
+}
+
+func TestUpdateMeeting_ExplicitEmptyNotesClearsExisting(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "user-1", Title: "Title", Notes: "existing notes",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	// A non-nil pointer to "" (the user deleted everything in the notes
+	// editor) must actually clear the stored notes -- distinct from the
+	// omitted-field (nil) "preserve" case above.
+	_, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{
+		Title: "Title", Notes: mdPtr(""),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.meetingsByID["m-1"].Notes != "" {
+		t.Errorf("expected notes cleared to empty, got %q", repo.meetingsByID["m-1"].Notes)
+	}
+}
+
 func TestUpdateMeeting_ReadOnlyShareForbidden(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)
