@@ -667,50 +667,60 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 	}
 
 	if preserveSpeakers {
-		if err := validatePreservedSpeakers(segments, refined); err != nil {
-			// The prompt tells the model acoustic labels are AUTHORITATIVE,
-			// but nothing enforced that until now. Returning an error here
-			// (rather than silently accepting the output) routes this chunk
-			// through the caller's existing rawFallbackSegments path, which
-			// preserves each segment's own acoustic Speaker -- safer than a
-			// hallucinated/dropped label reaching the merged transcript.
-			return nil, err
-		}
+		// The prompt tells the model acoustic labels are AUTHORITATIVE, but a
+		// set-equality check on the model's returned `speaker` field still
+		// can't distinguish a same-set swap (spk_0<->spk_1) from a correct
+		// output -- only per-segment identity does that. So don't trust the
+		// model's speaker field at all: recompute it structurally from the
+		// same acoustic input the prompt was built from.
+		remapPreservedSpeakers(segments, refined)
 	}
 
 	return refined, nil
 }
 
-// validatePreservedSpeakers checks that preserve-mode output only uses
-// speaker label SET matches the acoustic input's exactly: every output
-// label must have appeared in the input (catches an invented label), and
-// every input label must appear somewhere in the output (catches an input
-// label being dropped, or merged wholesale into another label -- e.g. the
-// model collapsing every segment onto a single speaker). It doesn't catch a
-// pure swap between two labels that were both already in the input -- that
-// would need per-segment identity tracking, not just a set comparison --
-// but set-equality is a cheap, meaningful floor given preserve mode's
-// contract that acoustic labels are authoritative.
-func validatePreservedSpeakers(input []WhisperSegment, output []RefinedSegment) error {
-	inputLabels := make(map[string]bool, len(input))
-	for _, seg := range input {
-		if seg.Speaker != "" {
-			inputLabels[seg.Speaker] = true
+// remapPreservedSpeakers overwrites each output segment's Speaker with the
+// acoustic label of the INPUT segment it overlaps most in time (falling
+// back to the closest by midpoint on zero overlap) -- the same max-overlap
+// assignment transcribe.py's _assign_speakers already uses for the initial
+// acoustic labeling. This makes preserve mode's "acoustic labels are
+// authoritative" contract structural instead of prompt-trusted: the LLM's
+// own speaker field can no longer swap, merge, or invent a label, because
+// it's never read. Input segments with no acoustic Speaker are skipped as
+// remap targets so an unlabeled segment never becomes the "source of
+// truth" for an output segment.
+func remapPreservedSpeakers(input []WhisperSegment, output []RefinedSegment) {
+	for i := range output {
+		best := -1
+		bestOverlap := 0.0
+		for j, in := range input {
+			if in.Speaker == "" {
+				continue
+			}
+			overlap := min(output[i].EndTime, in.End) - max(output[i].StartTime, in.Start)
+			if overlap > bestOverlap {
+				bestOverlap = overlap
+				best = j
+			}
+		}
+		if best == -1 {
+			outMid := (output[i].StartTime + output[i].EndTime) / 2
+			bestDist := math.Inf(1)
+			for j, in := range input {
+				if in.Speaker == "" {
+					continue
+				}
+				dist := math.Abs((in.Start+in.End)/2 - outMid)
+				if dist < bestDist {
+					bestDist = dist
+					best = j
+				}
+			}
+		}
+		if best >= 0 {
+			output[i].Speaker = input[best].Speaker
 		}
 	}
-	outputLabels := make(map[string]bool, len(output))
-	for _, seg := range output {
-		outputLabels[seg.Speaker] = true
-		if !inputLabels[seg.Speaker] {
-			return fmt.Errorf("preserve mode: output speaker %q not present in acoustic input labels", seg.Speaker)
-		}
-	}
-	for label := range inputLabels {
-		if !outputLabels[label] {
-			return fmt.Errorf("preserve mode: acoustic input speaker %q missing from output (dropped or merged into another label)", label)
-		}
-	}
-	return nil
 }
 
 // extractJSONArray extracts the first JSON array from a string,

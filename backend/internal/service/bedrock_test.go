@@ -136,44 +136,60 @@ func TestRawFallbackSegments_FallsBackToDefaultWhenSpeakerEmpty(t *testing.T) {
 	}
 }
 
-func TestValidatePreservedSpeakers_AcceptsLabelsPresentInInput(t *testing.T) {
+func TestRemapPreservedSpeakers_AssignsByMaxOverlap(t *testing.T) {
 	input := []WhisperSegment{
-		{Speaker: "spk_0", Text: "hi"},
-		{Speaker: "spk_1", Text: "hey"},
+		{Start: 0.0, End: 5.0, Speaker: "spk_0"},
+		{Start: 5.0, End: 10.0, Speaker: "spk_1"},
 	}
 	output := []RefinedSegment{
-		{Speaker: "spk_0", Text: "hi"},
-		{Speaker: "spk_1", Text: "hey"},
+		{StartTime: 0.5, EndTime: 4.5, Speaker: "spk_1"}, // LLM said spk_1, but this overlaps spk_0's span
 	}
-	if err := validatePreservedSpeakers(input, output); err != nil {
-		t.Errorf("expected no error for output labels drawn from input, got %v", err)
+	remapPreservedSpeakers(input, output)
+	if output[0].Speaker != "spk_0" {
+		t.Errorf("expected the acoustic input's spk_0 (max overlap), got %q", output[0].Speaker)
 	}
 }
 
-func TestValidatePreservedSpeakers_RejectsInventedLabel(t *testing.T) {
+func TestRemapPreservedSpeakers_IgnoresSwappedLLMLabels(t *testing.T) {
+	// The exact failure mode set-equality validation couldn't catch: the
+	// model swapped two labels that were both legitimately in the input.
 	input := []WhisperSegment{
-		{Speaker: "spk_0", Text: "hi"},
+		{Start: 0.0, End: 5.0, Speaker: "spk_0"},
+		{Start: 5.0, End: 10.0, Speaker: "spk_1"},
 	}
 	output := []RefinedSegment{
-		{Speaker: "spk_5", Text: "hi"}, // model invented a label never present in the acoustic input
+		{StartTime: 0.0, EndTime: 5.0, Speaker: "spk_1"}, // swapped
+		{StartTime: 5.0, EndTime: 10.0, Speaker: "spk_0"}, // swapped
 	}
-	if err := validatePreservedSpeakers(input, output); err == nil {
-		t.Error("expected an error for an output speaker label absent from the acoustic input")
+	remapPreservedSpeakers(input, output)
+	if output[0].Speaker != "spk_0" || output[1].Speaker != "spk_1" {
+		t.Errorf("expected swap corrected to [spk_0, spk_1], got [%q, %q]", output[0].Speaker, output[1].Speaker)
 	}
 }
 
-func TestValidatePreservedSpeakers_RejectsDroppedOrMergedLabel(t *testing.T) {
+func TestRemapPreservedSpeakers_ZeroOverlapFallsBackToNearestMidpoint(t *testing.T) {
 	input := []WhisperSegment{
-		{Speaker: "spk_0", Text: "hi"},
-		{Speaker: "spk_1", Text: "hey"},
+		{Start: 0.0, End: 1.0, Speaker: "spk_0"},
+		{Start: 10.0, End: 11.0, Speaker: "spk_1"},
 	}
 	output := []RefinedSegment{
-		// Model collapsed both acoustic speakers onto spk_0 -- every output
-		// label is individually valid (subset check alone would miss this),
-		// but spk_1 vanished entirely.
-		{Speaker: "spk_0", Text: "hi hey"},
+		{StartTime: 2.0, EndTime: 2.5, Speaker: "spk_1"}, // overlaps neither; midpoint 2.25 is closer to spk_0
 	}
-	if err := validatePreservedSpeakers(input, output); err == nil {
-		t.Error("expected an error when an acoustic input speaker is missing from the output")
+	remapPreservedSpeakers(input, output)
+	if output[0].Speaker != "spk_0" {
+		t.Errorf("expected fallback to nearest-midpoint spk_0, got %q", output[0].Speaker)
+	}
+}
+
+func TestRemapPreservedSpeakers_SkipsUnlabeledInputAsRemapSource(t *testing.T) {
+	input := []WhisperSegment{
+		{Start: 0.0, End: 5.0, Speaker: ""}, // no acoustic label -- must never become the "source of truth"
+	}
+	output := []RefinedSegment{
+		{StartTime: 0.0, EndTime: 5.0, Speaker: "spk_3"},
+	}
+	remapPreservedSpeakers(input, output)
+	if output[0].Speaker != "spk_3" {
+		t.Errorf("expected output speaker left unchanged when no labeled input overlaps, got %q", output[0].Speaker)
 	}
 }
