@@ -66,7 +66,11 @@ def _ensure_diarization_model() -> str | None:
 
         import tarfile
         with tarfile.open(archive) as tar:
-            tar.extractall(DIARIZATION_LOCAL_DIR)
+            # filter="data" (PEP 706, stdlib since Python 3.12/3.8.17+) rejects
+            # tar members that would escape DIARIZATION_LOCAL_DIR via ../ paths
+            # or symlinks -- the container's Ubuntu 24.04 base ships Python
+            # 3.12, so this is always available here.
+            tar.extractall(DIARIZATION_LOCAL_DIR, filter="data")
         os.remove(archive)
         elapsed = time.time() - start
         print(f"Diarization model ready ({elapsed:.0f}s)")

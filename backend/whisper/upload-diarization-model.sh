@@ -62,9 +62,16 @@ def _find_weights(dir_path):
 seg_weights = _find_weights('${STAGE_DIR}/segmentation')
 emb_weights = _find_weights('${STAGE_DIR}/embedding')
 
+# Absolute, container-runtime paths -- NOT relative to this staged config.yaml's
+# own location. pyannote's Pipeline.from_pretrained may resolve a relative path
+# against the process CWD rather than the config file's directory, which would
+# silently disable diarization (caught only by absence of a 'Diarization done'
+# log line). This must match transcribe.py's DIARIZATION_LOCAL_DIR constant
+# and the tar's internal pipeline/segmentation/embedding layout below -- if
+# either changes, update this hardcoded prefix too.
 params = config['pipeline']['params']
-params['segmentation'] = f'../segmentation/{seg_weights}'
-params['embedding'] = f'../embedding/{emb_weights}'
+params['segmentation'] = f'/tmp/diarization-model/segmentation/{seg_weights}'
+params['embedding'] = f'/tmp/diarization-model/embedding/{emb_weights}'
 
 with open(config_path, 'w') as f:
     yaml.safe_dump(config, f)
