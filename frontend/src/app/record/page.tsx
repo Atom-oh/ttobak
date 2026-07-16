@@ -21,7 +21,7 @@ import { isTauri } from '@/lib/tauri';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
-import { usePostRecording, withTimeout } from '@/hooks/usePostRecording';
+import { usePostRecording } from '@/hooks/usePostRecording';
 import { uploadsApi, meetingsApi, kbApi } from '@/lib/api';
 import { uploadFile, uploadToS3, notifyUploadComplete } from '@/lib/upload';
 import type { LiveSttProvider } from '@/lib/sttManager';
@@ -152,11 +152,16 @@ function RecordPageInner() {
     notesSaveInFlightRef.current = true;
     setNotesSaveStatus('saving');
     const run = (async () => {
+      let saveError: unknown = null;
+      // AbortController (not just withTimeout's Promise.race) so a timeout
+      // actually cancels the underlying request instead of just giving up
+      // on waiting for it -- a non-aborted, still-in-flight PUT that lands
+      // late could otherwise overwrite fresher notes with this stale value
+      // even though nothing else (status/audioKey) is at risk anymore.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
       try {
-        await withTimeout(
-          meetingsApi.update(meetingId, { notes: notesToSave }),
-          15000, 'Save meeting notes',
-        );
+        await meetingsApi.update(meetingId, { notes: notesToSave }, { signal: controller.signal });
         if (meetingId === activeMeetingIdRef.current) {
           lastSavedNotesRef.current = notesToSave;
           setNotesSaveStatus('saved');
@@ -169,11 +174,13 @@ function RecordPageInner() {
             pendingNotesRef.current = { meetingId, notes: liveNotesRef.current };
           }
         }
-      } catch {
+      } catch (err) {
+        saveError = err;
         if (meetingId === activeMeetingIdRef.current) {
           setNotesSaveStatus('error');
         }
       } finally {
+        clearTimeout(timeoutId);
         notesSaveInFlightRef.current = false;
         const pending = pendingNotesRef.current;
         if (pending !== null) {
@@ -187,6 +194,11 @@ function RecordPageInner() {
           await saveNotes(pending.meetingId, pending.notes);
         }
       }
+      // Surfaces the failure to whoever is awaiting this save (e.g.
+      // flushNotesQueue) instead of only reflecting it via notesSaveStatus
+      // -- a caller about to resume the upload flow needs to know the
+      // flush didn't actually succeed, not just that *a* UI label changed.
+      if (saveError) throw saveError;
     })();
     notesSaveSettledRef.current = run;
     return run;
@@ -199,7 +211,10 @@ function RecordPageInner() {
     const meetingId = postRecording.serverMeetingId;
     notesDebounceTimerRef.current = setTimeout(() => {
       notesDebounceTimerRef.current = null;
-      saveNotes(meetingId, notes);
+      // Fire-and-forget here -- failure is already reflected via
+      // notesSaveStatus, and there's no explicit "flush" caller at this
+      // point to react to a rejection (unlike flushNotesQueue below).
+      saveNotes(meetingId, notes).catch(() => {});
     }, 1500);
     return () => {
       if (notesDebounceTimerRef.current) {
@@ -247,7 +262,16 @@ function RecordPageInner() {
     setNotes(finalNotes);
     liveNotesRef.current = finalNotes;
     if (meetingId) {
-      await flushNotesQueue(meetingId, finalNotes);
+      try {
+        await flushNotesQueue(meetingId, finalNotes);
+      } catch {
+        // saveNotes already reflects this via notesSaveStatus('error');
+        // surfacing it here too so the user isn't silently left thinking
+        // their notes made it to the server when the flush itself failed.
+        if (!window.confirm('노트 저장에 실패했습니다. 계속할까요?')) {
+          return;
+        }
+      }
     }
     await postRecording.handleNotesSubmit(finalNotes);
   }, [flushNotesQueue, postRecording]);
@@ -258,7 +282,13 @@ function RecordPageInner() {
   const handleFinalNotesSkip = useCallback(async () => {
     const meetingId = postRecording.serverMeetingId;
     if (meetingId) {
-      await flushNotesQueue(meetingId, notes);
+      try {
+        await flushNotesQueue(meetingId, notes);
+      } catch {
+        if (!window.confirm('노트 저장에 실패했습니다. 계속할까요?')) {
+          return;
+        }
+      }
     }
     await postRecording.handleNotesSkip();
   }, [flushNotesQueue, postRecording, notes]);
