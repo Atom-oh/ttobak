@@ -15,6 +15,45 @@ import (
 
 var partKeyPattern = regexp.MustCompile(`_part_(\d{3})\.json$`)
 
+// maxSpeakersPerPart bounds n before offsetting -- without this, an n that
+// itself already exceeds the offset step (implausible from _assign_speakers'
+// normalization in practice, but not something this function can assume)
+// would let one part's namespaced range collide with another's. Enforcing
+// the bound makes collision-freedom a property of this function alone, not
+// a fact about pyannote's typical output that could change.
+const maxSpeakersPerPart = 1_000_000
+
+// namespaceSpeakerLabel rewrites an acoustic spk_N label to be unique across
+// parts by offsetting N by partIndex*maxSpeakersPerPart. Stays within
+// spk_\d+ so the frontend's SpeakerMapEditor (UNMAPPED_PATTERN,
+// speakerSortKey's parseInt) needs no changes. Non-spk_ labels pass through
+// unchanged.
+func namespaceSpeakerLabel(label string, partIndex int) string {
+	if !strings.HasPrefix(label, "spk_") {
+		return label
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(label, "spk_"))
+	if err != nil {
+		return label // not a spk_N label (e.g. a Korean 화자 fallback) -- leave as-is
+	}
+	// Clamp BEFORE computing the offset, and apply the offset uniformly
+	// (including partIndex==0) so every part's output is confined to the
+	// disjoint interval [partIndex*maxSpeakersPerPart,
+	// (partIndex+1)*maxSpeakersPerPart - 1] regardless of the input n.
+	// _assign_speakers only ever produces sequential labels starting at 0,
+	// so n reaching this clamp in practice would mean something already
+	// went wrong upstream; the clamp exists so out-of-range input degrades
+	// to a shared bucket within its own part rather than colliding with
+	// another part's range.
+	switch {
+	case n < 0:
+		n = 0
+	case n >= maxSpeakersPerPart:
+		n = maxSpeakersPerPart - 1
+	}
+	return fmt.Sprintf("spk_%d", partIndex*maxSpeakersPerPart+n)
+}
+
 // mergePartTranscripts downloads all part transcripts, refines each, offsets timestamps, and concatenates them
 func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCount int) (string, []TranscriptSegmentOut, error) {
 	prefix := fmt.Sprintf("transcripts/%s_part_", meetingID)
@@ -92,10 +131,28 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 			refinedText, refinedSegs, refineErr := bedrockService.RefineTranscript(ctx, whisperSegments)
 			if refineErr == nil {
 				transcript = refinedText
+				// Acoustic (preserve-mode) diarization runs per-part, so each
+				// part's spk_N numbering restarts at 0 independently -- without
+				// namespacing, part 1's spk_0 and part 2's spk_0 would refer to
+				// different real speakers but display as the same one after
+				// merge. Only namespace when this part actually used acoustic
+				// labels (any non-empty WhisperSegment.Speaker); infer-mode
+				// parts have no acoustic authority to preserve here.
+				acoustic := false
+				for _, ws := range whisperSegments {
+					if ws.Speaker != "" {
+						acoustic = true
+						break
+					}
+				}
 				segments = make([]TranscriptSegmentOut, len(refinedSegs))
 				for i, rs := range refinedSegs {
+					speaker := rs.Speaker
+					if acoustic {
+						speaker = namespaceSpeakerLabel(speaker, part.index)
+					}
 					segments[i] = TranscriptSegmentOut{
-						Speaker:   rs.Speaker,
+						Speaker:   speaker,
 						Text:      rs.Text,
 						StartTime: rs.StartTime,
 						EndTime:   rs.EndTime,
