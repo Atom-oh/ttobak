@@ -93,41 +93,31 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 			refinedText, refinedSegs, refineErr := bedrockService.RefineTranscript(ctx, whisperSegments)
 			if refineErr == nil {
 				transcript = refinedText
-				// Acoustic (preserve-mode) diarization runs per-part, so each
-				// part's spk_N numbering restarts at 0 independently -- without
-				// namespacing, part 1's spk_0 and part 2's spk_0 would refer to
-				// different real speakers but display as the same one after
-				// merge. Only namespace when this part actually used acoustic
-				// labels (any non-empty WhisperSegment.Speaker); infer-mode
-				// parts have no acoustic authority to preserve here.
-				acoustic := false
-				for _, ws := range whisperSegments {
-					if ws.Speaker != "" {
-						acoustic = true
-						break
-					}
-				}
+				// Each part's spk_N numbering restarts at 0 independently --
+				// whether from preserved acoustic labels or from RefineTranscript
+				// inferring them fresh per part -- so without namespacing, part
+				// 1's spk_0 and part 2's spk_0 would refer to different real
+				// speakers but display as the same one after merge. Namespace
+				// unconditionally: infer-mode multi-part is a normal path (any
+				// diarization failure -- missing S3 bundle, pyannote/ffmpeg
+				// error -- falls back to it, not just older transcripts), and
+				// namespacing is a collision-avoidance property of spk_N labels
+				// in general, not something that depends on acoustic authority.
 				segments = make([]TranscriptSegmentOut, len(refinedSegs))
 				for i, rs := range refinedSegs {
-					spk := rs.Speaker
-					if acoustic {
-						spk = speaker.Namespace(spk, part.index)
-					}
 					segments[i] = TranscriptSegmentOut{
-						Speaker:   spk,
+						Speaker:   speaker.Namespace(rs.Speaker, part.index),
 						Text:      rs.Text,
 						StartTime: rs.StartTime,
 						EndTime:   rs.EndTime,
 					}
 				}
-				if acoustic {
-					// refinedText was assembled by RefineTranscript from the
-					// PRE-namespaced labels (bedrock.go), so it still has the
-					// exact cross-part "spk_0" collision namespacing exists to
-					// prevent. Rebuild the text from the namespaced segments
-					// instead of using the stale refinedText.
-					transcript = buildTranscriptText(segments)
-				}
+				// refinedText was assembled by RefineTranscript from the
+				// PRE-namespaced labels (bedrock.go), so it still has the
+				// exact cross-part "spk_0" collision namespacing exists to
+				// prevent. Rebuild the text from the namespaced segments
+				// instead of using the stale refinedText.
+				transcript = buildTranscriptText(segments)
 			}
 		}
 

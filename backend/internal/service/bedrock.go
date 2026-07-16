@@ -682,10 +682,15 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 }
 
 // validatePreservedSpeakers checks that preserve-mode output only uses
-// speaker labels present in the acoustic input. It doesn't catch every
-// failure mode (e.g. the model swapping two labels that were both already
-// in the input stays undetected), but it catches invented or dropped labels
-// cheaply, without re-implementing diarization's overlap logic in Go.
+// speaker label SET matches the acoustic input's exactly: every output
+// label must have appeared in the input (catches an invented label), and
+// every input label must appear somewhere in the output (catches an input
+// label being dropped, or merged wholesale into another label -- e.g. the
+// model collapsing every segment onto a single speaker). It doesn't catch a
+// pure swap between two labels that were both already in the input -- that
+// would need per-segment identity tracking, not just a set comparison --
+// but set-equality is a cheap, meaningful floor given preserve mode's
+// contract that acoustic labels are authoritative.
 func validatePreservedSpeakers(input []WhisperSegment, output []RefinedSegment) error {
 	inputLabels := make(map[string]bool, len(input))
 	for _, seg := range input {
@@ -693,9 +698,16 @@ func validatePreservedSpeakers(input []WhisperSegment, output []RefinedSegment) 
 			inputLabels[seg.Speaker] = true
 		}
 	}
+	outputLabels := make(map[string]bool, len(output))
 	for _, seg := range output {
+		outputLabels[seg.Speaker] = true
 		if !inputLabels[seg.Speaker] {
 			return fmt.Errorf("preserve mode: output speaker %q not present in acoustic input labels", seg.Speaker)
+		}
+	}
+	for label := range inputLabels {
+		if !outputLabels[label] {
+			return fmt.Errorf("preserve mode: acoustic input speaker %q missing from output (dropped or merged into another label)", label)
 		}
 	}
 	return nil

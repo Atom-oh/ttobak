@@ -69,6 +69,24 @@ func TestReplaceLabel(t *testing.T) {
 			replacement: "X",
 			want:        "spk_1 stays",
 		},
+		{
+			// Regression: Go's regexp \b is ASCII-only and never fires at a
+			// Hangul boundary, so a naive `\b`-based implementation silently
+			// no-ops on this real production label (rawFallbackSegments'
+			// default, matched by the frontend's UNMAPPED_PATTERN).
+			name:        "Korean fallback label 화자A is matched and replaced",
+			text:        "[화자A]\nhello",
+			label:       "화자A",
+			replacement: "Dave",
+			want:        "[Dave]\nhello",
+		},
+		{
+			name:        "adjacent occurrences separated by a single character are both replaced",
+			text:        "spk_1 spk_1",
+			label:       "spk_1",
+			replacement: "Eve",
+			want:        "Eve Eve",
+		},
 	}
 	for _, c := range cases {
 		got := ReplaceLabel(c.text, c.label, c.replacement)

@@ -161,3 +161,19 @@ func TestValidatePreservedSpeakers_RejectsInventedLabel(t *testing.T) {
 		t.Error("expected an error for an output speaker label absent from the acoustic input")
 	}
 }
+
+func TestValidatePreservedSpeakers_RejectsDroppedOrMergedLabel(t *testing.T) {
+	input := []WhisperSegment{
+		{Speaker: "spk_0", Text: "hi"},
+		{Speaker: "spk_1", Text: "hey"},
+	}
+	output := []RefinedSegment{
+		// Model collapsed both acoustic speakers onto spk_0 -- every output
+		// label is individually valid (subset check alone would miss this),
+		// but spk_1 vanished entirely.
+		{Speaker: "spk_0", Text: "hi hey"},
+	}
+	if err := validatePreservedSpeakers(input, output); err == nil {
+		t.Error("expected an error when an acoustic input speaker is missing from the output")
+	}
+}
