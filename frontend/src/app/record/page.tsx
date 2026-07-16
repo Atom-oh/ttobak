@@ -121,6 +121,15 @@ function RecordPageInner() {
   // know the server has actually seen the latest value must await this,
   // not just call saveNotes and assume queuing was enough.
   const notesSaveSettledRef = useRef<Promise<void>>(Promise.resolve());
+  // Mirrors postRecording.serverMeetingId so saveNotes' completion handler
+  // can tell whether IT is still for the active session. A save started
+  // for meeting A that resolves after the user has already started
+  // meeting B must not write A's content/status into the (by-then-reset,
+  // now B's) lastSavedNotesRef/notesSaveStatus.
+  const activeMeetingIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeMeetingIdRef.current = postRecording.serverMeetingId;
+  }, [postRecording.serverMeetingId]);
 
   const saveNotes = useCallback((meetingId: string, notesToSave: string): Promise<void> => {
     if (notesSaveInFlightRef.current) {
@@ -132,10 +141,14 @@ function RecordPageInner() {
     const run = (async () => {
       try {
         await meetingsApi.update(meetingId, { notes: notesToSave });
-        lastSavedNotesRef.current = notesToSave;
-        setNotesSaveStatus('saved');
+        if (meetingId === activeMeetingIdRef.current) {
+          lastSavedNotesRef.current = notesToSave;
+          setNotesSaveStatus('saved');
+        }
       } catch {
-        setNotesSaveStatus('error');
+        if (meetingId === activeMeetingIdRef.current) {
+          setNotesSaveStatus('error');
+        }
       } finally {
         notesSaveInFlightRef.current = false;
         const pending = pendingNotesRef.current;
@@ -206,6 +219,17 @@ function RecordPageInner() {
     }
     await postRecording.handleNotesSubmit(finalNotes);
   }, [flushNotesQueue, postRecording]);
+
+  // Skip needs the same flush as submit -- it also resumes the upload flow
+  // (which PUTs a status transition), so a lingering autosave landing
+  // after that PUT would hit the same stale read-modify-write race.
+  const handleFinalNotesSkip = useCallback(async () => {
+    const meetingId = postRecording.serverMeetingId;
+    if (meetingId) {
+      await flushNotesQueue(meetingId, notes);
+    }
+    await postRecording.handleNotesSkip();
+  }, [flushNotesQueue, postRecording, notes]);
 
   // Q&A context = user-provided meeting context + live transcript
   const qaContext = contextText.trim()
@@ -943,7 +967,7 @@ function RecordPageInner() {
           onRetry={handleRetry}
           onDismiss={() => { postRecording.handleRetry(); setContextText(''); router.push('/'); }}
           onNotesSubmit={handleFinalNotesSubmit}
-          onNotesSkip={postRecording.handleNotesSkip}
+          onNotesSkip={handleFinalNotesSkip}
           initialNotes={notes}
         />
       )}

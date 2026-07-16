@@ -16,8 +16,8 @@ type CreateMeetingRequest struct {
 
 // UpdateMeetingRequest represents the request body for updating a meeting
 type UpdateMeetingRequest struct {
-	Title       string `json:"title,omitempty"`
-	Content     string `json:"content,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Content string `json:"content,omitempty"`
 	// Notes is a pointer so "key omitted" (nil, preserve existing notes) is
 	// distinguishable from "explicitly set to empty string" (non-nil
 	// pointer to "", clears notes) -- a plain string can't represent
