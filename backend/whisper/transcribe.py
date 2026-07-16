@@ -298,7 +298,8 @@ def main():
             "engine": "whisper-large-v3-gpu",
             "language": info.language,
             "language_probability": round(info.language_probability, 3),
-            "duration_seconds": round(elapsed, 1),
+            "duration_seconds": round(info.duration, 1),
+            "transcription_duration_seconds": round(elapsed, 1),
             "segments": all_segments,
             "diarization": {
                 "enabled": bool(diarization_config),
