@@ -82,8 +82,11 @@ export default function AccountDetailClient() {
     if (!confirm('Remove this member?')) return;
     setError(null);
     try {
-      await accountApi.removeMember(accountId, userId);
+      const result = await accountApi.removeMember(accountId, userId);
       await fetchAll();
+      if (result?.cleanupFailedForMeetings?.length) {
+        setError(`Member removed, but access cleanup failed for ${result.cleanupFailedForMeetings.length} meeting(s). Contact support if this persists.`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to remove member');
     }

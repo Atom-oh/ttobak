@@ -399,8 +399,12 @@ export const accountApi = {
   updateMember: (id: string, userId: string, data: { role: string }) =>
     api.put<AccountMember>(
       `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, data),
+  // Returns undefined on a fully-clean removal (204 No Content). A defined result means
+  // the membership was removed but Share cleanup didn't complete for every meeting --
+  // see API-SPEC.md's "Remove Member" note.
   removeMember: (id: string, userId: string) =>
-    api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`),
+    api.delete<{ removed: boolean; cleanupFailedForMeetings: string[] } | undefined>(
+      `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`),
   meetings: (id: string) =>
     api.get<{ meetings: AccountMeetingRef[] }>(`/api/accounts/${encodeURIComponent(id)}/meetings`),
   insights: (id: string, params?: { from?: string; to?: string; types?: string[] }) => {
