@@ -107,3 +107,31 @@ func TestBuildRefineSegmentLines_InferModeOmitsSpeakerPrefix(t *testing.T) {
 		t.Errorf("expected text in output, got: %s", lines)
 	}
 }
+
+func TestRawFallbackSegments_PreservesEachSegmentsOwnAcousticLabel(t *testing.T) {
+	chunk := []WhisperSegment{
+		{Start: 0.0, End: 1.0, Text: "hello", Speaker: "spk_0"},
+		{Start: 1.0, End: 2.0, Text: "world", Speaker: "spk_1"},
+	}
+
+	got := rawFallbackSegments(chunk, "spk_0")
+
+	if got[0].Speaker != "spk_0" {
+		t.Errorf("expected segment 0 to keep its own acoustic label spk_0, got %q", got[0].Speaker)
+	}
+	if got[1].Speaker != "spk_1" {
+		t.Errorf("expected segment 1 to keep its own acoustic label spk_1 (not collapse to the passed-in default), got %q", got[1].Speaker)
+	}
+}
+
+func TestRawFallbackSegments_FallsBackToDefaultWhenSpeakerEmpty(t *testing.T) {
+	chunk := []WhisperSegment{
+		{Start: 0.0, End: 1.0, Text: "no acoustic label"},
+	}
+
+	got := rawFallbackSegments(chunk, "spk_2")
+
+	if got[0].Speaker != "spk_2" {
+		t.Errorf("expected fallback to the passed-in default for a segment with no acoustic Speaker, got %q", got[0].Speaker)
+	}
+}

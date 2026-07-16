@@ -506,8 +506,16 @@ func rawFallbackSegments(chunk []WhisperSegment, speaker string) []RefinedSegmen
 	}
 	segments := make([]RefinedSegment, len(chunk))
 	for i, seg := range chunk {
+		// A segment's own acoustic label (from diarization) is authoritative
+		// when present -- collapsing it to the single passed-in default would
+		// actively mislabel a chunk that already has correct per-segment
+		// speaker data, which is worse than leaving segments unlabeled.
+		segSpeaker := seg.Speaker
+		if segSpeaker == "" {
+			segSpeaker = speaker
+		}
 		segments[i] = RefinedSegment{
-			Speaker:   speaker,
+			Speaker:   segSpeaker,
 			Text:      seg.Text,
 			StartTime: seg.Start,
 			EndTime:   seg.End,
