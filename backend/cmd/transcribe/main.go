@@ -182,9 +182,12 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 					log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
 				}
 			}
-			// Participant count hints pyannote's num_speakers so it doesn't
-			// have to auto-detect; 0 (Participants empty/unset) means "let
-			// pyannote auto-detect" -- see startWhisperTask.
+			// Participant count is passed through as pyannote's max_speakers
+			// upper bound (pyannote still auto-detects the actual count
+			// within it -- registered headcount can exceed actual speakers,
+			// e.g. invited-but-silent attendees); 0 (Participants
+			// empty/unset) means "no bound, fully auto-detect" -- see
+			// startWhisperTask.
 			numSpeakers := 0
 			if meeting != nil {
 				numSpeakers = len(meeting.Participants)
@@ -229,8 +232,9 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialP
 		})
 	}
 	if numSpeakers > 0 {
-		// Hints pyannote's num_speakers so diarization doesn't have to
-		// auto-detect the speaker count. Omitted (0) lets pyannote auto-detect.
+		// Passed to the container as max_speakers -- an upper bound
+		// pyannote still auto-detects within, not an exact count (see
+		// transcribe.py:_diarize). Omitted (0) means no bound at all.
 		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{
 			Name: aws.String("NUM_SPEAKERS"), Value: aws.String(strconv.Itoa(numSpeakers)),
 		})

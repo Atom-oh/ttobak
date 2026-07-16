@@ -11,48 +11,10 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/ttobak/backend/internal/speaker"
 )
 
 var partKeyPattern = regexp.MustCompile(`_part_(\d{3})\.json$`)
-
-// maxSpeakersPerPart bounds n before offsetting -- without this, an n that
-// itself already exceeds the offset step (implausible from _assign_speakers'
-// normalization in practice, but not something this function can assume)
-// would let one part's namespaced range collide with another's. Enforcing
-// the bound makes collision-freedom a property of this function alone, not
-// a fact about pyannote's typical output that could change.
-const maxSpeakersPerPart = 1_000_000
-
-// namespaceSpeakerLabel rewrites an acoustic spk_N label to be unique across
-// parts by offsetting N by partIndex*maxSpeakersPerPart. Stays within
-// spk_\d+ so the frontend's SpeakerMapEditor (UNMAPPED_PATTERN,
-// speakerSortKey's parseInt) needs no changes. Non-spk_ labels pass through
-// unchanged.
-func namespaceSpeakerLabel(label string, partIndex int) string {
-	if !strings.HasPrefix(label, "spk_") {
-		return label
-	}
-	n, err := strconv.Atoi(strings.TrimPrefix(label, "spk_"))
-	if err != nil {
-		return label // not a spk_N label (e.g. a Korean 화자 fallback) -- leave as-is
-	}
-	// Clamp BEFORE computing the offset, and apply the offset uniformly
-	// (including partIndex==0) so every part's output is confined to the
-	// disjoint interval [partIndex*maxSpeakersPerPart,
-	// (partIndex+1)*maxSpeakersPerPart - 1] regardless of the input n.
-	// _assign_speakers only ever produces sequential labels starting at 0,
-	// so n reaching this clamp in practice would mean something already
-	// went wrong upstream; the clamp exists so out-of-range input degrades
-	// to a shared bucket within its own part rather than colliding with
-	// another part's range.
-	switch {
-	case n < 0:
-		n = 0
-	case n >= maxSpeakersPerPart:
-		n = maxSpeakersPerPart - 1
-	}
-	return fmt.Sprintf("spk_%d", partIndex*maxSpeakersPerPart+n)
-}
 
 // mergePartTranscripts downloads all part transcripts, refines each, offsets timestamps, and concatenates them
 func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCount int) (string, []TranscriptSegmentOut, error) {
@@ -147,16 +109,24 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 				}
 				segments = make([]TranscriptSegmentOut, len(refinedSegs))
 				for i, rs := range refinedSegs {
-					speaker := rs.Speaker
+					spk := rs.Speaker
 					if acoustic {
-						speaker = namespaceSpeakerLabel(speaker, part.index)
+						spk = speaker.Namespace(spk, part.index)
 					}
 					segments[i] = TranscriptSegmentOut{
-						Speaker:   speaker,
+						Speaker:   spk,
 						Text:      rs.Text,
 						StartTime: rs.StartTime,
 						EndTime:   rs.EndTime,
 					}
+				}
+				if acoustic {
+					// refinedText was assembled by RefineTranscript from the
+					// PRE-namespaced labels (bedrock.go), so it still has the
+					// exact cross-part "spk_0" collision namespacing exists to
+					// prevent. Rebuild the text from the namespaced segments
+					// instead of using the stale refinedText.
+					transcript = buildTranscriptText(segments)
 				}
 			}
 		}
@@ -215,4 +185,26 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		len(parts), meetingID, len(mergedText), len(allSegments), cumulativeOffset)
 
 	return mergedText, allSegments, nil
+}
+
+// buildTranscriptText reassembles transcript body text from segments, using
+// the same speaker-grouping format as RefineTranscript's own text assembly
+// (bedrock.go): a "[speaker]\n" header on a speaker change, a joining space
+// within a run of the same speaker, and a blank line between speaker runs.
+func buildTranscriptText(segments []TranscriptSegmentOut) string {
+	var sb strings.Builder
+	prevSpeaker := ""
+	for _, seg := range segments {
+		if seg.Speaker != prevSpeaker {
+			if sb.Len() > 0 {
+				sb.WriteString("\n\n")
+			}
+			sb.WriteString(fmt.Sprintf("[%s]\n", seg.Speaker))
+			prevSpeaker = seg.Speaker
+		} else {
+			sb.WriteString(" ")
+		}
+		sb.WriteString(seg.Text)
+	}
+	return sb.String()
 }

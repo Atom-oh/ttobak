@@ -15,6 +15,7 @@ import (
 	cognitoidptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
+	"github.com/ttobak/backend/internal/speaker"
 )
 
 // Auto-expiry thresholds for meetings stuck in an in-progress status with no
@@ -355,17 +356,23 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 		return nil, ErrForbidden
 	}
 
-	// Apply replacements to all text fields
+	// Apply replacements to all text fields. Plain-text fields use a
+	// word-boundary-aware replace (speaker.ReplaceLabel) so a label like
+	// "spk_1" never partially matches a namespaced label like "spk_1000000"
+	// (multi-part meetings produce exactly that pair -- see ADR-019).
+	// TranscriptSegments is JSON, not prose, so it's updated structurally
+	// instead: parsing out the `speaker` field and comparing for exact
+	// equality has no substring-collision failure mode at all.
 	for label, name := range req.SpeakerMap {
 		if name == "" {
 			continue
 		}
-		meeting.Content = strings.ReplaceAll(meeting.Content, label, name)
-		meeting.TranscriptA = strings.ReplaceAll(meeting.TranscriptA, label, name)
-		meeting.TranscriptB = strings.ReplaceAll(meeting.TranscriptB, label, name)
-		meeting.TranscriptSegments = strings.ReplaceAll(meeting.TranscriptSegments, label, name)
-		meeting.ActionItems = strings.ReplaceAll(meeting.ActionItems, label, name)
+		meeting.Content = speaker.ReplaceLabel(meeting.Content, label, name)
+		meeting.TranscriptA = speaker.ReplaceLabel(meeting.TranscriptA, label, name)
+		meeting.TranscriptB = speaker.ReplaceLabel(meeting.TranscriptB, label, name)
+		meeting.ActionItems = speaker.ReplaceLabel(meeting.ActionItems, label, name)
 	}
+	meeting.TranscriptSegments = renameSegmentSpeakers(meeting.TranscriptSegments, req.SpeakerMap)
 
 	// Store the mapping for reference
 	meeting.SpeakerMap = req.SpeakerMap
@@ -378,6 +385,46 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 		MeetingID: meeting.MeetingID,
 		UpdatedAt: meeting.UpdatedAt.Format(time.RFC3339),
 	}, nil
+}
+
+// segmentSpeakerField is the on-disk shape of a TranscriptSegments element,
+// declared locally (rather than importing cmd/summarize's TranscriptSegmentOut)
+// to avoid a service->cmd dependency. Includes "id" -- omitted, it would be
+// silently dropped on re-marshal and break the ADR-013 transcript deep-link
+// scroll target.
+type segmentSpeakerField struct {
+	ID        string  `json:"id,omitempty"`
+	Speaker   string  `json:"speaker"`
+	Text      string  `json:"text"`
+	StartTime float64 `json:"startTime"`
+	EndTime   float64 `json:"endTime"`
+}
+
+// renameSegmentSpeakers rewrites the `speaker` field of each element in a
+// TranscriptSegments JSON array via exact match against speakerMap.
+// Structural (parse/update/re-marshal) rather than string replacement, so a
+// label like "spk_1" can never partially match a longer label like the
+// namespaced "spk_1000000" -- there is no substring involved at all. Returns
+// raw unchanged if it isn't valid JSON, matching the best-effort spirit of
+// the rest of UpdateSpeakers.
+func renameSegmentSpeakers(raw string, speakerMap map[string]string) string {
+	if raw == "" {
+		return raw
+	}
+	var segments []segmentSpeakerField
+	if err := json.Unmarshal([]byte(raw), &segments); err != nil {
+		return raw
+	}
+	for i := range segments {
+		if name, ok := speakerMap[segments[i].Speaker]; ok && name != "" {
+			segments[i].Speaker = name
+		}
+	}
+	updated, err := json.Marshal(segments)
+	if err != nil {
+		return raw
+	}
+	return string(updated)
 }
 
 // DeleteMeeting deletes a meeting (owner only)

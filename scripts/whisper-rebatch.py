@@ -9,8 +9,9 @@ Usage:
   python3 scripts/whisper-rebatch.py                                    # dry-run: list meetings
   python3 scripts/whisper-rebatch.py --run                              # trigger ECS tasks
   python3 scripts/whisper-rebatch.py --run <id>                         # single meeting
-  python3 scripts/whisper-rebatch.py --run --num-speakers 8 <id>        # hint speaker count
-                                                                         # for the diarization pipeline
+  python3 scripts/whisper-rebatch.py --run --num-speakers 8 <id>        # hint a max speaker count
+                                                                         # (upper bound; pyannote still
+                                                                         # auto-detects within it)
 """
 import argparse
 import json
@@ -97,8 +98,8 @@ def run_whisper_task(meeting_id, user_id, audio_key, num_speakers=None):
         {"name": "TABLE_NAME", "value": TABLE},
     ]
     if num_speakers:
-        # Hints pyannote's num_speakers in the container so diarization
-        # doesn't have to auto-detect the speaker count.
+        # Passed to the container as max_speakers -- an upper bound pyannote
+        # auto-detects within, not an exact count (see transcribe.py).
         environment.append({"name": "NUM_SPEAKERS", "value": str(num_speakers)})
     overrides = {
         "containerOverrides": [{
@@ -132,8 +133,9 @@ def main():
     parser = argparse.ArgumentParser(description="Re-batch existing meetings through Whisper ECS")
     parser.add_argument("--run", action="store_true", help="Actually trigger ECS tasks (default: dry-run)")
     parser.add_argument("--num-speakers", type=int, default=None,
-                         help="Hint the exact speaker count to the diarization pipeline "
-                              "(only meaningful with a single meeting_id)")
+                         help="Hint a maximum speaker count to the diarization pipeline -- "
+                              "an upper bound pyannote still auto-detects within, not an exact "
+                              "count (only meaningful with a single meeting_id)")
     parser.add_argument("meeting_id", nargs="?", help="Process single meeting ID")
     args = parser.parse_args()
 

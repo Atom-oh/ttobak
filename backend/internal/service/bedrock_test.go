@@ -135,3 +135,29 @@ func TestRawFallbackSegments_FallsBackToDefaultWhenSpeakerEmpty(t *testing.T) {
 		t.Errorf("expected fallback to the passed-in default for a segment with no acoustic Speaker, got %q", got[0].Speaker)
 	}
 }
+
+func TestValidatePreservedSpeakers_AcceptsLabelsPresentInInput(t *testing.T) {
+	input := []WhisperSegment{
+		{Speaker: "spk_0", Text: "hi"},
+		{Speaker: "spk_1", Text: "hey"},
+	}
+	output := []RefinedSegment{
+		{Speaker: "spk_0", Text: "hi"},
+		{Speaker: "spk_1", Text: "hey"},
+	}
+	if err := validatePreservedSpeakers(input, output); err != nil {
+		t.Errorf("expected no error for output labels drawn from input, got %v", err)
+	}
+}
+
+func TestValidatePreservedSpeakers_RejectsInventedLabel(t *testing.T) {
+	input := []WhisperSegment{
+		{Speaker: "spk_0", Text: "hi"},
+	}
+	output := []RefinedSegment{
+		{Speaker: "spk_5", Text: "hi"}, // model invented a label never present in the acoustic input
+	}
+	if err := validatePreservedSpeakers(input, output); err == nil {
+		t.Error("expected an error for an output speaker label absent from the acoustic input")
+	}
+}

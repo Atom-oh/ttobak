@@ -666,7 +666,39 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 		return nil, fmt.Errorf("failed to parse refined segments: %w (response: %.200s)", err, result)
 	}
 
+	if preserveSpeakers {
+		if err := validatePreservedSpeakers(segments, refined); err != nil {
+			// The prompt tells the model acoustic labels are AUTHORITATIVE,
+			// but nothing enforced that until now. Returning an error here
+			// (rather than silently accepting the output) routes this chunk
+			// through the caller's existing rawFallbackSegments path, which
+			// preserves each segment's own acoustic Speaker -- safer than a
+			// hallucinated/dropped label reaching the merged transcript.
+			return nil, err
+		}
+	}
+
 	return refined, nil
+}
+
+// validatePreservedSpeakers checks that preserve-mode output only uses
+// speaker labels present in the acoustic input. It doesn't catch every
+// failure mode (e.g. the model swapping two labels that were both already
+// in the input stays undetected), but it catches invented or dropped labels
+// cheaply, without re-implementing diarization's overlap logic in Go.
+func validatePreservedSpeakers(input []WhisperSegment, output []RefinedSegment) error {
+	inputLabels := make(map[string]bool, len(input))
+	for _, seg := range input {
+		if seg.Speaker != "" {
+			inputLabels[seg.Speaker] = true
+		}
+	}
+	for _, seg := range output {
+		if !inputLabels[seg.Speaker] {
+			return fmt.Errorf("preserve mode: output speaker %q not present in acoustic input labels", seg.Speaker)
+		}
+	}
+	return nil
 }
 
 // extractJSONArray extracts the first JSON array from a string,
