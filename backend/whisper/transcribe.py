@@ -101,7 +101,11 @@ def _diarize(config_path: str, wav_path: str, num_speakers: int | None):
 
         pipeline = Pipeline.from_pretrained(config_path)
         pipeline.to(torch.device("cuda"))
-        kwargs = {"num_speakers": num_speakers} if num_speakers else {}
+        # num_speakers is a registered-participant headcount, not an actual speaker
+        # count -- passed as max_speakers (an upper bound pyannote auto-detects
+        # within) rather than num_speakers (which would force exactly that many
+        # clusters and over-split when fewer people actually spoke).
+        kwargs = {"max_speakers": num_speakers} if num_speakers else {}
         diarization = pipeline(wav_path, **kwargs)
         return [
             (turn.start, turn.end, label)
