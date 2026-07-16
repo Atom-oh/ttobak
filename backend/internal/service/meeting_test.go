@@ -191,6 +191,37 @@ func (m *mockMeetingRepo) DeleteShare(_ context.Context, sharedToID, meetingID s
 	return nil
 }
 
+// CreateShareIfMember mirrors the real repo's atomic membership-check +
+// clobber-guarded write. It reuses the forceGetMemberNil hook (same
+// semantics as the standalone GetMember: simulates the member having been
+// removed by write time even though ListAccountMembers' earlier snapshot --
+// which reads `members` directly -- still included them), so a test can
+// force the write-time check to fail for one specific member without ever
+// removing them from the map ListAccountMembers already iterated.
+func (m *mockMeetingRepo) CreateShareIfMember(_ context.Context, meetingID, ownerID, ownerEmail, accountID, sharedToID, email, permission string) (*model.Share, error) {
+	memberKey := accountID + "|" + sharedToID
+	if m.forceGetMemberNil != "" && m.forceGetMemberNil == memberKey {
+		return nil, repository.ErrMemberRemoved
+	}
+	if _, ok := m.members[memberKey]; !ok {
+		return nil, repository.ErrMemberRemoved
+	}
+	key := shareKey(sharedToID, meetingID)
+	if existing, ok := m.shares[key]; ok && existing.Origin != model.ShareOriginAccount {
+		return existing, nil
+	}
+	sh := &model.Share{
+		MeetingID:  meetingID,
+		OwnerID:    ownerID,
+		SharedToID: sharedToID,
+		Email:      email,
+		Permission: permission,
+		Origin:     model.ShareOriginAccount,
+	}
+	m.shares[key] = sh
+	return sh, nil
+}
+
 func (m *mockMeetingRepo) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
 	if m.forceGetMemberNil != "" && m.forceGetMemberNil == accountID+"|"+userID {
 		return nil, nil
@@ -325,8 +356,8 @@ func TestShareMeetingToAccount_SkipsRemovedMember(t *testing.T) {
 
 	// Simulate tam-1 having been removed from the account in the gap between
 	// ListAccountMembers' snapshot (which still includes tam-1, since it reads
-	// the `members` map directly) and the per-member GetMember recheck this
-	// task adds before each CreateShare call.
+	// the `members` map directly) and CreateShareIfMember's atomic
+	// membership-check-and-write for this member.
 	repo.forceGetMemberNil = "acc-1|tam-1"
 
 	res, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1")
@@ -361,6 +392,32 @@ func TestCreateShare_AccountOriginNeverClobbersDirectShare(t *testing.T) {
 	stored := repo.shares[shareKey("tam-1", "m-1")]
 	if stored.Origin == model.ShareOriginAccount {
 		t.Errorf("direct share must not be overwritten by an account-origin write, got %+v", stored)
+	}
+}
+
+func TestShareMeetingToAccount_TransactionalWriteNeverClobbersDirectShare(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "ROSA 리뷰", Status: model.StatusDone})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+	repo.addMember("acc-1", "tam-1", model.RoleTAM)
+
+	// tam-1 already has a direct (non-account-origin) share on this meeting,
+	// e.g. from an earlier ShareMeetingByEmail call by the owner.
+	repo.shares[shareKey("tam-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionEdit, Origin: "",
+	}
+
+	res, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.SharedWith != 1 {
+		t.Errorf("expected tam-1 counted as shared (already has access via direct share), got %d", res.SharedWith)
+	}
+	stored := repo.shares[shareKey("tam-1", "m-1")]
+	if stored.Origin == model.ShareOriginAccount || stored.Permission != model.PermissionEdit {
+		t.Errorf("expected pre-existing direct share preserved unchanged through the transactional path, got %+v", stored)
 	}
 }
 

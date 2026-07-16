@@ -1106,6 +1106,210 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 	return shareForRecipient, nil
 }
 
+// ErrMemberRemoved is returned by CreateShareIfMember when the target user is
+// no longer an account member at write time -- the caller should treat this
+// as a silent skip (matching ShareMeetingToAccount's pre-existing
+// member==nil skip), not an error.
+var ErrMemberRemoved = errors.New("member no longer present")
+
+// CreateShareIfMember atomically verifies account membership and creates an
+// account-origin Share in a single DynamoDB transaction, closing the TOCTOU
+// window between a plain GetMember check and a later CreateShare call (the
+// gap where a concurrent RemoveMember could complete after the check but
+// before the write, permanently orphaning the Share -- nothing re-triggers
+// cleanup for an already-fully-removed member). Every Share write here is
+// origin="account".
+//
+// Two independent conditions are enforced by the SAME transaction:
+//  1. ConditionCheck on the AccountMember item (attribute_exists(PK)) --
+//     fails with ErrMemberRemoved if the member was removed.
+//  2. ConditionExpression on each Share Put (attribute_not_exists(PK) OR
+//     origin = :accountOrigin) -- ports CreateShare's existing clobber-guard
+//     (dynamodb.go's plain CreateShare, added in a prior fix) into the
+//     transaction so this path can NEVER overwrite a pre-existing direct
+//     share. Conditioning on PK (not on the `origin` attribute itself)
+//     matters: Origin has `dynamodbav:"origin,omitempty"`, so a direct share
+//     (Origin=="") never writes the origin attribute at all --
+//     attribute_not_exists(origin) would be true for a direct share too,
+//     wrongly permitting the clobber that attribute_not_exists(PK) correctly
+//     excludes. The caller sees this outcome as an existing (direct) share
+//     returned unchanged, matching the plain CreateShare's behavior.
+func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID, ownerID, ownerEmail, accountID, sharedToID, email, permission string) (*model.Share, error) {
+	now := time.Now().UTC()
+
+	shareForRecipient := &model.Share{
+		PK:         model.PrefixUser + sharedToID,
+		SK:         model.PrefixShare + meetingID,
+		MeetingID:  meetingID,
+		OwnerID:    ownerID,
+		OwnerEmail: ownerEmail,
+		SharedToID: sharedToID,
+		Email:      email,
+		Permission: permission,
+		Origin:     model.ShareOriginAccount,
+		CreatedAt:  now,
+		EntityType: "SHARE",
+	}
+	item1, err := attributevalue.MarshalMap(shareForRecipient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal share: %w", err)
+	}
+
+	shareForMeeting := &model.Share{
+		PK:         model.PrefixMeeting + meetingID,
+		SK:         model.PrefixShareTo + sharedToID,
+		MeetingID:  meetingID,
+		OwnerID:    ownerID,
+		OwnerEmail: ownerEmail,
+		SharedToID: sharedToID,
+		Email:      email,
+		Permission: permission,
+		Origin:     model.ShareOriginAccount,
+		CreatedAt:  now,
+		EntityType: "SHARE",
+	}
+	item2, err := attributevalue.MarshalMap(shareForMeeting)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal share: %w", err)
+	}
+
+	shareExpr, err := expression.NewBuilder().WithCondition(
+		expression.AttributeNotExists(expression.Name("PK")).Or(
+			expression.Name("origin").Equal(expression.Value(model.ShareOriginAccount)),
+		),
+	).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build share clobber-guard condition: %w", err)
+	}
+
+	memberExpr, err := expression.NewBuilder().WithCondition(
+		expression.AttributeExists(expression.Name("PK")),
+	).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build member condition: %w", err)
+	}
+
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixMember + sharedToID},
+					},
+					ConditionExpression:       memberExpr.Condition(),
+					ExpressionAttributeNames:  memberExpr.Names(),
+					ExpressionAttributeValues: memberExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:                 aws.String(r.tableName),
+					Item:                      item1,
+					ConditionExpression:       shareExpr.Condition(),
+					ExpressionAttributeNames:  shareExpr.Names(),
+					ExpressionAttributeValues: shareExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:                 aws.String(r.tableName),
+					Item:                      item2,
+					ConditionExpression:       shareExpr.Condition(),
+					ExpressionAttributeNames:  shareExpr.Names(),
+					ExpressionAttributeValues: shareExpr.Values(),
+				},
+			},
+		},
+	})
+	if err != nil {
+		var tce *types.TransactionCanceledException
+		if errors.As(err, &tce) && len(tce.CancellationReasons) > 0 {
+			// Item 0 is the member ConditionCheck; items 1-2 are the Share Puts.
+			if code := tce.CancellationReasons[0].Code; code != nil && *code == "ConditionalCheckFailed" {
+				return nil, ErrMemberRemoved
+			}
+			for _, reason := range tce.CancellationReasons[1:] {
+				if reason.Code != nil && *reason.Code == "ConditionalCheckFailed" {
+					// A pre-existing direct share blocked the write -- same
+					// outcome as the plain CreateShare's clobber-guard:
+					// return the existing share, not an error.
+					existing, getErr := r.GetShare(ctx, sharedToID, meetingID)
+					if getErr != nil {
+						return nil, getErr
+					}
+					return existing, nil
+				}
+			}
+		}
+		return nil, fmt.Errorf("failed to create share if member: %w", err)
+	}
+
+	return shareForRecipient, nil
+}
+
+// BackfillShareOrigin conditionally tags BOTH copies of a legacy Share
+// (recipient-lookup PK=USER#{sharedToID}/SK=SHARED#{meetingID}, and
+// meeting-lookup PK=MEETING#{meetingID}/SK=SHARE_TO#{sharedToID} --
+// CreateShare/CreateShareIfMember always write both, so a backfill leaving
+// only one tagged would create a permanently inconsistent pair) as
+// account-origin. Used only by the one-time backfill CLI
+// (cmd/backfill-share-origin) for Share records written by
+// ShareMeetingToAccount before the Origin field existed. Each item's update
+// requires origin to still be absent/empty at write time, so a concurrent
+// RemoveMember cleanup (which deletes the item) can't be raced into a
+// resurrected/half-updated state: on ConditionalCheckFailedException for
+// EITHER item this returns ErrConditionFailed and the caller treats that
+// meeting/member pair as a no-op skip, not an error. Not wrapped in a
+// transaction: if the recipient-lookup item updates but the meeting-lookup
+// item's condition then fails (e.g. concurrently deleted between the two
+// calls), the pair is left inconsistent -- acceptable for a manually
+// operated, dry-run-first backfill tool where the caller reviews output and
+// can safely re-run (idempotent: a re-run's condition simply fails-as-skip
+// for the already-updated item and retries the other).
+func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, sharedToID, meetingID string) error {
+	condition := expression.AttributeExists(expression.Name("PK")).And(
+		expression.Or(
+			expression.AttributeNotExists(expression.Name("origin")),
+			expression.Name("origin").Equal(expression.Value("")),
+		),
+	)
+	update := expression.Set(expression.Name("origin"), expression.Value(model.ShareOriginAccount))
+	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
+	if err != nil {
+		return fmt.Errorf("build backfill origin condition: %w", err)
+	}
+	keys := []map[string]types.AttributeValue{
+		{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixShare + meetingID},
+		},
+		{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixShareTo + sharedToID},
+		},
+	}
+	for _, key := range keys {
+		_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName:                 aws.String(r.tableName),
+			Key:                       key,
+			ConditionExpression:       expr.Condition(),
+			UpdateExpression:          expr.Update(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+		})
+		if err != nil {
+			var ccfe *types.ConditionalCheckFailedException
+			if errors.As(err, &ccfe) {
+				return fmt.Errorf("%w: share %s/%s not eligible (missing, or origin already set)", ErrConditionFailed, sharedToID, meetingID)
+			}
+			return fmt.Errorf("backfill share origin: %w", err)
+		}
+	}
+	return nil
+}
+
 // GetShare retrieves a share record
 func (r *DynamoDBRepository) GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error) {
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{

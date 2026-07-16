@@ -181,7 +181,8 @@ func (h *AccountHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID and user ID are required")
 		return
 	}
-	if err := h.accountService.RemoveMember(ctx, userID, accountID, targetUserID); err != nil {
+	failedMeetingIDs, err := h.accountService.RemoveMember(ctx, userID, accountID, targetUserID)
+	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrForbidden):
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can remove members")
@@ -192,6 +193,17 @@ func (h *AccountHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}
+		return
+	}
+	// The membership removal itself always succeeds at this point -- 204 is
+	// reserved for the fully-clean case (no body, matching HTTP semantics);
+	// when Share cleanup for one or more meetings failed, surface it in a
+	// 200 body instead of the caller only being able to find out via logs.
+	if len(failedMeetingIDs) > 0 {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"removed":                  true,
+			"cleanupFailedForMeetings": failedMeetingIDs,
+		})
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

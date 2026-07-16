@@ -397,7 +397,7 @@ func TestRemoveMember_OwnerRemovesMember(t *testing.T) {
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 
-	if err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	mem, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1")
@@ -415,7 +415,7 @@ func TestRemoveMember_NonOwnerForbidden(t *testing.T) {
 	seedUser(repo, "ssa-1", "ssa@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ssa@x.com", Role: model.RoleSSA})
 
-	err := svc.RemoveMember(context.Background(), "tam-1", acc.AccountID, "ssa-1")
+	_, err := svc.RemoveMember(context.Background(), "tam-1", acc.AccountID, "ssa-1")
 	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
 	}
@@ -426,7 +426,7 @@ func TestRemoveMember_OwnerCannotBeRemoved(t *testing.T) {
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 
-	err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "owner-1")
+	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "owner-1")
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("expected ErrInvalidInput, got %v", err)
 	}
@@ -437,7 +437,7 @@ func TestRemoveMember_MissingMemberNotFound(t *testing.T) {
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 
-	err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "ghost-1")
+	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "ghost-1")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -454,7 +454,7 @@ func TestRemoveMember_RevokesAccountOriginShare(t *testing.T) {
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
 	}
 
-	if err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if repo.shares[acctShareKey("tam-1", "m-1")] != nil {
@@ -473,7 +473,7 @@ func TestRemoveMember_PreservesDirectShare(t *testing.T) {
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // direct share
 	}
 
-	if err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if repo.shares[acctShareKey("tam-1", "m-1")] == nil {
@@ -490,11 +490,15 @@ func TestRemoveMember_CleanupFailureDoesNotFailRemoval(t *testing.T) {
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
 	repo.shareOpErr["m-1"] = errors.New("simulated transient DynamoDB error")
 
-	if err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+	failed, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1")
+	if err != nil {
 		t.Fatalf("expected RemoveMember to succeed despite share-cleanup failure, got: %v", err)
 	}
 	if mem, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1"); mem != nil {
 		t.Errorf("expected member to remain removed despite cleanup failure, got %+v", mem)
+	}
+	if len(failed) != 1 || failed[0] != "m-1" {
+		t.Errorf("expected failedMeetingIDs=[m-1], got %v", failed)
 	}
 }
 

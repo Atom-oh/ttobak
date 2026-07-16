@@ -31,6 +31,8 @@ type mockHandlerAccountRepo struct {
 	meetingRefs map[string][]model.MeetingRef
 	insightsByAccount map[string][]model.AccountInsight
 	documents map[string][]model.AccountDocument
+	shares    map[string]*model.Share // "sharedToID|meetingID" -> share
+	shareOpErr map[string]error       // meetingID -> forced GetShare/DeleteShare error
 }
 
 func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
@@ -41,6 +43,8 @@ func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
 		meetingRefs: make(map[string][]model.MeetingRef),
 		insightsByAccount: make(map[string][]model.AccountInsight),
 		documents: make(map[string][]model.AccountDocument),
+		shares:    make(map[string]*model.Share),
+		shareOpErr: make(map[string]error),
 	}
 }
 
@@ -92,9 +96,21 @@ func (m *mockHandlerAccountRepo) UpdateMemberRole(_ context.Context, accountID, 
 	return nil
 }
 func (m *mockHandlerAccountRepo) GetShare(_ context.Context, sharedToID, meetingID string) (*model.Share, error) {
-	return nil, nil
+	if err, ok := m.shareOpErr[meetingID]; ok {
+		return nil, err
+	}
+	sh, ok := m.shares[sharedToID+"|"+meetingID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *sh
+	return &cp, nil
 }
 func (m *mockHandlerAccountRepo) DeleteShare(_ context.Context, sharedToID, meetingID string) error {
+	if err, ok := m.shareOpErr[meetingID]; ok {
+		return err
+	}
+	delete(m.shares, sharedToID+"|"+meetingID)
 	return nil
 }
 func (m *mockHandlerAccountRepo) ListAccountMembers(_ context.Context, accountID string) ([]model.AccountMember, error) {
@@ -266,6 +282,36 @@ func TestHandlerRemoveMember_OwnerTargetBadRequest(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerRemoveMember_PartialCleanupFailureReturns200WithBody(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
+	repo.shareOpErr["m-1"] = fmt.Errorf("simulated transient error")
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	failed, _ := resp["cleanupFailedForMeetings"].([]interface{})
+	if len(failed) != 1 || failed[0] != "m-1" {
+		t.Errorf("expected cleanupFailedForMeetings=[m-1], got %+v", resp)
+	}
+	if _, ok := repo.members[acctMemberKey("acc-1", "tam-1")]; ok {
+		t.Error("member should still be removed despite cleanup failure")
 	}
 }
 

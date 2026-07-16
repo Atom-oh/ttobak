@@ -71,8 +71,10 @@ export default function AccountsClient() {
         // Stay on the accounts list so the error is actually visible -- the account
         // still exists and is reachable from the (refreshed) list below, where the
         // owner can open it and retry adding the failed members from its detail page.
-        setError(`Account created, but failed to add: ${failed.join(', ')}. Open the account below and retry.`);
+        // fetchAccounts() must run BEFORE setError(): it calls setError(null) on entry,
+        // which would otherwise wipe this message in the same tick it was set.
         await fetchAccounts();
+        setError(`Account created, but failed to add: ${failed.join(', ')}. Open the account below and retry.`);
         return;
       }
       router.push(`/accounts/${created.accountId}`);

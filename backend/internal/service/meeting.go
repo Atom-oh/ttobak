@@ -65,6 +65,7 @@ type meetingRepo interface {
 	GetOrCreateUser(ctx context.Context, userID, email, name string) (*model.User, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, origin string) (*model.Share, error)
+	CreateShareIfMember(ctx context.Context, meetingID, ownerID, ownerEmail, accountID, sharedToID, email, permission string) (*model.Share, error)
 	DeleteShare(ctx context.Context, sharedToID, meetingID string) error
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
@@ -714,16 +715,23 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 		if m.UserID == ownerID {
 			continue
 		}
-		member, err := s.repo.GetMember(ctx, accountID, m.UserID)
+		// CreateShareIfMember atomically checks membership and writes the
+		// Share in one transaction, closing the TOCTOU window a separate
+		// GetMember+CreateShare pair would leave open: if a concurrent
+		// RemoveMember completed for this exact member in that gap, the
+		// resulting orphaned Share would never be cleaned up by anyone
+		// (nothing re-triggers cleanup for an already-fully-removed member).
+		_, err := s.repo.CreateShareIfMember(ctx, meetingID, ownerID, ownerEmail, accountID, m.UserID, m.Email, model.PermissionRead)
 		if err != nil {
+			if errors.Is(err, repository.ErrMemberRemoved) {
+				continue // removed concurrently; matches the old member==nil skip
+			}
 			return nil, err
 		}
-		if member == nil {
-			continue
-		}
-		if _, err := s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, m.UserID, m.Email, model.PermissionRead, model.ShareOriginAccount); err != nil {
-			return nil, err
-		}
+		// Counted whether the write created a fresh account-origin Share or
+		// the clobber-guard preserved an existing direct share for this
+		// member -- either way they already have read access to this
+		// meeting, so it's correctly reflected in SharedWith.
 		shared++
 	}
 

@@ -290,14 +290,21 @@ Error: 400 Bad Request (잘못된 역할이거나 대상이 owner)
 ```
 DELETE /api/accounts/{accountId}/members/{userId}
 
-Response: 204 No Content
+Response: 204 No Content (모든 미팅의 Share cleanup까지 완전히 성공한 경우)
+Response: 200 OK (멤버십 삭제는 성공했으나 일부 미팅의 Share cleanup이 실패한 경우)
+{
+  "removed": true,
+  "cleanupFailedForMeetings": ["meeting-id-1", "meeting-id-2"]
+}
 
 Error: 403 Forbidden (owner가 아님)
 Error: 404 Not Found (해당 멤버 없음)
 Error: 400 Bad Request (owner는 제거 불가)
 ```
 
-> 멤버십 삭제는 per-user Share 레코드가 없는 미팅에 대한 새 접근을 즉시 차단합니다. 기존 Share 레코드가 있는 미팅은 같은 `RemoveMember` 요청 안에서 account의 전체 MeetingRef 목록을 순회하는 best-effort cleanup이 account-origin Share만 회수합니다. 이 처리는 N개 미팅 전체에 대해 즉시 완료되는 작업이 아니며 멤버십 삭제와 트랜잭션으로 묶이지 않습니다. 특정 미팅의 cleanup 실패는 로그로 남기고 멤버 제거 요청 자체는 성공하며, 소유자가 별도로 부여한 direct Share는 삭제하지 않습니다.
+> 멤버십 삭제는 per-user Share 레코드가 없는 미팅에 대한 새 접근을 즉시 차단합니다. 기존 Share 레코드가 있는 미팅은 같은 `RemoveMember` 요청 안에서 account의 전체 MeetingRef 목록을 순회하는 best-effort cleanup이 account-origin Share만 회수합니다. 이 처리는 N개 미팅 전체에 대해 즉시 완료되는 작업이 아니며 멤버십 삭제와 트랜잭션으로 묶이지 않습니다. 소유자가 별도로 부여한 direct Share는 삭제하지 않습니다.
+>
+> **Cleanup 실패 시그널**: 특정 미팅의 cleanup(Share 조회/삭제) 실패는 이제 로그뿐 아니라 응답 바디의 `cleanupFailedForMeetings`로도 노출됩니다 — 멤버 제거 요청 자체는 여전히 성공(멤버십은 이미 삭제됨)하지만, 호출자가 body를 확인하면 어떤 미팅의 접근 회수가 불완전한지 알 수 있습니다. 자동 재시도/reconciliation은 아직 구현되지 않은 후속 작업입니다.
 >
 > **Known limitation**: 이 수정 배포 전에 `share-account`가 생성한 Share 레코드는 origin 태그가 없어 direct grant로 취급됩니다. 따라서 수정 배포 후 멤버를 제거해도 해당 과거 레코드는 cleanup 대상이 아닙니다.
 

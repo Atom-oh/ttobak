@@ -267,40 +267,45 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 // RemoveMember deletes a non-owner member. Only the account owner may call
 // this; the owner member itself can never be removed (an account must never
 // exist without an owner -- see CreateAccount's transactional invariant).
-func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, accountID, targetUserID string) error {
+// Returns failedMeetingIDs listing which meetings' Share cleanup did not
+// complete -- err is nil whenever the membership delete itself succeeded (a
+// cleanup failure never fails the removal request), but the caller now gets
+// an explicit signal instead of the failure being visible only in logs.
+func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, accountID, targetUserID string) (failedMeetingIDs []string, err error) {
 	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if requester == nil || requester.Role != model.RoleOwner {
-		return ErrForbidden
+		return nil, ErrForbidden
 	}
 	target, err := s.repo.GetMember(ctx, accountID, targetUserID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if target == nil {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	if target.Role == model.RoleOwner {
-		return ErrInvalidInput
+		return nil, ErrInvalidInput
 	}
 	if err := s.repo.DeleteMember(ctx, accountID, targetUserID); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
-			return ErrNotFound // removed concurrently between our Get and Delete
+			return nil, ErrNotFound // removed concurrently between our Get and Delete
 		}
-		return err
+		return nil, err
 	}
 
 	refs, err := s.repo.ListMeetingRefsForAccount(ctx, accountID)
 	if err != nil {
 		log.Printf("cleanup shares for removed member %s in account %s: list meeting refs: %v", targetUserID, accountID, err)
-		return nil
+		return nil, nil
 	}
 	for _, ref := range refs {
 		share, err := s.repo.GetShare(ctx, targetUserID, ref.MeetingID)
 		if err != nil {
 			log.Printf("cleanup share for removed member %s (meeting %s): get share: %v", targetUserID, ref.MeetingID, err)
+			failedMeetingIDs = append(failedMeetingIDs, ref.MeetingID)
 			continue
 		}
 		if share == nil || share.Origin != model.ShareOriginAccount {
@@ -308,9 +313,10 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 		}
 		if err := s.repo.DeleteShare(ctx, targetUserID, ref.MeetingID); err != nil {
 			log.Printf("cleanup share for removed member %s (meeting %s): delete share: %v", targetUserID, ref.MeetingID, err)
+			failedMeetingIDs = append(failedMeetingIDs, ref.MeetingID)
 		}
 	}
-	return nil
+	return failedMeetingIDs, nil
 }
 
 // UpdateMemberRole changes a non-owner member's role. Only the account owner
@@ -621,8 +627,8 @@ func (s *AccountService) putDoc(ctx context.Context, userID, pk, accountID strin
 		PK: pk, SK: model.PrefixDoc + docID,
 		AccountID: accountID, DocID: docID, Title: strings.TrimSpace(req.Title),
 		DocType: req.DocType, Path: req.Path, Content: markdown,
-		Links:    parseWikilinks(markdown),
-		FileKey:  req.FileKey, FileName: req.FileName, MimeType: req.MimeType, FileSize: req.FileSize,
+		Links:   parseWikilinks(markdown),
+		FileKey: req.FileKey, FileName: req.FileName, MimeType: req.MimeType, FileSize: req.FileSize,
 		SourceUserID: userID, TtobakOrigin: false,
 		CreatedAt: now, UpdatedAt: now, EntityType: entityType,
 	}
