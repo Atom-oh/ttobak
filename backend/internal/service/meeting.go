@@ -56,6 +56,7 @@ type meetingRepo interface {
 	GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error)
 	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
 	UpdateMeeting(ctx context.Context, meeting *model.Meeting) error
+	UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error
 	DeleteMeeting(ctx context.Context, userID, meetingID string) error
 	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
 	ListAttachments(ctx context.Context, meetingID string) ([]model.Attachment, error)
@@ -296,7 +297,11 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 	}, nil
 }
 
-// UpdateMeeting updates a meeting with access check
+// UpdateMeeting updates a meeting with access check. Uses UpdateMeetingFields
+// (DynamoDB UpdateItem/SET) instead of a read-modify-write PutItem -- a
+// second concurrent UpdateMeeting call (e.g. a lingering notes autosave PUT
+// landing after a status transition) can then only ever touch the fields
+// THIS call actually sets, never clobber others it read a stale copy of.
 func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID string, req *model.UpdateMeetingRequest) (*model.MeetingUpdateResponse, error) {
 	meeting, permission, err := s.checkAccess(ctx, userID, meetingID)
 	if err != nil {
@@ -309,36 +314,41 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		return nil, ErrForbidden
 	}
 
-	// Apply updates
+	fields := map[string]interface{}{}
 	if req.Title != "" {
-		meeting.Title = req.Title
+		fields["title"] = req.Title
 	}
 	if req.Content != "" {
-		meeting.Content = req.Content
+		fields["content"] = req.Content
 	}
 	if req.Notes != nil {
-		meeting.Notes = *req.Notes
+		fields["notes"] = *req.Notes
 	}
 	if req.TranscriptA != "" {
-		meeting.TranscriptA = req.TranscriptA
+		fields["transcriptA"] = req.TranscriptA
 	}
 	if req.SelectedTranscript != "" {
-		meeting.SelectedTranscript = req.SelectedTranscript
+		fields["selectedTranscript"] = req.SelectedTranscript
 	}
 	if req.Participants != nil {
-		meeting.Participants = req.Participants
+		fields["participants"] = req.Participants
 	}
 	if req.Status != "" {
-		meeting.Status = req.Status
+		fields["status"] = req.Status
 	}
 
-	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
-		return nil, err
+	updatedAt := time.Now().UTC()
+	if len(fields) > 0 {
+		if err := s.repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, fields); err != nil {
+			return nil, err
+		}
+	} else {
+		updatedAt = meeting.UpdatedAt
 	}
 
 	return &model.MeetingUpdateResponse{
 		MeetingID: meeting.MeetingID,
-		UpdatedAt: meeting.UpdatedAt.Format(time.RFC3339),
+		UpdatedAt: updatedAt.Format(time.RFC3339),
 	}, nil
 }
 

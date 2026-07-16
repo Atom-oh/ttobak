@@ -90,6 +90,40 @@ func (m *mockMeetingRepo) UpdateMeeting(_ context.Context, meeting *model.Meetin
 	return nil
 }
 
+// UpdateMeetingFields mirrors the real repo's SET-only semantics: only the
+// given field names are mutated, everything else on the stored meeting is
+// left untouched (unlike UpdateMeeting's full-item replace above).
+func (m *mockMeetingRepo) UpdateMeetingFields(_ context.Context, userID, meetingID string, fields map[string]interface{}) error {
+	key := meetingKey(userID, meetingID)
+	existing, ok := m.meetings[key]
+	if !ok {
+		return errors.New("meeting not found")
+	}
+	cp := *existing
+	for k, v := range fields {
+		switch k {
+		case "title":
+			cp.Title = v.(string)
+		case "content":
+			cp.Content = v.(string)
+		case "notes":
+			cp.Notes = v.(string)
+		case "transcriptA":
+			cp.TranscriptA = v.(string)
+		case "selectedTranscript":
+			cp.SelectedTranscript = v.(string)
+		case "participants":
+			cp.Participants = v.([]string)
+		case "status":
+			cp.Status = v.(string)
+		}
+	}
+	cp.UpdatedAt = time.Now().UTC()
+	m.meetings[key] = &cp
+	m.meetingsByID[meetingID] = &cp
+	return nil
+}
+
 func (m *mockMeetingRepo) DeleteMeeting(_ context.Context, userID, meetingID string) error {
 	key := meetingKey(userID, meetingID)
 	if _, ok := m.meetings[key]; !ok {
@@ -514,6 +548,43 @@ func TestUpdateMeeting_ExplicitEmptyNotesClearsExisting(t *testing.T) {
 	}
 	if repo.meetingsByID["m-1"].Notes != "" {
 		t.Errorf("expected notes cleared to empty, got %q", repo.meetingsByID["m-1"].Notes)
+	}
+}
+
+func TestUpdateMeeting_OutOfOrderNotesUpdateDoesNotClobberOtherFields(t *testing.T) {
+	// Simulates a lingering notes autosave PUT landing AFTER a status
+	// transition -- with the old read-modify-write PutItem, a stale notes
+	// update would read the meeting BEFORE the status change, then write
+	// the whole item back, silently reverting status. UpdateMeetingFields
+	// (SET expression) must only ever touch the field it's given.
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "user-1", Title: "Title", Notes: "old notes",
+		Status: model.StatusRecording, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	// Status transitions to "transcribing" (as resumeUploadFlow does).
+	if _, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{
+		Title: "Title", Status: model.StatusTranscribing,
+	}); err != nil {
+		t.Fatalf("unexpected error on status update: %v", err)
+	}
+
+	// A stale notes-only autosave "arrives late" and must not touch status.
+	if _, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{
+		Title: "Title", Notes: mdPtr("stale notes from before the transition"),
+	}); err != nil {
+		t.Fatalf("unexpected error on notes update: %v", err)
+	}
+
+	updated := repo.meetingsByID["m-1"]
+	if updated.Status != model.StatusTranscribing {
+		t.Errorf("expected status to remain %q, got %q", model.StatusTranscribing, updated.Status)
+	}
+	if updated.Notes != "stale notes from before the transition" {
+		t.Errorf("expected notes updated, got %q", updated.Notes)
 	}
 }
 
