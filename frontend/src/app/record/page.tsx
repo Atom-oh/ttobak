@@ -21,7 +21,7 @@ import { isTauri } from '@/lib/tauri';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
-import { usePostRecording } from '@/hooks/usePostRecording';
+import { usePostRecording, withTimeout } from '@/hooks/usePostRecording';
 import { uploadsApi, meetingsApi, kbApi } from '@/lib/api';
 import { uploadFile, uploadToS3, notifyUploadComplete } from '@/lib/upload';
 import type { LiveSttProvider } from '@/lib/sttManager';
@@ -153,7 +153,10 @@ function RecordPageInner() {
     setNotesSaveStatus('saving');
     const run = (async () => {
       try {
-        await meetingsApi.update(meetingId, { notes: notesToSave });
+        await withTimeout(
+          meetingsApi.update(meetingId, { notes: notesToSave }),
+          15000, 'Save meeting notes',
+        );
         if (meetingId === activeMeetingIdRef.current) {
           lastSavedNotesRef.current = notesToSave;
           setNotesSaveStatus('saved');
@@ -235,6 +238,14 @@ function RecordPageInner() {
   // the only notes write left in flight from this point on.
   const handleFinalNotesSubmit = useCallback(async (finalNotes: string) => {
     const meetingId = postRecording.serverMeetingId;
+    // The banner edits notes in its OWN local state (seeded from
+    // initialNotes={notes} but not synced back) -- finalNotes can
+    // legitimately differ from this page's notes/liveNotesRef. Without
+    // this sync, saveNotes' completion handler would see finalNotes !=
+    // liveNotesRef.current (still the pre-banner value) and "helpfully"
+    // re-queue the STALE pre-banner notes over the user's banner edit.
+    setNotes(finalNotes);
+    liveNotesRef.current = finalNotes;
     if (meetingId) {
       await flushNotesQueue(meetingId, finalNotes);
     }
@@ -329,6 +340,12 @@ function RecordPageInner() {
     // meeting that just ended could still match activeMeetingIdRef during
     // that window and write its stale content into this new session's refs.
     activeMeetingIdRef.current = null;
+    // A pending save queued for the meeting that just ended must not drain
+    // into this new session -- it would flip notesSaveStatus to 'saving'
+    // for a target the activeMeetingIdRef guard then silently ignores on
+    // completion, leaving the new session's status stuck until the user
+    // types again.
+    pendingNotesRef.current = null;
     // contextText is NOT reset here -- it's filled in during setup, before
     // this handler fires, specifically so THIS session's Q&A can use it.
     // Clearing it on start would delete the very input the user just

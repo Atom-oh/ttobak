@@ -17,7 +17,7 @@ function formatDefaultTitle(date: Date): string {
 }
 
 /** Race a promise against a timeout */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     promise,
     new Promise<never>((_, reject) =>
