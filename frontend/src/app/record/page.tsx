@@ -130,6 +130,19 @@ function RecordPageInner() {
   useEffect(() => {
     activeMeetingIdRef.current = postRecording.serverMeetingId;
   }, [postRecording.serverMeetingId]);
+  // Mirrors the live `notes` state. The autosave effect's own gate
+  // (`notes === lastSavedNotesRef.current`) only sees the ref as of WHEN
+  // IT FIRES -- if the user reverts to an earlier already-saved value
+  // while a newer save is still in flight, the effect sees no change
+  // (matches the stale, not-yet-updated lastSavedNotesRef) and never
+  // queues anything. Once that in-flight save completes and overwrites
+  // lastSavedNotesRef, the reverted value is never sent. saveNotes'
+  // completion handler reads this ref to re-check against whatever the
+  // editor holds *right now*, independent of the debounce effect.
+  const liveNotesRef = useRef('');
+  useEffect(() => {
+    liveNotesRef.current = notes;
+  }, [notes]);
 
   const saveNotes = useCallback((meetingId: string, notesToSave: string): Promise<void> => {
     if (notesSaveInFlightRef.current) {
@@ -144,6 +157,14 @@ function RecordPageInner() {
         if (meetingId === activeMeetingIdRef.current) {
           lastSavedNotesRef.current = notesToSave;
           setNotesSaveStatus('saved');
+          if (liveNotesRef.current !== notesToSave) {
+            // The editor moved on (possibly back to an older value)
+            // while this save was in flight -- this completion isn't the
+            // last word. Trigger a fresh save for whatever's live now
+            // instead of waiting on the debounce effect, which won't
+            // re-fire on its own (nothing further changes `notes`).
+            pendingNotesRef.current = { meetingId, notes: liveNotesRef.current };
+          }
         }
       } catch {
         if (meetingId === activeMeetingIdRef.current) {
@@ -299,8 +320,15 @@ function RecordPageInner() {
     }
     summary.reset();
     setNotes('');
+    liveNotesRef.current = '';
     lastSavedNotesRef.current = '';
     setNotesSaveStatus('idle');
+    // Invalidate synchronously, not just via the postRecording.serverMeetingId
+    // mirror effect below (which only catches up on the NEXT render, after
+    // createDraftMeeting() resolves). Without this, a slow save from the
+    // meeting that just ended could still match activeMeetingIdRef during
+    // that window and write its stale content into this new session's refs.
+    activeMeetingIdRef.current = null;
     // contextText is NOT reset here -- it's filled in during setup, before
     // this handler fires, specifically so THIS session's Q&A can use it.
     // Clearing it on start would delete the very input the user just
