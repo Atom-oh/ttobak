@@ -115,28 +115,44 @@ function RecordPageInner() {
   // not whichever meetingId the in-flight call's own closure captured.
   const pendingNotesRef = useRef<{ meetingId: string; notes: string } | null>(null);
   const notesDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The promise a caller can await to know the ENTIRE chain -- the
+  // currently-running save plus anything it goes on to queue -- has fully
+  // settled. Queuing alone doesn't mean "done"; a caller that needs to
+  // know the server has actually seen the latest value must await this,
+  // not just call saveNotes and assume queuing was enough.
+  const notesSaveSettledRef = useRef<Promise<void>>(Promise.resolve());
 
-  const saveNotes = useCallback(async (meetingId: string, notesToSave: string) => {
+  const saveNotes = useCallback((meetingId: string, notesToSave: string): Promise<void> => {
     if (notesSaveInFlightRef.current) {
       pendingNotesRef.current = { meetingId, notes: notesToSave };
-      return;
+      return notesSaveSettledRef.current;
     }
     notesSaveInFlightRef.current = true;
     setNotesSaveStatus('saving');
-    try {
-      await meetingsApi.update(meetingId, { notes: notesToSave });
-      lastSavedNotesRef.current = notesToSave;
-      setNotesSaveStatus('saved');
-    } catch {
-      setNotesSaveStatus('error');
-    } finally {
-      notesSaveInFlightRef.current = false;
-      const pending = pendingNotesRef.current;
-      if (pending !== null) {
-        pendingNotesRef.current = null;
-        await saveNotes(pending.meetingId, pending.notes);
+    const run = (async () => {
+      try {
+        await meetingsApi.update(meetingId, { notes: notesToSave });
+        lastSavedNotesRef.current = notesToSave;
+        setNotesSaveStatus('saved');
+      } catch {
+        setNotesSaveStatus('error');
+      } finally {
+        notesSaveInFlightRef.current = false;
+        const pending = pendingNotesRef.current;
+        if (pending !== null) {
+          pendingNotesRef.current = null;
+          // Awaited here (not fire-and-forget) so this run's own promise
+          // -- which every earlier caller in the chain is holding onto --
+          // only resolves once the queued save (and anything IT queues)
+          // also finishes. That's what makes notesSaveSettledRef a real
+          // "wait for the whole chain" signal instead of "wait for the
+          // first PUT only".
+          await saveNotes(pending.meetingId, pending.notes);
+        }
       }
-    }
+    })();
+    notesSaveSettledRef.current = run;
+    return run;
   }, []);
 
   // Autosave in-meeting notes (debounced) to the draft meeting
@@ -156,11 +172,12 @@ function RecordPageInner() {
     };
   }, [notes, postRecording.serverMeetingId, saveNotes]);
 
-  // Flushes the debounce timer and any in-flight/queued autosave before the
-  // post-recording notes step's own PUT fires. Without this, a lingering
-  // autosave from during the recording could land on the server AFTER the
-  // banner's final submit and overwrite it with older content -- the two
-  // paths write independently with no shared ordering otherwise.
+  // Flushes the debounce timer and genuinely waits for any in-flight/queued
+  // autosave to fully settle before the post-recording notes step's own
+  // PUT fires. Without this, a lingering autosave from during the
+  // recording could land on the server AFTER the banner's final submit
+  // and overwrite it with older content -- the two paths write
+  // independently with no shared ordering otherwise.
   const flushNotesQueue = useCallback(async (meetingId: string, latestNotes: string) => {
     if (notesDebounceTimerRef.current) {
       clearTimeout(notesDebounceTimerRef.current);
@@ -168,16 +185,20 @@ function RecordPageInner() {
     }
     if (latestNotes !== lastSavedNotesRef.current) {
       await saveNotes(meetingId, latestNotes);
+    } else if (notesSaveInFlightRef.current) {
+      // Nothing new to send, but an earlier save (possibly for this exact
+      // content) may still be in flight -- wait for it so it can never
+      // complete after the banner's own PUT below.
+      await notesSaveSettledRef.current;
     }
   }, [saveNotes]);
 
-  // Flush before handing off to the banner's own (separately-timed) save --
-  // this awaits the flush before firing the banner's PUT, so on the normal
-  // path the banner's save is the last one to reach the server. It isn't an
-  // absolute guarantee: if an earlier autosave was already in flight when
-  // this fires, flushNotesQueue's own save just queues behind it (per
-  // saveNotes' in-flight guard) and awaits that queued drain -- a network-
-  // level failure of that queued send is still possible, same as any PUT.
+  // Flush -- and now genuinely WAIT for it -- before handing off to the
+  // banner's own save. Once flushNotesQueue resolves, notesSaveInFlightRef
+  // is guaranteed false and nothing further will fire on its own (the
+  // autosave effect only re-triggers on `notes` changes, and none happen
+  // between here and the banner's PUT), so handleNotesSubmit's request is
+  // the only notes write left in flight from this point on.
   const handleFinalNotesSubmit = useCallback(async (finalNotes: string) => {
     const meetingId = postRecording.serverMeetingId;
     if (meetingId) {
