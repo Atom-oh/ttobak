@@ -667,6 +667,16 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 	}
 
 	if preserveSpeakers {
+		if hasCrossSpeakerMerge(segments, refined) {
+			// The model merged two different speakers' text into one output
+			// segment despite the prompt explicitly forbidding it --
+			// remapPreservedSpeakers can't fix this (max-overlap would just
+			// assign the WHOLE merged segment to one speaker, silently
+			// misattributing the other's words). Fail the chunk so the
+			// caller's existing rawFallbackSegments path takes over, which
+			// preserves each original segment's own acoustic Speaker exactly.
+			return nil, fmt.Errorf("preserve mode: output segment merges text from multiple acoustic speakers")
+		}
 		// The prompt tells the model acoustic labels are AUTHORITATIVE, but a
 		// set-equality check on the model's returned `speaker` field still
 		// can't distinguish a same-set swap (spk_0<->spk_1) from a correct
@@ -677,6 +687,41 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 	}
 
 	return refined, nil
+}
+
+// significantOverlap reports whether overlap between an output segment and
+// an input segment is large enough to count as "this output segment
+// meaningfully contains this speaker's speech" rather than boundary noise
+// from imprecise timestamps -- either an absolute floor (1s) or a fraction
+// of the output segment's own duration (30%).
+func significantOverlap(overlap, outputDuration float64) bool {
+	return overlap >= 1.0 || (outputDuration > 0 && overlap >= 0.3*outputDuration)
+}
+
+// hasCrossSpeakerMerge reports whether any output segment significantly
+// overlaps 2+ DISTINCT acoustic input labels -- i.e. the LLM merged two
+// different speakers' text into one output segment. remapPreservedSpeakers
+// alone can't catch this: max-overlap assigns the whole merged segment to
+// whichever speaker it overlaps most, silently dropping the other's
+// attribution rather than surfacing an error.
+func hasCrossSpeakerMerge(input []WhisperSegment, output []RefinedSegment) bool {
+	for _, out := range output {
+		duration := out.EndTime - out.StartTime
+		distinctLabels := make(map[string]bool)
+		for _, in := range input {
+			if in.Speaker == "" {
+				continue
+			}
+			overlap := min(out.EndTime, in.End) - max(out.StartTime, in.Start)
+			if overlap > 0 && significantOverlap(overlap, duration) {
+				distinctLabels[in.Speaker] = true
+			}
+		}
+		if len(distinctLabels) > 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // remapPreservedSpeakers overwrites each output segment's Speaker with the

@@ -136,6 +136,35 @@ func TestRawFallbackSegments_FallsBackToDefaultWhenSpeakerEmpty(t *testing.T) {
 	}
 }
 
+func TestHasCrossSpeakerMerge_DetectsMergedOutputSegment(t *testing.T) {
+	input := []WhisperSegment{
+		{Start: 0.0, End: 5.0, Speaker: "spk_0"},
+		{Start: 5.0, End: 10.0, Speaker: "spk_1"},
+	}
+	output := []RefinedSegment{
+		// LLM combined both speakers' spans into a single output segment,
+		// against the preserve-mode prompt's explicit instruction not to.
+		{StartTime: 0.0, EndTime: 10.0, Speaker: "spk_0"},
+	}
+	if !hasCrossSpeakerMerge(input, output) {
+		t.Error("expected a merge to be detected when one output segment significantly overlaps two distinct acoustic labels")
+	}
+}
+
+func TestHasCrossSpeakerMerge_AllowsSingleSpeakerOverlap(t *testing.T) {
+	input := []WhisperSegment{
+		{Start: 0.0, End: 5.0, Speaker: "spk_0"},
+		{Start: 5.0, End: 10.0, Speaker: "spk_1"},
+	}
+	output := []RefinedSegment{
+		{StartTime: 0.0, EndTime: 4.9, Speaker: "spk_0"}, // entirely within spk_0's span
+		{StartTime: 5.0, EndTime: 10.0, Speaker: "spk_1"}, // entirely within spk_1's span
+	}
+	if hasCrossSpeakerMerge(input, output) {
+		t.Error("expected no merge detected when each output segment significantly overlaps only one acoustic label")
+	}
+}
+
 func TestRemapPreservedSpeakers_AssignsByMaxOverlap(t *testing.T) {
 	input := []WhisperSegment{
 		{Start: 0.0, End: 5.0, Speaker: "spk_0"},

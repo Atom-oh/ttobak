@@ -87,6 +87,32 @@ func TestReplaceLabel(t *testing.T) {
 			replacement: "Eve",
 			want:        "Eve Eve",
 		},
+		{
+			// Regression: treating all Hangul as a generic wordChar (the
+			// earlier Korean-fallback-label fix) also blocked the common case
+			// of a Korean particle glued directly onto a spk_N label in
+			// LLM-generated summaries/action items -- a case the old
+			// (boundary-unaware) strings.ReplaceAll handled fine.
+			name:        "Korean particle attached directly to spk_N label still matches",
+			text:        "spk_1이 문서를 작성했다",
+			label:       "spk_1",
+			replacement: "Kim",
+			want:        "Kim이 문서를 작성했다",
+		},
+		{
+			name:        "Korean particle attached directly to 화자X label still matches",
+			text:        "화자A는 회의를 시작했다",
+			label:       "화자A",
+			replacement: "Kim",
+			want:        "Kim는 회의를 시작했다",
+		},
+		{
+			name:        "spk_1 still doesn't match inside spk_10 even with a Hangul suffix",
+			text:        "spk_10이 말했다",
+			label:       "spk_1",
+			replacement: "Kim",
+			want:        "spk_10이 말했다",
+		},
 	}
 	for _, c := range cases {
 		got := ReplaceLabel(c.text, c.label, c.replacement)
