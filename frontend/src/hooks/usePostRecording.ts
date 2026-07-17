@@ -17,7 +17,7 @@ function formatDefaultTitle(date: Date): string {
 }
 
 /** Race a promise against a timeout */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     promise,
     new Promise<never>((_, reject) =>
@@ -138,8 +138,11 @@ export function usePostRecording({
     pendingBlobRef.current = null;
 
     try {
-      // Save notes to meeting if we have a draft
-      if (serverMeetingId && notes.trim()) {
+      // Save notes to meeting if we have a draft -- always send, even when
+      // empty, so the user clearing everything actually clears the stored
+      // notes (backend's Notes field is *string: omitted preserves, an
+      // explicit "" clears).
+      if (serverMeetingId) {
         await withTimeout(
           meetingsApi.update(serverMeetingId, { notes: notes.trim() }),
           15000, 'Save meeting notes',

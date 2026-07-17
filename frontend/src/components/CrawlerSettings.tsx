@@ -202,7 +202,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                   onClick={() => addKeyword(kw)}
                   className={`px-2.5 py-1 text-xs font-medium rounded-full transition-colors ${
                     newsQueries.includes(kw)
-                      ? 'bg-primary text-white dark:text-background-dark'
+                      ? 'bg-primary text-white'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-white/5 dark:text-text-muted dark:hover:bg-white/10'
                   }`}
                 >
@@ -270,7 +270,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
                   onClick={() => toggleAwsService(svc)}
                   className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
                     awsServices.includes(svc)
-                      ? 'bg-primary text-white dark:text-background-dark dark:shadow-[0_0_10px_rgba(0,229,255,0.3)]'
+                      ? 'bg-primary text-white'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-white/5 dark:text-text-muted dark:hover:bg-white/10'
                   }`}
                 >
@@ -375,7 +375,7 @@ function AddEditModal({ onClose, onSubmit, initial, isEdit }: AddEditModalProps)
             <button
               type="submit"
               disabled={!sourceName.trim() || submitting}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-white dark:text-background-dark rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
             >
               {submitting ? (
                 <>
@@ -704,7 +704,7 @@ export function CrawlerSettings() {
 
       <button
         onClick={() => setShowAddModal(true)}
-        className="flex items-center gap-2 px-4 py-2 bg-primary text-white dark:text-background-dark rounded-lg font-semibold text-sm hover:bg-primary/90 transition-colors dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
+        className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 transition-colors"
       >
         <span className="material-symbols-outlined text-lg">add</span>
         Add Source

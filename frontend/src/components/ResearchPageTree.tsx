@@ -68,8 +68,8 @@ export function ResearchPageTree({
           onClick={() => onPageSelect(mainResearch.researchId)}
           className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-colors ${
             isMainActive
-              ? 'bg-[#00E5FF]/10 text-[#00E5FF] border-l-2 border-[#00E5FF]'
-              : 'text-[#bac9cc] hover:bg-white/[0.03]'
+              ? 'bg-primary/10 text-primary border-l-2 border-primary'
+              : 'text-text-secondary hover:bg-white/[0.03]'
           }`}
         >
           <span className="material-symbols-outlined text-base">monitoring</span>
@@ -92,8 +92,8 @@ export function ResearchPageTree({
                   onClick={() => onPageSelect(sp.researchId)}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-left transition-colors ${
                     isActive
-                      ? 'bg-[#00E5FF]/10 text-[#00E5FF] border-l-2 border-[#00E5FF]'
-                      : 'text-[#bac9cc] hover:bg-white/[0.03]'
+                      ? 'bg-primary/10 text-primary border-l-2 border-primary'
+                      : 'text-text-secondary hover:bg-white/[0.03]'
                   }`}
                 >
                   <span className="material-symbols-outlined text-sm">
@@ -126,18 +126,18 @@ export function ResearchPageTree({
                 }}
                 placeholder="하위 주제 입력..."
                 disabled={addingSubPage}
-                className="flex-1 min-w-0 bg-white/[0.05] border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-[#e4e1e9] placeholder:text-[#849396]/60 focus:outline-none focus:border-[#00E5FF]/50 disabled:opacity-50"
+                className="flex-1 min-w-0 bg-white/[0.05] border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-text-main placeholder:text-text-muted/60 focus:outline-none focus:border-primary/50 disabled:opacity-50"
               />
               <button
                 onClick={handleSubmit}
                 disabled={!topic.trim() || addingSubPage}
-                className="p-1.5 rounded-lg bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 disabled:opacity-30 transition-colors flex-shrink-0"
+                className="p-1.5 rounded-lg bg-primary/20 text-primary hover:bg-primary/30 disabled:opacity-30 transition-colors flex-shrink-0"
               >
                 <span className="material-symbols-outlined text-sm">{addingSubPage ? 'hourglass_empty' : 'send'}</span>
               </button>
               <button
                 onClick={() => { setShowInput(false); setTopic(''); }}
-                className="p-1.5 rounded-lg text-[#849396] hover:text-[#e4e1e9] hover:bg-white/[0.03] transition-colors flex-shrink-0"
+                className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-white/[0.03] transition-colors flex-shrink-0"
               >
                 <span className="material-symbols-outlined text-sm">close</span>
               </button>
@@ -145,7 +145,7 @@ export function ResearchPageTree({
           ) : (
             <button
               onClick={() => setShowInput(true)}
-              className="w-full flex items-center gap-2 px-3 py-1.5 ml-3 rounded-lg text-[#849396] hover:text-[#00E5FF] hover:bg-white/[0.03] transition-colors"
+              className="w-full flex items-center gap-2 px-3 py-1.5 ml-3 rounded-lg text-text-muted hover:text-primary hover:bg-white/[0.03] transition-colors"
             >
               <span className="material-symbols-outlined text-sm">add</span>
               <span className="text-xs">Add sub-page</span>

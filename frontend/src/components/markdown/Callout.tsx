@@ -8,7 +8,7 @@ interface CalloutConfig {
 }
 
 const CALLOUT_CONFIG: Record<string, CalloutConfig> = {
-  summary: { color: '#00E5FF', bg: 'rgba(0, 229, 255, 0.05)', icon: 'lightbulb' },
+  summary: { color: '#8b85f7', bg: 'rgba(139, 133, 247, 0.06)', icon: 'lightbulb' },
   warning: { color: '#EA9619', bg: 'rgba(234, 150, 25, 0.05)', icon: 'warning' },
   tip:     { color: '#4DC290', bg: 'rgba(77, 194, 144, 0.05)', icon: 'check_circle' },
   danger:  { color: '#EF4444', bg: 'rgba(239, 68, 68, 0.05)', icon: 'dangerous' },
@@ -46,7 +46,7 @@ export function Callout(props: CalloutProps) {
             {title}
           </span>
         </div>
-        <div className="text-sm text-[#bac9cc] leading-relaxed [&>p]:m-0 [&>p+p]:mt-2">
+        <div className="text-sm text-text-secondary leading-relaxed [&>p]:m-0 [&>p+p]:mt-2">
           {props.children}
         </div>
       </div>

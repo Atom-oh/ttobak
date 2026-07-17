@@ -95,7 +95,7 @@ export default function DocsClient() {
           </button>
           <button
             onClick={() => setShowForm((v) => !v)}
-            className="bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg font-semibold text-sm px-4 py-2 flex items-center gap-1"
+            className="bg-primary hover:bg-primary-hover text-white rounded-lg font-semibold text-sm px-4 py-2 flex items-center gap-1"
           >
             <span className="material-symbols-outlined text-lg">add</span>New Document
           </button>
@@ -133,7 +133,7 @@ export default function DocsClient() {
           <button
             type="submit"
             disabled={creating || !title.trim()}
-            className="bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg font-semibold text-sm px-4 py-2 disabled:opacity-50"
+            className="bg-primary hover:bg-primary-hover text-white rounded-lg font-semibold text-sm px-4 py-2 disabled:opacity-50"
           >
             {creating ? 'Creating…' : 'Create'}
           </button>

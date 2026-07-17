@@ -189,7 +189,7 @@ export default function FilesPage() {
                 onClick={() => setFilterType(tab.key)}
                 className={`px-4 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-colors ${
                   filterType === tab.key
-                    ? 'bg-primary text-white dark:text-background-dark'
+                    ? 'bg-primary text-white'
                     : 'bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-text-muted hover:bg-slate-200 dark:hover:bg-white/10'
                 }`}
               >

@@ -124,7 +124,7 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
         ) : (
           <h1
             onClick={() => { setEditTitle(meeting.title); setIsEditingTitle(true); }}
-            className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:neon-text-cyan mb-4 cursor-pointer group"
+            className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline mb-4 cursor-pointer group"
             title="클릭하여 제목 수정"
           >
             {meeting.title}

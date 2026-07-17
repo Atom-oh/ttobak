@@ -14,6 +14,8 @@ import { LiveSummary } from '@/components/LiveSummary';
 import { LiveQAPanel } from '@/components/LiveQAPanel';
 import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingConfig';
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
+import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
+import { MeetingContextInput } from '@/components/record/MeetingContextInput';
 import { supportsTabAudioCapture } from '@/lib/device';
 import { isTauri } from '@/lib/tauri';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
@@ -66,6 +68,17 @@ function RecordPageInner() {
   const [isQAOpen, setIsQAOpen] = useState(false);
   const [detectedCount, setDetectedCount] = useState(0);
 
+  // In-meeting note-taking
+  const [notes, setNotes] = useState('');
+  const [notesSaveStatus, setNotesSaveStatus] = useState<NotesSaveStatus>('idle');
+  const lastSavedNotesRef = useRef('');
+
+  // Meeting context (agenda / customer background) — fed to AI Q&A
+  const [contextText, setContextText] = useState('');
+
+  // Desktop transcript panel collapse state
+  const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
+
   // --- Hooks ---
   const summary = useLiveSummary({ summaryInterval });
 
@@ -86,6 +99,211 @@ function RecordPageInner() {
   });
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
+
+  // Serializes notes autosave PUTs: two in-flight requests could reach the
+  // server out of order and let an older save's stale notes win the
+  // last-write-wins race (the effect's own debounce only prevents firing
+  // two timers back-to-back, not two overlapping in-flight requests when
+  // one is slow). Only one PUT is ever in flight; a save requested while
+  // one is in flight is queued (latest wins) and fires right after the
+  // current one settles, so the server always sees saves in order.
+  const notesSaveInFlightRef = useRef(false);
+  // Carries meetingId alongside the queued notes -- if a save for a NEW
+  // meeting queues while an OLDER meeting's save is still in flight (e.g.
+  // right after starting a second recording without reloading), draining
+  // the queue must PUT to the meeting the queued notes actually belong to,
+  // not whichever meetingId the in-flight call's own closure captured.
+  const pendingNotesRef = useRef<{ meetingId: string; notes: string } | null>(null);
+  const notesDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The promise a caller can await to know the ENTIRE chain -- the
+  // currently-running save plus anything it goes on to queue -- has fully
+  // settled. Queuing alone doesn't mean "done"; a caller that needs to
+  // know the server has actually seen the latest value must await this,
+  // not just call saveNotes and assume queuing was enough.
+  const notesSaveSettledRef = useRef<Promise<void>>(Promise.resolve());
+  // Mirrors postRecording.serverMeetingId so saveNotes' completion handler
+  // can tell whether IT is still for the active session. A save started
+  // for meeting A that resolves after the user has already started
+  // meeting B must not write A's content/status into the (by-then-reset,
+  // now B's) lastSavedNotesRef/notesSaveStatus.
+  const activeMeetingIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeMeetingIdRef.current = postRecording.serverMeetingId;
+  }, [postRecording.serverMeetingId]);
+  // Mirrors the live `notes` state. The autosave effect's own gate
+  // (`notes === lastSavedNotesRef.current`) only sees the ref as of WHEN
+  // IT FIRES -- if the user reverts to an earlier already-saved value
+  // while a newer save is still in flight, the effect sees no change
+  // (matches the stale, not-yet-updated lastSavedNotesRef) and never
+  // queues anything. Once that in-flight save completes and overwrites
+  // lastSavedNotesRef, the reverted value is never sent. saveNotes'
+  // completion handler reads this ref to re-check against whatever the
+  // editor holds *right now*, independent of the debounce effect.
+  const liveNotesRef = useRef('');
+  useEffect(() => {
+    liveNotesRef.current = notes;
+  }, [notes]);
+
+  const saveNotes = useCallback((meetingId: string, notesToSave: string): Promise<void> => {
+    if (notesSaveInFlightRef.current) {
+      pendingNotesRef.current = { meetingId, notes: notesToSave };
+      return notesSaveSettledRef.current;
+    }
+    notesSaveInFlightRef.current = true;
+    setNotesSaveStatus('saving');
+    const run = (async () => {
+      let saveError: unknown = null;
+      // AbortController (not just withTimeout's Promise.race) so a timeout
+      // actually cancels the underlying request instead of just giving up
+      // on waiting for it -- a non-aborted, still-in-flight PUT that lands
+      // late could otherwise overwrite fresher notes with this stale value
+      // even though nothing else (status/audioKey) is at risk anymore.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      try {
+        await meetingsApi.update(meetingId, { notes: notesToSave }, { signal: controller.signal });
+        if (meetingId === activeMeetingIdRef.current) {
+          lastSavedNotesRef.current = notesToSave;
+          setNotesSaveStatus('saved');
+          if (liveNotesRef.current !== notesToSave) {
+            // The editor moved on (possibly back to an older value)
+            // while this save was in flight -- this completion isn't the
+            // last word. Trigger a fresh save for whatever's live now
+            // instead of waiting on the debounce effect, which won't
+            // re-fire on its own (nothing further changes `notes`).
+            pendingNotesRef.current = { meetingId, notes: liveNotesRef.current };
+          }
+        }
+      } catch (err) {
+        saveError = err;
+        if (meetingId === activeMeetingIdRef.current) {
+          setNotesSaveStatus('error');
+        }
+      } finally {
+        clearTimeout(timeoutId);
+        notesSaveInFlightRef.current = false;
+        const pending = pendingNotesRef.current;
+        if (pending !== null) {
+          pendingNotesRef.current = null;
+          // Awaited here (not fire-and-forget) so this run's own promise
+          // -- which every earlier caller in the chain is holding onto --
+          // only resolves once the queued save (and anything IT queues)
+          // also finishes. That's what makes notesSaveSettledRef a real
+          // "wait for the whole chain" signal instead of "wait for the
+          // first PUT only".
+          await saveNotes(pending.meetingId, pending.notes);
+        }
+      }
+      // Surfaces the failure to whoever is awaiting this save (e.g.
+      // flushNotesQueue) instead of only reflecting it via notesSaveStatus
+      // -- a caller about to resume the upload flow needs to know the
+      // flush didn't actually succeed, not just that *a* UI label changed.
+      if (saveError) throw saveError;
+    })();
+    notesSaveSettledRef.current = run;
+    return run;
+  }, []);
+
+  // Autosave in-meeting notes (debounced) to the draft meeting
+  useEffect(() => {
+    if (!postRecording.serverMeetingId) return;
+    if (notes === lastSavedNotesRef.current) return;
+    const meetingId = postRecording.serverMeetingId;
+    notesDebounceTimerRef.current = setTimeout(() => {
+      notesDebounceTimerRef.current = null;
+      // Fire-and-forget here -- failure is already reflected via
+      // notesSaveStatus, and there's no explicit "flush" caller at this
+      // point to react to a rejection (unlike flushNotesQueue below).
+      saveNotes(meetingId, notes).catch(() => {});
+    }, 1500);
+    return () => {
+      if (notesDebounceTimerRef.current) {
+        clearTimeout(notesDebounceTimerRef.current);
+        notesDebounceTimerRef.current = null;
+      }
+    };
+  }, [notes, postRecording.serverMeetingId, saveNotes]);
+
+  // Flushes the debounce timer and genuinely waits for any in-flight/queued
+  // autosave to fully settle before the post-recording notes step's own
+  // PUT fires. Without this, a lingering autosave from during the
+  // recording could land on the server AFTER the banner's final submit
+  // and overwrite it with older content -- the two paths write
+  // independently with no shared ordering otherwise.
+  const flushNotesQueue = useCallback(async (meetingId: string, latestNotes: string) => {
+    if (notesDebounceTimerRef.current) {
+      clearTimeout(notesDebounceTimerRef.current);
+      notesDebounceTimerRef.current = null;
+    }
+    if (latestNotes !== lastSavedNotesRef.current) {
+      await saveNotes(meetingId, latestNotes);
+    } else if (notesSaveInFlightRef.current) {
+      // Nothing new to send, but an earlier save (possibly for this exact
+      // content) may still be in flight -- wait for it so it can never
+      // complete after the banner's own PUT below.
+      await notesSaveSettledRef.current;
+    }
+  }, [saveNotes]);
+
+  // Flush -- and now genuinely WAIT for it -- before handing off to the
+  // banner's own save. Once flushNotesQueue resolves, notesSaveInFlightRef
+  // is guaranteed false and nothing further will fire on its own (the
+  // autosave effect only re-triggers on `notes` changes, and none happen
+  // between here and the banner's PUT), so handleNotesSubmit's request is
+  // the only notes write left in flight from this point on.
+  const handleFinalNotesSubmit = useCallback(async (finalNotes: string) => {
+    const meetingId = postRecording.serverMeetingId;
+    // The banner edits notes in its OWN local state (seeded from
+    // initialNotes={notes} but not synced back) -- finalNotes can
+    // legitimately differ from this page's notes/liveNotesRef. Without
+    // this sync, saveNotes' completion handler would see finalNotes !=
+    // liveNotesRef.current (still the pre-banner value) and "helpfully"
+    // re-queue the STALE pre-banner notes over the user's banner edit.
+    setNotes(finalNotes);
+    liveNotesRef.current = finalNotes;
+    if (meetingId) {
+      try {
+        await flushNotesQueue(meetingId, finalNotes);
+      } catch {
+        // saveNotes already reflects this via notesSaveStatus('error');
+        // surfacing it here too so the user isn't silently left thinking
+        // their notes made it to the server when the flush itself failed.
+        if (!window.confirm('노트 저장에 실패했습니다. 계속할까요?')) {
+          return;
+        }
+      }
+    }
+    await postRecording.handleNotesSubmit(finalNotes);
+  }, [flushNotesQueue, postRecording]);
+
+  // Skip needs the same flush as submit -- it also resumes the upload flow
+  // (which PUTs a status transition), so a lingering autosave landing
+  // after that PUT would hit the same stale read-modify-write race.
+  const handleFinalNotesSkip = useCallback(async () => {
+    const meetingId = postRecording.serverMeetingId;
+    if (meetingId) {
+      try {
+        await flushNotesQueue(meetingId, notes);
+      } catch {
+        if (!window.confirm('노트 저장에 실패했습니다. 계속할까요?')) {
+          return;
+        }
+      }
+    }
+    await postRecording.handleNotesSkip();
+  }, [flushNotesQueue, postRecording, notes]);
+
+  // Q&A context = user-provided meeting context + live transcript
+  const qaContext = contextText.trim()
+    ? `[미팅 배경 정보]\n${contextText.trim()}\n\n${session.transcriptContext || ''}`
+    : session.transcriptContext;
+
+  // Append a Q&A entry to the meeting notes
+  const handleSaveQAToNotes = useCallback((question: string, answer: string) => {
+    setNotes((prev) =>
+      `${prev ? prev.trimEnd() + '\n\n' : ''}**Q. ${question}**\n\n${answer}\n`,
+    );
+  }, []);
 
   // Mic preview: create AudioContext + AnalyserNode when device changes (not recording)
   useEffect(() => {
@@ -142,6 +360,27 @@ function RecordPageInner() {
       setTabSharingLabel(label);
     }
     summary.reset();
+    setNotes('');
+    liveNotesRef.current = '';
+    lastSavedNotesRef.current = '';
+    setNotesSaveStatus('idle');
+    // Invalidate synchronously, not just via the postRecording.serverMeetingId
+    // mirror effect below (which only catches up on the NEXT render, after
+    // createDraftMeeting() resolves). Without this, a slow save from the
+    // meeting that just ended could still match activeMeetingIdRef during
+    // that window and write its stale content into this new session's refs.
+    activeMeetingIdRef.current = null;
+    // A pending save queued for the meeting that just ended must not drain
+    // into this new session -- it would flip notesSaveStatus to 'saving'
+    // for a target the activeMeetingIdRef guard then silently ignores on
+    // completion, leaving the new session's status stuck until the user
+    // types again.
+    pendingNotesRef.current = null;
+    // contextText is NOT reset here -- it's filled in during setup, before
+    // this handler fires, specifically so THIS session's Q&A can use it.
+    // Clearing it on start would delete the very input the user just
+    // typed. It's reset instead where a session actually ends and the
+    // user returns to a fresh setup screen (see the dismiss handler below).
     // Create draft meeting immediately so the post-recording flow has a
     // server meetingId to attach the audio to. This is required for both
     // browser (mic/tab) and Tauri native (system audio) modes — without it,
@@ -367,7 +606,6 @@ function RecordPageInner() {
         {isUploadMode && !postRecording.step && !session.isRecording && (
           <div className="flex flex-col items-center gap-6 py-8">
             <div className="hidden lg:block mb-2">
-              <span className="hidden dark:block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8B8D98] text-center mb-2">Upload</span>
               <input
                 type="text"
                 value={meetingTitle}
@@ -420,7 +658,6 @@ function RecordPageInner() {
           <div className="flex flex-col items-center gap-3">
             {/* Desktop: editable title */}
             <div className="hidden lg:block mb-4">
-              <span className="hidden dark:block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8B8D98] text-center mb-2">Studio</span>
               <input
                 type="text"
                 value={meetingTitle}
@@ -439,7 +676,7 @@ function RecordPageInner() {
                     onClick={() => setAudioSource('mic')}
                     className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold transition-colors ${
                       audioSource === 'mic'
-                        ? 'bg-primary text-white dark:text-background-dark'
+                        ? 'bg-primary text-white'
                         : 'text-slate-600 dark:text-text-muted hover:bg-slate-50 dark:hover:bg-white/5'
                     }`}
                   >
@@ -451,7 +688,7 @@ function RecordPageInner() {
                       onClick={() => setAudioSource('tab')}
                       className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold transition-colors ${
                         audioSource === 'tab'
-                          ? 'bg-primary text-white dark:text-background-dark'
+                          ? 'bg-primary text-white'
                           : 'text-slate-600 dark:text-text-muted hover:bg-slate-50 dark:hover:bg-white/5'
                       }`}
                     >
@@ -464,7 +701,7 @@ function RecordPageInner() {
                       onClick={() => setAudioSource('system')}
                       className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-semibold transition-colors ${
                         audioSource === 'system'
-                          ? 'bg-primary text-white dark:text-background-dark'
+                          ? 'bg-primary text-white'
                           : 'text-slate-600 dark:text-text-muted hover:bg-slate-50 dark:hover:bg-white/5'
                       }`}
                     >
@@ -507,13 +744,16 @@ function RecordPageInner() {
               activeProvider={session.activeProvider}
               isRecording={session.isRecording}
             />
+            {/* Meeting context — optional, fed to AI Q&A during the meeting */}
+            <div className="w-full max-w-md mt-2">
+              <MeetingContextInput value={contextText} onChange={setContextText} optional rows={3} />
+            </div>
           </div>
         )}
 
         {/* Desktop: Meeting title during recording */}
         {session.isRecording && (
           <div className="hidden lg:block mb-4">
-            <p className="hidden dark:block text-[10px] font-bold uppercase tracking-[0.2em] text-[#8B8D98] text-center mb-1">Studio</p>
             <h1 className="text-xl font-bold text-slate-900 dark:text-white dark:font-headline text-center tracking-tight">
               {meetingTitle || 'Untitled Meeting'}
             </h1>
@@ -565,13 +805,59 @@ function RecordPageInner() {
           />
         </div>}
 
-        {/* Desktop: Live Transcript in main content (centered) during recording */}
+        {/* Desktop: Summary (hero) + Notes side by side, transcript as collapsible strip */}
         {session.isRecording && (
-          <div className="hidden lg:flex lg:flex-col" style={{ height: '50vh' }}>
-            <LiveTranscript
-              transcripts={session.displayTranscripts}
-              wordCount={session.totalWordCount}
-            />
+          <div className="hidden lg:flex lg:flex-col gap-4">
+            <div className="grid grid-cols-2 gap-4" style={{ height: '48vh' }}>
+              <LiveSummary
+                summary={summary.liveSummary}
+                isGenerating={summary.isGenerating}
+                wordCount={session.totalWordCount}
+                lastSummaryWordCount={summary.lastSummaryWordCount}
+                summaryInterval={summaryInterval}
+                fill
+              />
+              <LiveNotes
+                value={notes}
+                onChange={setNotes}
+                saveStatus={notesSaveStatus}
+                fill
+              />
+            </div>
+
+            {/* Collapsible Live Transcript */}
+            <div className="bg-white dark:bg-surface-lowest rounded-xl border border-slate-200 dark:border-white/10 overflow-hidden">
+              <button
+                onClick={() => setIsTranscriptOpen(!isTranscriptOpen)}
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors text-left"
+              >
+                <span className="material-symbols-outlined text-primary text-xl">graphic_eq</span>
+                <span className="text-sm font-semibold text-slate-900 dark:text-text-main shrink-0">실시간 자막</span>
+                {session.totalWordCount > 0 && (
+                  <span className="text-xs text-slate-500 dark:text-text-muted bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full shrink-0">
+                    {session.totalWordCount.toLocaleString()} words
+                  </span>
+                )}
+                {!isTranscriptOpen && (
+                  <span className="flex-1 text-sm text-slate-500 dark:text-text-secondary truncate">
+                    {session.displayTranscripts.length > 0
+                      ? session.displayTranscripts[session.displayTranscripts.length - 1].text
+                      : '음성을 기다리는 중...'}
+                  </span>
+                )}
+                <span className="material-symbols-outlined text-slate-400 dark:text-text-muted ml-auto shrink-0">
+                  {isTranscriptOpen ? 'expand_less' : 'expand_more'}
+                </span>
+              </button>
+              {isTranscriptOpen && (
+                <div className="border-t border-slate-100 dark:border-white/5" style={{ height: '38vh' }}>
+                  <LiveTranscript
+                    transcripts={session.displayTranscripts}
+                    wordCount={session.totalWordCount}
+                  />
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -612,20 +898,32 @@ function RecordPageInner() {
                   summaryInterval={summaryInterval}
                 />
               }
+              notesContent={
+                <LiveNotes
+                  value={notes}
+                  onChange={setNotes}
+                  saveStatus={notesSaveStatus}
+                />
+              }
             />
           </div>
         )}
 
-        {/* File Attachments — shown during recording only */}
+        {/* Files & Context — shown during recording only */}
         {!postRecording.step && session.isRecording && (
           <section className="mt-8">
             <div className="flex items-center justify-between mb-4 px-1">
-              <h3 className="font-bold text-slate-800 dark:text-slate-200">첨부 파일</h3>
+              <h3 className="font-bold text-slate-800 dark:text-text-main">자료 · 컨텍스트</h3>
               {attachments.length > 0 && (
-                <span className="text-xs text-slate-500 dark:text-slate-400">
+                <span className="text-xs text-slate-500 dark:text-text-muted">
                   {attachments.length}개 파일
                 </span>
               )}
+            </div>
+
+            {/* Meeting context input */}
+            <div className="mb-4">
+              <MeetingContextInput value={contextText} onChange={setContextText} rows={2} />
             </div>
 
             {/* Attachment thumbnails grid */}
@@ -719,24 +1017,17 @@ function RecordPageInner() {
         )}
       </main>
 
-      {/* Desktop Side Panel: Q&A Hero + Summary during recording */}
+      {/* Desktop Side Panel: AI Q&A during recording */}
       {session.isRecording && (
         <aside className="hidden lg:flex w-96 shrink-0 border-l border-slate-200 dark:border-white/10 flex-col">
           <div className="flex-1 min-h-0 flex flex-col">
             <LiveQAPanel
-              transcriptContext={session.transcriptContext}
+              transcriptContext={qaContext}
+              meetingId={postRecording.serverMeetingId || undefined}
               onDetectedQuestionsChange={setDetectedCount}
               serverDetectedQuestions={summary.detectedQuestions}
               onAskedQuestion={summary.addAskedQuestion}
-            />
-          </div>
-          <div className="shrink-0 border-t border-slate-200 dark:border-white/10 max-h-[35%] overflow-y-auto">
-            <LiveSummary
-              summary={summary.liveSummary}
-              isGenerating={summary.isGenerating}
-              wordCount={session.totalWordCount}
-              lastSummaryWordCount={summary.lastSummaryWordCount}
-              summaryInterval={summaryInterval}
+              onSaveToNotes={handleSaveQAToNotes}
             />
           </div>
         </aside>
@@ -749,9 +1040,10 @@ function RecordPageInner() {
           step={postRecording.step}
           errorMessage={postRecording.errorMessage}
           onRetry={handleRetry}
-          onDismiss={() => { postRecording.handleRetry(); router.push('/'); }}
-          onNotesSubmit={postRecording.handleNotesSubmit}
-          onNotesSkip={postRecording.handleNotesSkip}
+          onDismiss={() => { postRecording.handleRetry(); setContextText(''); router.push('/'); }}
+          onNotesSubmit={handleFinalNotesSubmit}
+          onNotesSkip={handleFinalNotesSkip}
+          initialNotes={notes}
         />
       )}
 
@@ -780,10 +1072,12 @@ function RecordPageInner() {
             </button>
             <div className="flex-1 min-h-0">
               <LiveQAPanel
-                transcriptContext={session.transcriptContext}
+                transcriptContext={qaContext}
+                meetingId={postRecording.serverMeetingId || undefined}
                 onDetectedQuestionsChange={setDetectedCount}
                 serverDetectedQuestions={summary.detectedQuestions}
                 onAskedQuestion={summary.addAskedQuestion}
+                onSaveToNotes={handleSaveQAToNotes}
               />
             </div>
           </div>

@@ -110,7 +110,7 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
           <button
             onClick={handleSave}
             disabled={saving || !hasAnyName}
-            className="mt-2 px-4 py-2 bg-primary text-white dark:text-background-dark rounded-lg text-sm font-semibold disabled:opacity-40 hover:opacity-90 transition-opacity flex items-center gap-2"
+            className="mt-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold disabled:opacity-40 hover:opacity-90 transition-opacity flex items-center gap-2"
           >
             {saving ? (
               <>

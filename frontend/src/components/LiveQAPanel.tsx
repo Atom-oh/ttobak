@@ -11,6 +11,8 @@ interface LiveQAPanelProps {
   onDetectedQuestionsChange?: (count: number) => void;
   serverDetectedQuestions?: string[];
   onAskedQuestion?: (question: string) => void;
+  /** Save a Q&A entry into the meeting notes */
+  onSaveToNotes?: (question: string, answer: string) => void;
 }
 
 interface QAEntry {
@@ -22,6 +24,8 @@ interface QAEntry {
   usedDocs?: boolean;
   toolsUsed?: string[];
   isStreaming?: boolean;
+  /** AI-suggested follow-up questions for this answer */
+  followUps?: string[];
 }
 
 const suggestedQuestions = [
@@ -32,11 +36,12 @@ const suggestedQuestions = [
 
 const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
 
-export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, onAskedQuestion }: LiveQAPanelProps) {
+export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, onAskedQuestion, onSaveToNotes }: LiveQAPanelProps) {
   const [question, setQuestion] = useState('');
   const [qaHistory, setQaHistory] = useState<QAEntry[]>([]);
   const [isAsking, setIsAsking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savedEntryIds, setSavedEntryIds] = useState<Set<string>>(new Set());
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [detectedQuestions, setDetectedQuestions] = useState<string[]>([]);
@@ -65,6 +70,34 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       }
     }
   }, [serverDetectedQuestions, askedQuestions, onDetectedQuestionsChange]);
+
+  // Fetch follow-up question suggestions for each completed answer.
+  // Reuses the detect-questions endpoint (its prompt already generates
+  // "questions a practitioner would ask next" from context). Fetched at
+  // most once per entry; failures are silent (cards simply don't appear).
+  const followUpFetchedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const target = qaHistory.find(
+      (e) => !e.isStreaming && e.answer && !followUpFetchedRef.current.has(e.id),
+    );
+    if (!target) return;
+    followUpFetchedRef.current.add(target.id);
+    // Skip error placeholders — no useful context to suggest from
+    if (target.answer.startsWith('답변을 가져오지') || target.answer.startsWith('답변 생성 중 오류')) return;
+
+    const context = `질문: ${target.question}\n답변: ${target.answer}`.slice(0, 2000);
+    qaApi.detectQuestions(context, askedQuestions)
+      .then((res) => {
+        if (res.questions.length > 0) {
+          setQaHistory((prev) =>
+            prev.map((e) =>
+              e.id === target.id ? { ...e, followUps: res.questions.slice(0, 3) } : e,
+            ),
+          );
+        }
+      })
+      .catch(() => {}); // silent fail
+  }, [qaHistory, askedQuestions]);
 
   const handleStreamMessage = useCallback((msg: WebSocketMessage) => {
     const entryId = activeEntryIdRef.current;
@@ -213,7 +246,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 dark:border-slate-800">
-        <span className="material-symbols-outlined text-primary dark:text-cyan-400">auto_awesome</span>
+        <span className="material-symbols-outlined text-primary">auto_awesome</span>
         <h3 className="text-sm font-semibold text-slate-900 dark:text-white">AI 어시스턴트 · KB Q&A</h3>
         <span className="ml-auto text-[10px] text-slate-400 dark:text-slate-500 font-mono">⌘K</span>
       </div>
@@ -241,6 +274,18 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
               usedDocs={entry.usedDocs}
               toolsUsed={entry.toolsUsed}
               isStreaming={entry.isStreaming}
+              onSaveToNotes={
+                onSaveToNotes
+                  ? () => {
+                      onSaveToNotes(entry.question, entry.answer);
+                      setSavedEntryIds((prev) => new Set(prev).add(entry.id));
+                    }
+                  : undefined
+              }
+              isSavedToNotes={savedEntryIds.has(entry.id)}
+              followUps={entry.followUps}
+              onAskFollowUp={handleAsk}
+              followUpsDisabled={isAsking}
             />
           ))
         )}
