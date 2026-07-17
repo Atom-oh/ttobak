@@ -56,11 +56,11 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
   };
 
   const speakerColors = ['bg-indigo-500', 'bg-teal-500', 'bg-orange-500', 'bg-pink-500', 'bg-emerald-500'];
-  const darkSpeakerTextColors = ['text-[#00E5FF]', 'text-[#B026FF]', 'text-[#e5b5ff]', 'text-amber-400', 'text-emerald-400'];
+  const speakerTextColors = ['text-indigo-500 dark:text-indigo-400', 'text-teal-600 dark:text-teal-400', 'text-orange-600 dark:text-orange-400', 'text-pink-600 dark:text-pink-400', 'text-emerald-600 dark:text-emerald-400'];
 
   // Assign stable speaker color by index (simple hash based on entry position in final transcripts)
   const getSpeakerColor = (index: number) => speakerColors[index % speakerColors.length];
-  const getDarkSpeakerTextColor = (index: number) => darkSpeakerTextColors[index % darkSpeakerTextColors.length];
+  const getSpeakerTextColor = (index: number) => speakerTextColors[index % speakerTextColors.length];
   const getSpeakerInitial = (index: number) => String.fromCharCode(65 + (index % 26)); // A, B, C...
 
   // Extract hashtags from all transcript text for tag pills
@@ -71,7 +71,7 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
   if (transcripts.length === 0) {
     return (
       <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-4">
-        <div className="flex flex-col items-center justify-center py-8 text-slate-400 dark:text-[#8B8D98]">
+        <div className="flex flex-col items-center justify-center py-8 text-slate-400 dark:text-text-muted">
           <span className="material-symbols-outlined text-4xl mb-2">mic</span>
           <p className="text-sm">Waiting for speech...</p>
         </div>
@@ -87,13 +87,13 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
         <h3 className="text-sm font-semibold text-slate-900 dark:text-white dark:font-headline">Live Transcript</h3>
         <div className="ml-auto flex items-center gap-3">
           {wordCount !== undefined && wordCount > 0 && (
-            <span className="text-xs font-medium text-slate-500 dark:text-[#8B8D98] bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
+            <span className="text-xs font-medium text-slate-500 dark:text-text-muted bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
               {wordCount.toLocaleString()} words
             </span>
           )}
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs text-slate-500 dark:text-[#8B8D98]">Live</span>
+            <span className="text-xs text-slate-500 dark:text-text-muted">Live</span>
           </div>
         </div>
       </div>
@@ -126,23 +126,17 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-0.5">
                     {entry.isFinal ? (
-                      <span className={`hidden dark:inline text-[10px] font-bold uppercase tracking-wider ${getDarkSpeakerTextColor(finalIndex)}`}>
-                        Speaker {getSpeakerInitial(finalIndex)} &bull; {formatTime(entry.timestamp)}
+                      <span className={`text-[10px] font-bold uppercase tracking-wider ${getSpeakerTextColor(finalIndex)}`}>
+                        Speaker {getSpeakerInitial(finalIndex)}
                       </span>
                     ) : isLastInterim ? (
-                      <span className="hidden dark:inline text-[10px] font-bold uppercase tracking-wider text-green-400">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-500">
                         Speaking Now
                       </span>
                     ) : null}
-                    <span className="text-[10px] text-slate-400 dark:text-[#8B8D98] font-mono tabular-nums dark:hidden">
+                    <span className="text-[10px] text-slate-400 dark:text-text-muted font-mono tabular-nums">
                       {formatTime(entry.timestamp)}
                     </span>
-                    {/* Dark mode: show timestamp for non-final, non-last-interim entries */}
-                    {!entry.isFinal && !isLastInterim && (
-                      <span className="hidden dark:inline text-[10px] text-[#8B8D98] font-mono tabular-nums">
-                        {formatTime(entry.timestamp)}
-                      </span>
-                    )}
                   </div>
                   <p
                     className={`text-sm leading-relaxed ${
@@ -183,11 +177,11 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
 
       {/* Hashtag pills */}
       {hashtags.length > 0 && (
-        <div className="hidden dark:flex flex-wrap gap-1.5 px-4 py-3 border-t border-white/5">
+        <div className="flex flex-wrap gap-1.5 px-4 py-3 border-t border-slate-100 dark:border-white/5">
           {hashtags.map((tag) => (
             <span
               key={tag}
-              className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[#00E5FF]/70 bg-[#00E5FF]/5 border border-[#00E5FF]/15 rounded-full"
+              className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary/80 bg-primary/5 border border-primary/15 rounded-full"
             >
               {tag}
             </span>
@@ -197,7 +191,7 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
 
       {/* Export button — desktop only */}
       <div className="hidden lg:block p-4 border-t border-slate-100 dark:border-white/5">
-        <button className="w-full py-2 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-[#8B8D98] hover:text-primary transition-colors">
+        <button className="w-full py-2 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-text-muted hover:text-primary transition-colors">
           Export Transcript
         </button>
       </div>

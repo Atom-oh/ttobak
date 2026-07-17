@@ -91,7 +91,7 @@ export default function AccountsClient() {
         <h2 className="text-xl font-bold text-slate-900 dark:text-text-main">Accounts</h2>
         <button
           onClick={() => setShowForm((v) => !v)}
-          className="bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg font-semibold text-sm px-4 py-2 flex items-center gap-1"
+          className="bg-primary hover:bg-primary-hover text-white rounded-lg font-semibold text-sm px-4 py-2 flex items-center gap-1"
         >
           <span className="material-symbols-outlined text-lg">add</span>New Account
         </button>
@@ -168,7 +168,7 @@ export default function AccountsClient() {
           <button
             type="submit"
             disabled={creating || !name.trim()}
-            className="bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg font-semibold text-sm px-4 py-2 disabled:opacity-50"
+            className="bg-primary hover:bg-primary-hover text-white rounded-lg font-semibold text-sm px-4 py-2 disabled:opacity-50"
           >
             {creating ? 'Creating…' : 'Create'}
           </button>

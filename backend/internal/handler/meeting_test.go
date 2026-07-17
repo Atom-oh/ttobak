@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -110,6 +111,36 @@ func (m *mockHandlerMeetingRepo) UpdateMeeting(_ context.Context, meeting *model
 	cp.UpdatedAt = time.Now().UTC()
 	m.meetings[hKey(meeting.UserID, meeting.MeetingID)] = &cp
 	m.meetingsByID[meeting.MeetingID] = &cp
+	return nil
+}
+func (m *mockHandlerMeetingRepo) UpdateMeetingFields(_ context.Context, userID, meetingID string, fields map[string]interface{}) error {
+	key := hKey(userID, meetingID)
+	existing, ok := m.meetings[key]
+	if !ok {
+		return errors.New("meeting not found")
+	}
+	cp := *existing
+	for k, v := range fields {
+		switch k {
+		case "title":
+			cp.Title = v.(string)
+		case "content":
+			cp.Content = v.(string)
+		case "notes":
+			cp.Notes = v.(string)
+		case "transcriptA":
+			cp.TranscriptA = v.(string)
+		case "selectedTranscript":
+			cp.SelectedTranscript = v.(string)
+		case "participants":
+			cp.Participants = v.([]string)
+		case "status":
+			cp.Status = v.(string)
+		}
+	}
+	cp.UpdatedAt = time.Now().UTC()
+	m.meetings[key] = &cp
+	m.meetingsByID[meetingID] = &cp
 	return nil
 }
 func (m *mockHandlerMeetingRepo) DeleteMeeting(_ context.Context, userID, meetingID string) error {

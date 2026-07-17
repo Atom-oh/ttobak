@@ -239,7 +239,7 @@ export function InsightsList() {
           onClick={() => handleTabChange('news')}
           className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
             activeTab === 'news'
-              ? 'bg-primary text-white dark:text-background-dark dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]'
+              ? 'bg-primary text-white'
               : 'text-slate-600 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-white/5'
           }`}
         >
@@ -252,7 +252,7 @@ export function InsightsList() {
           onClick={() => handleTabChange('tech')}
           className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
             activeTab === 'tech'
-              ? 'bg-primary text-white dark:text-background-dark dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]'
+              ? 'bg-primary text-white'
               : 'text-slate-600 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-white/5'
           }`}
         >
@@ -265,7 +265,7 @@ export function InsightsList() {
           onClick={() => handleTabChange('research')}
           className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
             activeTab === 'research'
-              ? 'bg-primary text-white dark:text-background-dark dark:shadow-[0_0_15px_rgba(0,229,255,0.4)]'
+              ? 'bg-primary text-white'
               : 'text-slate-600 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-white/5'
           }`}
         >
@@ -283,7 +283,7 @@ export function InsightsList() {
           <div className="flex items-center justify-between">
             <button
               onClick={() => setShowNewResearch(true)}
-              className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white dark:text-background-dark rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity"
+              className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity"
             >
               <span className="material-symbols-outlined text-lg">add</span>
               New Research
@@ -323,7 +323,7 @@ export function InsightsList() {
                   <div
                     key={r.researchId}
                     onClick={() => r.status !== 'error' && router.push(`/insights/research/${r.researchId}`)}
-                    className={`glass-panel rounded-xl p-5 transition-shadow hover:shadow-lg dark:hover:shadow-[0_0_20px_rgba(0,229,255,0.06)] ${
+                    className={`glass-panel rounded-xl p-5 transition-shadow hover:shadow-lg ${
                       r.status !== 'error' ? 'cursor-pointer' : ''
                     }`}
                   >
@@ -452,12 +452,12 @@ export function InsightsList() {
                         onClick={() => setResearchMode(opt.value)}
                         className={`flex-1 py-2.5 text-sm font-medium transition-colors ${
                           researchMode === opt.value
-                            ? 'bg-primary text-white dark:text-background-dark'
+                            ? 'bg-primary text-white'
                             : 'bg-slate-50 dark:bg-surface-lowest text-slate-600 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-white/5'
                         }`}
                       >
                         <div>{opt.label}</div>
-                        <div className={`text-xs ${researchMode === opt.value ? 'text-white/70 dark:text-background-dark/70' : 'text-slate-400 dark:text-text-muted/60'}`}>
+                        <div className={`text-xs ${researchMode === opt.value ? 'text-white/70' : 'text-slate-400 dark:text-text-muted/60'}`}>
                           {opt.desc}
                         </div>
                       </button>
@@ -478,7 +478,7 @@ export function InsightsList() {
                   <button
                     onClick={handleCreateResearch}
                     disabled={creating || !researchTopic.trim()}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white dark:text-background-dark rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {creating ? (
                       <div className="animate-spin rounded-full h-4 w-4 border-2 border-white dark:border-background-dark border-t-transparent" />
@@ -548,13 +548,13 @@ export function InsightsList() {
               <div className="flex items-center gap-1 ml-2">
                 <button
                   onClick={() => setViewMode('card')}
-                  className={`p-1.5 rounded-lg transition-colors ${viewMode === 'card' ? 'bg-white/10 text-[#00E5FF]' : 'text-[#849396] hover:text-[#bac9cc]'}`}
+                  className={`p-1.5 rounded-lg transition-colors ${viewMode === 'card' ? 'bg-white/10 text-primary' : 'text-text-muted hover:text-text-secondary'}`}
                 >
                   <span className="material-symbols-outlined text-lg">grid_view</span>
                 </button>
                 <button
                   onClick={() => setViewMode('table')}
-                  className={`p-1.5 rounded-lg transition-colors ${viewMode === 'table' ? 'bg-white/10 text-[#00E5FF]' : 'text-[#849396] hover:text-[#bac9cc]'}`}
+                  className={`p-1.5 rounded-lg transition-colors ${viewMode === 'table' ? 'bg-white/10 text-primary' : 'text-text-muted hover:text-text-secondary'}`}
                 >
                   <span className="material-symbols-outlined text-lg">table_rows</span>
                 </button>
@@ -578,7 +578,7 @@ export function InsightsList() {
                       onClick={() => toggleTag(tag)}
                       className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all ${
                         isSelected
-                          ? 'bg-primary text-white dark:text-background-dark shadow-sm'
+                          ? 'bg-primary text-white shadow-sm'
                           : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-secondary hover:bg-slate-200 dark:hover:bg-white/10'
                       }`}
                     >
@@ -650,7 +650,7 @@ export function InsightsList() {
               {documents.map((doc, idx) => (
                 <div
                   key={doc.docHash || doc.url || String(idx)}
-                  className="glass-panel rounded-xl p-5 transition-shadow hover:shadow-lg dark:hover:shadow-[0_0_20px_rgba(0,229,255,0.06)]"
+                  className="glass-panel rounded-xl p-5 transition-shadow hover:shadow-lg"
                 >
                   {/* Title */}
                   <button

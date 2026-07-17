@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/ttobak/backend/internal/speaker"
 )
 
 var partKeyPattern = regexp.MustCompile(`_part_(\d{3})\.json$`)
@@ -89,18 +90,33 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		}
 
 		if len(whisperSegments) > 0 && len(segments) == 0 {
-			refinedText, refinedSegs, refineErr := bedrockService.RefineTranscript(ctx, whisperSegments)
+			_, refinedSegs, refineErr := bedrockService.RefineTranscript(ctx, whisperSegments)
 			if refineErr == nil {
-				transcript = refinedText
+				// Each part's spk_N numbering restarts at 0 independently --
+				// whether from preserved acoustic labels or from RefineTranscript
+				// inferring them fresh per part -- so without namespacing, part
+				// 1's spk_0 and part 2's spk_0 would refer to different real
+				// speakers but display as the same one after merge. Namespace
+				// unconditionally: infer-mode multi-part is a normal path (any
+				// diarization failure -- missing S3 bundle, pyannote/ffmpeg
+				// error -- falls back to it, not just older transcripts), and
+				// namespacing is a collision-avoidance property of spk_N labels
+				// in general, not something that depends on acoustic authority.
 				segments = make([]TranscriptSegmentOut, len(refinedSegs))
 				for i, rs := range refinedSegs {
 					segments[i] = TranscriptSegmentOut{
-						Speaker:   rs.Speaker,
+						Speaker:   speaker.Namespace(rs.Speaker, part.index),
 						Text:      rs.Text,
 						StartTime: rs.StartTime,
 						EndTime:   rs.EndTime,
 					}
 				}
+				// RefineTranscript's own assembled text uses the PRE-namespaced
+				// labels (bedrock.go), so it still has the exact cross-part
+				// "spk_0" collision namespacing exists to prevent -- rebuild the
+				// text from the namespaced segments instead (its return value is
+				// discarded above for this reason).
+				transcript = buildTranscriptText(segments)
 			}
 		}
 
@@ -158,4 +174,26 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		len(parts), meetingID, len(mergedText), len(allSegments), cumulativeOffset)
 
 	return mergedText, allSegments, nil
+}
+
+// buildTranscriptText reassembles transcript body text from segments, using
+// the same speaker-grouping format as RefineTranscript's own text assembly
+// (bedrock.go): a "[speaker]\n" header on a speaker change, a joining space
+// within a run of the same speaker, and a blank line between speaker runs.
+func buildTranscriptText(segments []TranscriptSegmentOut) string {
+	var sb strings.Builder
+	prevSpeaker := ""
+	for _, seg := range segments {
+		if seg.Speaker != prevSpeaker {
+			if sb.Len() > 0 {
+				sb.WriteString("\n\n")
+			}
+			sb.WriteString(fmt.Sprintf("[%s]\n", seg.Speaker))
+			prevSpeaker = seg.Speaker
+		} else {
+			sb.WriteString(" ")
+		}
+		sb.WriteString(seg.Text)
+	}
+	return sb.String()
 }

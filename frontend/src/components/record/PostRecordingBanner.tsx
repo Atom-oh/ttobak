@@ -11,6 +11,8 @@ interface PostRecordingBannerProps {
   onDismiss: () => void;
   onNotesSubmit?: (notes: string) => void;
   onNotesSkip?: () => void;
+  /** Notes taken during the meeting — prefills the notes step */
+  initialNotes?: string;
 }
 
 const STEP_LABELS: Record<string, string> = {
@@ -20,8 +22,8 @@ const STEP_LABELS: Record<string, string> = {
   redirecting: 'Opening meeting...',
 };
 
-export function PostRecordingBanner({ step, errorMessage, onRetry, onDismiss, onNotesSubmit, onNotesSkip }: PostRecordingBannerProps) {
-  const [notes, setNotes] = useState('');
+export function PostRecordingBanner({ step, errorMessage, onRetry, onDismiss, onNotesSubmit, onNotesSkip, initialNotes }: PostRecordingBannerProps) {
+  const [notes, setNotes] = useState(initialNotes || '');
   const isError = step === 'error';
   const isNotes = step === 'notes';
 
@@ -39,7 +41,7 @@ export function PostRecordingBanner({ step, errorMessage, onRetry, onDismiss, on
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="회의 중 주요 내용을 간략히 적어주세요..."
-            rows={4}
+            rows={6}
             className="w-full rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-slate-800/50 px-3 py-2 text-sm text-slate-900 dark:text-gray-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/40 resize-none"
             autoFocus
           />

@@ -522,7 +522,7 @@ export function RecordButton({
             <div className="relative flex items-center justify-center mb-8">
               <div className="absolute w-48 h-48 bg-primary/10 rounded-full animate-pulse" />
               <div className="absolute w-40 h-40 bg-primary/20 rounded-full" />
-              <div className="z-10 bg-white dark:bg-surface-lowest shadow-xl rounded-full w-32 h-32 flex items-center justify-center border-4 border-primary dark:shadow-[0_0_24px_rgba(0,229,255,0.15)]">
+              <div className="z-10 bg-white dark:bg-surface-lowest shadow-xl rounded-full w-32 h-32 flex items-center justify-center border-4 border-primary">
                 <span className="text-3xl font-bold text-primary tabular-nums tracking-tighter">{formatTime(elapsedTime)}</span>
               </div>
             </div>

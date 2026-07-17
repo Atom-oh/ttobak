@@ -684,6 +684,13 @@ func archiveMergedTranscript(ctx context.Context, bucket, meetingID, transcript 
 // (0 when absent — caller handles fallback). The duration is required by
 // `mergePartTranscripts` to avoid timestamp drift caused by trailing silence
 // that the last segment's EndTime omits.
+//
+// `duration_seconds` is the actual decoded audio length (faster_whisper's
+// `info.duration`), not processing time -- see ADR-019. A transcript written
+// by a pre-ADR-019 container image instead has Whisper's wall-clock
+// transcription time in this field, since the field's meaning changed
+// without a rename; there is no reliable way to detect that from the JSON
+// alone, so such historical transcripts may report an inaccurate value here.
 func downloadAndParseTranscript(ctx context.Context, bucket, key string) (string, []TranscriptSegmentOut, []service.WhisperSegment, float64, error) {
 	result, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),

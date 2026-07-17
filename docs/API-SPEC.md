@@ -140,6 +140,7 @@ Request:
 {
   "title": "Updated Title",                     // optional
   "content": "# Updated markdown...",           // optional
+  "notes": "In-meeting notes...",               // optional, see semantics below
   "selectedTranscript": "B",                    // optional
   "participants": ["Alice", "Bob", "David"],    // optional
   "status": "done"                              // optional
@@ -152,6 +153,8 @@ Error: 403 Forbidden (shared users with "read" permission cannot edit)
 ```
 
 > `content` must be **Markdown**, not HTML. The web editor (TipTap) edits in HTML but converts back to Markdown before saving, because the summary is consumed as Markdown downstream (Notion/Obsidian export). Exporters also normalize any stray HTML to Markdown as a safety net for legacy records.
+
+> `notes` is the only field with omit-vs-explicit-empty semantics: omitting the `notes` key entirely leaves the stored notes untouched, while sending `"notes": ""` explicitly clears them. Every other field in this request follows the older "empty/omitted string means don't touch this field" convention (a plain `string`, not a pointer) — so e.g. sending `"title": ""` does NOT clear the title, it's treated the same as omitting it.
 
 #### Delete Meeting
 

@@ -13,13 +13,13 @@ import (
 
 // mockMeetingRepo is an in-memory implementation of meetingRepo for testing.
 type mockMeetingRepo struct {
-	meetings    map[string]*model.Meeting    // "userID|meetingID" -> meeting
-	shares      map[string]*model.Share      // "sharedToID|meetingID" -> share
-	attachments map[string][]model.Attachment // meetingID -> attachments
-	meetingsByID map[string]*model.Meeting   // meetingID -> meeting (for GSI3 lookup)
-	users       map[string]*model.User       // email -> user
-	members     map[string]*model.AccountMember // "accountID|userID"
-	meetingRefs map[string][]model.MeetingRef   // accountID -> refs
+	meetings        map[string]*model.Meeting       // "userID|meetingID" -> meeting
+	shares          map[string]*model.Share         // "sharedToID|meetingID" -> share
+	attachments     map[string][]model.Attachment   // meetingID -> attachments
+	meetingsByID    map[string]*model.Meeting       // meetingID -> meeting (for GSI3 lookup)
+	users           map[string]*model.User          // email -> user
+	members         map[string]*model.AccountMember // "accountID|userID"
+	meetingRefs     map[string][]model.MeetingRef   // accountID -> refs
 	accountInsights []model.AccountInsight
 
 	// forceGetMemberNil simulates a concurrent RemoveMember that completed
@@ -97,6 +97,40 @@ func (m *mockMeetingRepo) UpdateMeeting(_ context.Context, meeting *model.Meetin
 	cp.UpdatedAt = time.Now().UTC()
 	m.meetings[meetingKey(meeting.UserID, meeting.MeetingID)] = &cp
 	m.meetingsByID[meeting.MeetingID] = &cp
+	return nil
+}
+
+// UpdateMeetingFields mirrors the real repo's SET-only semantics: only the
+// given field names are mutated, everything else on the stored meeting is
+// left untouched (unlike UpdateMeeting's full-item replace above).
+func (m *mockMeetingRepo) UpdateMeetingFields(_ context.Context, userID, meetingID string, fields map[string]interface{}) error {
+	key := meetingKey(userID, meetingID)
+	existing, ok := m.meetings[key]
+	if !ok {
+		return errors.New("meeting not found")
+	}
+	cp := *existing
+	for k, v := range fields {
+		switch k {
+		case "title":
+			cp.Title = v.(string)
+		case "content":
+			cp.Content = v.(string)
+		case "notes":
+			cp.Notes = v.(string)
+		case "transcriptA":
+			cp.TranscriptA = v.(string)
+		case "selectedTranscript":
+			cp.SelectedTranscript = v.(string)
+		case "participants":
+			cp.Participants = v.([]string)
+		case "status":
+			cp.Status = v.(string)
+		}
+	}
+	cp.UpdatedAt = time.Now().UTC()
+	m.meetings[key] = &cp
+	m.meetingsByID[meetingID] = &cp
 	return nil
 }
 
@@ -604,6 +638,84 @@ func TestUpdateMeeting_OwnerCanUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdateMeeting_OmittedNotesPreservesExisting(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "user-1", Title: "Title", Notes: "existing notes",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	_, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{Title: "Title"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.meetingsByID["m-1"].Notes != "existing notes" {
+		t.Errorf("expected notes preserved when omitted, got %q", repo.meetingsByID["m-1"].Notes)
+	}
+}
+
+func TestUpdateMeeting_ExplicitEmptyNotesClearsExisting(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "user-1", Title: "Title", Notes: "existing notes",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	// A non-nil pointer to "" (the user deleted everything in the notes
+	// editor) must actually clear the stored notes -- distinct from the
+	// omitted-field (nil) "preserve" case above.
+	_, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{
+		Title: "Title", Notes: mdPtr(""),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.meetingsByID["m-1"].Notes != "" {
+		t.Errorf("expected notes cleared to empty, got %q", repo.meetingsByID["m-1"].Notes)
+	}
+}
+
+func TestUpdateMeeting_OutOfOrderNotesUpdateDoesNotClobberOtherFields(t *testing.T) {
+	// Simulates a lingering notes autosave PUT landing AFTER a status
+	// transition -- with the old read-modify-write PutItem, a stale notes
+	// update would read the meeting BEFORE the status change, then write
+	// the whole item back, silently reverting status. UpdateMeetingFields
+	// (SET expression) must only ever touch the field it's given.
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "user-1", Title: "Title", Notes: "old notes",
+		Status: model.StatusRecording, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	// Status transitions to "transcribing" (as resumeUploadFlow does).
+	if _, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{
+		Title: "Title", Status: model.StatusTranscribing,
+	}); err != nil {
+		t.Fatalf("unexpected error on status update: %v", err)
+	}
+
+	// A stale notes-only autosave "arrives late" and must not touch status.
+	if _, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{
+		Title: "Title", Notes: mdPtr("stale notes from before the transition"),
+	}); err != nil {
+		t.Fatalf("unexpected error on notes update: %v", err)
+	}
+
+	updated := repo.meetingsByID["m-1"]
+	if updated.Status != model.StatusTranscribing {
+		t.Errorf("expected status to remain %q, got %q", model.StatusTranscribing, updated.Status)
+	}
+	if updated.Notes != "stale notes from before the transition" {
+		t.Errorf("expected notes updated, got %q", updated.Notes)
+	}
+}
+
 func TestUpdateMeeting_ReadOnlyShareForbidden(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)
@@ -690,7 +802,7 @@ func TestUpdateSpeakers_ReplacesInAllFields(t *testing.T) {
 		TranscriptA:        "spk_0: hello",
 		TranscriptSegments: `[{"speaker":"spk_0","text":"hello"}]`,
 		ActionItems:        `[{"text":"spk_0 will do it"}]`,
-		Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Date:               time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	})
 
 	_, err := svc.UpdateSpeakers(context.Background(), "user-1", "m-1", &model.UpdateSpeakersRequest{
@@ -706,6 +818,42 @@ func TestUpdateSpeakers_ReplacesInAllFields(t *testing.T) {
 	}
 	if updated.TranscriptA != "Kim: hello" {
 		t.Errorf("expected transcriptA 'Kim: hello', got %q", updated.TranscriptA)
+	}
+	if updated.TranscriptSegments != `[{"speaker":"Kim","text":"hello","startTime":0,"endTime":0}]` {
+		t.Errorf("expected renamed TranscriptSegments, got %q", updated.TranscriptSegments)
+	}
+}
+
+// TestUpdateSpeakers_NoPrefixCollisionWithNamespacedLabel covers the bug the
+// round-2 review found: a multi-part meeting's namespaced label "spk_1000000"
+// (see internal/speaker.Namespace) must not be corrupted when the user
+// renames the unrelated part-0 label "spk_1" -- a plain strings.ReplaceAll
+// would turn "spk_1000000" into "Kim000000".
+func TestUpdateSpeakers_NoPrefixCollisionWithNamespacedLabel(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "user-1", Title: "Meeting",
+		Status:             model.StatusDone,
+		Content:            "[spk_1]\nhello\n\n[spk_1000000]\nworld",
+		TranscriptSegments: `[{"speaker":"spk_1","text":"hello"},{"speaker":"spk_1000000","text":"world"}]`,
+		Date:               time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	_, err := svc.UpdateSpeakers(context.Background(), "user-1", "m-1", &model.UpdateSpeakersRequest{
+		SpeakerMap: map[string]string{"spk_1": "Kim"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated := repo.meetingsByID["m-1"]
+	if updated.Content != "[Kim]\nhello\n\n[spk_1000000]\nworld" {
+		t.Errorf("expected spk_1000000 left untouched, got %q", updated.Content)
+	}
+	if updated.TranscriptSegments != `[{"speaker":"Kim","text":"hello","startTime":0,"endTime":0},{"speaker":"spk_1000000","text":"world","startTime":0,"endTime":0}]` {
+		t.Errorf("expected spk_1000000 segment untouched, got %q", updated.TranscriptSegments)
 	}
 }
 

@@ -44,7 +44,7 @@ npm run lint      # ESLint
 - API calls: `lib/api.ts` apiFetch with Bearer token; error shape `{ error: { code, message } }`
 - Styling: Tailwind v4 with `@custom-variant dark` (class-based, not media query); design tokens in `globals.css`; Material Symbols Outlined icons
 - Dark mode: `.dark` class on `<html>` toggled via localStorage `theme` key; `@custom-variant dark (&:where(.dark, .dark *))` in globals.css makes all `dark:` utilities respond to the class
-- Primary colors: light `#3211d4`, dark `#00E5FF` (cyan) / `#B026FF` (purple accent)
+- Primary colors: light `#3211d4`, dark `#8b85f7` (violet) -- one unified indigo/violet brand, no separate neon palette (see root CLAUDE.md's Design System section for the full token table)
 - Responsive: mobile (`<768px`) bottom nav; desktop (`>=1024px`) sidebar `w-64`
 
 ## Gotchas

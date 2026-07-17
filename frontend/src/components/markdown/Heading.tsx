@@ -23,9 +23,9 @@ export function Heading({ level, children }: HeadingProps) {
   if (level === 2) {
     return (
       <h2 id={id} className={`${base} ${styles[2]} group`}>
-        <span className="w-1 h-6 rounded-sm bg-[#00E5FF] shrink-0" />
+        <span className="w-1 h-6 rounded-sm bg-primary shrink-0" />
         <span>{children}</span>
-        <a href={`#${id}`} className="opacity-0 group-hover:opacity-50 transition-opacity text-[#00E5FF] text-base ml-1">#</a>
+        <a href={`#${id}`} className="opacity-0 group-hover:opacity-50 transition-opacity text-primary text-base ml-1">#</a>
       </h2>
     );
   }

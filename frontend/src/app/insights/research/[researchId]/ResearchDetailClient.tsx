@@ -472,7 +472,7 @@ export default function ResearchDetailPage() {
             {!chatOpen && ['done', 'error'].includes(research.status) && (
               <button
                 onClick={() => setChatOpen(true)}
-                className="hidden lg:flex items-center justify-center w-10 h-10 rounded-full bg-[#00E5FF]/20 text-[#00E5FF] hover:bg-[#00E5FF]/30 transition-colors self-start mt-4 mr-2 flex-shrink-0"
+                className="hidden lg:flex items-center justify-center w-10 h-10 rounded-full bg-primary/20 text-primary hover:bg-primary/30 transition-colors self-start mt-4 mr-2 flex-shrink-0"
                 title="Open chat"
               >
                 <span className="material-symbols-outlined text-lg">chat</span>
@@ -487,7 +487,7 @@ export default function ResearchDetailPage() {
                 {research.status !== 'planning' && chatOpen && (
                   <button
                     onClick={() => setChatOpen(false)}
-                    className="absolute top-3 right-3 z-10 p-1 rounded text-[#849396] hover:text-[#e4e1e9] hover:bg-white/5 transition-colors"
+                    className="absolute top-3 right-3 z-10 p-1 rounded text-text-muted hover:text-text-main hover:bg-white/5 transition-colors"
                     title="Close chat"
                   >
                     <span className="material-symbols-outlined text-sm">close</span>

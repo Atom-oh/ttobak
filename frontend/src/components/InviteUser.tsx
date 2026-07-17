@@ -47,11 +47,11 @@ export function InviteUser() {
   };
 
   const inputClass =
-    'w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all dark:bg-black/30 dark:border-white/10 dark:text-white dark:placeholder-[#849396]/40 dark:focus:ring-0 dark:focus:border-[#00E5FF]';
+    'w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all dark:bg-black/30 dark:border-white/10 dark:text-white dark:placeholder-text-muted/40 dark:focus:ring-primary/30';
 
   return (
-    <div className="dark:glass-panel dark:rounded-xl dark:p-5 space-y-4">
-      <p className="text-sm text-slate-600 dark:text-[#849396]">
+    <div className="dark:glass-panel dark:p-5 space-y-4">
+      <p className="text-sm text-slate-600 dark:text-text-muted">
         이메일 주소를 입력하면 해당 사용자에게 임시 비밀번호가 담긴 초대 메일이 발송됩니다 (로그인 주소는 포함되지 않으니 별도로 안내해주세요).
         초대받은 사용자는 최초 로그인 시 새 비밀번호를 설정하게 됩니다.
       </p>
@@ -74,7 +74,7 @@ export function InviteUser() {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label htmlFor="invite-email" className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-1">
+          <label htmlFor="invite-email" className="block text-sm font-medium text-slate-700 dark:text-text-secondary mb-1">
             이메일 <span className="text-red-500">*</span>
           </label>
           <input
@@ -89,8 +89,8 @@ export function InviteUser() {
         </div>
 
         <div>
-          <label htmlFor="invite-name" className="block text-sm font-medium text-slate-700 dark:text-[#bac9cc] mb-1">
-            이름 <span className="text-slate-400 dark:text-[#849396] font-normal">(선택)</span>
+          <label htmlFor="invite-name" className="block text-sm font-medium text-slate-700 dark:text-text-secondary mb-1">
+            이름 <span className="text-slate-400 dark:text-text-muted font-normal">(선택)</span>
           </label>
           <input
             id="invite-name"
@@ -109,13 +109,13 @@ export function InviteUser() {
             onChange={(e) => setMakeAdmin(e.target.checked)}
             className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary/30 dark:border-white/20 dark:bg-black/30"
           />
-          <span className="text-sm text-slate-700 dark:text-[#bac9cc]">관리자 권한 부여</span>
+          <span className="text-sm text-slate-700 dark:text-text-secondary">관리자 권한 부여</span>
         </label>
 
         <button
           type="submit"
           disabled={submitting || !email.trim()}
-          className="inline-flex items-center gap-2 bg-primary hover:bg-primary/90 text-white font-semibold px-5 py-2.5 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#00E5FF] dark:text-[#001f24] dark:hover:shadow-[0_0_15px_rgba(0,229,255,0.4)]"
+          className="inline-flex items-center gap-2 bg-primary hover:bg-primary/90 text-white font-semibold px-5 py-2.5 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed dark:bg-primary dark:text-white"
         >
           <span className="material-symbols-outlined text-lg">
             {submitting ? 'hourglass_top' : 'person_add'}

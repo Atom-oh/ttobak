@@ -359,11 +359,16 @@ ADR-013 — 트랜스크립트 딥 링크:
 	return content, nil
 }
 
-// WhisperSegment represents a timestamped text segment from Whisper output
+// WhisperSegment represents a timestamped text segment from Whisper output.
+// Speaker is populated by the Whisper container's pyannote acoustic
+// diarization pass when available; empty for older transcripts or when
+// diarization failed/was unavailable, in which case refineChunk falls back
+// to inferring speakers from text.
 type WhisperSegment struct {
-	Start float64 `json:"start"`
-	End   float64 `json:"end"`
-	Text  string  `json:"text"`
+	Start   float64 `json:"start"`
+	End     float64 `json:"end"`
+	Text    string  `json:"text"`
+	Speaker string  `json:"speaker,omitempty"`
 }
 
 // RefinedSegment represents a cleaned-up transcript segment with inferred speaker turns
@@ -501,8 +506,16 @@ func rawFallbackSegments(chunk []WhisperSegment, speaker string) []RefinedSegmen
 	}
 	segments := make([]RefinedSegment, len(chunk))
 	for i, seg := range chunk {
+		// A segment's own acoustic label (from diarization) is authoritative
+		// when present -- collapsing it to the single passed-in default would
+		// actively mislabel a chunk that already has correct per-segment
+		// speaker data, which is worse than leaving segments unlabeled.
+		segSpeaker := seg.Speaker
+		if segSpeaker == "" {
+			segSpeaker = speaker
+		}
 		segments[i] = RefinedSegment{
-			Speaker:   speaker,
+			Speaker:   segSpeaker,
 			Text:      seg.Text,
 			StartTime: seg.Start,
 			EndTime:   seg.End,
@@ -543,27 +556,69 @@ func buildSpeakerHintTail(segments []RefinedSegment) []RefinedSegment {
 	return hints
 }
 
-func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int, prevTail []RefinedSegment) ([]RefinedSegment, error) {
-	var sb strings.Builder
+// hasAcousticSpeakers reports whether any segment in the chunk carries a
+// speaker label from acoustic diarization. A single Whisper transcript is
+// either all-labeled or all-unlabeled (diarization runs once over the whole
+// audio), but "any" is used defensively in case of partial-chunk boundary
+// weirdness rather than requiring every segment to match.
+func hasAcousticSpeakers(segments []WhisperSegment) bool {
 	for _, seg := range segments {
-		sb.WriteString(fmt.Sprintf("[%.1f-%.1f] %s\n", seg.Start, seg.End, seg.Text))
+		if seg.Speaker != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// buildRefineSystemPrompt returns the refineChunk system prompt for the
+// given mode. Split out from refineChunk so the preserve-vs-infer branching
+// is testable without a Bedrock client.
+func buildRefineSystemPrompt(preserveSpeakers bool) string {
+	var speakerTask string
+	if preserveSpeakers {
+		speakerTask = `4. **Preserve speaker labels**: Each input line is prefixed with its speaker label (e.g. "spk_2:"), assigned by acoustic diarization on the audio. These labels are AUTHORITATIVE — copy each one to its output segment exactly as given, do not relabel, merge, or reassign it based on what the text seems to say.
+   - You may merge consecutive input lines into one output segment ONLY if they have the same speaker label.
+   - Never combine text from two different speaker labels into a single output segment.`
+	} else {
+		speakerTask = `4. **Infer speaker turns**: Based on conversation flow, assign speaker labels "spk_0", "spk_1", "spk_2", "spk_3", "spk_4", "spk_5", etc.
+   - **Meetings typically have 3-8 participants.** Do NOT assume only 2-3 speakers. Pay close attention to: different speaking styles, distinct viewpoints, question-answer patterns, self-introductions, role references, and turn-taking pauses.
+   - **When uncertain, prefer splitting into a new speaker over merging.** It is better to over-estimate speaker count than to conflate different people into one label.
+   - If previous context is provided, reuse the same speaker labels for the same speakers.`
 	}
 
-	systemPrompt := `You are a Korean meeting transcript editor. You receive raw Whisper STT segments with timestamps and must produce clean, readable transcript segments.
+	return fmt.Sprintf(`You are a Korean meeting transcript editor. You receive raw Whisper STT segments with timestamps and must produce clean, readable transcript segments.
 
 Your tasks:
 1. **Merge fragmented sentences**: Whisper often splits one speaker's continuous speech into many short fragments. Merge them into natural sentence units.
 2. **Fix misrecognized words**: Correct obvious STT errors (e.g. "상침" → "상세" or "상위", "아키드" → "아키텍트", "채우해" → "셰어해"). Use surrounding context to infer correct words.
 3. **Remove hallucinations**: Whisper sometimes repeats words/phrases (e.g. "법인으로 법인으로 법인으로"). Keep only one instance.
-4. **Infer speaker turns**: Based on conversation flow, assign speaker labels "spk_0", "spk_1", "spk_2", "spk_3", "spk_4", "spk_5", etc.
-   - **Meetings typically have 3-8 participants.** Do NOT assume only 2-3 speakers. Pay close attention to: different speaking styles, distinct viewpoints, question-answer patterns, self-introductions, role references, and turn-taking pauses.
-   - **When uncertain, prefer splitting into a new speaker over merging.** It is better to over-estimate speaker count than to conflate different people into one label.
-   - If previous context is provided, reuse the same speaker labels for the same speakers.
+%s
 5. **Preserve timestamps**: Each output segment should have the start time of its first source segment and end time of its last source segment.
 6. **Remove filler words**: Clean up meaningless fillers ("음", "어", "그") but keep discourse markers that carry meaning.
 
 Output ONLY a JSON array. Each element: {"speaker":"spk_0","text":"정제된 문장","startTime":0.0,"endTime":6.5}
-Do NOT include any text outside the JSON array. No markdown fences.`
+Do NOT include any text outside the JSON array. No markdown fences.`, speakerTask)
+}
+
+// buildRefineSegmentLines renders the raw-segment block of the user prompt,
+// prefixing each line with its acoustic speaker label in preserve mode.
+func buildRefineSegmentLines(segments []WhisperSegment, preserveSpeakers bool) string {
+	var sb strings.Builder
+	for _, seg := range segments {
+		if preserveSpeakers {
+			sb.WriteString(fmt.Sprintf("[%.1f-%.1f] %s: %s\n", seg.Start, seg.End, seg.Speaker, seg.Text))
+		} else {
+			sb.WriteString(fmt.Sprintf("[%.1f-%.1f] %s\n", seg.Start, seg.End, seg.Text))
+		}
+	}
+	return sb.String()
+}
+
+func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegment, chunkIdx, totalChunks int, prevTail []RefinedSegment) ([]RefinedSegment, error) {
+	preserveSpeakers := hasAcousticSpeakers(segments)
+	sb := strings.Builder{}
+	sb.WriteString(buildRefineSegmentLines(segments, preserveSpeakers))
+	systemPrompt := buildRefineSystemPrompt(preserveSpeakers)
 
 	var userPrompt string
 	if len(prevTail) > 0 {
@@ -611,7 +666,108 @@ Do NOT include any text outside the JSON array. No markdown fences.`
 		return nil, fmt.Errorf("failed to parse refined segments: %w (response: %.200s)", err, result)
 	}
 
+	if preserveSpeakers {
+		if hasCrossSpeakerMerge(segments, refined) {
+			// The model merged two different speakers' text into one output
+			// segment despite the prompt explicitly forbidding it --
+			// remapPreservedSpeakers can't fix this (max-overlap would just
+			// assign the WHOLE merged segment to one speaker, silently
+			// misattributing the other's words). Fail the chunk so the
+			// caller's existing rawFallbackSegments path takes over, which
+			// preserves each original segment's own acoustic Speaker exactly.
+			return nil, fmt.Errorf("preserve mode: output segment merges text from multiple acoustic speakers")
+		}
+		// The prompt tells the model acoustic labels are AUTHORITATIVE, but a
+		// set-equality check on the model's returned `speaker` field still
+		// can't distinguish a same-set swap (spk_0<->spk_1) from a correct
+		// output -- only per-segment identity does that. So don't trust the
+		// model's speaker field at all: recompute it structurally from the
+		// same acoustic input the prompt was built from.
+		remapPreservedSpeakers(segments, refined)
+	}
+
 	return refined, nil
+}
+
+// significantOverlap reports whether overlap between an output segment and
+// an input segment is large enough to count as "this output segment
+// swallowed this input segment" -- judged against the INPUT segment's own
+// duration (not the output's), plus an absolute floor for long inputs
+// partially overlapped. Judging by the output's duration instead would let
+// a short interjection ("네", "맞습니다") folded into an adjacent long
+// response slip through: the interjection's whole 0.4s might be under 30%
+// of a 10s merged output, even though it's 100% of that input segment.
+func significantOverlap(overlap, inputDuration float64) bool {
+	return overlap >= 1.0 || (inputDuration > 0 && overlap >= 0.5*inputDuration)
+}
+
+// hasCrossSpeakerMerge reports whether any output segment significantly
+// swallows 2+ DISTINCT acoustic input labels' segments -- i.e. the LLM
+// merged two different speakers' text into one output segment.
+// remapPreservedSpeakers alone can't catch this: max-overlap assigns the
+// whole merged segment to whichever speaker it overlaps most, silently
+// dropping the other's attribution rather than surfacing an error.
+func hasCrossSpeakerMerge(input []WhisperSegment, output []RefinedSegment) bool {
+	for _, out := range output {
+		distinctLabels := make(map[string]bool)
+		for _, in := range input {
+			if in.Speaker == "" {
+				continue
+			}
+			overlap := min(out.EndTime, in.End) - max(out.StartTime, in.Start)
+			if overlap > 0 && significantOverlap(overlap, in.End-in.Start) {
+				distinctLabels[in.Speaker] = true
+			}
+		}
+		if len(distinctLabels) > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// remapPreservedSpeakers overwrites each output segment's Speaker with the
+// acoustic label of the INPUT segment it overlaps most in time (falling
+// back to the closest by midpoint on zero overlap) -- the same max-overlap
+// assignment transcribe.py's _assign_speakers already uses for the initial
+// acoustic labeling. This makes preserve mode's "acoustic labels are
+// authoritative" contract structural instead of prompt-trusted: the LLM's
+// own speaker field can no longer swap, merge, or invent a label, because
+// it's never read. Input segments with no acoustic Speaker are skipped as
+// remap targets so an unlabeled segment never becomes the "source of
+// truth" for an output segment.
+func remapPreservedSpeakers(input []WhisperSegment, output []RefinedSegment) {
+	for i := range output {
+		best := -1
+		bestOverlap := 0.0
+		for j, in := range input {
+			if in.Speaker == "" {
+				continue
+			}
+			overlap := min(output[i].EndTime, in.End) - max(output[i].StartTime, in.Start)
+			if overlap > bestOverlap {
+				bestOverlap = overlap
+				best = j
+			}
+		}
+		if best == -1 {
+			outMid := (output[i].StartTime + output[i].EndTime) / 2
+			bestDist := math.Inf(1)
+			for j, in := range input {
+				if in.Speaker == "" {
+					continue
+				}
+				dist := math.Abs((in.Start+in.End)/2 - outMid)
+				if dist < bestDist {
+					bestDist = dist
+					best = j
+				}
+			}
+		}
+		if best >= 0 {
+			output[i].Speaker = input[best].Speaker
+		}
+	}
 }
 
 // extractJSONArray extracts the first JSON array from a string,

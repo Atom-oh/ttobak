@@ -288,7 +288,7 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
   - Image: ECR `ttobak-whisper:latest`
   - Memory: 12,288 MiB (12GB, reserve 4GB for OS/ECS agent)
   - GPU: 1
-  - Environment: `BUCKET_NAME`, `TABLE_NAME`, `AWS_REGION`, `VOCAB_KEY`, `MODEL_S3_KEY`
+  - Environment: `BUCKET_NAME`, `TABLE_NAME`, `AWS_REGION`, `VOCAB_KEY`, `MODEL_S3_KEY`, `DIARIZATION_S3_KEY` (기본값 `models/pyannote-diarization-3.1.tar.gz` — 화자분리용 pyannote 모델 번들 S3 키, 태스크당 1회 다운로드되어 `/tmp/diarization-model`에 압축 해제됨; ADR-019 참고)
   - Logging: CloudWatch (`whisper` prefix)
 
 ### IAM Roles

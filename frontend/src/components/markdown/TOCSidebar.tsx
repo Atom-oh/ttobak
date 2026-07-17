@@ -62,7 +62,7 @@ export function TOCSidebar({ contentRef }: TOCSidebarProps) {
 
   return (
     <nav className="hidden xl:block w-[264px] shrink-0 sticky top-24 self-start max-h-[calc(100vh-8rem)] overflow-y-auto">
-      <p className="text-[11px] font-semibold text-[#849396] tracking-[2px] mb-4">
+      <p className="text-[11px] font-semibold text-text-muted tracking-[2px] mb-4">
         ON THIS PAGE
       </p>
       <ul className="space-y-1">
@@ -71,7 +71,7 @@ export function TOCSidebar({ contentRef }: TOCSidebarProps) {
           return (
             <li key={item.id} className="relative">
               {isActive && (
-                <span className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-[#00E5FF]" />
+                <span className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-primary" />
               )}
               <button
                 onClick={() => handleClick(item.id)}
@@ -79,10 +79,10 @@ export function TOCSidebar({ contentRef }: TOCSidebarProps) {
                   item.level === 0 ? 'pl-3' : 'pl-6'
                 } ${
                   isActive
-                    ? 'text-[#00E5FF] font-semibold'
+                    ? 'text-primary font-semibold'
                     : item.level === 0
-                      ? 'text-[#bac9cc] hover:text-[#e4e1e9]'
-                      : 'text-[#849396] hover:text-[#bac9cc]'
+                      ? 'text-text-secondary hover:text-text-main'
+                      : 'text-text-muted hover:text-text-secondary'
                 }`}
               >
                 {item.text}
