@@ -1252,32 +1252,20 @@ func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID,
 // BackfillShareOrigin conditionally tags BOTH copies of a legacy Share
 // (recipient-lookup PK=USER#{sharedToID}/SK=SHARED#{meetingID}, and
 // meeting-lookup PK=MEETING#{meetingID}/SK=SHARE_TO#{sharedToID} --
-// CreateShare/CreateShareIfMember always write both, so a backfill leaving
-// only one tagged would create a permanently inconsistent pair) as
-// account-origin. Used only by the one-time backfill CLI
+// CreateShare/CreateShareIfMember always write both) as account-origin, in a
+// single TransactWriteItems call. Used only by the one-time backfill CLI
 // (cmd/backfill-share-origin) for Share records written by
-// ShareMeetingToAccount before the Origin field existed. Each item's update
-// requires origin to still be absent/empty at write time, so a concurrent
-// RemoveMember cleanup (which deletes the item) can't be raced into a
-// resurrected/half-updated state: on ConditionalCheckFailedException for
-// EITHER item this returns ErrConditionFailed and the caller treats that
-// meeting/member pair as a no-op skip, not an error. Not wrapped in a
-// transaction: if the recipient-lookup item updates but the meeting-lookup
-// item's condition then fails (e.g. concurrently deleted between the two
-// calls), the pair is left inconsistent -- acceptable for a manually
-// operated, dry-run-first backfill tool where the caller reviews output and
-// can safely re-run (idempotent: a re-run's condition simply fails-as-skip
-// for the already-updated item and retries the other).
-// BackfillShareOrigin tags both Share rows (recipient + meeting-lookup) for a
-// legacy account-origin share in a single transaction. Both rows previously
-// updated via separate UpdateItem calls -- if the first succeeded and the
-// second failed (e.g. a transient error, or a concurrent write flipping the
-// second row's condition), a re-run's CLI-level candidate detection
-// (GetShare on the recipient row) would see Origin=="account" already and
-// skip re-attempting, permanently leaving the meeting-lookup row stale. One
-// TransactWriteItems call makes both updates atomic: either both rows end up
-// tagged, or neither does, so there is no partially-tagged state left behind
-// for a re-run to miss.
+// ShareMeetingToAccount before the Origin field existed. Each item's
+// ConditionCheck requires origin to still be absent/empty at write time, so a
+// concurrent RemoveMember cleanup (which deletes the item) can't race this
+// into a resurrected/half-updated state -- and because both updates are in
+// one transaction, either both rows end up tagged or neither does: there is
+// no partially-tagged pair for a re-run to miss (a re-run's CLI-level
+// candidate detection, GetShare on the recipient row, would otherwise see
+// Origin=="account" already and skip re-attempting a still-stale
+// meeting-lookup row). On TransactionCanceledException this returns
+// ErrConditionFailed and the caller treats that meeting/member pair as a
+// no-op skip, not an error.
 func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, sharedToID, meetingID string) error {
 	condition := expression.AttributeExists(expression.Name("PK")).And(
 		expression.Or(

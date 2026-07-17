@@ -997,6 +997,65 @@ func TestGetMeetingDetail_LinkedButNotSharedStaysPrivate(t *testing.T) {
 	}
 }
 
+func TestGetMeetingDetail_StaleAccountShareDeniedAfterMembershipRemoved(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// Simulates RemoveMember's cleanup failing to delete the account-origin
+	// Share row (e.g. a transient DynamoDB error) after membership itself was
+	// already deleted -- the exact permanent-access gap this checkAccess fix
+	// closes: read-time membership re-verification denies access even though
+	// the stale Share row is still present.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.shares[shareKey("removed-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "removed-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+	// "removed-1" is NOT in repo.members -- membership already deleted.
+
+	if _, err := svc.GetMeetingDetail(context.Background(), "removed-1", "m-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound for a removed member with a stale account-origin share, got %v", err)
+	}
+}
+
+func TestGetMeetingDetail_DirectSharePersistsAfterMembershipRemoved(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// A direct share (Origin=="") is an independent grant the owner made
+	// explicitly -- it must survive account membership removal, unlike an
+	// account-origin share.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.shares[shareKey("direct-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "direct-1",
+		Permission: model.PermissionRead,
+	}
+	// "direct-1" is NOT an account member at all.
+
+	if _, err := svc.GetMeetingDetail(context.Background(), "direct-1", "m-1"); err != nil {
+		t.Errorf("expected direct share to grant access regardless of account membership, got %v", err)
+	}
+}
+
+func TestGetMeetingDetail_AccountShareGrantsAccessDespiteSnapshotRace(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// Simulates the snapshot-race MAJOR: a CreateShareIfMember transaction
+	// commits a Share row for a member NOT present in RemoveMember's earlier
+	// ListMeetingRefsForAccount snapshot (e.g. the ref was created after the
+	// snapshot). Read-time membership re-verification means this doesn't
+	// depend on the Share row being freshly written -- it works the same way
+	// whether or not the member is still present.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.addMember("acc-1", "late-1", model.RoleTAM)
+	repo.shares[shareKey("late-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "late-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+
+	if _, err := svc.GetMeetingDetail(context.Background(), "late-1", "m-1"); err != nil {
+		t.Errorf("expected account member with a valid account-origin share to have access, got %v", err)
+	}
+}
+
 func TestShareMeetingToAccount_ReplacesStaleInsights(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)

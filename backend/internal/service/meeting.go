@@ -122,8 +122,10 @@ func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID stri
 	if err != nil {
 		return nil, "", err
 	}
-	if share != nil {
-		// Get the actual meeting from the owner
+	// A direct share (Origin=="") is an independent grant the owner made
+	// explicitly -- honor it unconditionally regardless of current account
+	// membership.
+	if share != nil && share.Origin != model.ShareOriginAccount {
 		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
 		if err != nil {
 			return nil, "", err
@@ -133,13 +135,18 @@ func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID stri
 		}
 	}
 
-	// Account membership grants live read access when no per-user Share exists,
-	// so a member added after the account share can read it immediately. A Share
-	// written by ShareMeetingToAccount is checked above and remains effective
-	// until RemoveMember's synchronous, best-effort cleanup reaches this meeting;
-	// cleanup across all account meetings is neither instantaneous nor
-	// transactional with membership deletion. Only SharedToAccount meetings
-	// qualify -- a Link-only (AccountID set, not shared) meeting stays private.
+	// Reaching here means either there's no Share row, or it's an
+	// account-origin row. An account-origin Share is a cache of membership,
+	// not an independent grant -- RemoveMember's cleanup that's supposed to
+	// delete it is best-effort and can fail (transient DynamoDB error) or
+	// race a concurrent ShareMeetingToAccount snapshot, leaving a stale row
+	// with no retry path. Re-verifying live membership here (instead of
+	// trusting the row, or absence of one, unconditionally) means a removed
+	// member loses access immediately even if cleanup never ran, and a
+	// member added after the share was written gets access immediately too
+	// -- closing the permanent-access gap without needing a reconciliation
+	// job. Only SharedToAccount meetings qualify -- a Link-only (AccountID
+	// set, not shared) meeting stays private.
 	byID, err := s.repo.GetMeetingByID(ctx, meetingID)
 	if err != nil {
 		return nil, "", err
@@ -150,7 +157,11 @@ func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID stri
 			return nil, "", err
 		}
 		if member != nil {
-			return byID, model.PermissionRead, nil
+			permission := model.PermissionRead
+			if share != nil {
+				permission = share.Permission
+			}
+			return byID, permission, nil
 		}
 	}
 
