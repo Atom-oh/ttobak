@@ -45,6 +45,11 @@ uv.lock
 # Claude Code
 .claude/scheduled_tasks.lock
 
+# co-agent local session/config state
+.claude/co-agent-consensus/
+.claude/co-agent-panel.local.json
+.claude/co-agent.local.json
+
 # OMC / Playwright
 .omc/
 .playwright-mcp/

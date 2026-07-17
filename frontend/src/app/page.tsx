@@ -43,28 +43,20 @@ function AuthScreen() {
           style={{ clipPath: 'polygon(20% 0%, 100% 10%, 80% 100%, 0% 90%)', background: 'linear-gradient(220deg, var(--primary) 10%, var(--accent) 90%)' }}
         />
         {/* Ambient glow behind crystals */}
-        <div className="absolute -top-40 -left-40 w-[40rem] h-[40rem] bg-[radial-gradient(circle,rgba(0,229,255,0.08)_0%,transparent_70%)] blur-[120px]" />
-        <div className="absolute -bottom-40 -right-40 w-[40rem] h-[40rem] bg-[radial-gradient(circle,rgba(176,38,255,0.06)_0%,transparent_70%)] blur-[120px]" />
+        <div className="absolute -top-40 -left-40 w-[40rem] h-[40rem] bg-[radial-gradient(circle,rgba(124,58,237,0.06)_0%,transparent_70%)] blur-[120px]" />
+        <div className="absolute -bottom-40 -right-40 w-[40rem] h-[40rem] bg-[radial-gradient(circle,rgba(139,133,247,0.05)_0%,transparent_70%)] blur-[120px]" />
       </div>
 
       {/* Content */}
       <main className="relative z-10 w-full max-w-md px-6 py-12">
         {/* Logo Section */}
         <div className="text-center mb-12">
-          {/* Light mode: icon + 또박 */}
-          <div className="dark:hidden flex flex-col items-center">
+          <div className="flex flex-col items-center">
             <div className="bg-primary rounded-2xl p-4 flex items-center justify-center mb-4 shadow-lg shadow-primary/20">
               <span className="material-symbols-outlined text-white text-4xl">record_voice_over</span>
             </div>
-            <h1 className="text-3xl font-black tracking-tight text-slate-900">또박</h1>
-            <p className="text-sm text-slate-600 mt-2">AI 회의 녹음 · 전사 · 요약</p>
-          </div>
-          {/* Dark mode: neon headline */}
-          <div className="hidden dark:block">
-            <h1 className="font-headline text-4xl md:text-5xl font-bold tracking-tight text-primary drop-shadow-[0_0_12px_rgba(0,229,255,0.6)]">
-              TTOBAK Assist
-            </h1>
-            <p className="font-body text-text-secondary mt-3 text-sm tracking-wide opacity-70">Intelligence redefined for the obsidian era</p>
+            <h1 className="text-3xl font-black tracking-tight text-slate-900 dark:text-text-main">또박</h1>
+            <p className="text-sm text-slate-600 dark:text-text-secondary mt-2">AI 회의 녹음 · 전사 · 요약</p>
           </div>
         </div>
 
@@ -210,47 +202,32 @@ export default function HomePage() {
 
       {/* Content Area */}
       <div className="flex-1 overflow-y-auto pb-24 lg:pb-8">
-        {/* Desktop Title — Light mode */}
-        <div className="hidden lg:block dark:hidden px-8 pt-8 pb-2 max-w-7xl mx-auto w-full">
-          <div className="flex justify-between items-end mb-6">
-            <div>
-              <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black text-slate-900">
-                Meeting Notes
-              </h2>
-              <p className="text-slate-500 mt-1">
-                Review your automated transcriptions and summaries.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Desktop Title — Dark mode: Stitch "TTOBAK Assist" welcome */}
-        <div className="hidden dark:lg:block px-8 pt-8 pb-2 max-w-7xl mx-auto w-full">
+        {/* Desktop Title + Dashboard */}
+        <div className="hidden lg:block px-8 pt-8 pb-2 max-w-7xl mx-auto w-full">
           <div className="mb-8">
-            <h2 className="font-headline text-4xl font-bold tracking-tight text-primary drop-shadow-[0_0_12px_rgba(0,229,255,0.5)]">
-              TTOBAK Assist
+            <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black text-slate-900 dark:text-text-main">
+              Meeting Notes
             </h2>
-            <p className="font-body text-text-secondary mt-2 text-sm tracking-wide">
-              Welcome back{user?.name ? `, ${user.name}` : ''}. Your AI cluster has processed{' '}
-              <span className="text-primary">{meetings.length}</span> meeting{meetings.length !== 1 ? 's' : ''}.
+            <p className="text-slate-500 dark:text-text-secondary mt-1">
+              {user?.name ? `${user.name}님, ` : ''}녹음된 미팅의 전사와 AI 요약을 확인하세요.
             </p>
           </div>
 
           {/* Action Buttons */}
           <div className="flex gap-3 mb-8">
             <Link
-              href="/record?mode=upload"
-              className="glass-panel rounded-lg px-5 py-2.5 text-sm font-semibold text-primary hover:border-primary/30 hover:shadow-[0_0_15px_rgba(0,229,255,0.15)] transition-all flex items-center gap-2"
+              href="/record"
+              className="rounded-lg px-5 py-2.5 text-sm font-semibold bg-primary text-white hover:bg-primary-hover transition-all flex items-center gap-2 shadow-lg shadow-primary/20"
             >
-              <span className="material-symbols-outlined text-lg">upload</span>
-              Upload Audio
+              <span className="material-symbols-outlined text-lg">mic</span>
+              녹음 시작
             </Link>
             <Link
-              href="/record"
-              className="glass-panel rounded-lg px-5 py-2.5 text-sm font-semibold text-accent hover:border-accent/30 hover:shadow-[0_0_15px_rgba(176,38,255,0.15)] transition-all flex items-center gap-2"
+              href="/record?mode=upload"
+              className="glass-panel rounded-lg px-5 py-2.5 text-sm font-semibold text-slate-700 dark:text-text-secondary hover:border-primary/30 hover:text-primary transition-all flex items-center gap-2"
             >
-              <span className="material-symbols-outlined text-lg">play_circle</span>
-              Start Engine
+              <span className="material-symbols-outlined text-lg">upload</span>
+              음성 파일 업로드
             </Link>
           </div>
 
@@ -258,22 +235,22 @@ export default function HomePage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
             {/* Activity */}
             <div className="glass-panel rounded-xl p-5">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">Activity</p>
-              <p className="font-headline text-2xl font-bold text-text-main">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-text-muted mb-2">Activity</p>
+              <p className="text-2xl font-bold text-slate-900 dark:text-text-main">
                 {meetings.length > 0
                   ? `${(meetings.reduce((sum, m) => sum + (m.duration || 0), 0) / 3600).toFixed(1)} Hrs`
                   : '0.0 Hrs'}
               </p>
-              <p className="font-body text-xs text-text-secondary mt-1 tracking-wide">
+              <p className="text-xs text-slate-500 dark:text-text-secondary mt-1">
                 Total airtime · {meetings.length} meeting{meetings.length !== 1 ? 's' : ''}
               </p>
             </div>
 
             {/* Insights */}
             <div className="glass-panel rounded-xl p-5">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-text-muted mb-2">Insights</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-text-muted mb-2">Insights</p>
               <div className="flex items-center gap-2">
-                <p className={`font-headline text-2xl font-bold ${dominantSentiment ? moodAccent : 'text-text-main'}`}>
+                <p className={`text-2xl font-bold ${dominantSentiment ? moodAccent : 'text-slate-900 dark:text-text-main'}`}>
                   {moodLabel}
                 </p>
                 <span className={`material-symbols-outlined text-xl ${moodAccent}`}>{moodIcon}</span>
@@ -283,13 +260,13 @@ export default function HomePage() {
                   topTags.map((t) => (
                     <span
                       key={t}
-                      className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs font-body"
+                      className="px-2 py-0.5 rounded-full bg-primary/10 text-primary text-xs"
                     >
                       {t}
                     </span>
                   ))
                 ) : (
-                  <span className="text-xs text-text-muted">No tags yet</span>
+                  <span className="text-xs text-slate-400 dark:text-text-muted">No tags yet</span>
                 )}
               </div>
             </div>
@@ -297,7 +274,7 @@ export default function HomePage() {
 
           {/* Section header */}
           <div className="mb-2">
-            <h3 className="text-xs font-bold uppercase tracking-widest text-text-muted">Recent Meeting Capsules</h3>
+            <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400 dark:text-text-muted">Recent Meetings</h3>
           </div>
         </div>
 

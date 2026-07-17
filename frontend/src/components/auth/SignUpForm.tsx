@@ -11,7 +11,7 @@ interface SignUpFormProps {
 
 /* Shared input class for light + dark mode */
 const inputClass =
-  'w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all dark:bg-black/30 dark:border-white/10 dark:h-12 dark:py-0 dark:text-white dark:placeholder-text-muted/40 dark:focus:ring-0 dark:focus:border-primary dark:focus:shadow-[0_0_12px_rgba(0,229,255,0.2)]';
+  'w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-all dark:bg-black/30 dark:border-white/10 dark:text-white dark:placeholder-text-muted/40 dark:focus:ring-primary/30';
 
 function FormField({
   id,
@@ -39,13 +39,12 @@ function FormField({
   extraClass?: string;
 }) {
   return (
-    <div className="space-y-1.5 dark:space-y-2">
+    <div className="space-y-1.5">
       <label
         htmlFor={id}
-        className="block text-sm font-medium text-slate-700 dark:font-headline dark:text-[#8B949E] dark:text-[13px] dark:font-medium dark:uppercase dark:tracking-wide dark:ml-1"
+        className="block text-sm font-medium text-slate-700 dark:text-text-secondary"
       >
-        <span className="dark:hidden">{label}</span>
-        <span className="hidden dark:inline">{labelEn}</span>
+        {label}
       </label>
       <div className="relative group">
         <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-text-muted group-focus-within:text-primary transition-colors text-lg">
@@ -137,7 +136,7 @@ export function SignUpForm({ onSwitchToLogin }: SignUpFormProps) {
   };
 
   const errorBanner = error ? (
-    <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg dark:rounded-xl p-3">
+    <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
       <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>
     </div>
   ) : null;
@@ -148,12 +147,12 @@ export function SignUpForm({ onSwitchToLogin }: SignUpFormProps) {
       <div className="w-full">
         <div className="text-center mb-6">
           <h2 className="text-xl font-bold text-slate-900 dark:font-headline dark:text-primary">이메일 인증</h2>
-          <p className="text-slate-600 dark:text-text-secondary mt-1 text-sm dark:font-body">
+          <p className="text-slate-600 dark:text-text-secondary mt-1 text-sm">
             {email}로 인증 코드를 보냈습니다
           </p>
         </div>
 
-        <form onSubmit={handleConfirm} className="space-y-5 dark:space-y-6">
+        <form onSubmit={handleConfirm} className="space-y-5">
           {errorBanner}
 
           <FormField
@@ -173,7 +172,7 @@ export function SignUpForm({ onSwitchToLogin }: SignUpFormProps) {
           </PrimaryButton>
         </form>
 
-        <p className="text-center mt-6 dark:mt-10 text-slate-600 dark:text-text-muted text-sm dark:font-body">
+        <p className="text-center mt-6 text-slate-600 dark:text-text-muted text-sm">
           코드를 받지 못하셨나요?{' '}
           <button className="text-primary font-semibold hover:underline dark:text-secondary dark:underline-offset-4 dark:decoration-2">
             재전송
@@ -186,13 +185,13 @@ export function SignUpForm({ onSwitchToLogin }: SignUpFormProps) {
   /* ──────────── Register Step ──────────── */
   return (
     <div className="w-full">
-      {/* Light mode heading */}
-      <div className="text-center mb-6 dark:hidden">
-        <h2 className="text-xl font-bold text-slate-900">회원가입</h2>
-        <p className="text-slate-600 mt-1 text-sm">회의 녹음을 시작해보세요</p>
+      
+      <div className="text-center mb-6">
+        <h2 className="text-xl font-bold text-slate-900 dark:text-text-main">회원가입</h2>
+        <p className="text-slate-600 dark:text-text-secondary mt-1 text-sm">회의 녹음을 시작해보세요</p>
       </div>
 
-      <form onSubmit={handleRegister} className="space-y-4 dark:space-y-5">
+      <form onSubmit={handleRegister} className="space-y-4">
         {errorBanner}
 
         <FormField id="signup-name" label="이름" labelEn="Name" icon="person" value={name} onChange={setName} placeholder="이름을 입력하세요" required={false} />
@@ -211,7 +210,7 @@ export function SignUpForm({ onSwitchToLogin }: SignUpFormProps) {
       </form>
 
       {onSwitchToLogin && (
-        <p className="text-center mt-6 dark:mt-10 text-slate-600 dark:text-text-muted text-sm dark:font-body">
+        <p className="text-center mt-6 text-slate-600 dark:text-text-muted text-sm">
           이미 계정이 있으신가요?{' '}
           <button
             onClick={onSwitchToLogin}

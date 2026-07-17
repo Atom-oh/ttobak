@@ -44,19 +44,19 @@ export function InsightsTableView({
         <table className="w-full">
           <thead>
             <tr className="bg-white/[0.04]">
-              <th className="text-xs font-semibold text-[#849396] text-left px-4 py-3" style={{ width: '40%' }}>
+              <th className="text-xs font-semibold text-text-muted text-left px-4 py-3" style={{ width: '40%' }}>
                 Title
               </th>
-              <th className="text-xs font-semibold text-[#849396] text-left px-4 py-3" style={{ width: '12%' }}>
+              <th className="text-xs font-semibold text-text-muted text-left px-4 py-3" style={{ width: '12%' }}>
                 Source
               </th>
-              <th className="text-xs font-semibold text-[#849396] text-left px-4 py-3" style={{ width: '10%' }}>
+              <th className="text-xs font-semibold text-text-muted text-left px-4 py-3" style={{ width: '10%' }}>
                 Date
               </th>
-              <th className="text-xs font-semibold text-[#849396] text-left px-4 py-3" style={{ width: '28%' }}>
+              <th className="text-xs font-semibold text-text-muted text-left px-4 py-3" style={{ width: '28%' }}>
                 Tags
               </th>
-              <th className="text-xs font-semibold text-[#849396] text-left px-4 py-3" style={{ width: '5%' }}>
+              <th className="text-xs font-semibold text-text-muted text-left px-4 py-3" style={{ width: '5%' }}>
                 KB
               </th>
             </tr>
@@ -69,17 +69,17 @@ export function InsightsTableView({
                 className="border-t border-white/[0.05] hover:bg-white/[0.03] cursor-pointer transition-colors"
               >
                 <td className="px-4 py-3">
-                  <span className="font-medium text-[#e4e1e9] line-clamp-1 text-sm">
+                  <span className="font-medium text-text-main line-clamp-1 text-sm">
                     {doc.title}
                   </span>
                 </td>
                 <td className="px-4 py-3">
-                  <span className="text-[#849396] text-xs">
+                  <span className="text-text-muted text-xs">
                     {doc.source || (doc.type === 'news' ? 'News' : 'AWS Docs')}
                   </span>
                 </td>
                 <td className="px-4 py-3">
-                  <span className="text-[#849396] text-xs whitespace-nowrap">
+                  <span className="text-text-muted text-xs whitespace-nowrap">
                     {formatDate(doc.pubDate || doc.crawledAt)}
                   </span>
                 </td>
@@ -96,8 +96,8 @@ export function InsightsTableView({
                           }}
                           className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
                             isActive
-                              ? 'bg-[#00E5FF]/20 text-[#00E5FF]'
-                              : 'bg-white/5 text-[#bac9cc] hover:bg-white/10'
+                              ? 'bg-primary/20 text-primary'
+                              : 'bg-white/5 text-text-secondary hover:bg-white/10'
                           }`}
                         >
                           {tag}
@@ -105,7 +105,7 @@ export function InsightsTableView({
                       );
                     })}
                     {(doc.tags || []).length > 4 && (
-                      <span className="text-xs text-[#849396]">
+                      <span className="text-xs text-text-muted">
                         +{(doc.tags || []).length - 4}
                       </span>
                     )}
@@ -115,7 +115,7 @@ export function InsightsTableView({
                   {doc.inKB ? (
                     <span className="material-symbols-outlined text-sm text-emerald-400">check_circle</span>
                   ) : (
-                    <span className="text-[#849396] text-xs">&mdash;</span>
+                    <span className="text-text-muted text-xs">&mdash;</span>
                   )}
                 </td>
               </tr>
@@ -123,7 +123,7 @@ export function InsightsTableView({
           </tbody>
         </table>
       </div>
-      <div className="px-4 py-3 border-t border-white/[0.05] text-xs text-[#849396]">
+      <div className="px-4 py-3 border-t border-white/[0.05] text-xs text-text-muted">
         Showing {startIdx}-{endIdx} of {totalCount} documents
       </div>
     </div>

@@ -16,9 +16,13 @@ type CreateMeetingRequest struct {
 
 // UpdateMeetingRequest represents the request body for updating a meeting
 type UpdateMeetingRequest struct {
-	Title              string   `json:"title,omitempty"`
-	Content            string   `json:"content,omitempty"`
-	Notes              string   `json:"notes,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Content string `json:"content,omitempty"`
+	// Notes is a pointer so "key omitted" (nil, preserve existing notes) is
+	// distinguishable from "explicitly set to empty string" (non-nil
+	// pointer to "", clears notes) -- a plain string can't represent
+	// "clear the notes" since Go's zero value for string is already "".
+	Notes              *string  `json:"notes,omitempty"`
 	TranscriptA        string   `json:"transcriptA,omitempty"`
 	SelectedTranscript string   `json:"selectedTranscript,omitempty"` // "A" or "B"
 	Participants       []string `json:"participants,omitempty"`

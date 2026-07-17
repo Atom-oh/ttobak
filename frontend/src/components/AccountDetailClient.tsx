@@ -173,7 +173,7 @@ export default function AccountDetailClient() {
                   <button
                     type="submit"
                     disabled={inviting || !inviteEmail.trim()}
-                    className="bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg font-semibold text-sm px-4 disabled:opacity-50"
+                    className="bg-primary hover:bg-primary-hover text-white rounded-lg font-semibold text-sm px-4 disabled:opacity-50"
                   >
                     Add
                   </button>
@@ -187,7 +187,7 @@ export default function AccountDetailClient() {
               <div className="flex flex-wrap gap-2 mb-3">
                 <button
                   onClick={() => setActiveType('')}
-                  className={`text-xs px-3 py-1 rounded-full border ${activeType === '' ? 'bg-primary text-white dark:text-background-dark border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
+                  className={`text-xs px-3 py-1 rounded-full border ${activeType === '' ? 'bg-primary text-white border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
                 >
                   all
                 </button>
@@ -195,7 +195,7 @@ export default function AccountDetailClient() {
                   <button
                     key={t}
                     onClick={() => setActiveType(t)}
-                    className={`text-xs px-3 py-1 rounded-full border ${activeType === t ? 'bg-primary text-white dark:text-background-dark border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
+                    className={`text-xs px-3 py-1 rounded-full border ${activeType === t ? 'bg-primary text-white border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
                   >
                     {t}
                   </button>
@@ -253,7 +253,7 @@ export default function AccountDetailClient() {
                   </button>
                   <button
                     onClick={handleCreateNote}
-                    className="text-xs bg-primary hover:bg-primary-hover text-white dark:text-background-dark rounded-lg px-2.5 py-1.5 flex items-center gap-1"
+                    className="text-xs bg-primary hover:bg-primary-hover text-white rounded-lg px-2.5 py-1.5 flex items-center gap-1"
                   >
                     <span className="material-symbols-outlined text-sm">add</span>Note
                   </button>

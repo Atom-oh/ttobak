@@ -82,8 +82,8 @@ Detailed specs in `docs/`: PRD.md, API-SPEC.md, INFRA-SPEC.md, DESIGN-SPEC.md, C
 
 ## Design System
 
-- **Primary**: `#3211d4` (Deep Indigo), with `/10`, `/20`, `/40` opacity variants
-- **Background**: light `#f6f6f8`, dark `#131022`
+- **Primary**: light `#3211d4` (Deep Indigo) / dark `#8b85f7` (violet) — one brand across both modes, no separate neon palette. `/10`, `/20`, `/40` opacity variants. Token defined once in `:root` and overridden by the same CSS var name under `.dark` (`frontend/src/app/globals.css`) — utilities like `text-primary` pick up the dark value automatically, no `dark:` prefix needed. `--background-light`/`--background-dark` are the one exception (two separate tokens switched via an explicit `dark:bg-background-dark` utility, not var-override).
+- **Background**: light `#f6f6f8`, dark `#0b0b0f`
 - **Font**: Inter (Google Fonts)
 - **Icons**: Material Symbols Outlined (Google Fonts) — see `docs/DESIGN-SPEC.md` §4 for full icon mapping
 - **Responsive**: Mobile (`<768px`) bottom nav + single column; PC (`>=1024px`) sidebar `w-64` + main content

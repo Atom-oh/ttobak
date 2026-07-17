@@ -21,15 +21,15 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
           startOnLoad: false,
           theme: 'dark',
           themeVariables: {
-            primaryColor: '#00E5FF',
+            primaryColor: '#8b85f7',
             primaryTextColor: '#e4e1e9',
-            primaryBorderColor: '#00E5FF',
-            lineColor: '#849396',
+            primaryBorderColor: '#8b85f7',
+            lineColor: '#8a8f98',
             secondaryColor: '#1a1a24',
             tertiaryColor: '#0e0e13',
             background: '#131022',
             mainBkg: '#1a1a24',
-            nodeBorder: '#00E5FF',
+            nodeBorder: '#8b85f7',
             clusterBkg: '#0e0e13',
             titleColor: '#e4e1e9',
             edgeLabelBackground: '#131022',
@@ -49,7 +49,7 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
     return (
       <div className="my-4 rounded-xl border border-red-500/20 bg-red-500/5 p-4">
         <div className="text-xs text-red-400 mb-2">Diagram render error</div>
-        <pre className="text-xs text-[#849396] overflow-x-auto">{code}</pre>
+        <pre className="text-xs text-text-muted overflow-x-auto">{code}</pre>
       </div>
     );
   }
@@ -57,7 +57,7 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
   if (!svg) {
     return (
       <div className="my-4 rounded-xl border border-white/[0.06] bg-[#0a0a0f] p-8 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-2 border-[#00E5FF] border-t-transparent" />
+        <div className="animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent" />
       </div>
     );
   }

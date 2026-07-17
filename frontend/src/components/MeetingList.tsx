@@ -93,7 +93,7 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
 
   return (
     <Link href={`/meeting/${meeting.meetingId}`}>
-      <div className={`glass-panel p-4 lg:p-6 rounded-xl hover:border-primary/30 lg:hover:border-slate-200 lg:dark:hover:border-primary/30 lg:hover:shadow-xl lg:hover:shadow-primary/5 lg:dark:hover:shadow-[0_0_15px_rgba(0,229,255,0.1)] transition-all cursor-pointer group ${isDeleting ? 'opacity-50 pointer-events-none' : ''}`}>
+      <div className={`glass-panel p-4 lg:p-6 rounded-xl hover:border-primary/30 lg:hover:border-slate-200 lg:dark:hover:border-primary/30 lg:hover:shadow-xl lg:hover:shadow-primary/5 transition-all cursor-pointer group ${isDeleting ? 'opacity-50 pointer-events-none' : ''}`}>
         {/* Mobile: title left, tag right */}
         <div className="flex justify-between items-start mb-2 lg:hidden">
           <h4 className="text-slate-900 dark:text-slate-100 font-bold text-base leading-tight group-hover:text-primary transition-colors">
@@ -381,7 +381,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
                   }}
                   className={`text-xs font-bold px-3 py-1.5 rounded-full transition-all ${
                     isSelected
-                      ? 'bg-primary text-white dark:text-background-dark ring-2 ring-primary/30'
+                      ? 'bg-primary text-white ring-2 ring-primary/30'
                       : getTagColor(tag)
                   }`}
                 >
