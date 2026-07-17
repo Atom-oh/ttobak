@@ -41,6 +41,26 @@ echo "Rewriting config.yaml to reference local paths (no runtime HF dependency).
 # releases. If this rewrite doesn't match what actually got downloaded,
 # inspect ${STAGE_DIR}/pipeline/config.yaml and ${STAGE_DIR}/segmentation/,
 # ${STAGE_DIR}/embedding/ by hand and adjust the keys below to match.
+#
+# Verified (pip-downloaded pyannote.audio 3.1.1 and 3.4.0 -- the floor and
+# current top of the >=3.1,<4 pin -- pyannote/audio/pipelines/speaker_verification.py
+# and speaker_diarization.py) that rewriting `embedding` to a bare local path
+# still loads correctly, despite dropping the "wespeaker" substring from the
+# original "pyannote/wespeaker-voxceleb-resnet34-LM" identifier:
+#   - `segmentation` always loads via `get_model(segmentation, ...)`
+#     (pipelines/utils/getter.py), which is documented to accept either a HF
+#     model name OR a local checkpoint path (`get_model("/path/to/ckpt")` is
+#     its own doctest example) -- path-agnostic, no substring involved.
+#   - `embedding`'s factory (`PretrainedSpeakerEmbedding`) dispatches on the
+#     FIRST substring match in this order: "pyannote" -> "speechbrain" ->
+#     "nvidia" -> "wespeaker" -> else (generic local-model fallback). Because
+#     the *original* identifier is "pyannote/wespeaker-...", it already
+#     matches "pyannote" before it ever reaches the "wespeaker" branch --
+#     the wespeaker-specific ONNX loader (`ONNXWeSpeakerPretrainedSpeakerEmbedding`)
+#     is for a *different*, non-pyannote-org repo (e.g. "hbredin/wespeaker-...",
+#     per its own docstring), not this one. So this rewrite never relied on
+#     "wespeaker" being present in the first place -- it goes through the
+#     same generic, local-path-supporting `get_model()` as segmentation does.
 python3 -c "
 import glob
 import os
