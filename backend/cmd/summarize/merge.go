@@ -90,9 +90,8 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		}
 
 		if len(whisperSegments) > 0 && len(segments) == 0 {
-			refinedText, refinedSegs, refineErr := bedrockService.RefineTranscript(ctx, whisperSegments)
+			_, refinedSegs, refineErr := bedrockService.RefineTranscript(ctx, whisperSegments)
 			if refineErr == nil {
-				transcript = refinedText
 				// Each part's spk_N numbering restarts at 0 independently --
 				// whether from preserved acoustic labels or from RefineTranscript
 				// inferring them fresh per part -- so without namespacing, part
@@ -112,11 +111,11 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 						EndTime:   rs.EndTime,
 					}
 				}
-				// refinedText was assembled by RefineTranscript from the
-				// PRE-namespaced labels (bedrock.go), so it still has the
-				// exact cross-part "spk_0" collision namespacing exists to
-				// prevent. Rebuild the text from the namespaced segments
-				// instead of using the stale refinedText.
+				// RefineTranscript's own assembled text uses the PRE-namespaced
+				// labels (bedrock.go), so it still has the exact cross-part
+				// "spk_0" collision namespacing exists to prevent -- rebuild the
+				// text from the namespaced segments instead (its return value is
+				// discarded above for this reason).
 				transcript = buildTranscriptText(segments)
 			}
 		}

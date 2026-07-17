@@ -22,7 +22,14 @@ const MaxPerPart = 1_000_000
 // Namespace rewrites an acoustic spk_N label to be unique across parts by
 // offsetting N by partIndex*MaxPerPart. Stays within spk_\d+ so the
 // frontend's SpeakerMapEditor (UNMAPPED_PATTERN, speakerSortKey's parseInt)
-// needs no changes. Non-spk_ labels pass through unchanged.
+// needs no changes. Non-spk_ labels (including a 화자X rawFallbackSegments
+// default) pass through unchanged -- suffixing 화자X per-part to avoid a
+// double-refine-failure collision was considered and rejected: the
+// frontend's UNMAPPED_PATTERN (exact-match `^화자[A-Z]$`) and
+// speakerSortKey (exact length-3 check) both silently stop recognizing a
+// suffixed label like "화자A-1", which is a guaranteed, always-triggered
+// regression traded against a low-probability edge case (refine failing
+// for a chunk in two different parts of the same meeting).
 func Namespace(label string, partIndex int) string {
 	if !strings.HasPrefix(label, "spk_") {
 		return label
