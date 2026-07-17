@@ -1268,6 +1268,16 @@ func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID,
 // operated, dry-run-first backfill tool where the caller reviews output and
 // can safely re-run (idempotent: a re-run's condition simply fails-as-skip
 // for the already-updated item and retries the other).
+// BackfillShareOrigin tags both Share rows (recipient + meeting-lookup) for a
+// legacy account-origin share in a single transaction. Both rows previously
+// updated via separate UpdateItem calls -- if the first succeeded and the
+// second failed (e.g. a transient error, or a concurrent write flipping the
+// second row's condition), a re-run's CLI-level candidate detection
+// (GetShare on the recipient row) would see Origin=="account" already and
+// skip re-attempting, permanently leaving the meeting-lookup row stale. One
+// TransactWriteItems call makes both updates atomic: either both rows end up
+// tagged, or neither does, so there is no partially-tagged state left behind
+// for a re-run to miss.
 func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, sharedToID, meetingID string) error {
 	condition := expression.AttributeExists(expression.Name("PK")).And(
 		expression.Or(
@@ -1290,22 +1300,26 @@ func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, sharedToID
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixShareTo + sharedToID},
 		},
 	}
-	for _, key := range keys {
-		_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-			TableName:                 aws.String(r.tableName),
-			Key:                       key,
-			ConditionExpression:       expr.Condition(),
-			UpdateExpression:          expr.Update(),
-			ExpressionAttributeNames:  expr.Names(),
-			ExpressionAttributeValues: expr.Values(),
-		})
-		if err != nil {
-			var ccfe *types.ConditionalCheckFailedException
-			if errors.As(err, &ccfe) {
-				return fmt.Errorf("%w: share %s/%s not eligible (missing, or origin already set)", ErrConditionFailed, sharedToID, meetingID)
-			}
-			return fmt.Errorf("backfill share origin: %w", err)
+	items := make([]types.TransactWriteItem, len(keys))
+	for i, key := range keys {
+		items[i] = types.TransactWriteItem{
+			Update: &types.Update{
+				TableName:                 aws.String(r.tableName),
+				Key:                       key,
+				ConditionExpression:       expr.Condition(),
+				UpdateExpression:          expr.Update(),
+				ExpressionAttributeNames:  expr.Names(),
+				ExpressionAttributeValues: expr.Values(),
+			},
 		}
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if err != nil {
+		var tce *types.TransactionCanceledException
+		if errors.As(err, &tce) {
+			return fmt.Errorf("%w: share %s/%s not eligible (missing, or origin already set)", ErrConditionFailed, sharedToID, meetingID)
+		}
+		return fmt.Errorf("backfill share origin: %w", err)
 	}
 	return nil
 }

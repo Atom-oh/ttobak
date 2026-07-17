@@ -33,6 +33,11 @@ type mockAccountRepo struct {
 	// the returned copy (so the caller's GetMember still sees the member, but
 	// any subsequent write in the same service call hits a since-deleted row).
 	deleteAfterGet string
+
+	// listMeetingRefsErr, when non-nil, is returned by ListMeetingRefsForAccount
+	// to test that a total-list failure surfaces as an error (not a silent
+	// success) and leaves membership untouched.
+	listMeetingRefsErr error
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -157,6 +162,9 @@ func (m *mockAccountRepo) GetUserByEmail(_ context.Context, email string) (*mode
 }
 
 func (m *mockAccountRepo) ListMeetingRefsForAccount(_ context.Context, accountID string) ([]model.MeetingRef, error) {
+	if m.listMeetingRefsErr != nil {
+		return nil, m.listMeetingRefsErr
+	}
 	return append([]model.MeetingRef(nil), m.meetingRefs[accountID]...), nil
 }
 
@@ -440,6 +448,24 @@ func TestRemoveMember_MissingMemberNotFound(t *testing.T) {
 	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "ghost-1")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestRemoveMember_ListRefsFailurePreservesMembershipAndErrors(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.listMeetingRefsErr = errors.New("dynamodb unavailable")
+
+	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1")
+	if err == nil {
+		t.Fatal("expected an error when ListMeetingRefsForAccount fails, got nil")
+	}
+	mem, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1")
+	if mem == nil {
+		t.Error("expected membership to be preserved (untouched) when the refs list fails before delete, but member was removed")
 	}
 }
 

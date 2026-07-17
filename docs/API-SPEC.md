@@ -300,13 +300,16 @@ Response: 200 OK (멤버십 삭제는 성공했으나 일부 미팅의 Share cle
 Error: 403 Forbidden (owner가 아님)
 Error: 404 Not Found (해당 멤버 없음)
 Error: 400 Bad Request (owner는 제거 불가)
+Error: 500 Internal Server Error (cleanup 대상 미팅 목록 조회 자체가 실패 — 멤버십은 삭제되지 않고 그대로 유지되므로 안전하게 재시도 가능)
 ```
 
 > 멤버십 삭제는 per-user Share 레코드가 없는 미팅에 대한 새 접근을 즉시 차단합니다. 기존 Share 레코드가 있는 미팅은 같은 `RemoveMember` 요청 안에서 account의 전체 MeetingRef 목록을 순회하는 best-effort cleanup이 account-origin Share만 회수합니다. 이 처리는 N개 미팅 전체에 대해 즉시 완료되는 작업이 아니며 멤버십 삭제와 트랜잭션으로 묶이지 않습니다. 소유자가 별도로 부여한 direct Share는 삭제하지 않습니다.
 >
-> **Cleanup 실패 시그널**: 특정 미팅의 cleanup(Share 조회/삭제) 실패는 이제 로그뿐 아니라 응답 바디의 `cleanupFailedForMeetings`로도 노출됩니다 — 멤버 제거 요청 자체는 여전히 성공(멤버십은 이미 삭제됨)하지만, 호출자가 body를 확인하면 어떤 미팅의 접근 회수가 불완전한지 알 수 있습니다. 자동 재시도/reconciliation은 아직 구현되지 않은 후속 작업입니다.
+> **미팅 목록 조회 자체의 실패**: cleanup 대상을 정하기 위한 `ListMeetingRefsForAccount` 호출은 멤버십 삭제 **이전**에 실행됩니다 — 이 호출이 실패하면 멤버십은 삭제되지 않은 채 500으로 응답하므로, 호출자는 동일 요청을 안전하게 재시도할 수 있습니다(멤버십이 이미 지워진 뒤라면 재시도가 404가 되어버려 재시도할 방법이 없었던 이전 동작을 수정).
 >
-> **Known limitation**: 이 수정 배포 전에 `share-account`가 생성한 Share 레코드는 origin 태그가 없어 direct grant로 취급됩니다. 따라서 수정 배포 후 멤버를 제거해도 해당 과거 레코드는 cleanup 대상이 아닙니다.
+> **Cleanup 실패 시그널**: 목록 조회 자체는 성공했지만 특정 미팅의 cleanup(Share 조회/삭제)이 실패하는 경우는 이제 로그뿐 아니라 응답 바디의 `cleanupFailedForMeetings`로도 노출됩니다 — 멤버 제거 요청 자체는 여전히 성공(멤버십은 이미 삭제됨)하지만, 호출자가 body를 확인하면 어떤 미팅의 접근 회수가 불완전한지 알 수 있습니다. 자동 재시도/reconciliation은 아직 구현되지 않은 후속 작업입니다.
+>
+> **Known limitation & remediation**: 이 수정 배포 전에 `share-account`가 생성한 Share 레코드는 origin 태그가 없어 direct grant로 취급되므로, `RemoveMember`의 cleanup이 자동으로 회수하지 못합니다. `backend/cmd/backfill-share-origin` CLI(운영자가 `--account-id` 단위로 직접 실행, 기본 dry-run·`--apply`로 확정)가 이런 과거 레코드에 `origin=account` 태그를 소급 부여해 이후 `RemoveMember` cleanup 대상이 되도록 만드는 remediation 경로다. 태깅 여부가 모호한 후보(같은 미팅이 account와 direct 양쪽으로 공유된 경우 두 origin이 구분되지 않음)는 CLI가 후보로만 출력하고 자동 태깅하지 않으므로 수동 검토가 필요하다.
 
 #### List Account Meetings (공유된 미팅 목록 — 멤버 전용)
 

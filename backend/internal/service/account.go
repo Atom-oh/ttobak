@@ -289,6 +289,17 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 	if target.Role == model.RoleOwner {
 		return nil, ErrInvalidInput
 	}
+
+	// List refs BEFORE deleting membership: membership is still intact here,
+	// so a list failure can safely return an error (500, retryable) instead
+	// of silently producing a 204 that leaves cleanup un-run with no way to
+	// signal or retry it -- a retried DELETE after membership is gone would
+	// just 404.
+	refs, err := s.repo.ListMeetingRefsForAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := s.repo.DeleteMember(ctx, accountID, targetUserID); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return nil, ErrNotFound // removed concurrently between our Get and Delete
@@ -296,11 +307,6 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 		return nil, err
 	}
 
-	refs, err := s.repo.ListMeetingRefsForAccount(ctx, accountID)
-	if err != nil {
-		log.Printf("cleanup shares for removed member %s in account %s: list meeting refs: %v", targetUserID, accountID, err)
-		return nil, nil
-	}
 	for _, ref := range refs {
 		share, err := s.repo.GetShare(ctx, targetUserID, ref.MeetingID)
 		if err != nil {

@@ -38,7 +38,7 @@ Listing "all meetings shared into this account" must not require a cross-partiti
 - `MeetingRef.SK` embeds `meeting.Date`; if the date is later edited and the meeting re-shared, the old ref orphans (new SK differs).
 
 ### Risks
-- Removing a member from an account does not revoke previously granted per-meeting shares (out of scope for v1).
+- ~~Removing a member from an account does not revoke previously granted per-meeting shares~~ — **superseded**: `RemoveMember` now revokes every `origin=="account"` Share for the removed member across all of the account's `MeetingRef`s, and new account-origin shares are created transactionally (`CreateShareIfMember`, closing the `AddMember`↔`ShareMeetingToAccount` TOCTOU gap) so every share this ADR's flow creates going forward is taggable and revocable. Pre-existing shares written before the `Origin` field existed are not automatically revocable (they collapse indistinguishably with direct shares — see `docs/API-SPEC.md`'s Known limitation note); `backend/cmd/backfill-share-origin` is a manually-run, one-account-at-a-time remediation CLI that tags them for accounts an operator has reviewed.
 
 ## Alternatives Considered
 | Option | Pros | Cons |
@@ -82,7 +82,7 @@ Listing "all meetings shared into this account" must not require a cross-partiti
 - `MeetingRef.SK`에 `meeting.Date` 포함 — 이후 날짜 수정 후 재공유 시 옛 ref가 고아가 됨.
 
 ### 위험
-- Account에서 멤버 제거 시 이미 부여된 미팅별 share는 회수되지 않음(v1 범위 밖).
+- ~~Account에서 멤버 제거 시 이미 부여된 미팅별 share는 회수되지 않음~~ — **대체됨**: `RemoveMember`가 이제 제거된 멤버의 `origin=="account"` Share를 해당 Account의 모든 `MeetingRef`에 걸쳐 회수하며, 신규 account-origin share는 트랜잭션(`CreateShareIfMember`)으로 생성돼 `AddMember`↔`ShareMeetingToAccount` 사이 TOCTOU 갭이 닫혔다 — 이 ADR의 흐름으로 앞으로 생성되는 모든 share는 태깅·회수 가능. `Origin` 필드 도입 이전에 쓰인 기존 share는 direct share와 구분 불가능하게 겹쳐 자동 회수되지 않음(`docs/API-SPEC.md`의 Known limitation 참고) — `backend/cmd/backfill-share-origin`이 운영자가 검토한 계정을 한 번에 하나씩 태깅하는 수동 실행 remediation CLI다.
 
 ## 검토한 대안
 | 옵션 | 장점 | 단점 |
