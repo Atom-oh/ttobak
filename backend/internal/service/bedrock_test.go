@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
@@ -42,5 +43,200 @@ func TestParseMeetingInsights_Empty(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("expected empty, got %+v", got)
+	}
+}
+
+func TestHasAcousticSpeakers(t *testing.T) {
+	if hasAcousticSpeakers([]WhisperSegment{{Text: "a"}, {Text: "b"}}) {
+		t.Error("expected false when no segment has a Speaker")
+	}
+	if !hasAcousticSpeakers([]WhisperSegment{{Text: "a"}, {Text: "b", Speaker: "spk_1"}}) {
+		t.Error("expected true when any segment has a Speaker")
+	}
+}
+
+func TestBuildRefineSystemPrompt_PreserveMode(t *testing.T) {
+	prompt := buildRefineSystemPrompt(true)
+
+	if !strings.Contains(prompt, "AUTHORITATIVE") {
+		t.Error("preserve-mode prompt should instruct the model to treat given labels as authoritative")
+	}
+	if strings.Contains(prompt, "Infer speaker turns") {
+		t.Error("preserve-mode prompt should not contain the infer-mode instruction")
+	}
+}
+
+func TestBuildRefineSystemPrompt_InferMode(t *testing.T) {
+	prompt := buildRefineSystemPrompt(false)
+
+	if !strings.Contains(prompt, "Infer speaker turns") {
+		t.Error("infer-mode prompt should instruct the model to infer speaker turns from text")
+	}
+	if strings.Contains(prompt, "AUTHORITATIVE") {
+		t.Error("infer-mode prompt should not contain the preserve-mode instruction")
+	}
+}
+
+func TestBuildRefineSegmentLines_PreserveModeIncludesSpeakerPrefix(t *testing.T) {
+	segments := []WhisperSegment{
+		{Start: 0.0, End: 1.5, Text: "안녕하세요", Speaker: "spk_0"},
+		{Start: 1.5, End: 3.0, Text: "네 반갑습니다", Speaker: "spk_1"},
+	}
+
+	lines := buildRefineSegmentLines(segments, true)
+
+	if !strings.Contains(lines, "spk_0: 안녕하세요") {
+		t.Errorf("expected speaker-prefixed line, got: %s", lines)
+	}
+	if !strings.Contains(lines, "spk_1: 네 반갑습니다") {
+		t.Errorf("expected speaker-prefixed line, got: %s", lines)
+	}
+}
+
+func TestBuildRefineSegmentLines_InferModeOmitsSpeakerPrefix(t *testing.T) {
+	segments := []WhisperSegment{
+		{Start: 0.0, End: 1.5, Text: "안녕하세요"},
+	}
+
+	lines := buildRefineSegmentLines(segments, false)
+
+	if strings.Contains(lines, "spk_") {
+		t.Errorf("infer-mode lines should not contain a speaker prefix, got: %s", lines)
+	}
+	if !strings.Contains(lines, "안녕하세요") {
+		t.Errorf("expected text in output, got: %s", lines)
+	}
+}
+
+func TestRawFallbackSegments_PreservesEachSegmentsOwnAcousticLabel(t *testing.T) {
+	chunk := []WhisperSegment{
+		{Start: 0.0, End: 1.0, Text: "hello", Speaker: "spk_0"},
+		{Start: 1.0, End: 2.0, Text: "world", Speaker: "spk_1"},
+	}
+
+	got := rawFallbackSegments(chunk, "spk_0")
+
+	if got[0].Speaker != "spk_0" {
+		t.Errorf("expected segment 0 to keep its own acoustic label spk_0, got %q", got[0].Speaker)
+	}
+	if got[1].Speaker != "spk_1" {
+		t.Errorf("expected segment 1 to keep its own acoustic label spk_1 (not collapse to the passed-in default), got %q", got[1].Speaker)
+	}
+}
+
+func TestRawFallbackSegments_FallsBackToDefaultWhenSpeakerEmpty(t *testing.T) {
+	chunk := []WhisperSegment{
+		{Start: 0.0, End: 1.0, Text: "no acoustic label"},
+	}
+
+	got := rawFallbackSegments(chunk, "spk_2")
+
+	if got[0].Speaker != "spk_2" {
+		t.Errorf("expected fallback to the passed-in default for a segment with no acoustic Speaker, got %q", got[0].Speaker)
+	}
+}
+
+func TestHasCrossSpeakerMerge_DetectsMergedOutputSegment(t *testing.T) {
+	input := []WhisperSegment{
+		{Start: 0.0, End: 5.0, Speaker: "spk_0"},
+		{Start: 5.0, End: 10.0, Speaker: "spk_1"},
+	}
+	output := []RefinedSegment{
+		// LLM combined both speakers' spans into a single output segment,
+		// against the preserve-mode prompt's explicit instruction not to.
+		{StartTime: 0.0, EndTime: 10.0, Speaker: "spk_0"},
+	}
+	if !hasCrossSpeakerMerge(input, output) {
+		t.Error("expected a merge to be detected when one output segment significantly overlaps two distinct acoustic labels")
+	}
+}
+
+func TestHasCrossSpeakerMerge_AllowsSingleSpeakerOverlap(t *testing.T) {
+	input := []WhisperSegment{
+		{Start: 0.0, End: 5.0, Speaker: "spk_0"},
+		{Start: 5.0, End: 10.0, Speaker: "spk_1"},
+	}
+	output := []RefinedSegment{
+		{StartTime: 0.0, EndTime: 4.9, Speaker: "spk_0"}, // entirely within spk_0's span
+		{StartTime: 5.0, EndTime: 10.0, Speaker: "spk_1"}, // entirely within spk_1's span
+	}
+	if hasCrossSpeakerMerge(input, output) {
+		t.Error("expected no merge detected when each output segment significantly overlaps only one acoustic label")
+	}
+}
+
+func TestHasCrossSpeakerMerge_DetectsShortInterjectionFoldedIntoLongResponse(t *testing.T) {
+	// Regression: a short interjection ("네", "맞습니다") folded into an
+	// adjacent long response is the easiest case for the LLM to merge, and
+	// exactly the case an output-duration-relative threshold would miss --
+	// the interjection's whole 0.4s span is under 30% of the 10.4s merged
+	// output, even though it's 100% of that input segment.
+	input := []WhisperSegment{
+		{Start: 0.0, End: 10.0, Speaker: "spk_0"},
+		{Start: 10.0, End: 10.4, Speaker: "spk_1"},
+	}
+	output := []RefinedSegment{
+		{StartTime: 0.0, EndTime: 10.4, Speaker: "spk_0"},
+	}
+	if !hasCrossSpeakerMerge(input, output) {
+		t.Error("expected a merge to be detected when a short interjection is folded entirely into a long adjacent response")
+	}
+}
+
+func TestRemapPreservedSpeakers_AssignsByMaxOverlap(t *testing.T) {
+	input := []WhisperSegment{
+		{Start: 0.0, End: 5.0, Speaker: "spk_0"},
+		{Start: 5.0, End: 10.0, Speaker: "spk_1"},
+	}
+	output := []RefinedSegment{
+		{StartTime: 0.5, EndTime: 4.5, Speaker: "spk_1"}, // LLM said spk_1, but this overlaps spk_0's span
+	}
+	remapPreservedSpeakers(input, output)
+	if output[0].Speaker != "spk_0" {
+		t.Errorf("expected the acoustic input's spk_0 (max overlap), got %q", output[0].Speaker)
+	}
+}
+
+func TestRemapPreservedSpeakers_IgnoresSwappedLLMLabels(t *testing.T) {
+	// The exact failure mode set-equality validation couldn't catch: the
+	// model swapped two labels that were both legitimately in the input.
+	input := []WhisperSegment{
+		{Start: 0.0, End: 5.0, Speaker: "spk_0"},
+		{Start: 5.0, End: 10.0, Speaker: "spk_1"},
+	}
+	output := []RefinedSegment{
+		{StartTime: 0.0, EndTime: 5.0, Speaker: "spk_1"}, // swapped
+		{StartTime: 5.0, EndTime: 10.0, Speaker: "spk_0"}, // swapped
+	}
+	remapPreservedSpeakers(input, output)
+	if output[0].Speaker != "spk_0" || output[1].Speaker != "spk_1" {
+		t.Errorf("expected swap corrected to [spk_0, spk_1], got [%q, %q]", output[0].Speaker, output[1].Speaker)
+	}
+}
+
+func TestRemapPreservedSpeakers_ZeroOverlapFallsBackToNearestMidpoint(t *testing.T) {
+	input := []WhisperSegment{
+		{Start: 0.0, End: 1.0, Speaker: "spk_0"},
+		{Start: 10.0, End: 11.0, Speaker: "spk_1"},
+	}
+	output := []RefinedSegment{
+		{StartTime: 2.0, EndTime: 2.5, Speaker: "spk_1"}, // overlaps neither; midpoint 2.25 is closer to spk_0
+	}
+	remapPreservedSpeakers(input, output)
+	if output[0].Speaker != "spk_0" {
+		t.Errorf("expected fallback to nearest-midpoint spk_0, got %q", output[0].Speaker)
+	}
+}
+
+func TestRemapPreservedSpeakers_SkipsUnlabeledInputAsRemapSource(t *testing.T) {
+	input := []WhisperSegment{
+		{Start: 0.0, End: 5.0, Speaker: ""}, // no acoustic label -- must never become the "source of truth"
+	}
+	output := []RefinedSegment{
+		{StartTime: 0.0, EndTime: 5.0, Speaker: "spk_3"},
+	}
+	remapPreservedSpeakers(input, output)
+	if output[0].Speaker != "spk_3" {
+		t.Errorf("expected output speaker left unchanged when no labeled input overlaps, got %q", output[0].Speaker)
 	}
 }

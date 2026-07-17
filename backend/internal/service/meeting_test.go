@@ -13,13 +13,13 @@ import (
 
 // mockMeetingRepo is an in-memory implementation of meetingRepo for testing.
 type mockMeetingRepo struct {
-	meetings    map[string]*model.Meeting    // "userID|meetingID" -> meeting
-	shares      map[string]*model.Share      // "sharedToID|meetingID" -> share
-	attachments map[string][]model.Attachment // meetingID -> attachments
-	meetingsByID map[string]*model.Meeting   // meetingID -> meeting (for GSI3 lookup)
-	users       map[string]*model.User       // email -> user
-	members     map[string]*model.AccountMember // "accountID|userID"
-	meetingRefs map[string][]model.MeetingRef   // accountID -> refs
+	meetings        map[string]*model.Meeting       // "userID|meetingID" -> meeting
+	shares          map[string]*model.Share         // "sharedToID|meetingID" -> share
+	attachments     map[string][]model.Attachment   // meetingID -> attachments
+	meetingsByID    map[string]*model.Meeting       // meetingID -> meeting (for GSI3 lookup)
+	users           map[string]*model.User          // email -> user
+	members         map[string]*model.AccountMember // "accountID|userID"
+	meetingRefs     map[string][]model.MeetingRef   // accountID -> refs
 	accountInsights []model.AccountInsight
 }
 
@@ -674,7 +674,7 @@ func TestUpdateSpeakers_ReplacesInAllFields(t *testing.T) {
 		TranscriptA:        "spk_0: hello",
 		TranscriptSegments: `[{"speaker":"spk_0","text":"hello"}]`,
 		ActionItems:        `[{"text":"spk_0 will do it"}]`,
-		Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		Date:               time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	})
 
 	_, err := svc.UpdateSpeakers(context.Background(), "user-1", "m-1", &model.UpdateSpeakersRequest{
@@ -690,6 +690,42 @@ func TestUpdateSpeakers_ReplacesInAllFields(t *testing.T) {
 	}
 	if updated.TranscriptA != "Kim: hello" {
 		t.Errorf("expected transcriptA 'Kim: hello', got %q", updated.TranscriptA)
+	}
+	if updated.TranscriptSegments != `[{"speaker":"Kim","text":"hello","startTime":0,"endTime":0}]` {
+		t.Errorf("expected renamed TranscriptSegments, got %q", updated.TranscriptSegments)
+	}
+}
+
+// TestUpdateSpeakers_NoPrefixCollisionWithNamespacedLabel covers the bug the
+// round-2 review found: a multi-part meeting's namespaced label "spk_1000000"
+// (see internal/speaker.Namespace) must not be corrupted when the user
+// renames the unrelated part-0 label "spk_1" -- a plain strings.ReplaceAll
+// would turn "spk_1000000" into "Kim000000".
+func TestUpdateSpeakers_NoPrefixCollisionWithNamespacedLabel(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "user-1", Title: "Meeting",
+		Status:             model.StatusDone,
+		Content:            "[spk_1]\nhello\n\n[spk_1000000]\nworld",
+		TranscriptSegments: `[{"speaker":"spk_1","text":"hello"},{"speaker":"spk_1000000","text":"world"}]`,
+		Date:               time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	_, err := svc.UpdateSpeakers(context.Background(), "user-1", "m-1", &model.UpdateSpeakersRequest{
+		SpeakerMap: map[string]string{"spk_1": "Kim"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated := repo.meetingsByID["m-1"]
+	if updated.Content != "[Kim]\nhello\n\n[spk_1000000]\nworld" {
+		t.Errorf("expected spk_1000000 left untouched, got %q", updated.Content)
+	}
+	if updated.TranscriptSegments != `[{"speaker":"Kim","text":"hello","startTime":0,"endTime":0},{"speaker":"spk_1000000","text":"world","startTime":0,"endTime":0}]` {
+		t.Errorf("expected spk_1000000 segment untouched, got %q", updated.TranscriptSegments)
 	}
 }
 

@@ -182,7 +182,17 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 					log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
 				}
 			}
-			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt, outputKey)
+			// Participant count is passed through as pyannote's max_speakers
+			// upper bound (pyannote still auto-detects the actual count
+			// within it -- registered headcount can exceed actual speakers,
+			// e.g. invited-but-silent attendees); 0 (Participants
+			// empty/unset) means "no bound, fully auto-detect" -- see
+			// startWhisperTask.
+			numSpeakers := 0
+			if meeting != nil {
+				numSpeakers = len(meeting.Participants)
+			}
+			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt, outputKey, numSpeakers)
 			jobName = "whisper-ecs-" + meetingID
 		}
 	case "nova-sonic":
@@ -205,7 +215,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	return nil
 }
 
-func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string) error {
+func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int) error {
 	envOverrides := []ecsTypes.KeyValuePair{
 		{Name: aws.String("AUDIO_KEY"), Value: aws.String(audioKey)},
 		{Name: aws.String("MEETING_ID"), Value: aws.String(meetingID)},
@@ -219,6 +229,14 @@ func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialP
 	if outputKey != "" {
 		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{
 			Name: aws.String("OUTPUT_KEY"), Value: aws.String(outputKey),
+		})
+	}
+	if numSpeakers > 0 {
+		// Passed to the container as max_speakers -- an upper bound
+		// pyannote still auto-detects within, not an exact count (see
+		// transcribe.py:_diarize). Omitted (0) means no bound at all.
+		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{
+			Name: aws.String("NUM_SPEAKERS"), Value: aws.String(strconv.Itoa(numSpeakers)),
 		})
 	}
 

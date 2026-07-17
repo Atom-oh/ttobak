@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 233e4ebc3c0c · generated-at: 2026-07-15 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: cbd5c00120da · generated-at: 2026-07-17 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -20,9 +20,10 @@ cd backend && /usr/local/go/bin/go test ./internal/...      # stdlib testing, no
 cd backend && /usr/local/go/bin/go vet ./internal/...
 cd frontend && npm run build      # static export to out/
 cd frontend && npm run lint       # eslint (NO test framework — lint+build only)
-pip install 'boto3<2'             # prerequisite for both Python suites below
+pip install 'boto3<2'             # prerequisite for the Python suites below
 cd backend/python/crawler && python3 -m unittest test_crawlers -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
+cd backend/whisper && python3 -m unittest test_transcribe -v   # pure diarization-merge logic, no torch/pyannote import needed
 cd infra && npx cdk synth && npm test
 ```
 
@@ -32,6 +33,7 @@ cd infra && npx cdk synth && npm test
 - **DynamoDB single-table**: key schemas in `backend/internal/model/`. `ACCOUNT#{id}` is a shared partition (outside `USER#`); meetings under `USER#{id}`; GSI1 (`GSI1PK`/`GSI1SK`) for reverse lookup. S3 keys: `{audio|images|files}/{userId}/{meetingId}/...`; the STT pipeline writes a separate `transcripts/{meetingId}.json` / `transcripts/{meetingId}_part_{NNN}.json` prefix with no `{userId}` segment; document/slide uploads use `docs/{userId}/{timestamp}_{fileName}` (no meetingId) -- all share one bucket-wide IAM grant + origin-scoped CORS, no per-prefix policy. A new *static* frontend route still needs the CloudFront SPA router CloudFront Function (`frontend-stack.ts`) updated -- it only recognizes routes explicitly listed in `knownPages`/its dynamic-segment rewrites.
 - **Frontend**: API via `src/lib/api.ts` (Bearer token, auto-refresh on 401); auth via Cognito SDK in `src/lib/auth.ts`; runtime config from `/config.json` (NOT build-time env). Error shape `{ error: { code, message } }`.
 - **Admin gating**: `middleware.RequireAdmin` checks the `admins` entry in the JWT's `cognito:groups` claim (backend-verified — see below). Admin-only endpoints (e.g. `POST /api/settings/invite-user`) sit behind it; frontend `isAdmin` display state is cosmetic only, never a substitute for this check.
+- **Speaker diarization (ADR-019)**: batch STT (Whisper) runs pyannote.audio acoustic diarization after transcription on the same GPU, assigning each segment a `speaker` field. `meeting.Participants` headcount is passed through as pyannote's `max_speakers` upper bound (not an exact count — pyannote still auto-detects within it, since registered attendees can exceed actual speakers). When segments carry acoustic labels, `RefineTranscript` (`backend/internal/service/bedrock.go`) switches to "preserve mode" — the acoustic labels are authoritative, the LLM only cleans up text; its returned `speaker` field is never trusted directly, though — `remapPreservedSpeakers` recomputes it structurally by max-time-overlap with the acoustic input, and `hasCrossSpeakerMerge` fails the chunk (falling back to raw per-segment labels) if an output segment significantly overlaps 2+ distinct acoustic speakers. Without acoustic labels at all (older transcripts, diarization failure) it falls back to text-inference. `spk_N` numbering restarts per audio part in a multi-part meeting, so `backend/internal/speaker` namespaces labels by part index at merge time (`backend/cmd/summarize/merge.go`) to prevent different parts' `spk_0` colliding into one displayed speaker — the same package's word-boundary-aware replace is what `UpdateSpeakers` (`backend/internal/service/meeting.go`) uses when renaming labels, so a rename of `spk_1` can't corrupt a namespaced `spk_1000000`.
 
 ## Banned Patterns / Security Mandates (CRITICAL — flag any violation)
 - **No public AWS resources.** ALL public traffic through CloudFront only. No Lambda Function URL with `AuthType: NONE`; no public ALB/NLB; S3 Block Public Access always on (serve via OAC); API Gateway reached only via CloudFront origin.

@@ -119,6 +119,7 @@ export class WhisperStack extends cdk.Stack {
         AWS_REGION: cdk.Aws.REGION,
         VOCAB_KEY: 'config/custom-vocabulary.txt',
         MODEL_S3_KEY: 'models/faster-whisper-large-v3.tar.gz',
+        DIARIZATION_S3_KEY: 'models/pyannote-diarization-3.1.tar.gz',
       },
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'whisper',
