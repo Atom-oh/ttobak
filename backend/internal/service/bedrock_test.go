@@ -165,6 +165,24 @@ func TestHasCrossSpeakerMerge_AllowsSingleSpeakerOverlap(t *testing.T) {
 	}
 }
 
+func TestHasCrossSpeakerMerge_DetectsShortInterjectionFoldedIntoLongResponse(t *testing.T) {
+	// Regression: a short interjection ("네", "맞습니다") folded into an
+	// adjacent long response is the easiest case for the LLM to merge, and
+	// exactly the case an output-duration-relative threshold would miss --
+	// the interjection's whole 0.4s span is under 30% of the 10.4s merged
+	// output, even though it's 100% of that input segment.
+	input := []WhisperSegment{
+		{Start: 0.0, End: 10.0, Speaker: "spk_0"},
+		{Start: 10.0, End: 10.4, Speaker: "spk_1"},
+	}
+	output := []RefinedSegment{
+		{StartTime: 0.0, EndTime: 10.4, Speaker: "spk_0"},
+	}
+	if !hasCrossSpeakerMerge(input, output) {
+		t.Error("expected a merge to be detected when a short interjection is folded entirely into a long adjacent response")
+	}
+}
+
 func TestRemapPreservedSpeakers_AssignsByMaxOverlap(t *testing.T) {
 	input := []WhisperSegment{
 		{Start: 0.0, End: 5.0, Speaker: "spk_0"},

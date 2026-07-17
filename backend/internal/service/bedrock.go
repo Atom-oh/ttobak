@@ -691,29 +691,31 @@ func (s *BedrockService) refineChunk(ctx context.Context, segments []WhisperSegm
 
 // significantOverlap reports whether overlap between an output segment and
 // an input segment is large enough to count as "this output segment
-// meaningfully contains this speaker's speech" rather than boundary noise
-// from imprecise timestamps -- either an absolute floor (1s) or a fraction
-// of the output segment's own duration (30%).
-func significantOverlap(overlap, outputDuration float64) bool {
-	return overlap >= 1.0 || (outputDuration > 0 && overlap >= 0.3*outputDuration)
+// swallowed this input segment" -- judged against the INPUT segment's own
+// duration (not the output's), plus an absolute floor for long inputs
+// partially overlapped. Judging by the output's duration instead would let
+// a short interjection ("네", "맞습니다") folded into an adjacent long
+// response slip through: the interjection's whole 0.4s might be under 30%
+// of a 10s merged output, even though it's 100% of that input segment.
+func significantOverlap(overlap, inputDuration float64) bool {
+	return overlap >= 1.0 || (inputDuration > 0 && overlap >= 0.5*inputDuration)
 }
 
 // hasCrossSpeakerMerge reports whether any output segment significantly
-// overlaps 2+ DISTINCT acoustic input labels -- i.e. the LLM merged two
-// different speakers' text into one output segment. remapPreservedSpeakers
-// alone can't catch this: max-overlap assigns the whole merged segment to
-// whichever speaker it overlaps most, silently dropping the other's
-// attribution rather than surfacing an error.
+// swallows 2+ DISTINCT acoustic input labels' segments -- i.e. the LLM
+// merged two different speakers' text into one output segment.
+// remapPreservedSpeakers alone can't catch this: max-overlap assigns the
+// whole merged segment to whichever speaker it overlaps most, silently
+// dropping the other's attribution rather than surfacing an error.
 func hasCrossSpeakerMerge(input []WhisperSegment, output []RefinedSegment) bool {
 	for _, out := range output {
-		duration := out.EndTime - out.StartTime
 		distinctLabels := make(map[string]bool)
 		for _, in := range input {
 			if in.Speaker == "" {
 				continue
 			}
 			overlap := min(out.EndTime, in.End) - max(out.StartTime, in.Start)
-			if overlap > 0 && significantOverlap(overlap, duration) {
+			if overlap > 0 && significantOverlap(overlap, in.End-in.Start) {
 				distinctLabels[in.Speaker] = true
 			}
 		}
