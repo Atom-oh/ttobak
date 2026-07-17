@@ -21,6 +21,11 @@ DETECT_MODEL_ID = os.environ.get('DETECT_MODEL_ID', 'qwen.qwen3-32b-v1:0')
 
 MAX_TOOL_ROUNDS = int(os.environ.get('MAX_TOOL_ROUNDS', '3'))
 KB_CACHE_TTL_SECONDS = int(os.environ.get('KB_CACHE_TTL_SECONDS', '600'))
+# Bounds how long a removed account member can keep reading via a stale
+# _shared_meetings_cache entry on a warm Lambda -- same rationale as
+# KB_CACHE_TTL_SECONDS, applied to the access-check cache instead of the
+# KB-retrieval cache.
+SHARED_MEETINGS_CACHE_TTL_SECONDS = int(os.environ.get('SHARED_MEETINGS_CACHE_TTL_SECONDS', '300'))
 
 # AWS clients
 bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
@@ -265,34 +270,86 @@ def _kb_cache_put(question, number_of_results, results, user_id=None):
         logger.warning(f"KB cache write failed: {e}")
 
 
-# Cache shared-meeting lookups per user (warm for Lambda lifetime)
+# Cache shared-meeting lookups per user (warm for Lambda lifetime, bounded by
+# SHARED_MEETINGS_CACHE_TTL_SECONDS -- see _is_account_member for why an
+# account-origin share can't just be cached and trusted indefinitely).
 _shared_meetings_cache = {}
+_shared_meetings_cache_expiry = {}
+
+# Account membership is re-checked per (accountId, userId) with its own short
+# TTL, separate from the shared-meetings cache above: a share's ownerId/
+# meetingId never changes, but membership can be revoked at any time, so it
+# needs to be checked more granularly than "refetch the whole share list".
+_account_member_cache = {}
+_account_member_cache_expiry = {}
+
+
+def _is_account_member(account_id, user_id):
+    """Check live AccountMember existence (ACCOUNT#{id}/MEMBER#{userId}), short-TTL cached."""
+    cache_key = (account_id, user_id)
+    now = time.time()
+    if _account_member_cache_expiry.get(cache_key, 0) > now:
+        return _account_member_cache[cache_key]
+    try:
+        result = table.get_item(Key={'PK': f'ACCOUNT#{account_id}', 'SK': f'MEMBER#{user_id}'})
+        is_member = bool(result.get('Item'))
+    except Exception as e:
+        logger.warning(f"account membership check failed for account={account_id} user={user_id}: {e}")
+        is_member = False
+    _account_member_cache[cache_key] = is_member
+    _account_member_cache_expiry[cache_key] = now + SHARED_MEETINGS_CACHE_TTL_SECONDS
+    return is_member
 
 
 def _list_shared_meetings(user_id):
-    """Query DynamoDB for meetings shared with this user.
+    """Query DynamoDB for meetings shared with this user, filtered to currently-valid grants.
 
-    Returns list of {'meetingId': ..., 'ownerId': ...}.
-    Results are cached in module-level dict keyed by user_id.
+    Returns list of {'meetingId': ..., 'ownerId': ...}. A direct share
+    (no origin, or origin != 'account') is included unconditionally -- it's
+    an independent grant the owner made explicitly. An account-origin share
+    (origin == 'account') is included only if the caller is STILL a member
+    of that meeting's account right now: RemoveMember's cleanup of this row
+    is best-effort and can fail or lag, so this cache must not trust a stale
+    row for longer than SHARED_MEETINGS_CACHE_TTL_SECONDS -- mirrors the Go
+    backend's checkAccess, which re-verifies membership at read time for the
+    same reason (see backend/internal/service/meeting.go). The Share item
+    itself has no accountId attribute, so this looks it up from the meeting
+    record (PK=USER#{ownerId}, SK=MEETING#{meetingId}).
     """
-    if user_id in _shared_meetings_cache:
+    now = time.time()
+    if _shared_meetings_cache_expiry.get(user_id, 0) > now:
         return _shared_meetings_cache[user_id]
     try:
         from boto3.dynamodb.conditions import Key
         resp = table.query(
             KeyConditionExpression=Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('SHARED#'),
-            ProjectionExpression='meetingId, ownerId',
+            ProjectionExpression='meetingId, ownerId, origin',
         )
-        items = [
-            {'meetingId': item['meetingId'], 'ownerId': item['ownerId']}
-            for item in resp.get('Items', [])
-            if item.get('meetingId') and item.get('ownerId')
-        ]
+        items = []
+        for item in resp.get('Items', []):
+            meeting_id, owner_id = item.get('meetingId'), item.get('ownerId')
+            if not meeting_id or not owner_id:
+                continue
+            if item.get('origin') == 'account':
+                try:
+                    meeting = table.get_item(
+                        Key={'PK': f'USER#{owner_id}', 'SK': f'MEETING#{meeting_id}'},
+                        ProjectionExpression='accountId',
+                    ).get('Item')
+                except Exception as e:
+                    logger.warning(f"meeting lookup failed for account-share check {meeting_id}: {e}")
+                    meeting = None
+                account_id = (meeting or {}).get('accountId')
+                if not account_id or not _is_account_member(account_id, user_id):
+                    continue
+            items.append({'meetingId': meeting_id, 'ownerId': owner_id})
         _shared_meetings_cache[user_id] = items
+        _shared_meetings_cache_expiry[user_id] = now + SHARED_MEETINGS_CACHE_TTL_SECONDS
         return items
     except Exception as e:
         logger.warning(f"Failed to list shared meetings for {user_id}: {e}")
         _shared_meetings_cache[user_id] = []
+        _shared_meetings_cache_expiry[user_id] = now + SHARED_MEETINGS_CACHE_TTL_SECONDS
         return []
 
 

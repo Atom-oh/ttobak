@@ -174,7 +174,13 @@ func (m *mockMeetingRepo) ListMeetings(_ context.Context, params repository.List
 			meetings = append(meetings, *mtg)
 		}
 	}
-	return &repository.ListMeetingsResult{Meetings: meetings}, nil
+	var shares []model.Share
+	for key, sh := range m.shares {
+		if strings.HasPrefix(key, params.UserID+"|") {
+			shares = append(shares, *sh)
+		}
+	}
+	return &repository.ListMeetingsResult{Meetings: meetings, Shares: shares}, nil
 }
 
 func (m *mockMeetingRepo) BatchGetMeetings(_ context.Context, keys []repository.MeetingKey) ([]*model.Meeting, error) {
@@ -1053,6 +1059,78 @@ func TestGetMeetingDetail_AccountShareGrantsAccessDespiteSnapshotRace(t *testing
 
 	if _, err := svc.GetMeetingDetail(context.Background(), "late-1", "m-1"); err != nil {
 		t.Errorf("expected account member with a valid account-origin share to have access, got %v", err)
+	}
+}
+
+func TestListMeetings_StaleAccountShareOmittedAfterMembershipRemoved(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// Metadata (title/summary) must not leak via the list endpoint either --
+	// checkAccess blocking the detail view isn't enough on its own.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "Secret Plans", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.shares[shareKey("removed-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "removed-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+	// "removed-1" is NOT in repo.members -- membership already deleted.
+
+	resp, err := svc.ListMeetings(context.Background(), "removed-1", "", "", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, item := range resp.Meetings {
+		if item.MeetingID == "m-1" {
+			t.Errorf("expected stale account-origin share to be omitted from list, got %+v", item)
+		}
+	}
+}
+
+func TestListMeetings_ValidAccountShareIncluded(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "Team Sync", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.addMember("acc-1", "member-1", model.RoleTAM)
+	repo.shares[shareKey("member-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "member-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+
+	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found := false
+	for _, item := range resp.Meetings {
+		if item.MeetingID == "m-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected valid account-origin share to appear in list")
+	}
+}
+
+func TestListMeetings_DirectShareIncludedRegardlessOfMembership(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "1:1", Status: model.StatusDone})
+	repo.shares[shareKey("direct-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "direct-1",
+		Permission: model.PermissionRead,
+	}
+
+	resp, err := svc.ListMeetings(context.Background(), "direct-1", "", "", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found := false
+	for _, item := range resp.Meetings {
+		if item.MeetingID == "m-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected direct share to appear in list regardless of account membership")
 	}
 }
 

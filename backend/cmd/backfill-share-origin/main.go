@@ -108,6 +108,7 @@ func main() {
 
 	candidates := 0
 	tagged := 0
+	failed := 0
 	for _, ref := range refs {
 		meeting, err := repo.GetMeetingByID(ctx, ref.MeetingID)
 		if err != nil {
@@ -147,6 +148,7 @@ func main() {
 			}
 			if err := repo.BackfillShareOrigin(ctx, m.UserID, ref.MeetingID); err != nil {
 				log.Printf("    FAILED to tag: %v", err)
+				failed++
 				continue
 			}
 			tagged++
@@ -154,8 +156,14 @@ func main() {
 		}
 	}
 
-	fmt.Printf("[%s] done: %d candidate(s) found, %d tagged\n", mode, candidates, tagged)
+	fmt.Printf("[%s] done: %d candidate(s) found, %d tagged, %d failed\n", mode, candidates, tagged, failed)
 	if !*apply && candidates > 0 {
 		fmt.Println("Re-run with --apply after reviewing the candidates above.")
+	}
+	if failed > 0 {
+		// A partial-failure run left some candidates untagged -- exit non-zero
+		// so an operator running this from a script notices instead of
+		// assuming the account is now fully backfilled.
+		os.Exit(1)
 	}
 }

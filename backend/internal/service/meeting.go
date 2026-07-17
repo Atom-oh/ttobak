@@ -106,19 +106,24 @@ func (s *MeetingService) CreateMeeting(ctx context.Context, userID, title string
 	return s.repo.CreateMeeting(ctx, userID, title, date, participants, sttProvider)
 }
 
-// checkAccess verifies access and returns meeting, permission, and error
-func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID string) (*model.Meeting, string, error) {
-	// Try to get owned meeting
-	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
-	if err != nil {
-		return nil, "", err
-	}
-	if meeting != nil {
-		return meeting, "owner", nil
-	}
+// shareAccessRepo is the minimal persistence seam resolveSharedAccess needs --
+// satisfied by both meetingRepo (MeetingService) and *repository.DynamoDBRepository
+// (KnowledgeService), letting Ask reuse the exact same origin-aware
+// membership re-verification as checkAccess instead of duplicating it with
+// its own (previously unconditional) GetShare check.
+type shareAccessRepo interface {
+	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
+	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
+	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
+}
 
-	// Check for shared access
-	share, err := s.repo.GetShare(ctx, userID, meetingID)
+// resolveSharedAccess checks non-owner access to meetingID for userID: a
+// direct Share, or -- for an account-origin Share -- live account
+// membership. Returns (nil, "", nil) if there's no valid access (not an
+// error: the caller decides what "no access" means, e.g. checkAccess falls
+// through to owner/account-membership-only checks, Ask returns 404).
+func resolveSharedAccess(ctx context.Context, repo shareAccessRepo, userID, meetingID string) (*model.Meeting, string, error) {
+	share, err := repo.GetShare(ctx, userID, meetingID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -126,7 +131,7 @@ func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID stri
 	// explicitly -- honor it unconditionally regardless of current account
 	// membership.
 	if share != nil && share.Origin != model.ShareOriginAccount {
-		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
+		meeting, err := repo.GetMeetingByID(ctx, meetingID)
 		if err != nil {
 			return nil, "", err
 		}
@@ -147,12 +152,12 @@ func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID stri
 	// -- closing the permanent-access gap without needing a reconciliation
 	// job. Only SharedToAccount meetings qualify -- a Link-only (AccountID
 	// set, not shared) meeting stays private.
-	byID, err := s.repo.GetMeetingByID(ctx, meetingID)
+	byID, err := repo.GetMeetingByID(ctx, meetingID)
 	if err != nil {
 		return nil, "", err
 	}
 	if byID != nil && byID.SharedToAccount && byID.AccountID != "" {
-		member, err := s.repo.GetMember(ctx, byID.AccountID, userID)
+		member, err := repo.GetMember(ctx, byID.AccountID, userID)
 		if err != nil {
 			return nil, "", err
 		}
@@ -166,6 +171,20 @@ func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID stri
 	}
 
 	return nil, "", nil
+}
+
+// checkAccess verifies access and returns meeting, permission, and error
+func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID string) (*model.Meeting, string, error) {
+	// Try to get owned meeting
+	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil {
+		return nil, "", err
+	}
+	if meeting != nil {
+		return meeting, "owner", nil
+	}
+
+	return resolveSharedAccess(ctx, s.repo, userID, meetingID)
 }
 
 // ListMeetings lists meetings for a user with pagination
@@ -208,12 +227,35 @@ func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor s
 			for _, m := range meetings {
 				meetingMap[m.MeetingID] = m
 			}
+			// memberCache avoids a duplicate GetMember call per meeting when
+			// the same account appears more than once in this page's shares.
+			memberCache := make(map[string]bool)
 			for _, share := range result.Shares {
-				if meeting, ok := meetingMap[share.MeetingID]; ok {
-					perm := share.Permission
-					item := model.ToMeetingListItem(meeting, true, &share.OwnerEmail, &perm)
-					response.Meetings = append(response.Meetings, item)
+				meeting, ok := meetingMap[share.MeetingID]
+				if !ok {
+					continue
 				}
+				// Same read-time re-verification as checkAccess/resolveSharedAccess
+				// (meeting.go): an account-origin Share row is a membership cache,
+				// not an independent grant, so a removed member's title/summary
+				// must not leak into their meeting list via a stale row either.
+				if share.Origin == model.ShareOriginAccount {
+					if meeting.AccountID == "" {
+						continue
+					}
+					isMember, cached := memberCache[meeting.AccountID]
+					if !cached {
+						member, err := s.repo.GetMember(ctx, meeting.AccountID, userID)
+						isMember = err == nil && member != nil
+						memberCache[meeting.AccountID] = isMember
+					}
+					if !isMember {
+						continue
+					}
+				}
+				perm := share.Permission
+				item := model.ToMeetingListItem(meeting, true, &share.OwnerEmail, &perm)
+				response.Meetings = append(response.Meetings, item)
 			}
 		}
 	}
