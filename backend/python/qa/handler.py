@@ -276,29 +276,28 @@ def _kb_cache_put(question, number_of_results, results, user_id=None):
 _shared_meetings_cache = {}
 _shared_meetings_cache_expiry = {}
 
-# Account membership is re-checked per (accountId, userId) with its own short
-# TTL, separate from the shared-meetings cache above: a share's ownerId/
-# meetingId never changes, but membership can be revoked at any time, so it
-# needs to be checked more granularly than "refetch the whole share list".
-_account_member_cache = {}
-_account_member_cache_expiry = {}
-
 
 def _is_account_member(account_id, user_id):
-    """Check live AccountMember existence (ACCOUNT#{id}/MEMBER#{userId}), short-TTL cached."""
-    cache_key = (account_id, user_id)
-    now = time.time()
-    if _account_member_cache_expiry.get(cache_key, 0) > now:
-        return _account_member_cache[cache_key]
+    """Check live AccountMember existence (ACCOUNT#{id}/MEMBER#{userId}).
+
+    Deliberately uses ConsistentRead and NO cache of its own: it's only ever
+    called from _list_shared_meetings, which already caches its own result
+    for SHARED_MEETINGS_CACHE_TTL_SECONDS. A second, independent TTL here
+    (as an earlier version of this function had) would let a membership
+    check refreshed just before the outer cache's last expiry serve a stale
+    positive for up to another full TTL after that -- compounding worst-case
+    staleness to ~2x the documented bound instead of the single TTL
+    SHARED_MEETINGS_CACHE_TTL_SECONDS actually promises.
+    """
     try:
-        result = table.get_item(Key={'PK': f'ACCOUNT#{account_id}', 'SK': f'MEMBER#{user_id}'})
-        is_member = bool(result.get('Item'))
+        result = table.get_item(
+            Key={'PK': f'ACCOUNT#{account_id}', 'SK': f'MEMBER#{user_id}'},
+            ConsistentRead=True,
+        )
+        return bool(result.get('Item'))
     except Exception as e:
         logger.warning(f"account membership check failed for account={account_id} user={user_id}: {e}")
-        is_member = False
-    _account_member_cache[cache_key] = is_member
-    _account_member_cache_expiry[cache_key] = now + SHARED_MEETINGS_CACHE_TTL_SECONDS
-    return is_member
+        return False
 
 
 def _list_shared_meetings(user_id):
@@ -334,13 +333,18 @@ def _list_shared_meetings(user_id):
                 try:
                     meeting = table.get_item(
                         Key={'PK': f'USER#{owner_id}', 'SK': f'MEETING#{meeting_id}'},
-                        ProjectionExpression='accountId',
+                        ProjectionExpression='accountId, sharedToAccount',
                     ).get('Item')
                 except Exception as e:
                     logger.warning(f"meeting lookup failed for account-share check {meeting_id}: {e}")
                     meeting = None
-                account_id = (meeting or {}).get('accountId')
-                if not account_id or not _is_account_member(account_id, user_id):
+                meeting = meeting or {}
+                account_id = meeting.get('accountId')
+                # Mirrors the Go backend's resolveSharedAccess predicate exactly
+                # (meeting.go) -- a meeting the owner un-shared from the account
+                # (or that was only ever Link-only) must not leak here either,
+                # even with a lingering account-origin Share row.
+                if not account_id or not meeting.get('sharedToAccount') or not _is_account_member(account_id, user_id):
                     continue
             items.append({'meetingId': meeting_id, 'ownerId': owner_id})
         _shared_meetings_cache[user_id] = items

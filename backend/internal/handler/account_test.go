@@ -106,11 +106,16 @@ func (m *mockHandlerAccountRepo) GetShare(_ context.Context, sharedToID, meeting
 	cp := *sh
 	return &cp, nil
 }
-func (m *mockHandlerAccountRepo) DeleteShare(_ context.Context, sharedToID, meetingID string) error {
+func (m *mockHandlerAccountRepo) DeleteShareIfAccountOrigin(_ context.Context, sharedToID, meetingID string) error {
 	if err, ok := m.shareOpErr[meetingID]; ok {
 		return err
 	}
-	delete(m.shares, sharedToID+"|"+meetingID)
+	key := sharedToID + "|" + meetingID
+	existing, ok := m.shares[key]
+	if !ok || existing.Origin != model.ShareOriginAccount {
+		return fmt.Errorf("%w: share %s not account-origin", repository.ErrConditionFailed, key)
+	}
+	delete(m.shares, key)
 	return nil
 }
 func (m *mockHandlerAccountRepo) ListAccountMembers(_ context.Context, accountID string) ([]model.AccountMember, error) {

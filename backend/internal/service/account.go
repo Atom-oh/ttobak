@@ -67,7 +67,7 @@ type accountRepo interface {
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
 	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
-	DeleteShare(ctx context.Context, sharedToID, meetingID string) error
+	DeleteShareIfAccountOrigin(ctx context.Context, sharedToID, meetingID string) error
 	ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error)
 	PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error
 	ListAccountDocuments(ctx context.Context, pk string) ([]model.AccountDocument, error)
@@ -317,7 +317,17 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 		if share == nil || share.Origin != model.ShareOriginAccount {
 			continue
 		}
-		if err := s.repo.DeleteShare(ctx, targetUserID, ref.MeetingID); err != nil {
+		// This GetShare read is just a cheap pre-filter to skip meetings with
+		// no account-origin share -- DeleteShareIfAccountOrigin re-checks
+		// origin=="account" as a transaction condition at delete time, so an
+		// owner creating a new direct share for this exact (user, meeting)
+		// pair in the gap between the read above and this delete can't have
+		// that new grant silently swept up: the condition fails and the
+		// delete is skipped instead.
+		if err := s.repo.DeleteShareIfAccountOrigin(ctx, targetUserID, ref.MeetingID); err != nil {
+			if errors.Is(err, repository.ErrConditionFailed) {
+				continue // origin changed (or row gone) between the read and this delete -- no-op skip, not a failure
+			}
 			log.Printf("cleanup share for removed member %s (meeting %s): delete share: %v", targetUserID, ref.MeetingID, err)
 			failedMeetingIDs = append(failedMeetingIDs, ref.MeetingID)
 		}

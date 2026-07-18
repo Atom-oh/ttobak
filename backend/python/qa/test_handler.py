@@ -26,8 +26,6 @@ class TestListSharedMeetings(unittest.TestCase):
         # code is designed for, but would make tests order-dependent).
         handler._shared_meetings_cache.clear()
         handler._shared_meetings_cache_expiry.clear()
-        handler._account_member_cache.clear()
-        handler._account_member_cache_expiry.clear()
 
     @mock.patch.object(handler, 'table')
     def test_direct_share_included_unconditionally(self, mock_table):
@@ -46,7 +44,7 @@ class TestListSharedMeetings(unittest.TestCase):
 
         def get_item(Key, **kwargs):
             if Key['SK'].startswith('MEETING#'):
-                return {'Item': {'accountId': 'acc-1'}}
+                return {'Item': {'accountId': 'acc-1', 'sharedToAccount': True}}
             if Key['SK'].startswith('MEMBER#'):
                 return {'Item': {'role': 'TAM'}}
             return {}
@@ -54,6 +52,8 @@ class TestListSharedMeetings(unittest.TestCase):
         mock_table.get_item.side_effect = get_item
         result = handler._list_shared_meetings('member-1')
         self.assertEqual(result, [{'meetingId': 'm-1', 'ownerId': 'owner-1'}])
+        member_check_call = [c for c in mock_table.get_item.call_args_list if c.kwargs['Key']['SK'].startswith('MEMBER#')][0]
+        self.assertTrue(member_check_call.kwargs.get('ConsistentRead'), "membership check must use ConsistentRead -- an eventual read could return stale removed=False")
 
     @mock.patch.object(handler, 'table')
     def test_account_share_excluded_when_membership_removed(self, mock_table):
@@ -66,13 +66,34 @@ class TestListSharedMeetings(unittest.TestCase):
 
         def get_item(Key, **kwargs):
             if Key['SK'].startswith('MEETING#'):
-                return {'Item': {'accountId': 'acc-1'}}
+                return {'Item': {'accountId': 'acc-1', 'sharedToAccount': True}}
             if Key['SK'].startswith('MEMBER#'):
                 return {}  # membership removed
             return {}
 
         mock_table.get_item.side_effect = get_item
         result = handler._list_shared_meetings('removed-1')
+        self.assertEqual(result, [])
+
+    @mock.patch.object(handler, 'table')
+    def test_account_share_excluded_when_unshared_from_account(self, mock_table):
+        # Mirrors the Go backend's resolveSharedAccess predicate: a meeting
+        # the owner un-shared from the account (or that was only ever
+        # Link-only), sharedToAccount=False, must not leak here even with a
+        # lingering account-origin Share row and valid membership.
+        mock_table.query.return_value = {
+            'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1', 'origin': 'account'}],
+        }
+
+        def get_item(Key, **kwargs):
+            if Key['SK'].startswith('MEETING#'):
+                return {'Item': {'accountId': 'acc-1', 'sharedToAccount': False}}
+            if Key['SK'].startswith('MEMBER#'):
+                return {'Item': {'role': 'TAM'}}
+            return {}
+
+        mock_table.get_item.side_effect = get_item
+        result = handler._list_shared_meetings('member-1')
         self.assertEqual(result, [])
 
     @mock.patch.object(handler, 'table')
@@ -84,7 +105,7 @@ class TestListSharedMeetings(unittest.TestCase):
 
         def get_item(Key, **kwargs):
             if Key['SK'].startswith('MEETING#'):
-                return {'Item': {'accountId': 'acc-1'}}
+                return {'Item': {'accountId': 'acc-1', 'sharedToAccount': True}}
             if Key['SK'].startswith('MEMBER#'):
                 return {'Item': {'role': 'TAM'}} if is_still_member['value'] else {}
             return {}
@@ -94,11 +115,10 @@ class TestListSharedMeetings(unittest.TestCase):
         self.assertEqual(result, [{'meetingId': 'm-1', 'ownerId': 'owner-1'}])
         self.assertEqual(mock_table.get_item.call_count, 2)  # meeting lookup + member check
 
-        # Force both caches to have expired so the query path (and the
-        # membership check, which has its own independent TTL) run again;
-        # membership has since been revoked.
+        # Force the shared-meetings cache to have expired so the query path
+        # (and thus a fresh membership check, since _is_account_member has no
+        # cache of its own) runs again; membership has since been revoked.
         handler._shared_meetings_cache_expiry['member-1'] = time.time() - 1
-        handler._account_member_cache_expiry[('acc-1', 'member-1')] = time.time() - 1
         is_still_member['value'] = False
         result = handler._list_shared_meetings('member-1')
         self.assertEqual(result, [])

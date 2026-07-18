@@ -240,6 +240,7 @@ export class GatewayStack extends cdk.Stack {
         DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
         MAX_TOOL_ROUNDS: '5',
         KB_CACHE_TTL_SECONDS: '600',
+        SHARED_MEETINGS_CACHE_TTL_SECONDS: '300',
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
       },
       timeout: cdk.Duration.seconds(60),

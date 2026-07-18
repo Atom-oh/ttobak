@@ -38,6 +38,16 @@ type mockAccountRepo struct {
 	// to test that a total-list failure surfaces as an error (not a silent
 	// success) and leaves membership untouched.
 	listMeetingRefsErr error
+
+	// replaceWithDirectShareAfterGet simulates an owner creating a new direct
+	// share for this exact "sharedToID|meetingID" key in the gap between
+	// RemoveMember's cleanup GetShare read and its delete: when set to this
+	// key, GetShare's returned copy still reflects the account-origin share
+	// (the read that happened first), but the underlying map is overwritten
+	// with a direct share immediately after, so a subsequent
+	// DeleteShareIfAccountOrigin call sees the new direct share, not the one
+	// GetShare read.
+	replaceWithDirectShareAfterGet string
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -116,19 +126,30 @@ func (m *mockAccountRepo) GetShare(_ context.Context, sharedToID, meetingID stri
 	if err, ok := m.shareOpErr[meetingID]; ok {
 		return nil, err
 	}
-	sh, ok := m.shares[acctShareKey(sharedToID, meetingID)]
+	key := acctShareKey(sharedToID, meetingID)
+	sh, ok := m.shares[key]
 	if !ok {
 		return nil, nil
 	}
 	cp := *sh
+	if m.replaceWithDirectShareAfterGet != "" && m.replaceWithDirectShareAfterGet == key {
+		m.shares[key] = &model.Share{
+			MeetingID: meetingID, SharedToID: sharedToID, Permission: model.PermissionEdit, Origin: "",
+		}
+	}
 	return &cp, nil
 }
 
-func (m *mockAccountRepo) DeleteShare(_ context.Context, sharedToID, meetingID string) error {
+func (m *mockAccountRepo) DeleteShareIfAccountOrigin(_ context.Context, sharedToID, meetingID string) error {
 	if err, ok := m.shareOpErr[meetingID]; ok {
 		return err
 	}
-	delete(m.shares, acctShareKey(sharedToID, meetingID))
+	key := acctShareKey(sharedToID, meetingID)
+	existing, ok := m.shares[key]
+	if !ok || existing.Origin != model.ShareOriginAccount {
+		return fmt.Errorf("%w: share %s not account-origin", repository.ErrConditionFailed, key)
+	}
+	delete(m.shares, key)
 	return nil
 }
 
@@ -504,6 +525,35 @@ func TestRemoveMember_PreservesDirectShare(t *testing.T) {
 	}
 	if repo.shares[acctShareKey("tam-1", "m-1")] == nil {
 		t.Error("expected direct share to be preserved (not account-origin)")
+	}
+}
+
+func TestRemoveMember_RaceCreatingDirectShareDuringCleanupIsNotDeleted(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+	// Simulates the owner creating a new direct share for tam-1/m-1 in the
+	// window between cleanup's GetShare read and its DeleteShareIfAccountOrigin
+	// call -- the exact race the review flagged: without the delete-time
+	// condition, that new direct grant would be silently swept up by the
+	// delete decided from the stale (pre-race) GetShare read.
+	repo.replaceWithDirectShareAfterGet = acctShareKey("tam-1", "m-1")
+
+	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	share := repo.shares[acctShareKey("tam-1", "m-1")]
+	if share == nil {
+		t.Fatal("expected the racily-created direct share to survive cleanup, got nil")
+	}
+	if share.Origin == model.ShareOriginAccount {
+		t.Error("expected the surviving share to be the new direct grant, not the stale account-origin one")
 	}
 }
 

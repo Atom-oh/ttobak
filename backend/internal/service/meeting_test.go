@@ -31,6 +31,13 @@ type mockMeetingRepo struct {
 	// this member, exactly reproducing the race window the recheck exists to
 	// close).
 	forceGetMemberNil string
+
+	// getMemberErrCount, when non-zero, makes the next N GetMember calls for
+	// ANY key return an error instead of consulting `members` -- used to
+	// verify a transient GetMember failure in ListMeetings isn't cached as
+	// "not a member" (which would incorrectly suppress every other meeting
+	// for the same account on the same page).
+	getMemberErrCount int
 }
 
 func newMockMeetingRepo() *mockMeetingRepo {
@@ -263,6 +270,10 @@ func (m *mockMeetingRepo) CreateShareIfMember(_ context.Context, meetingID, owne
 }
 
 func (m *mockMeetingRepo) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
+	if m.getMemberErrCount > 0 {
+		m.getMemberErrCount--
+		return nil, errors.New("simulated transient GetMember error")
+	}
 	if m.forceGetMemberNil != "" && m.forceGetMemberNil == accountID+"|"+userID {
 		return nil, nil
 	}
@@ -1107,6 +1118,65 @@ func TestListMeetings_ValidAccountShareIncluded(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected valid account-origin share to appear in list")
+	}
+}
+
+func TestListMeetings_UnsharedFromAccountOmittedDespiteLingeringShareAndMembership(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// The owner un-shared the meeting from the account (or it was only ever
+	// Link-only) -- SharedToAccount is false -- but a stale account-origin
+	// Share row lingers, and the caller is still a member of the account.
+	// Without the SharedToAccount check, this leaks the title/summary here
+	// even though checkAccess correctly blocks the detail view for the same
+	// row (an invariant mismatch the review flagged).
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "Confidential", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: false})
+	repo.addMember("acc-1", "member-1", model.RoleTAM)
+	repo.shares[shareKey("member-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "member-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+
+	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, item := range resp.Meetings {
+		if item.MeetingID == "m-1" {
+			t.Errorf("expected unshared-from-account meeting to be omitted from list, got %+v", item)
+		}
+	}
+}
+
+func TestListMeetings_TransientGetMemberErrorNotCachedAsNonMember(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// Two meetings shared via the same account. If a transient GetMember
+	// error were cached as "not a member" (keyed by accountID, shared across
+	// meetings on this page), BOTH meetings would be suppressed instead of
+	// just the one whose GetMember call actually failed. Map iteration order
+	// is non-deterministic, so this doesn't assert which specific meeting
+	// hits the forced error -- only that exactly one of the two is missing
+	// (the one that errored), not both.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "First", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.addMeeting(&model.Meeting{MeetingID: "m-2", UserID: "owner-1", Title: "Second", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.addMember("acc-1", "member-1", model.RoleTAM)
+	repo.shares[shareKey("member-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "member-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+	repo.shares[shareKey("member-1", "m-2")] = &model.Share{
+		MeetingID: "m-2", OwnerID: "owner-1", SharedToID: "member-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+	repo.getMemberErrCount = 1 // exactly one GetMember call fails
+
+	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Meetings) != 1 {
+		t.Errorf("expected exactly 1 meeting to survive the single transient GetMember error (caching would suppress both), got %d: %+v", len(resp.Meetings), resp.Meetings)
 	}
 }
 

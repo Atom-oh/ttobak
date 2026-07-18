@@ -1337,7 +1337,10 @@ func (r *DynamoDBRepository) GetShare(ctx context.Context, sharedToID, meetingID
 	return &share, nil
 }
 
-// DeleteShare deletes both share records
+// DeleteShare deletes both share records unconditionally. Used by the
+// owner-initiated RevokeShare path, where the caller has already decided
+// (with fresh authorization) to revoke whatever share currently exists --
+// direct or account-origin.
 func (r *DynamoDBRepository) DeleteShare(ctx context.Context, sharedToID, meetingID string) error {
 	// Delete both records atomically
 	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
@@ -1364,6 +1367,61 @@ func (r *DynamoDBRepository) DeleteShare(ctx context.Context, sharedToID, meetin
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete share: %w", err)
+	}
+	return nil
+}
+
+// DeleteShareIfAccountOrigin deletes both share records ONLY if the
+// recipient-lookup row still has origin=="account" at delete time, in a
+// single transaction. Used by RemoveMember's cleanup loop, which decides
+// what to delete from an earlier, separate GetShare read -- without this
+// condition, an owner creating a new direct share for the same
+// (targetUserID, meetingID) in the gap between that read and this delete
+// would have their explicit grant silently deleted along with the stale
+// account-origin row it replaced. On ConditionalCheckFailedException (the
+// row's origin changed, or the row no longer exists) this returns
+// ErrConditionFailed and the caller treats it as a no-op skip, matching
+// BackfillShareOrigin's convention for the same kind of condition failure.
+func (r *DynamoDBRepository) DeleteShareIfAccountOrigin(ctx context.Context, sharedToID, meetingID string) error {
+	condition := expression.Name("origin").Equal(expression.Value(model.ShareOriginAccount))
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return fmt.Errorf("build delete-if-account-origin condition: %w", err)
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixShare + meetingID},
+					},
+					ConditionExpression:       expr.Condition(),
+					ExpressionAttributeNames:  expr.Names(),
+					ExpressionAttributeValues: expr.Values(),
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixShareTo + sharedToID},
+					},
+					ConditionExpression:       expr.Condition(),
+					ExpressionAttributeNames:  expr.Names(),
+					ExpressionAttributeValues: expr.Values(),
+				},
+			},
+		},
+	})
+	if err != nil {
+		var tce *types.TransactionCanceledException
+		if errors.As(err, &tce) {
+			return fmt.Errorf("%w: share %s/%s no longer account-origin", ErrConditionFailed, sharedToID, meetingID)
+		}
+		return fmt.Errorf("failed to delete share if account origin: %w", err)
 	}
 	return nil
 }

@@ -239,14 +239,28 @@ func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor s
 				// (meeting.go): an account-origin Share row is a membership cache,
 				// not an independent grant, so a removed member's title/summary
 				// must not leak into their meeting list via a stale row either.
+				// Mirrors resolveSharedAccess's predicate exactly, including the
+				// SharedToAccount check -- without it, a meeting whose owner
+				// un-shared it from the account (or that was only ever Link-only)
+				// but still has a lingering account-origin Share row would leak
+				// its title/summary here despite checkAccess correctly blocking
+				// the detail view for the same row.
 				if share.Origin == model.ShareOriginAccount {
-					if meeting.AccountID == "" {
+					if !meeting.SharedToAccount || meeting.AccountID == "" {
 						continue
 					}
 					isMember, cached := memberCache[meeting.AccountID]
 					if !cached {
 						member, err := s.repo.GetMember(ctx, meeting.AccountID, userID)
-						isMember = err == nil && member != nil
+						if err != nil {
+							// Don't cache a transient error as "not a member" --
+							// that would suppress every meeting for this account
+							// on this page, not just the one call that failed.
+							// Skip only this meeting; a later share for the same
+							// account on this page gets its own fresh attempt.
+							continue
+						}
+						isMember = member != nil
 						memberCache[meeting.AccountID] = isMember
 					}
 					if !isMember {
