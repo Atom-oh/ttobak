@@ -1,8 +1,11 @@
 """Tech Crawler Lambda — discovers and indexes AWS technical content.
 
 Triggered by Step Functions with a source config containing awsServices.
-Fetches from AWS What's New RSS, AWS Blog RSS, and direct documentation
-pages. Generates summaries + auto-tags via Bedrock, stores in S3 + DynamoDB.
+Fetches from AWS What's New RSS, AWS Blog RSS, the AgentCore Gateway Web
+Search connector, and direct documentation pages. Generates summaries +
+auto-tags via Bedrock, stores in S3 + DynamoDB. Also runs a one-shot web
+search each run to discover AWS services not yet in any source's
+awsServices list (ADR-021).
 
 Dependencies: stdlib + boto3 only.
 """
@@ -21,6 +24,14 @@ from urllib.request import Request, urlopen
 
 import boto3
 
+# news_crawler owns the AgentCore Gateway Web Search connector (SigV4 MCP
+# client) + crawl-history recorder; both Lambdas ship from the same asset
+# directory, so importing it here reuses that code instead of duplicating
+# it. WEB_SEARCH_GATEWAY_URL/_REGION are read via news_crawler's module
+# attributes so a test that patches news_crawler.WEB_SEARCH_GATEWAY_URL (or
+# news_crawler._gateway_web_search) affects this module's calls too.
+import news_crawler
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -32,6 +43,10 @@ dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
 s3 = boto3.client('s3')
 bedrock = boto3.client('bedrock-runtime')
+
+MAX_AUTO_SERVICES = 30
+MAX_NEW_SERVICES_PER_RUN = 5
+_SERVICE_SLUG_RE = re.compile(r'^[a-z0-9-]{2,30}$')
 
 # AWS RSS sources
 AWS_WHATS_NEW_RSS = 'https://aws.amazon.com/about-aws/whats-new/recent/feed/'
@@ -263,6 +278,26 @@ def _fetch_blog_rss(service: str) -> list:
     return articles[:MAX_ARTICLES_PER_SOURCE]
 
 
+def _fetch_web_search(service: str) -> tuple:
+    """Search via the AgentCore Gateway Web Search connector for recent
+    announcements about an AWS service -- catches launches/GA news that
+    haven't hit the What's New or blog RSS feeds yet (or a service with no
+    SERVICE_BLOG_MAP entry at all). Returns (articles, error); error is None
+    on success or a genuine zero-match search, non-None on a real failure
+    (missing gateway config, transport/HTTP error) so it isn't silently
+    treated as 0 results."""
+    if not news_crawler.WEB_SEARCH_GATEWAY_URL:
+        return [], None
+    results, error = news_crawler._gateway_web_search(f'AWS {service} 신기능 발표', max_results=3)
+    articles = [{
+        'title': r.get('title', ''),
+        'url': r.get('url', ''),
+        'pubDate': r.get('publishedDate', ''),
+        'description': r.get('text', '')[:500],
+    } for r in results]
+    return articles, error
+
+
 def _get_service_aliases(service: str) -> list:
     """Get search aliases for an AWS service."""
     s = service.lower()
@@ -298,6 +333,15 @@ def _get_service_aliases(service: str) -> list:
 # Bedrock summarization + auto-tagging
 # ---------------------------------------------------------------------------
 
+def _response_text(resp: dict) -> str:
+    """Return the first text content block from a Bedrock converse()
+    response. content[0] isn't guaranteed to be the text block, so scan for
+    one instead of indexing blindly."""
+    content = resp['output']['message']['content']
+    block = next((b for b in content if 'text' in b), None)
+    return block['text'] if block else ''
+
+
 def _summarize_and_tag(title: str, text: str, service: str) -> tuple:
     """Generate summary + tags. Returns (summary, tags_list)."""
     truncated = text[:6000] if len(text) > 6000 else text
@@ -320,7 +364,7 @@ def _summarize_and_tag(title: str, text: str, service: str) -> tuple:
             messages=[{'role': 'user', 'content': [{'text': prompt}]}],
             inferenceConfig={'maxTokens': 1500},
         )
-        response_text = resp['output']['message']['content'][0]['text']
+        response_text = _response_text(resp)
 
         start_idx = response_text.find('{')
         if start_idx >= 0:
@@ -409,6 +453,78 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
 
 
 # ---------------------------------------------------------------------------
+# New-service discovery (ADR-021) — RSS/blog crawling only covers services
+# we already know to ask about; this catches the ones we don't yet track.
+# ---------------------------------------------------------------------------
+
+def _discover_new_services(known_services: list) -> list:
+    """Web-search for recent AWS service launch announcements and ask
+    Bedrock to pull out service slugs not already tracked. Returns a
+    de-duplicated list of new slugs (capped at MAX_NEW_SERVICES_PER_RUN)."""
+    results, error = news_crawler._gateway_web_search('AWS 신규 서비스 GA 출시 발표', max_results=10)
+    if error or not results:
+        return []
+
+    known = {s.lower() for s in known_services} | set(SERVICE_BLOG_MAP.keys())
+    digest = '\n'.join(f"- {r.get('title', '')}: {r.get('text', '')[:200]}" for r in results)
+    prompt = (
+        '다음은 AWS 관련 최신 웹 검색 결과입니다. 여기서 언급된 AWS 서비스 중 '
+        '아래의 이미 알고 있는 서비스 목록에 없는 새로운 서비스의 slug만 '
+        '소문자-하이픈 형식으로 JSON 배열로 추출하세요 (예: ["agentcore", "nova-act"]).\n'
+        f'이미 알고 있는 서비스: {", ".join(sorted(known))}\n\n'
+        f'{digest}\n\n'
+        '응답은 설명 없이 JSON 배열만 반환하세요: ["slug1", "slug2", ...]'
+    )
+    try:
+        resp = bedrock.converse(
+            modelId=SUMMARIZE_MODEL_ID,
+            messages=[{'role': 'user', 'content': [{'text': prompt}]}],
+            inferenceConfig={'maxTokens': 300},
+        )
+        text = _response_text(resp)
+        start_idx = text.find('[')
+        if start_idx < 0:
+            return []
+        parsed, _ = json.JSONDecoder().raw_decode(text, start_idx)
+    except Exception as e:
+        logger.warning(f'Service discovery Bedrock call failed: {e}')
+        return []
+    if not isinstance(parsed, list):
+        return []
+
+    unique = []
+    for slug in parsed:
+        slug = str(slug).strip().lower()
+        if slug and slug not in known and slug not in unique and _SERVICE_SLUG_RE.match(slug):
+            unique.append(slug)
+    return unique[:MAX_NEW_SERVICES_PER_RUN]
+
+
+def _register_auto_services(new_services: list) -> None:
+    """Merge newly-discovered service slugs into the CRAWLER#__auto__ config
+    item so orchestrator.py's scan picks them up (merged into techConfig)
+    on the next scheduled run. sourceId '__auto__' is prefixed '__' like
+    '__tech__', so orchestrator excludes it from the per-customer news
+    fan-out -- it only ever contributes awsServices."""
+    existing = table.get_item(Key={'PK': 'CRAWLER#__auto__', 'SK': 'CONFIG'}).get('Item', {})
+    merged = sorted(set(existing.get('awsServices', [])) | set(new_services))
+    if len(merged) > MAX_AUTO_SERVICES:
+        logger.warning(f'Auto-discovered services capped at {MAX_AUTO_SERVICES} '
+                        f'(dropping {len(merged) - MAX_AUTO_SERVICES})')
+        merged = merged[:MAX_AUTO_SERVICES]
+    table.put_item(Item={
+        'PK': 'CRAWLER#__auto__',
+        'SK': 'CONFIG',
+        'sourceId': '__auto__',
+        'sourceName': '자동 발견',
+        'status': 'active',
+        'awsServices': merged,
+        'newsQueries': [],
+        'customUrls': [],
+    })
+
+
+# ---------------------------------------------------------------------------
 # Lambda handler
 # ---------------------------------------------------------------------------
 
@@ -421,6 +537,7 @@ def handler(event, context):
         "awsServices": ["lambda", "s3", "bedrock", "eks"]
       }
     """
+    start_time = time.time()
     source_id = event.get('sourceId', 'unknown')
     services = event.get('awsServices', [])
     logger.info(f'Tech crawler: sourceId={source_id}, services={services}')
@@ -443,6 +560,15 @@ def handler(event, context):
         blog_articles = _fetch_blog_rss(service)
         logger.info(f'{service} Blog RSS: {len(blog_articles)} article(s)')
         all_articles.extend(blog_articles)
+
+        # 3. AgentCore Gateway Web Search — catches launches/GA news the
+        # RSS feeds haven't picked up yet, and services with no
+        # SERVICE_BLOG_MAP entry at all.
+        search_articles, search_error = _fetch_web_search(service)
+        if search_error:
+            errors.append(f'{service} web search: {search_error}')
+        logger.info(f'{service} Web Search: {len(search_articles)} article(s)')
+        all_articles.extend(search_articles)
 
         # Deduplicate by URL within this run
         unique_articles = []
@@ -492,10 +618,22 @@ def handler(event, context):
                 logger.error(f'Doc processing error: {error_msg}', exc_info=True)
                 errors.append(error_msg)
 
+    if news_crawler.WEB_SEARCH_GATEWAY_URL:
+        try:
+            discovered = _discover_new_services(services)
+            if discovered:
+                _register_auto_services(discovered)
+                logger.info(f'Auto-discovered new AWS service(s): {discovered}')
+        except Exception as e:
+            logger.warning(f'New-service discovery failed: {e}')
+            errors.append(f'service discovery: {e}')
+
     result = {
         'docsAdded': docs_added,
         'docsUpdated': docs_updated,
         'errors': errors,
     }
     logger.info(f'Tech crawler complete: {json.dumps(result)}')
+    news_crawler._record_history(source_id, docs_added, docs_updated, errors, start_time,
+                                 update_status=False)
     return result

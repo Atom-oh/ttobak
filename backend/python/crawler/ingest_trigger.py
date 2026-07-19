@@ -63,39 +63,27 @@ def handler(event, context):
             'totalErrors': total_errors,
         }
 
+    # Raise (rather than return an "ERROR" result) so a broken KB config or
+    # a start_ingestion_job failure surfaces as a FAILED Step Functions
+    # execution instead of a silently-successful one -- for 7 weeks this
+    # returned {"status": "ERROR"} and the workflow kept reporting
+    # SUCCEEDED every night while the KB never got the day's crawled docs.
     if not KB_ID or not DATA_SOURCE_ID:
-        logger.error('KB_ID or DATA_SOURCE_ID not configured')
-        return {
-            'status': 'ERROR',
-            'ingestionJobId': None,
-            'error': 'KB_ID or DATA_SOURCE_ID environment variable not set',
-            'totalDocsAdded': total_added,
-            'totalErrors': total_errors,
-        }
+        raise RuntimeError('KB_ID or DATA_SOURCE_ID environment variable not set')
 
-    try:
-        resp = bedrock_agent.start_ingestion_job(
-            knowledgeBaseId=KB_ID,
-            dataSourceId=DATA_SOURCE_ID,
-        )
-        job = resp.get('ingestionJob', {})
-        job_id = job.get('ingestionJobId', 'unknown')
-        status = job.get('status', 'UNKNOWN')
+    resp = bedrock_agent.start_ingestion_job(
+        knowledgeBaseId=KB_ID,
+        dataSourceId=DATA_SOURCE_ID,
+    )
+    job = resp.get('ingestionJob', {})
+    job_id = job.get('ingestionJobId', 'unknown')
+    status = job.get('status', 'UNKNOWN')
 
-        logger.info(f'Ingestion job started: id={job_id}, status={status}')
-        return {
-            'status': 'STARTED',
-            'ingestionJobId': job_id,
-            'ingestionStatus': status,
-            'totalDocsAdded': total_added,
-            'totalErrors': total_errors,
-        }
-    except Exception as e:
-        logger.error(f'Failed to start ingestion job: {e}', exc_info=True)
-        return {
-            'status': 'ERROR',
-            'ingestionJobId': None,
-            'error': str(e),
-            'totalDocsAdded': total_added,
-            'totalErrors': total_errors,
-        }
+    logger.info(f'Ingestion job started: id={job_id}, status={status}')
+    return {
+        'status': 'STARTED',
+        'ingestionJobId': job_id,
+        'ingestionStatus': status,
+        'totalDocsAdded': total_added,
+        'totalErrors': total_errors,
+    }

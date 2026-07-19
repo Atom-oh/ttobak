@@ -115,6 +115,40 @@ class TestOrchestrator(unittest.TestCase):
         self.assertEqual(result['newsSources'], [])
         self.assertIn('error', result)
 
+    def test_synthetic_source_excluded_from_news_but_merged_into_tech(self):
+        """A "__"-prefixed sourceId (e.g. __auto__, registered by
+        tech_crawler.py's new-service discovery) has no real news config --
+        it must contribute its awsServices to techConfig but never appear in
+        the per-customer news fan-out."""
+        mock_table = mock.MagicMock()
+        mock_table.scan.return_value = {
+            'Items': [
+                {
+                    'PK': 'CRAWLER#__auto__',
+                    'SK': 'CONFIG',
+                    'status': 'active',
+                    'awsServices': ['agentcore'],
+                    'newsQueries': [],
+                    'customUrls': [],
+                },
+                {
+                    'PK': 'CRAWLER#wooribank',
+                    'SK': 'CONFIG',
+                    'status': 'active',
+                    'awsServices': [],
+                    'newsQueries': ['AI'],
+                    'customUrls': [],
+                },
+            ],
+        }
+
+        with mock.patch.object(orchestrator, 'table', mock_table):
+            result = orchestrator.handler({}, None)
+
+        self.assertEqual(len(result['newsSources']), 1)
+        self.assertEqual(result['newsSources'][0]['sourceId'], 'wooribank')
+        self.assertEqual(result['techConfig']['awsServices'], ['agentcore'])
+
 
 # ---------------------------------------------------------------------------
 # 2. tech_crawler._fetch_whats_new -- RSS fetch + service-keyword filter
@@ -1301,8 +1335,10 @@ class TestIngestTriggerSuccess(unittest.TestCase):
         mock_agent.start_ingestion_job.assert_not_called()
 
     @mock.patch.object(ingest_trigger, 'bedrock_agent')
-    def test_handler_error_on_api_failure(self, mock_agent):
-        """Verify ERROR status when start_ingestion_job raises."""
+    def test_handler_raises_on_api_failure(self, mock_agent):
+        """A start_ingestion_job failure must raise (not return an "ERROR"
+        result) so the Step Functions execution surfaces as FAILED instead
+        of looking like a normal successful run."""
         mock_agent.start_ingestion_job.side_effect = Exception('Bedrock error')
 
         event = {
@@ -1311,10 +1347,31 @@ class TestIngestTriggerSuccess(unittest.TestCase):
             ],
         }
 
+        with self.assertRaises(Exception):
+            ingest_trigger.handler(event, None)
+
+    @mock.patch.object(ingest_trigger, 'bedrock_agent')
+    def test_handler_accepts_step_functions_list_payload(self, mock_agent):
+        """The real Step Functions ParallelCrawl output is
+        [techResult, [newsResult, ...]] (no "crawlerResults" wrapper key) --
+        the handler must flatten and aggregate this shape directly."""
+        mock_agent.start_ingestion_job.return_value = {
+            'ingestionJob': {'ingestionJobId': 'job-456', 'status': 'STARTING'},
+        }
+
+        event = [
+            {'docsAdded': 1, 'docsUpdated': 0, 'errors': []},
+            [
+                {'docsAdded': 2, 'docsUpdated': 0, 'errors': []},
+                {'docsAdded': 0, 'docsUpdated': 1, 'errors': ['x']},
+            ],
+        ]
+
         result = ingest_trigger.handler(event, None)
 
-        self.assertEqual(result['status'], 'ERROR')
-        self.assertIn('Bedrock error', result['error'])
+        self.assertEqual(result['status'], 'STARTED')
+        self.assertEqual(result['totalDocsAdded'], 3)
+        self.assertEqual(result['totalErrors'], 1)
 
 
 # ---------------------------------------------------------------------------
@@ -1325,8 +1382,11 @@ class TestIngestTriggerNoKBConfig(unittest.TestCase):
     """Test ingest_trigger.handler when KB_ID is empty."""
 
     @mock.patch.object(ingest_trigger, 'bedrock_agent')
-    def test_handler_no_kb_config(self, mock_agent):
-        """KB_ID empty, verify skipped with ERROR."""
+    def test_handler_raises_when_kb_not_configured(self, mock_agent):
+        """KB_ID/DATA_SOURCE_ID empty must raise, not return an "ERROR"
+        result that leaves the Step Functions execution looking SUCCEEDED
+        (this is exactly the bug that silently broke KB ingestion for 7
+        weeks -- KB_ID was 'PENDING' every night and no one noticed)."""
         original_kb_id = ingest_trigger.KB_ID
         original_ds_id = ingest_trigger.DATA_SOURCE_ID
         try:
@@ -1339,10 +1399,8 @@ class TestIngestTriggerNoKBConfig(unittest.TestCase):
                 ],
             }
 
-            result = ingest_trigger.handler(event, None)
-
-            self.assertEqual(result['status'], 'ERROR')
-            self.assertIn('not set', result['error'])
+            with self.assertRaises(Exception):
+                ingest_trigger.handler(event, None)
             mock_agent.start_ingestion_job.assert_not_called()
         finally:
             ingest_trigger.KB_ID = original_kb_id
@@ -1386,6 +1444,202 @@ class TestNewsCrawlerHTMLExtraction(unittest.TestCase):
         text = news_crawler.extract_paragraphs(html)
         self.assertNotIn('Nav text', text)
         self.assertIn('actual main body', text)
+
+
+# ---------------------------------------------------------------------------
+# 14. _response_text -- Bedrock converse() content-block parsing
+# ---------------------------------------------------------------------------
+
+class TestResponseTextHelper(unittest.TestCase):
+    """content[0] isn't guaranteed to be the text block -- both crawlers'
+    _response_text must scan for one instead of indexing blindly."""
+
+    def test_news_crawler_skips_non_text_block(self):
+        resp = {'output': {'message': {'content': [
+            {'type': 'other'}, {'text': 'the answer'},
+        ]}}}
+        self.assertEqual(news_crawler._response_text(resp), 'the answer')
+
+    def test_tech_crawler_skips_non_text_block(self):
+        resp = {'output': {'message': {'content': [
+            {'type': 'other'}, {'text': 'the answer'},
+        ]}}}
+        self.assertEqual(tech_crawler._response_text(resp), 'the answer')
+
+    def test_no_text_block_returns_empty_string(self):
+        resp = {'output': {'message': {'content': [{'type': 'other'}]}}}
+        self.assertEqual(news_crawler._response_text(resp), '')
+
+
+# ---------------------------------------------------------------------------
+# 15. tech_crawler._fetch_web_search -- AgentCore Gateway reuse
+# ---------------------------------------------------------------------------
+
+class TestFetchWebSearch(unittest.TestCase):
+    """tech_crawler reuses news_crawler's Gateway Web Search client rather
+    than duplicating the SigV4 MCP call."""
+
+    def test_returns_empty_when_gateway_url_unset(self):
+        original = news_crawler.WEB_SEARCH_GATEWAY_URL
+        try:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = ''
+            articles, error = tech_crawler._fetch_web_search('bedrock')
+            self.assertEqual(articles, [])
+            self.assertIsNone(error)
+        finally:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = original
+
+    def test_delegates_to_news_crawler_and_maps_fields(self):
+        original = news_crawler.WEB_SEARCH_GATEWAY_URL
+        try:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = 'https://test-gateway.example.com/mcp'
+            with mock.patch.object(news_crawler, '_gateway_web_search', return_value=(
+                [{'title': 'Bedrock GA', 'url': 'https://example.com/1',
+                  'publishedDate': '2026-07-01', 'text': 'announcement body'}],
+                None,
+            )) as mock_search:
+                articles, error = tech_crawler._fetch_web_search('bedrock')
+            mock_search.assert_called_once()
+            self.assertIn('bedrock', mock_search.call_args[0][0])
+            self.assertIsNone(error)
+            self.assertEqual(articles, [{
+                'title': 'Bedrock GA', 'url': 'https://example.com/1',
+                'pubDate': '2026-07-01', 'description': 'announcement body',
+            }])
+        finally:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = original
+
+    def test_surfaces_search_error(self):
+        original = news_crawler.WEB_SEARCH_GATEWAY_URL
+        try:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = 'https://test-gateway.example.com/mcp'
+            with mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], 'HTTP 403')):
+                articles, error = tech_crawler._fetch_web_search('bedrock')
+            self.assertEqual(articles, [])
+            self.assertEqual(error, 'HTTP 403')
+        finally:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = original
+
+
+# ---------------------------------------------------------------------------
+# 16. tech_crawler new-service discovery (ADR-021)
+# ---------------------------------------------------------------------------
+
+class TestDiscoverNewServices(unittest.TestCase):
+
+    def test_extracts_unknown_slugs_from_bedrock_response(self):
+        with mock.patch.object(news_crawler, '_gateway_web_search', return_value=(
+            [{'title': 'AWS launches AgentCore', 'text': 'new agent runtime service'}], None,
+        )):
+            with mock.patch.object(tech_crawler.bedrock, 'converse', return_value={
+                'output': {'message': {'content': [
+                    {'text': '["agentcore", "lambda"]'},  # lambda is already known
+                ]}},
+            }):
+                result = tech_crawler._discover_new_services(['lambda'])
+        self.assertEqual(result, ['agentcore'])
+
+    def test_invalid_slug_format_filtered_out(self):
+        with mock.patch.object(news_crawler, '_gateway_web_search', return_value=(
+            [{'title': 'x', 'text': 'y'}], None,
+        )):
+            with mock.patch.object(tech_crawler.bedrock, 'converse', return_value={
+                'output': {'message': {'content': [
+                    {'text': '["has spaces", "x", "ok-slug"]'},  # "x" too short, spaces invalid
+                ]}},
+            }):
+                result = tech_crawler._discover_new_services([])
+        self.assertEqual(result, ['ok-slug'])
+
+    def test_no_search_results_returns_empty_without_bedrock_call(self):
+        with mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None)):
+            with mock.patch.object(tech_crawler.bedrock, 'converse') as mock_converse:
+                result = tech_crawler._discover_new_services([])
+        self.assertEqual(result, [])
+        mock_converse.assert_not_called()
+
+    def test_search_error_returns_empty(self):
+        with mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], 'timeout')):
+            result = tech_crawler._discover_new_services([])
+        self.assertEqual(result, [])
+
+    def test_capped_at_max_new_services_per_run(self):
+        slugs = [f'svc-{i}' for i in range(tech_crawler.MAX_NEW_SERVICES_PER_RUN + 5)]
+        with mock.patch.object(news_crawler, '_gateway_web_search', return_value=(
+            [{'title': 'x', 'text': 'y'}], None,
+        )):
+            with mock.patch.object(tech_crawler.bedrock, 'converse', return_value={
+                'output': {'message': {'content': [{'text': json.dumps(slugs)}]}},
+            }):
+                result = tech_crawler._discover_new_services([])
+        self.assertEqual(len(result), tech_crawler.MAX_NEW_SERVICES_PER_RUN)
+
+
+class TestRegisterAutoServices(unittest.TestCase):
+
+    def test_merges_with_existing_and_writes_config(self):
+        mock_table = mock.MagicMock()
+        mock_table.get_item.return_value = {'Item': {'awsServices': ['existing-svc']}}
+        with mock.patch.object(tech_crawler, 'table', mock_table):
+            tech_crawler._register_auto_services(['new-svc'])
+
+        put_item = mock_table.put_item.call_args[1]['Item']
+        self.assertEqual(put_item['PK'], 'CRAWLER#__auto__')
+        self.assertEqual(put_item['SK'], 'CONFIG')
+        self.assertEqual(sorted(put_item['awsServices']), ['existing-svc', 'new-svc'])
+        self.assertEqual(put_item['status'], 'active')
+
+    def test_caps_total_at_max_auto_services(self):
+        mock_table = mock.MagicMock()
+        existing = [f'svc-{i}' for i in range(tech_crawler.MAX_AUTO_SERVICES)]
+        mock_table.get_item.return_value = {'Item': {'awsServices': existing}}
+        with mock.patch.object(tech_crawler, 'table', mock_table):
+            tech_crawler._register_auto_services(['brand-new-svc'])
+
+        put_item = mock_table.put_item.call_args[1]['Item']
+        self.assertEqual(len(put_item['awsServices']), tech_crawler.MAX_AUTO_SERVICES)
+
+
+# ---------------------------------------------------------------------------
+# 17. news_crawler._record_history -- crawl history + status badge
+# ---------------------------------------------------------------------------
+
+class TestRecordHistory(unittest.TestCase):
+
+    def test_writes_history_item_and_updates_status(self):
+        mock_table = mock.MagicMock()
+        with mock.patch.object(news_crawler, 'table', mock_table):
+            news_crawler._record_history('wooribank', 3, 0, [], start_time=0.0)
+
+        put_item = mock_table.put_item.call_args[1]['Item']
+        self.assertEqual(put_item['PK'], 'CRAWLER#wooribank')
+        self.assertTrue(put_item['SK'].startswith('HISTORY#'))
+        self.assertEqual(put_item['docsAdded'], 3)
+        mock_table.update_item.assert_called_once()
+        update_values = mock_table.update_item.call_args[1]['ExpressionAttributeValues']
+        self.assertEqual(update_values[':status'], 'active')
+
+    def test_errors_set_status_to_error(self):
+        mock_table = mock.MagicMock()
+        with mock.patch.object(news_crawler, 'table', mock_table):
+            news_crawler._record_history('wooribank', 0, 0, ['boom'], start_time=0.0)
+
+        update_values = mock_table.update_item.call_args[1]['ExpressionAttributeValues']
+        self.assertEqual(update_values[':status'], 'error')
+
+    def test_update_status_false_skips_config_update(self):
+        mock_table = mock.MagicMock()
+        with mock.patch.object(news_crawler, 'table', mock_table):
+            news_crawler._record_history('__tech__', 1, 0, [], start_time=0.0, update_status=False)
+
+        mock_table.put_item.assert_called_once()
+        mock_table.update_item.assert_not_called()
+
+    def test_dynamodb_failure_does_not_raise(self):
+        mock_table = mock.MagicMock()
+        mock_table.put_item.side_effect = Exception('throttled')
+        with mock.patch.object(news_crawler, 'table', mock_table):
+            news_crawler._record_history('wooribank', 1, 0, [], start_time=0.0)  # must not raise
 
 
 if __name__ == '__main__':

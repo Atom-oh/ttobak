@@ -15,7 +15,7 @@ logger.setLevel(logging.INFO)
 
 # Environment variables
 TABLE_NAME = os.environ.get('TABLE_NAME', 'ttobak-main')
-KB_ID = os.environ.get('KB_ID', 'XGFBOMVSS8')
+KB_ID = os.environ.get('KB_ID', 'BJJLVLFTOR')
 BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'global.anthropic.claude-sonnet-5')
 DETECT_MODEL_ID = os.environ.get('DETECT_MODEL_ID', 'qwen.qwen3-32b-v1:0')
 

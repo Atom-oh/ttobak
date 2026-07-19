@@ -175,11 +175,13 @@ export class KnowledgeStack extends cdk.Stack {
       })
     );
 
-    // Phase 1: AOSS collection + index must exist before KB can be created
-    // After deploying Phase 1, create the AOSS vector index out-of-band,
-    // then uncomment Phase 2 below and redeploy.
-    this.knowledgeBaseId = 'PENDING';
-    this.dataSourceId = 'PENDING';
+    // Phase 1: AOSS collection + index must exist before KB can be created.
+    // The actual KnowledgeBase/DataSource were created out-of-band (not by
+    // the commented-out Phase 2 CFN resources below) -- these are their real
+    // IDs, not placeholders. Do not redeploy TtobakKnowledgeStack; it stages
+    // a teardown of this out-of-band KB (see root CLAUDE.md Known Issues).
+    this.knowledgeBaseId = 'BJJLVLFTOR';
+    this.dataSourceId = '3AVMMT3RF3';
 
     /* Phase 2: Uncomment after AOSS index is created
     const knowledgeBase = new cdk.CfnResource(this, 'BedrockKnowledgeBase', {

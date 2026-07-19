@@ -91,11 +91,15 @@ export class CrawlerStack extends cdk.Stack {
       outputPath: '$.Payload',
     });
 
-    // Tech: single global crawl with merged awsServices from all sources
+    // Tech: single global crawl with merged awsServices from all sources.
+    // outputPath (not resultPath) so this branch's output IS the tech
+    // crawler's {docsAdded, docsUpdated, errors} result -- ingest_trigger's
+    // aggregation expects each Parallel branch to be a bare result dict/list,
+    // not nested under a wrapper key.
     const crawlTech = new tasks.LambdaInvoke(this, 'CrawlTechDocs', {
       lambdaFunction: techCrawler,
       inputPath: '$.techConfig',
-      resultPath: '$.techResult',
+      outputPath: '$.Payload',
     });
 
     // News: per-customer fan-out
@@ -104,13 +108,16 @@ export class CrawlerStack extends cdk.Stack {
       outputPath: '$.Payload',
     });
 
+    // outputPath on the Map itself (not resultPath) so this branch's output
+    // is the bare list of per-source results, matching crawlTech's shape.
     const mapNewsSources = new sfn.Map(this, 'MapNewsSources', {
       maxConcurrency: 5,
       itemsPath: '$.newsSources',
-      resultPath: '$.newsResults',
     }).itemProcessor(crawlNews);
 
-    // Run Tech (1x global) and News (per-customer) in parallel
+    // Run Tech (1x global) and News (per-customer) in parallel. Output is
+    // [techResult, [newsResult, ...]] -- ingest_trigger.py's handler already
+    // flattens one level of nested lists/dicts from this exact shape.
     const parallelCrawl = new sfn.Parallel(this, 'ParallelCrawl', {
       resultPath: '$.crawlResults',
     })
@@ -119,6 +126,7 @@ export class CrawlerStack extends cdk.Stack {
 
     const triggerIngestion = new tasks.LambdaInvoke(this, 'TriggerIngestion', {
       lambdaFunction: ingestTrigger,
+      inputPath: '$.crawlResults',
       outputPath: '$.Payload',
     });
 
