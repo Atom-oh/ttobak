@@ -20,18 +20,19 @@ BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'global.anthropic.claude-s
 DETECT_MODEL_ID = os.environ.get('DETECT_MODEL_ID', 'qwen.qwen3-32b-v1:0')
 
 MAX_TOOL_ROUNDS = int(os.environ.get('MAX_TOOL_ROUNDS', '3'))
-# NOTE: a KB_CACHE hit for the exact same (user, question, n) within this TTL
-# skips _list_shared_meetings entirely (retrieve_from_kb below), so a removed
-# member re-asking a question they already asked before removal can still
-# get a cached answer for up to this long -- a narrower residual than the
-# unconditional access this cache had before account-origin membership
-# checking existed. Re-asking with any different wording/n misses the cache
-# and gets the live per-request check below.
+# NOTE: retrieve_from_kb (below) always computes a live access signature via
+# _list_shared_meetings BEFORE consulting this cache, and _kb_cache_get
+# rejects a hit whose stored signature doesn't match the live one -- so a
+# removed member re-asking a cached question does NOT get a stale answer,
+# even within this TTL. The cache only saves the Bedrock retrieve() call
+# for a caller whose access is unchanged.
 KB_CACHE_TTL_SECONDS = int(os.environ.get('KB_CACHE_TTL_SECONDS', '600'))
-# Bounds how long _list_shared_meetings_raw's Query+GetItem results (share
-# rows, NOT the membership decision) are cached -- account-origin membership
-# itself is checked fresh on every _list_shared_meetings call (no cache), so
-# a removed member's very next QA request sees the revocation immediately.
+# Bounds how long _list_shared_meetings_raw's Query results (the immutable
+# meetingId/ownerId identity of each share -- NOT any authorization
+# decision) are cached. Every authorization-relevant fact (share existence,
+# origin, the meeting's sharedToAccount, live membership) is re-checked on
+# every _list_shared_meetings call, uncached, so a removed member's very
+# next QA request sees the revocation immediately regardless of this TTL.
 SHARED_MEETINGS_CACHE_TTL_SECONDS = int(os.environ.get('SHARED_MEETINGS_CACHE_TTL_SECONDS', '300'))
 
 # AWS clients

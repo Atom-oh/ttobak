@@ -173,6 +173,26 @@ func resolveSharedAccess(ctx context.Context, repo shareAccessRepo, userID, meet
 	return nil, "", nil
 }
 
+// resolveSharedAccessOrNotFound wraps resolveSharedAccess for callers that
+// want "no access" reported as an error rather than a (nil, "", nil) zero
+// value the caller must remember to check. resolveSharedAccess itself keeps
+// the zero-value contract because checkAccess needs to fall through to
+// owner/account-membership-only checks on "no access", not stop -- but a
+// single-purpose caller like KnowledgeService.Ask has no fallthrough and
+// only wants a request-level Not Found, so folding the nil-check in here
+// removes the one call-site step (an easily-diffed-away trailing check) a
+// separate manual guard would otherwise depend on.
+func resolveSharedAccessOrNotFound(ctx context.Context, repo shareAccessRepo, userID, meetingID string) (*model.Meeting, string, error) {
+	meeting, permission, err := resolveSharedAccess(ctx, repo, userID, meetingID)
+	if err != nil {
+		return nil, "", err
+	}
+	if meeting == nil {
+		return nil, "", ErrNotFound
+	}
+	return meeting, permission, nil
+}
+
 // checkAccess verifies access and returns meeting, permission, and error
 func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID string) (*model.Meeting, string, error) {
 	// Try to get owned meeting

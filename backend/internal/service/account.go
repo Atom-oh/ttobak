@@ -66,6 +66,7 @@ type accountRepo interface {
 	ListAccountsForUser(ctx context.Context, userID string) ([]model.AccountMember, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
+	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
 	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
 	DeleteShareIfAccountOrigin(ctx context.Context, sharedToID, meetingID string) error
 	ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error)
@@ -308,6 +309,22 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 	}
 
 	for _, ref := range refs {
+		// A meeting can be re-shared from account A to account B without A's
+		// MeetingRef ever being cleaned up (ADR-016's known non-transactional
+		// write-order gap) -- verifying the meeting is STILL linked to THIS
+		// account before touching its share prevents A's RemoveMember from
+		// deleting a share that actually belongs to B's membership grant.
+		// Mirrors the same guard the backfill CLI already applies
+		// (meeting.AccountID != *accountID skip).
+		meeting, err := s.repo.GetMeetingByID(ctx, ref.MeetingID)
+		if err != nil {
+			log.Printf("cleanup share for removed member %s (meeting %s): get meeting: %v", targetUserID, ref.MeetingID, err)
+			failedMeetingIDs = append(failedMeetingIDs, ref.MeetingID)
+			continue
+		}
+		if meeting == nil || meeting.AccountID != accountID {
+			continue // stale ref: meeting deleted, or re-shared to a different account since
+		}
 		share, err := s.repo.GetShare(ctx, targetUserID, ref.MeetingID)
 		if err != nil {
 			log.Printf("cleanup share for removed member %s (meeting %s): get share: %v", targetUserID, ref.MeetingID, err)

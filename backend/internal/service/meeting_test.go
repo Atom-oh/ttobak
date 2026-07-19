@@ -1014,6 +1014,46 @@ func TestGetMeetingDetail_LinkedButNotSharedStaysPrivate(t *testing.T) {
 	}
 }
 
+func TestResolveSharedAccessOrNotFound_NoAccessReturnsErrNotFound(t *testing.T) {
+	repo := newMockMeetingRepo()
+	// No meeting, no share, no membership at all -- resolveSharedAccess's
+	// zero-value (nil, "", nil) contract must be converted to ErrNotFound by
+	// the OrNotFound wrapper, the exact regression flagged for
+	// KnowledgeService.Ask (a caller that has no fallthrough of its own and
+	// needs an error, not a value it must remember to nil-check).
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone})
+
+	meeting, permission, err := resolveSharedAccessOrNotFound(context.Background(), repo, "stranger-1", "m-1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+	if meeting != nil {
+		t.Errorf("expected nil meeting on no access, got %+v", meeting)
+	}
+	if permission != "" {
+		t.Errorf("expected empty permission on no access, got %q", permission)
+	}
+}
+
+func TestResolveSharedAccessOrNotFound_ValidShareReturnsNoError(t *testing.T) {
+	repo := newMockMeetingRepo()
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone})
+	repo.shares[shareKey("reader-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "reader-1", Permission: model.PermissionRead,
+	}
+
+	meeting, permission, err := resolveSharedAccessOrNotFound(context.Background(), repo, "reader-1", "m-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meeting == nil || meeting.MeetingID != "m-1" {
+		t.Errorf("expected meeting m-1, got %+v", meeting)
+	}
+	if permission != model.PermissionRead {
+		t.Errorf("expected read permission, got %q", permission)
+	}
+}
+
 func TestGetMeetingDetail_StaleAccountShareDeniedAfterMembershipRemoved(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)

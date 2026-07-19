@@ -32,6 +32,7 @@ type mockHandlerAccountRepo struct {
 	insightsByAccount map[string][]model.AccountInsight
 	documents map[string][]model.AccountDocument
 	shares    map[string]*model.Share // "sharedToID|meetingID" -> share
+	meetings  map[string]*model.Meeting // meetingID -> meeting
 	shareOpErr map[string]error       // meetingID -> forced GetShare/DeleteShare error
 }
 
@@ -44,8 +45,18 @@ func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
 		insightsByAccount: make(map[string][]model.AccountInsight),
 		documents: make(map[string][]model.AccountDocument),
 		shares:    make(map[string]*model.Share),
+		meetings:  make(map[string]*model.Meeting),
 		shareOpErr: make(map[string]error),
 	}
+}
+
+func (m *mockHandlerAccountRepo) GetMeetingByID(_ context.Context, meetingID string) (*model.Meeting, error) {
+	mtg, ok := m.meetings[meetingID]
+	if !ok {
+		return nil, nil
+	}
+	c := *mtg
+	return &c, nil
 }
 
 func acctMemberKey(accountID, userID string) string { return accountID + "|" + userID }
@@ -296,6 +307,7 @@ func TestHandlerRemoveMember_PartialCleanupFailureReturns200WithBody(t *testing.
 	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
 	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
 	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1"}
 	repo.shareOpErr["m-1"] = fmt.Errorf("simulated transient error")
 
 	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)

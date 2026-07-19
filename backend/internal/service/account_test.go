@@ -21,6 +21,7 @@ type mockAccountRepo struct {
 	insightsByAccount map[string][]model.AccountInsight
 	documents map[string][]model.AccountDocument // PK -> docs
 	shares    map[string]*model.Share            // "sharedToID|meetingID" -> share
+	meetings  map[string]*model.Meeting          // meetingID -> meeting
 
 	// shareOpErr, when non-nil, is returned by GetShare/DeleteShare for the
 	// specific meetingID it's keyed to test cleanup-failure handling without
@@ -59,8 +60,18 @@ func newMockAccountRepo() *mockAccountRepo {
 		insightsByAccount: make(map[string][]model.AccountInsight),
 		documents: make(map[string][]model.AccountDocument),
 		shares:    make(map[string]*model.Share),
+		meetings:  make(map[string]*model.Meeting),
 		shareOpErr: make(map[string]error),
 	}
+}
+
+func (m *mockAccountRepo) GetMeetingByID(_ context.Context, meetingID string) (*model.Meeting, error) {
+	mtg, ok := m.meetings[meetingID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *mtg
+	return &cp, nil
 }
 
 func acctShareKey(sharedToID, meetingID string) string { return sharedToID + "|" + meetingID }
@@ -497,6 +508,7 @@ func TestRemoveMember_RevokesAccountOriginShare(t *testing.T) {
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
 	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
 	}
@@ -516,6 +528,7 @@ func TestRemoveMember_PreservesDirectShare(t *testing.T) {
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
 	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // direct share
 	}
@@ -535,6 +548,7 @@ func TestRemoveMember_RaceCreatingDirectShareDuringCleanupIsNotDeleted(t *testin
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
 	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
 	}
@@ -564,6 +578,7 @@ func TestRemoveMember_CleanupFailureDoesNotFailRemoval(t *testing.T) {
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
 	repo.shareOpErr["m-1"] = errors.New("simulated transient DynamoDB error")
 
 	failed, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1")
@@ -575,6 +590,32 @@ func TestRemoveMember_CleanupFailureDoesNotFailRemoval(t *testing.T) {
 	}
 	if len(failed) != 1 || failed[0] != "m-1" {
 		t.Errorf("expected failedMeetingIDs=[m-1], got %v", failed)
+	}
+}
+
+func TestRemoveMember_CrossAccountMeetingRefNotTouched(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	// Simulates ADR-016's known non-transactional write-order gap: the
+	// meeting was re-shared from acc.AccountID to a DIFFERENT account
+	// ("other-acc") without acc.AccountID's stale MeetingRef ever being
+	// cleaned up. Without the meeting.AccountID == accountID guard,
+	// RemoveMember here would delete a share that actually belongs to
+	// other-acc's membership grant.
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "other-acc"}
+	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+
+	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.shares[acctShareKey("tam-1", "m-1")] == nil {
+		t.Error("expected share belonging to a different account's re-share to survive this account's RemoveMember cleanup")
 	}
 }
 
