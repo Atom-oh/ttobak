@@ -1112,6 +1112,37 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 // member==nil skip), not an error.
 var ErrMemberRemoved = errors.New("member no longer present")
 
+// isConditionalCheckFailedTransaction reports whether every failed item in a
+// TransactWriteItems cancellation was ConditionalCheckFailed specifically --
+// i.e. the transaction was cancelled purely because a precondition wasn't
+// met, not because of an unrelated transient failure (throttling,
+// TransactionConflict, item size limits, etc.) that happened to hit while
+// OTHER items in the same transaction also failed their conditions.
+// TransactWriteItems cancels every item together, so a single condition
+// miss and a single throttle both surface as one TransactionCanceledException
+// -- inspecting err.Error() or just checking errors.As without walking
+// CancellationReasons can't tell them apart, and treating a transient
+// failure as a benign "precondition not met" skip (as an earlier version of
+// DeleteShareIfAccountOrigin and BackfillShareOrigin did) silently drops
+// real failures that should have been retried or reported.
+func isConditionalCheckFailedTransaction(err error) bool {
+	var tce *types.TransactionCanceledException
+	if !errors.As(err, &tce) || len(tce.CancellationReasons) == 0 {
+		return false
+	}
+	sawConditionFailure := false
+	for _, reason := range tce.CancellationReasons {
+		if reason.Code == nil || *reason.Code == "None" {
+			continue // this item wasn't the one that caused the cancellation
+		}
+		if *reason.Code != "ConditionalCheckFailed" {
+			return false // a non-condition failure (throttling, conflict, etc.) is in the mix
+		}
+		sawConditionFailure = true
+	}
+	return sawConditionFailure
+}
+
 // CreateShareIfMember atomically verifies account membership and creates an
 // account-origin Share in a single DynamoDB transaction, closing the TOCTOU
 // window between a plain GetMember check and a later CreateShare call (the
@@ -1303,8 +1334,7 @@ func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, sharedToID
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
-		var tce *types.TransactionCanceledException
-		if errors.As(err, &tce) {
+		if isConditionalCheckFailedTransaction(err) {
 			return fmt.Errorf("%w: share %s/%s not eligible (missing, or origin already set)", ErrConditionFailed, sharedToID, meetingID)
 		}
 		return fmt.Errorf("backfill share origin: %w", err)
@@ -1417,8 +1447,7 @@ func (r *DynamoDBRepository) DeleteShareIfAccountOrigin(ctx context.Context, sha
 		},
 	})
 	if err != nil {
-		var tce *types.TransactionCanceledException
-		if errors.As(err, &tce) {
+		if isConditionalCheckFailedTransaction(err) {
 			return fmt.Errorf("%w: share %s/%s no longer account-origin", ErrConditionFailed, sharedToID, meetingID)
 		}
 		return fmt.Errorf("failed to delete share if account origin: %w", err)

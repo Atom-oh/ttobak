@@ -1,8 +1,10 @@
 """Unit tests for handler.py's _list_shared_meetings origin/membership gate.
 
-Verifies the fix for the PR #114 review MAJOR: an account-origin share row
+Verifies the fix for the PR #114 review MAJORs: an account-origin share row
 must not grant access once the caller is no longer an account member, even
-if RemoveMember's best-effort cleanup never deleted the row.
+if RemoveMember's best-effort cleanup never deleted the row -- and that
+membership revocation is visible immediately (checked per-call, uncached),
+not bounded by the raw share-list's SHARED_MEETINGS_CACHE_TTL_SECONDS.
 """
 
 import os
@@ -97,7 +99,12 @@ class TestListSharedMeetings(unittest.TestCase):
         self.assertEqual(result, [])
 
     @mock.patch.object(handler, 'table')
-    def test_account_membership_cache_expires(self, mock_table):
+    def test_membership_revocation_seen_immediately_despite_warm_raw_cache(self, mock_table):
+        # The exact MAJOR this round's fix closes: _list_shared_meetings_raw's
+        # cache (query + per-item meeting GetItem) stays warm across calls,
+        # but membership itself is re-checked on every _list_shared_meetings
+        # call with no cache of its own -- so revocation is visible on the
+        # very next call, NOT bounded by SHARED_MEETINGS_CACHE_TTL_SECONDS.
         mock_table.query.return_value = {
             'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1', 'origin': 'account'}],
         }
@@ -113,15 +120,28 @@ class TestListSharedMeetings(unittest.TestCase):
         mock_table.get_item.side_effect = get_item
         result = handler._list_shared_meetings('member-1')
         self.assertEqual(result, [{'meetingId': 'm-1', 'ownerId': 'owner-1'}])
-        self.assertEqual(mock_table.get_item.call_count, 2)  # meeting lookup + member check
+        self.assertEqual(mock_table.query.call_count, 1)
 
-        # Force the shared-meetings cache to have expired so the query path
-        # (and thus a fresh membership check, since _is_account_member has no
-        # cache of its own) runs again; membership has since been revoked.
-        handler._shared_meetings_cache_expiry['member-1'] = time.time() - 1
+        # Membership revoked -- raw cache is still warm (not expired), yet
+        # the very next call must reflect the revocation immediately.
         is_still_member['value'] = False
         result = handler._list_shared_meetings('member-1')
         self.assertEqual(result, [])
+        self.assertEqual(mock_table.query.call_count, 1, "raw share-list cache should still be warm -- no re-query needed")
+
+    @mock.patch.object(handler, 'table')
+    def test_raw_share_list_cache_expires_and_requeries(self, mock_table):
+        mock_table.query.return_value = {
+            'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1'}],  # direct share
+        }
+        handler._list_shared_meetings('reader-1')
+        self.assertEqual(mock_table.query.call_count, 1)
+        handler._list_shared_meetings('reader-1')
+        self.assertEqual(mock_table.query.call_count, 1, "second call within TTL should hit the raw cache, not re-query")
+
+        handler._shared_meetings_cache_expiry['reader-1'] = time.time() - 1
+        handler._list_shared_meetings('reader-1')
+        self.assertEqual(mock_table.query.call_count, 2, "expired cache should trigger a fresh query")
 
 
 if __name__ == '__main__':

@@ -20,11 +20,18 @@ BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'global.anthropic.claude-s
 DETECT_MODEL_ID = os.environ.get('DETECT_MODEL_ID', 'qwen.qwen3-32b-v1:0')
 
 MAX_TOOL_ROUNDS = int(os.environ.get('MAX_TOOL_ROUNDS', '3'))
+# NOTE: a KB_CACHE hit for the exact same (user, question, n) within this TTL
+# skips _list_shared_meetings entirely (retrieve_from_kb below), so a removed
+# member re-asking a question they already asked before removal can still
+# get a cached answer for up to this long -- a narrower residual than the
+# unconditional access this cache had before account-origin membership
+# checking existed. Re-asking with any different wording/n misses the cache
+# and gets the live per-request check below.
 KB_CACHE_TTL_SECONDS = int(os.environ.get('KB_CACHE_TTL_SECONDS', '600'))
-# Bounds how long a removed account member can keep reading via a stale
-# _shared_meetings_cache entry on a warm Lambda -- same rationale as
-# KB_CACHE_TTL_SECONDS, applied to the access-check cache instead of the
-# KB-retrieval cache.
+# Bounds how long _list_shared_meetings_raw's Query+GetItem results (share
+# rows, NOT the membership decision) are cached -- account-origin membership
+# itself is checked fresh on every _list_shared_meetings call (no cache), so
+# a removed member's very next QA request sees the revocation immediately.
 SHARED_MEETINGS_CACHE_TTL_SECONDS = int(os.environ.get('SHARED_MEETINGS_CACHE_TTL_SECONDS', '300'))
 
 # AWS clients
@@ -300,20 +307,17 @@ def _is_account_member(account_id, user_id):
         return False
 
 
-def _list_shared_meetings(user_id):
-    """Query DynamoDB for meetings shared with this user, filtered to currently-valid grants.
+def _list_shared_meetings_raw(user_id):
+    """Query DynamoDB for meetings shared with this user, WITHOUT any
+    membership filtering -- cached for SHARED_MEETINGS_CACHE_TTL_SECONDS.
 
-    Returns list of {'meetingId': ..., 'ownerId': ...}. A direct share
-    (no origin, or origin != 'account') is included unconditionally -- it's
-    an independent grant the owner made explicitly. An account-origin share
-    (origin == 'account') is included only if the caller is STILL a member
-    of that meeting's account right now: RemoveMember's cleanup of this row
-    is best-effort and can fail or lag, so this cache must not trust a stale
-    row for longer than SHARED_MEETINGS_CACHE_TTL_SECONDS -- mirrors the Go
-    backend's checkAccess, which re-verifies membership at read time for the
-    same reason (see backend/internal/service/meeting.go). The Share item
-    itself has no accountId attribute, so this looks it up from the meeting
-    record (PK=USER#{ownerId}, SK=MEETING#{meetingId}).
+    Returns list of {'meetingId', 'ownerId', 'origin', 'accountId',
+    'sharedToAccount'}. Caching this raw list is safe regardless of TTL: a
+    Share row's ownerId/meetingId/origin never change after creation, and
+    _list_shared_meetings (below) re-verifies live membership on every call
+    for any account-origin entry before trusting it -- the cache here only
+    saves the DynamoDB Query + per-item meeting GetItem, not the
+    authorization decision itself.
     """
     now = time.time()
     if _shared_meetings_cache_expiry.get(user_id, 0) > now:
@@ -329,7 +333,8 @@ def _list_shared_meetings(user_id):
             meeting_id, owner_id = item.get('meetingId'), item.get('ownerId')
             if not meeting_id or not owner_id:
                 continue
-            if item.get('origin') == 'account':
+            entry = {'meetingId': meeting_id, 'ownerId': owner_id, 'origin': item.get('origin')}
+            if entry['origin'] == 'account':
                 try:
                     meeting = table.get_item(
                         Key={'PK': f'USER#{owner_id}', 'SK': f'MEETING#{meeting_id}'},
@@ -339,14 +344,9 @@ def _list_shared_meetings(user_id):
                     logger.warning(f"meeting lookup failed for account-share check {meeting_id}: {e}")
                     meeting = None
                 meeting = meeting or {}
-                account_id = meeting.get('accountId')
-                # Mirrors the Go backend's resolveSharedAccess predicate exactly
-                # (meeting.go) -- a meeting the owner un-shared from the account
-                # (or that was only ever Link-only) must not leak here either,
-                # even with a lingering account-origin Share row.
-                if not account_id or not meeting.get('sharedToAccount') or not _is_account_member(account_id, user_id):
-                    continue
-            items.append({'meetingId': meeting_id, 'ownerId': owner_id})
+                entry['accountId'] = meeting.get('accountId')
+                entry['sharedToAccount'] = bool(meeting.get('sharedToAccount'))
+            items.append(entry)
         _shared_meetings_cache[user_id] = items
         _shared_meetings_cache_expiry[user_id] = now + SHARED_MEETINGS_CACHE_TTL_SECONDS
         return items
@@ -355,6 +355,29 @@ def _list_shared_meetings(user_id):
         _shared_meetings_cache[user_id] = []
         _shared_meetings_cache_expiry[user_id] = now + SHARED_MEETINGS_CACHE_TTL_SECONDS
         return []
+
+
+def _list_shared_meetings(user_id):
+    """Return currently-valid shared meetings for user_id: {'meetingId', 'ownerId'}.
+
+    A direct share (origin != 'account') is included unconditionally -- it's
+    an independent grant the owner made explicitly. An account-origin share
+    is included only if _is_account_member confirms the caller is STILL a
+    member RIGHT NOW (no caching on the membership check itself -- only the
+    raw share list above is cached) -- mirrors the Go backend's checkAccess/
+    resolveSharedAccess, which re-verify membership at read time for the same
+    reason (see backend/internal/service/meeting.go). Unlike the raw list's
+    TTL, this closes the exposure window down to the request itself: a
+    removed member's next QA call sees the revocation immediately, not after
+    up to SHARED_MEETINGS_CACHE_TTL_SECONDS.
+    """
+    items = []
+    for entry in _list_shared_meetings_raw(user_id):
+        if entry['origin'] == 'account':
+            if not entry.get('accountId') or not entry.get('sharedToAccount') or not _is_account_member(entry['accountId'], user_id):
+                continue
+        items.append({'meetingId': entry['meetingId'], 'ownerId': entry['ownerId']})
+    return items
 
 
 def list_meetings_for_user(user_id, date_from=None, date_to=None, tag=None, keyword=None, limit=None):
