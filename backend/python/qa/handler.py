@@ -245,7 +245,23 @@ def _kb_cache_key(question, number_of_results, user_id=None):
     return f"CACHE#KB#{digest}"
 
 
-def _kb_cache_get(question, number_of_results, user_id=None):
+def _shared_access_signature(shared_meetings):
+    """Hash of the exact meetingIds a LIVE _list_shared_meetings call granted
+    access to, for tagging/validating a KB_CACHE entry.
+
+    Stored alongside a KB cache entry at write time and re-derived (from a
+    fresh _list_shared_meetings call) at read time: a mismatch means the
+    caller's access has changed since the cached retrieval ran (a meeting
+    revoked, un-shared, or newly granted), so the cached result -- built from
+    the OLD filter -- must not be served even though KB_CACHE_TTL_SECONDS
+    hasn't expired. Without this, a KB_CACHE hit would bypass
+    _list_shared_meetings' live membership check entirely.
+    """
+    ids = sorted(f"{s['ownerId']}/{s['meetingId']}" for s in shared_meetings)
+    return hashlib.sha256('|'.join(ids).encode('utf-8')).hexdigest()
+
+
+def _kb_cache_get(question, number_of_results, user_id=None, access_signature=None):
     """Look up a cached KB retrieve() response. Returns list or None."""
     if KB_CACHE_TTL_SECONDS <= 0:
         return None
@@ -256,14 +272,16 @@ def _kb_cache_get(question, number_of_results, user_id=None):
             return None
         if int(item.get("TTL", 0)) < int(time.time()):
             return None
+        if item.get("accessSignature") != access_signature:
+            return None  # caller's shared-meeting access changed since this was cached
         return json.loads(item["results"])
     except Exception as e:
         logger.warning(f"KB cache read failed: {e}")
         return None
 
 
-def _kb_cache_put(question, number_of_results, results, user_id=None):
-    """Store KB retrieve() response with TTL."""
+def _kb_cache_put(question, number_of_results, results, user_id=None, access_signature=None):
+    """Store KB retrieve() response with TTL, tagged with the access signature it was built under."""
     if KB_CACHE_TTL_SECONDS <= 0:
         return
     try:
@@ -271,6 +289,7 @@ def _kb_cache_put(question, number_of_results, results, user_id=None):
             "PK": _kb_cache_key(question, number_of_results, user_id),
             "SK": "V1",
             "results": json.dumps(results, ensure_ascii=False),
+            "accessSignature": access_signature,
             "TTL": int(time.time()) + KB_CACHE_TTL_SECONDS,
         })
     except Exception as e:
@@ -308,16 +327,18 @@ def _is_account_member(account_id, user_id):
 
 
 def _list_shared_meetings_raw(user_id):
-    """Query DynamoDB for meetings shared with this user, WITHOUT any
-    membership filtering -- cached for SHARED_MEETINGS_CACHE_TTL_SECONDS.
+    """Query DynamoDB for the SET of meetings shared with this user --
+    cached for SHARED_MEETINGS_CACHE_TTL_SECONDS, but ONLY the immutable
+    identity of each share (meetingId, ownerId).
 
-    Returns list of {'meetingId', 'ownerId', 'origin', 'accountId',
-    'sharedToAccount'}. Caching this raw list is safe regardless of TTL: a
-    Share row's ownerId/meetingId/origin never change after creation, and
-    _list_shared_meetings (below) re-verifies live membership on every call
-    for any account-origin entry before trusting it -- the cache here only
-    saves the DynamoDB Query + per-item meeting GetItem, not the
-    authorization decision itself.
+    Returns list of {'meetingId', 'ownerId'}. This only saves the DynamoDB
+    Query that enumerates which Share rows exist; it deliberately does NOT
+    cache origin/accountId/sharedToAccount -- those are mutable authorization
+    inputs (a row can be deleted and recreated with a different origin; a
+    meeting's sharedToAccount can flip) and caching them let a stale
+    authorization decision survive within the TTL even though
+    _is_account_member itself was checked fresh. _list_shared_meetings
+    (below) re-fetches all of those live for every call.
     """
     now = time.time()
     if _shared_meetings_cache_expiry.get(user_id, 0) > now:
@@ -326,27 +347,13 @@ def _list_shared_meetings_raw(user_id):
         from boto3.dynamodb.conditions import Key
         resp = table.query(
             KeyConditionExpression=Key('PK').eq(f'USER#{user_id}') & Key('SK').begins_with('SHARED#'),
-            ProjectionExpression='meetingId, ownerId, origin',
+            ProjectionExpression='meetingId, ownerId',
         )
-        items = []
-        for item in resp.get('Items', []):
-            meeting_id, owner_id = item.get('meetingId'), item.get('ownerId')
-            if not meeting_id or not owner_id:
-                continue
-            entry = {'meetingId': meeting_id, 'ownerId': owner_id, 'origin': item.get('origin')}
-            if entry['origin'] == 'account':
-                try:
-                    meeting = table.get_item(
-                        Key={'PK': f'USER#{owner_id}', 'SK': f'MEETING#{meeting_id}'},
-                        ProjectionExpression='accountId, sharedToAccount',
-                    ).get('Item')
-                except Exception as e:
-                    logger.warning(f"meeting lookup failed for account-share check {meeting_id}: {e}")
-                    meeting = None
-                meeting = meeting or {}
-                entry['accountId'] = meeting.get('accountId')
-                entry['sharedToAccount'] = bool(meeting.get('sharedToAccount'))
-            items.append(entry)
+        items = [
+            {'meetingId': item['meetingId'], 'ownerId': item['ownerId']}
+            for item in resp.get('Items', [])
+            if item.get('meetingId') and item.get('ownerId')
+        ]
         _shared_meetings_cache[user_id] = items
         _shared_meetings_cache_expiry[user_id] = now + SHARED_MEETINGS_CACHE_TTL_SECONDS
         return items
@@ -360,23 +367,50 @@ def _list_shared_meetings_raw(user_id):
 def _list_shared_meetings(user_id):
     """Return currently-valid shared meetings for user_id: {'meetingId', 'ownerId'}.
 
-    A direct share (origin != 'account') is included unconditionally -- it's
-    an independent grant the owner made explicitly. An account-origin share
-    is included only if _is_account_member confirms the caller is STILL a
-    member RIGHT NOW (no caching on the membership check itself -- only the
-    raw share list above is cached) -- mirrors the Go backend's checkAccess/
-    resolveSharedAccess, which re-verify membership at read time for the same
-    reason (see backend/internal/service/meeting.go). Unlike the raw list's
-    TTL, this closes the exposure window down to the request itself: a
-    removed member's next QA call sees the revocation immediately, not after
-    up to SHARED_MEETINGS_CACHE_TTL_SECONDS.
+    The SET of meetingId/ownerId pairs comes from the cached
+    _list_shared_meetings_raw, but every authorization-relevant fact --
+    whether the share is still present and what its current origin is, the
+    meeting's current sharedToAccount, and live account membership -- is
+    fetched fresh on every call, uncached. A direct share (origin !=
+    'account') is included unconditionally once confirmed fresh; an
+    account-origin share additionally requires current sharedToAccount and
+    _is_account_member. This mirrors the Go backend's checkAccess/
+    resolveSharedAccess, which re-verify at read time for the same reason
+    (see backend/internal/service/meeting.go) -- revocation, un-sharing, or
+    an origin change (e.g. a deleted direct share replaced by a new
+    account-origin one on the same key) is visible on the very next call,
+    not bounded by SHARED_MEETINGS_CACHE_TTL_SECONDS.
     """
     items = []
     for entry in _list_shared_meetings_raw(user_id):
-        if entry['origin'] == 'account':
-            if not entry.get('accountId') or not entry.get('sharedToAccount') or not _is_account_member(entry['accountId'], user_id):
+        meeting_id, owner_id = entry['meetingId'], entry['ownerId']
+        try:
+            share_result = table.get_item(
+                Key={'PK': f'USER#{user_id}', 'SK': f'SHARED#{meeting_id}'},
+                ProjectionExpression='origin',
+                ConsistentRead=True,
+            )
+        except Exception as e:
+            logger.warning(f"share re-check failed for {user_id}/{meeting_id}: {e}")
+            continue
+        if 'Item' not in share_result:
+            continue  # revoked since the raw list was cached
+        share = share_result['Item']  # {} for a direct share with no other projected attrs -- NOT "missing"
+        if share.get('origin') == 'account':
+            try:
+                meeting = table.get_item(
+                    Key={'PK': f'USER#{owner_id}', 'SK': f'MEETING#{meeting_id}'},
+                    ProjectionExpression='accountId, sharedToAccount',
+                    ConsistentRead=True,
+                ).get('Item')
+            except Exception as e:
+                logger.warning(f"meeting lookup failed for account-share check {meeting_id}: {e}")
+                meeting = None
+            meeting = meeting or {}
+            account_id = meeting.get('accountId')
+            if not account_id or not meeting.get('sharedToAccount') or not _is_account_member(account_id, user_id):
                 continue
-        items.append({'meetingId': entry['meetingId'], 'ownerId': entry['ownerId']})
+        items.append({'meetingId': meeting_id, 'ownerId': owner_id})
     return items
 
 
@@ -459,7 +493,15 @@ def retrieve_from_kb(question, number_of_results=5, user_id=None):
     """Retrieve relevant documents from Bedrock Knowledge Base, with short-lived DynamoDB cache."""
     capped = min(number_of_results, 10)
 
-    cached = _kb_cache_get(question, capped, user_id)
+    # Computed unconditionally (not just on a cache miss) -- this call IS the
+    # live membership/access check. Skipping it on a would-be cache hit is
+    # exactly the bypass this signature exists to close: a cached result
+    # built from an access set that has since changed (a meeting revoked)
+    # must not be served just because the question/params match.
+    shared = _list_shared_meetings(user_id) if user_id else []
+    access_signature = _shared_access_signature(shared) if user_id else None
+
+    cached = _kb_cache_get(question, capped, user_id, access_signature)
     if cached is not None:
         logger.info(f"KB cache hit: query={question[:60]!r} n={capped}")
         return cached
@@ -478,11 +520,11 @@ def retrieve_from_kb(question, number_of_results=5, user_id=None):
                 {'stringContains': {'key': 'x-amz-bedrock-kb-source-uri', 'value': 'shared/'}},
             ]
             # Include documents from meetings shared with this user
-            for shared in _list_shared_meetings(user_id):
+            for s in shared:
                 filters.append({
                     'stringContains': {
                         'key': 'x-amz-bedrock-kb-source-uri',
-                        'value': f"meetings/{shared['ownerId']}/{shared['meetingId']}",
+                        'value': f"meetings/{s['ownerId']}/{s['meetingId']}",
                     }
                 })
             retrieval_config['vectorSearchConfiguration']['filter'] = {'orAll': filters}
@@ -499,7 +541,7 @@ def retrieve_from_kb(question, number_of_results=5, user_id=None):
                 uri = item.get('location', {}).get('s3Location', {}).get('uri', '')
                 if text:
                     results.append({'text': text, 'uri': uri, 'score': score})
-        _kb_cache_put(question, capped, results, user_id)
+        _kb_cache_put(question, capped, results, user_id, access_signature)
         return results
     except Exception as e:
         logger.warning(f'KB retrieve failed: {e}')

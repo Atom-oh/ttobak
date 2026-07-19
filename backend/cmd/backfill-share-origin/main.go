@@ -113,6 +113,7 @@ func main() {
 		meeting, err := repo.GetMeetingByID(ctx, ref.MeetingID)
 		if err != nil {
 			log.Printf("skip meeting %s: get meeting: %v", ref.MeetingID, err)
+			failed++
 			continue
 		}
 		if meeting == nil || !meeting.SharedToAccount || meeting.AccountID != *accountID {
@@ -125,6 +126,7 @@ func main() {
 			share, err := repo.GetShare(ctx, m.UserID, ref.MeetingID)
 			if err != nil {
 				log.Printf("skip %s / meeting %s: get share: %v", m.UserID, ref.MeetingID, err)
+				failed++
 				continue
 			}
 			if share == nil || share.Origin != "" {
