@@ -75,6 +75,10 @@ Prefer these Mermaid diagram types:
 - `flowchart` for decision trees and process pipelines
 - `classDiagram` for data models and relationships
 
+Mermaid syntax rules (an unquoted label breaks the parser — the whole diagram fails to render):
+- Any node or edge label containing parentheses, colons, slashes, or other punctuation MUST be wrapped in double quotes: `A["Text (with parens)"]`, not `A[Text (with parens)]`
+- For a line break inside a label, use `<br/>` — never a literal `\n`
+
 ## Mode
 - quick: 5+ sources, 1-2 diagrams if relevant
 - standard: 8-12 sources, 2-3 diagrams
