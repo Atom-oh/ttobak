@@ -40,7 +40,16 @@ def handler(event, context):
     is unset or start_ingestion_job fails, so the failure surfaces as a
     FAILED Step Functions execution instead of a silently-successful one.
     """
-    # Step Functions Map outputs a list of per-source results (each is [tech_result, news_result])
+    # Validate config before the SKIPPED short-circuit below -- otherwise a
+    # KB_ID/DATA_SOURCE_ID regression (e.g. back to 'PENDING') goes
+    # unnoticed on any night with zero new/updated docs, since the config
+    # check would never run and the execution reports SUCCEEDED regardless.
+    if not KB_ID or not DATA_SOURCE_ID:
+        raise RuntimeError('KB_ID or DATA_SOURCE_ID environment variable not set')
+
+    # Step Functions ParallelCrawl outputs a bare list, one entry per branch
+    # (techResult, then the news Map's own list of per-source results) --
+    # extend() flattens that one level of list nesting into crawler_results.
     raw = event if isinstance(event, list) else event.get('crawlerResults', [])
     crawler_results = []
     for item in raw:
@@ -65,13 +74,11 @@ def handler(event, context):
             'totalErrors': total_errors,
         }
 
-    # Raise (rather than return an "ERROR" result) so a broken KB config or
-    # a start_ingestion_job failure surfaces as a FAILED Step Functions
-    # execution instead of a silently-successful one -- for 7 weeks this
-    # returned {"status": "ERROR"} and the workflow kept reporting
-    # SUCCEEDED every night while the KB never got the day's crawled docs.
-    if not KB_ID or not DATA_SOURCE_ID:
-        raise RuntimeError('KB_ID or DATA_SOURCE_ID environment variable not set')
+    # Raise (rather than return an "ERROR" result) so a start_ingestion_job
+    # failure surfaces as a FAILED Step Functions execution instead of a
+    # silently-successful one -- for 7 weeks this returned {"status":
+    # "ERROR"} and the workflow kept reporting SUCCEEDED every night while
+    # the KB never got the day's crawled docs.
 
     resp = bedrock_agent.start_ingestion_job(
         knowledgeBaseId=KB_ID,

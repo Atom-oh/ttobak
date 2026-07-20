@@ -1408,6 +1408,23 @@ class TestIngestTriggerNoKBConfig(unittest.TestCase):
             ingest_trigger.KB_ID = original_kb_id
             ingest_trigger.DATA_SOURCE_ID = original_ds_id
 
+    @mock.patch.object(ingest_trigger, 'bedrock_agent')
+    def test_config_validated_even_when_no_new_docs(self, mock_agent):
+        # Regression: KB_ID validation must run before the SKIPPED
+        # short-circuit below, or a KB_ID regression (e.g. back to
+        # 'PENDING') goes completely unnoticed on any quiet night with zero
+        # new/updated docs -- exactly the silent-failure shape this PR
+        # exists to eliminate.
+        original_kb_id = ingest_trigger.KB_ID
+        try:
+            ingest_trigger.KB_ID = ''
+            event = {'crawlerResults': [{'docsAdded': 0, 'docsUpdated': 0, 'errors': []}]}
+            with self.assertRaises(Exception):
+                ingest_trigger.handler(event, None)
+            mock_agent.start_ingestion_job.assert_not_called()
+        finally:
+            ingest_trigger.KB_ID = original_kb_id
+
 
 # ---------------------------------------------------------------------------
 # Extra: HTML text extraction helpers
@@ -1521,6 +1538,46 @@ class TestFetchWebSearch(unittest.TestCase):
             self.assertEqual(error, 'HTTP 403')
         finally:
             news_crawler.WEB_SEARCH_GATEWAY_URL = original
+
+
+class TestArticleCapIncludesWebSearch(unittest.TestCase):
+    """Regression: web search results are appended to all_articles *after*
+    What's New + Blog RSS, so a busy service whose RSS feeds alone fill the
+    old cap (MAX_ARTICLES_PER_SOURCE * 2 = 10) would silently drop every
+    web search result -- defeating ADR-021's "catches announcements RSS
+    hasn't indexed yet" purpose for exactly the services that need it."""
+
+    @mock.patch.object(tech_crawler, '_write_metadata')
+    @mock.patch.object(tech_crawler, '_write_to_s3')
+    @mock.patch.object(tech_crawler, '_summarize_and_tag', return_value=('summary', []))
+    @mock.patch.object(tech_crawler, '_fetch_url', side_effect=Exception('no full page'))
+    @mock.patch.object(tech_crawler, '_doc_exists', return_value=False)
+    @mock.patch.object(tech_crawler, '_fetch_blog_rss')
+    @mock.patch.object(tech_crawler, '_fetch_whats_new')
+    def test_web_search_result_survives_when_rss_fills_old_cap(
+        self, mock_whats_new, mock_blog, mock_exists, mock_fetch, mock_summarize, mock_s3, mock_meta,
+    ):
+        mock_whats_new.return_value = [
+            {'title': f'WN {i}', 'url': f'https://docs.aws.amazon.com/wn{i}',
+             'description': 'x' * 150, 'pubDate': ''} for i in range(5)
+        ]
+        mock_blog.return_value = [
+            {'title': f'Blog {i}', 'url': f'https://aws.amazon.com/blog{i}',
+             'description': 'x' * 150, 'pubDate': ''} for i in range(5)
+        ]
+        original = news_crawler.WEB_SEARCH_GATEWAY_URL
+        try:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = 'https://test-gateway.example.com/mcp'
+            with mock.patch.object(news_crawler, '_gateway_web_search', return_value=(
+                [{'title': 'Search hit', 'url': 'https://example.com/search-hit',
+                  'text': 'x' * 150, 'publishedDate': ''}], None,
+            )):
+                tech_crawler.handler({'sourceId': 'aws-docs', 'awsServices': ['lambda']}, None)
+        finally:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = original
+
+        processed_urls = [c.args[3] for c in mock_s3.call_args_list]
+        self.assertIn('https://example.com/search-hit', processed_urls)
 
 
 # ---------------------------------------------------------------------------

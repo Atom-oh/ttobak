@@ -84,6 +84,7 @@ SERVICE_BLOG_MAP = {
 }
 
 MAX_ARTICLES_PER_SOURCE = 5
+WEB_SEARCH_RESULTS_PER_SERVICE = 3
 FETCH_TIMEOUT_SECONDS = 15
 MAX_CONTENT_LENGTH = 50000
 
@@ -288,7 +289,8 @@ def _fetch_web_search(service: str) -> tuple:
     treated as 0 results."""
     if not news_crawler.WEB_SEARCH_GATEWAY_URL:
         return [], None
-    results, error = news_crawler._gateway_web_search(f'AWS {service} 신기능 발표', max_results=3)
+    results, error = news_crawler._gateway_web_search(
+        f'AWS {service} 신기능 발표', max_results=WEB_SEARCH_RESULTS_PER_SERVICE)
     articles = [{
         'title': r.get('title', ''),
         'url': r.get('url', ''),
@@ -598,7 +600,14 @@ def handler(event, context):
 
         logger.info(f'{service}: {len(unique_articles)} unique article(s) to process')
 
-        for article in unique_articles[:MAX_ARTICLES_PER_SOURCE * 2]:
+        # Web search results are appended last (after What's New + Blog
+        # RSS), so the cap must have room for all three sources -- otherwise
+        # a busy service whose RSS feeds alone fill MAX_ARTICLES_PER_SOURCE*2
+        # silently drops every web search result, defeating the "catches
+        # announcements RSS hasn't indexed yet" purpose (ADR-021) for
+        # exactly the services that need it most.
+        article_cap = MAX_ARTICLES_PER_SOURCE * 2 + WEB_SEARCH_RESULTS_PER_SERVICE
+        for article in unique_articles[:article_cap]:
             url = article['url']
             title = article['title']
             doc_hash = _make_hash(url)
