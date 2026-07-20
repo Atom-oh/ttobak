@@ -11,8 +11,12 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o /out/co
 
 # fonts-noto-cjk is not optional: without it, Korean text in a converted PDF
 # renders as tofu boxes -- this is a Korean product, most decks have Korean text.
+# ca-certificates is not optional either: debian:bookworm-slim ships no root
+# CA bundle, so the Go AWS SDK's TLS handshake to S3 fails outright
+# ("x509: certificate signed by unknown authority") without it.
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
       libreoffice-impress \
       fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
