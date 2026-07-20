@@ -25,28 +25,28 @@ func withUserEmailCtx(r *http.Request, userID, email string) *http.Request {
 
 // mockHandlerAccountRepo implements service.AccountRepo for handler tests.
 type mockHandlerAccountRepo struct {
-	accounts map[string]*model.Account
-	members  map[string]*model.AccountMember
-	users    map[string]*model.User
-	meetingRefs map[string][]model.MeetingRef
+	accounts          map[string]*model.Account
+	members           map[string]*model.AccountMember
+	users             map[string]*model.User
+	meetingRefs       map[string][]model.MeetingRef
 	insightsByAccount map[string][]model.AccountInsight
-	documents map[string][]model.AccountDocument
-	shares    map[string]*model.Share // "sharedToID|meetingID" -> share
-	meetings  map[string]*model.Meeting // meetingID -> meeting
-	shareOpErr map[string]error       // meetingID -> forced GetShare/DeleteShare error
+	documents         map[string][]model.AccountDocument
+	shares            map[string]*model.Share   // "sharedToID|meetingID" -> share
+	meetings          map[string]*model.Meeting // meetingID -> meeting
+	shareOpErr        map[string]error          // meetingID -> forced GetShare/DeleteShare error
 }
 
 func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
 	return &mockHandlerAccountRepo{
-		accounts: make(map[string]*model.Account),
-		members:  make(map[string]*model.AccountMember),
-		users:    make(map[string]*model.User),
-		meetingRefs: make(map[string][]model.MeetingRef),
+		accounts:          make(map[string]*model.Account),
+		members:           make(map[string]*model.AccountMember),
+		users:             make(map[string]*model.User),
+		meetingRefs:       make(map[string][]model.MeetingRef),
 		insightsByAccount: make(map[string][]model.AccountInsight),
-		documents: make(map[string][]model.AccountDocument),
-		shares:    make(map[string]*model.Share),
-		meetings:  make(map[string]*model.Meeting),
-		shareOpErr: make(map[string]error),
+		documents:         make(map[string][]model.AccountDocument),
+		shares:            make(map[string]*model.Share),
+		meetings:          make(map[string]*model.Meeting),
+		shareOpErr:        make(map[string]error),
 	}
 }
 
@@ -329,6 +329,40 @@ func TestHandlerRemoveMember_PartialCleanupFailureReturns200WithBody(t *testing.
 	}
 	if _, ok := repo.members[acctMemberKey("acc-1", "tam-1")]; ok {
 		t.Error("member should still be removed despite cleanup failure")
+	}
+}
+
+func TestHandlerRemoveMember_AmbiguousShareReturns200WithBody(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1"}
+	repo.shares["tam-1|m-1"] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // ambiguous shape
+	}
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	failed, ok := resp["cleanupFailedForMeetings"].([]interface{})
+	if !ok || len(failed) != 0 {
+		t.Errorf("expected cleanupFailedForMeetings=[] (present, empty), got %+v", resp)
+	}
+	ambiguous, _ := resp["ambiguousUntaggedMeetingIDs"].([]interface{})
+	if len(ambiguous) != 1 || ambiguous[0] != "m-1" {
+		t.Errorf("expected ambiguousUntaggedMeetingIDs=[m-1], got %+v", resp)
 	}
 }
 

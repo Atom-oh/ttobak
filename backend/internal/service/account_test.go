@@ -14,14 +14,14 @@ import (
 
 // mockAccountRepo implements accountRepo with in-memory maps.
 type mockAccountRepo struct {
-	accounts map[string]*model.Account       // accountID
-	members  map[string]*model.AccountMember // accountID|userID
-	users    map[string]*model.User          // email
-	meetingRefs map[string][]model.MeetingRef // accountID -> refs
+	accounts          map[string]*model.Account       // accountID
+	members           map[string]*model.AccountMember // accountID|userID
+	users             map[string]*model.User          // email
+	meetingRefs       map[string][]model.MeetingRef   // accountID -> refs
 	insightsByAccount map[string][]model.AccountInsight
-	documents map[string][]model.AccountDocument // PK -> docs
-	shares    map[string]*model.Share            // "sharedToID|meetingID" -> share
-	meetings  map[string]*model.Meeting          // meetingID -> meeting
+	documents         map[string][]model.AccountDocument // PK -> docs
+	shares            map[string]*model.Share            // "sharedToID|meetingID" -> share
+	meetings          map[string]*model.Meeting          // meetingID -> meeting
 
 	// shareOpErr, when non-nil, is returned by GetShare/DeleteShare for the
 	// specific meetingID it's keyed to test cleanup-failure handling without
@@ -53,15 +53,15 @@ type mockAccountRepo struct {
 
 func newMockAccountRepo() *mockAccountRepo {
 	return &mockAccountRepo{
-		accounts: make(map[string]*model.Account),
-		members:  make(map[string]*model.AccountMember),
-		users:    make(map[string]*model.User),
-		meetingRefs: make(map[string][]model.MeetingRef),
+		accounts:          make(map[string]*model.Account),
+		members:           make(map[string]*model.AccountMember),
+		users:             make(map[string]*model.User),
+		meetingRefs:       make(map[string][]model.MeetingRef),
 		insightsByAccount: make(map[string][]model.AccountInsight),
-		documents: make(map[string][]model.AccountDocument),
-		shares:    make(map[string]*model.Share),
-		meetings:  make(map[string]*model.Meeting),
-		shareOpErr: make(map[string]error),
+		documents:         make(map[string][]model.AccountDocument),
+		shares:            make(map[string]*model.Share),
+		meetings:          make(map[string]*model.Meeting),
+		shareOpErr:        make(map[string]error),
 	}
 }
 
@@ -581,15 +581,64 @@ func TestRemoveMember_CleanupFailureDoesNotFailRemoval(t *testing.T) {
 	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
 	repo.shareOpErr["m-1"] = errors.New("simulated transient DynamoDB error")
 
-	failed, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1")
+	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1")
 	if err != nil {
 		t.Fatalf("expected RemoveMember to succeed despite share-cleanup failure, got: %v", err)
 	}
 	if mem, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1"); mem != nil {
 		t.Errorf("expected member to remain removed despite cleanup failure, got %+v", mem)
 	}
-	if len(failed) != 1 || failed[0] != "m-1" {
-		t.Errorf("expected failedMeetingIDs=[m-1], got %v", failed)
+	if len(result.FailedMeetingIDs) != 1 || result.FailedMeetingIDs[0] != "m-1" {
+		t.Errorf("expected FailedMeetingIDs=[m-1], got %v", result.FailedMeetingIDs)
+	}
+}
+
+func TestRemoveMember_SurfacesAmbiguousLegacyShare(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
+	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // ambiguous: legacy account-share OR direct grant
+	}
+
+	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.AmbiguousUntaggedMeetingIDs) != 1 || result.AmbiguousUntaggedMeetingIDs[0] != "m-1" {
+		t.Errorf("expected AmbiguousUntaggedMeetingIDs=[m-1], got %v", result.AmbiguousUntaggedMeetingIDs)
+	}
+	if len(result.FailedMeetingIDs) != 0 {
+		t.Errorf("expected no failures (this is not a failure), got %v", result.FailedMeetingIDs)
+	}
+	if repo.shares[acctShareKey("tam-1", "m-1")] == nil {
+		t.Error("expected the ambiguous share to be left untouched")
+	}
+}
+
+func TestRemoveMember_EmptyResultListsAreNotNil(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	// No meeting refs at all -- the cleanup loop never runs, so nothing is
+	// ever appended to either result slice. They must still encode as JSON
+	// [] (pre-initialized), not null (the nil zero value).
+
+	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FailedMeetingIDs == nil {
+		t.Error("expected FailedMeetingIDs to be a non-nil empty slice, got nil")
+	}
+	if result.AmbiguousUntaggedMeetingIDs == nil {
+		t.Error("expected AmbiguousUntaggedMeetingIDs to be a non-nil empty slice, got nil")
 	}
 }
 

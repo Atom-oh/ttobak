@@ -265,14 +265,32 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 	return &model.AccountMemberDTO{UserID: user.UserID, Email: user.Email, Role: req.Role}, nil
 }
 
+// RemoveMemberResult reports the outcome of RemoveMember's best-effort Share
+// cleanup. FailedMeetingIDs is a genuine cleanup error (retryable, worth
+// alerting on). AmbiguousUntaggedMeetingIDs is NOT a failure -- it flags
+// meetings where a Share exists with Origin != "account" on a meeting still
+// shared to this account, so cleanup could not safely touch it. This is a
+// COARSE signal, not a precise "these are legacy" list: Origin=="" is the
+// shape of BOTH a legacy account-share (written before the Origin field
+// existed) AND a perfectly normal direct grant the owner made explicitly --
+// they are indistinguishable at this layer (see model.Share.Origin's doc
+// and CreateShare's clobber-guard). Any meeting where the removed member
+// ALSO holds a direct share to a meeting still linked to this account will
+// appear here too, regardless of whether a legacy account-share also
+// exists; this is intentional noise traded for not silently hiding the
+// legacy case, not a bug. Surfacing this list gives an operator a signal to
+// check whether backfill-share-origin is needed for this account, without
+// RemoveMember itself guessing wrong and revoking an owner's explicit
+// direct share.
+type RemoveMemberResult struct {
+	FailedMeetingIDs            []string
+	AmbiguousUntaggedMeetingIDs []string
+}
+
 // RemoveMember deletes a non-owner member. Only the account owner may call
 // this; the owner member itself can never be removed (an account must never
 // exist without an owner -- see CreateAccount's transactional invariant).
-// Returns failedMeetingIDs listing which meetings' Share cleanup did not
-// complete -- err is nil whenever the membership delete itself succeeded (a
-// cleanup failure never fails the removal request), but the caller now gets
-// an explicit signal instead of the failure being visible only in logs.
-func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, accountID, targetUserID string) (failedMeetingIDs []string, err error) {
+func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, accountID, targetUserID string) (*RemoveMemberResult, error) {
 	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
 	if err != nil {
 		return nil, err
@@ -308,6 +326,11 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 		return nil, err
 	}
 
+	result := &RemoveMemberResult{
+		FailedMeetingIDs:            []string{},
+		AmbiguousUntaggedMeetingIDs: []string{},
+	}
+
 	for _, ref := range refs {
 		// A meeting can be re-shared from account A to account B without A's
 		// MeetingRef ever being cleaned up (ADR-016's known non-transactional
@@ -319,7 +342,7 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 		meeting, err := s.repo.GetMeetingByID(ctx, ref.MeetingID)
 		if err != nil {
 			log.Printf("cleanup share for removed member %s (meeting %s): get meeting: %v", targetUserID, ref.MeetingID, err)
-			failedMeetingIDs = append(failedMeetingIDs, ref.MeetingID)
+			result.FailedMeetingIDs = append(result.FailedMeetingIDs, ref.MeetingID)
 			continue
 		}
 		if meeting == nil || meeting.AccountID != accountID {
@@ -328,10 +351,17 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 		share, err := s.repo.GetShare(ctx, targetUserID, ref.MeetingID)
 		if err != nil {
 			log.Printf("cleanup share for removed member %s (meeting %s): get share: %v", targetUserID, ref.MeetingID, err)
-			failedMeetingIDs = append(failedMeetingIDs, ref.MeetingID)
+			result.FailedMeetingIDs = append(result.FailedMeetingIDs, ref.MeetingID)
 			continue
 		}
-		if share == nil || share.Origin != model.ShareOriginAccount {
+		if share == nil {
+			continue
+		}
+		if share.Origin != model.ShareOriginAccount {
+			// Origin != "account" here (in practice always Origin=="") means
+			// cleanup must not touch this share: it might be a legitimate direct
+			// grant, but it is also the shape of a legacy account share.
+			result.AmbiguousUntaggedMeetingIDs = append(result.AmbiguousUntaggedMeetingIDs, ref.MeetingID)
 			continue
 		}
 		// This GetShare read is just a cheap pre-filter to skip meetings with
@@ -346,10 +376,10 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 				continue // origin changed (or row gone) between the read and this delete -- no-op skip, not a failure
 			}
 			log.Printf("cleanup share for removed member %s (meeting %s): delete share: %v", targetUserID, ref.MeetingID, err)
-			failedMeetingIDs = append(failedMeetingIDs, ref.MeetingID)
+			result.FailedMeetingIDs = append(result.FailedMeetingIDs, ref.MeetingID)
 		}
 	}
-	return failedMeetingIDs, nil
+	return result, nil
 }
 
 // UpdateMemberRole changes a non-owner member's role. Only the account owner

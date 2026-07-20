@@ -294,10 +294,11 @@ Error: 400 Bad Request (잘못된 역할이거나 대상이 owner)
 DELETE /api/accounts/{accountId}/members/{userId}
 
 Response: 204 No Content (모든 미팅의 Share cleanup까지 완전히 성공한 경우)
-Response: 200 OK (멤버십 삭제는 성공했으나 일부 미팅의 Share cleanup이 실패한 경우)
+Response: 200 OK (멤버십 삭제는 성공했으나 일부 미팅의 Share cleanup이 실패했거나 origin 태그가 없는 모호한 Share가 발견된 경우 — **주의**: backfill 미실행 legacy 계정은 그 멤버의 모든 account-share가 `origin==""`이므로, 해당 계정에서의 모든 멤버 제거가 사실상 항상 이 200 분기를 타게 됩니다. 이는 의도된 동작(모호한 share를 조용히 넘기지 않고 노출)이며 204→200 자체는 여전히 성공 응답이지만, "204만 성공으로 취급"하는 호출자가 있다면 이 변경을 인지해야 합니다)
 {
   "removed": true,
-  "cleanupFailedForMeetings": ["meeting-id-1", "meeting-id-2"]
+  "cleanupFailedForMeetings": ["meeting-id-1", "meeting-id-2"],
+  "ambiguousUntaggedMeetingIDs": ["meeting-id-3"]
 }
 
 Error: 403 Forbidden (owner가 아님)
@@ -314,7 +315,7 @@ Error: 500 Internal Server Error (cleanup 대상 미팅 목록 조회 자체가 
 >
 > **이 보장이 적용되지 않는 경우**: `Origin` 필드 도입 이전에 쓰인 legacy share(`origin==""`)는 direct grant와 구분 불가능하므로 이 재검증 대상이 아니며 무조건 신뢰됩니다 — backfill CLI로 `origin=account` 태그를 소급 부여하기 전까지는 멤버 제거로 회수되지 않습니다. 아래 Known limitation 참고.
 >
-> **Known limitation & remediation**: 이 수정 배포 전에 `share-account`가 생성한 Share 레코드는 origin 태그가 없어 direct grant로 취급되므로, `RemoveMember`의 cleanup이 자동으로 회수하지 못합니다. `backend/cmd/backfill-share-origin` CLI(운영자가 `--account-id` 단위로 직접 실행, 기본 dry-run·`--apply`로 확정)가 이런 과거 레코드에 `origin=account` 태그를 소급 부여해 이후 `RemoveMember` cleanup 대상이 되도록 만드는 remediation 경로다. **주의**: 이 CLI는 태깅 여부가 모호한 후보(같은 미팅이 account와 direct 양쪽으로 공유된 경우 두 origin이 구분되지 않음)를 자동으로 구별하지 못한다 — `--apply` 실행 시 dry-run에서 출력된 CANDIDATE 전부가 예외 없이 태깅되므로, 신뢰할 수 없는 후보는 `--apply` 전에 반드시 `--exclude userId1:meetingId1,userId2:meetingId2,...`로 명시적으로 제외해야 한다(그렇지 않으면 direct grant가 `origin=account`로 오태깅되고, 이후 `RemoveMember`가 owner가 명시적으로 부여한 공유를 자동 회수할 수 있다). **운영 순서**: legacy 계정(Origin 필드 도입 이전에 공유가 이루어진 계정)에서 멤버를 제거하기 전에 먼저 이 backfill을 실행해 둬야 한다 — 멤버가 이미 제거된 뒤에는 그 멤버의 과거 Share 레코드가 `ListAccountMembers`에 더 이상 나타나지 않아 이 CLI의 후보 목록에서도 영구적으로 누락된다(CLI는 현재 멤버만 순회).
+> **Known limitation & remediation**: 이 수정 배포 전에 `share-account`가 생성한 Share 레코드는 origin 태그가 없어 direct grant로 취급되므로, `RemoveMember`의 cleanup이 자동으로 회수하지 못합니다. `RemoveMember`는 이 모호성에 해당하는 미팅 ID를 응답의 `ambiguousUntaggedMeetingIDs`로 노출합니다. 이 목록은 정밀한 legacy 판정이 아니라 **거친(coarse) 시그널**입니다. 제거된 멤버가 account와 연결된 미팅에 별도의 direct Share도 보유한 경우에는 legacy account-share의 실제 존재 여부와 무관하게 그 미팅도 목록에 포함되므로, 항목이 있다는 사실만으로 반드시 backfill이 필요한 legacy share라고 판단해서는 안 됩니다. `backend/cmd/backfill-share-origin` CLI(운영자가 `--account-id` 단위로 직접 실행, 기본 dry-run·`--apply`로 확정)가 이런 과거 레코드에 `origin=account` 태그를 소급 부여해 이후 `RemoveMember` cleanup 대상이 되도록 만드는 remediation 경로다. **주의**: 이 CLI는 태깅 여부가 모호한 후보(같은 미팅이 account와 direct 양쪽으로 공유된 경우 두 origin이 구분되지 않음)를 자동으로 구별하지 못한다 — `--apply` 실행 시 dry-run에서 출력된 CANDIDATE 전부가 예외 없이 태깅되므로, 신뢰할 수 없는 후보는 `--apply` 전에 반드시 `--exclude userId1:meetingId1,userId2:meetingId2,...`로 명시적으로 제외해야 한다(그렇지 않으면 direct grant가 `origin=account`로 오태깅되고, 이후 `RemoveMember`가 owner가 명시적으로 부여한 공유를 자동 회수할 수 있다). 새 응답 필드는 아직 frontend에 표시되지 않으며 후속 작업으로 추적합니다. **운영 순서**: legacy 계정(Origin 필드 도입 이전에 공유가 이루어진 계정)에서 멤버를 제거하기 전에 먼저 이 backfill을 실행해 둬야 한다 — 멤버가 이미 제거된 뒤에는 그 멤버의 과거 Share 레코드가 `ListAccountMembers`에 더 이상 나타나지 않아 이 CLI의 후보 목록에서도 영구적으로 누락되고, 이미 제거된 멤버를 remediation 대상으로 되돌리는 backfill CLI 경로도 아직 없으므로 이 역시 후속 작업으로 추적합니다(CLI는 현재 멤버만 순회).
 
 #### List Account Meetings (공유된 미팅 목록 — 멤버 전용)
 
