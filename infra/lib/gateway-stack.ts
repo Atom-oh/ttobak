@@ -320,26 +320,33 @@ export class GatewayStack extends cdk.Stack {
       authorizer: jwtAuthorizer,
     });
 
-    // Public slide-share redirect — deliberately registered WITHOUT
-    // jwtAuthorizer. This literal-segment route ("public", "docs") is more
-    // specific than the /api/{proxy+} catch-all below, so API Gateway
-    // matches it first and skips the authorizer entirely; the Go handler
-    // (DocumentHandler.PublicGetDoc) does its own token lookup instead of
-    // trusting any caller identity. Anything else added under /api/public/
-    // in the future is automatically unauthenticated too — keep that path
-    // to exactly this one redirect handler.
-    this.httpApi.addRoutes({
-      path: '/api/public/docs/{token}',
-      methods: [apigatewayv2.HttpMethod.GET],
-      integration: apiIntegration,
-    });
-
     // Add route: ANY /api/{proxy+}
     this.httpApi.addRoutes({
       path: '/api/{proxy+}',
       methods: [apigatewayv2.HttpMethod.ANY],
       integration: apiIntegration,
       authorizer: jwtAuthorizer,
+    });
+
+    // Public slide-share redirect — deliberately registered WITHOUT
+    // jwtAuthorizer. This literal-segment route ("public", "docs") is more
+    // specific than the /api/{proxy+} catch-all above, so API Gateway
+    // matches it first and skips the authorizer entirely (HTTP API route
+    // matching is by path specificity, not registration order); the Go
+    // handler (DocumentHandler.PublicGetDoc) does its own token lookup
+    // instead of trusting any caller identity. Anything else added under
+    // /api/public/ in the future is automatically unauthenticated too —
+    // keep that path to exactly this one redirect handler.
+    //
+    // Registered AFTER the catch-all above (not before) so the shared
+    // `apiIntegration` object's underlying CfnIntegration resource keeps
+    // being created from the catch-all route as it always has — reusing it
+    // from a route added earlier in the file would rename/replace that
+    // resource for no functional reason.
+    this.httpApi.addRoutes({
+      path: '/api/public/docs/{token}',
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: apiIntegration,
     });
 
     // Warm the API Lambda every 5 minutes to eliminate cold starts

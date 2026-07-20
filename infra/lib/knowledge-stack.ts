@@ -178,8 +178,16 @@ export class KnowledgeStack extends cdk.Stack {
     // Phase 1: AOSS collection + index must exist before KB can be created
     // After deploying Phase 1, create the AOSS vector index out-of-band,
     // then uncomment Phase 2 below and redeploy.
-    this.knowledgeBaseId = 'PENDING';
-    this.dataSourceId = 'PENDING';
+    //
+    // The real KB was already created out-of-band and is live in production
+    // (QAFunction/SummarizeFunction read it via these same props today) --
+    // CDK just never learned its ID because Phase 2 was never uncommented.
+    // Read it from context (see cdk.json's ttobak:knowledgeBaseId /
+    // ttobak:dataSourceId) so redeploying this stack for an unrelated
+    // reason doesn't blow those Lambdas' env vars back to the placeholder
+    // and silently break RAG. Falls back to 'PENDING' if unset, same as before.
+    this.knowledgeBaseId = this.node.tryGetContext('ttobak:knowledgeBaseId') || 'PENDING';
+    this.dataSourceId = this.node.tryGetContext('ttobak:dataSourceId') || 'PENDING';
 
     /* Phase 2: Uncomment after AOSS index is created
     const knowledgeBase = new cdk.CfnResource(this, 'BedrockKnowledgeBase', {

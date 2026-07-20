@@ -8,6 +8,7 @@ import TurndownService from 'turndown';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi, docApi } from '@/lib/api';
+import { uploadDocFile } from '@/lib/upload';
 import type { AccountDocument, AccountSummary } from '@/types/meeting';
 
 const MeetingEditor = dynamic(() => import('./MeetingEditor').then(m => ({ default: m.MeetingEditor })), {
@@ -69,6 +70,12 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
   const [publicToken, setPublicToken] = useState<string | null>(null);
   const [publicBusy, setPublicBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  // Replace the uploaded file behind a slide doc (see updateDoc's fileKey
+  // branch in the backend, ADR-020) -- separate ref/state from the title
+  // editor's save flow above since this never touches markdown.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [replacing, setReplacing] = useState(false);
 
   const fetchAll = useCallback(async () => {
     if (!docId || docId === '_') return;
@@ -206,6 +213,43 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
     }
   }, [doc, title, saveContent]);
 
+  const handleReplaceFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !doc) return;
+    setReplacing(true);
+    setError(null);
+    try {
+      const { key } = await uploadDocFile(file);
+      // Omit markdown entirely (not even "") -- updateDoc's slide/note
+      // exclusivity check treats a non-nil markdown as "also changing the
+      // body", which conflicts with fileKey (see saveContent's comment above).
+      const req = {
+        title: doc.title,
+        docType: doc.docType,
+        path: doc.path,
+        fileKey: key,
+        fileName: file.name,
+        mimeType: file.type,
+        fileSize: file.size,
+      };
+      if (accountId) {
+        await accountApi.updateDocument(accountId, docId, req);
+      } else {
+        await docApi.update(docId, req);
+      }
+      // updateDoc's response doesn't re-presign downloadUrl/previewUrl for
+      // the new fileKey (only GetDocument does) -- refetch instead of
+      // merging the response into state, or the viewer/Download link would
+      // keep pointing at the superseded file.
+      await fetchAll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '파일 교체에 실패했습니다.');
+    } finally {
+      setReplacing(false);
+    }
+  }, [doc, accountId, docId, fetchAll]);
+
   if (isLoading) {
     return (
       <AppLayout activePath={accountId ? '/accounts' : '/docs'}>
@@ -329,15 +373,31 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
                 <span className="material-symbols-outlined text-primary">description</span>
                 <span>{doc.fileName}</span>
               </div>
-              {doc.downloadUrl && (
-                <a
-                  href={doc.downloadUrl}
-                  download={doc.fileName}
-                  className="text-sm px-3 py-1.5 rounded-lg bg-primary text-white hover:opacity-90"
+              <div className="flex items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.pptx,.ppt"
+                  className="hidden"
+                  onChange={handleReplaceFile}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={replacing}
+                  className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-secondary hover:bg-slate-50 dark:hover:bg-white/5 disabled:opacity-50"
                 >
-                  Download
-                </a>
-              )}
+                  {replacing ? '교체 중…' : '파일 변경'}
+                </button>
+                {doc.downloadUrl && (
+                  <a
+                    href={doc.downloadUrl}
+                    download={doc.fileName}
+                    className="text-sm px-3 py-1.5 rounded-lg bg-primary text-white hover:opacity-90"
+                  >
+                    Download
+                  </a>
+                )}
+              </div>
             </div>
 
             {!accountScoped && (
