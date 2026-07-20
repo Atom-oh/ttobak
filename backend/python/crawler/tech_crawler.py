@@ -333,13 +333,6 @@ def _get_service_aliases(service: str) -> list:
 # Bedrock summarization + auto-tagging
 # ---------------------------------------------------------------------------
 
-def _response_text(resp: dict) -> str:
-    """Return the first text content block from a Bedrock converse()
-    response. content[0] isn't guaranteed to be the text block, so scan for
-    one instead of indexing blindly."""
-    content = resp['output']['message']['content']
-    block = next((b for b in content if 'text' in b), None)
-    return block['text'] if block else ''
 
 
 def _summarize_and_tag(title: str, text: str, service: str) -> tuple:
@@ -364,7 +357,7 @@ def _summarize_and_tag(title: str, text: str, service: str) -> tuple:
             messages=[{'role': 'user', 'content': [{'text': prompt}]}],
             inferenceConfig={'maxTokens': 1500},
         )
-        response_text = _response_text(resp)
+        response_text = news_crawler._response_text(resp)
 
         start_idx = response_text.find('{')
         if start_idx >= 0:
@@ -487,7 +480,7 @@ def _discover_new_services(known_services: list) -> tuple:
             messages=[{'role': 'user', 'content': [{'text': prompt}]}],
             inferenceConfig={'maxTokens': 300},
         )
-        text = _response_text(resp)
+        text = news_crawler._response_text(resp)
         start_idx = text.find('[')
         if start_idx < 0:
             return [], 'no JSON array in Bedrock discovery response'
@@ -500,7 +493,12 @@ def _discover_new_services(known_services: list) -> tuple:
 
     unique = []
     for slug in parsed:
-        slug = str(slug).strip().lower()
+        # Bedrock's JSON array should only ever contain strings, but a
+        # non-string entry (null, a number) would otherwise coerce to a
+        # literal-looking slug ('none', '123') and pass the regex below.
+        if not isinstance(slug, str):
+            continue
+        slug = slug.strip().lower()
         if slug and slug not in known and slug not in unique and _SERVICE_SLUG_RE.match(slug):
             unique.append(slug)
     return unique[:MAX_NEW_SERVICES_PER_RUN], None
@@ -518,6 +516,10 @@ def _register_auto_services(new_services: list) -> None:
     union and slicing to MAX_AUTO_SERVICES (the original approach) truncates
     alphabetically, which can silently drop already-tracked services (their
     crawl just stops) and/or the very slugs this run just discovered.
+
+    Also preserves an existing 'disabled' status rather than forcing
+    'active' -- overwriting it here would fight the exact disabled-status
+    invariant news_crawler.py's _record_history enforces for real sources.
     """
     existing = table.get_item(Key={'PK': 'CRAWLER#__auto__', 'SK': 'CONFIG'}).get('Item', {})
     existing_services = set(existing.get('awsServices', []))
@@ -533,7 +535,7 @@ def _register_auto_services(new_services: list) -> None:
         'SK': 'CONFIG',
         'sourceId': '__auto__',
         'sourceName': '자동 발견',
-        'status': 'active',
+        'status': existing.get('status', 'active'),
         'awsServices': merged,
         'newsQueries': [],
         'customUrls': [],

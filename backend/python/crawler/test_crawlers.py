@@ -1462,11 +1462,11 @@ class TestResponseTextHelper(unittest.TestCase):
         ]}}}
         self.assertEqual(news_crawler._response_text(resp), 'the answer')
 
-    def test_tech_crawler_skips_non_text_block(self):
-        resp = {'output': {'message': {'content': [
-            {'type': 'other'}, {'text': 'the answer'},
-        ]}}}
-        self.assertEqual(tech_crawler._response_text(resp), 'the answer')
+    def test_tech_crawler_reuses_news_crawler_response_text(self):
+        # tech_crawler has no _response_text of its own -- it imports
+        # news_crawler for its SigV4 client and reuses this helper too,
+        # rather than duplicating it (see module docstring).
+        self.assertFalse(hasattr(tech_crawler, '_response_text'))
 
     def test_no_text_block_returns_empty_string(self):
         resp = {'output': {'message': {'content': [{'type': 'other'}]}}}
@@ -1636,6 +1636,29 @@ class TestRegisterAutoServices(unittest.TestCase):
         accepted_new = [s for s in ('new-a', 'new-b', 'new-c') if s in put_item['awsServices']]
         self.assertEqual(len(accepted_new), 2)
 
+    def test_preserves_disabled_status_instead_of_forcing_active(self):
+        # Regression: unconditionally writing 'active' would silently
+        # re-enable a source the user disabled, contradicting the same
+        # disabled-status invariant news_crawler._record_history enforces.
+        mock_table = mock.MagicMock()
+        mock_table.get_item.return_value = {
+            'Item': {'awsServices': ['existing-svc'], 'status': 'disabled'},
+        }
+        with mock.patch.object(tech_crawler, 'table', mock_table):
+            tech_crawler._register_auto_services(['new-svc'])
+
+        put_item = mock_table.put_item.call_args[1]['Item']
+        self.assertEqual(put_item['status'], 'disabled')
+
+    def test_first_registration_defaults_to_active(self):
+        mock_table = mock.MagicMock()
+        mock_table.get_item.return_value = {}
+        with mock.patch.object(tech_crawler, 'table', mock_table):
+            tech_crawler._register_auto_services(['new-svc'])
+
+        put_item = mock_table.put_item.call_args[1]['Item']
+        self.assertEqual(put_item['status'], 'active')
+
 
 # ---------------------------------------------------------------------------
 # 17. news_crawler._record_history -- crawl history + status badge
@@ -1684,6 +1707,19 @@ class TestRecordHistory(unittest.TestCase):
             news_crawler._record_history('wooribank', 1, 0, [], start_time=0.0)  # must not raise
 
         mock_table.put_item.assert_called_once()  # history is still recorded
+
+    def test_status_update_condition_requires_existing_item(self):
+        # Regression: UpdateItem upserts by default. Without
+        # attribute_exists(PK), a source deleted between the orchestrator's
+        # scan and this crawl finishing would have its CONFIG item silently
+        # recreated as a self-reviving zombie (the disabled-only condition
+        # is satisfied vacuously when there's no item at all to check).
+        mock_table = mock.MagicMock()
+        with mock.patch.object(news_crawler, 'table', mock_table):
+            news_crawler._record_history('wooribank', 1, 0, [], start_time=0.0)
+
+        condition = mock_table.update_item.call_args[1]['ConditionExpression']
+        self.assertIn('attribute_exists(PK)', condition)
 
     def test_other_dynamodb_errors_on_status_update_are_not_swallowed_as_disabled(self):
         mock_table = mock.MagicMock()

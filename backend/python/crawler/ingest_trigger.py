@@ -22,21 +22,23 @@ bedrock_agent = boto3.client('bedrock-agent')
 def handler(event, context):
     """Trigger Bedrock KB ingestion job.
 
-    Expected event (from Step Functions aggregation of crawler results):
-      {
-        "crawlerResults": [
-          {"docsAdded": 5, "docsUpdated": 0, "errors": []},
-          ...
-        ]
-      }
+    Expected event -- the Step Functions ParallelCrawl branch outputs,
+    unwrapped: [techResult, [newsResult, ...]] (a bare list; techResult and
+    each newsResult are {"docsAdded", "docsUpdated", "errors"} dicts). A
+    dict shaped {"crawlerResults": [...]} is also accepted for direct/test
+    invocation.
 
-    Returns:
+    Returns on success:
       {
-        "status": "STARTED" | "SKIPPED" | "ERROR",
+        "status": "STARTED" | "SKIPPED",
         "ingestionJobId": "...",
         "totalDocsAdded": N,
         "totalErrors": N
       }
+
+    Raises (rather than returning an "ERROR" status) if KB_ID/DATA_SOURCE_ID
+    is unset or start_ingestion_job fails, so the failure surfaces as a
+    FAILED Step Functions execution instead of a silently-successful one.
     """
     # Step Functions Map outputs a list of per-source results (each is [tech_result, news_result])
     raw = event if isinstance(event, list) else event.get('crawlerResults', [])

@@ -588,7 +588,9 @@ def _record_history(source_id: str, docs_added: int, docs_updated: int,
     optionally flip the source's CONFIG status so its badge isn't stuck on
     'idle' forever. update_status=False for the synthetic __tech__/__auto__
     source IDs, which have no real CONFIG item to update.
-    # ponytail: no TTL -- daily cadence means ~365 items/year/source, not worth pruning
+
+    No TTL on the HISTORY# items -- daily cadence means ~365 items/year/
+    source, not worth pruning.
     """
     timestamp = datetime.now(timezone.utc).isoformat()
     try:
@@ -607,10 +609,18 @@ def _record_history(source_id: str, docs_added: int, docs_updated: int,
             try:
                 table.update_item(
                     Key={'PK': f'CRAWLER#{source_id}', 'SK': 'CONFIG'},
-                    # A user can disable a source between the orchestrator's
-                    # scan and this crawl finishing; without this guard the
-                    # status update below would silently re-enable it.
-                    ConditionExpression='attribute_not_exists(#status) OR #status <> :disabled',
+                    # attribute_exists(PK) matters as much as the disabled
+                    # check: UpdateItem upserts by default, so a source
+                    # deleted between the orchestrator's scan and this crawl
+                    # finishing (DELETE /api/crawler/sources/{id}) would
+                    # otherwise have this call silently recreate its CONFIG
+                    # item -- a self-reviving zombie that the next scan picks
+                    # up again. A user disabling a source mid-run hits the
+                    # same guard via the disabled check.
+                    ConditionExpression=(
+                        'attribute_exists(PK) AND '
+                        '(attribute_not_exists(#status) OR #status <> :disabled)'
+                    ),
                     UpdateExpression='SET #status = :status, lastCrawledAt = :ts',
                     ExpressionAttributeNames={'#status': 'status'},
                     ExpressionAttributeValues={
@@ -622,7 +632,7 @@ def _record_history(source_id: str, docs_added: int, docs_updated: int,
             except ClientError as e:
                 if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
                     raise
-                logger.info(f'Skipping status update for {source_id}: source was disabled mid-run')
+                logger.info(f'Skipping status update for {source_id}: source was deleted or disabled mid-run')
     except Exception as e:
         logger.warning(f'Failed to record crawl history for {source_id}: {e}')
 
