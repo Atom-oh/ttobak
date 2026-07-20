@@ -212,8 +212,11 @@ paths:
     post:
       summary: Tech Crawler Lambda
       description: |
-        Fetches AWS What's New RSS, AWS Blog RSS for specified services.
-        Generates summaries and auto-tags via Bedrock.
+        Fetches AWS What's New RSS, AWS Blog RSS, and the AgentCore Gateway
+        Web Search connector for specified services -- plus a once-per-run
+        discovery search that auto-registers newly-found AWS services under
+        CRAWLER#__auto__/CONFIG (ADR-021). Generates summaries and auto-tags
+        via Bedrock.
       tags: [Step Functions Lambdas]
       requestBody:
         content:

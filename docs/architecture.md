@@ -144,6 +144,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-018: 양방향 MCP back-data 도구](decisions/ADR-018-mcp-back-data-tools.md) (승인됨)
 - [ADR-019: pyannote.audio 기반 음향 화자분리 도입](decisions/ADR-019-acoustic-speaker-diarization-pyannote.md) (승인됨)
 - [ADR-020: 문서 허브 v2 — 개인 문서, 위키링크 인덱스, 슬라이드 업로드](decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) (승인됨)
+- [ADR-021: 크롤러 → KB 인제스천 파이프라인 수리 및 AWS 서비스 자동 발견](decisions/ADR-021-crawler-pipeline-repair-and-service-autodiscovery.md) (승인됨)
 
 ### 운영
 
@@ -237,6 +238,7 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-018: Bidirectional MCP Back-Data Tools](decisions/ADR-018-mcp-back-data-tools.md) (Accepted)
 - [ADR-019: Adopt pyannote.audio for Acoustic Speaker Diarization](decisions/ADR-019-acoustic-speaker-diarization-pyannote.md) (Accepted)
 - [ADR-020: Document Hub v2 — Personal Documents, Wikilink Index, Slide Uploads](decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) (Accepted)
+- [ADR-021: Repair the Crawler → KB Ingestion Pipeline and Add AWS Service Auto-Discovery](decisions/ADR-021-crawler-pipeline-repair-and-service-autodiscovery.md) (Accepted)
 
 ### Operations
 
