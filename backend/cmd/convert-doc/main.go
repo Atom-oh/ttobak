@@ -69,13 +69,18 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return nil
 	}
 
+	ext := strings.ToLower(filepath.Ext(key))
+	if ext != ".ppt" && ext != ".pptx" {
+		return fmt.Errorf("unsupported file extension for key %q", key)
+	}
+
 	workDir, err := os.MkdirTemp("/tmp", "convert-doc-")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
 	defer os.RemoveAll(workDir)
 
-	inPath := filepath.Join(workDir, "in"+filepath.Ext(key))
+	inPath := filepath.Join(workDir, "in"+ext)
 	if err := downloadObject(ctx, key, inPath); err != nil {
 		return fmt.Errorf("download %s: %w", key, err)
 	}
