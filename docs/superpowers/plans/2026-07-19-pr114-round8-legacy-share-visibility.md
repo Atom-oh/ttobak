@@ -11,10 +11,10 @@
       continue
   }
   ```
-  This one `continue` covers two very different cases with no way to tell them apart in the response: (a) no share exists (nothing to do, fine), and (b) a share exists but has `Origin == ""` on a meeting still shared to this account — which is EITHER a legacy account-share written before the `Origin` field existed, OR a perfectly normal, correctly-preserved direct grant the owner made explicitly (both collapse to the identical `Origin == ""` shape — confirmed via `account_test.go`'s existing `TestRemoveMember_PreservesDirectShare`, which asserts a direct share with `Origin: ""` survives cleanup untouched, and `CreateShare`'s own clobber-guard, which deliberately leaves a collision at `Origin==""`). **This means a naive "flag every `Origin != account` share as legacy" surfaces a false positive for every account that has ANY direct shares at all** — pure noise on every single member removal for such accounts, not a useful signal. This was caught in this plan's own plan-gate review (codex, MAJOR, confirmed against `account_test.go:524` and `CreateShare`'s clobber-guard) and is fixed below by renaming the field to `AmbiguousUntaggedMeetingIDs` and documenting the false-positive possibility explicitly, rather than pretending the signal is precise.
+  This one `continue` covers two very different cases with no way to tell them apart in the response: (a) no share exists (nothing to do, fine), and (b) a share exists but has `Origin == ""` on a meeting still shared to this account — which is EITHER a legacy account-share written before the `Origin` field existed, OR a perfectly normal, correctly-preserved direct grant the owner made explicitly to the SAME removed member for a meeting that also happens to be linked to this account (both collapse to the identical `Origin == ""` shape — confirmed via `account_test.go`'s existing `TestRemoveMember_PreservesDirectShare`, which asserts a direct share with `Origin: ""` survives cleanup untouched, and `CreateShare`'s own clobber-guard, which deliberately leaves a collision at `Origin==""`). **This means a naive "flag every `Origin != account` share as legacy" surfaces a false positive whenever the removed member ALSO holds a direct share to a meeting linked to this account** — noise on that specific removal, not a useful signal for that meeting. This was caught in this plan's own plan-gate review (codex, MAJOR, confirmed against `account_test.go:524` and `CreateShare`'s clobber-guard) and is fixed below by renaming the field to `AmbiguousUntaggedMeetingIDs` and documenting the false-positive possibility explicitly, rather than pretending the signal is precise.
 - `RemoveMember` currently returns `(failedMeetingIDs []string, err error)`. This plan changes the return type to a new `*RemoveMemberResult{FailedMeetingIDs, AmbiguousUntaggedMeetingIDs []string}` struct so the two lists are distinguishable to callers.
 - The HTTP handler (`backend/internal/handler/account.go`'s `RemoveMember`) currently returns 204 when `len(failedMeetingIDs) == 0`, or 200 + `{"removed": true, "cleanupFailedForMeetings": [...]}` otherwise. This plan adds an `ambiguousUntaggedMeetingIDs` field to that same 200 body, triggering the 200 (non-204) path whenever either list is non-empty. Both slices are explicitly initialized to `[]string{}` (not left as a nil zero value) so the JSON response always has `[]`, never `null`, for these two fields — a nil Go slice marshals to JSON `null`, which is an unnecessary special case for every consumer of this response to handle.
-- `docs/API-SPEC.md`'s "Remove Member" section documents the current 204/200 contract and already has a "Known limitation & remediation" paragraph about legacy shares — this plan updates both to mention the new response field, INCLUDING the false-positive caveat (an account with direct shares will see them listed here too — this is a coarse signal, not a precise "these are definitely legacy" list).
+- `docs/API-SPEC.md`'s "Remove Member" section documents the current 204/200 contract and already has a "Known limitation & remediation" paragraph about legacy shares — this plan updates both to mention the new response field, INCLUDING the false-positive caveat (the removed member's own direct share to a meeting linked to this account will be listed here too — this is a coarse signal, not a precise "these are definitely legacy" list).
 
 **Explicitly out of scope for this round (tracked as follow-ups, not silently dropped):**
 1. **Frontend wiring** — `frontend/src/lib/api.ts`'s `removeMember` return type and `AccountDetailClient.tsx`'s `handleRemoveMember` only reference `cleanupFailedForMeetings` today; this plan does not add `ambiguousUntaggedMeetingIDs` to either. The new field is API-visible (inspectable via network tab / curl) but not yet shown in the product UI. Flagged here so it isn't mistaken for an oversight.
@@ -30,6 +30,7 @@
 - Modify: `backend/internal/service/account.go`
 - Modify: `backend/internal/service/account_test.go`
 - Modify: `backend/internal/handler/account.go`
+- Modify: `backend/internal/handler/account_test.go`
 - Modify: `docs/API-SPEC.md`
 
 - [ ] **Step 1: Define `RemoveMemberResult` and change `RemoveMember`'s signature**
@@ -45,12 +46,14 @@ In `backend/internal/service/account.go`, above `RemoveMember`, add:
 // shape of BOTH a legacy account-share (written before the Origin field
 // existed) AND a perfectly normal direct grant the owner made explicitly --
 // they are indistinguishable at this layer (see model.Share.Origin's doc
-// and CreateShare's clobber-guard). An account with any direct shares at
-// all will see those meetings listed here on every removal; this is
-// intentional noise traded for not silently hiding the legacy case, not a
-// bug. Surfacing this list gives an operator a signal to check whether
-// backfill-share-origin is needed for this account, without RemoveMember
-// itself guessing wrong and revoking an owner's explicit direct share.
+// and CreateShare's clobber-guard). Any meeting where the removed member
+// ALSO holds a direct share to a meeting still linked to this account will
+// appear here too, regardless of whether a legacy account-share also
+// exists; this is intentional noise traded for not silently hiding the
+// legacy case, not a bug. Surfacing this list gives an operator a signal to
+// check whether backfill-share-origin is needed for this account, without
+// RemoveMember itself guessing wrong and revoking an owner's explicit
+// direct share.
 type RemoveMemberResult struct {
 	FailedMeetingIDs            []string
 	AmbiguousUntaggedMeetingIDs []string
@@ -106,9 +109,11 @@ Add two new tests in the same file:
 1. `TestRemoveMember_SurfacesAmbiguousLegacyShare` — create an account, add a TAM member, set `repo.meetingRefs[acc.AccountID]` to one ref, set `repo.meetings["m-1"]` to `&model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}` (needed since round 7 added a `GetMeetingByID` cross-account guard before the share check), set `repo.shares[acctShareKey("tam-1", "m-1")]` to a `Share` with `Origin: ""` (legacy shape). Call `RemoveMember`, assert `err == nil`, assert `result.AmbiguousUntaggedMeetingIDs` equals `["m-1"]`, assert `len(result.FailedMeetingIDs) == 0` (this is NOT a failure), and assert the share itself was left untouched (`repo.shares[acctShareKey("tam-1", "m-1")] != nil`).
 2. `TestRemoveMember_EmptyResultListsAreNotNil` — create an account, add and then remove a member with NO meeting refs at all (empty account). Call `RemoveMember`, assert `err == nil`, then assert `result.FailedMeetingIDs != nil && len(result.FailedMeetingIDs) == 0` and the same for `result.AmbiguousUntaggedMeetingIDs` — proves Step 2's pre-initialization actually took effect (a test using `reflect.DeepEqual(result.FailedMeetingIDs, []string{})` or simply checking `!= nil` both work; prefer the explicit nil-check since that's the exact JSON-encoding distinction that matters).
 
+Add one new test in `backend/internal/handler/account_test.go` (mirroring the existing `TestHandlerRemoveMember_PartialCleanupFailureReturns200WithBody`'s setup style): `TestHandlerRemoveMember_AmbiguousShareReturns200WithBody` — set up an account/member/meeting/ref the same way, but give the share `Origin: ""` (ambiguous shape) instead of forcing a `shareOpErr`. Call the handler, assert the HTTP status is 200 (not 204), decode the JSON body and assert `cleanupFailedForMeetings` is present and equals `[]` (an empty array, not absent/null — confirms the pre-initialized-slice fix from Step 2 survives JSON encoding through the real handler path, not just the service-layer struct), and assert `ambiguousUntaggedMeetingIDs` equals `["m-1"]`.
+
 - [ ] **Step 5: Update API-SPEC.md**
 
-In `docs/API-SPEC.md`'s "Remove Member (owner 전용)" section, add `ambiguousUntaggedMeetingIDs` to the documented 200 response body example (a sibling field to `cleanupFailedForMeetings`), and add to the existing "Known limitation & remediation" paragraph: (a) `RemoveMember` now surfaces which meetings hit this exact ambiguity in its own response, and (b) this is explicitly a COARSE/noisy signal — an account with real direct shares will see those same meetings listed on every removal, so the presence of an entry does not by itself mean "this is definitely a legacy share needing backfill." Also add one sentence noting the frontend does not yet surface this new field (tracked as a follow-up, not silently dropped) and that already-removed members still have no backfill CLI path back to remediation (also a follow-up).
+In `docs/API-SPEC.md`'s "Remove Member (owner 전용)" section: add `ambiguousUntaggedMeetingIDs` to the documented 200 response body example (a sibling field to `cleanupFailedForMeetings`); update the existing "Response: 200 OK (멤버십 삭제는 성공했으나 일부 미팅의 Share cleanup이 실패한 경우)" line's condition text to also cover the ambiguous-share case (200 now triggers on cleanup failure OR an ambiguous untagged share, not failure alone) so the status-code contract description matches Step 3's actual `||` condition; and add to the existing "Known limitation & remediation" paragraph: (a) `RemoveMember` now surfaces which meetings hit this exact ambiguity in its own response, and (b) this is explicitly a COARSE/noisy signal — **specifically**, any meeting where the removed member ALSO holds a direct share (independent of whether a legacy account-share exists) will appear here too, so the presence of an entry does not by itself mean "this is definitely a legacy share needing backfill." Also add one sentence noting the frontend does not yet surface this new field (tracked as a follow-up, not silently dropped) and that already-removed members still have no backfill CLI path back to remediation (also a follow-up).
 
 - [ ] **Step 6: Verify**
 
