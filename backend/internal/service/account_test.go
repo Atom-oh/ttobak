@@ -49,6 +49,18 @@ type mockAccountRepo struct {
 	// DeleteShareIfAccountOrigin call sees the new direct share, not the one
 	// GetShare read.
 	replaceWithDirectShareAfterGet string
+
+	// replaceWithOtherAccountShareAfterGet simulates the cross-account
+	// re-share race the review flagged: the meeting is re-shared from THIS
+	// account to a different account (fresh CreateShareIfMember grant) in
+	// the gap between cleanup's GetMeetingByID+GetShare reads and its
+	// delete. GetShare's returned copy still reflects the row as it was at
+	// read time (this account's origin=="account" share), but the
+	// underlying map is overwritten with the other account's fresh grant
+	// immediately after, so DeleteShareIfAccountOrigin's own accountId
+	// condition -- not the earlier, non-atomic meeting.AccountID read -- is
+	// what has to refuse to delete it.
+	replaceWithOtherAccountShareAfterGet string
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -148,17 +160,22 @@ func (m *mockAccountRepo) GetShare(_ context.Context, sharedToID, meetingID stri
 			MeetingID: meetingID, SharedToID: sharedToID, Permission: model.PermissionEdit, Origin: "",
 		}
 	}
+	if m.replaceWithOtherAccountShareAfterGet != "" && m.replaceWithOtherAccountShareAfterGet == key {
+		m.shares[key] = &model.Share{
+			MeetingID: meetingID, SharedToID: sharedToID, Permission: model.PermissionRead, Origin: model.ShareOriginAccount, AccountID: "other-acc",
+		}
+	}
 	return &cp, nil
 }
 
-func (m *mockAccountRepo) DeleteShareIfAccountOrigin(_ context.Context, sharedToID, meetingID string) error {
+func (m *mockAccountRepo) DeleteShareIfAccountOrigin(_ context.Context, accountID, sharedToID, meetingID string) error {
 	if err, ok := m.shareOpErr[meetingID]; ok {
 		return err
 	}
 	key := acctShareKey(sharedToID, meetingID)
 	existing, ok := m.shares[key]
-	if !ok || existing.Origin != model.ShareOriginAccount {
-		return fmt.Errorf("%w: share %s not account-origin", repository.ErrConditionFailed, key)
+	if !ok || existing.Origin != model.ShareOriginAccount || existing.AccountID != accountID {
+		return fmt.Errorf("%w: share %s not account-origin for account %s", repository.ErrConditionFailed, key, accountID)
 	}
 	delete(m.shares, key)
 	return nil
@@ -510,7 +527,7 @@ func TestRemoveMember_RevokesAccountOriginShare(t *testing.T) {
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
 	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID, SharedToAccount: true}
 	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
-		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount, AccountID: acc.AccountID,
 	}
 
 	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false); err != nil {
@@ -575,7 +592,7 @@ func TestRemoveMember_RaceCreatingDirectShareDuringCleanupIsNotDeleted(t *testin
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
 	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID, SharedToAccount: true}
 	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
-		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount, AccountID: acc.AccountID,
 	}
 	// Simulates the owner creating a new direct share for tam-1/m-1 in the
 	// window between cleanup's GetShare read and its DeleteShareIfAccountOrigin
@@ -695,9 +712,12 @@ func TestRemoveMember_CrossAccountMeetingRefNotTouched(t *testing.T) {
 	// RemoveMember here would delete a share that actually belongs to
 	// other-acc's membership grant.
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
-	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "other-acc"}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "other-acc", SharedToAccount: true}
 	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
-		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+		// AccountID is other-acc's fresh grant, not acc.AccountID's -- this is
+		// exactly the row DeleteShareIfAccountOrigin's accountId condition
+		// must refuse to touch even though its origin is also "account".
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount, AccountID: "other-acc",
 	}
 
 	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false); err != nil {
@@ -705,6 +725,38 @@ func TestRemoveMember_CrossAccountMeetingRefNotTouched(t *testing.T) {
 	}
 	if repo.shares[acctShareKey("tam-1", "m-1")] == nil {
 		t.Error("expected share belonging to a different account's re-share to survive this account's RemoveMember cleanup")
+	}
+}
+
+func TestRemoveMember_CrossAccountReshareRaceDuringCleanupIsNotDeleted(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	// Unlike TestRemoveMember_CrossAccountMeetingRefNotTouched (where the
+	// read-time meeting.AccountID check already excludes the ref), this
+	// meeting still shows acc.AccountID at GetMeetingByID time -- the
+	// re-share to "other-acc" happens AFTER that read, in the same gap
+	// before DeleteShareIfAccountOrigin's delete. The review's MAJOR: this
+	// exact race is not excluded by any read, only by a condition on the
+	// row being deleted.
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID, SharedToAccount: true}
+	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount, AccountID: acc.AccountID,
+	}
+	repo.replaceWithOtherAccountShareAfterGet = acctShareKey("tam-1", "m-1")
+
+	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	share := repo.shares[acctShareKey("tam-1", "m-1")]
+	if share == nil {
+		t.Fatal("expected the racily-created other-account share to survive cleanup, got nil")
+	}
+	if share.AccountID != "other-acc" {
+		t.Errorf("expected the surviving share to be other-acc's fresh grant, got AccountID=%q", share.AccountID)
 	}
 }
 

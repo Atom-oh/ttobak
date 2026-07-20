@@ -1178,6 +1178,7 @@ func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID,
 		Email:      email,
 		Permission: permission,
 		Origin:     model.ShareOriginAccount,
+		AccountID:  accountID,
 		CreatedAt:  now,
 		EntityType: "SHARE",
 	}
@@ -1196,6 +1197,7 @@ func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID,
 		Email:      email,
 		Permission: permission,
 		Origin:     model.ShareOriginAccount,
+		AccountID:  accountID,
 		CreatedAt:  now,
 		EntityType: "SHARE",
 	}
@@ -1293,28 +1295,33 @@ func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID,
 // BackfillShareOrigin conditionally tags BOTH copies of a legacy Share
 // (recipient-lookup PK=USER#{sharedToID}/SK=SHARED#{meetingID}, and
 // meeting-lookup PK=MEETING#{meetingID}/SK=SHARE_TO#{sharedToID} --
-// CreateShare/CreateShareIfMember always write both) as account-origin, in a
-// single TransactWriteItems call. Used only by the one-time backfill CLI
-// (cmd/backfill-share-origin) for Share records written by
-// ShareMeetingToAccount before the Origin field existed. Each item's
-// ConditionCheck requires origin to still be absent/empty at write time, so a
-// concurrent RemoveMember cleanup (which deletes the item) can't race this
-// into a resurrected/half-updated state -- and because both updates are in
-// one transaction, either both rows end up tagged or neither does: there is
-// no partially-tagged pair for a re-run to miss (a re-run's CLI-level
-// candidate detection, GetShare on the recipient row, would otherwise see
-// Origin=="account" already and skip re-attempting a still-stale
-// meeting-lookup row). On TransactionCanceledException this returns
-// ErrConditionFailed and the caller treats that meeting/member pair as a
-// no-op skip, not an error.
-func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, sharedToID, meetingID string) error {
+// CreateShare/CreateShareIfMember always write both) as account-origin AND
+// stamps accountId, in a single TransactWriteItems call. Used only by the
+// one-time backfill CLI (cmd/backfill-share-origin) for Share records
+// written by ShareMeetingToAccount before the Origin/AccountID fields
+// existed. Stamping accountId here (not just origin) matters: without it, a
+// backfilled row would have origin=="account" but accountId=="", which
+// DeleteShareIfAccountOrigin's accountId-scoped condition would then refuse
+// to ever delete -- reintroducing the exact un-revocable state this backfill
+// exists to fix. Each item's ConditionCheck requires origin to still be
+// absent/empty at write time, so a concurrent RemoveMember cleanup (which
+// deletes the item) can't race this into a resurrected/half-updated state --
+// and because both updates are in one transaction, either both rows end up
+// tagged or neither does: there is no partially-tagged pair for a re-run to
+// miss (a re-run's CLI-level candidate detection, GetShare on the recipient
+// row, would otherwise see Origin=="account" already and skip
+// re-attempting a still-stale meeting-lookup row). On
+// TransactionCanceledException this returns ErrConditionFailed and the
+// caller treats that meeting/member pair as a no-op skip, not an error.
+func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, accountID, sharedToID, meetingID string) error {
 	condition := expression.AttributeExists(expression.Name("PK")).And(
 		expression.Or(
 			expression.AttributeNotExists(expression.Name("origin")),
 			expression.Name("origin").Equal(expression.Value("")),
 		),
 	)
-	update := expression.Set(expression.Name("origin"), expression.Value(model.ShareOriginAccount))
+	update := expression.Set(expression.Name("origin"), expression.Value(model.ShareOriginAccount)).
+		Set(expression.Name("accountId"), expression.Value(accountID))
 	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
 	if err != nil {
 		return fmt.Errorf("build backfill origin condition: %w", err)
@@ -1412,18 +1419,27 @@ func (r *DynamoDBRepository) DeleteShare(ctx context.Context, sharedToID, meetin
 }
 
 // DeleteShareIfAccountOrigin deletes both share records ONLY if the
-// recipient-lookup row still has origin=="account" at delete time, in a
-// single transaction. Used by RemoveMember's cleanup loop, which decides
-// what to delete from an earlier, separate GetShare read -- without this
-// condition, an owner creating a new direct share for the same
-// (targetUserID, meetingID) in the gap between that read and this delete
-// would have their explicit grant silently deleted along with the stale
-// account-origin row it replaced. On ConditionalCheckFailedException (the
-// row's origin changed, or the row no longer exists) this returns
-// ErrConditionFailed and the caller treats it as a no-op skip, matching
-// BackfillShareOrigin's convention for the same kind of condition failure.
-func (r *DynamoDBRepository) DeleteShareIfAccountOrigin(ctx context.Context, sharedToID, meetingID string) error {
-	condition := expression.Name("origin").Equal(expression.Value(model.ShareOriginAccount))
+// recipient-lookup row still has origin=="account" AND accountId==accountID
+// at delete time, in a single transaction. Used by RemoveMember's cleanup
+// loop, which decides what to delete from an earlier, separate GetShare +
+// GetMeetingByID read -- the accountID condition (not just origin) is what
+// actually closes the cross-account race: without it, a meeting re-shared
+// from THIS account to a DIFFERENT account in the gap between that read and
+// this delete would have the new account's fresh CreateShareIfMember grant
+// silently deleted by the old account's RemoveMember, because both rows
+// carry origin=="account" and the cleanup loop's meeting.AccountID re-check
+// is a separate, non-atomic read that can't itself prevent the race -- only
+// a condition on the row being deleted can. Also protects an owner's fresh
+// direct share the same way the origin-only condition always did (a direct
+// share has accountId=="" too, so it fails this condition either way). On
+// ConditionalCheckFailedException (origin/accountId changed, or the row no
+// longer exists) this returns ErrConditionFailed and the caller treats it as
+// a no-op skip, matching BackfillShareOrigin's convention for the same kind
+// of condition failure.
+func (r *DynamoDBRepository) DeleteShareIfAccountOrigin(ctx context.Context, accountID, sharedToID, meetingID string) error {
+	condition := expression.Name("origin").Equal(expression.Value(model.ShareOriginAccount)).And(
+		expression.Name("accountId").Equal(expression.Value(accountID)),
+	)
 	expr, err := expression.NewBuilder().WithCondition(condition).Build()
 	if err != nil {
 		return fmt.Errorf("build delete-if-account-origin condition: %w", err)

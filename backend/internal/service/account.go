@@ -82,7 +82,7 @@ type accountRepo interface {
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
 	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
 	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
-	DeleteShareIfAccountOrigin(ctx context.Context, sharedToID, meetingID string) error
+	DeleteShareIfAccountOrigin(ctx context.Context, accountID, sharedToID, meetingID string) error
 	ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error)
 	PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error
 	ListAccountDocuments(ctx context.Context, pk string) ([]model.AccountDocument, error)
@@ -436,12 +436,15 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 		}
 		// This GetShare read is just a cheap pre-filter to skip meetings with
 		// no account-origin share -- DeleteShareIfAccountOrigin re-checks
-		// origin=="account" as a transaction condition at delete time, so an
-		// owner creating a new direct share for this exact (user, meeting)
-		// pair in the gap between the read above and this delete can't have
-		// that new grant silently swept up: the condition fails and the
-		// delete is skipped instead.
-		if err := s.repo.DeleteShareIfAccountOrigin(ctx, targetUserID, ref.MeetingID); err != nil {
+		// origin=="account" AND accountId==accountID as a transaction
+		// condition at delete time, so neither an owner creating a new direct
+		// share NOR this same meeting being re-shared to a DIFFERENT account
+		// in the gap between the read above and this delete can have that
+		// new grant silently swept up: the condition fails and the delete is
+		// skipped instead. The accountID here (not accountID re-derived from
+		// meeting, which the read above already re-checked non-atomically)
+		// is this call's own security boundary against that exact race.
+		if err := s.repo.DeleteShareIfAccountOrigin(ctx, accountID, targetUserID, ref.MeetingID); err != nil {
 			if errors.Is(err, repository.ErrConditionFailed) {
 				continue // origin changed (or row gone) between the read and this delete -- no-op skip, not a failure
 			}

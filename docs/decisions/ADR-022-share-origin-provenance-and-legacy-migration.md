@@ -22,6 +22,7 @@ This PR adds `Share.Origin` (`"account"` for team-published shares, `""` for dir
 ### 1. Origin semantics
 - `Origin == "account"`: written exclusively by `CreateShareIfMember` (a single `TransactWriteItems` call that ConditionChecks live `AccountMember` existence and Puts both Share rows atomically — closes the TOCTOU window a plain `GetMember`-then-`CreateShare` pair would leave between `AddMember`/`ShareMeetingToAccount`). Safe for `RemoveMember`'s cleanup to unilaterally revoke.
 - `Origin == ""`: either (a) a direct grant from `ShareMeetingByEmail`/`RevokeShare`'s counterpart, which must NEVER be touched by account-membership cleanup, or (b) a legacy account-share written by `ShareMeetingToAccount` before this PR, which SHOULD be revoked on removal but isn't tagged as such. **These two cases are structurally identical rows and cannot be distinguished by any field this system persists.** This is a permanent property of the migration gap, not a bug to fix later — see "Alternatives Considered."
+- `AccountID` (new field, this round): every `Origin == "account"` share also carries the granting account's ID, and `DeleteShareIfAccountOrigin`'s delete condition is scoped to `origin == "account" AND accountId == :accountID`, not origin alone. Without this, a meeting re-shared from account A to account B in the gap between A's `RemoveMember` cleanup reading the meeting (still showing A at read time) and deleting the share (by then B's fresh `CreateShareIfMember` grant) could have B's valid grant deleted by A's removal — the meeting-level `meeting.AccountID != accountID` guard that read happens with is a separate, non-atomic call and cannot itself close that race; only a condition on the row being deleted can. `BackfillShareOrigin` stamps `AccountID` alongside `Origin` for the same reason: a backfilled row with `Origin=="account"` but no `AccountID` would fail this same condition and become un-revocable all over again.
 
 ### 2. RemoveMember's force gate (this round's fix)
 Earlier drafts of this PR made `RemoveMember` always delete membership and merely *report* `AmbiguousUntaggedMeetingIDs` in the response — i.e. fail-open: a member holding only ambiguous shares kept transcript/Bedrock access indefinitely, with the failure signal easy to miss (200-with-body looks like success). This ADR changes that to fail-closed by default:
@@ -32,7 +33,9 @@ Earlier drafts of this PR made `RemoveMember` always delete membership and merel
 This means: for an account that has already run the backfill CLI (below), removal behaves exactly as before (no ambiguous shares exist, nothing is ever blocked). For an account that hasn't, the owner is forced to make a conscious choice at removal time instead of the ambiguity silently resolving to "access retained forever."
 
 ### 3. Legacy migration: `backend/cmd/backfill-share-origin`
-A manually-run, one-account-at-a-time CLI that retags a legacy account-share's `Origin` to `"account"` so it becomes revocable again. It is NOT run automatically by any deploy pipeline — this is deliberate; retagging the wrong row (a genuine direct grant, indistinguishable per §1) would let a future `RemoveMember` silently revoke an owner's explicit grant, and that risk should sit with a human decision per account, not a script.
+A manually-run, one-account-at-a-time CLI that retags a legacy account-share's `Origin` to `"account"` (and stamps `AccountID`) so it becomes revocable again. It is NOT run automatically by any deploy pipeline — this is deliberate; retagging the wrong row (a genuine direct grant, indistinguishable per §1) would let a future `RemoveMember` silently revoke an owner's explicit grant, and that risk should sit with a human decision per account, not a script.
+
+Candidate detection enumerates each account-linked meeting's Share rows directly (`ListSharesForMeeting`, keyed on the meeting, not on current membership) rather than joining through `ListAccountMembers` — this is what lets the CLI find and tag legacy shares belonging to users who have **already been removed** from the account by the time it runs, not just current members (see §4 below; this closes what an earlier draft of this ADR accepted as a permanent Known Limitation).
 
 **Operational procedure (dry-run first, always):**
 ```
@@ -40,23 +43,27 @@ go run ./cmd/backfill-share-origin --account-id <id>                # dry-run: l
 go run ./cmd/backfill-share-origin --account-id <id> --apply        # tags every listed candidate
 go run ./cmd/backfill-share-origin --account-id <id> --apply --exclude userId1:meetingId1,userId2:meetingId2
 ```
-- Review the dry-run's CANDIDATE list. Every listed `(member, meeting)` pair is *ambiguous by construction* — the CLI cannot tell a true legacy account-share from a coincidental direct grant on an account-shared meeting. Anything you don't trust must be named in `--exclude` before `--apply`, or it WILL be tagged (and a future `RemoveMember` will revoke it as if it were a team grant).
+- Review the dry-run's CANDIDATE list. Every listed `(sharedTo, meeting)` pair is *ambiguous by construction* — the CLI cannot tell a true legacy account-share from a coincidental direct grant on an account-shared meeting. Anything you don't trust must be named in `--exclude` before `--apply`, or it WILL be tagged (and a future `RemoveMember` will revoke it as if it were a team grant).
 - Run one account at a time (`--account-id` is required, not optional) — this is the safer phased rollout the CLI's own design forces.
-- The CLI only iterates the account's *current* members (`ListAccountMembers`). A member already removed before backfill runs has no candidate path back — see Known Limitations.
-- **Operational sequencing this ADR requires**: run backfill BEFORE removing any member from an account that predates this PR. Once a member is removed, their legacy shares (if any) become permanently un-revocable by any means short of manual DynamoDB surgery (`DeleteShare` by hand, with the same false-positive risk the CLI itself carries).
-- Rollback: retagging is a single-attribute `Origin` write per row, ConditionExpression-guarded against concurrent changes. To undo a mistaken `--apply`, manually `UpdateItem` the specific `(sharedToID, meetingID)` pair's `origin` attribute back to absent/empty — there is no CLI `--undo` flag; this is intentionally a rare, manual-review operation, not a scripted one.
+- **Operational sequencing this ADR still recommends**: run backfill before removing a member from an account that predates this PR, so the force gate never triggers in the first place. This is no longer a hard *requirement* the way it was before §4's fix (a member removed before backfill runs is now still a valid candidate on a later backfill run), but running backfill first remains the friction-free path.
+- Rollback: retagging is a two-attribute (`Origin`, `AccountID`) write per row, ConditionExpression-guarded against concurrent changes. To undo a mistaken `--apply`, manually `UpdateItem` the specific `(sharedToID, meetingID)` pair's `origin`/`accountId` attributes back to absent/empty — there is no CLI `--undo` flag; this is intentionally a rare, manual-review operation, not a scripted one.
+
+### 4. Cross-account race + ex-member backfill coverage (second fix this round)
+Review found two further gaps in the first draft of this round's fix:
+- **Cross-account share race**: `Share` had no field tying an account-origin row to the account that granted it — `DeleteShareIfAccountOrigin`'s delete condition checked `origin == "account"` alone. A meeting re-shared from account A to account B in the (non-atomic) gap between RemoveMember's cleanup reading the meeting and deleting the share could have B's fresh grant deleted by A's removal, because both rows share the same origin value. Fixed by adding `Share.AccountID` (see §1) and scoping the delete condition to it.
+- **Ex-member backfill coverage**: the original backfill CLI iterated `ListAccountMembers` (current members only), so a user removed from the account BEFORE backfill ran had no way back into the candidate list — their legacy share stayed `Origin==""` forever. Fixed by switching candidate detection to `ListSharesForMeeting` (§3), which enumerates Share rows by meeting, independent of current membership.
 
 ## Consequences
 
 ### Positive
-- Every share created after this PR ships has unambiguous provenance and is correctly revoked/preserved by `RemoveMember`.
+- Every share created after this PR ships has unambiguous provenance (`Origin` + `AccountID`) and is correctly revoked/preserved by `RemoveMember`, including under the cross-account re-share race.
 - The force gate makes "this account has an unresolved legacy-share ambiguity" a decision an owner must actively make, not a silent default.
-- The backfill CLI's `--exclude` + per-account, dry-run-first design keeps a human in the loop for the one case (coincidental direct-share-on-shared-meeting) that's fundamentally unresolvable by any automated heuristic.
+- The backfill CLI's `--exclude` + per-account, dry-run-first design keeps a human in the loop for the one case (coincidental direct-share-on-shared-meeting) that's fundamentally unresolvable by any automated heuristic — and now also covers ex-members, closing what was previously accepted as a permanent residual risk.
 
 ### Negative
-- **Known limitation**: a member removed BEFORE their account runs backfill has no remediation path — the CLI's candidate detection depends on `ListAccountMembers`, which no longer includes them. Their legacy shares (if any existed) stay `Origin==""` forever, silently collapsed with "direct grant" and therefore un-revocable by any means this system provides going forward, short of manual DynamoDB access. This is the residual risk this ADR accepts rather than closes — extending the CLI to also enumerate ex-members (e.g. by scanning `Share` rows directly rather than joining through `AccountMember`) is a legitimate follow-up but out of scope for this round.
 - The force gate is a new required step in the removal flow for any account that hasn't backfilled — this is deliberate friction, not an oversight, but it does mean "remove this troublesome member right now" can be blocked until an owner either backfills the account or explicitly overrides with `force=true`.
 - No automated enforcement of the "backfill before removal" sequencing beyond the force gate itself — an owner who always passes `force=true` reflexively bypasses the protection this ADR adds without ever running backfill. The gate raises the bar from "impossible to notice" to "requires an explicit override," not to "impossible to bypass."
+- A meeting re-shared cross-account is still detected by a non-atomic read at the point cleanup decides whether to even attempt the delete (`meeting.AccountID != accountID` skip) — §4's `AccountID` condition is what makes the delete itself safe regardless, but the read-side skip logic remains best-effort, not transactional.
 
 ## Alternatives Considered
 | Option | Pros | Cons |
@@ -64,7 +71,8 @@ go run ./cmd/backfill-share-origin --account-id <id> --apply --exclude userId1:m
 | Force gate on ambiguous share (chosen) | No code path silently revokes a direct grant OR silently leaves a legacy share un-revocable forever without SOME explicit signal reaching the owner | Adds friction; bypassable via `force=true` |
 | Fail-open + report only (rejected, this round's prior state) | No friction for owners | The exact fail-open gap 4 independent AI review models flagged across multiple rounds — a member with only legacy shares is removed and keeps access forever with an easy-to-miss signal |
 | Treat `Origin==""` as always-revocable (rejected) | No ambiguity, no gate needed | Would let `RemoveMember` silently revoke a genuine direct grant the owner made explicitly — worse than the fail-open case, since it actively destroys correct state instead of merely failing to fix incorrect state |
-| Extend backfill CLI to cover ex-members now (deferred) | Closes the Known Limitation above | Requires a new read path (scan `Share` rows directly, since `ListAccountMembers` excludes ex-members by definition) and a new ambiguity-review UX for candidates with no current membership context to help a human judge them — sized as a follow-up, not blocking this round |
+| Scope Share deletes to accountId, not origin alone (chosen, §4) | Closes the cross-account re-share race at the row being deleted, not just at an earlier non-atomic read | Requires a new field (`Share.AccountID`) and backfilling it alongside `Origin` for legacy rows |
+| Backfill CLI enumerates Share rows by meeting, not by current membership (chosen, §4) | Closes the ex-member Known Limitation this ADR previously accepted as permanent | None significant — `ListSharesForMeeting` already existed (used by `GetMeeting`'s owner-facing share list) and returns exactly the rows needed |
 
 ---
 
@@ -85,6 +93,7 @@ go run ./cmd/backfill-share-origin --account-id <id> --apply --exclude userId1:m
 ### 1. Origin 의미론
 - `Origin == "account"`: `CreateShareIfMember`(단일 `TransactWriteItems` 호출로 살아있는 `AccountMember` 존재를 ConditionCheck하고 두 Share row를 원자적으로 Put — `AddMember`/`ShareMeetingToAccount` 사이 평범한 `GetMember`-then-`CreateShare` 쌍이 남기는 TOCTOU 창을 닫음)에 의해서만 작성됨. `RemoveMember`의 cleanup이 일방적으로 회수해도 안전.
 - `Origin == ""`: (a) `ShareMeetingByEmail`/`RevokeShare`의 짝인 direct grant — account membership cleanup이 절대 손대면 안 됨, 또는 (b) 이 PR 이전에 `ShareMeetingToAccount`가 쓴 legacy account-share — 제거 시 회수돼야 하지만 그렇게 태깅돼 있지 않음. **이 두 경우는 구조적으로 동일한 row이며 이 시스템이 저장하는 어떤 필드로도 구분할 수 없다.** 이는 나중에 고칠 버그가 아니라 이 migration 갭의 영구적 속성이다 — "검토한 대안" 참고.
+- `AccountID`(신규 필드, 이번 라운드): `Origin == "account"`인 모든 share는 이제 발급한 account의 ID도 함께 가지며, `DeleteShareIfAccountOrigin`의 삭제 조건은 origin 단독이 아니라 `origin == "account" AND accountId == :accountID`로 범위가 좁혀진다. 이게 없으면, A 계정에서 B 계정으로 재공유된 미팅이 A의 `RemoveMember` cleanup이 미팅을 읽는 시점(그때는 아직 A로 표시됨)과 share를 삭제하는 시점(그 사이 B의 새 `CreateShareIfMember` grant로 바뀜) 사이의 비원자적 gap에서, B의 유효한 grant가 A의 제거에 의해 삭제될 수 있다 — 이 read가 겪는 미팅 단위 가드(`meeting.AccountID != accountID`)는 별도의 비원자적 호출이라 그 race를 스스로 막을 수 없고, 삭제 대상 row 자체에 대한 조건만이 막을 수 있다. `BackfillShareOrigin`도 `Origin`과 함께 `AccountID`를 태깅한다 — `AccountID` 없이 `Origin=="account"`만 태깅된 row는 이 조건을 통과하지 못해 또다시 회수 불가능해지기 때문이다.
 
 ### 2. RemoveMember의 force gate (이번 라운드 수정)
 이 PR의 초기 초안은 `RemoveMember`가 항상 멤버십을 삭제하고 응답에 `AmbiguousUntaggedMeetingIDs`만 *보고*했다 — 즉 fail-open: legacy share만 보유한 멤버는 transcript/Bedrock 접근을 영구 보유했고, 그 실패 신호는 놓치기 쉬웠다(200-with-body는 성공처럼 보임). 이 ADR은 기본값을 fail-closed로 바꾼다:
@@ -95,7 +104,9 @@ go run ./cmd/backfill-share-origin --account-id <id> --apply --exclude userId1:m
 즉: 이미 backfill CLI(아래)를 실행한 account는 제거가 이전과 완전히 동일하게 동작한다(ambiguous share가 없으므로 차단될 일이 없음). 아직 실행하지 않은 account는 owner가 제거 시점에 의식적인 선택을 하도록 강제되며, 모호성이 "접근이 영원히 유지됨"으로 조용히 귀결되지 않는다.
 
 ### 3. Legacy migration: `backend/cmd/backfill-share-origin`
-legacy account-share의 `Origin`을 `"account"`로 재태깅해 다시 회수 가능하게 만드는, 수동 실행·계정 단위 CLI. 어떤 배포 파이프라인도 이를 자동 실행하지 않는다 — 의도적이다; 잘못된 row(§1에서 구분 불가능한 진짜 direct grant)를 재태깅하면 향후 `RemoveMember`가 owner의 명시적 grant를 조용히 회수할 수 있으므로, 이 위험은 스크립트가 아니라 계정별 인간의 판단이 감당해야 한다.
+legacy account-share의 `Origin`을 `"account"`로 재태깅(및 `AccountID` 태깅)해 다시 회수 가능하게 만드는, 수동 실행·계정 단위 CLI. 어떤 배포 파이프라인도 이를 자동 실행하지 않는다 — 의도적이다; 잘못된 row(§1에서 구분 불가능한 진짜 direct grant)를 재태깅하면 향후 `RemoveMember`가 owner의 명시적 grant를 조용히 회수할 수 있으므로, 이 위험은 스크립트가 아니라 계정별 인간의 판단이 감당해야 한다.
+
+후보 탐지는 현재 멤버십을 거치지 않고 account에 연결된 각 미팅의 Share row를 직접 열거한다(`ListSharesForMeeting`, 미팅 기준 — `ListAccountMembers`를 조인하지 않음). 이 덕분에 CLI 실행 시점에 이미 계정에서 **제거된** 사용자가 보유한 legacy share도 찾아서 태깅할 수 있다(§4 참고 — 이전 초안이 영구적 Known Limitation으로 수용했던 부분을 이번 라운드에서 닫음).
 
 **운영 절차 (항상 dry-run 먼저):**
 ```
@@ -103,23 +114,27 @@ go run ./cmd/backfill-share-origin --account-id <id>                # dry-run: �
 go run ./cmd/backfill-share-origin --account-id <id> --apply        # 나열된 모든 후보 태깅
 go run ./cmd/backfill-share-origin --account-id <id> --apply --exclude userId1:meetingId1,userId2:meetingId2
 ```
-- dry-run의 CANDIDATE 목록을 검토하라. 나열된 모든 `(member, meeting)` 쌍은 *구조적으로 모호하다* — CLI는 진짜 legacy account-share와 account-shared 미팅에 우연히 존재하는 direct grant를 구분할 수 없다. 믿을 수 없는 항목은 `--apply` 전에 반드시 `--exclude`로 명시해야 한다. 그렇지 않으면 태깅되며(향후 `RemoveMember`가 팀 grant인 것처럼 회수함).
+- dry-run의 CANDIDATE 목록을 검토하라. 나열된 모든 `(sharedTo, meeting)` 쌍은 *구조적으로 모호하다* — CLI는 진짜 legacy account-share와 account-shared 미팅에 우연히 존재하는 direct grant를 구분할 수 없다. 믿을 수 없는 항목은 `--apply` 전에 반드시 `--exclude`로 명시해야 한다. 그렇지 않으면 태깅되며(향후 `RemoveMember`가 팀 grant인 것처럼 회수함).
 - 한 번에 한 계정씩 실행(`--account-id`는 필수, 선택 아님) — CLI 자체 설계가 강제하는 더 안전한 단계적 rollout이다.
-- CLI는 계정의 *현재* 멤버만 순회한다(`ListAccountMembers`). backfill 실행 전에 이미 제거된 멤버는 복구 경로가 없다 — Known Limitations 참고.
-- **이 ADR이 요구하는 운영 순서**: 이 PR 이전부터 존재한 계정에서 멤버를 제거하기 전에 반드시 backfill을 먼저 실행하라. 멤버가 제거되고 나면 그들의 legacy share(있다면)는 수동 DynamoDB 수술(CLI 자체와 동일한 오탐 위험을 감수한 손수 `DeleteShare`) 외에는 영구적으로 회수 불가능해진다.
-- Rollback: 재태깅은 row당 단일 속성(`Origin`) 쓰기이며 ConditionExpression으로 동시 변경을 방어한다. 잘못된 `--apply`를 되돌리려면 해당 `(sharedToID, meetingID)` 쌍의 `origin` 속성을 수동으로 `UpdateItem`해 비어있는 상태로 되돌려야 한다 — CLI에는 `--undo` 플래그가 없다; 이는 의도적으로 드물고 수동 검토가 필요한 작업이지 스크립트화할 작업이 아니다.
+- **이 ADR이 여전히 권장하는 운영 순서**: 이 PR 이전부터 존재한 계정에서 멤버를 제거하기 전에 backfill을 먼저 실행해, force gate가 애초에 걸리지 않게 하라. §4의 수정으로 이는 더 이상 엄격한 *요구사항*은 아니다(backfill 실행 전에 제거된 멤버도 이후 backfill 실행에서 여전히 유효한 후보가 됨) — 다만 backfill을 먼저 하는 쪽이 여전히 마찰 없는 경로다.
+- Rollback: 재태깅은 row당 두 속성(`Origin`, `AccountID`) 쓰기이며 ConditionExpression으로 동시 변경을 방어한다. 잘못된 `--apply`를 되돌리려면 해당 `(sharedToID, meetingID)` 쌍의 `origin`/`accountId` 속성을 수동으로 `UpdateItem`해 비어있는 상태로 되돌려야 한다 — CLI에는 `--undo` 플래그가 없다; 이는 의도적으로 드물고 수동 검토가 필요한 작업이지 스크립트화할 작업이 아니다.
+
+### 4. Cross-account race + ex-member backfill 커버리지 (이번 라운드 두 번째 수정)
+리뷰에서 이번 라운드 첫 수정의 추가 갭 2건이 발견됨:
+- **Cross-account share race**: `Share`에는 account-origin row를 발급한 account와 묶어주는 필드가 없었다 — `DeleteShareIfAccountOrigin`의 삭제 조건은 `origin == "account"`만 확인했다. A 계정에서 B 계정으로 재공유된 미팅이 RemoveMember의 cleanup이 미팅을 읽는 시점과 share를 삭제하는 시점 사이의 (비원자적) gap에서, 두 row가 같은 origin 값을 가진다는 이유로 B의 새 grant가 A의 제거에 의해 삭제될 수 있었다. `Share.AccountID`(§1)를 추가하고 삭제 조건을 이 필드로 좁혀 수정.
+- **Ex-member backfill 커버리지**: 원래 backfill CLI는 `ListAccountMembers`(현재 멤버만)를 순회했으므로, backfill 실행 **전에** 계정에서 제거된 사용자는 후보 목록으로 돌아올 방법이 없었고 — 그들의 legacy share는 영원히 `Origin==""`로 남았다. 후보 탐지를 `ListSharesForMeeting`(§3)으로 전환해 수정 — 이는 현재 멤버십과 무관하게 미팅 기준으로 Share row를 열거한다.
 
 ## 결과
 
 ### 긍정
-- 이 PR 배포 이후 생성되는 모든 share는 명확한 provenance를 가지며 `RemoveMember`가 올바르게 회수/보존한다.
+- 이 PR 배포 이후 생성되는 모든 share는 명확한 provenance(`Origin` + `AccountID`)를 가지며 `RemoveMember`가 cross-account 재공유 race 상황에서도 올바르게 회수/보존한다.
 - force gate는 "이 계정에 해결되지 않은 legacy-share 모호성이 있다"를 owner가 능동적으로 결정해야 하는 사안으로 만든다(조용한 기본값이 아니라).
-- backfill CLI의 `--exclude` + 계정별·dry-run-우선 설계는 어떤 자동화된 휴리스틱으로도 근본적으로 해결 불가능한 유일한 케이스(공유된 미팅에 우연히 존재하는 direct share)에 인간을 개입시킨다.
+- backfill CLI의 `--exclude` + 계정별·dry-run-우선 설계는 어떤 자동화된 휴리스틱으로도 근본적으로 해결 불가능한 유일한 케이스(공유된 미팅에 우연히 존재하는 direct share)에 인간을 개입시키며, 이제 ex-member도 커버해 이전에 영구적 잔존 위험으로 수용했던 부분을 닫는다.
 
 ### 부정
-- **알려진 한계**: 계정이 backfill을 실행하기 **전에** 제거된 멤버는 구제 경로가 없다 — CLI의 후보 탐지는 `ListAccountMembers`에 의존하는데, 제거된 멤버는 더 이상 여기 포함되지 않는다. 그들의 legacy share(있었다면)는 영원히 `Origin==""`로 남아 "direct grant"와 조용히 겹쳐지며, 수동 DynamoDB 접근 외에는 이 시스템이 제공하는 어떤 수단으로도 앞으로 회수할 수 없다. 이는 이 ADR이 닫는 것이 아니라 수용하는 잔존 위험이다 — CLI가 ex-member도 열거하도록 확장하는 것(예: `AccountMember`를 거치지 않고 `Share` row를 직접 스캔)은 타당한 후속 작업이지만 이번 라운드 범위 밖이다.
 - backfill을 아직 하지 않은 계정에서는 force gate가 제거 흐름에 새로운 필수 단계가 된다 — 의도된 마찰이지만, "지금 당장 이 문제 멤버를 제거"가 owner가 backfill을 하거나 `force=true`로 명시적으로 override할 때까지 막힐 수 있다는 뜻이기도 하다.
 - force gate 자체 외에 "제거 전 backfill" 순서를 강제하는 자동화된 장치는 없다 — 반사적으로 항상 `force=true`를 넘기는 owner는 backfill을 한 번도 실행하지 않고도 이 ADR이 추가한 보호를 우회한다. 이 gate는 기준을 "알아차릴 수 없음"에서 "명시적 override가 필요함"으로 올린 것이지, "우회 불가능"으로 만든 것은 아니다.
+- cross-account로 재공유된 미팅은 cleanup이 삭제를 시도할지 결정하는 시점에 여전히 비원자적 read로 감지된다(`meeting.AccountID != accountID` skip) — §4의 `AccountID` 조건은 그와 무관하게 삭제 자체를 안전하게 만들지만, read 쪽의 skip 로직 자체는 여전히 best-effort이며 트랜잭션이 아니다.
 
 ## 검토한 대안
 | 옵션 | 장점 | 단점 |
@@ -127,4 +142,5 @@ go run ./cmd/backfill-share-origin --account-id <id> --apply --exclude userId1:m
 | ambiguous share에 force gate(채택) | direct grant를 조용히 회수하거나 legacy share를 영원히 회수 불가능하게 방치하는 코드 경로가 owner에게 어떤 명시적 신호도 없이 존재하지 않음 | 마찰 추가; `force=true`로 우회 가능 |
 | fail-open + 보고만(기각, 이번 라운드 이전 상태) | owner에게 마찰 없음 | 여러 라운드에 걸쳐 4개 독립 AI 리뷰 모델이 지적한 정확한 fail-open 갭 — legacy share만 있는 멤버가 제거되고도 영구히 접근을 유지하며 신호는 놓치기 쉬움 |
 | `Origin==""`를 항상 회수 가능으로 처리(기각) | 모호성 없음, gate 불필요 | `RemoveMember`가 owner가 명시적으로 부여한 진짜 direct grant를 조용히 회수할 수 있게 됨 — 잘못된 상태를 고치지 못하는 것보다 올바른 상태를 능동적으로 파괴하는 게 더 나쁨 |
-| backfill CLI를 지금 ex-member까지 확장(연기) | 위 Known Limitation을 닫음 | 새로운 read 경로(`ListAccountMembers`가 정의상 ex-member를 제외하므로 `Share` row를 직접 스캔해야 함)와, 현재 membership 컨텍스트가 없는 후보를 인간이 판단하도록 돕는 새로운 모호성-검토 UX가 필요 — 이번 라운드를 막지 않는 후속 작업으로 분류 |
+| Share 삭제를 origin 단독이 아니라 accountId로 범위 좁힘(채택, §4) | cross-account 재공유 race를 더 이른 비원자적 read가 아니라 삭제 대상 row 자체에서 닫음 | 새 필드(`Share.AccountID`) 필요, legacy row에 `Origin`과 함께 소급 태깅 필요 |
+| backfill CLI가 현재 멤버십이 아니라 미팅 기준으로 Share row를 열거(채택, §4) | 이 ADR이 이전에 영구적으로 수용했던 ex-member Known Limitation을 닫음 | 큰 단점 없음 — `ListSharesForMeeting`이 이미 존재했고(`GetMeeting`의 owner용 share 목록에서 사용) 필요한 row를 그대로 반환함 |

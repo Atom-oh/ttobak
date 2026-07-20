@@ -1,10 +1,18 @@
 // backfill-share-origin is a one-time, manually-operated CLI (not a Lambda)
-// that tags pre-existing account-origin Share records with the Origin field
-// (added by ADR's account-team-members fix round 2). Shares written by
-// ShareMeetingToAccount before that field existed have Origin=="" and are
-// therefore treated as direct grants by RemoveMember's cleanup, permanently
-// un-revocable -- this backfill closes that gap for shares belonging to
-// members who are STILL in the account today.
+// that tags pre-existing account-origin Share records with the Origin (and
+// AccountID) fields (added by ADR's account-team-members fix round 2).
+// Shares written by ShareMeetingToAccount before those fields existed have
+// Origin=="" and are therefore treated as direct grants by RemoveMember's
+// cleanup, permanently un-revocable -- this backfill closes that gap.
+//
+// Candidates are found by enumerating each account-linked meeting's Share
+// rows directly (ListSharesForMeeting), NOT by joining through
+// ListAccountMembers -- this deliberately covers shares belonging to users
+// who have ALREADY been removed from the account by the time this CLI runs,
+// not just current members. An earlier version of this tool only checked
+// current members, which meant a member removed before backfill ran had no
+// remediation path at all (see ADR-022's "Known Limitation" for why that gap
+// existed and this fix).
 //
 // IMPORTANT — the discriminator this tool uses cannot distinguish a true
 // legacy account-share from a direct share that happens to exist on a
@@ -94,10 +102,6 @@ func main() {
 		log.Fatalf("account %s not found", *accountID)
 	}
 
-	members, err := repo.ListAccountMembers(ctx, *accountID)
-	if err != nil {
-		log.Fatalf("list account members: %v", err)
-	}
 	refs, err := repo.ListMeetingRefsForAccount(ctx, *accountID)
 	if err != nil {
 		log.Fatalf("list meeting refs: %v", err)
@@ -107,7 +111,7 @@ func main() {
 	if *apply {
 		mode = "APPLY"
 	}
-	fmt.Printf("[%s] account %s (%s): %d current member(s), %d meeting ref(s)\n", mode, *accountID, account.Name, len(members), len(refs))
+	fmt.Printf("[%s] account %s (%s): %d meeting ref(s)\n", mode, *accountID, account.Name, len(refs))
 
 	candidates := 0
 	tagged := 0
@@ -123,28 +127,35 @@ func main() {
 		if meeting == nil || !meeting.SharedToAccount || meeting.AccountID != *accountID {
 			continue // ref exists but the meeting no longer matches ShareMeetingToAccount's invariants
 		}
-		for _, m := range members {
-			if m.UserID == meeting.UserID {
+		// Enumerate this meeting's Share rows directly instead of joining
+		// through ListAccountMembers -- this is what covers a user who has
+		// ALREADY been removed from the account by the time this CLI runs:
+		// their legacy share row still exists (RemoveMember never touches an
+		// ambiguous Origin=="" share) but they no longer appear in
+		// ListAccountMembers, so a members-first join would silently skip
+		// them forever.
+		shares, err := repo.ListSharesForMeeting(ctx, ref.MeetingID)
+		if err != nil {
+			log.Printf("skip meeting %s: list shares: %v", ref.MeetingID, err)
+			failed++
+			continue
+		}
+		for _, sh := range shares {
+			if sh.SharedToID == meeting.UserID {
 				continue // ShareMeetingToAccount skips the meeting's own uploader, not the account owner role -- these can differ (any member can upload a meeting, and the account owner role isn't tied to any specific meeting)
 			}
-			share, err := repo.GetShare(ctx, m.UserID, ref.MeetingID)
-			if err != nil {
-				log.Printf("skip %s / meeting %s: get share: %v", m.UserID, ref.MeetingID, err)
-				failed++
-				continue
-			}
-			if share == nil || share.Origin != "" {
-				continue // no share, or already tagged (account or otherwise) -- nothing to do
+			if sh.Origin != "" {
+				continue // already tagged (account or otherwise) -- nothing to do
 			}
 			candidates++
-			pairKey := m.UserID + ":" + ref.MeetingID
+			pairKey := sh.SharedToID + ":" + ref.MeetingID
 			detail := ""
 			if *verbose {
-				detail = fmt.Sprintf(" (%s / %q)", m.Email, meeting.Title)
+				detail = fmt.Sprintf(" (%s / %q)", sh.Email, meeting.Title)
 			}
-			fmt.Printf("  CANDIDATE: member=%s meeting=%s%s -- untaggable ambiguity: this heuristic cannot tell a true legacy\n"+
+			fmt.Printf("  CANDIDATE: sharedTo=%s meeting=%s%s -- untaggable ambiguity: this heuristic cannot tell a true legacy\n"+
 				"    account-share apart from a direct share that happens to exist on a meeting also shared to this account.\n"+
-				"    Review before trusting this tag. To skip it, pass --exclude %s\n", m.UserID, ref.MeetingID, detail, pairKey)
+				"    Review before trusting this tag. To skip it, pass --exclude %s\n", sh.SharedToID, ref.MeetingID, detail, pairKey)
 			if !*apply {
 				continue
 			}
@@ -152,11 +163,11 @@ func main() {
 				fmt.Printf("    skipped (--exclude %s)\n", pairKey)
 				continue
 			}
-			if err := repo.BackfillShareOrigin(ctx, m.UserID, ref.MeetingID); err != nil {
+			if err := repo.BackfillShareOrigin(ctx, *accountID, sh.SharedToID, ref.MeetingID); err != nil {
 				if errors.Is(err, repository.ErrConditionFailed) {
 					// Benign: the row's origin changed (or the row itself
-					// was deleted) between this CLI's GetShare read above
-					// and BackfillShareOrigin's conditional write --
+					// was deleted) between the ListSharesForMeeting read
+					// above and BackfillShareOrigin's conditional write --
 					// something else (a concurrent RemoveMember cleanup, or
 					// a fresh direct share) already resolved this pair, so
 					// tagging is correctly skipped rather than failed.
@@ -169,7 +180,7 @@ func main() {
 				continue
 			}
 			tagged++
-			fmt.Printf("    tagged origin=account\n")
+			fmt.Printf("    tagged origin=account accountId=%s\n", *accountID)
 		}
 	}
 
