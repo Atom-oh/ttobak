@@ -26,6 +26,7 @@ import boto3
 import botocore.session
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -598,18 +599,30 @@ def _record_history(source_id: str, docs_added: int, docs_updated: int,
             'docsAdded': docs_added,
             'docsUpdated': docs_updated,
             'errors': errors[:20],
-            'duration': int(time.time() - start_time),
+            # milliseconds -- CrawlerSettings.tsx:462 renders this as
+            # `(h.duration / 1000).toFixed(1)}s`
+            'duration': int((time.time() - start_time) * 1000),
         })
         if update_status:
-            table.update_item(
-                Key={'PK': f'CRAWLER#{source_id}', 'SK': 'CONFIG'},
-                UpdateExpression='SET #status = :status, lastCrawledAt = :ts',
-                ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={
-                    ':status': 'error' if errors else 'active',
-                    ':ts': timestamp,
-                },
-            )
+            try:
+                table.update_item(
+                    Key={'PK': f'CRAWLER#{source_id}', 'SK': 'CONFIG'},
+                    # A user can disable a source between the orchestrator's
+                    # scan and this crawl finishing; without this guard the
+                    # status update below would silently re-enable it.
+                    ConditionExpression='attribute_not_exists(#status) OR #status <> :disabled',
+                    UpdateExpression='SET #status = :status, lastCrawledAt = :ts',
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':status': 'error' if errors else 'active',
+                        ':ts': timestamp,
+                        ':disabled': 'disabled',
+                    },
+                )
+            except ClientError as e:
+                if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                    raise
+                logger.info(f'Skipping status update for {source_id}: source was disabled mid-run')
     except Exception as e:
         logger.warning(f'Failed to record crawl history for {source_id}: {e}')
 

@@ -9,6 +9,8 @@ import os
 import unittest
 from unittest import mock
 
+from botocore.exceptions import ClientError
+
 # Set env vars BEFORE importing modules (they read env at import time)
 os.environ['TABLE_NAME'] = 'test-table'
 os.environ['KB_BUCKET_NAME'] = 'test-bucket'
@@ -1536,8 +1538,9 @@ class TestDiscoverNewServices(unittest.TestCase):
                     {'text': '["agentcore", "lambda"]'},  # lambda is already known
                 ]}},
             }):
-                result = tech_crawler._discover_new_services(['lambda'])
+                result, error = tech_crawler._discover_new_services(['lambda'])
         self.assertEqual(result, ['agentcore'])
+        self.assertIsNone(error)
 
     def test_invalid_slug_format_filtered_out(self):
         with mock.patch.object(news_crawler, '_gateway_web_search', return_value=(
@@ -1548,20 +1551,35 @@ class TestDiscoverNewServices(unittest.TestCase):
                     {'text': '["has spaces", "x", "ok-slug"]'},  # "x" too short, spaces invalid
                 ]}},
             }):
-                result = tech_crawler._discover_new_services([])
+                result, error = tech_crawler._discover_new_services([])
         self.assertEqual(result, ['ok-slug'])
+        self.assertIsNone(error)
 
     def test_no_search_results_returns_empty_without_bedrock_call(self):
         with mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None)):
             with mock.patch.object(tech_crawler.bedrock, 'converse') as mock_converse:
-                result = tech_crawler._discover_new_services([])
+                result, error = tech_crawler._discover_new_services([])
         self.assertEqual(result, [])
+        self.assertIsNone(error)
         mock_converse.assert_not_called()
 
-    def test_search_error_returns_empty(self):
+    def test_search_error_is_propagated_not_swallowed(self):
+        # A gateway/transport failure must not look identical to a genuine
+        # zero-match search -- the caller needs the error to add it to
+        # errors[] instead of silently treating discovery as "nothing found".
         with mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], 'timeout')):
-            result = tech_crawler._discover_new_services([])
+            result, error = tech_crawler._discover_new_services([])
         self.assertEqual(result, [])
+        self.assertEqual(error, 'timeout')
+
+    def test_bedrock_failure_returns_error_not_silent_empty(self):
+        with mock.patch.object(news_crawler, '_gateway_web_search', return_value=(
+            [{'title': 'x', 'text': 'y'}], None,
+        )):
+            with mock.patch.object(tech_crawler.bedrock, 'converse', side_effect=Exception('boom')):
+                result, error = tech_crawler._discover_new_services([])
+        self.assertEqual(result, [])
+        self.assertIsNotNone(error)
 
     def test_capped_at_max_new_services_per_run(self):
         slugs = [f'svc-{i}' for i in range(tech_crawler.MAX_NEW_SERVICES_PER_RUN + 5)]
@@ -1571,8 +1589,9 @@ class TestDiscoverNewServices(unittest.TestCase):
             with mock.patch.object(tech_crawler.bedrock, 'converse', return_value={
                 'output': {'message': {'content': [{'text': json.dumps(slugs)}]}},
             }):
-                result = tech_crawler._discover_new_services([])
+                result, error = tech_crawler._discover_new_services([])
         self.assertEqual(len(result), tech_crawler.MAX_NEW_SERVICES_PER_RUN)
+        self.assertIsNone(error)
 
 
 class TestRegisterAutoServices(unittest.TestCase):
@@ -1589,7 +1608,10 @@ class TestRegisterAutoServices(unittest.TestCase):
         self.assertEqual(sorted(put_item['awsServices']), ['existing-svc', 'new-svc'])
         self.assertEqual(put_item['status'], 'active')
 
-    def test_caps_total_at_max_auto_services(self):
+    def test_at_cap_preserves_existing_and_drops_new(self):
+        # Regression: sorting the union and slicing to MAX_AUTO_SERVICES used
+        # to evict already-tracked services alphabetically -- a previously
+        # working crawl target could silently stop being crawled.
         mock_table = mock.MagicMock()
         existing = [f'svc-{i}' for i in range(tech_crawler.MAX_AUTO_SERVICES)]
         mock_table.get_item.return_value = {'Item': {'awsServices': existing}}
@@ -1597,7 +1619,22 @@ class TestRegisterAutoServices(unittest.TestCase):
             tech_crawler._register_auto_services(['brand-new-svc'])
 
         put_item = mock_table.put_item.call_args[1]['Item']
+        self.assertEqual(sorted(put_item['awsServices']), sorted(existing))
+        self.assertNotIn('brand-new-svc', put_item['awsServices'])
+
+    def test_partial_capacity_accepts_only_up_to_remaining_room(self):
+        mock_table = mock.MagicMock()
+        existing = [f'svc-{i}' for i in range(tech_crawler.MAX_AUTO_SERVICES - 2)]
+        mock_table.get_item.return_value = {'Item': {'awsServices': existing}}
+        with mock.patch.object(tech_crawler, 'table', mock_table):
+            tech_crawler._register_auto_services(['new-a', 'new-b', 'new-c'])
+
+        put_item = mock_table.put_item.call_args[1]['Item']
         self.assertEqual(len(put_item['awsServices']), tech_crawler.MAX_AUTO_SERVICES)
+        for s in existing:
+            self.assertIn(s, put_item['awsServices'])
+        accepted_new = [s for s in ('new-a', 'new-b', 'new-c') if s in put_item['awsServices']]
+        self.assertEqual(len(accepted_new), 2)
 
 
 # ---------------------------------------------------------------------------
@@ -1626,6 +1663,37 @@ class TestRecordHistory(unittest.TestCase):
 
         update_values = mock_table.update_item.call_args[1]['ExpressionAttributeValues']
         self.assertEqual(update_values[':status'], 'error')
+
+    def test_duration_recorded_in_milliseconds(self):
+        # Regression: CrawlerSettings.tsx:462 renders `(h.duration / 1000)s` --
+        # storing whole seconds here shows a 120s crawl as "0.1s".
+        mock_table = mock.MagicMock()
+        with mock.patch.object(news_crawler, 'table', mock_table):
+            with mock.patch.object(news_crawler.time, 'time', return_value=1002.5):
+                news_crawler._record_history('wooribank', 1, 0, [], start_time=1000.0)
+
+        put_item = mock_table.put_item.call_args[1]['Item']
+        self.assertEqual(put_item['duration'], 2500)
+
+    def test_disabled_status_is_not_overwritten(self):
+        mock_table = mock.MagicMock()
+        mock_table.update_item.side_effect = ClientError(
+            {'Error': {'Code': 'ConditionalCheckFailedException', 'Message': 'x'}}, 'UpdateItem',
+        )
+        with mock.patch.object(news_crawler, 'table', mock_table):
+            news_crawler._record_history('wooribank', 1, 0, [], start_time=0.0)  # must not raise
+
+        mock_table.put_item.assert_called_once()  # history is still recorded
+
+    def test_other_dynamodb_errors_on_status_update_are_not_swallowed_as_disabled(self):
+        mock_table = mock.MagicMock()
+        mock_table.update_item.side_effect = ClientError(
+            {'Error': {'Code': 'ProvisionedThroughputExceededException', 'Message': 'x'}}, 'UpdateItem',
+        )
+        with mock.patch.object(news_crawler, 'table', mock_table):
+            with mock.patch.object(news_crawler.logger, 'warning') as mock_warn:
+                news_crawler._record_history('wooribank', 1, 0, [], start_time=0.0)  # must not raise
+        mock_warn.assert_called_once()
 
     def test_update_status_false_skips_config_update(self):
         mock_table = mock.MagicMock()

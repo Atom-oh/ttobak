@@ -108,8 +108,9 @@ export class CrawlerStack extends cdk.Stack {
       outputPath: '$.Payload',
     });
 
-    // outputPath on the Map itself (not resultPath) so this branch's output
-    // is the bare list of per-source results, matching crawlTech's shape.
+    // No resultPath (default output is the Map's own result list) so this
+    // branch's output is the bare list of per-source results, matching
+    // crawlTech's shape -- unlike crawlTech, this Map has no outputPath set.
     const mapNewsSources = new sfn.Map(this, 'MapNewsSources', {
       maxConcurrency: 5,
       itemsPath: '$.newsSources',

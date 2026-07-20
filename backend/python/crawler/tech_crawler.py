@@ -457,13 +457,19 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
 # we already know to ask about; this catches the ones we don't yet track.
 # ---------------------------------------------------------------------------
 
-def _discover_new_services(known_services: list) -> list:
+def _discover_new_services(known_services: list) -> tuple:
     """Web-search for recent AWS service launch announcements and ask
-    Bedrock to pull out service slugs not already tracked. Returns a
-    de-duplicated list of new slugs (capped at MAX_NEW_SERVICES_PER_RUN)."""
+    Bedrock to pull out service slugs not already tracked. Returns
+    (new_slugs, error): new_slugs is a de-duplicated list (capped at
+    MAX_NEW_SERVICES_PER_RUN), error is None on success or a genuine
+    zero-match search -- non-None on a real failure (search transport error,
+    Bedrock call/parse failure) so the caller can surface it in errors[]
+    instead of it silently looking identical to "no new services found"."""
     results, error = news_crawler._gateway_web_search('AWS 신규 서비스 GA 출시 발표', max_results=10)
-    if error or not results:
-        return []
+    if error:
+        return [], error
+    if not results:
+        return [], None
 
     known = {s.lower() for s in known_services} | set(SERVICE_BLOG_MAP.keys())
     digest = '\n'.join(f"- {r.get('title', '')}: {r.get('text', '')[:200]}" for r in results)
@@ -484,20 +490,20 @@ def _discover_new_services(known_services: list) -> list:
         text = _response_text(resp)
         start_idx = text.find('[')
         if start_idx < 0:
-            return []
+            return [], 'no JSON array in Bedrock discovery response'
         parsed, _ = json.JSONDecoder().raw_decode(text, start_idx)
     except Exception as e:
         logger.warning(f'Service discovery Bedrock call failed: {e}')
-        return []
+        return [], 'service discovery Bedrock call failed'
     if not isinstance(parsed, list):
-        return []
+        return [], 'Bedrock discovery response was not a JSON array'
 
     unique = []
     for slug in parsed:
         slug = str(slug).strip().lower()
         if slug and slug not in known and slug not in unique and _SERVICE_SLUG_RE.match(slug):
             unique.append(slug)
-    return unique[:MAX_NEW_SERVICES_PER_RUN]
+    return unique[:MAX_NEW_SERVICES_PER_RUN], None
 
 
 def _register_auto_services(new_services: list) -> None:
@@ -505,13 +511,23 @@ def _register_auto_services(new_services: list) -> None:
     item so orchestrator.py's scan picks them up (merged into techConfig)
     on the next scheduled run. sourceId '__auto__' is prefixed '__' like
     '__tech__', so orchestrator excludes it from the per-customer news
-    fan-out -- it only ever contributes awsServices."""
+    fan-out -- it only ever contributes awsServices.
+
+    Existing services are never evicted to make room for new ones -- only
+    accept as many new_services as remaining capacity allows. Sorting the
+    union and slicing to MAX_AUTO_SERVICES (the original approach) truncates
+    alphabetically, which can silently drop already-tracked services (their
+    crawl just stops) and/or the very slugs this run just discovered.
+    """
     existing = table.get_item(Key={'PK': 'CRAWLER#__auto__', 'SK': 'CONFIG'}).get('Item', {})
-    merged = sorted(set(existing.get('awsServices', [])) | set(new_services))
-    if len(merged) > MAX_AUTO_SERVICES:
-        logger.warning(f'Auto-discovered services capped at {MAX_AUTO_SERVICES} '
-                        f'(dropping {len(merged) - MAX_AUTO_SERVICES})')
-        merged = merged[:MAX_AUTO_SERVICES]
+    existing_services = set(existing.get('awsServices', []))
+    capacity = MAX_AUTO_SERVICES - len(existing_services)
+    accepted = [s for s in new_services if s not in existing_services][:max(capacity, 0)]
+    dropped = [s for s in new_services if s not in accepted and s not in existing_services]
+    if dropped:
+        logger.warning(f'Auto-discovered services capped at {MAX_AUTO_SERVICES} total '
+                        f'(existing services preserved) -- dropping {dropped}')
+    merged = sorted(existing_services | set(accepted))
     table.put_item(Item={
         'PK': 'CRAWLER#__auto__',
         'SK': 'CONFIG',
@@ -620,8 +636,10 @@ def handler(event, context):
 
     if news_crawler.WEB_SEARCH_GATEWAY_URL:
         try:
-            discovered = _discover_new_services(services)
-            if discovered:
+            discovered, discover_error = _discover_new_services(services)
+            if discover_error:
+                errors.append(f'service discovery: {discover_error}')
+            elif discovered:
                 _register_auto_services(discovered)
                 logger.info(f'Auto-discovered new AWS service(s): {discovered}')
         except Exception as e:

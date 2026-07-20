@@ -13,7 +13,7 @@
 Accepted
 
 ## Context
-The crawler Step Functions pipeline (`ttobak-crawler-daily` → `ttobak-crawler-workflow`) ran successfully every night and wrote fresh crawled documents to S3, but Bedrock Knowledge Base ingestion had silently stopped since 2026-05-28 (7 weeks). Two independent bugs combined to hide this:
+The crawler Step Functions pipeline (`ttobak-crawler-daily` → `ttobak-crawler-workflow`) ran successfully every night and wrote fresh crawled documents to S3, but Bedrock Knowledge Base ingestion had silently stopped since 2026-05-28 (7 weeks). Three compounding bugs combined to hide this:
 
 1. **`KB_ID`/`DATA_SOURCE_ID` reset to `'PENDING'`.** `infra/lib/knowledge-stack.ts` hardcodes these as placeholders (the real KB/DataSource were created out-of-band; the CFN `AWS::Bedrock::KnowledgeBase`/`DataSource` resources are commented out as "Phase 2"). A CDK redeploy of `TtobakCrawlerStack`/`TtobakGatewayStack` overwrote the previously-working manual env var values with `'PENDING'` again.
 2. **Step Functions payload shape mismatch.** `ingest_trigger.py` expects the aggregated crawl results under a `crawlerResults` key (or a bare list); the actual `ParallelCrawl` state wrote branch outputs under `$.techResult`/`$.newsResults` inside `$.crawlResults`, a shape `ingest_trigger.py` never received correctly — so it always saw "0 crawler(s)" and skipped ingestion regardless of KB_ID.
@@ -23,7 +23,7 @@ Separately, the tech crawler only searches AWS What's New/Blog RSS for services 
 
 ## Decision
 1. **Fix the KB IDs**: hardcode the real out-of-band values (`BJJLVLFTOR` / `3AVMMT3RF3`) in `knowledge-stack.ts` and the QA Lambda's fallback, with a comment warning never to redeploy `TtobakKnowledgeStack` for real.
-2. **Fix the Step Functions payload**: `CrawlTechDocs` and `MapNewsSources` now use `OutputPath` (not `ResultPath`) so each `ParallelCrawl` branch emits a bare result value; `TriggerIngestion` reads `$.crawlResults` directly. This produces `[techResult, [newsResult, ...]]`, which `ingest_trigger.py`'s existing one-level flatten already handles correctly.
+2. **Fix the Step Functions payload**: `CrawlTechDocs` uses `OutputPath` and `MapNewsSources` drops its `ResultPath` (falling back to the Map's default bare-list output) so each `ParallelCrawl` branch emits an unwrapped result value; `TriggerIngestion` reads `$.crawlResults` directly. This produces `[techResult, [newsResult, ...]]`, which `ingest_trigger.py`'s existing one-level flatten already handles correctly.
 3. **Fail loud**: `ingest_trigger.py` now raises instead of returning an `ERROR` status, so a broken config or API failure surfaces as a FAILED Step Functions execution.
 4. **Reuse the AgentCore Gateway Web Search connector in the tech crawler** (`tech_crawler.py` imports `news_crawler` for its SigV4 MCP client rather than duplicating it) for two purposes:
    - An extra search query per known service (`AWS {service} 신기능 발표`), supplementing RSS results with announcements RSS/blog feeds haven't indexed yet.
@@ -59,7 +59,7 @@ Separately, the tech crawler only searches AWS What's New/Blog RSS for services 
 승인됨
 
 ## 배경
-크롤러 Step Functions 파이프라인(`ttobak-crawler-daily` → `ttobak-crawler-workflow`)은 매일 밤 정상적으로 실행되며 S3에 새 크롤 문서를 계속 기록했지만, Bedrock Knowledge Base 인제스천은 2026-05-28 이후 7주간 조용히 멈춰 있었습니다. 두 가지 독립된 버그가 겹쳐 이를 숨겼습니다:
+크롤러 Step Functions 파이프라인(`ttobak-crawler-daily` → `ttobak-crawler-workflow`)은 매일 밤 정상적으로 실행되며 S3에 새 크롤 문서를 계속 기록했지만, Bedrock Knowledge Base 인제스천은 2026-05-28 이후 7주간 조용히 멈춰 있었습니다. 세 가지 버그가 겹쳐 이를 숨겼습니다:
 
 1. **`KB_ID`/`DATA_SOURCE_ID`가 `'PENDING'`으로 리셋됨.** `infra/lib/knowledge-stack.ts`는 이 값들을 플레이스홀더로 하드코딩하고 있었습니다(실제 KB/DataSource는 out-of-band로 생성되었고, `AWS::Bedrock::KnowledgeBase`/`DataSource` CFN 리소스는 "Phase 2"로 주석 처리돼 있음). `TtobakCrawlerStack`/`TtobakGatewayStack`을 CDK로 재배포하면서 이전에 수동으로 맞춰뒀던 값이 다시 `'PENDING'`으로 덮어써졌습니다.
 2. **Step Functions 페이로드 형태 불일치.** `ingest_trigger.py`는 집계된 크롤 결과가 `crawlerResults` 키(또는 단순 리스트) 아래에 있길 기대하지만, 실제 `ParallelCrawl` 상태는 브랜치 출력을 `$.crawlResults` 안의 `$.techResult`/`$.newsResults`로 감싸서 기록했습니다 — `ingest_trigger.py`는 이를 제대로 받지 못해 항상 "0 crawler(s)"로 보고 KB_ID와 무관하게 인제스천을 건너뛰었습니다.
@@ -69,7 +69,7 @@ Separately, the tech crawler only searches AWS What's New/Blog RSS for services 
 
 ## 결정
 1. **KB ID 수정**: 실제 out-of-band 값(`BJJLVLFTOR` / `3AVMMT3RF3`)을 `knowledge-stack.ts`와 QA Lambda의 fallback에 하드코딩하고, `TtobakKnowledgeStack`을 실제로 재배포하면 안 된다는 경고 주석을 추가.
-2. **Step Functions 페이로드 수정**: `CrawlTechDocs`와 `MapNewsSources`가 `ResultPath` 대신 `OutputPath`를 사용해 각 `ParallelCrawl` 브랜치가 래퍼 없는 결과 값을 그대로 출력하도록 함. `TriggerIngestion`은 `$.crawlResults`를 직접 입력받음. 결과 형태는 `[techResult, [newsResult, ...]]`이며, `ingest_trigger.py`에 이미 있던 1단계 flatten 로직이 이를 그대로 처리.
+2. **Step Functions 페이로드 수정**: `CrawlTechDocs`는 `OutputPath`를 사용하고 `MapNewsSources`는 `ResultPath`를 생략(Map의 기본 bare-list 출력에 의존)해, 각 `ParallelCrawl` 브랜치가 래퍼 없는 결과 값을 그대로 출력하도록 함. `TriggerIngestion`은 `$.crawlResults`를 직접 입력받음. 결과 형태는 `[techResult, [newsResult, ...]]`이며, `ingest_trigger.py`에 이미 있던 1단계 flatten 로직이 이를 그대로 처리.
 3. **실패를 숨기지 않음**: `ingest_trigger.py`는 이제 `ERROR` 상태를 리턴하는 대신 예외를 raise해, 설정 오류나 API 실패가 Step Functions 실행을 FAILED로 표면화함.
 4. **tech 크롤러에서 AgentCore Gateway Web Search 커넥터 재사용** (`tech_crawler.py`가 SigV4 MCP 클라이언트를 새로 만들지 않고 `news_crawler`를 import해 재사용) — 두 가지 용도로:
    - 이미 알고 있는 서비스별로 검색 쿼리 1건 추가(`AWS {service} 신기능 발표`) — RSS/블로그가 아직 색인하지 않은 발표를 보완.

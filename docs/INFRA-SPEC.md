@@ -266,7 +266,7 @@ TtobakApp (bin/ttobak.ts)
 - `ttobak-crawler-ingest` (256MB, 30s) — Bedrock KB `StartIngestionJob`. 신규 문서 0건이면 SKIPPED, `KB_ID`/`DATA_SOURCE_ID` 미설정이거나 API 호출 실패 시 **예외를 raise**해 Step Functions 실행이 FAILED로 표면화됨(과거엔 `{"status":"ERROR"}`를 리턴해 7주간 무증상으로 인제스천이 멈췄던 원인).
 
 ### Step Functions 페이로드
-`ListActiveSources` → `Parallel(CrawlTechDocs ‖ Map(CrawlNews))` → `TriggerIngestion`. Parallel의 두 브랜치 모두 `OutputPath`로 래퍼 없는 결과를 내보내므로, `crawlResults`는 `[techResult, [newsResult, ...]]` 형태 — `ingest_trigger.py`가 이 한 단계 중첩을 그대로 flatten해 집계.
+`ListActiveSources` → `Parallel(CrawlTechDocs ‖ Map(CrawlNews))` → `TriggerIngestion`. `CrawlTechDocs`는 `OutputPath`로, `MapNewsSources`는 `resultPath`를 생략(Map 기본 출력)해 각각 래퍼 없는 결과를 내보내므로, `crawlResults`는 `[techResult, [newsResult, ...]]` 형태 — `ingest_trigger.py`가 이 한 단계 중첩을 그대로 flatten해 집계.
 
 ### 크롤 이력/상태
 각 크롤러 실행 끝에 `CRAWLER#{sourceId}/HISTORY#{ISO8601}` 아이템을 기록하고(뉴스 소스는) CONFIG의 `status`(`active`/`error`)와 `lastCrawledAt`을 갱신 — Settings 페이지의 크롤 이력/상태 배지가 이 데이터를 표시.
