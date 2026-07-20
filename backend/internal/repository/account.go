@@ -207,6 +207,60 @@ func (r *DynamoDBRepository) ListMeetingRefsForAccount(ctx context.Context, acco
 	return refs, nil
 }
 
+// PutResearchRef writes a ResearchRef item (caller builds PK/SK).
+func (r *DynamoDBRepository) PutResearchRef(ctx context.Context, ref *model.ResearchRef) error {
+	item, err := attributevalue.MarshalMap(ref)
+	if err != nil {
+		return fmt.Errorf("marshal research ref: %w", err)
+	}
+	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(r.tableName),
+		Item:      item,
+	}); err != nil {
+		return fmt.Errorf("put research ref: %w", err)
+	}
+	return nil
+}
+
+// DeleteResearchRef removes the ResearchRef item linking researchID to accountID.
+func (r *DynamoDBRepository) DeleteResearchRef(ctx context.Context, accountID, researchID string) error {
+	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixResearchRef + researchID},
+		},
+	}); err != nil {
+		return fmt.Errorf("delete research ref: %w", err)
+	}
+	return nil
+}
+
+// ListResearchRefsForAccount queries the account partition for RESEARCHREF# items.
+func (r *DynamoDBRepository) ListResearchRefsForAccount(ctx context.Context, accountID string) ([]model.ResearchRef, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").BeginsWith(model.PrefixResearchRef))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build research refs query: %w", err)
+	}
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(false), // newest first
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query research refs: %w", err)
+	}
+	refs := []model.ResearchRef{}
+	if err := attributevalue.UnmarshalListOfMaps(items, &refs); err != nil {
+		return nil, fmt.Errorf("unmarshal research refs: %w", err)
+	}
+	return refs, nil
+}
+
 // PutAccountInsights REPLACES the account insights for a single meeting: it first
 // deletes any existing items sharing the meeting's SK prefix
 // (INSIGHT#{occurredAt}#{meetingId}#) and then writes the fresh set. This makes a
@@ -289,6 +343,55 @@ func (r *DynamoDBRepository) ListInsightsForAccount(ctx context.Context, account
 		return nil, fmt.Errorf("unmarshal insights: %w", err)
 	}
 	return insights, nil
+}
+
+// PutPublicShare writes a token -> document pointer item (caller builds PK/SK).
+func (r *DynamoDBRepository) PutPublicShare(ctx context.Context, share *model.PublicShare) error {
+	item, err := attributevalue.MarshalMap(share)
+	if err != nil {
+		return fmt.Errorf("marshal public share: %w", err)
+	}
+	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(r.tableName),
+		Item:      item,
+	}); err != nil {
+		return fmt.Errorf("put public share: %w", err)
+	}
+	return nil
+}
+
+func (r *DynamoDBRepository) GetPublicShare(ctx context.Context, token string) (*model.PublicShare, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixPubShare + token},
+			"SK": &types.AttributeValueMemberS{Value: model.SKPubShare},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get public share: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+	var share model.PublicShare
+	if err := attributevalue.UnmarshalMap(result.Item, &share); err != nil {
+		return nil, fmt.Errorf("unmarshal public share: %w", err)
+	}
+	return &share, nil
+}
+
+func (r *DynamoDBRepository) DeletePublicShare(ctx context.Context, token string) error {
+	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixPubShare + token},
+			"SK": &types.AttributeValueMemberS{Value: model.SKPubShare},
+		},
+	}); err != nil {
+		return fmt.Errorf("delete public share: %w", err)
+	}
+	return nil
 }
 
 func (r *DynamoDBRepository) PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error {

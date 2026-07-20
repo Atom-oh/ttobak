@@ -110,6 +110,36 @@ type MeetingRef struct {
 	EntityType  string    `dynamodbav:"entityType"` // "MEETING_REF"
 }
 
+const (
+	PrefixResearchRef     = "RESEARCHREF#"
+	EntityTypeResearchRef = "RESEARCH_REF"
+)
+
+// ResearchRef is a lightweight reference to a research report linked to an
+// account, stored in the account partition so members can list linked
+// research without a cross-partition scan (mirrors MeetingRef).
+// PK: ACCOUNT#{accountId}, SK: RESEARCHREF#{researchId}.
+type ResearchRef struct {
+	PK          string    `dynamodbav:"PK"`
+	SK          string    `dynamodbav:"SK"`
+	AccountID   string    `dynamodbav:"accountId"`
+	ResearchID  string    `dynamodbav:"researchId"`
+	OwnerUserID string    `dynamodbav:"ownerUserId"`
+	Topic       string    `dynamodbav:"topic,omitempty"`
+	CreatedAt   time.Time `dynamodbav:"createdAt"`
+	EntityType  string    `dynamodbav:"entityType"` // "RESEARCH_REF"
+}
+
+// AccountResearchDTO is the list-view item for "research linked to this account".
+type AccountResearchDTO struct {
+	ResearchID  string `json:"researchId"`
+	Topic       string `json:"topic"`
+	Summary     string `json:"summary,omitempty"`
+	Status      string `json:"status"`
+	OwnerUserID string `json:"ownerUserId"`
+	CreatedAt   string `json:"createdAt"`
+}
+
 // --- meeting↔account request/response DTOs ---
 
 type LinkAccountRequest struct {
@@ -236,9 +266,13 @@ type AccountDocument struct {
 	FileSize     int64     `dynamodbav:"fileSize,omitempty"`
 	SourceUserID string    `dynamodbav:"sourceUserId"`
 	TtobakOrigin bool      `dynamodbav:"ttobakOrigin"`
-	CreatedAt    time.Time `dynamodbav:"createdAt"`
-	UpdatedAt    time.Time `dynamodbav:"updatedAt"`
-	EntityType   string    `dynamodbav:"entityType"`
+	// PublicShareToken is set once CreateUserDocPublicShare mints an
+	// unauthenticated share link for this (personal, slide) document; see
+	// PublicShare for the token->doc pointer item this references.
+	PublicShareToken string    `dynamodbav:"publicShareToken,omitempty"`
+	CreatedAt        time.Time `dynamodbav:"createdAt"`
+	UpdatedAt        time.Time `dynamodbav:"updatedAt"`
+	EntityType       string    `dynamodbav:"entityType"`
 }
 
 type PutDocumentRequest struct {
@@ -276,6 +310,31 @@ type AccountDocumentDetail struct {
 	Content     string `json:"content"`
 	FileKey     string `json:"-"` // internal only; handler presigns this into DownloadURL
 	DownloadURL string `json:"downloadUrl,omitempty"`
+	// PreviewURL is set only for a PPTX/PPT slide whose PDF sidecar
+	// conversion (convert-doc Lambda) has finished; see UploadService.GeneratePreviewPDFURL.
+	PreviewURL string `json:"previewUrl,omitempty"`
+	// PublicShareToken, if set, means GET /api/public/docs/{token} serves
+	// this document unauthenticated. See AccountService.CreateUserDocPublicShare.
+	PublicShareToken string `json:"publicShareToken,omitempty"`
+}
+
+const (
+	PrefixPubShare     = "PUBSHARE#"
+	SKPubShare         = "PUBSHARE"
+	EntityTypePubShare = "PUB_SHARE"
+)
+
+// PublicShare is a token -> document pointer enabling one unauthenticated
+// GET route (see handler.DocumentHandler.PublicGetDoc) to resolve a share
+// link without a table scan. PK: PUBSHARE#{token}, SK: PUBSHARE.
+type PublicShare struct {
+	PK         string    `dynamodbav:"PK"`
+	SK         string    `dynamodbav:"SK"`
+	Token      string    `dynamodbav:"token"`
+	DocPK      string    `dynamodbav:"docPK"` // USER#{userId} -- personal docs only for now
+	DocID      string    `dynamodbav:"docId"`
+	CreatedAt  time.Time `dynamodbav:"createdAt"`
+	EntityType string    `dynamodbav:"entityType"` // "PUB_SHARE"
 }
 
 // VaultFile is one Obsidian note in an export bundle.

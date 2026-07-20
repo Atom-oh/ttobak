@@ -120,6 +120,7 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   originVerifySecret,
   agentCoreRuntimeArn,
   researchWorkerRole: aiStack.researchWorkerRole,
+  convertDocRole: aiStack.convertDocRole,
 });
 gatewayStack.addDependency(authStack);
 gatewayStack.addDependency(storageStack);

@@ -7,7 +7,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi } from '@/lib/api';
 import { uploadDocFile } from '@/lib/upload';
 import { INSIGHT_TYPES } from '@/types/meeting';
-import type { Account, AccountInsight, AccountMeetingRef, AccountDocument } from '@/types/meeting';
+import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef } from '@/types/meeting';
 
 export default function AccountDetailClient() {
   const pathname = usePathname();
@@ -20,6 +20,7 @@ export default function AccountDetailClient() {
   const [meetings, setMeetings] = useState<AccountMeetingRef[]>([]);
   const [insights, setInsights] = useState<AccountInsight[]>([]);
   const [documents, setDocuments] = useState<AccountDocument[]>([]);
+  const [research, setResearch] = useState<AccountResearchRef[]>([]);
   const [activeType, setActiveType] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,16 +35,18 @@ export default function AccountDetailClient() {
     setLoading(true);
     setError(null);
     try {
-      const [acc, mtg, ins, docs] = await Promise.all([
+      const [acc, mtg, ins, docs, res] = await Promise.all([
         accountApi.get(accountId),
         accountApi.meetings(accountId),
         accountApi.insights(accountId),
         accountApi.listDocuments(accountId),
+        accountApi.research(accountId),
       ]);
       setAccount(acc);
       setMeetings(mtg?.meetings ?? []);
       setInsights(ins?.insights ?? []);
       setDocuments(docs?.documents ?? []);
+      setResearch(res?.research ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load account');
     } finally {
@@ -215,6 +218,35 @@ export default function AccountDetailClient() {
                       </div>
                       <p className="text-sm text-slate-700 dark:text-text-secondary">{ins.text}</p>
                     </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {/* Linked research */}
+            <section className="mb-8">
+              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">리서치</h3>
+              {research.length === 0 ? (
+                <p className="text-sm text-slate-400 dark:text-text-muted">연결된 리서치가 없습니다.</p>
+              ) : (
+                <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
+                  {research.map((r) => (
+                    <a
+                      key={r.researchId}
+                      href={`/insights/research/${r.researchId}`}
+                      className="block p-3 hover:bg-slate-50 dark:hover:bg-white/5"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="material-symbols-outlined text-primary text-lg">neurology</span>
+                        <span className="text-sm font-medium text-slate-900 dark:text-text-main">{r.topic}</span>
+                      </div>
+                      {r.summary && (
+                        <p className="text-xs text-slate-500 dark:text-text-muted line-clamp-2">{r.summary}</p>
+                      )}
+                      <div className="text-xs text-slate-400 dark:text-text-muted mt-1">
+                        {new Date(r.createdAt).toLocaleDateString()}
+                      </div>
+                    </a>
                   ))}
                 </div>
               )}

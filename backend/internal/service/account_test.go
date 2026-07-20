@@ -20,6 +20,7 @@ type mockAccountRepo struct {
 	meetingRefs map[string][]model.MeetingRef // accountID -> refs
 	insightsByAccount map[string][]model.AccountInsight
 	documents map[string][]model.AccountDocument // PK -> docs
+	publicShares map[string]*model.PublicShare   // token -> share
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -30,6 +31,7 @@ func newMockAccountRepo() *mockAccountRepo {
 		meetingRefs: make(map[string][]model.MeetingRef),
 		insightsByAccount: make(map[string][]model.AccountInsight),
 		documents: make(map[string][]model.AccountDocument),
+		publicShares: make(map[string]*model.PublicShare),
 	}
 }
 
@@ -137,6 +139,24 @@ func (m *mockAccountRepo) DeleteAccountDocument(_ context.Context, pk, docID str
 		}
 	}
 	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+
+func (m *mockAccountRepo) PutPublicShare(_ context.Context, share *model.PublicShare) error {
+	cp := *share
+	m.publicShares[share.Token] = &cp
+	return nil
+}
+func (m *mockAccountRepo) GetPublicShare(_ context.Context, token string) (*model.PublicShare, error) {
+	s, ok := m.publicShares[token]
+	if !ok {
+		return nil, nil
+	}
+	cp := *s
+	return &cp, nil
+}
+func (m *mockAccountRepo) DeletePublicShare(_ context.Context, token string) error {
+	delete(m.publicShares, token)
+	return nil
 }
 
 // mdPtr always returns a non-nil pointer, unlike strPtr (meeting.go), which
@@ -947,9 +967,10 @@ func TestDeleteAccountDocument_RemovesDoc(t *testing.T) {
 	}
 }
 
-// mockS3Deleter records DeleteObject calls for assertion.
+// mockS3Deleter records DeleteObject/CopyObject calls for assertion.
 type mockS3Deleter struct {
 	deletedKeys []string
+	copied      []s3.CopyObjectInput
 	err         error
 }
 
@@ -959,6 +980,14 @@ func (m *mockS3Deleter) DeleteObject(_ context.Context, params *s3.DeleteObjectI
 	}
 	m.deletedKeys = append(m.deletedKeys, *params.Key)
 	return &s3.DeleteObjectOutput{}, nil
+}
+
+func (m *mockS3Deleter) CopyObject(_ context.Context, params *s3.CopyObjectInput, _ ...func(*s3.Options)) (*s3.CopyObjectOutput, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	m.copied = append(m.copied, *params)
+	return &s3.CopyObjectOutput{}, nil
 }
 
 func TestDeleteAccountDocument_RemovesSlideS3Object(t *testing.T) {
@@ -1190,5 +1219,138 @@ func TestDeleteAccountDocument_NonMemberForbidden(t *testing.T) {
 	err := svc.DeleteAccountDocument(context.Background(), "stranger-9", acc.AccountID, created.DocID)
 	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestShareUserDocumentToAccount(t *testing.T) {
+	repo := newMockAccountRepo()
+	s3mock := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: s3mock, bucketName: "test-bucket"}
+
+	acc, err := svc.CreateAccount(context.Background(), "user-1", "u1@example.com", &model.CreateAccountRequest{Name: "테스트 어카운트"})
+	if err != nil {
+		t.Fatalf("setup: create account failed: %v", err)
+	}
+	other, err := svc.CreateAccount(context.Background(), "owner-2", "o2@example.com", &model.CreateAccountRequest{Name: "다른 어카운트"})
+	if err != nil {
+		t.Fatalf("setup: create other account failed: %v", err)
+	}
+
+	personalDoc := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "doc-1",
+		DocID: "doc-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pptx", FileName: "deck.pptx",
+		MimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		FileSize: 100, SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[personalDoc.PK] = append(repo.documents[personalDoc.PK], personalDoc)
+
+	// user-1 is not a member of `other` -- sharing there must be forbidden,
+	// and must not have touched S3 (checked below via s3mock.copied == 0).
+	if _, err := svc.ShareUserDocumentToAccount(context.Background(), "user-1", "doc-1", other.AccountID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden for non-member account, got %v", err)
+	}
+	if len(s3mock.copied) != 0 {
+		t.Fatalf("expected no S3 copy for a rejected share, got %d", len(s3mock.copied))
+	}
+
+	dto, err := svc.ShareUserDocumentToAccount(context.Background(), "user-1", "doc-1", acc.AccountID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dto.Title != "Deck" || dto.FileName != "deck.pptx" {
+		t.Errorf("unexpected dto: %+v", dto)
+	}
+	if len(s3mock.copied) != 1 {
+		t.Fatalf("expected 1 CopyObject call, got %d", len(s3mock.copied))
+	}
+	wantSource := "test-bucket/docs/user-1/123_deck.pptx"
+	if got := *s3mock.copied[0].CopySource; got != wantSource {
+		t.Errorf("expected CopySource %q, got %q", wantSource, got)
+	}
+	newKey := *s3mock.copied[0].Key
+	if newKey == personalDoc.FileKey {
+		t.Error("expected a fresh S3 key for the account copy, not the original personal key")
+	}
+
+	accDocs := repo.documents[model.PrefixAccount+acc.AccountID]
+	if len(accDocs) != 1 {
+		t.Fatalf("expected 1 account doc, got %d", len(accDocs))
+	}
+	if accDocs[0].FileKey != newKey {
+		t.Errorf("expected account doc fileKey %q, got %q", newKey, accDocs[0].FileKey)
+	}
+
+	// Deleting the original personal doc must not break the shared copy --
+	// this is the whole reason ShareUserDocumentToAccount copies rather
+	// than reusing the original fileKey.
+	if err := svc.DeleteUserDocument(context.Background(), "user-1", "doc-1"); err != nil {
+		t.Fatalf("delete original failed: %v", err)
+	}
+	if _, err := svc.GetAccountDocument(context.Background(), "user-1", acc.AccountID, accDocs[0].DocID); err != nil {
+		t.Errorf("shared copy should survive original deletion, got error: %v", err)
+	}
+}
+
+func TestUserDocPublicShare_LifecycleAndScope(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	slide := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "slide-1",
+		DocID: "slide-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pdf", FileName: "deck.pdf",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[slide.PK] = append(repo.documents[slide.PK], slide)
+
+	note := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "note-1",
+		DocID: "note-1", Title: "Note", DocType: "note", Content: "body",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[note.PK] = append(repo.documents[note.PK], note)
+
+	// Markdown docs are out of scope -- must be rejected.
+	if _, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "note-1"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for a markdown doc, got %v", err)
+	}
+
+	token, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "slide-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token == "" {
+		t.Fatal("expected a non-empty token")
+	}
+
+	// Idempotent: sharing again returns the same token, not a second one.
+	token2, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "slide-1")
+	if err != nil || token2 != token {
+		t.Fatalf("expected idempotent re-share to return %q, got %q err=%v", token, token2, err)
+	}
+
+	resolved, err := svc.ResolvePublicShare(context.Background(), token)
+	if err != nil {
+		t.Fatalf("unexpected error resolving token: %v", err)
+	}
+	if resolved.DocID != "slide-1" {
+		t.Errorf("expected resolved doc slide-1, got %s", resolved.DocID)
+	}
+
+	if _, err := svc.ResolvePublicShare(context.Background(), "bogus-token"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for a bogus token, got %v", err)
+	}
+
+	if err := svc.RevokeUserDocPublicShare(context.Background(), "user-1", "slide-1"); err != nil {
+		t.Fatalf("unexpected error revoking: %v", err)
+	}
+	if _, err := svc.ResolvePublicShare(context.Background(), token); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound after revoke, got %v", err)
+	}
+
+	// Revoking a never-shared doc is a no-op, not an error.
+	if err := svc.RevokeUserDocPublicShare(context.Background(), "user-1", "note-1"); err != nil {
+		t.Errorf("expected revoke on unshared doc to be a no-op, got %v", err)
 	}
 }

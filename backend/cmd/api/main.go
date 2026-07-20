@@ -124,6 +124,12 @@ func init() {
 	// Public: allowed domains (no auth required)
 	r.Get("/api/auth/allowed-domains", settingsHandler.GetAllowedDomains)
 
+	// Public: slide document share links (no auth required -- see
+	// DocumentHandler.PublicGetDoc's doc comment). Everything else document-
+	// related lives inside the Auth group below; nothing added under
+	// /api/public/ is ever authenticated, so keep this route surface minimal.
+	r.Get("/api/public/docs/{token}", documentHandler.PublicGetDoc)
+
 	// Authenticated routes
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth)
@@ -136,6 +142,7 @@ func init() {
 		r.Get("/api/accounts/{accountId}/meetings", accountHandler.ListAccountMeetings)
 		r.Get("/api/accounts/{accountId}/insights", accountHandler.ListAccountInsights)
 		r.Get("/api/accounts/{accountId}/brief", accountHandler.GetAccountBrief)
+		r.Get("/api/accounts/{accountId}/research", researchHandler.ListAccountResearch)
 		r.Post("/api/accounts/{accountId}/documents", accountHandler.PutDocument)
 		r.Get("/api/accounts/{accountId}/documents", accountHandler.ListDocuments)
 		r.Get("/api/accounts/{accountId}/documents/{docId}", accountHandler.GetDocument)
@@ -148,6 +155,9 @@ func init() {
 		r.Get("/api/documents/{docId}", documentHandler.GetDocument)
 		r.Put("/api/documents/{docId}", documentHandler.UpdateDocument)
 		r.Delete("/api/documents/{docId}", documentHandler.DeleteDocument)
+		r.Post("/api/documents/{docId}/share-account", documentHandler.ShareToAccount)
+		r.Post("/api/documents/{docId}/public-share", documentHandler.CreatePublicShare)
+		r.Delete("/api/documents/{docId}/public-share", documentHandler.RevokePublicShare)
 		r.Get("/api/vault/export", vaultHandler.ExportVault)
 		r.Post("/api/meetings/{meetingId}/account", meetingHandler.LinkToAccount)
 		r.Post("/api/meetings/{meetingId}/share-account", shareHandler.ShareToAccount)
@@ -243,6 +253,8 @@ func init() {
 		r.Post("/api/research/{researchId}/export", researchHandler.ExportResearch)
 		r.Post("/api/research/{researchId}/share", researchShareHandler.ShareResearch)
 		r.Delete("/api/research/{researchId}/share/{userId}", researchShareHandler.RevokeResearchShare)
+		r.Post("/api/research/{researchId}/accounts", researchHandler.LinkAccount)
+		r.Delete("/api/research/{researchId}/accounts/{accountId}", researchHandler.UnlinkAccount)
 
 		// Research chat routes
 		r.Get("/api/research/{researchId}/chat", researchChatHandler.ListMessages)

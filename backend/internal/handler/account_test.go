@@ -31,6 +31,7 @@ type mockHandlerAccountRepo struct {
 	meetingRefs map[string][]model.MeetingRef
 	insightsByAccount map[string][]model.AccountInsight
 	documents map[string][]model.AccountDocument
+	publicShares map[string]*model.PublicShare
 }
 
 func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
@@ -41,6 +42,7 @@ func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
 		meetingRefs: make(map[string][]model.MeetingRef),
 		insightsByAccount: make(map[string][]model.AccountInsight),
 		documents: make(map[string][]model.AccountDocument),
+		publicShares: make(map[string]*model.PublicShare),
 	}
 }
 
@@ -139,6 +141,23 @@ func (m *mockHandlerAccountRepo) DeleteAccountDocument(_ context.Context, pk, do
 		}
 	}
 	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+func (m *mockHandlerAccountRepo) PutPublicShare(_ context.Context, share *model.PublicShare) error {
+	cp := *share
+	m.publicShares[share.Token] = &cp
+	return nil
+}
+func (m *mockHandlerAccountRepo) GetPublicShare(_ context.Context, token string) (*model.PublicShare, error) {
+	s, ok := m.publicShares[token]
+	if !ok {
+		return nil, nil
+	}
+	cp := *s
+	return &cp, nil
+}
+func (m *mockHandlerAccountRepo) DeletePublicShare(_ context.Context, token string) error {
+	delete(m.publicShares, token)
+	return nil
 }
 
 func newStubAccountHandler() (*AccountHandler, *mockHandlerAccountRepo) {

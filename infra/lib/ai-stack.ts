@@ -27,6 +27,7 @@ export class AiStack extends cdk.Stack {
   public readonly wsAuthorizerRole: iam.Role;
   public readonly crawlerRole: iam.Role;
   public readonly researchWorkerRole: iam.Role;
+  public readonly convertDocRole: iam.Role;
   public readonly kmsKey: kms.Key;
   /** @deprecated Legacy shared role — kept for RealtimeStack backward compatibility */
   public readonly legacyRole: iam.Role;
@@ -303,6 +304,24 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // ==================== Convert Doc Role ====================
+    // Needs: S3 read on docs/ (untrusted uploaded files), S3 write on
+    // docs-pdf/ only (its sidecar output prefix). No DynamoDB access at
+    // all -- convert-doc never touches the table (see convert-doc/main.go's
+    // comment on why: deterministic sidecar keys avoid needing the doc
+    // record to exist yet). Deliberately narrower than bucket.grantReadWrite
+    // (the pattern most other roles use): this Lambda processes
+    // attacker-supplied file bytes, so its blast radius if compromised
+    // should be "can read other users' docs/ uploads and write into
+    // docs-pdf/", not "can read/write the entire assets bucket".
+    this.convertDocRole = createLambdaRole(
+      'TtobakConvertDocRole',
+      'ttobak-convert-doc-role',
+      'Role for ttobak-convert-doc Lambda function'
+    );
+    props.bucket.grantRead(this.convertDocRole, 'docs/*');
+    props.bucket.grantPut(this.convertDocRole, 'docs-pdf/*');
+
     // ==================== KB Role ====================
     // Needs: DynamoDB R/W, S3 R/W (kb bucket), Bedrock KB, OpenSearch Serverless
     this.kbRole = createLambdaRole(
@@ -517,6 +536,11 @@ export class AiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ProcessImageRoleArn', {
       value: this.processImageRole.roleArn,
       exportName: 'TtobakProcessImageRoleArn',
+    });
+
+    new cdk.CfnOutput(this, 'ConvertDocRoleArn', {
+      value: this.convertDocRole.roleArn,
+      exportName: 'TtobakConvertDocRoleArn',
     });
 
     new cdk.CfnOutput(this, 'KbRoleArn', {

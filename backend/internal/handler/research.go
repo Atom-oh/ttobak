@@ -105,6 +105,100 @@ func (h *ResearchHandler) GetResearchDetail(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, result)
 }
 
+// LinkAccount handles POST /api/research/{researchId}/accounts
+func (h *ResearchHandler) LinkAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	researchID := chi.URLParam(r, "researchId")
+
+	if researchID == "" || strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
+		return
+	}
+
+	var req model.LinkAccountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AccountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "accountId is required")
+		return
+	}
+
+	accountIDs, err := h.researchService.LinkAccount(ctx, userID, researchID, req.AccountID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		log.Printf("failed to link research %s to account %s: %v", researchID, req.AccountID, err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"accountIds": accountIDs})
+}
+
+// UnlinkAccount handles DELETE /api/research/{researchId}/accounts/{accountId}
+func (h *ResearchHandler) UnlinkAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	researchID := chi.URLParam(r, "researchId")
+	accountID := chi.URLParam(r, "accountId")
+
+	if researchID == "" || strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
+		return
+	}
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "accountId is required")
+		return
+	}
+
+	_, err := h.researchService.UnlinkAccount(ctx, userID, researchID, accountID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		log.Printf("failed to unlink research %s from account %s: %v", researchID, accountID, err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListAccountResearch handles GET /api/accounts/{accountId}/research
+func (h *ResearchHandler) ListAccountResearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid accountId")
+		return
+	}
+
+	items, err := h.researchService.ListAccountResearch(ctx, userID, accountID)
+	if err != nil {
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		log.Printf("failed to list research for account %s: %v", accountID, err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"research": items})
+}
+
 // DeleteResearch handles DELETE /api/research/{researchId} — soft delete (moves to trash)
 func (h *ResearchHandler) DeleteResearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

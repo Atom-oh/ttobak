@@ -146,6 +146,22 @@ function handler(event) {
         ],
       },
       additionalBehaviors: {
+        // Public slide-share redirects — MUST be defined before '/api/*'
+        // below: CloudFront evaluates additionalBehaviors path patterns in
+        // insertion order (first match wins), so this more-specific pattern
+        // has to come first or every request would already match '/api/*'
+        // and pick up its Lambda@Edge JWT check. No edgeLambdas here by
+        // design — the Go handler (DocumentHandler.PublicGetDoc) is the only
+        // gate, and it checks a share token, not a caller identity. Same
+        // apiOrigin as '/api/*' below, so x-origin-verify is still injected
+        // and the Go OriginVerify middleware still passes.
+        '/api/public/*': {
+          origin: apiOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        },
         '/api/*': {
           origin: apiOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,

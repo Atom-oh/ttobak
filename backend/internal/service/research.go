@@ -18,9 +18,41 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
+// researchMainRepo is the slice of the main-table repository ResearchService
+// needs (user lookup for sharing, account membership + refs for account
+// linking). Kept as an interface, mirroring AccountService's accountRepo, so
+// tests can supply an in-memory fake instead of a real DynamoDB table.
+type researchMainRepo interface {
+	ListSharesForUser(ctx context.Context, userID string) ([]model.Share, error)
+	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
+	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
+	PutResearchRef(ctx context.Context, ref *model.ResearchRef) error
+	DeleteResearchRef(ctx context.Context, accountID, researchID string) error
+	ListResearchRefsForAccount(ctx context.Context, accountID string) ([]model.ResearchRef, error)
+}
+
+// researchRepo is the slice of ResearchRepository ResearchService needs.
+// Kept as an interface (mirrors researchMainRepo above) so tests can supply
+// an in-memory fake instead of a real DynamoDB table.
+type researchRepo interface {
+	CreateResearch(ctx context.Context, research *model.Research) error
+	GetResearch(ctx context.Context, researchId string) (*model.Research, error)
+	UpdateResearchFieldsConditional(ctx context.Context, researchId string, fields map[string]interface{}, expectedStatus string) error
+	UpdateResearchFields(ctx context.Context, researchId string, fields map[string]interface{}) error
+	ListUserResearch(ctx context.Context, userId string) ([]model.Research, error)
+	BatchGetResearch(ctx context.Context, researchIds []string) ([]model.Research, error)
+	ListSubPages(ctx context.Context, userId, parentId string) ([]model.Research, error)
+	RemoveResearchField(ctx context.Context, researchId, fieldName string) error
+	DeleteResearch(ctx context.Context, researchId, userId string) error
+	CreateResearchShare(ctx context.Context, researchID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error)
+	GetResearchShare(ctx context.Context, sharedToID, researchID string) (*model.Share, error)
+	DeleteResearchShare(ctx context.Context, sharedToID, researchID string) error
+	ListSharesForResearch(ctx context.Context, researchID string) ([]model.Share, error)
+}
+
 type ResearchService struct {
-	repo            *repository.ResearchRepository
-	mainRepo        *repository.DynamoDBRepository
+	repo            researchRepo
+	mainRepo        researchMainRepo
 	s3Client        *s3.Client
 	sfnClient       *sfn.Client
 	kbBucketName    string
@@ -36,6 +68,13 @@ func NewResearchService(repo *repository.ResearchRepository, mainRepo *repositor
 		kbBucketName:    kbBucketName,
 		stateMachineArn: stateMachineArn,
 	}
+}
+
+// newResearchServiceWithRepo is for same-package (service) tests: it accepts
+// the researchMainRepo interface directly so a test can supply an in-memory
+// fake instead of a real DynamoDB table (mirrors newAccountServiceWithRepo).
+func newResearchServiceWithRepo(repo researchRepo, mainRepo researchMainRepo) *ResearchService {
+	return &ResearchService{repo: repo, mainRepo: mainRepo}
 }
 
 func generateID() string {
@@ -182,7 +221,15 @@ func (s *ResearchService) GetResearchDetail(ctx context.Context, researchId, use
 		if err != nil {
 			return nil, fmt.Errorf("failed to check share: %w", err)
 		}
-		if share == nil {
+		if share != nil {
+			research.IsShared = true
+		} else if s.mainRepo != nil && s.hasAccountAccess(ctx, research.AccountIDs, userId) {
+			// Not shared directly, but the caller is a member of an account
+			// this research is linked to -- grant read access. IsShared=true
+			// keeps the owner-only UI (account chips, share button) hidden
+			// for this viewer, same as a direct share would.
+			research.IsShared = true
+		} else {
 			return nil, ErrForbidden
 		}
 	}
@@ -466,4 +513,171 @@ func (s *ResearchService) RevokeResearchShare(ctx context.Context, ownerID, rese
 	}
 
 	return s.repo.DeleteResearchShare(ctx, sharedToID, researchId)
+}
+
+// hasAccountAccess reports whether userId is a member of any account in accountIDs.
+func (s *ResearchService) hasAccountAccess(ctx context.Context, accountIDs []string, userId string) bool {
+	for _, accID := range accountIDs {
+		member, err := s.mainRepo.GetMember(ctx, accID, userId)
+		if err != nil {
+			log.Printf("warn: failed to check account membership %s for research access: %v", accID, err)
+			continue
+		}
+		if member != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// LinkAccount links a research (owner only) to an account the caller is a
+// member of. Idempotent: linking an already-linked account is a no-op.
+func (s *ResearchService) LinkAccount(ctx context.Context, userID, researchID, accountID string) ([]string, error) {
+	if s.mainRepo == nil {
+		return nil, fmt.Errorf("account linking not configured")
+	}
+	research, err := s.repo.GetResearch(ctx, researchID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get research: %w", err)
+	}
+	if research == nil {
+		return nil, ErrNotFound
+	}
+	if research.UserID != userID {
+		return nil, ErrForbidden
+	}
+
+	member, err := s.mainRepo.GetMember(ctx, accountID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check account membership: %w", err)
+	}
+	if member == nil {
+		return nil, ErrForbidden
+	}
+
+	for _, id := range research.AccountIDs {
+		if id == accountID {
+			return research.AccountIDs, nil // already linked
+		}
+	}
+	accountIDs := append(append([]string{}, research.AccountIDs...), accountID)
+
+	if err := s.repo.UpdateResearchFields(ctx, researchID, map[string]interface{}{
+		"accountIds": accountIDs,
+	}); err != nil {
+		return nil, fmt.Errorf("failed to link account: %w", err)
+	}
+
+	if err := s.mainRepo.PutResearchRef(ctx, &model.ResearchRef{
+		PK:          model.PrefixAccount + accountID,
+		SK:          model.PrefixResearchRef + researchID,
+		AccountID:   accountID,
+		ResearchID:  researchID,
+		OwnerUserID: userID,
+		Topic:       research.Topic,
+		CreatedAt:   time.Now().UTC(),
+		EntityType:  model.EntityTypeResearchRef,
+	}); err != nil {
+		log.Printf("warn: failed to write research ref for account %s: %v", accountID, err)
+	}
+
+	return accountIDs, nil
+}
+
+// UnlinkAccount removes a research↔account link (owner only).
+func (s *ResearchService) UnlinkAccount(ctx context.Context, userID, researchID, accountID string) ([]string, error) {
+	if s.mainRepo == nil {
+		return nil, fmt.Errorf("account linking not configured")
+	}
+	research, err := s.repo.GetResearch(ctx, researchID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get research: %w", err)
+	}
+	if research == nil {
+		return nil, ErrNotFound
+	}
+	if research.UserID != userID {
+		return nil, ErrForbidden
+	}
+
+	remaining := make([]string, 0, len(research.AccountIDs))
+	for _, id := range research.AccountIDs {
+		if id != accountID {
+			remaining = append(remaining, id)
+		}
+	}
+
+	if err := s.repo.UpdateResearchFields(ctx, researchID, map[string]interface{}{
+		"accountIds": remaining,
+	}); err != nil {
+		return nil, fmt.Errorf("failed to unlink account: %w", err)
+	}
+
+	if err := s.mainRepo.DeleteResearchRef(ctx, accountID, researchID); err != nil {
+		log.Printf("warn: failed to delete research ref for account %s: %v", accountID, err)
+	}
+
+	return remaining, nil
+}
+
+// summaryPreviewMaxLen caps AccountResearchDTO.Summary so the account
+// reference panel's list view never carries a full research summary.
+const summaryPreviewMaxLen = 300
+
+// truncateRunes cuts s to at most n runes, rune-boundary safe (Korean/multi-byte
+// text would otherwise risk a byte-index cut landing mid-character).
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
+// ListAccountResearch returns research linked to accountID, for members only.
+func (s *ResearchService) ListAccountResearch(ctx context.Context, userID, accountID string) ([]model.AccountResearchDTO, error) {
+	if s.mainRepo == nil {
+		return nil, fmt.Errorf("account linking not configured")
+	}
+	member, err := s.mainRepo.GetMember(ctx, accountID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check account membership: %w", err)
+	}
+	if member == nil {
+		return nil, ErrForbidden
+	}
+
+	refs, err := s.mainRepo.ListResearchRefsForAccount(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list research refs: %w", err)
+	}
+	if len(refs) == 0 {
+		return []model.AccountResearchDTO{}, nil
+	}
+
+	ids := make([]string, len(refs))
+	for i, ref := range refs {
+		ids[i] = ref.ResearchID
+	}
+	items, err := s.repo.BatchGetResearch(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch get research: %w", err)
+	}
+
+	dtos := make([]model.AccountResearchDTO, 0, len(items))
+	for _, r := range items {
+		if r.TrashedAt != "" {
+			continue
+		}
+		summary := truncateRunes(r.Summary, summaryPreviewMaxLen)
+		dtos = append(dtos, model.AccountResearchDTO{
+			ResearchID:  r.ResearchID,
+			Topic:       r.Topic,
+			Summary:     summary,
+			Status:      r.Status,
+			OwnerUserID: r.UserID,
+			CreatedAt:   r.CreatedAt,
+		})
+	}
+	return dtos, nil
 }

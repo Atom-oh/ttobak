@@ -8,7 +8,7 @@ import TurndownService from 'turndown';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi, docApi } from '@/lib/api';
-import type { AccountDocument } from '@/types/meeting';
+import type { AccountDocument, AccountSummary } from '@/types/meeting';
 
 const MeetingEditor = dynamic(() => import('./MeetingEditor').then(m => ({ default: m.MeetingEditor })), {
   loading: () => <div className="animate-pulse bg-slate-100 dark:bg-slate-800 rounded-xl h-64" />,
@@ -60,6 +60,16 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
   const saveInFlightRef = useRef(false);
   const pendingSaveRef = useRef<{ markdown: string; nextTitle?: string } | null>(null);
 
+  // Share-to-account (personal docs only -- account docs are already
+  // account-scoped by definition).
+  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
+  const [shareAccountId, setShareAccountId] = useState('');
+  const [sharing, setSharing] = useState(false);
+  const [shareMsg, setShareMsg] = useState<string | null>(null);
+  const [publicToken, setPublicToken] = useState<string | null>(null);
+  const [publicBusy, setPublicBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+
   const fetchAll = useCallback(async () => {
     if (!docId || docId === '_') return;
     setLoading(true);
@@ -71,6 +81,7 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
       ]);
       setDoc(detail);
       setTitle(detail.title);
+      setPublicToken(detail.publicShareToken || null);
       latestMarkdownRef.current = detail.content ?? '';
       setTitles((list?.documents ?? []).filter((d) => d.docId !== docId).map((d) => d.title));
     } catch (err) {
@@ -83,6 +94,51 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
   useEffect(() => {
     if (isAuthenticated) fetchAll();
   }, [isAuthenticated, fetchAll]);
+
+  useEffect(() => {
+    if (accountScoped || !isAuthenticated) return;
+    accountApi.list().then((r) => setAccounts(r?.accounts ?? [])).catch(() => {});
+  }, [accountScoped, isAuthenticated]);
+
+  const handleShareToAccount = useCallback(async () => {
+    if (!shareAccountId) return;
+    setSharing(true);
+    setShareMsg(null);
+    try {
+      await docApi.shareToAccount(docId, shareAccountId);
+      setShareMsg('팀에 공유되었습니다.');
+    } catch (err) {
+      setShareMsg(err instanceof Error ? err.message : '공유에 실패했습니다.');
+    } finally {
+      setSharing(false);
+    }
+  }, [docId, shareAccountId]);
+
+  const handleTogglePublicShare = useCallback(async () => {
+    setPublicBusy(true);
+    try {
+      if (publicToken) {
+        await docApi.revokePublicShare(docId);
+        setPublicToken(null);
+      } else {
+        const { token } = await docApi.createPublicShare(docId);
+        setPublicToken(token);
+      }
+    } catch (err) {
+      setShareMsg(err instanceof Error ? err.message : '공개 링크 처리에 실패했습니다.');
+    } finally {
+      setPublicBusy(false);
+    }
+  }, [docId, publicToken]);
+
+  const handleCopyPublicLink = useCallback(() => {
+    if (!publicToken || typeof window === 'undefined') return;
+    const url = `${window.location.origin}/api/public/docs/${publicToken}`;
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [publicToken]);
 
   // saveContent always sends markdown (even "" for a slide, whose content
   // is always empty) -- that's safe only because the title input below is
@@ -217,15 +273,57 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
           {savedAt && !saving && <span className="text-xs text-slate-400">Saved {savedAt}</span>}
         </div>
 
+        {!accountScoped && accounts.length > 0 && (
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-6">
+            <select
+              value={shareAccountId}
+              onChange={(e) => setShareAccountId(e.target.value)}
+              className="flex-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
+            >
+              <option value="">어카운트 선택…</option>
+              {accounts.map((a) => (
+                <option key={a.accountId} value={a.accountId}>{a.name}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleShareToAccount}
+              disabled={sharing || !shareAccountId}
+              className="text-sm px-4 py-2 rounded-lg bg-primary text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {sharing ? '공유 중…' : '팀에 공유'}
+            </button>
+            {shareMsg && <p className="text-xs text-slate-500 dark:text-text-muted">{shareMsg}</p>}
+          </div>
+        )}
+
         {isSlide ? (
           <div className="space-y-4">
-            {isPdf && doc.downloadUrl && (
+            {isPdf && doc.downloadUrl ? (
               <iframe
                 src={doc.downloadUrl}
                 title={doc.title}
                 className="w-full h-[70vh] rounded-xl border border-slate-200 dark:border-slate-700"
               />
-            )}
+            ) : doc.previewUrl ? (
+              <iframe
+                src={doc.previewUrl}
+                title={doc.title}
+                className="w-full h-[70vh] rounded-xl border border-slate-200 dark:border-slate-700"
+              />
+            ) : !isPdf ? (
+              <div className="flex items-center justify-between glass-panel rounded-xl p-4">
+                <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-text-muted">
+                  <span className="material-symbols-outlined animate-spin">progress_activity</span>
+                  <span>PDF로 변환 중입니다. 잠시 후 새로고침 해주세요.</span>
+                </div>
+                <button
+                  onClick={() => fetchAll()}
+                  className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-secondary hover:bg-slate-50 dark:hover:bg-white/5"
+                >
+                  새로고침
+                </button>
+              </div>
+            ) : null}
             <div className="flex items-center justify-between glass-panel rounded-xl p-4">
               <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-text-secondary">
                 <span className="material-symbols-outlined text-primary">description</span>
@@ -241,6 +339,26 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
                 </a>
               )}
             </div>
+
+            {!accountScoped && (
+              <div className="flex items-center gap-2 glass-panel rounded-xl p-4">
+                <button
+                  onClick={handleTogglePublicShare}
+                  disabled={publicBusy}
+                  className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-secondary hover:bg-slate-50 dark:hover:bg-white/5 disabled:opacity-50"
+                >
+                  {publicToken ? '공개 링크 해제' : '공개 링크 만들기'}
+                </button>
+                {publicToken && (
+                  <button
+                    onClick={handleCopyPublicLink}
+                    className="text-sm px-3 py-1.5 rounded-lg bg-primary text-white hover:opacity-90"
+                  >
+                    {copied ? '복사됨!' : '링크 복사'}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <MeetingEditor

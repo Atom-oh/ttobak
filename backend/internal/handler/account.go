@@ -39,6 +39,11 @@ func (h *AccountHandler) withDownloadURL(ctx context.Context, detail *model.Acco
 		return detail
 	}
 	detail.DownloadURL = url
+	if previewURL, err := h.uploadService.GeneratePreviewPDFURL(ctx, detail.FileKey); err != nil {
+		log.Printf("presign preview URL for doc %s: %v", detail.DocID, err)
+	} else {
+		detail.PreviewURL = previewURL
+	}
 	return detail
 }
 

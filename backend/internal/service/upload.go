@@ -199,6 +199,59 @@ func (s *UploadService) GeneratePresignedDownloadURL(
 	return presignedURL.URL, nil
 }
 
+// docsPDFSidecarPrefix mirrors the "docs/" upload prefix, one level over --
+// a converted PDF lives at docsPDFSidecarPrefix + strings.TrimPrefix(fileKey, "docs/") + ".pdf",
+// e.g. docs/{uid}/123_deck.pptx -> docs-pdf/{uid}/123_deck.pptx.pdf. Kept
+// outside "docs/" so the convert-doc Lambda's own PutObject never re-triggers
+// the EventBridge rule that invokes it, and outside ownsFileKey's docs/
+// prefix so the sidecar is never mistaken for a client-suppliable fileKey.
+const docsPDFSidecarPrefix = "docs-pdf/"
+
+// pptxExtensions are the slide file types that get a PDF sidecar converted
+// by the convert-doc Lambda (see infra's EventBridge rule on the docs/ prefix).
+var pptxExtensions = []string{".pptx", ".ppt"}
+
+// SidecarPDFKey returns the deterministic PDF sidecar key for a docs/
+// upload, or "" if fileKey isn't a docs/ upload or isn't a PPTX/PPT (a PDF
+// upload needs no conversion; anything else -- images, audio -- has no
+// sidecar concept at all).
+func SidecarPDFKey(fileKey string) string {
+	if !strings.HasPrefix(fileKey, "docs/") {
+		return ""
+	}
+	lower := strings.ToLower(fileKey)
+	isSlide := false
+	for _, ext := range pptxExtensions {
+		if strings.HasSuffix(lower, ext) {
+			isSlide = true
+			break
+		}
+	}
+	if !isSlide {
+		return ""
+	}
+	return docsPDFSidecarPrefix + strings.TrimPrefix(fileKey, "docs/") + ".pdf"
+}
+
+// GeneratePreviewPDFURL returns a presigned GET URL for fileKey's PDF
+// sidecar if the conversion has completed, or ("", nil) if fileKey isn't a
+// PPTX/PPT upload or the conversion hasn't finished yet -- callers treat
+// both as "no preview available" rather than an error (the doc is still
+// perfectly usable via its download link either way).
+func (s *UploadService) GeneratePreviewPDFURL(ctx context.Context, fileKey string) (string, error) {
+	sidecarKey := SidecarPDFKey(fileKey)
+	if sidecarKey == "" {
+		return "", nil
+	}
+	if _, err := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(sidecarKey),
+	}); err != nil {
+		return "", nil // not converted yet (or genuinely missing) -- not an error for the caller
+	}
+	return s.GeneratePresignedDownloadURL(ctx, sidecarKey)
+}
+
 // inferAttachTypeFromMime determines the attachment type from the MIME type
 func inferAttachTypeFromMime(mimeType string) string {
 	lower := strings.ToLower(mimeType)

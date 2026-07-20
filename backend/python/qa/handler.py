@@ -622,8 +622,36 @@ def get_account_brief_for_chat(user_id, account_query):
             meetings.append({'meetingId': r.get('meetingId', ''), 'title': r.get('title', ''), 'date': r.get('date', '')})
     except Exception as e:
         logger.warning(f"account meeting refs query failed: {e}")
+    research = _account_research(acc_id)
     return {'account': acc.get('name', ''), 'industry': acc.get('industry', ''),
-            'insightsByType': by_type, 'meetings': meetings}
+            'insightsByType': by_type, 'meetings': meetings, 'research': research}
+
+
+def _account_research(acc_id):
+    """Research reports linked to an account (RESEARCHREF# items -> full RESEARCH#{id}/CONFIG record)."""
+    from boto3.dynamodb.conditions import Key
+    out = []
+    try:
+        refs = _query_all(
+            KeyConditionExpression=Key('PK').eq(f'ACCOUNT#{acc_id}') & Key('SK').begins_with('RESEARCHREF#'),
+            ScanIndexForward=False,
+        )
+    except Exception as e:
+        logger.warning(f"account research refs query failed: {e}")
+        return out
+    for ref in refs:
+        research_id = ref.get('researchId', '')
+        if not research_id:
+            continue
+        try:
+            item = table.get_item(Key={'PK': f'RESEARCH#{research_id}', 'SK': 'CONFIG'}).get('Item')
+        except Exception as e:
+            logger.warning(f"research record read failed for {research_id}: {e}")
+            continue
+        if not item or item.get('trashedAt'):
+            continue
+        out.append({'topic': item.get('topic', ''), 'summary': item.get('summary', ''), 'status': item.get('status', '')})
+    return out
 
 
 def agentic_converse(messages, transcript=None, session_id=None, user_id=None):

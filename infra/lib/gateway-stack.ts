@@ -36,6 +36,7 @@ export interface GatewayStackProps extends cdk.StackProps {
   dataSourceId?: string;
   agentCoreRuntimeArn?: string;
   researchWorkerRole?: iam.IRole;
+  convertDocRole?: iam.IRole;
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
   originVerifySecret?: string;
@@ -51,6 +52,7 @@ export class GatewayStack extends cdk.Stack {
   public readonly qaFunction: lambda.Function;
   public readonly websocketApi: apigatewayv2.WebSocketApi;
   public readonly websocketFunction: lambda.Function;
+  public convertDocFunction?: lambda.DockerImageFunction;
   constructor(scope: Construct, id: string, props: GatewayStackProps) {
     super(scope, id, props);
 
@@ -318,6 +320,20 @@ export class GatewayStack extends cdk.Stack {
       authorizer: jwtAuthorizer,
     });
 
+    // Public slide-share redirect — deliberately registered WITHOUT
+    // jwtAuthorizer. This literal-segment route ("public", "docs") is more
+    // specific than the /api/{proxy+} catch-all below, so API Gateway
+    // matches it first and skips the authorizer entirely; the Go handler
+    // (DocumentHandler.PublicGetDoc) does its own token lookup instead of
+    // trusting any caller identity. Anything else added under /api/public/
+    // in the future is automatically unauthenticated too — keep that path
+    // to exactly this one redirect handler.
+    this.httpApi.addRoutes({
+      path: '/api/public/docs/{token}',
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: apiIntegration,
+    });
+
     // Add route: ANY /api/{proxy+}
     this.httpApi.addRoutes({
       path: '/api/{proxy+}',
@@ -413,6 +429,46 @@ export class GatewayStack extends cdk.Stack {
       },
     });
     allPartsTranscribedRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction));
+
+    // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
+    // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like
+    // researchWorkerRole above) so unit tests that omit convertDocRole don't
+    // trigger a Docker build during `npm test`.
+    if (props.convertDocRole) {
+      this.convertDocFunction = new lambda.DockerImageFunction(this, 'ConvertDocFunction', {
+        functionName: 'ttobak-convert-doc',
+        code: lambda.DockerImageCode.fromImageAsset('../backend', {
+          file: 'cmd/convert-doc/Dockerfile',
+          platform: cdk.aws_ecr_assets.Platform.LINUX_ARM64,
+        }),
+        architecture: lambda.Architecture.ARM_64,
+        role: props.convertDocRole as iam.Role,
+        environment: {
+          BUCKET_NAME: props.bucket.bucketName,
+        },
+        timeout: cdk.Duration.minutes(5),
+        memorySize: 3008,
+        ephemeralStorageSize: cdk.Size.mebibytes(2048),
+      });
+
+      const docSlideUploadRule = new events.Rule(this, 'DocSlideUploadRule', {
+        ruleName: 'ttobak-doc-slide-upload',
+        description: 'Trigger convert-doc Lambda when a PPTX/PPT slide is uploaded to S3',
+        eventPattern: {
+          source: ['aws.s3'],
+          detailType: ['Object Created'],
+          detail: {
+            bucket: {
+              name: [props.bucket.bucketName],
+            },
+            object: {
+              key: [{ wildcard: 'docs/*.pptx' }, { wildcard: 'docs/*.ppt' }],
+            },
+          },
+        },
+      });
+      docSlideUploadRule.addTarget(new eventsTargets.LambdaFunction(this.convertDocFunction));
+    }
 
     // ==================== WebSocket API (Live QA Streaming) ====================
 

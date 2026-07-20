@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -69,17 +70,23 @@ type accountRepo interface {
 	ListAccountDocuments(ctx context.Context, pk string) ([]model.AccountDocument, error)
 	GetAccountDocument(ctx context.Context, pk, docID string) (*model.AccountDocument, error)
 	DeleteAccountDocument(ctx context.Context, pk, docID string) error
+	PutPublicShare(ctx context.Context, share *model.PublicShare) error
+	GetPublicShare(ctx context.Context, token string) (*model.PublicShare, error)
+	DeletePublicShare(ctx context.Context, token string) error
 }
 
 // AccountRepo is the exported alias for cross-package (handler) tests.
 type AccountRepo = accountRepo
 
-// s3ObjectDeleter is the minimal S3 capability AccountService needs: cleaning
-// up a slide's underlying object when its document is deleted. Matches
-// *s3.Client's DeleteObject method so the real client satisfies it directly;
-// a mock can implement just this one method in tests.
+// s3ObjectDeleter is the S3 capability AccountService needs: cleaning up a
+// slide's underlying object when its document is deleted/replaced, and
+// copying a slide's object when a personal doc is shared to an account (see
+// ShareUserDocumentToAccount). Matches *s3.Client's methods directly so the
+// real client satisfies it without wrapping; a mock can implement just
+// these two methods in tests.
 type s3ObjectDeleter interface {
 	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	CopyObject(ctx context.Context, params *s3.CopyObjectInput, optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
 }
 
 type AccountService struct {
@@ -670,6 +677,14 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 		}); err != nil {
 			log.Printf("cleanup superseded S3 object for doc %s (key %s): %v", docID, oldFileKey, err)
 		}
+		if sidecarKey := SidecarPDFKey(oldFileKey); sidecarKey != "" {
+			if _, err := s.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
+				Bucket: aws.String(s.bucketName),
+				Key:    aws.String(sidecarKey),
+			}); err != nil {
+				log.Printf("cleanup superseded PDF sidecar for doc %s (key %s): %v", docID, sidecarKey, err)
+			}
+		}
 	}
 	dto := toDocumentDTO(existing)
 	return &dto, nil
@@ -753,6 +768,14 @@ func (s *AccountService) deleteDoc(ctx context.Context, userID, pk, docID string
 		}); err != nil {
 			log.Printf("cleanup S3 object for deleted doc %s (key %s): %v", docID, doc.FileKey, err)
 		}
+		if sidecarKey := SidecarPDFKey(doc.FileKey); sidecarKey != "" {
+			if _, err := s.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
+				Bucket: aws.String(s.bucketName),
+				Key:    aws.String(sidecarKey),
+			}); err != nil {
+				log.Printf("cleanup PDF sidecar for deleted doc %s (key %s): %v", docID, sidecarKey, err)
+			}
+		}
 	}
 	return nil
 }
@@ -790,4 +813,132 @@ func (s *AccountService) UpdateUserDocument(ctx context.Context, userID, docID s
 
 func (s *AccountService) DeleteUserDocument(ctx context.Context, userID, docID string) error {
 	return s.deleteDoc(ctx, userID, model.PrefixUser+userID, docID)
+}
+
+// ShareUserDocumentToAccount copies a personal document into an account's
+// document list. A slide's S3 object is COPIED to a fresh key under the
+// sharer's own docs/{userID}/ prefix rather than referenced by the original
+// key: deleteDoc and updateDoc both delete/replace the S3 object whenever
+// their caller owns its key, so a same-key "link" would leave the shared
+// copy pointing at a file the original owner can delete or overwrite out
+// from under it. Copying also gives the shared copy its own PPTX->PDF
+// sidecar conversion for free (the copy re-triggers the S3 upload event).
+func (s *AccountService) ShareUserDocumentToAccount(ctx context.Context, userID, docID, accountID string) (*model.AccountDocumentDTO, error) {
+	doc, err := s.getDoc(ctx, model.PrefixUser+userID, docID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.requireMember(ctx, userID, accountID); err != nil {
+		return nil, err
+	}
+
+	req := &model.PutDocumentRequest{
+		Title:   doc.Title,
+		DocType: doc.DocType,
+		Path:    doc.Path,
+	}
+
+	if doc.FileKey != "" {
+		if s.s3 == nil {
+			return nil, errors.New("s3 client not configured")
+		}
+		base := doc.FileKey
+		if idx := strings.LastIndex(base, "/"); idx >= 0 {
+			base = base[idx+1:]
+		}
+		newKey := fmt.Sprintf("docs/%s/%d_%s", userID, time.Now().UnixMilli(), base)
+		copySource := fmt.Sprintf("%s/%s", s.bucketName, doc.FileKey) // matches kb.go's CopyAttachmentToKB convention
+		if _, err := s.s3.CopyObject(ctx, &s3.CopyObjectInput{
+			Bucket:     aws.String(s.bucketName),
+			Key:        aws.String(newKey),
+			CopySource: aws.String(copySource),
+		}); err != nil {
+			return nil, fmt.Errorf("failed to copy slide object: %w", err)
+		}
+		req.FileKey = newKey
+		req.FileName = doc.FileName
+		req.MimeType = doc.MimeType
+		req.FileSize = doc.FileSize
+	} else {
+		md := doc.Content
+		req.Markdown = &md
+	}
+
+	return s.putDoc(ctx, userID, model.PrefixAccount+accountID, accountID, req, model.EntityTypeAccountDoc)
+}
+
+// CreateUserDocPublicShare mints (or returns the existing) unauthenticated
+// share token for a personal SLIDE document. Idempotent -- calling it again
+// on an already-shared doc returns the same token rather than minting a
+// second one (which would leave the first token orphaned but still valid).
+// Markdown docs are out of scope for now (see ErrInvalidInput below);
+// nothing about the token/pointer design prevents adding them later.
+func (s *AccountService) CreateUserDocPublicShare(ctx context.Context, userID, docID string) (string, error) {
+	doc, err := s.getDoc(ctx, model.PrefixUser+userID, docID)
+	if err != nil {
+		return "", err
+	}
+	if doc.FileKey == "" {
+		return "", ErrInvalidInput // slides only
+	}
+	if doc.PublicShareToken != "" {
+		return doc.PublicShareToken, nil
+	}
+	token := generateID() // 32 hex chars, crypto/rand -- see research.go
+	if err := s.repo.PutPublicShare(ctx, &model.PublicShare{
+		PK: model.PrefixPubShare + token, SK: model.SKPubShare,
+		Token: token, DocPK: model.PrefixUser + userID, DocID: docID,
+		CreatedAt: time.Now().UTC(), EntityType: model.EntityTypePubShare,
+	}); err != nil {
+		return "", err
+	}
+	doc.PublicShareToken = token
+	doc.UpdatedAt = time.Now().UTC()
+	if err := s.repo.PutAccountDocument(ctx, doc); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// RevokeUserDocPublicShare deletes the share pointer and clears the doc's
+// token. A no-op (not an error) if the doc was never shared.
+func (s *AccountService) RevokeUserDocPublicShare(ctx context.Context, userID, docID string) error {
+	doc, err := s.getDoc(ctx, model.PrefixUser+userID, docID)
+	if err != nil {
+		return err
+	}
+	if doc.PublicShareToken == "" {
+		return nil
+	}
+	if err := s.repo.DeletePublicShare(ctx, doc.PublicShareToken); err != nil {
+		log.Printf("cleanup public share pointer for doc %s: %v", docID, err)
+	}
+	doc.PublicShareToken = ""
+	doc.UpdatedAt = time.Now().UTC()
+	return s.repo.PutAccountDocument(ctx, doc)
+}
+
+// ResolvePublicShare is the ONLY entry point the unauthenticated
+// /api/public/docs/{token} route may call -- it does no caller-identity
+// check by design (that's the point of a public link), so nothing else in
+// AccountService should reuse this lookup path for an authenticated flow.
+func (s *AccountService) ResolvePublicShare(ctx context.Context, token string) (*model.AccountDocument, error) {
+	share, err := s.repo.GetPublicShare(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	if share == nil {
+		return nil, ErrNotFound
+	}
+	doc, err := s.getDoc(ctx, share.DocPK, share.DocID)
+	if err != nil {
+		return nil, err
+	}
+	if doc.FileKey == "" || doc.PublicShareToken != token {
+		// Defensive: a doc that's been re-saved without a fileKey (shouldn't
+		// happen for a slide) or whose token was revoked/rotated after this
+		// pointer's read but before this check -- either way, not shareable.
+		return nil, ErrNotFound
+	}
+	return doc, nil
 }

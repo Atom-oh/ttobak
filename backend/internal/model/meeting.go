@@ -172,6 +172,11 @@ type Research struct {
 	TrashedAt    string `dynamodbav:"trashedAt,omitempty" json:"trashedAt,omitempty"`
 	IsShared     bool   `dynamodbav:"-" json:"isShared,omitempty"`
 	SharedBy     string `dynamodbav:"-" json:"sharedBy,omitempty"`
+	// AccountIDs links this research to zero or more accounts (many-to-many),
+	// mirroring Meeting.AccountID but pluralized since one research report can
+	// be relevant to several customer accounts. See account.go's ResearchRef
+	// for the reverse-lookup item stored in each account's partition.
+	AccountIDs []string `dynamodbav:"accountIds,omitempty" json:"accountIds,omitempty"`
 }
 
 const MaxAudioParts = 10
