@@ -36,19 +36,60 @@ function buildFrontmatter(doc: CrawledDocument & { content: string }): string {
   ].filter(Boolean).join('\n');
 }
 
+// Matches any leading "**Label:** value" metadata line the crawlers emit
+// (Published/Source/Service/Tags, ...) so a new label never needs a new
+// hardcoded check here.
+const METADATA_LINE_RE = /^\*\*[^*:]+:\*\*/;
+
 function stripS3Header(content: string): string {
   const lines = content.split('\n');
-  let startIdx = 0;
-  for (let i = 0; i < Math.min(lines.length, 10); i++) {
+  let i = 0;
+  while (i < lines.length) {
     const line = lines[i].trim();
-    if (line.startsWith('**Published:') || line.startsWith('**Source:') || line === '---') {
-      startIdx = i + 1;
-    }
-    if (line.startsWith('# ') && i < 3) {
-      startIdx = i + 1;
-    }
+    // "---" is the structural end-of-metadata marker for the news format
+    // (title/Published/Source/Tags/---/summary) -- stop scanning the moment
+    // it's consumed, rather than continuing to test METADATA_LINE_RE against
+    // subsequent lines. Otherwise a briefing that legitimately opens with its
+    // own bold sub-label (e.g. "**핵심 요약:** ...", which the summarize
+    // prompt's "핵심요약 + 비즈니스 시사점 + AWS 관련성" structure invites)
+    // would itself match METADATA_LINE_RE and get stripped as if it were
+    // crawler metadata, silently eating real briefing content.
+    if (line === '---') { i++; break; }
+    const isMetaLine = line === '' || METADATA_LINE_RE.test(line) || (i === 0 && line.startsWith('# '));
+    if (!isMetaLine) break;
+    i++;
   }
-  return lines.slice(startIdx).join('\n').trim();
+  return lines.slice(i).join('\n').trim();
+}
+
+// The raw excerpt section ("본문 발췌" for news, "Content" for tech docs) is
+// unedited scraped text -- often padded with ad copy or nav boilerplate (see
+// news_crawler.py's own "신뢰할 수 없는 외부 검색 결과" caveat baked into that
+// heading). Rendering it as prose next to the Sonnet-written briefing makes
+// the polished summary and the raw scrape read as one undifferentiated wall
+// of text. Splitting them lets the briefing get a comfortable reading
+// column while the raw excerpt collapses behind a disclosure by default.
+// The Korean heading always carries a parenthetical caveat ("... 신뢰할 수
+// 없는 외부 검색 결과 ..."), so it's never a bare "## 본문 발췌" -- matching
+// on the prefix alone is safe there. "Content" has no such caveat and is a
+// plain word that could legitimately open an unrelated briefing subsection
+// (e.g. "## Content Strategy"), so it's anchored to end-of-line instead of
+// just a word boundary -- a trailing \b would still match "Content Strategy".
+const EXCERPT_HEADING_RE = /^##\s+(?:본문 발췌|Content\s*$)/;
+const REDUNDANT_SUMMARY_HEADING_RE = /^##\s+Summary\s*\n+/;
+
+function splitBriefingAndExcerpt(strippedContent: string): { briefing: string; excerpt: string | null } {
+  const lines = strippedContent.split('\n');
+  const headingIdx = lines.findIndex((line) => EXCERPT_HEADING_RE.test(line.trim()));
+  if (headingIdx === -1) {
+    return { briefing: strippedContent.replace(REDUNDANT_SUMMARY_HEADING_RE, ''), excerpt: null };
+  }
+  const briefing = lines.slice(0, headingIdx).join('\n')
+    .replace(/\n*---\s*$/, '')
+    .replace(REDUNDANT_SUMMARY_HEADING_RE, '')
+    .trim();
+  const excerpt = lines.slice(headingIdx + 1).join('\n').trim();
+  return { briefing, excerpt: excerpt || null };
 }
 
 export default function InsightDetailPage() {
@@ -90,6 +131,11 @@ export default function InsightDetailPage() {
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
   }, [exportOpen]);
+
+  const { briefing, excerpt } = useMemo(
+    () => splitBriefingAndExcerpt(doc ? stripS3Header(doc.content) : ''),
+    [doc]
+  );
 
   const handleCopyMarkdown = async () => {
     if (!doc) return;
@@ -258,14 +304,33 @@ export default function InsightDetailPage() {
                 </div>
               </div>
 
-              {/* Briefing Content — unified view, strip S3 header metadata */}
+              {/* Briefing Content — capped to a comfortable reading measure;
+                  the raw scrape is a separate, collapsed block below */}
               <div className="flex gap-0">
-                <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 flex-1 min-w-0">
+                <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 max-w-[70ch] w-full min-w-0">
                   <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-text-main uppercase tracking-wide mb-4">
                     <span className="material-symbols-outlined text-primary text-lg">auto_awesome</span>
                     AI Briefing
                   </h2>
-                  <MarkdownRenderer content={stripS3Header(doc.content)} />
+                  {briefing ? (
+                    <MarkdownRenderer content={briefing} />
+                  ) : (
+                    <p className="text-sm text-slate-400 dark:text-text-muted italic">
+                      AI 요약을 만들지 못했습니다{excerpt ? ' — 아래 원문을 확인하세요.' : '.'}
+                    </p>
+                  )}
+
+                  {excerpt && (
+                    <details className="mt-6 border border-slate-200 dark:border-white/10 rounded-lg">
+                      <summary className="px-4 py-3 text-sm font-medium text-slate-600 dark:text-text-muted cursor-pointer hover:bg-slate-50 dark:hover:bg-white/5 rounded-lg flex items-center gap-2">
+                        <span className="material-symbols-outlined text-lg">description</span>
+                        원문 발췌 보기 (자동 수집, 편집되지 않음)
+                      </summary>
+                      <div className="px-4 pb-4 text-sm text-slate-400 leading-relaxed whitespace-pre-wrap border-t border-slate-200 dark:border-white/10 pt-3">
+                        {excerpt}
+                      </div>
+                    </details>
+                  )}
                 </div>
                 <TOCSidebar contentRef={contentRef} />
               </div>
