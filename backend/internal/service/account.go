@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"regexp"
 	"strings"
@@ -302,33 +303,31 @@ type RemoveMemberResult struct {
 
 // checkNoAmbiguousShares returns ErrAmbiguousShareBlocksRemoval if
 // targetUserID holds a Share with Origin != "account" on any of refs'
-// meetings that are still linked to accountID -- the same predicate
-// RemoveMember's cleanup loop uses to populate AmbiguousUntaggedMeetingIDs,
-// run here BEFORE membership is deleted so the caller can block on it
-// instead of only learning about it after the fact.
+// meetings that are still linked to accountID via SharedToAccount -- the
+// same predicate RemoveMember's cleanup loop uses to populate
+// AmbiguousUntaggedMeetingIDs, run here BEFORE membership is deleted so the
+// caller can block on it instead of only learning about it after the fact.
 //
-// A transient GetMeetingByID/GetShare error here does NOT block removal --
-// it's logged and treated the same as "can't verify, not ambiguous", so a
-// single DynamoDB blip can't turn into a new failure mode for what was
-// previously always a soft, best-effort cleanup step. The cleanup loop
-// (which runs this same pair of reads again after membership is deleted)
-// still surfaces a repeated read failure to the caller via
-// FailedMeetingIDs -- this precheck's only job is to catch a share it CAN
-// positively confirm is ambiguous before it's too late to stop.
+// Unlike the cleanup loop (which runs after membership is already gone and
+// can only report failures via FailedMeetingIDs), a GetMeetingByID/GetShare
+// error HERE returns an error instead of silently continuing: this precheck
+// is the security gate that closes RemoveMember's fail-open access-retention
+// gap, so a transient DynamoDB blip must not let it pass silently -- the
+// caller gets a retryable error and membership is left untouched (same
+// fail-closed treatment RemoveMember already gives ListMeetingRefsForAccount
+// failures).
 func (s *AccountService) checkNoAmbiguousShares(ctx context.Context, accountID, targetUserID string, refs []model.MeetingRef) error {
 	for _, ref := range refs {
 		meeting, err := s.repo.GetMeetingByID(ctx, ref.MeetingID)
 		if err != nil {
-			log.Printf("ambiguous-share precheck for %s (meeting %s): get meeting: %v", targetUserID, ref.MeetingID, err)
-			continue
+			return fmt.Errorf("ambiguous-share precheck: get meeting %s: %w", ref.MeetingID, err)
 		}
-		if meeting == nil || meeting.AccountID != accountID {
-			continue // stale ref -- same skip RemoveMember's cleanup loop applies
+		if meeting == nil || !meeting.SharedToAccount || meeting.AccountID != accountID {
+			continue // stale ref, or Link-only (not a team-share grant) -- same skip the cleanup loop and backfill CLI apply
 		}
 		share, err := s.repo.GetShare(ctx, targetUserID, ref.MeetingID)
 		if err != nil {
-			log.Printf("ambiguous-share precheck for %s (meeting %s): get share: %v", targetUserID, ref.MeetingID, err)
-			continue
+			return fmt.Errorf("ambiguous-share precheck: get share for meeting %s: %w", ref.MeetingID, err)
 		}
 		if share != nil && share.Origin != model.ShareOriginAccount {
 			return ErrAmbiguousShareBlocksRemoval
@@ -403,17 +402,21 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 		// MeetingRef ever being cleaned up (ADR-016's known non-transactional
 		// write-order gap) -- verifying the meeting is STILL linked to THIS
 		// account before touching its share prevents A's RemoveMember from
-		// deleting a share that actually belongs to B's membership grant.
-		// Mirrors the same guard the backfill CLI already applies
-		// (meeting.AccountID != *accountID skip).
+		// deleting a share that actually belongs to B's membership grant. The
+		// !SharedToAccount check additionally excludes Link-only meetings
+		// (AccountID set, SharedToAccount false): those were never a team
+		// grant, so any share the target holds there is unrelated to this
+		// account's membership and must not be swept up as "ambiguous" or
+		// deleted. Mirrors the exact guard checkNoAmbiguousShares and the
+		// backfill CLI both apply (!meeting.SharedToAccount || meeting.AccountID != accountID).
 		meeting, err := s.repo.GetMeetingByID(ctx, ref.MeetingID)
 		if err != nil {
 			log.Printf("cleanup share for removed member %s (meeting %s): get meeting: %v", targetUserID, ref.MeetingID, err)
 			result.FailedMeetingIDs = append(result.FailedMeetingIDs, ref.MeetingID)
 			continue
 		}
-		if meeting == nil || meeting.AccountID != accountID {
-			continue // stale ref: meeting deleted, or re-shared to a different account since
+		if meeting == nil || !meeting.SharedToAccount || meeting.AccountID != accountID {
+			continue // stale ref: meeting deleted, re-shared to a different account, or Link-only (never a team grant)
 		}
 		share, err := s.repo.GetShare(ctx, targetUserID, ref.MeetingID)
 		if err != nil {

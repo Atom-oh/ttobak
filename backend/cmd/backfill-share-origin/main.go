@@ -43,7 +43,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
-	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
 
@@ -125,8 +124,8 @@ func main() {
 			continue // ref exists but the meeting no longer matches ShareMeetingToAccount's invariants
 		}
 		for _, m := range members {
-			if m.Role == model.RoleOwner {
-				continue // ShareMeetingToAccount never shares to the owner
+			if m.UserID == meeting.UserID {
+				continue // ShareMeetingToAccount skips the meeting's own uploader, not the account owner role -- these can differ (any member can upload a meeting, and the account owner role isn't tied to any specific meeting)
 			}
 			share, err := repo.GetShare(ctx, m.UserID, ref.MeetingID)
 			if err != nil {

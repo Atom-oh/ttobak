@@ -508,7 +508,7 @@ func TestRemoveMember_RevokesAccountOriginShare(t *testing.T) {
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
-	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID, SharedToAccount: true}
 	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
 	}
@@ -528,7 +528,7 @@ func TestRemoveMember_AmbiguousShareBlocksRemovalWithoutForce(t *testing.T) {
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
-	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID, SharedToAccount: true}
 	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // direct share (or legacy account-share -- ambiguous)
 	}
@@ -553,7 +553,7 @@ func TestRemoveMember_ForcePreservesDirectShare(t *testing.T) {
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
-	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID, SharedToAccount: true}
 	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // direct share
 	}
@@ -573,7 +573,7 @@ func TestRemoveMember_RaceCreatingDirectShareDuringCleanupIsNotDeleted(t *testin
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
-	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID, SharedToAccount: true}
 	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
 	}
@@ -609,10 +609,15 @@ func TestRemoveMember_CleanupFailureDoesNotFailRemoval(t *testing.T) {
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
-	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID, SharedToAccount: true}
 	repo.shareOpErr["m-1"] = errors.New("simulated transient DynamoDB error")
 
-	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false)
+	// force=true: with force=false the precheck now fails closed on this
+	// same transient error (see TestRemoveMember_PrecheckFailsClosedOnTransientError)
+	// and never reaches membership deletion at all. This test targets the
+	// cleanup loop's OWN soft-fail handling, which only runs post-delete --
+	// force=true skips the precheck to get there.
+	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", true)
 	if err != nil {
 		t.Fatalf("expected RemoveMember to succeed despite share-cleanup failure, got: %v", err)
 	}
@@ -631,7 +636,7 @@ func TestRemoveMember_SurfacesAmbiguousLegacyShare(t *testing.T) {
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
-	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID, SharedToAccount: true}
 	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // ambiguous: legacy account-share OR direct grant
 	}
@@ -700,6 +705,63 @@ func TestRemoveMember_CrossAccountMeetingRefNotTouched(t *testing.T) {
 	}
 	if repo.shares[acctShareKey("tam-1", "m-1")] == nil {
 		t.Error("expected share belonging to a different account's re-share to survive this account's RemoveMember cleanup")
+	}
+}
+
+func TestRemoveMember_PrecheckFailsClosedOnTransientError(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID, SharedToAccount: true}
+	repo.shareOpErr["m-1"] = errors.New("simulated transient DynamoDB error")
+
+	// The review's MAJOR finding: checkNoAmbiguousShares used to swallow a
+	// transient GetShare error (log + continue), reopening the exact
+	// fail-open access-retention gap this precheck exists to close. It must
+	// now fail closed: return the error and leave membership untouched.
+	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false)
+	if err == nil {
+		t.Fatal("expected a transient precheck read error to block removal, got nil")
+	}
+	if errors.Is(err, ErrAmbiguousShareBlocksRemoval) {
+		t.Error("a transient read error is not a confirmed ambiguity -- should not be ErrAmbiguousShareBlocksRemoval")
+	}
+	if mem, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1"); mem == nil {
+		t.Error("expected membership to be preserved when the precheck fails closed on a transient error")
+	}
+}
+
+func TestRemoveMember_LinkOnlyMeetingShareDoesNotBlockOrGetTouched(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	// Link-only: AccountID is set (the account can browse it via the link)
+	// but SharedToAccount is false -- this was never a team-share grant, so
+	// a direct share tam-1 happens to hold here is unrelated to this
+	// account's membership. The review flagged that the precheck and
+	// cleanup loop, checking only meeting.AccountID, would wrongly treat
+	// this as ambiguous (blocking removal) or sweep it into
+	// AmbiguousUntaggedMeetingIDs -- neither should happen.
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID, SharedToAccount: false}
+	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "",
+	}
+
+	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false)
+	if err != nil {
+		t.Fatalf("unexpected error (Link-only share must not block removal): %v", err)
+	}
+	if len(result.AmbiguousUntaggedMeetingIDs) != 0 {
+		t.Errorf("expected Link-only meeting's share to not be reported as ambiguous, got %v", result.AmbiguousUntaggedMeetingIDs)
+	}
+	if repo.shares[acctShareKey("tam-1", "m-1")] == nil {
+		t.Error("expected Link-only meeting's share to be left untouched")
 	}
 }
 

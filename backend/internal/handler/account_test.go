@@ -307,10 +307,14 @@ func TestHandlerRemoveMember_PartialCleanupFailureReturns200WithBody(t *testing.
 	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
 	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
 	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
-	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1"}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1", SharedToAccount: true}
 	repo.shareOpErr["m-1"] = fmt.Errorf("simulated transient error")
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)
+	// force=true: without it the precheck now fails closed on this same
+	// transient error before membership is even deleted (see
+	// TestHandlerRemoveMember_PrecheckFailsClosedOnTransientError) -- this
+	// test targets the post-delete cleanup loop's own soft-fail handling.
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1?force=true", nil)
 	r = withUserEmailCtx(r, "owner-1", "o@x.com")
 	r = withChiParam(r, "accountId", "acc-1")
 	r = withChiParam(r, "userId", "tam-1")
@@ -338,7 +342,7 @@ func TestHandlerRemoveMember_AmbiguousShareBlockedWithoutForce(t *testing.T) {
 	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
 	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
 	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
-	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1"}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1", SharedToAccount: true}
 	repo.shares["tam-1|m-1"] = &model.Share{
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // ambiguous shape
 	}
@@ -365,7 +369,7 @@ func TestHandlerRemoveMember_ForceAmbiguousShareReturns200WithBody(t *testing.T)
 	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
 	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
 	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
-	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1"}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1", SharedToAccount: true}
 	repo.shares["tam-1|m-1"] = &model.Share{
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // ambiguous shape
 	}
@@ -390,6 +394,63 @@ func TestHandlerRemoveMember_ForceAmbiguousShareReturns200WithBody(t *testing.T)
 	ambiguous, _ := resp["ambiguousUntaggedMeetingIDs"].([]interface{})
 	if len(ambiguous) != 1 || ambiguous[0] != "m-1" {
 		t.Errorf("expected ambiguousUntaggedMeetingIDs=[m-1], got %+v", resp)
+	}
+}
+
+func TestHandlerRemoveMember_PrecheckFailsClosedOnTransientError(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1", SharedToAccount: true}
+	repo.shareOpErr["m-1"] = fmt.Errorf("simulated transient error")
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code == http.StatusOK {
+		t.Fatalf("expected a non-2xx status when the ambiguous-share precheck fails closed on a transient error, got 200 (%s)", w.Body.String())
+	}
+	if _, ok := repo.members[acctMemberKey("acc-1", "tam-1")]; !ok {
+		t.Error("expected membership to be preserved when the precheck fails closed on a transient error")
+	}
+}
+
+func TestHandlerRemoveMember_LinkOnlyMeetingShareDoesNotBlock(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
+	// Link-only: AccountID set but SharedToAccount false -- never a team
+	// grant, so tam-1's direct share here must not block removal.
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1", SharedToAccount: false}
+	repo.shares["tam-1|m-1"] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "",
+	}
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	// 204: the Link-only share is neither a cleanup failure nor an ambiguous
+	// untagged share (it's outside the account-membership grant entirely),
+	// so this is the fully-clean case -- it must not be blocked with a 400.
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 (Link-only share must not block removal), got %d (%s)", w.Code, w.Body.String())
+	}
+	if repo.shares["tam-1|m-1"] == nil {
+		t.Error("expected Link-only meeting's share to be left untouched")
 	}
 }
 
