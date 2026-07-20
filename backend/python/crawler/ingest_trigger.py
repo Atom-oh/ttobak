@@ -41,11 +41,15 @@ def handler(event, context):
     FAILED Step Functions execution instead of a silently-successful one.
     """
     # Validate config before the SKIPPED short-circuit below -- otherwise a
-    # KB_ID/DATA_SOURCE_ID regression (e.g. back to 'PENDING') goes
-    # unnoticed on any night with zero new/updated docs, since the config
-    # check would never run and the execution reports SUCCEEDED regardless.
-    if not KB_ID or not DATA_SOURCE_ID:
-        raise RuntimeError('KB_ID or DATA_SOURCE_ID environment variable not set')
+    # KB_ID/DATA_SOURCE_ID regression goes unnoticed on any night with zero
+    # new/updated docs, since the config check would never run and the
+    # execution reports SUCCEEDED regardless. 'PENDING' is checked
+    # explicitly (not just falsiness): it's the actual placeholder
+    # knowledge-stack.ts hardcodes before the real KB/DataSource are wired
+    # up (see ADR-021) -- a truthy, non-empty string that `not KB_ID` alone
+    # would let straight through.
+    if not KB_ID or not DATA_SOURCE_ID or 'PENDING' in (KB_ID, DATA_SOURCE_ID):
+        raise RuntimeError(f'KB_ID/DATA_SOURCE_ID not configured (KB_ID={KB_ID!r}, DATA_SOURCE_ID={DATA_SOURCE_ID!r})')
 
     # Step Functions ParallelCrawl outputs a bare list, one entry per branch
     # (techResult, then the news Map's own list of per-source results) --

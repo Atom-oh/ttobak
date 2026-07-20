@@ -634,7 +634,10 @@ def _record_history(source_id: str, docs_added: int, docs_updated: int,
                     raise
                 logger.info(f'Skipping status update for {source_id}: source was deleted or disabled mid-run')
     except Exception as e:
-        logger.warning(f'Failed to record crawl history for {source_id}: {e}')
+        # Covers both put_item (HISTORY# write) and update_item (CONFIG
+        # status) failing -- if only the latter fails, the HISTORY# item
+        # from put_item above was already written successfully.
+        logger.warning(f'Failed to record crawl history/status for {source_id}: {e}')
 
 
 # ---------------------------------------------------------------------------

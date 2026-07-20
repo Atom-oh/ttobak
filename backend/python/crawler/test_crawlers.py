@@ -1414,16 +1414,37 @@ class TestIngestTriggerNoKBConfig(unittest.TestCase):
         # short-circuit below, or a KB_ID regression (e.g. back to
         # 'PENDING') goes completely unnoticed on any quiet night with zero
         # new/updated docs -- exactly the silent-failure shape this PR
-        # exists to eliminate.
+        # exists to eliminate. Uses the real regression value ('PENDING',
+        # not '') since that's what knowledge-stack.ts actually hardcodes.
         original_kb_id = ingest_trigger.KB_ID
         try:
-            ingest_trigger.KB_ID = ''
+            ingest_trigger.KB_ID = 'PENDING'
             event = {'crawlerResults': [{'docsAdded': 0, 'docsUpdated': 0, 'errors': []}]}
             with self.assertRaises(Exception):
                 ingest_trigger.handler(event, None)
             mock_agent.start_ingestion_job.assert_not_called()
         finally:
             ingest_trigger.KB_ID = original_kb_id
+
+    @mock.patch.object(ingest_trigger, 'bedrock_agent')
+    def test_raises_when_kb_id_is_pending_sentinel(self, mock_agent):
+        # 'PENDING' is truthy and non-empty -- `if not KB_ID` alone would
+        # let it straight through. This is the literal placeholder value
+        # knowledge-stack.ts hardcodes before the real KB/DataSource are
+        # wired up (ADR-021), and the actual regression that caused 7 weeks
+        # of silent ingestion failure.
+        original_kb_id = ingest_trigger.KB_ID
+        original_ds_id = ingest_trigger.DATA_SOURCE_ID
+        try:
+            ingest_trigger.KB_ID = 'PENDING'
+            ingest_trigger.DATA_SOURCE_ID = 'PENDING'
+            event = {'crawlerResults': [{'docsAdded': 5, 'docsUpdated': 0, 'errors': []}]}
+            with self.assertRaises(Exception):
+                ingest_trigger.handler(event, None)
+            mock_agent.start_ingestion_job.assert_not_called()
+        finally:
+            ingest_trigger.KB_ID = original_kb_id
+            ingest_trigger.DATA_SOURCE_ID = original_ds_id
 
 
 # ---------------------------------------------------------------------------

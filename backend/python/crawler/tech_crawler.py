@@ -335,8 +335,6 @@ def _get_service_aliases(service: str) -> list:
 # Bedrock summarization + auto-tagging
 # ---------------------------------------------------------------------------
 
-
-
 def _summarize_and_tag(title: str, text: str, service: str) -> tuple:
     """Generate summary + tags. Returns (summary, tags_list)."""
     truncated = text[:6000] if len(text) > 6000 else text

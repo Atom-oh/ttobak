@@ -263,7 +263,7 @@ TtobakApp (bin/ttobak.ts)
 - `ttobak-crawler-orchestrator` (256MB, 30s) — DynamoDB에서 `PK begins_with CRAWLER#, SK=CONFIG, status≠disabled` 스캔. `sourceId`가 `__`로 시작하는 합성 소스(예: `__auto__`)는 `awsServices`만 techConfig에 병합하고 뉴스 팬아웃에서는 제외.
 - `ttobak-crawler-tech` (512MB, 14min) — AWS What's New/Blog RSS + AgentCore Gateway Web Search로 신규 서비스 발표를 추가 검색. 실행마다 별도 웹서치 1회로 미등록 AWS 서비스를 발견해 Bedrock으로 slug를 추출, `CRAWLER#__auto__/CONFIG`에 등록(최대 30개, 회당 최대 5개 신규).
 - `ttobak-crawler-news` (512MB, 14min) — 고객사별 뉴스 검색(AgentCore Gateway Web Search) + customUrls 직접 fetch.
-- `ttobak-crawler-ingest` (256MB, 30s) — Bedrock KB `StartIngestionJob`. 신규 문서 0건이면 SKIPPED, `KB_ID`/`DATA_SOURCE_ID` 미설정이거나 API 호출 실패 시 **예외를 raise**해 Step Functions 실행이 FAILED로 표면화됨(과거엔 `{"status":"ERROR"}`를 리턴해 7주간 무증상으로 인제스천이 멈췄던 원인).
+- `ttobak-crawler-ingest` (256MB, 30s) — Bedrock KB `StartIngestionJob`. `KB_ID`/`DATA_SOURCE_ID` 검증이 SKIPPED 판정보다 먼저 실행되므로(신규 문서 0건인 조용한 밤에도 설정 회귀를 놓치지 않음) — 미설정(`'PENDING'` sentinel 포함)이거나 이후 API 호출이 실패하면 **예외를 raise**해 Step Functions 실행이 FAILED로 표면화됨(과거엔 `{"status":"ERROR"}`를 리턴해 7주간 무증상으로 인제스천이 멈췄던 원인). 검증을 통과했는데 신규 문서가 0건이면 SKIPPED.
 
 ### Step Functions 페이로드
 `ListActiveSources` → `Parallel(CrawlTechDocs ‖ Map(CrawlNews))` → `TriggerIngestion`. `CrawlTechDocs`는 `OutputPath`로, `MapNewsSources`는 `resultPath`를 생략(Map 기본 출력)해 각각 래퍼 없는 결과를 내보내므로, `crawlResults`는 `[techResult, [newsResult, ...]]` 형태 — `ingest_trigger.py`가 이 한 단계 중첩을 그대로 flatten해 집계.
