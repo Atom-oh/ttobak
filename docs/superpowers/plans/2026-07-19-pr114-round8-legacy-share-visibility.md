@@ -1,4 +1,4 @@
-# PR #114 Round 8 Fix — Surface Legacy Untagged Shares in RemoveMember's Response
+# PR #114 Round 8 Fix — Surface Ambiguous Untagged Shares in RemoveMember's Response
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -11,16 +11,20 @@
       continue
   }
   ```
-  This one `continue` covers two very different cases with no way to tell them apart in the response: (a) no share exists (nothing to do, fine), and (b) a share exists but predates the `Origin` field (`Origin == ""`) on a meeting still shared to this account — a legacy account-share cleanup cannot safely touch (touching it risks revoking an owner's actual direct grant, since the two collapse into the same DB shape). Case (b) is the one the review wants surfaced.
-- `RemoveMember` currently returns `(failedMeetingIDs []string, err error)`. This plan changes the return type to a new `*RemoveMemberResult{FailedMeetingIDs, LegacyUntaggedMeetingIDs []string}` struct so the two lists are distinguishable to callers.
-- The HTTP handler (`backend/internal/handler/account.go`'s `RemoveMember`) currently returns 204 when `len(failedMeetingIDs) == 0`, or 200 + `{"removed": true, "cleanupFailedForMeetings": [...]}` otherwise. This plan adds a `legacyUntaggedMeetingIDs` field to that same 200 body, triggering the 200 (non-204) path whenever either list is non-empty.
-- `docs/API-SPEC.md`'s "Remove Member" section documents the current 204/200 contract and already has a "Known limitation & remediation" paragraph about legacy shares — this plan updates both to mention the new response field.
+  This one `continue` covers two very different cases with no way to tell them apart in the response: (a) no share exists (nothing to do, fine), and (b) a share exists but has `Origin == ""` on a meeting still shared to this account — which is EITHER a legacy account-share written before the `Origin` field existed, OR a perfectly normal, correctly-preserved direct grant the owner made explicitly (both collapse to the identical `Origin == ""` shape — confirmed via `account_test.go`'s existing `TestRemoveMember_PreservesDirectShare`, which asserts a direct share with `Origin: ""` survives cleanup untouched, and `CreateShare`'s own clobber-guard, which deliberately leaves a collision at `Origin==""`). **This means a naive "flag every `Origin != account` share as legacy" surfaces a false positive for every account that has ANY direct shares at all** — pure noise on every single member removal for such accounts, not a useful signal. This was caught in this plan's own plan-gate review (codex, MAJOR, confirmed against `account_test.go:524` and `CreateShare`'s clobber-guard) and is fixed below by renaming the field to `AmbiguousUntaggedMeetingIDs` and documenting the false-positive possibility explicitly, rather than pretending the signal is precise.
+- `RemoveMember` currently returns `(failedMeetingIDs []string, err error)`. This plan changes the return type to a new `*RemoveMemberResult{FailedMeetingIDs, AmbiguousUntaggedMeetingIDs []string}` struct so the two lists are distinguishable to callers.
+- The HTTP handler (`backend/internal/handler/account.go`'s `RemoveMember`) currently returns 204 when `len(failedMeetingIDs) == 0`, or 200 + `{"removed": true, "cleanupFailedForMeetings": [...]}` otherwise. This plan adds an `ambiguousUntaggedMeetingIDs` field to that same 200 body, triggering the 200 (non-204) path whenever either list is non-empty. Both slices are explicitly initialized to `[]string{}` (not left as a nil zero value) so the JSON response always has `[]`, never `null`, for these two fields — a nil Go slice marshals to JSON `null`, which is an unnecessary special case for every consumer of this response to handle.
+- `docs/API-SPEC.md`'s "Remove Member" section documents the current 204/200 contract and already has a "Known limitation & remediation" paragraph about legacy shares — this plan updates both to mention the new response field, INCLUDING the false-positive caveat (an account with direct shares will see them listed here too — this is a coarse signal, not a precise "these are definitely legacy" list).
+
+**Explicitly out of scope for this round (tracked as follow-ups, not silently dropped):**
+1. **Frontend wiring** — `frontend/src/lib/api.ts`'s `removeMember` return type and `AccountDetailClient.tsx`'s `handleRemoveMember` only reference `cleanupFailedForMeetings` today; this plan does not add `ambiguousUntaggedMeetingIDs` to either. The new field is API-visible (inspectable via network tab / curl) but not yet shown in the product UI. Flagged here so it isn't mistaken for an oversight.
+2. **Backfill CLI remediation for already-removed members** — `backend/cmd/backfill-share-origin/main.go` only iterates `ListAccountMembers` (current members), so a member who is already removed by the time this new signal is seen has no CLI path back to remediation for their own share. This plan's field makes the problem *visible* sooner (at removal time, not after-the-fact discovery), which narrows but does not close this gap.
 
 **Tech Stack:** Go (chi router, sentinel errors, typed DTOs).
 
 ---
 
-## Task 1: Add `RemoveMemberResult` and surface legacy shares
+## Task 1: Add `RemoveMemberResult` and surface ambiguous untagged shares
 
 **Files:**
 - Modify: `backend/internal/service/account.go`
@@ -33,24 +37,39 @@
 In `backend/internal/service/account.go`, above `RemoveMember`, add:
 ```go
 // RemoveMemberResult reports the outcome of RemoveMember's best-effort Share
-// cleanup: FailedMeetingIDs is a genuine cleanup error (retryable, worth
-// alerting on); LegacyUntaggedMeetingIDs is not a failure at all -- it flags
-// meetings where a Share exists but predates the Origin field (origin=="")
-// on a meeting still shared to this account, so cleanup could not tell it
-// apart from a direct grant and left it untouched. Surfacing this list gives
-// an operator the same visibility the backfill CLI's dry-run output does,
-// without RemoveMember itself guessing wrong and revoking an owner's
-// explicit direct share.
+// cleanup. FailedMeetingIDs is a genuine cleanup error (retryable, worth
+// alerting on). AmbiguousUntaggedMeetingIDs is NOT a failure -- it flags
+// meetings where a Share exists with Origin != "account" on a meeting still
+// shared to this account, so cleanup could not safely touch it. This is a
+// COARSE signal, not a precise "these are legacy" list: Origin=="" is the
+// shape of BOTH a legacy account-share (written before the Origin field
+// existed) AND a perfectly normal direct grant the owner made explicitly --
+// they are indistinguishable at this layer (see model.Share.Origin's doc
+// and CreateShare's clobber-guard). An account with any direct shares at
+// all will see those meetings listed here on every removal; this is
+// intentional noise traded for not silently hiding the legacy case, not a
+// bug. Surfacing this list gives an operator a signal to check whether
+// backfill-share-origin is needed for this account, without RemoveMember
+// itself guessing wrong and revoking an owner's explicit direct share.
 type RemoveMemberResult struct {
-	FailedMeetingIDs         []string
-	LegacyUntaggedMeetingIDs []string
+	FailedMeetingIDs            []string
+	AmbiguousUntaggedMeetingIDs []string
 }
 ```
 Change `RemoveMember`'s signature from `(failedMeetingIDs []string, err error)` to `(*RemoveMemberResult, error)`. Every early `return nil, err`/`return nil, ErrX` in the function already returns `nil` for the first value, so those lines need no change — only the success-path plumbing does.
 
-- [ ] **Step 2: Split the single `continue` into two branches, build the result**
+- [ ] **Step 2: Split the single `continue` into two branches, build the result with pre-initialized (non-nil) slices**
 
-Replace the named-return `failedMeetingIDs = append(...)` pattern with a local `result := &RemoveMemberResult{}` built up through the loop, returned at the end (`return result, nil`). Where the loop currently does:
+Replace the named-return `failedMeetingIDs = append(...)` pattern with a local result built up through the loop, returned at the end:
+```go
+result := &RemoveMemberResult{
+	FailedMeetingIDs:            []string{},
+	AmbiguousUntaggedMeetingIDs: []string{},
+}
+```
+(Pre-initializing to empty slices, not `nil`, means the JSON response always encodes `[]` for these fields rather than `null` when nothing was appended.)
+
+Where the loop currently does:
 ```go
 if share == nil || share.Origin != model.ShareOriginAccount {
     continue
@@ -62,15 +81,14 @@ if share == nil {
     continue
 }
 if share.Origin != model.ShareOriginAccount {
-    // origin=="" here can't be distinguished from an owner's explicit
-    // direct grant (see model.Share.Origin's doc), so cleanup must NOT
-    // touch it -- but a legacy account-share written before the Origin
-    // field existed collapses into this exact same shape. Surface it
-    // instead of silently doing nothing, so an operator has a signal to
-    // run backfill-share-origin for this account before it's too late
-    // (this member is already removed, so ListAccountMembers will never
-    // surface them as a backfill candidate again).
-    result.LegacyUntaggedMeetingIDs = append(result.LegacyUntaggedMeetingIDs, ref.MeetingID)
+    // Origin != "account" here (in practice always Origin=="") means cleanup
+    // must NOT touch this share -- it might be a legitimate direct grant.
+    // But it's ALSO the exact shape a legacy pre-Origin-field account-share
+    // has, and there is no way to tell the two apart at this layer (see the
+    // RemoveMemberResult doc comment above). Report it as ambiguous rather
+    // than silently doing nothing, even knowing this will include false
+    // positives for accounts that have real direct shares.
+    result.AmbiguousUntaggedMeetingIDs = append(result.AmbiguousUntaggedMeetingIDs, ref.MeetingID)
     continue
 }
 ```
@@ -78,26 +96,29 @@ Every other `failedMeetingIDs = append(failedMeetingIDs, ref.MeetingID)` in the 
 
 - [ ] **Step 3: Update the handler to read the new type and add the response field**
 
-In `backend/internal/handler/account.go`'s `RemoveMember`, change `failedMeetingIDs, err := h.accountService.RemoveMember(...)` to `result, err := h.accountService.RemoveMember(...)`. Change the 200-vs-204 branch condition from `len(failedMeetingIDs) > 0` to `len(result.FailedMeetingIDs) > 0 || len(result.LegacyUntaggedMeetingIDs) > 0`, and add `"legacyUntaggedMeetingIDs": result.LegacyUntaggedMeetingIDs` alongside the existing `"cleanupFailedForMeetings": result.FailedMeetingIDs` in the response map. Run `gofmt` on both edited files to fix struct-literal field alignment.
+In `backend/internal/handler/account.go`'s `RemoveMember`, change `failedMeetingIDs, err := h.accountService.RemoveMember(...)` to `result, err := h.accountService.RemoveMember(...)`. Change the 200-vs-204 branch condition from `len(failedMeetingIDs) > 0` to `len(result.FailedMeetingIDs) > 0 || len(result.AmbiguousUntaggedMeetingIDs) > 0`, and add `"ambiguousUntaggedMeetingIDs": result.AmbiguousUntaggedMeetingIDs` alongside the existing `"cleanupFailedForMeetings": result.FailedMeetingIDs` in the response map. Run `gofmt` on both edited files to fix struct-literal field alignment.
 
 - [ ] **Step 4: Update tests**
 
 `backend/internal/service/account_test.go`'s `TestRemoveMember_CleanupFailureDoesNotFailRemoval` currently does `failed, err := svc.RemoveMember(...)` then checks `len(failed) != 1 || failed[0] != "m-1"` — change to check `result.FailedMeetingIDs` instead of `failed` directly (var name `result`, type is now `*RemoveMemberResult`). All other `RemoveMember` call sites in that file use `_, err := svc.RemoveMember(...)` or `if _, err := svc.RemoveMember(...); err != nil` — those compile unchanged since only the discarded value's type changed.
 
-Add a new test `TestRemoveMember_SurfacesLegacyUntaggedShare` in the same file: create an account, add a TAM member, set `repo.meetingRefs[acc.AccountID]` to one ref, set `repo.meetings["m-1"]` to `&model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}` (needed since round 7 added a `GetMeetingByID` cross-account guard before the share check), set `repo.shares[acctShareKey("tam-1", "m-1")]` to a `Share` with `Origin: ""` (legacy shape). Call `RemoveMember`, assert `err == nil`, assert `result.LegacyUntaggedMeetingIDs == ["m-1"]`, assert `len(result.FailedMeetingIDs) == 0` (this is NOT a failure), and assert the share itself was left untouched (`repo.shares[acctShareKey("tam-1", "m-1")] != nil`, matching the existing `TestRemoveMember_PreservesDirectShare`'s pattern — a legacy share and a direct share are handled identically by cleanup, which is exactly the point).
+Add two new tests in the same file:
+1. `TestRemoveMember_SurfacesAmbiguousLegacyShare` — create an account, add a TAM member, set `repo.meetingRefs[acc.AccountID]` to one ref, set `repo.meetings["m-1"]` to `&model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}` (needed since round 7 added a `GetMeetingByID` cross-account guard before the share check), set `repo.shares[acctShareKey("tam-1", "m-1")]` to a `Share` with `Origin: ""` (legacy shape). Call `RemoveMember`, assert `err == nil`, assert `result.AmbiguousUntaggedMeetingIDs` equals `["m-1"]`, assert `len(result.FailedMeetingIDs) == 0` (this is NOT a failure), and assert the share itself was left untouched (`repo.shares[acctShareKey("tam-1", "m-1")] != nil`).
+2. `TestRemoveMember_EmptyResultListsAreNotNil` — create an account, add and then remove a member with NO meeting refs at all (empty account). Call `RemoveMember`, assert `err == nil`, then assert `result.FailedMeetingIDs != nil && len(result.FailedMeetingIDs) == 0` and the same for `result.AmbiguousUntaggedMeetingIDs` — proves Step 2's pre-initialization actually took effect (a test using `reflect.DeepEqual(result.FailedMeetingIDs, []string{})` or simply checking `!= nil` both work; prefer the explicit nil-check since that's the exact JSON-encoding distinction that matters).
 
 - [ ] **Step 5: Update API-SPEC.md**
 
-In `docs/API-SPEC.md`'s "Remove Member (owner 전용)" section, add `legacyUntaggedMeetingIDs` to the documented 200 response body example (a sibling field to `cleanupFailedForMeetings`), and add one sentence to the existing "Known limitation & remediation" paragraph noting that `RemoveMember` now surfaces which meetings hit this exact ambiguity in its own response (not just the backfill CLI's separate dry-run output), so an operator doesn't need to run the CLI speculatively to discover them.
+In `docs/API-SPEC.md`'s "Remove Member (owner 전용)" section, add `ambiguousUntaggedMeetingIDs` to the documented 200 response body example (a sibling field to `cleanupFailedForMeetings`), and add to the existing "Known limitation & remediation" paragraph: (a) `RemoveMember` now surfaces which meetings hit this exact ambiguity in its own response, and (b) this is explicitly a COARSE/noisy signal — an account with real direct shares will see those same meetings listed on every removal, so the presence of an entry does not by itself mean "this is definitely a legacy share needing backfill." Also add one sentence noting the frontend does not yet surface this new field (tracked as a follow-up, not silently dropped) and that already-removed members still have no backfill CLI path back to remediation (also a follow-up).
 
 - [ ] **Step 6: Verify**
 
-`cd backend && /home/atomoh/go-sdk/go/bin/go build ./... && /home/atomoh/go-sdk/go/bin/go test ./...` — full suite must stay green, including the new test and all existing `RemoveMember`/`TestHandlerRemoveMember_*` tests (handler tests use `map[string]interface{}` response parsing already, so they're unaffected by the Go-side type change as long as the JSON field names match).
+`cd backend && /home/atomoh/go-sdk/go/bin/go build ./... && /home/atomoh/go-sdk/go/bin/go test ./...` — full suite must stay green, including both new tests and all existing `RemoveMember`/`TestHandlerRemoveMember_*` tests (handler tests use `map[string]interface{}` response parsing already, so they're unaffected by the Go-side type change as long as the JSON field names match).
 
 ---
 
 ## Verification Summary
 
 - Go build + full test suite green (`internal/service`, `internal/handler`, and everything else — no other package touches `RemoveMember`'s return type).
-- New test proves a legacy share is (a) left untouched, (b) reported in `LegacyUntaggedMeetingIDs`, (c) NOT counted as a failure.
-- `docs/API-SPEC.md` reflects the new response field.
+- New test 1 proves an ambiguous (potentially-legacy) share is (a) left untouched, (b) reported in `AmbiguousUntaggedMeetingIDs`, (c) NOT counted as a failure.
+- New test 2 proves both result slices are non-nil (encode as `[]`, not `null`) even when nothing was appended.
+- `docs/API-SPEC.md` reflects the new response field AND its false-positive caveat, plus the two explicitly-scoped-out follow-ups (frontend wiring, already-removed-member backfill path).
