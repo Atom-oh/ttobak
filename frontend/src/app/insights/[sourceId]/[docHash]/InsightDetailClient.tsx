@@ -46,7 +46,16 @@ function stripS3Header(content: string): string {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i].trim();
-    const isMetaLine = line === '' || line === '---' || METADATA_LINE_RE.test(line) || (i === 0 && line.startsWith('# '));
+    // "---" is the structural end-of-metadata marker for the news format
+    // (title/Published/Source/Tags/---/summary) -- stop scanning the moment
+    // it's consumed, rather than continuing to test METADATA_LINE_RE against
+    // subsequent lines. Otherwise a briefing that legitimately opens with its
+    // own bold sub-label (e.g. "**핵심 요약:** ...", which the summarize
+    // prompt's "핵심요약 + 비즈니스 시사점 + AWS 관련성" structure invites)
+    // would itself match METADATA_LINE_RE and get stripped as if it were
+    // crawler metadata, silently eating real briefing content.
+    if (line === '---') { i++; break; }
+    const isMetaLine = line === '' || METADATA_LINE_RE.test(line) || (i === 0 && line.startsWith('# '));
     if (!isMetaLine) break;
     i++;
   }
@@ -60,11 +69,13 @@ function stripS3Header(content: string): string {
 // the polished summary and the raw scrape read as one undifferentiated wall
 // of text. Splitting them lets the briefing get a comfortable reading
 // column while the raw excerpt collapses behind a disclosure by default.
-// \b only guards "Content" (so it doesn't match e.g. "Contentious") -- \b
-// is a word-boundary between \w and non-\w, and JS regex treats Korean
-// characters as non-\w, so a trailing \b right after "발췌" would never
-// match (non-word char followed by a space, which is also non-word).
-const EXCERPT_HEADING_RE = /^##\s+(?:본문 발췌|Content\b)/;
+// The Korean heading always carries a parenthetical caveat ("... 신뢰할 수
+// 없는 외부 검색 결과 ..."), so it's never a bare "## 본문 발췌" -- matching
+// on the prefix alone is safe there. "Content" has no such caveat and is a
+// plain word that could legitimately open an unrelated briefing subsection
+// (e.g. "## Content Strategy"), so it's anchored to end-of-line instead of
+// just a word boundary -- a trailing \b would still match "Content Strategy".
+const EXCERPT_HEADING_RE = /^##\s+(?:본문 발췌|Content\s*$)/;
 const REDUNDANT_SUMMARY_HEADING_RE = /^##\s+Summary\s*\n+/;
 
 function splitBriefingAndExcerpt(strippedContent: string): { briefing: string; excerpt: string | null } {
