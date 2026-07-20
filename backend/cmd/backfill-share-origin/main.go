@@ -24,13 +24,17 @@
 // data-mutating tool guessing the wrong table under --apply is worse than
 // failing outright.
 //
+// Also see ADR-022 for the full migration procedure, operational sequencing
+// ("run this before removing a member from a legacy account"), and rollback.
+//
 // Usage:
 //
-//	TABLE_NAME=ttobak-main go run ./cmd/backfill-share-origin --account-id <id> [--apply] [--verbose] [--exclude userId1:meetingId1,userId2:meetingId2,...]
+//	TABLE_NAME=ttobak-main /usr/local/go/bin/go run ./cmd/backfill-share-origin --account-id <id> [--apply] [--verbose] [--exclude userId1:meetingId1,userId2:meetingId2,...]
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -109,6 +113,7 @@ func main() {
 	candidates := 0
 	tagged := 0
 	failed := 0
+	skipped := 0
 	for _, ref := range refs {
 		meeting, err := repo.GetMeetingByID(ctx, ref.MeetingID)
 		if err != nil {
@@ -149,6 +154,17 @@ func main() {
 				continue
 			}
 			if err := repo.BackfillShareOrigin(ctx, m.UserID, ref.MeetingID); err != nil {
+				if errors.Is(err, repository.ErrConditionFailed) {
+					// Benign: the row's origin changed (or the row itself
+					// was deleted) between this CLI's GetShare read above
+					// and BackfillShareOrigin's conditional write --
+					// something else (a concurrent RemoveMember cleanup, or
+					// a fresh direct share) already resolved this pair, so
+					// tagging is correctly skipped rather than failed.
+					fmt.Printf("    skipped (row changed concurrently -- no longer an untagged candidate)\n")
+					skipped++
+					continue
+				}
 				log.Printf("    FAILED to tag: %v", err)
 				failed++
 				continue
@@ -158,7 +174,7 @@ func main() {
 		}
 	}
 
-	fmt.Printf("[%s] done: %d candidate(s) found, %d tagged, %d failed\n", mode, candidates, tagged, failed)
+	fmt.Printf("[%s] done: %d candidate(s) found, %d tagged, %d skipped (concurrent change), %d failed\n", mode, candidates, tagged, skipped, failed)
 	if !*apply && candidates > 0 {
 		fmt.Println("Re-run with --apply after reviewing the candidates above.")
 	}

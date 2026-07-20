@@ -332,7 +332,7 @@ func TestHandlerRemoveMember_PartialCleanupFailureReturns200WithBody(t *testing.
 	}
 }
 
-func TestHandlerRemoveMember_AmbiguousShareReturns200WithBody(t *testing.T) {
+func TestHandlerRemoveMember_AmbiguousShareBlockedWithoutForce(t *testing.T) {
 	h, repo := newStubAccountHandler()
 	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
 	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
@@ -344,6 +344,33 @@ func TestHandlerRemoveMember_AmbiguousShareReturns200WithBody(t *testing.T) {
 	}
 
 	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (%s)", w.Code, w.Body.String())
+	}
+	if _, ok := repo.members[acctMemberKey("acc-1", "tam-1")]; !ok {
+		t.Error("expected membership to be preserved (untouched) when removal is blocked, but member was removed")
+	}
+}
+
+func TestHandlerRemoveMember_ForceAmbiguousShareReturns200WithBody(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1"}
+	repo.shares["tam-1|m-1"] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // ambiguous shape
+	}
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1?force=true", nil)
 	r = withUserEmailCtx(r, "owner-1", "o@x.com")
 	r = withChiParam(r, "accountId", "acc-1")
 	r = withChiParam(r, "userId", "tam-1")

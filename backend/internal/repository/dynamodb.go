@@ -1255,8 +1255,18 @@ func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID,
 		},
 	})
 	if err != nil {
-		var tce *types.TransactionCanceledException
-		if errors.As(err, &tce) && len(tce.CancellationReasons) > 0 {
+		// Gate the item-by-item classification below on
+		// isConditionalCheckFailedTransaction (same helper
+		// BackfillShareOrigin/DeleteShareIfAccountOrigin use) rather than a
+		// bare errors.As + non-empty-reasons check: that bare check alone
+		// can't tell "every failed item failed its condition" apart from "a
+		// transient error (throttling, TransactionConflict) landed on one
+		// item while a condition also failed on another" -- the latter
+		// would otherwise get silently classified as ErrMemberRemoved or a
+		// clobber-guard hit instead of propagating as a real error.
+		if isConditionalCheckFailedTransaction(err) {
+			var tce *types.TransactionCanceledException
+			errors.As(err, &tce)
 			// Item 0 is the member ConditionCheck; items 1-2 are the Share Puts.
 			if code := tce.CancellationReasons[0].Code; code != nil && *code == "ConditionalCheckFailed" {
 				return nil, ErrMemberRemoved

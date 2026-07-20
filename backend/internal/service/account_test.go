@@ -437,7 +437,7 @@ func TestRemoveMember_OwnerRemovesMember(t *testing.T) {
 	seedUser(repo, "tam-1", "tam@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 
-	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	mem, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1")
@@ -455,7 +455,7 @@ func TestRemoveMember_NonOwnerForbidden(t *testing.T) {
 	seedUser(repo, "ssa-1", "ssa@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ssa@x.com", Role: model.RoleSSA})
 
-	_, err := svc.RemoveMember(context.Background(), "tam-1", acc.AccountID, "ssa-1")
+	_, err := svc.RemoveMember(context.Background(), "tam-1", acc.AccountID, "ssa-1", false)
 	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
 	}
@@ -466,7 +466,7 @@ func TestRemoveMember_OwnerCannotBeRemoved(t *testing.T) {
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 
-	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "owner-1")
+	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "owner-1", false)
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("expected ErrInvalidInput, got %v", err)
 	}
@@ -477,7 +477,7 @@ func TestRemoveMember_MissingMemberNotFound(t *testing.T) {
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 
-	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "ghost-1")
+	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "ghost-1", false)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -491,7 +491,7 @@ func TestRemoveMember_ListRefsFailurePreservesMembershipAndErrors(t *testing.T) 
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	repo.listMeetingRefsErr = errors.New("dynamodb unavailable")
 
-	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1")
+	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false)
 	if err == nil {
 		t.Fatal("expected an error when ListMeetingRefsForAccount fails, got nil")
 	}
@@ -513,7 +513,7 @@ func TestRemoveMember_RevokesAccountOriginShare(t *testing.T) {
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
 	}
 
-	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if repo.shares[acctShareKey("tam-1", "m-1")] != nil {
@@ -521,7 +521,32 @@ func TestRemoveMember_RevokesAccountOriginShare(t *testing.T) {
 	}
 }
 
-func TestRemoveMember_PreservesDirectShare(t *testing.T) {
+func TestRemoveMember_AmbiguousShareBlocksRemovalWithoutForce(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.meetingRefs[acc.AccountID] = []model.MeetingRef{{AccountID: acc.AccountID, MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
+	repo.shares[acctShareKey("tam-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // direct share (or legacy account-share -- ambiguous)
+	}
+
+	// This is the fix this round's plan-gate MAJOR called for: without force,
+	// removal must be REFUSED (not silently succeed and merely report the
+	// ambiguity afterward) so membership is never deleted out from under a
+	// member who might only be holding legacy shares.
+	_, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false)
+	if !errors.Is(err, ErrAmbiguousShareBlocksRemoval) {
+		t.Errorf("expected ErrAmbiguousShareBlocksRemoval, got %v", err)
+	}
+	if mem, _ := repo.GetMember(context.Background(), acc.AccountID, "tam-1"); mem == nil {
+		t.Error("expected membership to be preserved (untouched) when removal is blocked, but member was removed")
+	}
+}
+
+func TestRemoveMember_ForcePreservesDirectShare(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
@@ -533,7 +558,7 @@ func TestRemoveMember_PreservesDirectShare(t *testing.T) {
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // direct share
 	}
 
-	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if repo.shares[acctShareKey("tam-1", "m-1")] == nil {
@@ -559,7 +584,13 @@ func TestRemoveMember_RaceCreatingDirectShareDuringCleanupIsNotDeleted(t *testin
 	// delete decided from the stale (pre-race) GetShare read.
 	repo.replaceWithDirectShareAfterGet = acctShareKey("tam-1", "m-1")
 
-	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+	// force=true: this test targets the cleanup loop's OWN GetShare->Delete
+	// race window specifically. The mock's replaceWithDirectShareAfterGet
+	// swap fires on its FIRST matching GetShare call and is a one-shot side
+	// effect -- if force=false ran the ambiguous-share precheck first, that
+	// precheck's own GetShare call would consume the swap before the
+	// cleanup loop ever ran, changing which code path this test exercises.
+	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	share := repo.shares[acctShareKey("tam-1", "m-1")]
@@ -581,7 +612,7 @@ func TestRemoveMember_CleanupFailureDoesNotFailRemoval(t *testing.T) {
 	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: acc.AccountID}
 	repo.shareOpErr["m-1"] = errors.New("simulated transient DynamoDB error")
 
-	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1")
+	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false)
 	if err != nil {
 		t.Fatalf("expected RemoveMember to succeed despite share-cleanup failure, got: %v", err)
 	}
@@ -605,7 +636,11 @@ func TestRemoveMember_SurfacesAmbiguousLegacyShare(t *testing.T) {
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // ambiguous: legacy account-share OR direct grant
 	}
 
-	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1")
+	// force=true: the ambiguous share would otherwise block this removal
+	// outright (see TestRemoveMember_AmbiguousShareBlocksRemovalWithoutForce)
+	// -- this test covers what happens once an owner has consciously
+	// overridden that block.
+	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -630,7 +665,7 @@ func TestRemoveMember_EmptyResultListsAreNotNil(t *testing.T) {
 	// ever appended to either result slice. They must still encode as JSON
 	// [] (pre-initialized), not null (the nil zero value).
 
-	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1")
+	result, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -660,7 +695,7 @@ func TestRemoveMember_CrossAccountMeetingRefNotTouched(t *testing.T) {
 		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
 	}
 
-	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1"); err != nil {
+	if _, err := svc.RemoveMember(context.Background(), "owner-1", acc.AccountID, "tam-1", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if repo.shares[acctShareKey("tam-1", "m-1")] == nil {

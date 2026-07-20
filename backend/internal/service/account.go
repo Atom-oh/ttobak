@@ -22,6 +22,19 @@ var (
 	ErrMemberExists   = errors.New("member already exists")
 	ErrAmbiguousAlias = errors.New("alias maps to multiple accounts")
 	ErrLoopGuard      = errors.New("document originated from ttobak (loop guard)")
+	// ErrAmbiguousShareBlocksRemoval is returned by RemoveMember when the
+	// target holds at least one Share with Origin != "account" on a meeting
+	// still linked to this account, AND force was not passed. See
+	// RemoveMemberResult's doc comment for why this ambiguity exists (a
+	// pre-Origin-field legacy account-share is indistinguishable from a
+	// direct grant) -- this precheck is what actually closes the fail-open
+	// gap: previously RemoveMember always deleted membership and merely
+	// reported the ambiguity afterward, so a member who held only legacy
+	// shares kept transcript/Bedrock access forever with no forced
+	// checkpoint for the owner to notice. Passing force=true proceeds
+	// exactly as before (delete membership, leave ambiguous shares
+	// untouched, report them in the response).
+	ErrAmbiguousShareBlocksRemoval = errors.New("ambiguous untagged share blocks removal (pass force=true to proceed anyway)")
 )
 
 const maxInlineDocBytes = 300 * 1024 // mirror repo transcript inline threshold
@@ -287,10 +300,56 @@ type RemoveMemberResult struct {
 	AmbiguousUntaggedMeetingIDs []string
 }
 
+// checkNoAmbiguousShares returns ErrAmbiguousShareBlocksRemoval if
+// targetUserID holds a Share with Origin != "account" on any of refs'
+// meetings that are still linked to accountID -- the same predicate
+// RemoveMember's cleanup loop uses to populate AmbiguousUntaggedMeetingIDs,
+// run here BEFORE membership is deleted so the caller can block on it
+// instead of only learning about it after the fact.
+//
+// A transient GetMeetingByID/GetShare error here does NOT block removal --
+// it's logged and treated the same as "can't verify, not ambiguous", so a
+// single DynamoDB blip can't turn into a new failure mode for what was
+// previously always a soft, best-effort cleanup step. The cleanup loop
+// (which runs this same pair of reads again after membership is deleted)
+// still surfaces a repeated read failure to the caller via
+// FailedMeetingIDs -- this precheck's only job is to catch a share it CAN
+// positively confirm is ambiguous before it's too late to stop.
+func (s *AccountService) checkNoAmbiguousShares(ctx context.Context, accountID, targetUserID string, refs []model.MeetingRef) error {
+	for _, ref := range refs {
+		meeting, err := s.repo.GetMeetingByID(ctx, ref.MeetingID)
+		if err != nil {
+			log.Printf("ambiguous-share precheck for %s (meeting %s): get meeting: %v", targetUserID, ref.MeetingID, err)
+			continue
+		}
+		if meeting == nil || meeting.AccountID != accountID {
+			continue // stale ref -- same skip RemoveMember's cleanup loop applies
+		}
+		share, err := s.repo.GetShare(ctx, targetUserID, ref.MeetingID)
+		if err != nil {
+			log.Printf("ambiguous-share precheck for %s (meeting %s): get share: %v", targetUserID, ref.MeetingID, err)
+			continue
+		}
+		if share != nil && share.Origin != model.ShareOriginAccount {
+			return ErrAmbiguousShareBlocksRemoval
+		}
+	}
+	return nil
+}
+
 // RemoveMember deletes a non-owner member. Only the account owner may call
 // this; the owner member itself can never be removed (an account must never
 // exist without an owner -- see CreateAccount's transactional invariant).
-func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, accountID, targetUserID string) (*RemoveMemberResult, error) {
+// If the target holds any ambiguous untagged share (see RemoveMemberResult)
+// on a meeting still linked to this account, membership is NOT deleted and
+// ErrAmbiguousShareBlocksRemoval is returned instead -- unless force is
+// true, in which case removal proceeds exactly as it always has (delete
+// membership, leave ambiguous shares untouched, report them in the
+// result). This precheck is what actually closes the fail-open access gap:
+// without it, a member holding only legacy (pre-Origin-field) shares could
+// be removed and keep transcript/Bedrock access forever with nothing
+// forcing the owner to notice before that happened.
+func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, accountID, targetUserID string, force bool) (*RemoveMemberResult, error) {
 	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
 	if err != nil {
 		return nil, err
@@ -313,10 +372,18 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 	// so a list failure can safely return an error (500, retryable) instead
 	// of silently producing a 204 that leaves cleanup un-run with no way to
 	// signal or retry it -- a retried DELETE after membership is gone would
-	// just 404.
+	// just 404. The precheck below reuses this same list, so a re-list after
+	// the delete (which would also defeat the "membership untouched on early
+	// return" guarantee) is unnecessary.
 	refs, err := s.repo.ListMeetingRefsForAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
+	}
+
+	if !force {
+		if err := s.checkNoAmbiguousShares(ctx, accountID, targetUserID, refs); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := s.repo.DeleteMember(ctx, accountID, targetUserID); err != nil {

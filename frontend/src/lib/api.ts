@@ -400,11 +400,12 @@ export const accountApi = {
     api.put<AccountMember>(
       `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, data),
   // Returns undefined on a fully-clean removal (204 No Content). A defined result means
-  // the membership was removed but Share cleanup didn't complete for every meeting --
-  // see API-SPEC.md's "Remove Member" note.
-  removeMember: (id: string, userId: string) =>
-    api.delete<{ removed: boolean; cleanupFailedForMeetings: string[] } | undefined>(
-      `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`),
+  // the membership was removed but Share cleanup didn't complete for every meeting, and/or
+  // an ambiguous untagged share was left untouched (only possible when force=true, since
+  // without it the request throws instead -- see API-SPEC.md's "Remove Member" note).
+  removeMember: (id: string, userId: string, force?: boolean) =>
+    api.delete<{ removed: boolean; cleanupFailedForMeetings: string[]; ambiguousUntaggedMeetingIDs: string[] } | undefined>(
+      `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}${force ? '?force=true' : ''}`),
   meetings: (id: string) =>
     api.get<{ meetings: AccountMeetingRef[] }>(`/api/accounts/${encodeURIComponent(id)}/meetings`),
   insights: (id: string, params?: { from?: string; to?: string; types?: string[] }) => {

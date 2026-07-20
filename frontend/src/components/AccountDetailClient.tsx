@@ -87,8 +87,31 @@ export default function AccountDetailClient() {
       if (result?.cleanupFailedForMeetings?.length) {
         setError(`Member removed, but access cleanup failed for ${result.cleanupFailedForMeetings.length} meeting(s). Contact support if this persists.`);
       }
+      if (result?.ambiguousUntaggedMeetingIDs?.length) {
+        setError(`Member removed, but ${result.ambiguousUntaggedMeetingIDs.length} meeting share(s) could not be safely revoked (may be a direct grant). Review with backend/cmd/backfill-share-origin if needed.`);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to remove member');
+      // The backend blocks removal by default (no force) when the member
+      // holds a share that's ambiguous between a legacy account-share and a
+      // real direct grant -- offer to retry with force instead of leaving
+      // the owner stuck, since force is the only way to actually remove
+      // someone in that state (see API-SPEC.md's "Remove Member" note).
+      const message = err instanceof Error ? err.message : 'Failed to remove member';
+      if (message.includes('force=true')) {
+        if (confirm(`${message}\n\nRemove anyway? The share will be left untouched and reported.`)) {
+          try {
+            const result = await accountApi.removeMember(accountId, userId, true);
+            await fetchAll();
+            if (result?.ambiguousUntaggedMeetingIDs?.length) {
+              setError(`Member removed. ${result.ambiguousUntaggedMeetingIDs.length} meeting share(s) were left untouched (may be a direct grant) -- review with backend/cmd/backfill-share-origin if needed.`);
+            }
+          } catch (retryErr) {
+            setError(retryErr instanceof Error ? retryErr.message : 'Failed to remove member');
+          }
+        }
+        return;
+      }
+      setError(message);
     }
   };
 

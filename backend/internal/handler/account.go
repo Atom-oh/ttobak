@@ -181,7 +181,8 @@ func (h *AccountHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID and user ID are required")
 		return
 	}
-	result, err := h.accountService.RemoveMember(ctx, userID, accountID, targetUserID)
+	force := r.URL.Query().Get("force") == "true"
+	result, err := h.accountService.RemoveMember(ctx, userID, accountID, targetUserID, force)
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrForbidden):
@@ -190,6 +191,8 @@ func (h *AccountHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Member not found")
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "The owner cannot be removed")
+		case errors.Is(err, service.ErrAmbiguousShareBlocksRemoval):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "This member holds an untagged share that may be a direct grant or a legacy account-share; pass ?force=true to remove anyway (the share will be left untouched and reported in the response)")
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}
