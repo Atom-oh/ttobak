@@ -37,7 +37,11 @@ cd infra && npm test             # jest tests
 #   npx cdk deploy TtobakGatewayStack --exclusively   # (one stack at a time)
 
 # Deploy frontend to S3 + invalidate CloudFront
-aws s3 sync frontend/out/ s3://ttobak-site-180294183052-ap-northeast-2/ --delete
+# --exclude "config.json" is REQUIRED: config.json (Cognito userPoolId/clientId/
+# identityPoolId) is written separately by TtobakFrontendStack's CDK
+# BucketDeployment, not by `next build` -- it does not exist in frontend/out/,
+# so a bare `--delete` sync wipes it and breaks login until it's redeployed.
+aws s3 sync frontend/out/ s3://ttobak-site-180294183052-ap-northeast-2/ --delete --exclude "config.json"
 aws cloudfront create-invalidation --distribution-id E3IFMH57E9UTB5 --paths "/*"
 ```
 
