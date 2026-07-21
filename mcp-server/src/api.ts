@@ -1,6 +1,6 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, realpathSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
-import { basename, extname, resolve, sep } from 'node:path';
+import { basename, extname, isAbsolute, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { URL } from 'node:url';
 import type { CognitoAuth } from './auth.js';
@@ -18,24 +18,37 @@ const MIME_BY_EXT: Record<string, string> = {
 };
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100MB
-const BLOCKED_PATH_PREFIXES = [resolve(homedir(), '.ttobak')];
 
-// Reject the TTOBAK token directory and anything over the size cap before we
-// ever read bytes off disk -- these upload tools accept an arbitrary local
-// filePath, so a prompt-injected agent could otherwise be steered into
-// reading and exfiltrating ~/.ttobak/tokens.json via a shared/account upload.
+// Reject anything over the size cap, and any dotfile/dotdir under $HOME
+// (~/.ttobak, ~/.aws, ~/.ssh, ~/.config, ~/.gnupg, etc.), before we ever read
+// bytes off disk -- these upload tools accept an arbitrary local filePath, so
+// a prompt-injected agent could otherwise be steered into reading and
+// exfiltrating credentials via a shared/account upload. Resolves through
+// realpathSync (not just path.resolve) so a symlink pointing at a blocked
+// path can't bypass the check -- statSync/readFileSync follow symlinks even
+// though path.resolve() doesn't.
 function guardUploadPath(filePath: string): string {
-  const resolved = resolve(filePath);
-  for (const blocked of BLOCKED_PATH_PREFIXES) {
-    if (resolved === blocked || resolved.startsWith(blocked + sep)) {
-      throw new Error(`Refusing to upload "${filePath}" -- path is inside the TTOBAK credentials directory.`);
+  if (!isAbsolute(filePath)) {
+    throw new Error(`filePath must be an absolute path, got "${filePath}".`);
+  }
+  let real: string;
+  try {
+    real = realpathSync(filePath);
+  } catch {
+    throw new Error(`File not found: "${filePath}".`);
+  }
+  const home = homedir();
+  if (real === home || real.startsWith(home + sep)) {
+    const relSegments = real === home ? [] : real.slice(home.length + 1).split(sep);
+    if (relSegments.some((seg) => seg.startsWith('.'))) {
+      throw new Error(`Refusing to upload "${filePath}" -- path is inside a hidden/credentials directory under $HOME.`);
     }
   }
-  const size = statSync(resolved).size;
+  const size = statSync(real).size;
   if (size > MAX_UPLOAD_BYTES) {
     throw new Error(`Refusing to upload "${filePath}" -- ${size} bytes exceeds the ${MAX_UPLOAD_BYTES}-byte limit.`);
   }
-  return resolved;
+  return real;
 }
 
 function resolveFileMeta(filePath: string, fileName?: string, fileType?: string) {
@@ -46,7 +59,13 @@ function resolveFileMeta(filePath: string, fileName?: string, fileType?: string)
       `Could not infer a MIME type for "${name}" -- pass fileType explicitly (e.g. application/pdf).`,
     );
   }
-  return { name, type };
+  // Lowercase the effective extension for the upload key too, not just MIME
+  // inference -- the convert-doc EventBridge rule matches `docs/*.pptx`/`.ppt`
+  // (lowercase, case-sensitive), so `DECK.PPTX` would upload fine but never
+  // get a PDF preview sidecar.
+  const ext = extname(name);
+  const normalizedName = ext && ext === ext.toLowerCase() ? name : name.slice(0, -ext.length) + ext.toLowerCase();
+  return { name: normalizedName, type };
 }
 
 export class TtobakApi {
