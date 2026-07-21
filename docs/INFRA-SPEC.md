@@ -223,6 +223,11 @@ TtobakApp (bin/ttobak.ts)
 - **Environment**: `TABLE_NAME`, `BUCKET_NAME`, `KB_ID`, `AOSS_ENDPOINT`
 - **Permissions**: Bedrock KB 관리, OpenSearch Serverless, S3 read, DynamoDB read/write
 
+#### QA Lambda (`ttobak-qa`, Python)
+- **Trigger**: API Gateway HTTP (`/api/qa/*`, sync) + WebSocket Lambda의 async 재호출 (`InvocationType=Event`, live Q&A 스트리밍)
+- **Async retry**: `retryAttempts: 0` (`configureAsyncInvoke`) — 실패/타임아웃한 async 호출을 Lambda가 기본 2회 재시도하면, 몇 분 뒤 stale duplicate answer delta가 이미 끝난 WebSocket 세션으로 배달되는 문제를 차단
+- **Environment**: `TABLE_NAME`, `KB_ID`, `BEDROCK_MODEL_ID`, `DETECT_MODEL_ID`, `MAX_TOOL_ROUNDS`, `KB_CACHE_TTL_SECONDS`, `RESEARCH_SFN_ARN`
+
 #### Convert-Doc Lambda (ADR-022)
 - **Trigger**: S3 Event (prefix: `docs/`, suffix: `.ppt`/`.pptx`) via EventBridge
 - **Deploy**: container image (`DockerImageCode.fromImageAsset`, `backend/cmd/convert-doc/Dockerfile`,

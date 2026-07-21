@@ -48,6 +48,36 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   const [askedQuestions, setAskedQuestions] = useState<string[]>([]);
   const wsRef = useRef<RealtimeWebSocket | null>(null);
   const activeEntryIdRef = useRef<string | null>(null);
+  // Watchdog for the WS streaming path: if no message arrives for the active
+  // entry within this window, surface an error and unlock the input instead of
+  // spinning forever on a stalled stream.
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearWatchdog = useCallback(() => {
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  }, []);
+
+  const armWatchdog = useCallback(() => {
+    clearWatchdog();
+    watchdogRef.current = setTimeout(() => {
+      watchdogRef.current = null;
+      const entryId = activeEntryIdRef.current;
+      if (!entryId) return;
+      setQaHistory(prev =>
+        prev.map(e =>
+          e.id === entryId
+            ? { ...e, answer: e.answer || '응답 시간 초과 — 다시 시도해주세요.', isStreaming: false }
+            : e
+        )
+      );
+      setIsAsking(false);
+      activeEntryIdRef.current = null;
+      inputRef.current?.focus();
+    }, 60_000);
+  }, [clearWatchdog]);
 
   const sessionId = useMemo(() => {
     const ts = Date.now();
@@ -105,6 +135,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
 
     switch (msg.type) {
       case 'answer_delta':
+        armWatchdog(); // stream is alive — push the stall deadline out
         setQaHistory(prev =>
           prev.map(e =>
             e.id === entryId ? { ...e, answer: e.answer + (msg.text || '') } : e
@@ -112,6 +143,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         );
         break;
       case 'answer_complete':
+        clearWatchdog();
         setQaHistory(prev =>
           prev.map(e =>
             e.id === entryId
@@ -132,6 +164,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         inputRef.current?.focus();
         break;
       case 'answer_error':
+        clearWatchdog();
         setQaHistory(prev =>
           prev.map(e =>
             e.id === entryId
@@ -147,7 +180,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         setError(msg.error || 'WebSocket error');
         break;
     }
-  }, []);
+  }, [armWatchdog, clearWatchdog]);
 
   const ensureWebSocket = useCallback(async (): Promise<RealtimeWebSocket | null> => {
     if (!WS_URL) return null;
@@ -165,10 +198,11 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     }
   }, [handleStreamMessage]);
 
-  // Cleanup WebSocket on unmount
+  // Cleanup WebSocket + watchdog on unmount
   useEffect(() => {
     return () => {
       wsRef.current?.disconnect();
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
     };
   }, []);
 
@@ -199,7 +233,15 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     // Try WebSocket streaming first
     const ws = await ensureWebSocket();
     if (ws) {
-      ws.askLive(q.trim(), transcriptContext, meetingId, sessionId);
+      // API Gateway WebSocket caps messages at 128KB — send only the tail of a
+      // long transcript (24,000 chars ≈ 72KB worst-case UTF-8) so delivery
+      // never dies silently on long meetings.
+      const wsContext =
+        transcriptContext && transcriptContext.length > 24000
+          ? transcriptContext.slice(-24000)
+          : transcriptContext;
+      ws.askLive(q.trim(), wsContext, meetingId, sessionId);
+      armWatchdog();
       return;
     }
 

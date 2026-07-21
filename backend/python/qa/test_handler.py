@@ -1,27 +1,98 @@
-"""Unit tests for handler.py's _list_shared_meetings origin/membership gate.
+"""Unit tests for the QA Lambda's handler.py.
 
-Verifies the fix for the PR #114 review MAJORs: an account-origin share row
-must not grant access once the caller is no longer an account member, even
-if RemoveMember's best-effort cleanup never deleted the row -- and that
-revocation is visible immediately (origin/membership/sharedToAccount are all
-re-checked live on every call, uncached), not bounded by the raw
-share-list's SHARED_MEETINGS_CACHE_TTL_SECONDS (which only caches the
-immutable meetingId/ownerId identity of each share, not any authorization
-decision).
+Run: cd backend/python/qa && python3 -m unittest test_handler -v
+Same stdlib-unittest pattern as backend/python/crawler/test_crawlers.py.
+
+Covers:
+- load_session's trailing-user-message trim (poisoning guard: a stored
+  history ending in a user-role message would otherwise make Bedrock reject
+  every subsequent call in that meeting with a role-alternation error).
+- _list_shared_meetings' live origin/membership/sharedToAccount re-check
+  (PR #114 review MAJORs: revocation must be visible immediately, not
+  bounded by the raw share-list cache TTL).
+- retrieve_from_kb's access-signature-gated cache (a cached KB answer must
+  not be served once the caller's access has changed).
 """
-
+import json
 import os
 import sys
 import time
 import unittest
 from unittest import mock
 
+# Set env vars BEFORE importing handler (it reads env at import time)
 os.environ.setdefault('TABLE_NAME', 'test-table')
+os.environ.setdefault('KB_ID', 'test-kb')
+os.environ.setdefault('BEDROCK_MODEL_ID', 'test-model')
 os.environ.setdefault('AWS_DEFAULT_REGION', 'us-east-1')
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+# ---------------------------------------------------------------------------
+# Patch boto3 at module level so `import handler` doesn't hit real AWS
+# ---------------------------------------------------------------------------
+_boto3_resource_patcher = mock.patch('boto3.resource', return_value=mock.MagicMock())
+_boto3_client_patcher = mock.patch('boto3.client', return_value=mock.MagicMock())
+_boto3_resource_patcher.start()
+_boto3_client_patcher.start()
+
 import handler  # noqa: E402
+
+
+def _stored(messages):
+    """DynamoDB get_item response holding the given conversation history."""
+    return {'Item': {'PK': 'SESSION#u1#s1', 'SK': 'MESSAGES',
+                     'messages': json.dumps(messages, ensure_ascii=False)}}
+
+
+class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
+    """A stored history ending in user-role messages must be trimmed on load,
+    or Bedrock rejects every subsequent call with a role-alternation error."""
+
+    def setUp(self):
+        self.get_item = mock.MagicMock()
+        patcher = mock.patch.object(handler, 'table', mock.MagicMock(get_item=self.get_item))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_missing_item_returns_empty(self):
+        self.get_item.return_value = {}
+        self.assertEqual(handler.load_session('s1', user_id='u1'), [])
+
+    def test_trims_single_trailing_user_message(self):
+        self.get_item.return_value = _stored([
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'text': 'a1'}]},
+            {'role': 'user', 'content': [{'text': 'q2 (round failed)'}]},
+        ])
+        result = handler.load_session('s1', user_id='u1')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[-1]['role'], 'assistant')
+
+    def test_trims_multiple_trailing_user_messages(self):
+        self.get_item.return_value = _stored([
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'text': 'a1'}]},
+            {'role': 'user', 'content': [{'toolResult': {'toolUseId': 't1', 'content': [{'text': 'r'}]}}]},
+            {'role': 'user', 'content': [{'text': 'q2'}]},
+        ])
+        result = handler.load_session('s1', user_id='u1')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[-1]['role'], 'assistant')
+
+    def test_preserves_history_ending_in_assistant(self):
+        history = [
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'text': 'a1'}]},
+        ]
+        self.get_item.return_value = _stored(history)
+        self.assertEqual(handler.load_session('s1', user_id='u1'), history)
+
+    def test_all_user_history_trims_to_empty(self):
+        self.get_item.return_value = _stored([
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+        ])
+        self.assertEqual(handler.load_session('s1', user_id='u1'), [])
 
 
 def make_get_item(share_origin='', member_exists=True, shared_to_account=True, account_id='acc-1', share_exists=True):

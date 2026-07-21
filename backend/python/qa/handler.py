@@ -559,7 +559,15 @@ def load_session(session_id, user_id=None):
         result = table.get_item(Key={"PK": pk, "SK": "MESSAGES"})
         item = result.get("Item")
         if item:
-            return json.loads(item.get("messages", "[]"))
+            messages = json.loads(item.get("messages", "[]"))
+            # A failed/aborted round can persist history ending in a user-role
+            # message; appending the next question would then violate Bedrock's
+            # role alternation and poison EVERY subsequent call in the session.
+            # Trimming here (the single load choke point) heals both converse
+            # loops and already-poisoned stored sessions.
+            while messages and messages[-1].get("role") == "user":
+                messages.pop()
+            return messages
         return []
     except Exception as e:
         logger.warning(f"Failed to load session {session_id}: {e}")
@@ -1180,6 +1188,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         current_block = None
         stop_reason = None
         round_text = ''
+        client_gone = False
 
         for ev in stream_resp.get('stream', []):
             if 'messageStart' in ev:
@@ -1202,11 +1211,12 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 if 'text' in delta and current_block is not None and 'text' in current_block:
                     current_block['text'] += delta['text']
                     round_text += delta['text']
-                    _post_ws(apigw, connection_id, {
+                    if not _post_ws(apigw, connection_id, {
                         'type': 'answer_delta',
                         'sessionId': session_id,
                         'text': delta['text'],
-                    })
+                    }):
+                        client_gone = True
                 elif 'toolUse' in delta and current_block is not None and 'toolUse' in current_block:
                     current_block['toolUse']['input'] += delta['toolUse'].get('input', '')
                 continue
@@ -1231,6 +1241,12 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         messages.append({"role": "assistant", "content": assembled_content})
         if round_text:
             final_answer_parts.append(round_text)
+
+        if client_gone:
+            # WebSocket client is gone — stop burning Bedrock calls. The
+            # assistant message was appended above so the saved session stays
+            # role-consistent.
+            break
 
         if stop_reason == 'end_turn' or stop_reason is None:
             break
