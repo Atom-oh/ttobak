@@ -48,9 +48,21 @@ struct UploadProgress {
     total: u64,
 }
 
+/// The only S3 bucket this app is ever allowed to upload a recording to.
+/// The account ID and bucket-naming convention are already hardcoded
+/// elsewhere in this repo's infra (`infra/lib/storage-stack.ts`'s
+/// `ttobak-assets-${cdk.Aws.ACCOUNT_ID}`, region `ap-northeast-2` per
+/// `infra/bin/infra.ts`'s default) — duplicating the concrete value here,
+/// rather than accepting any `*.amazonaws.com` suffix, is deliberate: a
+/// bare suffix check accepts ANY AWS customer's bucket (bucket names are
+/// globally attacker-choosable), which would defeat the point of this
+/// check entirely under a compromised-frontend precondition (this app's
+/// WebView fully controls the `upload_url` argument it passes in).
+const EXPECTED_BUCKET_HOST: &str = "ttobak-assets-180294183052.s3.ap-northeast-2.amazonaws.com";
+
 /// Parse and validate a presigned upload URL: must be `https` and hosted on
-/// an `amazonaws.com` endpoint. Split out from the command itself so it can
-/// be unit tested without any network or Tauri context.
+/// exactly [`EXPECTED_BUCKET_HOST`]. Split out from the command itself so
+/// it can be unit tested without any network or Tauri context.
 pub(crate) fn validate_upload_url(upload_url: &str) -> Result<reqwest::Url, AppError> {
     let parsed = reqwest::Url::parse(upload_url)
         .map_err(|e| AppError::Backend(format!("invalid upload_url: {e}")))?;
@@ -61,9 +73,10 @@ pub(crate) fn validate_upload_url(upload_url: &str) -> Result<reqwest::Url, AppE
         )));
     }
     let host = parsed.host_str().unwrap_or("");
-    if !host.ends_with(".amazonaws.com") {
+    if host != EXPECTED_BUCKET_HOST {
         return Err(AppError::Backend(format!(
-            "upload_url host {host:?} is not an amazonaws.com endpoint — refusing to upload"
+            "upload_url host {host:?} is not the expected TTOBAK audio bucket \
+             ({EXPECTED_BUCKET_HOST}) — refusing to upload"
         )));
     }
     Ok(parsed)
@@ -346,16 +359,16 @@ mod tests {
     }
 
     #[test]
-    fn validate_upload_url_accepts_https_amazonaws_endpoint() {
-        let result = validate_upload_url(
-            "https://ttobak-audio-bucket.s3.ap-northeast-2.amazonaws.com/audio/foo.wav?X-Amz-Signature=abc",
-        );
+    fn validate_upload_url_accepts_the_expected_bucket_host() {
+        let result = validate_upload_url(&format!(
+            "https://{EXPECTED_BUCKET_HOST}/audio/foo.wav?X-Amz-Signature=abc",
+        ));
         assert!(result.is_ok(), "expected a valid S3 presigned URL to pass: {result:?}");
     }
 
     #[test]
     fn validate_upload_url_rejects_non_https_scheme() {
-        let result = validate_upload_url("http://ttobak-audio-bucket.s3.amazonaws.com/audio/foo.wav");
+        let result = validate_upload_url(&format!("http://{EXPECTED_BUCKET_HOST}/audio/foo.wav"));
         assert!(result.is_err(), "plain http must be rejected");
     }
 
@@ -363,5 +376,17 @@ mod tests {
     fn validate_upload_url_rejects_non_amazonaws_host() {
         let result = validate_upload_url("https://evil.example.com/audio/foo.wav");
         assert!(result.is_err(), "a non-amazonaws.com host must be rejected");
+    }
+
+    #[test]
+    fn validate_upload_url_rejects_a_different_amazonaws_bucket() {
+        // Regression test: a bare `.amazonaws.com` suffix check would
+        // accept ANY AWS customer's bucket, including an attacker's own —
+        // not just this app's. Bucket names are globally attacker-choosable,
+        // so this must be an exact host match, not a suffix match.
+        let result = validate_upload_url(
+            "https://attacker-owned-bucket.s3.us-east-1.amazonaws.com/audio/foo.wav",
+        );
+        assert!(result.is_err(), "a different (even if AWS-hosted) bucket must be rejected");
     }
 }

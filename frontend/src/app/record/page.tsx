@@ -750,7 +750,7 @@ function RecordPageInner() {
               <div className="flex flex-col gap-1 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-base">speaker</span>
-                  Zoom·Teams 데스크탑 앱과 Chrome의 Zoom Web·Google Meet 등 시스템 오디오를 캡처합니다 (실시간 자막 미지원)
+                  Zoom·Teams 데스크탑 앱과 Chrome의 Zoom Web·Google Meet 등 시스템 오디오를 캡처합니다 (실시간 자막은 베스트에포트로 시도되며, 연결에 실패해도 녹음 종료 후 자동으로 전사됩니다)
                 </div>
                 <div className="text-xs text-purple-600/80 dark:text-purple-300/70 ml-6">
                   ⚠️ 다른 참가자 음성만 녹음됩니다 — 본인 마이크는 별도로 잡지 않습니다
@@ -786,14 +786,17 @@ function RecordPageInner() {
             Sharing: {tabSharingLabel}
           </div>
         )}
-        {/* System audio status during recording — session.isRecording stays
-            false in this mode (no MediaStream), so this is gated on
-            isNativeRecording instead; states plainly that live captions
-            aren't available so the recording screen doesn't read as broken. */}
+        {/* System audio status during recording. isNativeRecording (set
+            synchronously as soon as native capture starts) drives this
+            rather than session.isRecording alone: startNativeSession()
+            does eventually set session.isRecording true too once the STT
+            session spins up, but isNativeRecording covers the moment
+            before that resolves and the case where Transcribe Streaming
+            isn't configured/fails to connect at all. */}
         {audioSource === 'system' && isNativeRecording && (
           <div className="flex items-center gap-2 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300 mb-4">
             <span className="material-symbols-outlined text-base animate-pulse">speaker</span>
-            시스템 오디오 캡처 중 — 실시간 자막은 지원되지 않습니다. 녹음 종료 후 자동으로 전사·요약됩니다.
+            시스템 오디오 캡처 중 — 실시간 자막은 연결되면 표시됩니다. 녹음 종료 후 자동으로 전사·요약됩니다.
           </div>
         )}
 
@@ -803,19 +806,29 @@ function RecordPageInner() {
             meetingId={clientMeetingId}
             meetingTitle={meetingTitle || 'Untitled Meeting'}
             audioSource={audioSource}
+            disabled={!!postRecording.step}
             deviceId={audioSource === 'mic' ? (selectedDeviceId || undefined) : undefined}
             onRecordingComplete={postRecording.handleRecordingComplete}
             onBlobReady={postRecording.handleBlobReady}
             onNativeFileReady={postRecording.handleNativeFileReady}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error) => {
-              if (session.isRecording || isNativeRecording) {
-                postRecording.reset(); // clear any previous banner state
-                // setStep and errorMessage handled by handleBlobReady/
-                // handleNativeFileReady on real post-recording errors.
-                // For recording errors, show blocking overlay instead.
-                session.setSpeechError(null);
+              if (isNativeRecording) {
+                // Every onError call while isNativeRecording is true comes
+                // from RecordButton's native start/stop catch blocks (the
+                // native branch returns before reaching any browser-mode
+                // code) — always a terminal failure, e.g. a stop that names
+                // the preserved file path for manual recovery. Show it;
+                // don't route it through the "clear stale banner state"
+                // branch below, which would silently discard the message.
                 setIsNativeRecording(false);
+                session.setSpeechError(error);
+              } else if (session.isRecording) {
+                postRecording.reset(); // clear any previous banner state
+                // setStep and errorMessage handled by handleBlobReady on
+                // real post-recording errors. For recording errors, show
+                // blocking overlay instead.
+                session.setSpeechError(null);
               } else {
                 session.setSpeechError(error);
               }

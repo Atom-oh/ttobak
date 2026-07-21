@@ -34,6 +34,13 @@ interface RecordButtonProps {
   onAnalyserReady?: (analyser: AnalyserNode | null) => void;
   onCheckpoint?: (blob: Blob, mimeType: string) => void;
   audioSource?: 'mic' | 'tab' | 'system';
+  /** Disables starting a NEW recording — used while a previous recording's
+   * post-processing (notes/upload/notify, or its error banner) is still
+   * unresolved. Without this, RecordButton's idle mic button stayed
+   * clickable throughout that window, and starting a second recording
+   * could clobber `usePostRecording`'s shared pending-upload state
+   * (there's exactly one in-flight "pending recording" slot per page). */
+  disabled?: boolean;
 }
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'uploading';
@@ -62,6 +69,7 @@ export function RecordButton({
   onAnalyserReady,
   onCheckpoint,
   audioSource = 'mic',
+  disabled = false,
 }: RecordButtonProps) {
   const [state, setState] = useState<RecordingState>('idle');
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -201,6 +209,13 @@ export function RecordButton({
   }, [state, audioSource]);
 
   const startRecording = async () => {
+    // A previous recording's post-processing (notes/upload/notify, or its
+    // unresolved error banner) is still in flight — refuse to start a new
+    // one. usePostRecording has exactly one pending-upload slot per page;
+    // starting a second recording into it could clobber the first
+    // recording's retry state before it finishes.
+    if (disabled) return;
+
     // Clean up any leftover resources from a previous recording
     cleanupAudioResources();
 
@@ -503,7 +518,7 @@ export function RecordButton({
         />
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={state === 'uploading'}
+          disabled={state === 'uploading' || disabled}
           className="w-20 h-20 rounded-full bg-primary flex items-center justify-center shadow-lg shadow-primary/40 hover:scale-105 transition-transform disabled:opacity-50"
         >
           {state === 'uploading' ? (
@@ -528,7 +543,8 @@ export function RecordButton({
             <div className="absolute w-24 h-24 bg-primary/20 rounded-full" />
             <button
               onClick={startRecording}
-              className="relative w-20 h-20 rounded-full bg-primary flex items-center justify-center shadow-lg shadow-primary/40 hover:scale-105 active:scale-[0.97] transition-transform z-10"
+              disabled={disabled}
+              className="relative w-20 h-20 rounded-full bg-primary flex items-center justify-center shadow-lg shadow-primary/40 hover:scale-105 active:scale-[0.97] transition-transform z-10 disabled:opacity-50 disabled:hover:scale-100"
             >
               <span className="material-symbols-outlined text-white text-3xl">mic</span>
             </button>

@@ -305,11 +305,15 @@ Error step:
 
 Tauri desktop app, System Audio mode (`audioSource === 'system'`,
 `isTauri()`): the pre-recording setup notice and the during-recording
-banner (purple, `speaker` icon) both state plainly that live captions are
-unavailable in this mode — see `app/record/page.tsx`'s `isNativeRecording`
-flag, which drives the during-recording banner/title/nav-lock independent
-of `session.isRecording` (that flag only ever becomes true from a browser
-`MediaStream`, never present in this mode).
+banner (purple, `speaker` icon) both state that live captions are
+best-effort in this mode (fed by Rust-downsampled PCM over
+`native-pcm-chunk` into the same Transcribe Streaming pipeline mic/tab
+modes use — no Web Speech fallback exists here) and that transcription
+happens automatically after the meeting ends regardless. `isNativeRecording`
+(`app/record/page.tsx`) drives the during-recording banner/title/nav-lock
+independent of `session.isRecording`, since it needs to be true from the
+moment native capture starts — before the async STT session start
+resolves, and even if Transcribe Streaming never successfully connects.
 
 ### 2.7 Meeting Detail (Mobile)
 

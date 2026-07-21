@@ -10,6 +10,8 @@
 //! `cargo check` works on Linux dev machines (e.g. CI lint).
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::error::AppError;
@@ -22,6 +24,17 @@ pub struct RecordingSnapshot {
 
 pub struct AudioRecorder {
     inner: Option<RecordingHandle>,
+    /// Bumped by every `start()`. Passed down to each recording's
+    /// `AudioOutput` (see `macos::AudioOutput`) so its callback can detect
+    /// when it's been superseded by a newer recording and stop emitting
+    /// events / writing samples — closes a real bug where a `stop_capture`
+    /// wedged past `stop_recording`'s timeout kept running in the
+    /// background (see `lib.rs`'s `STOP_CAPTURE_TIMEOUT`) and, without this
+    /// guard, its `native-audio-level`/`native-pcm-chunk` events (global
+    /// Tauri broadcasts, no per-recording tag) would leak into whatever
+    /// recording started next.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    generation: Arc<AtomicU64>,
 }
 
 pub struct RecordingHandle {
@@ -33,7 +46,10 @@ pub struct RecordingHandle {
 
 impl AudioRecorder {
     pub fn new() -> Self {
-        Self { inner: None }
+        Self {
+            inner: None,
+            generation: Arc::new(AtomicU64::new(0)),
+        }
     }
 
     pub fn snapshot(&self) -> RecordingSnapshot {
@@ -65,7 +81,9 @@ impl AudioRecorder {
 
         #[cfg(target_os = "macos")]
         {
-            let backend = macos::Backend::start(&path, app)?;
+            use std::sync::atomic::Ordering;
+            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            let backend = macos::Backend::start(&path, app, generation, Arc::clone(&self.generation))?;
             self.inner = Some(RecordingHandle {
                 path: path.clone(),
                 started_at: Instant::now(),
@@ -181,7 +199,15 @@ pub mod macos {
     }
 
     impl Backend {
-        pub fn start(path: &Path, app: AppHandle) -> Result<Self, AppError> {
+        /// `generation` / `generation_counter`: see `AudioRecorder`'s field
+        /// doc comment in the parent module — lets `AudioOutput` detect
+        /// once it's been superseded by a newer recording and stop acting.
+        pub fn start(
+            path: &Path,
+            app: AppHandle,
+            generation: u64,
+            generation_counter: Arc<AtomicU64>,
+        ) -> Result<Self, AppError> {
             let spec = WavSpec {
                 channels: CHANNELS,
                 sample_rate: SAMPLE_RATE,
@@ -225,6 +251,8 @@ pub mod macos {
                     last_emit_ms: Arc::new(AtomicU64::new(0)),
                     since_flush: Arc::new(AtomicU64::new(0)),
                     pcm_pending: Arc::new(Mutex::new(Vec::with_capacity(PCM_CHUNK_SAMPLES * 2))),
+                    my_generation: generation,
+                    current_generation: generation_counter,
                 },
                 SCStreamOutputType::Audio,
             );
@@ -349,11 +377,32 @@ pub mod macos {
         /// event. ScreenCaptureKit callback sizes don't divide evenly by the
         /// downsample ratio or the chunk size, so leftovers carry over.
         pcm_pending: Arc<Mutex<Vec<f32>>>,
+        /// This recording's generation number, captured at `Backend::start`.
+        my_generation: u64,
+        /// Shared with `AudioRecorder` — bumped by every `start()`. If this
+        /// no longer equals `my_generation`, a newer recording has started
+        /// and this stream is orphaned (e.g. its `stop_capture` wedged past
+        /// `stop_recording`'s timeout and kept running in the background).
+        current_generation: Arc<AtomicU64>,
     }
 
     impl SCStreamOutputTrait for AudioOutput {
         fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
             if !matches!(of_type, SCStreamOutputType::Audio) {
+                return;
+            }
+
+            // A newer recording has started — this stream is orphaned.
+            // Stop writing AND emitting entirely: Tauri events are global
+            // broadcasts with no per-recording tag, so without this check
+            // an orphaned stream's `native-audio-level`/`native-pcm-chunk`
+            // events would leak into whatever recording started next,
+            // corrupting its waveform and feeding stale audio into its live
+            // captions. (Harmless to stop writing too — the newer
+            // recording always uses a fresh file path, so this stream's own
+            // file was already finalized via `stop_and_finalize` or will be
+            // whenever its `stop_capture` eventually returns.)
+            if self.current_generation.load(Ordering::Relaxed) != self.my_generation {
                 return;
             }
 
