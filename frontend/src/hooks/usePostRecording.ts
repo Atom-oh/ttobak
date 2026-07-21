@@ -3,7 +3,8 @@
 import { useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { meetingsApi, uploadsApi } from '@/lib/api';
-import { uploadAudioWithRetry } from '@/lib/upload';
+import { putWithProgress, type UploadProgress } from '@/lib/upload';
+import { uploadRecording, onNativeUploadProgress, cleanupRecording } from '@/lib/tauri';
 import type { PostRecordingStep } from '@/components/record/PostRecordingBanner';
 
 function formatDefaultTitle(date: Date): string {
@@ -26,6 +27,18 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
   ]);
 }
 
+/**
+ * The recording audio not yet confirmed uploaded. Either an in-memory Blob
+ * (browser mic/tab modes) or a file path on disk (Tauri System Audio mode —
+ * see mac-app/src-tauri/src/upload.rs; the bytes never come into the
+ * WebView at all). Cleared ONLY after `notifyComplete` succeeds (or on an
+ * explicit dismiss/new-recording) — never before the upload has actually
+ * been confirmed, so a failed upload never silently loses the recording.
+ */
+type PendingAudio =
+  | { kind: 'blob'; blob: Blob; mimeType: string }
+  | { kind: 'native'; path: string; byteSize: number };
+
 interface UsePostRecordingOptions {
   meetingTitle: string;
 }
@@ -37,12 +50,24 @@ export function usePostRecording({
   const [step, setStep] = useState<PostRecordingStep | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [serverMeetingId, setServerMeetingId] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
 
-  // Hold the recording blob while user writes notes
-  const pendingBlobRef = useRef<{ blob: Blob; mimeType: string } | null>(null);
+  const pendingAudioRef = useRef<PendingAudio | null>(null);
+  // Set once the PUT to S3 has actually succeeded, so a retry that only
+  // needs to redo `notifyComplete` (e.g. that call timed out, or the app
+  // was closed right after a successful upload) never re-uploads the whole
+  // file — that would also re-fire the backend's S3-upload EventBridge rule
+  // and duplicate the transcription run.
+  const putDoneRef = useRef<{ key: string } | null>(null);
 
   /** Create a draft meeting at recording start for crash recovery */
   const createDraftMeeting = useCallback(async (): Promise<string | null> => {
+    // A stale pending payload from a previous, never-resolved recording
+    // (e.g. the user started a new recording without retrying or
+    // dismissing an earlier upload error) must not bleed into this new
+    // session — its own draft meeting is about to be created below.
+    pendingAudioRef.current = null;
+    putDoneRef.current = null;
     try {
       const result = await withTimeout(
         meetingsApi.create({
@@ -59,8 +84,11 @@ export function usePostRecording({
     }
   }, [meetingTitle]);
 
-  /** Resume the save+upload flow after notes step */
-  const resumeUploadFlow = useCallback(async (blob: Blob, mimeType: string) => {
+  /** Resume the save+upload flow after notes step (or a retry). Safe to
+   * call more than once for the same `payload` — if the PUT already
+   * succeeded (`putDoneRef` set), it's skipped and only `notifyComplete`
+   * is retried. */
+  const resumeUploadFlow = useCallback(async (payload: PendingAudio) => {
     try {
       let meetingId = serverMeetingId;
 
@@ -92,28 +120,60 @@ export function usePostRecording({
         );
       }
 
-      // Upload final audio
       setStep('uploading');
-      const resolvedMime = mimeType || 'audio/webm';
-      const ext = resolvedMime.includes('wav') ? 'wav'
-                : resolvedMime.includes('mp4') ? 'm4a'
-                : resolvedMime.includes('ogg') ? 'ogg'
-                : 'webm';
-      const fileName = `recording_${Date.now()}.${ext}`;
-      const { uploadUrl, key } = await withTimeout(
-        uploadsApi.getPresignedUrl({
-          fileName,
-          fileType: resolvedMime,
-          category: 'audio',
-          meetingId,
-        }),
-        15000, 'Get upload URL',
-      );
-      await uploadAudioWithRetry(blob, uploadUrl, mimeType);
+      setUploadProgress(null);
+
+      let uploadKey = putDoneRef.current?.key ?? null;
+      if (!uploadKey) {
+        const resolvedMime = payload.kind === 'native' ? 'audio/wav' : (payload.mimeType || 'audio/webm');
+        const ext = payload.kind === 'native' ? 'wav'
+                  : resolvedMime.includes('wav') ? 'wav'
+                  : resolvedMime.includes('mp4') ? 'm4a'
+                  : resolvedMime.includes('ogg') ? 'ogg'
+                  : 'webm';
+        const fileName = `recording_${Date.now()}.${ext}`;
+        const { uploadUrl, key } = await withTimeout(
+          uploadsApi.getPresignedUrl({
+            fileName,
+            fileType: resolvedMime,
+            category: 'audio',
+            meetingId,
+          }),
+          15000, 'Get upload URL',
+        );
+
+        if (payload.kind === 'blob') {
+          await putWithProgress(uploadUrl, payload.blob, payload.mimeType, setUploadProgress);
+        } else {
+          const unlisten = onNativeUploadProgress(({ loaded, total }) => {
+            setUploadProgress(
+              total > 0 ? { loaded, total, percentage: Math.round((loaded / total) * 100) } : null,
+            );
+          });
+          try {
+            await uploadRecording(payload.path, uploadUrl, 'audio/wav');
+          } finally {
+            unlisten();
+          }
+        }
+
+        putDoneRef.current = { key };
+        uploadKey = key;
+      }
+
       await withTimeout(
-        uploadsApi.notifyComplete({ meetingId, key, category: 'audio' }),
+        uploadsApi.notifyComplete({ meetingId, key: uploadKey, category: 'audio' }),
         15000, 'Notify upload complete',
       );
+
+      // Only now — upload confirmed and the backend has acknowledged it —
+      // is it safe to delete the source file.
+      if (payload.kind === 'native') {
+        await cleanupRecording(payload.path).catch(() => {});
+      }
+      pendingAudioRef.current = null;
+      putDoneRef.current = null;
+      setUploadProgress(null);
 
       // Redirect
       setStep(null);
@@ -122,20 +182,34 @@ export function usePostRecording({
       console.error('Failed to process recording:', err);
       setErrorMessage(err instanceof Error ? err.message : 'Failed to process recording');
       setStep('error');
+      // Deliberately do NOT clear pendingAudioRef/putDoneRef here — that's
+      // what makes handleRetry (below) able to resume instead of losing
+      // the recording.
     }
   }, [meetingTitle, router, serverMeetingId]);
 
-  /** Called when recording blob is ready — pause for notes input */
+  /** Called when a browser-mode (mic/tab) recording blob is ready — pause
+   * for notes input. */
   const handleBlobReady = useCallback(async (blob: Blob, mimeType: string) => {
-    pendingBlobRef.current = { blob, mimeType };
+    pendingAudioRef.current = { kind: 'blob', blob, mimeType };
+    putDoneRef.current = null;
+    setStep('notes');
+  }, []);
+
+  /** Called when a Tauri System Audio recording has been stopped and
+   * finalized on disk — mirrors `handleBlobReady`, but hands off a file
+   * path instead of a Blob so the WAV's bytes never need to enter the
+   * WebView (see `lib/tauri.ts`'s `uploadRecording`). */
+  const handleNativeFileReady = useCallback((path: string, byteSize: number) => {
+    pendingAudioRef.current = { kind: 'native', path, byteSize };
+    putDoneRef.current = null;
     setStep('notes');
   }, []);
 
   /** User submitted notes — save to meeting then resume upload */
   const handleNotesSubmit = useCallback(async (notes: string) => {
-    const pending = pendingBlobRef.current;
+    const pending = pendingAudioRef.current;
     if (!pending) return;
-    pendingBlobRef.current = null;
 
     try {
       // Save notes to meeting if we have a draft -- always send, even when
@@ -152,15 +226,14 @@ export function usePostRecording({
       console.warn('Failed to save notes, continuing with upload:', err);
     }
 
-    await resumeUploadFlow(pending.blob, pending.mimeType);
+    await resumeUploadFlow(pending);
   }, [serverMeetingId, resumeUploadFlow]);
 
   /** User skipped notes — resume upload immediately */
   const handleNotesSkip = useCallback(async () => {
-    const pending = pendingBlobRef.current;
+    const pending = pendingAudioRef.current;
     if (!pending) return;
-    pendingBlobRef.current = null;
-    await resumeUploadFlow(pending.blob, pending.mimeType);
+    await resumeUploadFlow(pending);
   }, [resumeUploadFlow]);
 
   /** Legacy callback for iOS native capture fallback */
@@ -179,20 +252,44 @@ export function usePostRecording({
     }
   }, [meetingTitle, router]);
 
+  /** "Try Again" on the error banner — actually retries the upload from
+   * the retained pending payload (fresh presign; `resumeUploadFlow` skips
+   * straight to `notifyComplete` if the PUT itself already succeeded).
+   * Falls back to a plain reset if there's nothing to retry. */
   const handleRetry = useCallback(() => {
+    const pending = pendingAudioRef.current;
+    if (!pending) {
+      setStep(null);
+      setErrorMessage(null);
+      return;
+    }
+    setErrorMessage(null);
+    void resumeUploadFlow(pending);
+  }, [resumeUploadFlow]);
+
+  /** Clears all post-recording UI/pending state without attempting any
+   * upload — used for "Home"/dismiss, where the user is deliberately
+   * walking away rather than retrying. */
+  const reset = useCallback(() => {
     setStep(null);
     setErrorMessage(null);
+    setUploadProgress(null);
+    pendingAudioRef.current = null;
+    putDoneRef.current = null;
   }, []);
 
   return {
     step,
     errorMessage,
     serverMeetingId,
+    uploadProgress,
     createDraftMeeting,
     handleBlobReady,
+    handleNativeFileReady,
     handleNotesSubmit,
     handleNotesSkip,
     handleRecordingComplete,
     handleRetry,
+    reset,
   };
 }

@@ -52,6 +52,12 @@ function RecordPageInner() {
   const [liveSttProvider, setLiveSttProvider] = useState<LiveSttProvider>('web-speech');
   const [audioSource, setAudioSource] = useState<'mic' | 'tab' | 'system'>('mic');
   const [tabSharingLabel, setTabSharingLabel] = useState<string | null>(null);
+  // Tauri System Audio mode has no MediaStream, so `session.isRecording`
+  // (which only flips true inside session.startSession, given a stream)
+  // stays false for the whole recording. Without this separate signal, the
+  // during-recording banner/title/nav-lock never rendered and the screen
+  // looked blank/broken even though capture was working fine.
+  const [isNativeRecording, setIsNativeRecording] = useState(false);
 
   // Analyser nodes for MicSelector level meter
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
@@ -392,6 +398,7 @@ function RecordPageInner() {
     // the meeting stays stuck in 'recording' status with no linked audioKey.
     await postRecording.createDraftMeeting();
     if (stream) {
+      setIsNativeRecording(false);
       // Browser modes (mic/tab): start live STT session with the MediaStream.
       session.startSession(() => {
         previewStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -400,11 +407,14 @@ function RecordPageInner() {
         previewCtxRef.current = null;
         setPreviewAnalyser(null);
       }, stream);
+    } else if (isTauri() && audioSource === 'system') {
+      // Native (system audio): no MediaStream — capture happens in Rust via
+      // ScreenCaptureKit, and RecordButton manages its own timer/state.
+      // session.isRecording stays false (there is no browser stream to
+      // start a session with), so this separate flag drives the
+      // during-recording UI instead.
+      setIsNativeRecording(true);
     }
-    // Native (system audio): no MediaStream, no live STT — capture happens
-    // in Rust via ScreenCaptureKit. RecordButton manages timer + state on
-    // its own. session.isRecording stays false, so LiveTranscript / LiveQAPanel
-    // are not rendered (correctly — there is no live transcript to render).
   };
 
   const handleCheckpoint = async (blob: Blob, mimeType: string) => {
@@ -544,7 +554,7 @@ function RecordPageInner() {
   };
 
   return (
-    <AppLayout activePath="/record" showMobileNav={true} isRecording={session.isRecording} breadcrumbs={[{ label: 'Recording' }, { label: meetingTitle || 'New Meeting' }]}>
+    <AppLayout activePath="/record" showMobileNav={true} isRecording={session.isRecording || isNativeRecording} breadcrumbs={[{ label: 'Recording' }, { label: meetingTitle || 'New Meeting' }]}>
       {/* Header */}
       <header className="lg:hidden flex items-center justify-between px-6 py-4 bg-white/80 dark:bg-background-dark/80 backdrop-blur-md sticky top-0 z-10 border-b border-slate-100 dark:border-white/10">
         <button
@@ -757,7 +767,7 @@ function RecordPageInner() {
         )}
 
         {/* Desktop: Meeting title during recording */}
-        {session.isRecording && (
+        {(session.isRecording || isNativeRecording) && (
           <div className="hidden lg:block mb-4">
             <h1 className="text-xl font-bold text-slate-900 dark:text-white dark:font-headline text-center tracking-tight">
               {meetingTitle || 'Untitled Meeting'}
@@ -772,11 +782,14 @@ function RecordPageInner() {
             Sharing: {tabSharingLabel}
           </div>
         )}
-        {/* System audio status during recording */}
-        {audioSource === 'system' && session.isRecording && (
+        {/* System audio status during recording — session.isRecording stays
+            false in this mode (no MediaStream), so this is gated on
+            isNativeRecording instead; states plainly that live captions
+            aren't available so the recording screen doesn't read as broken. */}
+        {audioSource === 'system' && isNativeRecording && (
           <div className="flex items-center gap-2 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300 mb-4">
             <span className="material-symbols-outlined text-base animate-pulse">speaker</span>
-            시스템 오디오 캡처 중
+            시스템 오디오 캡처 중 — 실시간 자막은 지원되지 않습니다. 녹음 종료 후 자동으로 전사·요약됩니다.
           </div>
         )}
 
@@ -789,12 +802,15 @@ function RecordPageInner() {
             deviceId={audioSource === 'mic' ? (selectedDeviceId || undefined) : undefined}
             onRecordingComplete={postRecording.handleRecordingComplete}
             onBlobReady={postRecording.handleBlobReady}
+            onNativeFileReady={postRecording.handleNativeFileReady}
             onError={(error) => {
-              if (session.isRecording) {
-                postRecording.handleRetry(); // clear any previous state
-                // setStep and errorMessage handled by handleBlobReady on real errors
-                // For recording errors, show blocking overlay
+              if (session.isRecording || isNativeRecording) {
+                postRecording.reset(); // clear any previous banner state
+                // setStep and errorMessage handled by handleBlobReady/
+                // handleNativeFileReady on real post-recording errors.
+                // For recording errors, show blocking overlay instead.
                 session.setSpeechError(null);
+                setIsNativeRecording(false);
               } else {
                 session.setSpeechError(error);
               }
@@ -802,7 +818,7 @@ function RecordPageInner() {
             onRecordingStart={handleRecordingStart}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
-            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); }}
+            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); }}
             onPermissionGranted={refreshDevices}
             onCaptureImage={handleFileAttach}
             onAnalyserReady={setAnalyserNode}
@@ -1053,8 +1069,9 @@ function RecordPageInner() {
         <PostRecordingBanner
           step={postRecording.step}
           errorMessage={postRecording.errorMessage}
+          uploadProgress={postRecording.uploadProgress}
           onRetry={handleRetry}
-          onDismiss={() => { postRecording.handleRetry(); setContextText(''); router.push('/'); }}
+          onDismiss={() => { postRecording.reset(); setContextText(''); router.push('/'); }}
           onNotesSubmit={handleFinalNotesSubmit}
           onNotesSkip={handleFinalNotesSkip}
           initialNotes={notes}

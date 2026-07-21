@@ -2,8 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { isIOS, getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
-import { uploadAudioBlob, uploadToS3 } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, readRecordingBytes, cleanupRecording, onNativeAudioLevel } from '@/lib/tauri';
+import { uploadAudioBlob } from '@/lib/upload';
+import { isTauri, startNativeRecording, stopNativeRecording, onNativeAudioLevel } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 interface RecordButtonProps {
@@ -12,6 +12,12 @@ interface RecordButtonProps {
   deviceId?: string;
   onRecordingComplete?: (audioUrl: string) => void;
   onBlobReady?: (blob: Blob, mimeType: string) => void;
+  /** Called instead of `onBlobReady` when a Tauri System Audio recording
+   * has been stopped and finalized on disk — the file's bytes never enter
+   * the WebView; `path` is streamed straight to S3 from Rust. See
+   * `lib/tauri.ts`'s `uploadRecording` and `usePostRecording`'s
+   * `handleNativeFileReady`. */
+  onNativeFileReady?: (path: string, byteSize: number) => void;
   onError?: (error: string) => void;
   onRecordingStart?: (stream: MediaStream | null) => void;
   onRecordingPause?: () => void;
@@ -38,6 +44,7 @@ export function RecordButton({
   deviceId,
   onRecordingComplete,
   onBlobReady,
+  onNativeFileReady,
   onError,
   onRecordingStart,
   onRecordingPause,
@@ -375,52 +382,46 @@ export function RecordButton({
       checkpointTimerRef.current = null;
     }
 
-    // Native system-audio stop → read bytes via IPC → route through the
-    // standard post-recording flow (onBlobReady → notes → resumeUploadFlow).
-    // This ensures meeting status transitions 'recording' -> 'transcribing'
-    // and the upload uses the server meetingId, not the client temp ID.
+    // Native system-audio stop → hand the finalized WAV's file PATH to the
+    // standard post-recording flow (onNativeFileReady → notes →
+    // resumeUploadFlow), which streams it to S3 directly from Rust
+    // (lib/tauri.ts's uploadRecording) instead of reading it into the
+    // WebView. Reading the whole file through Tauri's IPC bridge used to
+    // crash JavaScriptCore on a real ~35-minute recording — see
+    // mac-app/CLAUDE.md and ADR-024.
     //
-    // On failure (read/cleanup throws), nativeTempPathRef is already cleared
-    // but the WAV file is intentionally preserved on disk — system audio is
-    // irreplaceable; the user can recover it from /tmp/ttobak-mac/ manually
-    // and upload via /record?mode=upload.
+    // The path is only cleared on success. Either way the WAV file itself
+    // is untouched here — cleanup only ever happens after the SPA's own
+    // upload-complete notification succeeds (see usePostRecording's
+    // resumeUploadFlow), never in this component. It lives at
+    // $TMPDIR/ttobak-mac/ (std::env::temp_dir()), recoverable via
+    // /record?mode=upload if something goes wrong before that.
     if (nativeTempPathRef.current) {
       const tempPath = nativeTempPathRef.current;
-      nativeTempPathRef.current = null;
-      // Stop receiving level events first; the Rust side won't emit any more
+      // Stop receiving level events; the Rust side won't emit any more
       // after stop_capture, but unsubscribe defensively.
       nativeUnlistenRef.current?.();
       nativeUnlistenRef.current = null;
       nativeLevelRef.current = 0;
       try {
-        await stopNativeRecording();
-        onRecordingStop?.();
-        setRecordingState('uploading');
-        const buffer = await readRecordingBytes(tempPath);
-        const blob = new Blob([buffer], { type: 'audio/wav' });
-
-        if (onBlobReady) {
-          // Standard flow — parent handles notes step + upload + status update.
-          // Cleanup the temp WAV after the blob is in memory.
-          await cleanupRecording(tempPath).catch(() => {});
-          setRecordingState('idle');
-          setElapsedTime(0);
-          onBlobReady(blob, 'audio/wav');
-        } else {
-          // Fallback (should not happen — record/page.tsx always provides
-          // onBlobReady): one-shot direct upload with whatever meetingId we
-          // have, then call onRecordingComplete (legacy iOS-style path).
-          const fileName = `recording_${Date.now()}.wav`;
-          const file = new File([blob], fileName, { type: 'audio/wav' });
-          const result = await uploadToS3(file, 'audio', undefined, meetingId);
-          await cleanupRecording(tempPath).catch(() => {});
-          onRecordingComplete?.(result.url);
-          setRecordingState('idle');
-          setElapsedTime(0);
+        const resp = await stopNativeRecording();
+        nativeTempPathRef.current = null;
+        if (resp.stop_timed_out) {
+          console.warn(
+            'Native stop timed out — proceeding with the WAV as finalized up to the last periodic flush.',
+          );
         }
-      } catch (err) {
-        onError?.(err instanceof Error ? err.message : 'Native recording upload failed');
+        onRecordingStop?.();
         setRecordingState('idle');
+        setElapsedTime(0);
+        onNativeFileReady?.(tempPath, resp.byte_size);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Native recording stop failed';
+        onError?.(
+          `${message} — 녹음 파일은 보존되어 있습니다: ${tempPath}. /record?mode=upload 에서 직접 업로드할 수 있습니다.`,
+        );
+        setRecordingState('idle');
+        setElapsedTime(0);
       }
       return;
     }
