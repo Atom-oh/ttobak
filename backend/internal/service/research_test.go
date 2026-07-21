@@ -200,8 +200,19 @@ func (m *mockResearchMainRepo) addMember(accountID, userID string) {
 	m.members[accountID+"|"+userID] = &model.AccountMember{AccountID: accountID, UserID: userID, Role: model.RoleAM}
 }
 
+// PutResearchRef mirrors DynamoDB PutItem's overwrite-by-key semantics: the
+// real repo keys this item by PK=ACCOUNT#{accountID}, SK=RESEARCH_REF#{researchID},
+// so re-linking the same pair overwrites the existing item rather than
+// duplicating it.
 func (m *mockResearchMainRepo) PutResearchRef(_ context.Context, ref *model.ResearchRef) error {
-	m.refs[ref.AccountID] = append(m.refs[ref.AccountID], *ref)
+	refs := m.refs[ref.AccountID]
+	for i, r := range refs {
+		if r.ResearchID == ref.ResearchID {
+			refs[i] = *ref
+			return nil
+		}
+	}
+	m.refs[ref.AccountID] = append(refs, *ref)
 	return nil
 }
 
@@ -429,5 +440,42 @@ func TestLinkAccount_MultipleAccountsAllPersist(t *testing.T) {
 
 	if !contains(repo.byID["r1"].AccountIDs, "acc-1") || !contains(repo.byID["r1"].AccountIDs, "acc-2") {
 		t.Fatalf("expected both accounts linked, got %v", repo.byID["r1"].AccountIDs)
+	}
+}
+
+func TestLinkAccount_ReLinkHealsMissingRef(t *testing.T) {
+	// Regression: LinkAccount's "already linked" fast path used to return
+	// immediately without ever touching the ref. If a *prior* LinkAccount
+	// call's canonical AddAccountLink succeeded but its PutResearchRef
+	// failed (logged, not retried), the ref stayed missing forever --
+	// re-calling LinkAccount for the same pair is the only realistic way
+	// to heal it, so that path must attempt the ref write too.
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newResearchServiceWithRepo(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+	mainRepo.addMember("acc-1", "owner-1")
+	if _, err := svc.LinkAccount(context.Background(), "owner-1", "r1", "acc-1"); err != nil {
+		t.Fatalf("initial link failed: %v", err)
+	}
+
+	// Simulate the failure this fix targets: canonical link exists, but the
+	// ref write never landed (or was since lost).
+	mainRepo.refs["acc-1"] = nil
+	if refs, _ := mainRepo.ListResearchRefsForAccount(context.Background(), "acc-1"); len(refs) != 0 {
+		t.Fatalf("setup: expected ref cleared, got %v", refs)
+	}
+
+	if _, err := svc.LinkAccount(context.Background(), "owner-1", "r1", "acc-1"); err != nil {
+		t.Fatalf("re-link failed: %v", err)
+	}
+
+	refs, err := mainRepo.ListResearchRefsForAccount(context.Background(), "acc-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(refs) != 1 || refs[0].ResearchID != "r1" {
+		t.Fatalf("expected the missing ref to be healed by re-linking, got %v", refs)
 	}
 }

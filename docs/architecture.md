@@ -102,7 +102,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 | `TtobakAiStack` | IAM Roles, KMS Key | Storage, Knowledge, Auth, WebSearchGateway |
 | `TtobakKnowledgeStack` | S3 (KB), OpenSearch, Bedrock KB | Storage |
 | `TtobakEdgeAuthStack` | Lambda@Edge (us-east-1) | Auth |
-| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 8 Lambdas, EventBridge | Auth, Storage, AI, Knowledge |
+| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 9 Lambdas (incl. convert-doc container image), EventBridge | Auth, Storage, AI, Knowledge |
 | `TtobakWhisperStack` | ECS Cluster, ECR, ASG (GPU Spot, min=0, max=10) | Storage |
 | `TtobakCrawlerStack` | Step Functions, 4 크롤러 Lambda, 일일 EventBridge | AI, Storage, Knowledge, WebSearchGateway |
 | `TtobakResearchAgentStack` | Bedrock Agent (Deep Research), 도구 Lambda | Storage, Knowledge |
@@ -145,6 +145,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-019: pyannote.audio 기반 음향 화자분리 도입](decisions/ADR-019-acoustic-speaker-diarization-pyannote.md) (승인됨)
 - [ADR-020: 문서 허브 v2 — 개인 문서, 위키링크 인덱스, 슬라이드 업로드](decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) (승인됨)
 - [ADR-021: 크롤러 → KB 인제스천 파이프라인 수리 및 AWS 서비스 자동 발견](decisions/ADR-021-crawler-pipeline-repair-and-service-autodiscovery.md) (승인됨)
+- [ADR-022: LibreOffice 변환 기반 PPTX 미리보기 및 무인증 공개 슬라이드 링크](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md) — ADR-020의 "PPTX는 다운로드만" 결정을 대체 (승인됨)
 
 ### 운영
 
@@ -196,7 +197,7 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 | `TtobakAiStack` | IAM Roles, KMS Key | Storage, Knowledge, Auth, WebSearchGateway |
 | `TtobakKnowledgeStack` | S3 (KB), OpenSearch, Bedrock KB | Storage |
 | `TtobakEdgeAuthStack` | Lambda@Edge (us-east-1) | Auth |
-| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 8 Lambdas, EventBridge | Auth, Storage, AI, Knowledge |
+| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 9 Lambdas (incl. convert-doc container image), EventBridge | Auth, Storage, AI, Knowledge |
 | `TtobakWhisperStack` | ECS Cluster, ECR, ASG (GPU Spot, min=0, max=10) | Storage |
 | `TtobakCrawlerStack` | Step Functions, 4 crawler Lambdas, daily EventBridge | AI, Storage, Knowledge, WebSearchGateway |
 | `TtobakResearchAgentStack` | Bedrock Agent (Deep Research), tool Lambdas | Storage, Knowledge |
@@ -239,6 +240,7 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-019: Adopt pyannote.audio for Acoustic Speaker Diarization](decisions/ADR-019-acoustic-speaker-diarization-pyannote.md) (Accepted)
 - [ADR-020: Document Hub v2 — Personal Documents, Wikilink Index, Slide Uploads](decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) (Accepted)
 - [ADR-021: Repair the Crawler → KB Ingestion Pipeline and Add AWS Service Auto-Discovery](decisions/ADR-021-crawler-pipeline-repair-and-service-autodiscovery.md) (Accepted)
+- [ADR-022: LibreOffice-Based PPTX Preview Conversion and Unauthenticated Public Slide Links](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md) — supersedes ADR-020's "PPTX is download-only" decision (Accepted)
 
 ### Operations
 

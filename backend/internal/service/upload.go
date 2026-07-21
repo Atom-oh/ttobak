@@ -187,11 +187,27 @@ func (s *UploadService) GeneratePresignedDownloadURL(
 	ctx context.Context,
 	s3Key string,
 ) (string, error) {
-	expiresIn := 1 * time.Hour
+	return s.GeneratePresignedDownloadURLWithTTL(ctx, s3Key, 1*time.Hour)
+}
+
+// PublicShareURLTTL bounds how long a presigned URL handed out via the
+// unauthenticated GET /api/public/docs/{token} route stays valid -- much
+// shorter than the 1-hour default used elsewhere, since it's the window an
+// already-issued URL keeps working even after RevokeUserDocPublicShare
+// clears the token (ADR-022).
+const PublicShareURLTTL = 5 * time.Minute
+
+// GeneratePresignedDownloadURLWithTTL is GeneratePresignedDownloadURL with a
+// caller-chosen expiry, for routes that need a tighter revocation window.
+func (s *UploadService) GeneratePresignedDownloadURLWithTTL(
+	ctx context.Context,
+	s3Key string,
+	ttl time.Duration,
+) (string, error) {
 	presignedURL, err := s.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(s3Key),
-	}, s3.WithPresignExpires(expiresIn))
+	}, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
 	}
@@ -239,6 +255,16 @@ func SidecarPDFKey(fileKey string) string {
 // both as "no preview available" rather than an error (the doc is still
 // perfectly usable via its download link either way).
 func (s *UploadService) GeneratePreviewPDFURL(ctx context.Context, fileKey string) (string, error) {
+	return s.generatePreviewPDFURLWithTTL(ctx, fileKey, 1*time.Hour)
+}
+
+// GeneratePreviewPDFURLShortLived is GeneratePreviewPDFURL with publicShareURLTTL,
+// for the unauthenticated public-share route (see PublicShareURLTTL).
+func (s *UploadService) GeneratePreviewPDFURLShortLived(ctx context.Context, fileKey string) (string, error) {
+	return s.generatePreviewPDFURLWithTTL(ctx, fileKey, PublicShareURLTTL)
+}
+
+func (s *UploadService) generatePreviewPDFURLWithTTL(ctx context.Context, fileKey string, ttl time.Duration) (string, error) {
 	sidecarKey := SidecarPDFKey(fileKey)
 	if sidecarKey == "" {
 		return "", nil
@@ -249,7 +275,7 @@ func (s *UploadService) GeneratePreviewPDFURL(ctx context.Context, fileKey strin
 	}); err != nil {
 		return "", nil // not converted yet (or genuinely missing) -- not an error for the caller
 	}
-	return s.GeneratePresignedDownloadURL(ctx, sidecarKey)
+	return s.GeneratePresignedDownloadURLWithTTL(ctx, sidecarKey, ttl)
 }
 
 // inferAttachTypeFromMime determines the attachment type from the MIME type

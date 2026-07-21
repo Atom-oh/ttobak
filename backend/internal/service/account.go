@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -448,6 +449,19 @@ func parseWikilinks(markdown string) []string {
 	return links
 }
 
+// encodeS3CopySourceKey percent-encodes an S3 key for use in a CopyObject
+// CopySource (the x-amz-copy-source header requires URL-encoding), escaping
+// each "/"-delimited segment independently so the separators between
+// segments stay literal "/" rather than becoming "%2F" -- url.PathEscape
+// on the whole key at once would encode those too.
+func encodeS3CopySourceKey(key string) string {
+	segments := strings.Split(key, "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return strings.Join(segments, "/")
+}
+
 func toDocumentDTO(d *model.AccountDocument) model.AccountDocumentDTO {
 	// UpdatedAt is a new field -- documents written before this shipped have
 	// a zero value. `omitempty` doesn't help here (Go's encoding/json never
@@ -859,7 +873,14 @@ func (s *AccountService) ShareUserDocumentToAccount(ctx context.Context, userID,
 		// first share's object; deleting either share later then destroys
 		// the file the other share still references.
 		newKey := fmt.Sprintf("docs/%s/%d_%s_%s", userID, time.Now().UnixMilli(), generateID(), base)
-		copySource := fmt.Sprintf("%s/%s", s.bucketName, doc.FileKey) // matches kb.go's CopyAttachmentToKB convention
+		// x-amz-copy-source (what CopySource becomes) must be URL-encoded --
+		// sanitizeFileName only replaces whitespace/path separators in the
+		// *uploaded* name, so a Korean or otherwise non-ASCII original
+		// fileName (routine for this product) survives into doc.FileKey and
+		// would break an unencoded CopySource. Escaped per path segment (not
+		// the whole key at once) so the "/" separators between segments
+		// stay literal instead of becoming %2F.
+		copySource := fmt.Sprintf("%s/%s", s.bucketName, encodeS3CopySourceKey(doc.FileKey))
 		if _, err := s.s3.CopyObject(ctx, &s3.CopyObjectInput{
 			Bucket:     aws.String(s.bucketName),
 			Key:        aws.String(newKey),

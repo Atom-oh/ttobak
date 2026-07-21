@@ -558,6 +558,14 @@ func (s *ResearchService) LinkAccount(ctx context.Context, userID, researchID, a
 	}
 
 	if contains(research.AccountIDs, accountID) {
+		// Already linked in the canonical record, but re-attempt the ref
+		// write anyway: PutResearchRef is a Put (idempotent overwrite, not
+		// a conditional create), and a *previous* LinkAccount call could
+		// have added accountID to accountIds successfully while its own
+		// ref write failed (logged, never retried). Before this fix, the
+		// only place that could heal a missing ref was here -- but the old
+		// unconditional early return meant that path could never run.
+		s.putResearchRefBestEffort(ctx, userID, researchID, accountID, research.Topic)
 		return research.AccountIDs, nil // already linked
 	}
 
@@ -569,20 +577,30 @@ func (s *ResearchService) LinkAccount(ctx context.Context, userID, researchID, a
 		return nil, fmt.Errorf("failed to link account: %w", err)
 	}
 
+	s.putResearchRefBestEffort(ctx, userID, researchID, accountID, research.Topic)
+
+	return append(append([]string{}, research.AccountIDs...), accountID), nil
+}
+
+// putResearchRefBestEffort writes (or re-writes) the RESEARCHREF# reverse
+// index item. Failures are logged, not returned -- LinkAccount's own
+// fail-closed read paths (ListAccountResearch, qa/handler.py's
+// _account_research) re-verify accountIds membership before trusting a ref,
+// so a failed write here just means a slightly stale/missing entry until
+// the next LinkAccount call for the same pair heals it, not a security gap.
+func (s *ResearchService) putResearchRefBestEffort(ctx context.Context, userID, researchID, accountID, topic string) {
 	if err := s.mainRepo.PutResearchRef(ctx, &model.ResearchRef{
 		PK:          model.PrefixAccount + accountID,
 		SK:          model.PrefixResearchRef + researchID,
 		AccountID:   accountID,
 		ResearchID:  researchID,
 		OwnerUserID: userID,
-		Topic:       research.Topic,
+		Topic:       topic,
 		CreatedAt:   time.Now().UTC(),
 		EntityType:  model.EntityTypeResearchRef,
 	}); err != nil {
 		log.Printf("warn: failed to write research ref for account %s: %v", accountID, err)
 	}
-
-	return append(append([]string{}, research.AccountIDs...), accountID), nil
 }
 
 // UnlinkAccount removes a research↔account link (owner only).

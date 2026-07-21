@@ -1334,6 +1334,59 @@ func TestShareUserDocumentToAccount_ConcurrentSharesDoNotCollideOnKey(t *testing
 	}
 }
 
+func TestEncodeS3CopySourceKey(t *testing.T) {
+	// x-amz-copy-source must be URL-encoded, but "/" path separators
+	// between segments must stay literal, not become "%2F".
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain ascii unaffected", "docs/user-1/deck.pdf", "docs/user-1/deck.pdf"},
+		{"korean filename encoded", "docs/user-1/발표자료.pdf", "docs/user-1/%EB%B0%9C%ED%91%9C%EC%9E%90%EB%A3%8C.pdf"},
+		{"hash and question mark encoded", "docs/user-1/a#b?c.pdf", "docs/user-1/a%23b%3Fc.pdf"},
+		{"space encoded", "docs/user-1/my deck.pdf", "docs/user-1/my%20deck.pdf"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := encodeS3CopySourceKey(tc.in); got != tc.want {
+				t.Errorf("encodeS3CopySourceKey(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestShareUserDocumentToAccount_KoreanFileNameCopySourceEncoded(t *testing.T) {
+	// Regression: an unencoded CopySource containing the Korean file names
+	// routine for this product would be malformed per the x-amz-copy-source
+	// contract.
+	repo := newMockAccountRepo()
+	s3mock := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: s3mock, bucketName: "test-bucket"}
+
+	acc, err := svc.CreateAccount(context.Background(), "user-1", "u1@example.com", &model.CreateAccountRequest{Name: "A"})
+	if err != nil {
+		t.Fatalf("setup: create account failed: %v", err)
+	}
+
+	doc := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "doc-1",
+		DocID: "doc-1", Title: "발표자료", DocType: "slide",
+		FileKey: "docs/user-1/발표자료.pdf", FileName: "발표자료.pdf",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[doc.PK] = append(repo.documents[doc.PK], doc)
+
+	if _, err := svc.ShareUserDocumentToAccount(context.Background(), "user-1", "doc-1", acc.AccountID); err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+
+	want := "test-bucket/docs/user-1/%EB%B0%9C%ED%91%9C%EC%9E%90%EB%A3%8C.pdf"
+	if got := *s3mock.copied[0].CopySource; got != want {
+		t.Errorf("expected encoded CopySource %q, got %q", want, got)
+	}
+}
+
 func TestUserDocPublicShare_LifecycleAndScope(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}

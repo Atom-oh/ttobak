@@ -45,7 +45,11 @@ func init() {
 	s3Client = s3.NewFromConfig(cfg)
 	bucket = os.Getenv("BUCKET_NAME")
 	if bucket == "" {
-		bucket = "ttobak-assets"
+		// Fail fast rather than silently targeting a placeholder bucket
+		// name that doesn't exist in this account -- a wrong-but-non-empty
+		// default here would make every conversion fail with an opaque S3
+		// error instead of a clear one at cold start.
+		log.Fatal("BUCKET_NAME environment variable is required")
 	}
 	// LibreOffice needs a writable HOME for its profile dir; /tmp is the
 	// only writable filesystem in the Lambda execution environment.
@@ -97,6 +101,14 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	defer cancel()
 	cmd := exec.CommandContext(convertCtx, "soffice",
 		"--headless", "--norestore", "--convert-to", "pdf", "--outdir", outDir, inPath)
+	// soffice parses an untrusted, attacker-controllable PPTX/PPT and can
+	// fetch remote resources a document references -- a parser
+	// vulnerability or SSRF-style resource fetch could otherwise read this
+	// Lambda's temporary AWS_* credential env vars (inherited by default
+	// from exec.Command's nil Env) and exfiltrate them, extending well
+	// beyond convert-doc's own IAM scope. Strip them; soffice itself needs
+	// no AWS access.
+	cmd.Env = sanitizedSofficeEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("soffice convert failed: %w (output: %s)", err, string(out))
@@ -109,6 +121,23 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	log.Printf("converted %s -> %s", key, sidecarKey)
 	return nil
+}
+
+// sanitizedSofficeEnv returns the current process environment with every
+// AWS_* variable removed. Lambda injects temporary credentials
+// (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN, plus
+// AWS_CONTAINER_CREDENTIALS_* etc.) as env vars for the Go SDK to pick up
+// automatically -- soffice has no legitimate need for any of them.
+func sanitizedSofficeEnv() []string {
+	env := os.Environ()
+	filtered := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "AWS_") {
+			continue
+		}
+		filtered = append(filtered, kv)
+	}
+	return filtered
 }
 
 func downloadObject(ctx context.Context, key, destPath string) error {

@@ -9,13 +9,19 @@ TTOBAK (또박) is a Korean AI meeting assistant: record audio → real-time STT
 ## Build Commands
 
 ```bash
-# Go Lambda binaries (ARM64 cross-compile, all 5 functions)
+# Go Lambda binaries (ARM64 cross-compile, all 5 zip-deployed functions)
 cd backend && for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
   GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o $dir/bootstrap ./$dir
 done
 
 # Build a single Lambda (e.g. after editing only the api handler)
 cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/api/bootstrap ./cmd/api
+
+# 6th Go Lambda, deployed as a container image instead of a zip (LibreOffice +
+# fonts have no equivalent of the ARM64 zip build above) -- CDK's
+# DockerImageCode.fromImageAsset builds this automatically on `cdk deploy`,
+# this is only for a local build/smoke-test:
+docker build --platform linux/arm64 -f backend/cmd/convert-doc/Dockerfile -t ttobak-convert-doc backend
 
 # Frontend
 cd frontend && npm run build     # static export to out/
@@ -72,7 +78,10 @@ Microphone → AWS Transcribe Streaming (via @aws-sdk/client-transcribe-streamin
 
 ### Backend (Go)
 
-5 Lambda entry points in `backend/cmd/{api,transcribe,summarize,process-image,kb}/main.go`. `api` uses chi router + `aws-lambda-go-api-proxy` (payload v1.0). Q&A (`/api/qa/*`) is a separate Python Lambda (`backend/python/qa/`). Shared code in `backend/internal/` (handler, service, repository, model, middleware). Service layer uses sentinel errors (`ErrForbidden`, `ErrNotFound`) for typed error handling.
+5 Lambda entry points in `backend/cmd/{api,transcribe,summarize,process-image,kb}/main.go`, plus a 6th (`cmd/convert-doc`) deployed as a container image (LibreOffice PPTX→PDF conversion, triggered by an EventBridge S3 rule on the `docs/` prefix — see "Document sharing & public links" below). `api` uses chi router + `aws-lambda-go-api-proxy` (payload v1.0). Q&A (`/api/qa/*`) is a separate Python Lambda (`backend/python/qa/`). Shared code in `backend/internal/` (handler, service, repository, model, middleware). Service layer uses sentinel errors (`ErrForbidden`, `ErrNotFound`) for typed error handling.
+
+### Document sharing & public links
+A personal document (`backend/internal/handler/document.go`) can be shared into an account's shared document list (`ShareUserDocumentToAccount`, `internal/service/account.go`) — this **copies** the S3 object to a fresh key (`docs/{userID}/{millis}_{randomID}_{name}`) rather than referencing the original, so deleting/replacing the source document never breaks the shared copy. A slide (PPTX/PPT) upload under `docs/` also triggers the `convert-doc` container Lambda via EventBridge, which runs headless LibreOffice to produce a `docs-pdf/` PDF sidecar for in-browser preview (`UploadService.GeneratePreviewPDFURL`); `convert-doc`'s IAM role is scoped to `docs/*` read + `docs-pdf/*` write only (not the bucket-wide `grantReadWrite` other upload categories share), and its LibreOffice subprocess has `AWS_*` env vars stripped before exec since it parses untrusted, attacker-controllable file content. A user can additionally mint an **unauthenticated** public link for a slide (`CreateUserDocPublicShare`) served at `GET /api/public/docs/{token}` — see the Security Policy exception below.
 
 ### DynamoDB & S3
 Table `ttobak-main`, single-table design. Key schema and GSIs in `backend/internal/model/meeting.go`. S3 keys: `{audio|images|files}/{userId}/{meetingId}/...` (upload categories `audio`/`image`/`file` in `service/upload.go`); the STT pipeline writes a *separate* `transcripts/{meetingId}.json` / `transcripts/{meetingId}_part_{NNN}.json` prefix with no `{userId}` segment at all (`cmd/transcribe/main.go`, `cmd/summarize/main.go`); account/personal document uploads (slides) use `docs/{userId}/{timestamp}_{fileName}` (the `{timestamp}_` prefix comes from `sanitizeFileName`, shared by every upload category) — no meetingId, since a document isn't tied to a meeting. All upload categories share one bucket-wide `bucket.grantReadWrite(apiRole)` IAM grant (`infra/lib/ai-stack.ts`) and origin-scoped (not prefix-scoped) CORS, so adding `docs/` required no S3/IAM change — but a new *static* route (like `/docs`) does need the CloudFront SPA router CloudFront Function (`infra/lib/frontend-stack.ts`'s `knownPages` + dynamic-segment rewrites) updated, since that function only recognizes routes it's told about.
@@ -131,6 +140,7 @@ The news crawler Lambda (`ttobak-crawler-news`) gets `WEB_SEARCH_GATEWAY_URL` / 
 - **API Gateway** is accessed only via CloudFront origin, not directly from the internet.
 - **No public Load Balancers** — if an LB is needed, it must be internal and routed through CloudFront or VPC-only.
 - When adding any new resource, verify it has no public endpoint. If a public endpoint is required, it must be behind CloudFront with Lambda@Edge auth.
+- **One deliberate exception**: `GET /api/public/docs/{token}` (public slide-share links, ADR-022) is registered without the Lambda@Edge JWT check and without the API Gateway JWT authorizer — by design, since the whole point is an unauthenticated caller with a valid share token. It is NOT a gap in the rule above: CloudFront still fronts it (`frontend-stack.ts`'s `/api/public/*` behavior, GET/HEAD only, no caching), and the Go handler (`DocumentHandler.PublicGetDoc`) does its own token lookup + `PublicShareToken != token` re-check instead of trusting caller identity. Any future route added under `/api/public/` inherits this same unauthenticated treatment — keep that prefix to exactly this one handler, and treat a new unauthenticated route anywhere else as the CRITICAL violation this rule exists to prevent.
 
 ## Important Gotchas
 

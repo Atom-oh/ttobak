@@ -193,9 +193,12 @@ func (h *DocumentHandler) PublicGetDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Short-lived (publicShareURLTTL, not the usual 1-hour default): this URL
+	// leaks to an unauthenticated caller, so a revoke should close the window
+	// quickly rather than leaving it valid for an hour (ADR-022).
 	targetKey := doc.FileKey
 	if sidecarKey := service.SidecarPDFKey(doc.FileKey); sidecarKey != "" {
-		previewURL, err := h.uploadService.GeneratePreviewPDFURL(ctx, doc.FileKey)
+		previewURL, err := h.uploadService.GeneratePreviewPDFURLShortLived(ctx, doc.FileKey)
 		if err != nil || previewURL == "" {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "PDF로 변환 중입니다. 잠시 후 다시 시도해 주세요")
 			return
@@ -205,7 +208,7 @@ func (h *DocumentHandler) PublicGetDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, targetKey)
+	url, err := h.uploadService.GeneratePresignedDownloadURLWithTTL(ctx, targetKey, service.PublicShareURLTTL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
 		return
