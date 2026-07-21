@@ -151,7 +151,7 @@ func (h *DocumentHandler) CreatePublicShare(w http.ResponseWriter, r *http.Reque
 	}
 	token, err := h.accountService.CreateUserDocPublicShare(ctx, userID, docID)
 	if err != nil {
-		writeDocumentServiceError(w, err, "슬라이드 문서만 공개 공유할 수 있습니다")
+		writeDocumentServiceError(w, err, "파일이 첨부된 문서만 공개 공유할 수 있습니다")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})

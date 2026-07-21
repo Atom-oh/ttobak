@@ -239,10 +239,15 @@ TtobakApp (bin/ttobak.ts)
   key) — tracked as a residual risk in ADR-022, not yet closed.
 - **Network**: deployed into `PRIVATE_ISOLATED` subnets of the pre-existing VPC
   `vpc-04e77172c67f19814` (same VPC `WhisperStack` reuses via `ec2.Vpc.fromLookup` —
-  no new VPC/NAT cost), with a dedicated S3 gateway VPC endpoint (`ConvertDocS3Endpoint`)
-  scoped to just those subnets' route tables. No internet/NAT route at all; S3 is the
-  only reachable network destination. Closes the network half of the LibreOffice RCE
-  surface (SSRF via linked/remote document content, network exfiltration) — see
+  no new VPC/NAT cost). No internet/NAT route at all; S3 access for the sidecar
+  upload goes out through this VPC's **pre-existing** S3 gateway endpoint
+  (`vpce-04a82e15d312f39b8`, already attached to every route table here) —
+  do NOT add a second one (`vpc.addGatewayEndpoint`) for this service; CDK's first
+  deploy attempt did and CloudFormation rejected it (`AlreadyExists` on the S3
+  prefix-list route), rolling back the whole stack update. No internet/NAT route
+  at all otherwise; S3 is the only reachable network destination. Closes the
+  network half of the LibreOffice RCE surface (SSRF via linked/remote document
+  content, network exfiltration) — see
   ADR-022 Consequences for what this does and doesn't close.
 
 ### EventBridge Rules

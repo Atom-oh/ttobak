@@ -765,6 +765,38 @@ type ListMeetingsResult struct {
 	NextCursor *string
 }
 
+// paginateMeetingsPage decides ListMeetings' final page and resume cursor
+// for its GSI1 filter-loop. DynamoDB's FilterExpression runs after Limit is
+// applied server-side, so that loop can overshoot Limit (concatenating
+// multiple Query pages) before its own stop condition fires.
+//   - Overshot: truncate to exactly limit and resume from the key of the
+//     last KEPT item -- not wherever the underlying query's
+//     LastEvaluatedKey landed, which may be well past the cutoff. Every
+//     Meeting here already carries PK/SK/GSI1PK/GSI1SK (see the
+//     projection), so this is a real, resumable DynamoDB key.
+//   - Otherwise (filled exactly, or under-filled because the loop's own
+//     maxPages bound was hit first): resume from lastEvaluatedKey as-is.
+//     nil means the GSI1 partition is genuinely exhausted (the loop's own
+//     break condition); non-nil means more items exist further down
+//     regardless of how many landed on this page. Forcing it to nil here
+//     was a real bug -- a page that happened to fill exactly Limit lost
+//     its cursor and could never see anything beyond it again, which is
+//     the common case for a user with few/no account-membership rows to
+//     filter out (i.e. most users' very first page).
+func paginateMeetingsPage(meetings []model.Meeting, limit int32, lastEvaluatedKey map[string]types.AttributeValue) ([]model.Meeting, map[string]types.AttributeValue) {
+	if len(meetings) > int(limit) {
+		last := meetings[limit-1]
+		resumeKey := map[string]types.AttributeValue{
+			"PK":     &types.AttributeValueMemberS{Value: last.PK},
+			"SK":     &types.AttributeValueMemberS{Value: last.SK},
+			"GSI1PK": &types.AttributeValueMemberS{Value: last.GSI1PK},
+			"GSI1SK": &types.AttributeValueMemberS{Value: last.GSI1SK},
+		}
+		return meetings[:limit], resumeKey
+	}
+	return meetings, lastEvaluatedKey
+}
+
 // ListMeetings lists meetings for a user with pagination.
 // Uses ProjectionExpression to exclude transcript fields (transcriptA/B, transcriptSegments)
 // and other large fields (actionItems, notes) to stay within DynamoDB's 1MB per-query limit.
@@ -856,25 +888,7 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 			}
 		}
 
-		result.Meetings = meetings
-		if len(result.Meetings) > int(params.Limit) {
-			// Truncate to exactly Limit and resume from the key of the last
-			// item ON this page -- not wherever the underlying query's
-			// LastEvaluatedKey landed, which may be well past the cutoff
-			// once the filter-loop above overshoots. The projection above
-			// already carries PK/SK/GSI1PK/GSI1SK on every Meeting, so this
-			// is a real, resumable DynamoDB key.
-			last := result.Meetings[params.Limit-1]
-			exclusiveStartKey = map[string]types.AttributeValue{
-				"PK":     &types.AttributeValueMemberS{Value: last.PK},
-				"SK":     &types.AttributeValueMemberS{Value: last.SK},
-				"GSI1PK": &types.AttributeValueMemberS{Value: last.GSI1PK},
-				"GSI1SK": &types.AttributeValueMemberS{Value: last.GSI1SK},
-			}
-			result.Meetings = result.Meetings[:params.Limit]
-		} else {
-			exclusiveStartKey = nil
-		}
+		result.Meetings, exclusiveStartKey = paginateMeetingsPage(meetings, params.Limit, exclusiveStartKey)
 
 		if exclusiveStartKey != nil {
 			cursor := encodeCursor(exclusiveStartKey)
