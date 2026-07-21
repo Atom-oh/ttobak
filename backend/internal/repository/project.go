@@ -574,3 +574,16 @@ func (r *DynamoDBRepository) ListProjectResearchRefsForProject(ctx context.Conte
 	sort.Slice(refs, func(i, j int) bool { return refs[i].CreatedAt.After(refs[j].CreatedAt) })
 	return refs, nil
 }
+
+// GetResearchByID exposes the canonical research read needed by ProjectService.
+// It delegates to the existing research repository implementation so key and
+// unmarshalling behavior stay identical.
+func (r *DynamoDBRepository) GetResearchByID(ctx context.Context, researchID string) (*model.Research, error) {
+	return NewResearchRepository(r.client, r.tableName).GetResearch(ctx, researchID)
+}
+
+// BatchGetResearchByIDs exposes the existing batched research read to
+// ProjectService without introducing a second repository dependency.
+func (r *DynamoDBRepository) BatchGetResearchByIDs(ctx context.Context, ids []string) ([]model.Research, error) {
+	return NewResearchRepository(r.client, r.tableName).BatchGetResearch(ctx, ids)
+}
