@@ -287,3 +287,68 @@ func TestListInsights_EmptyResult(t *testing.T) {
 		t.Errorf("expected 0 documents, got %d", len(resp.Documents))
 	}
 }
+
+// TestListInsights_SortsBeforePaginating_CrossSource is a regression test
+// for the bug reported as "new news isn't showing up" in production:
+// scanAll used to slice the DynamoDB Scan's arbitrary result order into a
+// page BEFORE sorting by crawledAt, so a genuinely new document could land
+// outside page 1 purely by chance and never surface. allDocuments here is
+// seeded in an order that does NOT match recency (oldest-first, reversed
+// from crawledAt descending) to reproduce that arbitrary Scan ordering.
+func TestListInsights_SortsBeforePaginating_CrossSource(t *testing.T) {
+	scanCache.clear()
+	repo := newMockCrawlerRepo()
+	svc := &InsightsService{repo: repo}
+	ctx := context.Background()
+
+	// Seeded oldest -> newest (the opposite of what "newest" sort should
+	// return), simulating an unordered Scan result.
+	repo.allDocuments = []model.CrawledDocument{
+		{DocHash: "old1", Type: "news", Title: "Old Article 1", CrawledAt: 100},
+		{DocHash: "old2", Type: "news", Title: "Old Article 2", CrawledAt: 200},
+		{DocHash: "old3", Type: "news", Title: "Old Article 3", CrawledAt: 300},
+		{DocHash: "new1", Type: "news", Title: "Brand New Article", CrawledAt: 999},
+	}
+
+	resp, err := svc.ListInsights(ctx, "news", "", "", nil, "", 1, 2)
+	if err != nil {
+		t.Fatalf("ListInsights returned error: %v", err)
+	}
+	if len(resp.Documents) != 2 {
+		t.Fatalf("expected 2 documents on page 1, got %d", len(resp.Documents))
+	}
+	if resp.Documents[0].DocHash != "new1" {
+		t.Errorf("expected the newest document (new1) first on page 1, got %q -- pagination is truncating before sorting", resp.Documents[0].DocHash)
+	}
+	if resp.Documents[1].DocHash != "old3" {
+		t.Errorf("expected old3 second (next-newest by crawledAt), got %q", resp.Documents[1].DocHash)
+	}
+}
+
+// TestListInsights_SortsBeforePaginating_WithSource is the same regression,
+// scoped to a single source (listBySource path, which queries by SK/docHash
+// order -- also unrelated to crawledAt).
+func TestListInsights_SortsBeforePaginating_WithSource(t *testing.T) {
+	scanCache.clear()
+	repo := newMockCrawlerRepo()
+	svc := &InsightsService{repo: repo}
+	ctx := context.Background()
+
+	repo.documents["hanabank"] = []model.CrawledDocument{
+		{DocHash: "old1", Type: "news", Title: "Old Article 1", Source: "hanabank", CrawledAt: 100},
+		{DocHash: "old2", Type: "news", Title: "Old Article 2", Source: "hanabank", CrawledAt: 200},
+		{DocHash: "old3", Type: "news", Title: "Old Article 3", Source: "hanabank", CrawledAt: 300},
+		{DocHash: "new1", Type: "news", Title: "Brand New Article", Source: "hanabank", CrawledAt: 999},
+	}
+
+	resp, err := svc.ListInsights(ctx, "news", "hanabank", "", nil, "", 1, 2)
+	if err != nil {
+		t.Fatalf("ListInsights returned error: %v", err)
+	}
+	if len(resp.Documents) != 2 {
+		t.Fatalf("expected 2 documents on page 1, got %d", len(resp.Documents))
+	}
+	if resp.Documents[0].DocHash != "new1" {
+		t.Errorf("expected the newest document (new1) first on page 1, got %q -- pagination is truncating before sorting", resp.Documents[0].DocHash)
+	}
+}
