@@ -283,6 +283,27 @@ func (r *ResearchRepository) RemoveAccountLink(ctx context.Context, researchId, 
 	return nil
 }
 
+// mapTransactionCanceledError inspects a TransactWriteItems cancellation to
+// determine whether item 0 -- the CONFIG Update in both
+// LinkAccountTransactional and UnlinkAccountTransactional -- is what
+// actually failed its condition. TransactionCanceledException also fires
+// for TransactionConflict (a concurrent transaction touching the same
+// item, exactly what racing Link/Unlink calls for the same research
+// produce) and throttling, neither of which mean the research doesn't
+// exist. Mapping every cancellation to ErrConditionFailed would turn a
+// transient, retryable conflict into a wrong "research not found" 404 for
+// a caller who did nothing wrong.
+func mapTransactionCanceledError(err error, researchId, verb string) error {
+	var tce *types.TransactionCanceledException
+	if errors.As(err, &tce) {
+		if len(tce.CancellationReasons) > 0 && aws.ToString(tce.CancellationReasons[0].Code) == "ConditionalCheckFailed" {
+			return fmt.Errorf("%w: research %s not found", ErrConditionFailed, researchId)
+		}
+		return fmt.Errorf("failed to %s account: transaction canceled, retry: %w", verb, err)
+	}
+	return fmt.Errorf("failed to %s account transactionally: %w", verb, err)
+}
+
 // LinkAccountTransactional atomically ADDs accountID to research.accountIds
 // AND puts the RESEARCHREF# reverse-index item in one TransactWriteItems
 // call. Doing these as two separate requests (the original AddAccountLink +
@@ -331,11 +352,7 @@ func (r *ResearchRepository) LinkAccountTransactional(ctx context.Context, resea
 		},
 	})
 	if err != nil {
-		var tce *types.TransactionCanceledException
-		if errors.As(err, &tce) {
-			return fmt.Errorf("%w: research %s not found", ErrConditionFailed, researchId)
-		}
-		return fmt.Errorf("failed to link account transactionally: %w", err)
+		return mapTransactionCanceledError(err, researchId, "link")
 	}
 	return nil
 }
@@ -378,11 +395,7 @@ func (r *ResearchRepository) UnlinkAccountTransactional(ctx context.Context, res
 		},
 	})
 	if err != nil {
-		var tce *types.TransactionCanceledException
-		if errors.As(err, &tce) {
-			return fmt.Errorf("%w: research %s not found", ErrConditionFailed, researchId)
-		}
-		return fmt.Errorf("failed to unlink account transactionally: %w", err)
+		return mapTransactionCanceledError(err, researchId, "unlink")
 	}
 	return nil
 }

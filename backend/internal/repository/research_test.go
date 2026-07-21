@@ -1,8 +1,10 @@
 package repository
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
@@ -41,6 +43,70 @@ func TestAccountLinkExpression_EmitsStringSetOperand(t *testing.T) {
 				if len(ss.Value) != 1 || ss.Value[0] != "acc-1" {
 					t.Fatalf("expected SS value [acc-1], got %v", ss.Value)
 				}
+			}
+		})
+	}
+}
+
+// TestMapTransactionCanceledError verifies, without any AWS network call,
+// that mapTransactionCanceledError only maps a TransactWriteItems
+// cancellation to ErrConditionFailed ("research not found") when item 0
+// (the CONFIG Update) specifically failed its condition -- NOT for every
+// TransactionCanceledException. A round-10 PR review caught this as a real
+// bug: TransactionCanceledException also fires for TransactionConflict (a
+// concurrent transaction on the same item -- exactly what racing
+// LinkAccount/UnlinkAccount calls for the same research produce) and
+// throttling, neither of which mean the research doesn't exist. The old
+// unconditional mapping turned a transient, retryable conflict into a
+// wrong 404 for a caller who did nothing wrong.
+func TestMapTransactionCanceledError(t *testing.T) {
+	tests := []struct {
+		name          string
+		err           error
+		wantCondition bool // true: expect ErrConditionFailed; false: expect the original error propagated (retryable)
+	}{
+		{
+			name: "item 0 ConditionalCheckFailed -- research genuinely gone",
+			err: &types.TransactionCanceledException{
+				CancellationReasons: []types.CancellationReason{
+					{Code: aws.String("ConditionalCheckFailed")},
+					{Code: aws.String("None")},
+				},
+			},
+			wantCondition: true,
+		},
+		{
+			name: "item 0 TransactionConflict -- concurrent Link/Unlink, must NOT be reported as not-found",
+			err: &types.TransactionCanceledException{
+				CancellationReasons: []types.CancellationReason{
+					{Code: aws.String("TransactionConflict")},
+					{Code: aws.String("None")},
+				},
+			},
+			wantCondition: false,
+		},
+		{
+			name: "item 1 failed (the ref write), item 0 None -- research exists, must NOT be reported as not-found",
+			err: &types.TransactionCanceledException{
+				CancellationReasons: []types.CancellationReason{
+					{Code: aws.String("None")},
+					{Code: aws.String("ConditionalCheckFailed")},
+				},
+			},
+			wantCondition: false,
+		},
+		{
+			name:          "not a TransactionCanceledException at all",
+			err:           errors.New("some other dynamodb error"),
+			wantCondition: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mapTransactionCanceledError(tc.err, "r1", "link")
+			isCondition := errors.Is(got, ErrConditionFailed)
+			if isCondition != tc.wantCondition {
+				t.Fatalf("mapTransactionCanceledError(%v) -> %v; errors.Is(ErrConditionFailed)=%v, want %v", tc.err, got, isCondition, tc.wantCondition)
 			}
 		})
 	}

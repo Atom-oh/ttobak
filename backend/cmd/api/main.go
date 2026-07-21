@@ -124,7 +124,8 @@ func init() {
 	// Public: allowed domains (no auth required)
 	r.Get("/api/auth/allowed-domains", settingsHandler.GetAllowedDomains)
 
-	// Public: slide document share links (no auth required -- see
+	// Public: file-backed personal document share links -- any doc with a
+	// FileKey, not just slides (no auth required -- see
 	// DocumentHandler.PublicGetDoc's doc comment). Everything else document-
 	// related lives inside the Auth group below; nothing added under
 	// /api/public/ is ever authenticated, so keep this route surface minimal.
