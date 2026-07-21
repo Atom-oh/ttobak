@@ -52,6 +52,35 @@ func (m *mockResearchRepo) UpdateResearchFields(_ context.Context, id string, fi
 	return m.applyFields(id, fields)
 }
 
+func (m *mockResearchRepo) AddAccountLink(_ context.Context, id, accountID string) error {
+	r, ok := m.byID[id]
+	if !ok {
+		return errors.New("not found")
+	}
+	for _, existing := range r.AccountIDs {
+		if existing == accountID {
+			return nil // ADD on a set already containing the value is a no-op
+		}
+	}
+	r.AccountIDs = append(r.AccountIDs, accountID)
+	return nil
+}
+
+func (m *mockResearchRepo) RemoveAccountLink(_ context.Context, id, accountID string) error {
+	r, ok := m.byID[id]
+	if !ok {
+		return errors.New("not found")
+	}
+	remaining := make([]string, 0, len(r.AccountIDs))
+	for _, existing := range r.AccountIDs {
+		if existing != accountID {
+			remaining = append(remaining, existing)
+		}
+	}
+	r.AccountIDs = remaining
+	return nil
+}
+
 func (m *mockResearchRepo) applyFields(id string, fields map[string]interface{}) error {
 	r, ok := m.byID[id]
 	if !ok {
@@ -344,5 +373,61 @@ func TestListAccountResearch_MemberOnlyExcludesTrashed(t *testing.T) {
 	_, err = svc.ListAccountResearch(context.Background(), "stranger", "acc-1")
 	if !errors.Is(err, ErrForbidden) {
 		t.Fatalf("expected ErrForbidden for non-member, got %v", err)
+	}
+}
+
+func TestListAccountResearch_StaleRefExcludedAfterUnlinkFailure(t *testing.T) {
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newResearchServiceWithRepo(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+	mainRepo.addMember("acc-1", "owner-1")
+	mainRepo.addMember("acc-1", "member-2")
+	if _, err := svc.LinkAccount(context.Background(), "owner-1", "r1", "acc-1"); err != nil {
+		t.Fatalf("link failed: %v", err)
+	}
+
+	// Simulate exactly the failure mode LinkAccount/UnlinkAccount's
+	// best-effort ref write/delete leaves behind: the canonical accountIds
+	// no longer lists acc-1 (RemoveAccountLink succeeded), but the
+	// RESEARCHREF# index item was never cleaned up (DeleteResearchRef
+	// failed and was only logged, not surfaced as an error). Before this
+	// fix, ListAccountResearch trusted the stale ref alone and kept
+	// exposing the research to the account.
+	repo.byID["r1"].AccountIDs = nil
+
+	items, err := svc.ListAccountResearch(context.Background(), "member-2", "acc-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("expected stale ref to be excluded (fail-closed), got %v", items)
+	}
+}
+
+func TestLinkAccount_MultipleAccountsAllPersist(t *testing.T) {
+	// Regression: the old LinkAccount read research.AccountIDs, appended
+	// one accountID, and SET the whole list back. AddAccountLink instead
+	// does an atomic set ADD, so linking a second account can never lose
+	// the first one's link (the actual race two concurrent LinkAccount
+	// calls for different accounts on the same research could hit).
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newResearchServiceWithRepo(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+	mainRepo.addMember("acc-1", "owner-1")
+	mainRepo.addMember("acc-2", "owner-1")
+
+	if _, err := svc.LinkAccount(context.Background(), "owner-1", "r1", "acc-1"); err != nil {
+		t.Fatalf("link acc-1 failed: %v", err)
+	}
+	if _, err := svc.LinkAccount(context.Background(), "owner-1", "r1", "acc-2"); err != nil {
+		t.Fatalf("link acc-2 failed: %v", err)
+	}
+
+	if !contains(repo.byID["r1"].AccountIDs, "acc-1") || !contains(repo.byID["r1"].AccountIDs, "acc-2") {
+		t.Fatalf("expected both accounts linked, got %v", repo.byID["r1"].AccountIDs)
 	}
 }

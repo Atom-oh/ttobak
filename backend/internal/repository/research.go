@@ -208,6 +208,62 @@ func (r *ResearchRepository) UpdateResearchFields(ctx context.Context, researchI
 	return nil
 }
 
+// AddAccountLink atomically adds accountID to research.accountIds (a
+// DynamoDB String Set). ADD on a set already containing the value is a
+// no-op, so this is idempotent and race-free -- unlike a read-modify-write
+// on a List, two concurrent LinkAccount calls for different accounts can
+// never lose one side's change.
+func (r *ResearchRepository) AddAccountLink(ctx context.Context, researchId, accountID string) error {
+	expr, err := expression.NewBuilder().WithUpdate(
+		expression.Add(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}})),
+	).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build update expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchId},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		},
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to add account link: %w", err)
+	}
+	return nil
+}
+
+// RemoveAccountLink atomically removes accountID from research.accountIds.
+// Same idempotency/race-freedom as AddAccountLink -- DELETE on a set not
+// containing the value is a no-op rather than an error.
+func (r *ResearchRepository) RemoveAccountLink(ctx context.Context, researchId, accountID string) error {
+	expr, err := expression.NewBuilder().WithUpdate(
+		expression.Delete(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}})),
+	).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build update expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchId},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		},
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove account link: %w", err)
+	}
+	return nil
+}
+
 // ListUserResearch lists all research tasks for a user
 // Query PK=USER#{userId}, SK begins_with RESEARCH#, then fetch each full record
 func (r *ResearchRepository) ListUserResearch(ctx context.Context, userId string) ([]model.Research, error) {

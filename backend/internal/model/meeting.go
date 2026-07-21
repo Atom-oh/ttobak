@@ -176,7 +176,14 @@ type Research struct {
 	// mirroring Meeting.AccountID but pluralized since one research report can
 	// be relevant to several customer accounts. See account.go's ResearchRef
 	// for the reverse-lookup item stored in each account's partition.
-	AccountIDs []string `dynamodbav:"accountIds,omitempty" json:"accountIds,omitempty"`
+	//
+	// Stored as a DynamoDB String Set (stringset tag), not a List -- this
+	// lets LinkAccount/UnlinkAccount use atomic ADD/DELETE update
+	// expressions instead of a read-modify-write on the whole list, which
+	// would otherwise lose one side's change when two accounts are
+	// (un)linked concurrently (ADD/DELETE on a set has no such race, and is
+	// naturally idempotent for a value already present/absent).
+	AccountIDs []string `dynamodbav:"accountIds,omitempty,stringset" json:"accountIds,omitempty"`
 }
 
 const MaxAudioParts = 10

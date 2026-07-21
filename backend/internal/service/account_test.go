@@ -1292,6 +1292,48 @@ func TestShareUserDocumentToAccount(t *testing.T) {
 	}
 }
 
+func TestShareUserDocumentToAccount_ConcurrentSharesDoNotCollideOnKey(t *testing.T) {
+	// Regression: the S3 destination key used to be docs/{userID}/{millis}_{name}
+	// -- sharing the same doc to two accounts within the same millisecond
+	// produced an identical key, so the second CopyObject silently
+	// overwrote the first share's object.
+	repo := newMockAccountRepo()
+	s3mock := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: s3mock, bucketName: "test-bucket"}
+
+	accA, err := svc.CreateAccount(context.Background(), "user-1", "u1@example.com", &model.CreateAccountRequest{Name: "A"})
+	if err != nil {
+		t.Fatalf("setup: create account A failed: %v", err)
+	}
+	accB, err := svc.CreateAccount(context.Background(), "user-1", "u1@example.com", &model.CreateAccountRequest{Name: "B"})
+	if err != nil {
+		t.Fatalf("setup: create account B failed: %v", err)
+	}
+
+	doc := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "doc-1",
+		DocID: "doc-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pptx", FileName: "deck.pptx",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[doc.PK] = append(repo.documents[doc.PK], doc)
+
+	if _, err := svc.ShareUserDocumentToAccount(context.Background(), "user-1", "doc-1", accA.AccountID); err != nil {
+		t.Fatalf("share to account A failed: %v", err)
+	}
+	if _, err := svc.ShareUserDocumentToAccount(context.Background(), "user-1", "doc-1", accB.AccountID); err != nil {
+		t.Fatalf("share to account B failed: %v", err)
+	}
+
+	if len(s3mock.copied) != 2 {
+		t.Fatalf("expected 2 CopyObject calls, got %d", len(s3mock.copied))
+	}
+	keyA, keyB := *s3mock.copied[0].Key, *s3mock.copied[1].Key
+	if keyA == keyB {
+		t.Fatalf("expected distinct S3 keys for two shares of the same doc, both got %q", keyA)
+	}
+}
+
 func TestUserDocPublicShare_LifecycleAndScope(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
@@ -1328,6 +1370,18 @@ func TestUserDocPublicShare_LifecycleAndScope(t *testing.T) {
 	token2, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "slide-1")
 	if err != nil || token2 != token {
 		t.Fatalf("expected idempotent re-share to return %q, got %q err=%v", token, token2, err)
+	}
+
+	// Regression: GetUserDocument's AccountDocumentDetail must surface the
+	// token (DocDetailClient.tsx's setPublicToken(detail.publicShareToken)
+	// on load depends on this) -- toDocumentDTO doesn't map it since it
+	// lives on AccountDocumentDetail, not the embedded DTO.
+	detail, err := svc.GetUserDocument(context.Background(), "user-1", "slide-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if detail.PublicShareToken != token {
+		t.Errorf("expected GetUserDocument to surface PublicShareToken %q, got %q", token, detail.PublicShareToken)
 	}
 
 	resolved, err := svc.ResolvePublicShare(context.Background(), token)

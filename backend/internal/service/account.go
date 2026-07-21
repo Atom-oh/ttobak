@@ -713,7 +713,13 @@ func (s *AccountService) GetAccountDocument(ctx context.Context, userID, account
 		return nil, err
 	}
 	dto := toDocumentDTO(doc)
-	return &model.AccountDocumentDetail{AccountDocumentDTO: dto, Content: doc.Content, FileKey: doc.FileKey}, nil
+	// PublicShareToken must come from doc directly, not toDocumentDTO -- it
+	// lives on AccountDocumentDetail (json:"publicShareToken"), not the
+	// embedded AccountDocumentDTO. Without it, DocDetailClient.tsx's
+	// setPublicToken(detail.publicShareToken) always sees undefined on
+	// load, so an already-shared slide shows "공개 링크 만들기" (create) again
+	// after a refresh instead of "공개 링크 해제" (revoke) + the copy button.
+	return &model.AccountDocumentDetail{AccountDocumentDTO: dto, Content: doc.Content, FileKey: doc.FileKey, PublicShareToken: doc.PublicShareToken}, nil
 }
 
 func (s *AccountService) UpdateAccountDocument(ctx context.Context, userID, accountID, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
@@ -804,7 +810,7 @@ func (s *AccountService) GetUserDocument(ctx context.Context, userID, docID stri
 		return nil, err
 	}
 	dto := toDocumentDTO(doc)
-	return &model.AccountDocumentDetail{AccountDocumentDTO: dto, Content: doc.Content, FileKey: doc.FileKey}, nil
+	return &model.AccountDocumentDetail{AccountDocumentDTO: dto, Content: doc.Content, FileKey: doc.FileKey, PublicShareToken: doc.PublicShareToken}, nil
 }
 
 func (s *AccountService) UpdateUserDocument(ctx context.Context, userID, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {
@@ -846,7 +852,13 @@ func (s *AccountService) ShareUserDocumentToAccount(ctx context.Context, userID,
 		if idx := strings.LastIndex(base, "/"); idx >= 0 {
 			base = base[idx+1:]
 		}
-		newKey := fmt.Sprintf("docs/%s/%d_%s", userID, time.Now().UnixMilli(), base)
+		// generateID() (not just the millisecond timestamp) guarantees
+		// uniqueness -- sharing the same doc to two accounts (or re-sharing
+		// it) within the same millisecond would otherwise collide on an
+		// identical key, so the second CopyObject silently overwrites the
+		// first share's object; deleting either share later then destroys
+		// the file the other share still references.
+		newKey := fmt.Sprintf("docs/%s/%d_%s_%s", userID, time.Now().UnixMilli(), generateID(), base)
 		copySource := fmt.Sprintf("%s/%s", s.bucketName, doc.FileKey) // matches kb.go's CopyAttachmentToKB convention
 		if _, err := s.s3.CopyObject(ctx, &s3.CopyObjectInput{
 			Bucket:     aws.String(s.bucketName),

@@ -650,6 +650,15 @@ def _account_research(acc_id):
             continue
         if not item or item.get('trashedAt'):
             continue
+        # Re-verify membership against the canonical accountIds rather than
+        # trusting the RESEARCHREF# index alone: LinkAccount/UnlinkAccount
+        # (backend/internal/service/research.go) best-effort the ref
+        # write/delete and only log on failure, so a failed DeleteResearchRef
+        # would otherwise leave a stale ref that keeps exposing this
+        # research's summary in the Bedrock chat context after the owner
+        # unlinked it -- fail-closed here instead of fail-open.
+        if acc_id not in item.get('accountIds', []):
+            continue
         out.append({'topic': item.get('topic', ''), 'summary': item.get('summary', ''), 'status': item.get('status', '')})
     return out
 

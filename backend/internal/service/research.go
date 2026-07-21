@@ -39,6 +39,8 @@ type researchRepo interface {
 	GetResearch(ctx context.Context, researchId string) (*model.Research, error)
 	UpdateResearchFieldsConditional(ctx context.Context, researchId string, fields map[string]interface{}, expectedStatus string) error
 	UpdateResearchFields(ctx context.Context, researchId string, fields map[string]interface{}) error
+	AddAccountLink(ctx context.Context, researchId, accountID string) error
+	RemoveAccountLink(ctx context.Context, researchId, accountID string) error
 	ListUserResearch(ctx context.Context, userId string) ([]model.Research, error)
 	BatchGetResearch(ctx context.Context, researchIds []string) ([]model.Research, error)
 	ListSubPages(ctx context.Context, userId, parentId string) ([]model.Research, error)
@@ -555,16 +557,15 @@ func (s *ResearchService) LinkAccount(ctx context.Context, userID, researchID, a
 		return nil, ErrForbidden
 	}
 
-	for _, id := range research.AccountIDs {
-		if id == accountID {
-			return research.AccountIDs, nil // already linked
-		}
+	if contains(research.AccountIDs, accountID) {
+		return research.AccountIDs, nil // already linked
 	}
-	accountIDs := append(append([]string{}, research.AccountIDs...), accountID)
 
-	if err := s.repo.UpdateResearchFields(ctx, researchID, map[string]interface{}{
-		"accountIds": accountIDs,
-	}); err != nil {
+	// Atomic ADD on the accountIds string set -- safe against a concurrent
+	// Link/UnlinkAccount call for a *different* accountID racing on the same
+	// research. The old approach (read the whole list, append, SET it back)
+	// would lose whichever side's write landed second.
+	if err := s.repo.AddAccountLink(ctx, researchID, accountID); err != nil {
 		return nil, fmt.Errorf("failed to link account: %w", err)
 	}
 
@@ -581,7 +582,7 @@ func (s *ResearchService) LinkAccount(ctx context.Context, userID, researchID, a
 		log.Printf("warn: failed to write research ref for account %s: %v", accountID, err)
 	}
 
-	return accountIDs, nil
+	return append(append([]string{}, research.AccountIDs...), accountID), nil
 }
 
 // UnlinkAccount removes a research↔account link (owner only).
@@ -600,16 +601,10 @@ func (s *ResearchService) UnlinkAccount(ctx context.Context, userID, researchID,
 		return nil, ErrForbidden
 	}
 
-	remaining := make([]string, 0, len(research.AccountIDs))
-	for _, id := range research.AccountIDs {
-		if id != accountID {
-			remaining = append(remaining, id)
-		}
-	}
-
-	if err := s.repo.UpdateResearchFields(ctx, researchID, map[string]interface{}{
-		"accountIds": remaining,
-	}); err != nil {
+	// Atomic DELETE on the accountIds string set -- see LinkAccount's
+	// comment; same race the old read-modify-write-the-whole-list approach
+	// was exposed to.
+	if err := s.repo.RemoveAccountLink(ctx, researchID, accountID); err != nil {
 		return nil, fmt.Errorf("failed to unlink account: %w", err)
 	}
 
@@ -617,6 +612,12 @@ func (s *ResearchService) UnlinkAccount(ctx context.Context, userID, researchID,
 		log.Printf("warn: failed to delete research ref for account %s: %v", accountID, err)
 	}
 
+	remaining := make([]string, 0, len(research.AccountIDs))
+	for _, id := range research.AccountIDs {
+		if id != accountID {
+			remaining = append(remaining, id)
+		}
+	}
 	return remaining, nil
 }
 
@@ -667,6 +668,15 @@ func (s *ResearchService) ListAccountResearch(ctx context.Context, userID, accou
 	dtos := make([]model.AccountResearchDTO, 0, len(items))
 	for _, r := range items {
 		if r.TrashedAt != "" {
+			continue
+		}
+		// Re-verify membership against the canonical accountIds rather than
+		// trusting the RESEARCHREF# index alone: LinkAccount/UnlinkAccount
+		// best-effort the ref write/delete (logged, not retried), so a
+		// failed DeleteResearchRef would otherwise leave a stale ref that
+		// keeps exposing this research's summary to the account after the
+		// owner unlinked it -- fail-closed here instead of fail-open.
+		if !contains(r.AccountIDs, accountID) {
 			continue
 		}
 		summary := truncateRunes(r.Summary, summaryPreviewMaxLen)

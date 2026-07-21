@@ -14,7 +14,15 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o /out/co
 # ca-certificates is not optional either: debian:bookworm-slim ships no root
 # CA bundle, so the Go AWS SDK's TLS handshake to S3 fails outright
 # ("x509: certificate signed by unknown authority") without it.
-FROM debian:bookworm-slim
+#
+# --platform=linux/arm64 is required here (the build stage above doesn't need
+# it -- GOARCH=arm64 cross-compiles regardless of the build container's own
+# arch). Without it, building on an amd64 CI runner with no explicit
+# `docker buildx --platform` flag pulls the amd64 debian image, so
+# LibreOffice/fonts/ca-certificates install as amd64 while the COPYed Go
+# binary is arm64 -- a mixed-arch image that fails at Lambda runtime, unlike
+# the other 5 Go Lambdas which are pure ARM64 zip deploys.
+FROM --platform=linux/arm64 debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       libreoffice-impress \
