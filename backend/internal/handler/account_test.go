@@ -109,7 +109,7 @@ func (m *mockHandlerAccountRepo) ListMeetingRefsForAccount(_ context.Context, ac
 func (m *mockHandlerAccountRepo) ListInsightsForAccount(_ context.Context, accountID string) ([]model.AccountInsight, error) {
 	return append([]model.AccountInsight(nil), m.insightsByAccount[accountID]...), nil
 }
-func (m *mockHandlerAccountRepo) UpdateAccountDocumentFields(_ context.Context, pk, docID string, fields map[string]interface{}) error {
+func (m *mockHandlerAccountRepo) UpdateAccountDocumentFields(_ context.Context, pk, docID string, fields map[string]interface{}, removeFields []string) (map[string]string, error) {
 	docs := m.documents[pk]
 	for i, d := range docs {
 		if d.DocID == docID {
@@ -136,15 +136,27 @@ func (m *mockHandlerAccountRepo) UpdateAccountDocumentFields(_ context.Context, 
 				case "updatedAt":
 					d.UpdatedAt = v.(time.Time)
 				default:
-					return fmt.Errorf("unexpected field %q in UpdateAccountDocumentFields", k)
+					return nil, fmt.Errorf("unexpected field %q in UpdateAccountDocumentFields", k)
+				}
+			}
+			oldValues := make(map[string]string, len(removeFields))
+			for _, k := range removeFields {
+				switch k {
+				case "publicShareToken":
+					if d.PublicShareToken != "" {
+						oldValues[k] = d.PublicShareToken
+					}
+					d.PublicShareToken = ""
+				default:
+					return nil, fmt.Errorf("unexpected removeField %q in UpdateAccountDocumentFields", k)
 				}
 			}
 			docs[i] = d
 			m.documents[pk] = docs
-			return nil
+			return oldValues, nil
 		}
 	}
-	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+	return nil, fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
 }
 
 func (m *mockHandlerAccountRepo) PutAccountDocument(_ context.Context, doc *model.AccountDocument) error {

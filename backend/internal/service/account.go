@@ -68,7 +68,7 @@ type accountRepo interface {
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
 	ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error)
 	PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error
-	UpdateAccountDocumentFields(ctx context.Context, pk, docID string, fields map[string]interface{}) error
+	UpdateAccountDocumentFields(ctx context.Context, pk, docID string, fields map[string]interface{}, removeFields []string) (map[string]string, error)
 	ListAccountDocuments(ctx context.Context, pk string) ([]model.AccountDocument, error)
 	GetAccountDocument(ctx context.Context, pk, docID string) (*model.AccountDocument, error)
 	DeleteAccountDocument(ctx context.Context, pk, docID string) error
@@ -687,36 +687,43 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 	existing.UpdatedAt = time.Now().UTC()
 	fields["updatedAt"] = existing.UpdatedAt
 	// Deliberately NOT PutAccountDocument (whole-item overwrite) and
-	// deliberately NOT including "publicShareToken" in fields: that field
+	// deliberately NOT SET-ing "publicShareToken" in fields: that field
 	// has its own independent writers (CreateUserDocPublicShare /
-	// RevokeUserDocPublicShare), and existing.PublicShareToken is a stale
-	// snapshot from the getDoc call above. A whole-item Put -- even one
-	// that re-reads the token right before writing -- still clobbers
-	// whatever landed in the gap between that re-read and the write.
-	// UpdateAccountDocumentFields only ever touches the fields named
-	// here, so it structurally cannot race on a field it never writes.
-	if err := s.repo.UpdateAccountDocumentFields(ctx, pk, docID, fields); err != nil {
+	// RevokeUserDocPublicShare), and a whole-item Put -- even one that
+	// re-reads the token right before writing -- still clobbers whatever
+	// landed in the gap between that re-read and the write.
+	var removeFields []string
+	if bodyChanging && oldFileKey != "" && existing.FileKey == "" {
+		// This edit turns a file-backed doc into a markdown one (slide ->
+		// note): remove publicShareToken unconditionally, in the SAME
+		// atomic UpdateItem as clearing fileKey -- not gated on the
+		// getDoc-time snapshot's token value. A concurrent
+		// CreateUserDocPublicShare can mint a token after that snapshot
+		// read but before this write lands; a snapshot-gated clear would
+		// miss it, leaving a token that's inert only until some *future*
+		// edit reattaches a file, at which point it would unauthenticated-
+		// expose that new file to whoever holds the old token. Whichever
+		// of {this write, a concurrent mint} lands second determines the
+		// outcome regardless of read-time ordering -- see
+		// SetPublicShareTokenIfAbsent's fileKey<>"" condition for the
+		// other half of closing this race (a mint landing *after* this
+		// clear must also fail, not just one landing before).
+		removeFields = append(removeFields, "publicShareToken")
+	}
+	oldValues, err := s.repo.UpdateAccountDocumentFields(ctx, pk, docID, fields, removeFields)
+	if err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return nil, ErrNotFound // deleted concurrently between our getDoc and this write
 		}
 		return nil, err
 	}
-	if oldFileKey != "" && existing.FileKey == "" && existing.PublicShareToken != "" {
-		// This edit turned a file-backed doc into a markdown one (slide ->
-		// note): any live public link must die with the file, not survive
-		// to expose whatever content the doc has *later* (a markdown body
-		// now, possibly a different file after a future edit) to whoever
-		// held the old token. Same conditional-clear-then-delete ordering
-		// as RevokeUserDocPublicShare, for the same reason (a losing race
-		// against a concurrent re-share leaves an inert orphan pointer,
-		// not a token handed out that's already dead).
-		staleToken := existing.PublicShareToken
-		if err := s.repo.ClearPublicShareTokenIfMatches(ctx, pk, docID, staleToken); err != nil && !errors.Is(err, repository.ErrConditionFailed) {
-			log.Printf("clear public share token for doc %s during file->markdown conversion: %v", docID, err)
-		} else if err == nil {
-			if err := s.repo.DeletePublicShare(ctx, staleToken); err != nil {
-				log.Printf("cleanup public share pointer for doc %s during file->markdown conversion: %v", docID, err)
-			}
+	if removedToken := oldValues["publicShareToken"]; removedToken != "" {
+		// Best-effort: the field removal above already made the token
+		// unusable (ResolvePublicShare's own doc lookup will never find
+		// this token as the doc's live PublicShareToken again); a failure
+		// here just leaves an inert orphaned PublicShare pointer.
+		if err := s.repo.DeletePublicShare(ctx, removedToken); err != nil {
+			log.Printf("cleanup public share pointer for doc %s during file->markdown conversion: %v", docID, err)
 		}
 	}
 	if oldFileKey != "" && oldFileKey != existing.FileKey && ownsFileKey(userID, oldFileKey) && s.s3 != nil {
@@ -990,13 +997,25 @@ func (s *AccountService) CreateUserDocPublicShare(ctx context.Context, userID, d
 		if !errors.Is(err, repository.ErrConditionFailed) {
 			return "", err
 		}
-		// Lost the race -- another request's token is now canonical;
-		// hand the caller that one instead of a token whose pointer we
-		// just deleted.
+		// The condition can fail for two different reasons -- distinguish
+		// them instead of assuming it's always "lost a double-mint race":
 		fresh, getErr := s.getDoc(ctx, model.PrefixUser+userID, docID)
 		if getErr != nil {
 			return "", getErr
 		}
+		if fresh.FileKey == "" {
+			// A concurrent file->markdown conversion cleared fileKey
+			// between our upfront check and this write -- not a race
+			// against another mint. Returning fresh.PublicShareToken
+			// here (== "" in this case) would hand back an empty string
+			// as if it were a valid token instead of surfacing the error
+			// the upfront FileKey=="" check would have given had it run
+			// a moment later.
+			return "", ErrInvalidInput
+		}
+		// Otherwise: lost the race -- another request's token is now
+		// canonical; hand the caller that one instead of a token whose
+		// pointer we just deleted.
 		return fresh.PublicShareToken, nil
 	}
 	return token, nil

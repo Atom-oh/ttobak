@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
+	"github.com/ttobak/backend/internal/convertdoc"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/service"
 )
@@ -62,10 +62,14 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return fmt.Errorf("failed to unmarshal EventBridge event: %w", err)
 	}
 
+	// Unlike the classic S3->SNS/SQS/Lambda event notification JSON (which
+	// URL-encodes object.key, form-style, so cmd/transcribe|summarize|process-image
+	// apply url.QueryUnescape to it), EventBridge's "S3 Object Created"
+	// detail.object.key is NOT URL-encoded -- it's the literal key.
+	// Decoding it here would corrupt a literal "+" in a filename to a
+	// space (QueryUnescape's form-decoding semantics), permanently
+	// breaking conversion for e.g. "C++ 소개.pptx".
 	key := event.Detail.Object.Key
-	if decoded, err := url.QueryUnescape(key); err == nil {
-		key = decoded
-	}
 
 	sidecarKey := service.SidecarPDFKey(key)
 	if sidecarKey == "" {
@@ -73,10 +77,10 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return nil
 	}
 
-	ext := strings.ToLower(filepath.Ext(key))
-	if ext != ".ppt" && ext != ".pptx" {
+	if !convertdoc.IsSlideExtension(key) {
 		return fmt.Errorf("unsupported file extension for key %q", key)
 	}
+	ext := strings.ToLower(filepath.Ext(key))
 
 	workDir, err := os.MkdirTemp("/tmp", "convert-doc-")
 	if err != nil {
@@ -112,7 +116,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	// an inherent RCE surface; see ADR-022's Consequences for the tracked
 	// residual risk (this Lambda's docs/* IAM grant is bucket-wide across
 	// all users, not scoped to the triggering key) and follow-up.
-	cmd.Env = sanitizedSofficeEnv()
+	cmd.Env = convertdoc.SanitizedEnv(os.Environ())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		// Truncated: soffice's stdout/stderr on a malformed/hostile input
@@ -120,7 +124,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		// names) -- cap what lands in this error (and therefore
 		// CloudWatch, via the Lambda runtime's own error logging) rather
 		// than including it in full.
-		return fmt.Errorf("soffice convert failed: %w (output: %s)", err, truncateOutput(out, 2000))
+		return fmt.Errorf("soffice convert failed: %w (output: %s)", err, convertdoc.TruncateOutput(out, 2000))
 	}
 
 	outPath := filepath.Join(outDir, strings.TrimSuffix(filepath.Base(inPath), filepath.Ext(inPath))+".pdf")
@@ -130,32 +134,6 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	log.Printf("converted %s -> %s", key, sidecarKey)
 	return nil
-}
-
-// truncateOutput caps out at n bytes for safe inclusion in an error/log
-// message -- see the soffice CombinedOutput call site.
-func truncateOutput(out []byte, n int) string {
-	if len(out) <= n {
-		return string(out)
-	}
-	return string(out[:n]) + "...(truncated)"
-}
-
-// sanitizedSofficeEnv returns the current process environment with every
-// AWS_* variable removed. Lambda injects temporary credentials
-// (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN, plus
-// AWS_CONTAINER_CREDENTIALS_* etc.) as env vars for the Go SDK to pick up
-// automatically -- soffice has no legitimate need for any of them.
-func sanitizedSofficeEnv() []string {
-	env := os.Environ()
-	filtered := make([]string, 0, len(env))
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "AWS_") {
-			continue
-		}
-		filtered = append(filtered, kv)
-	}
-	return filtered
 }
 
 func downloadObject(ctx context.Context, key, destPath string) error {
