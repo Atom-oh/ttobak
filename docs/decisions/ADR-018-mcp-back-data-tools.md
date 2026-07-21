@@ -24,6 +24,14 @@ Add account-scoped MCP tools to `mcp-server`, each a thin wrapper over an authen
 
 The write path is intentionally narrow (documents only); it never writes meetings or membership. Tool names, the API client (`mcp-server/src/api.ts`), and the README tool list are kept in lockstep.
 
+## Post-Implementation Updates
+
+1. **Write surface widened beyond documents-only**: three more write-capable tool groups were added, each still a thin wrapper over an existing member/owner-gated REST endpoint (no new auth path):
+   - **KB tools** (`ttobak_kb_upload`, `ttobak_kb_sync`, `ttobak_kb_list_files`, `ttobak_kb_delete_file`) → `POST /api/kb/upload`, `POST /api/kb/sync`, `GET /api/kb/files`, `DELETE /api/kb/files/{fileId}`. Upload is a local-file-to-presigned-URL flow (`uploadToKB` in `mcp-server/src/api.ts`), separate from sync so multiple files can be uploaded before one ingestion run.
+   - **`ttobak_upload_document`** → `POST /api/upload/presigned` (category `doc`) + `POST /api/accounts/{id}/documents` or `POST /api/documents`. Extends the original `put_document` (markdown text only) to binary files (pdf/pptx/ppt) — same loop-guard-free path as the REST API itself already allowed, just now reachable from MCP.
+   - **`ttobak_create_account`** / **`ttobak_add_account_member`** → `POST /api/accounts`, `POST /api/accounts/{id}/members`. This is the one genuine expansion beyond "documents only": account and membership writes are now MCP-reachable, where the original decision explicitly said "it never writes meetings or membership." Membership adds still require the caller to already be the account owner (server-enforced), and role is restricted to `AM`/`TAM`/`SSA` (never `owner`) — same restriction the REST endpoint itself enforces.
+2. **KB uploads are not account-scoped**: unlike documents, KB files ingest into one shared Bedrock Knowledge Base regardless of which account they're "about" — there's no account-membership gate on `/api/kb/*`, only authentication. Any authenticated user can add to (and, via `ttobak_kb_delete_file`, remove) the shared KB.
+
 ## Consequences
 
 ### Positive
@@ -65,6 +73,14 @@ The write path is intentionally narrow (documents only); it never writes meeting
 - **`put_document`** → `POST /api/accounts/{id}/documents` — 외부 마크다운 노트를 Account에 기록(루프 가드 적용).
 
 쓰기 경로는 의도적으로 좁다(문서 전용). 미팅·멤버십은 절대 쓰지 않는다. 도구명·API 클라이언트(`mcp-server/src/api.ts`)·README 도구 목록을 일치 유지.
+
+## 구현 후 업데이트
+
+1. **문서 전용을 넘어선 쓰기 표면 확장**: 세 가지 쓰기 가능 도구 그룹이 추가됐다. 각각 여전히 기존의 멤버/소유자 게이트 REST 엔드포인트의 얇은 래퍼(신규 인증 경로 없음):
+   - **KB 도구** (`ttobak_kb_upload`, `ttobak_kb_sync`, `ttobak_kb_list_files`, `ttobak_kb_delete_file`) → `POST /api/kb/upload`, `POST /api/kb/sync`, `GET /api/kb/files`, `DELETE /api/kb/files/{fileId}`. 업로드는 로컬 파일 → presigned URL 흐름(`mcp-server/src/api.ts`의 `uploadToKB`)이며, 여러 파일을 먼저 업로드하고 한 번에 인제스천할 수 있도록 sync와 분리돼 있다.
+   - **`ttobak_upload_document`** → `POST /api/upload/presigned`(category `doc`) + `POST /api/accounts/{id}/documents` 또는 `POST /api/documents`. 기존 `put_document`(마크다운 텍스트만)를 바이너리 파일(pdf/pptx/ppt)로 확장 — REST API 자체가 이미 허용하던 경로를 MCP에서도 도달 가능하게 만든 것뿐이다.
+   - **`ttobak_create_account`** / **`ttobak_add_account_member`** → `POST /api/accounts`, `POST /api/accounts/{id}/members`. "문서 전용"을 실질적으로 넘어서는 유일한 확장 — 원래 결정이 명시적으로 "미팅·멤버십은 절대 쓰지 않는다"고 했던 부분이 이제 MCP에서 계정·멤버십 쓰기로 확장됐다. 멤버 추가는 여전히 호출자가 이미 계정 소유자여야 하고(서버 강제), role은 `AM`/`TAM`/`SSA`로만 제한(`owner`는 불가) — REST 엔드포인트 자체가 강제하는 것과 동일한 제약이다.
+2. **KB 업로드는 Account 범위가 아님**: 문서와 달리 KB 파일은 "어느 Account에 대한 것인지"와 무관하게 하나의 공유 Bedrock Knowledge Base로 인제스트된다 — `/api/kb/*`에는 계정 멤버십 게이트가 없고 인증만 필요하다. 인증된 사용자라면 누구나 공유 KB에 추가(그리고 `ttobak_kb_delete_file`로 제거)할 수 있다.
 
 ## 결과
 

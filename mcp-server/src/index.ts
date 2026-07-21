@@ -165,7 +165,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'ttobak_ask',
       description:
-        'Ask a natural-language question about your meetings. Uses Bedrock RAG with knowledge base. Optionally scope to one meeting.',
+        'Ask a natural-language question. Uses Bedrock RAG. Omit meetingId to query across the shared Knowledge Base and your meetings; pass meetingId to scope to one meeting.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -174,6 +174,84 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           sessionId: { type: 'string', description: 'Optional: continue a conversation' },
         },
         required: ['question'],
+      },
+    },
+    {
+      name: 'ttobak_kb_upload',
+      description:
+        'Upload a local file (pdf, md, pptx, docx) into the shared Knowledge Base. Ingestion does not start until you call ttobak_kb_sync -- upload several files first, then sync once.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          filePath: { type: 'string', description: 'Absolute path to the local file to upload' },
+          fileName: { type: 'string', description: 'Optional: override the uploaded file name (defaults to the local file name)' },
+          fileType: { type: 'string', description: 'Optional: MIME type override, inferred from the file extension otherwise (pdf/md/pptx/docx)' },
+        },
+        required: ['filePath'],
+      },
+    },
+    {
+      name: 'ttobak_kb_sync',
+      description: 'Trigger Knowledge Base ingestion for files uploaded via ttobak_kb_upload since the last sync.',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
+    {
+      name: 'ttobak_kb_list_files',
+      description: 'List your own uploaded Knowledge Base files (fileId, fileName, size, lastModified).',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
+    {
+      name: 'ttobak_kb_delete_file',
+      description: 'Delete a file from the Knowledge Base by fileId (from ttobak_kb_list_files).',
+      inputSchema: {
+        type: 'object' as const,
+        properties: { fileId: { type: 'string', description: 'File ID from ttobak_kb_list_files' } },
+        required: ['fileId'],
+      },
+    },
+    {
+      name: 'ttobak_upload_document',
+      description:
+        'Upload a local file (pdf, pptx, or legacy ppt) and register it as a document, so teammates can preview/download it in TTOBAK. Omit accountId for a personal doc; set it to share into an account.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          filePath: { type: 'string', description: 'Absolute path to the local file to upload' },
+          title: { type: 'string', description: 'Document title' },
+          accountId: { type: 'string', description: 'Optional: Account ID to share into (omit for a personal doc)' },
+          fileName: { type: 'string', description: 'Optional: override the uploaded file name (defaults to the local file name)' },
+          fileType: { type: 'string', description: 'Optional: MIME type override (application/pdf, .pptx, or legacy .ppt), inferred from the file extension otherwise' },
+          docType: { type: 'string', description: 'Optional: prep | reference | slide | ...' },
+          path: { type: 'string', description: 'Optional: original vault path' },
+        },
+        required: ['filePath', 'title'],
+      },
+    },
+    {
+      name: 'ttobak_create_account',
+      description: 'Create a new customer account. You become its owner.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          name: { type: 'string', description: 'Account name' },
+          aliases: { type: 'array', items: { type: 'string' }, description: 'Optional: alternate names' },
+          domains: { type: 'array', items: { type: 'string' }, description: 'Optional: email domains' },
+          industry: { type: 'string', description: 'Optional: industry' },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'ttobak_add_account_member',
+      description: "Add a teammate to an account by email. Only the account owner can do this. role must be AM, TAM, or SSA.",
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          accountId: { type: 'string', description: 'Account ID' },
+          email: { type: 'string', description: "Teammate's TTOBAK email" },
+          role: { type: 'string', enum: ['AM', 'TAM', 'SSA'], description: 'Role to assign' },
+        },
+        required: ['accountId', 'email', 'role'],
       },
     },
     {
@@ -298,6 +376,63 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         if (!question) return error('question is required');
         const result = await api.askQuestion(question, meetingId, sessionId);
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_kb_upload': {
+        const { filePath, fileName, fileType } = args as {
+          filePath: string; fileName?: string; fileType?: string;
+        };
+        if (!filePath) return error('filePath is required');
+        const result = await api.uploadToKB(filePath, fileName, fileType);
+        return text(`Uploaded to Knowledge Base: ${JSON.stringify(result)}\nCall ttobak_kb_sync to start ingestion.`);
+      }
+
+      case 'ttobak_kb_sync': {
+        const result = await api.syncKB();
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_kb_list_files': {
+        const result = await api.listKBFiles();
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_kb_delete_file': {
+        const { fileId } = args as { fileId: string };
+        if (!fileId) return error('fileId is required');
+        await api.deleteKBFile(fileId);
+        return text(`Deleted Knowledge Base file ${fileId}.`);
+      }
+
+      case 'ttobak_upload_document': {
+        const { filePath, title, accountId, fileName, fileType, docType, path } = args as {
+          filePath: string; title: string; accountId?: string; fileName?: string;
+          fileType?: string; docType?: string; path?: string;
+        };
+        if (!filePath) return error('filePath is required');
+        if (!title) return error('title is required');
+        const result = await api.uploadDocument(filePath, title, {
+          accountId, fileName, fileType, docType, path,
+        });
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_create_account': {
+        const { name, aliases, domains, industry } = args as {
+          name: string; aliases?: string[]; domains?: string[]; industry?: string;
+        };
+        if (!name) return error('name is required');
+        const result = await api.createAccount({ name, aliases, domains, industry });
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_add_account_member': {
+        const { accountId, email, role } = args as { accountId: string; email: string; role: string };
+        if (!accountId) return error('accountId is required');
+        if (!email) return error('email is required');
+        if (!role) return error('role is required');
+        const result = await api.addAccountMember(accountId, email, role);
         return text(JSON.stringify(result, null, 2));
       }
 
