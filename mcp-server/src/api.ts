@@ -212,7 +212,7 @@ export class TtobakApi {
     })) as { uploadUrl: string; key: string };
     await this.putFile(uploadUrl, resolvedPath, type);
     const target = opts?.accountId
-      ? `/api/accounts/${opts.accountId}/documents`
+      ? `/api/accounts/${encodeURIComponent(opts.accountId)}/documents`
       : '/api/documents';
     return this.post(target, {
       title,
@@ -235,7 +235,7 @@ export class TtobakApi {
   }
 
   async addAccountMember(accountId: string, email: string, role: string) {
-    return this.post(`/api/accounts/${accountId}/members`, { email, role });
+    return this.post(`/api/accounts/${encodeURIComponent(accountId)}/members`, { email, role });
   }
 
   private async get(path: string) {

@@ -42,7 +42,7 @@ test('guardUploadPath: wraps missing files in a clear error', () => {
 });
 
 test('guardUploadPath: rejects non-regular files (directory)', () => {
-  const dir = mkddir();
+  const dir = mkTmpDir();
   try {
     assert.throws(() => guardUploadPath(dir, MAX_UPLOAD_BYTES), /not a regular file/);
   } finally {
@@ -51,7 +51,7 @@ test('guardUploadPath: rejects non-regular files (directory)', () => {
 });
 
 test('guardUploadPath: enforces the size cap', () => {
-  const dir = mkddir();
+  const dir = mkTmpDir();
   const f = join(dir, 'big.pdf');
   writeFileSync(f, 'x'.repeat(16));
   try {
@@ -67,7 +67,7 @@ test('guardUploadPath: blocks dotdirs under $HOME, including via symlink', () =>
   const hidden = mkdtempSync(join(homedir(), '.guard-test-'));
   const secret = join(hidden, 'creds.pdf');
   writeFileSync(secret, 'x');
-  const outside = mkddir();
+  const outside = mkTmpDir();
   const link = join(outside, 'looks-legit.pdf');
   symlinkSync(secret, link);
   try {
@@ -81,7 +81,7 @@ test('guardUploadPath: blocks dotdirs under $HOME, including via symlink', () =>
 });
 
 test('guardUploadPath: allows a normal file outside hidden dirs', () => {
-  const dir = mkddir();
+  const dir = mkTmpDir();
   const f = join(dir, 'doc.pdf');
   writeFileSync(f, 'hello');
   try {
@@ -93,6 +93,6 @@ test('guardUploadPath: allows a normal file outside hidden dirs', () => {
   }
 });
 
-function mkddir() {
+function mkTmpDir() {
   return mkdtempSync(join(tmpdir(), 'guard-'));
 }

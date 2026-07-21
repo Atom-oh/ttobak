@@ -165,7 +165,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'ttobak_ask',
       description:
-        'Ask a natural-language question. Uses Bedrock RAG. Omit meetingId to query across the shared Knowledge Base and your meetings; pass meetingId to scope to one meeting.',
+        'Ask a natural-language question. Uses Bedrock RAG. Omit meetingId to query across your own Knowledge Base uploads, your meetings (plus ones shared with you), and shared crawler-collected docs; pass meetingId to scope to one meeting.',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -179,10 +179,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'ttobak_kb_upload',
       description:
-        'Upload a local file (pdf, md, pptx, docx) into the shared Knowledge Base. ' +
-        'WARNING: the KB is shared org-wide -- anything uploaded here becomes searchable by ALL ' +
-        'authenticated TTOBAK users via ttobak_ask, so never upload private or account-confidential material. ' +
-        'Indexing happens at the next ingestion run, not immediately (see ttobak_kb_sync).',
+        'Upload a local file (pdf, md, pptx, docx) into your Knowledge Base space. Retrieval is scoped ' +
+        'to you: files land under your own kb/{userId}/ prefix and only your ttobak_ask queries can ' +
+        'retrieve them (the underlying Bedrock KB is shared infrastructure, but the QA retrieval filter ' +
+        'is per-user). Indexing happens at the next ingestion run, not immediately (see ttobak_kb_sync).',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -199,8 +199,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         'Trigger Knowledge Base ingestion for files uploaded via ttobak_kb_upload since the last sync. ' +
         'NOTE: on the current production deployment this is a no-op (returns status "skipped") -- the API ' +
         'Lambda is not yet configured with the Knowledge Base ID/data source needed to start an ingestion job. ' +
-        'Until that is fixed, uploads are only indexed when the daily crawler triggers ingestion, and it skips ' +
-        'runs where it found no new documents of its own -- so indexing latency is unbounded.',
+        'Until that is fixed, uploads are indexed by the next ingestion run another pipeline triggers: every ' +
+        'completed meeting summary starts one, and so does any daily crawler run that found new documents.',
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {
@@ -395,9 +395,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const result = await api.uploadToKB(filePath, fileName, fileType);
         return text(
           `Uploaded to Knowledge Base: ${JSON.stringify(result)}\n` +
-            'Reminder: the KB is shared -- this file becomes searchable by all authenticated users once indexed. ' +
+            'Retrieval is scoped to you -- only your own ttobak_ask queries can find this file. ' +
             'Indexing happens at the next ingestion run (ttobak_kb_sync is currently a no-op in production; ' +
-            'ingestion is triggered by crawler runs that found new documents).',
+            'ingestion is triggered by every completed meeting summary and by crawler runs that found new documents).',
         );
       }
 
@@ -416,9 +416,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!fileId) return error('fileId is required');
         await api.deleteKBFile(fileId);
         return text(
-          `Deleted Knowledge Base file ${fileId}. It stays searchable until the next ingestion run -- ` +
-            'and since ttobak_kb_sync is currently a no-op in production and crawler-triggered ingestion ' +
-            'skips runs with no new crawler documents, that removal has no guaranteed deadline.',
+          `Deleted Knowledge Base file ${fileId}. It stays retrievable (by you only -- retrieval is ` +
+            'user-scoped) until the next ingestion run; with ttobak_kb_sync a no-op in production, that ' +
+            'means the next completed meeting summary or the next crawler run that found new documents.',
         );
       }
 
