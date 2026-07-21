@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { isIOS, getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, onNativeAudioLevel } from '@/lib/tauri';
+import { isTauri, startNativeRecording, stopNativeRecording, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 interface RecordButtonProps {
@@ -18,6 +18,12 @@ interface RecordButtonProps {
    * `lib/tauri.ts`'s `uploadRecording` and `usePostRecording`'s
    * `handleNativeFileReady`. */
   onNativeFileReady?: (path: string, byteSize: number) => void;
+  /** Called for each 16kHz mono 16-bit PCM chunk emitted from Rust during a
+   * System Audio recording — feeds `useRecordingSession`'s
+   * `pushNativePcmChunk` for live captions via Amazon Transcribe
+   * Streaming. Not called in mic/tab modes (those feed Transcribe via an
+   * AudioWorklet on the MediaStream instead). */
+  onNativePcmChunk?: (chunk: Uint8Array) => void;
   onError?: (error: string) => void;
   onRecordingStart?: (stream: MediaStream | null) => void;
   onRecordingPause?: () => void;
@@ -45,6 +51,7 @@ export function RecordButton({
   onRecordingComplete,
   onBlobReady,
   onNativeFileReady,
+  onNativePcmChunk,
   onError,
   onRecordingStart,
   onRecordingPause,
@@ -81,6 +88,7 @@ export function RecordButton({
   const nativeTempPathRef = useRef<string | null>(null);
   const nativeLevelRef = useRef(0);
   const nativeUnlistenRef = useRef<(() => void) | null>(null);
+  const nativePcmUnlistenRef = useRef<(() => void) | null>(null);
 
   const useNativeCapture = isIOS() || !supportsMediaRecorder();
 
@@ -126,6 +134,8 @@ export function RecordButton({
       cleanupAudioResources();
       nativeUnlistenRef.current?.();
       nativeUnlistenRef.current = null;
+      nativePcmUnlistenRef.current?.();
+      nativePcmUnlistenRef.current = null;
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
@@ -194,25 +204,33 @@ export function RecordButton({
     // Clean up any leftover resources from a previous recording
     cleanupAudioResources();
 
-    // Tauri native system-audio capture — no MediaStream, no live STT.
-    // Trigger onRecordingStart(null) so the parent can createDraftMeeting,
-    // then start native capture. On stop we route the blob through onBlobReady
-    // so the normal post-recording flow updates status -> 'transcribing' and
-    // uploads under the server meetingId (not the client temp ID).
+    // Tauri native system-audio capture — no MediaStream. Trigger
+    // onRecordingStart(null) so the parent can createDraftMeeting (and, for
+    // live captions, start a native STT session fed by onNativePcmChunk
+    // below — see useRecordingSession's startNativeSession), then start
+    // native capture. On stop we route the finalized file through
+    // onNativeFileReady so the normal post-recording flow updates status ->
+    // 'transcribing' and uploads under the server meetingId (not the client
+    // temp ID).
     if (audioSource === 'system' && isTauri()) {
       try {
         // Fire onRecordingStart first so parent creates the draft meeting.
         // Note: native capture has no MediaStream — pass null.
         onRecordingStart?.(null);
 
-        // Subscribe to the native audio level event before starting the
-        // capture so we don't miss the first samples. The Rust side emits
-        // ~30 Hz RMS values in [0, 1].
+        // Subscribe to the native audio level + PCM chunk events before
+        // starting capture so we don't miss the first samples. The Rust
+        // side emits ~30 Hz RMS values in [0, 1] for the waveform, and
+        // ~64ms 16kHz mono PCM chunks for live captions.
         nativeLevelRef.current = 0;
         nativeUnlistenRef.current?.();
         nativeUnlistenRef.current = onNativeAudioLevel((level) => {
           nativeLevelRef.current = level;
         });
+        nativePcmUnlistenRef.current?.();
+        nativePcmUnlistenRef.current = onNativePcmChunk
+          ? subscribeNativePcmChunk((chunk) => onNativePcmChunk(chunk))
+          : null;
 
         const resp = await startNativeRecording(meetingId);
         nativeTempPathRef.current = resp.temp_path;
@@ -226,6 +244,8 @@ export function RecordButton({
       } catch (err) {
         nativeUnlistenRef.current?.();
         nativeUnlistenRef.current = null;
+        nativePcmUnlistenRef.current?.();
+        nativePcmUnlistenRef.current = null;
         onError?.(err instanceof Error ? err.message : 'Native recording failed');
       }
       return;
@@ -398,10 +418,12 @@ export function RecordButton({
     // /record?mode=upload if something goes wrong before that.
     if (nativeTempPathRef.current) {
       const tempPath = nativeTempPathRef.current;
-      // Stop receiving level events; the Rust side won't emit any more
+      // Stop receiving level/PCM events; the Rust side won't emit any more
       // after stop_capture, but unsubscribe defensively.
       nativeUnlistenRef.current?.();
       nativeUnlistenRef.current = null;
+      nativePcmUnlistenRef.current?.();
+      nativePcmUnlistenRef.current = null;
       nativeLevelRef.current = 0;
       try {
         const resp = await stopNativeRecording();

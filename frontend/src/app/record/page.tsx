@@ -410,10 +410,14 @@ function RecordPageInner() {
     } else if (isTauri() && audioSource === 'system') {
       // Native (system audio): no MediaStream — capture happens in Rust via
       // ScreenCaptureKit, and RecordButton manages its own timer/state.
-      // session.isRecording stays false (there is no browser stream to
-      // start a session with), so this separate flag drives the
-      // during-recording UI instead.
+      // isNativeRecording drives the during-recording UI immediately,
+      // rather than waiting on the async STT session start below.
       setIsNativeRecording(true);
+      // Live captions: no MediaStream exists to hand an AudioWorklet, so
+      // this starts a session fed by PCM chunks pushed in via
+      // RecordButton's onNativePcmChunk prop instead (see
+      // useRecordingSession's startNativeSession/pushNativePcmChunk).
+      session.startNativeSession();
     }
   };
 
@@ -803,6 +807,7 @@ function RecordPageInner() {
             onRecordingComplete={postRecording.handleRecordingComplete}
             onBlobReady={postRecording.handleBlobReady}
             onNativeFileReady={postRecording.handleNativeFileReady}
+            onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error) => {
               if (session.isRecording || isNativeRecording) {
                 postRecording.reset(); // clear any previous banner state
