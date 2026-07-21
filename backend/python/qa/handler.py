@@ -561,12 +561,26 @@ def load_session(session_id, user_id=None):
         if item:
             messages = json.loads(item.get("messages", "[]"))
             # A failed/aborted round can persist history ending in a user-role
-            # message; appending the next question would then violate Bedrock's
-            # role alternation and poison EVERY subsequent call in the session.
-            # Trimming here (the single load choke point) heals both converse
-            # loops and already-poisoned stored sessions.
-            while messages and messages[-1].get("role") == "user":
-                messages.pop()
+            # message, OR in an assistant message still holding an unresolved
+            # toolUse block (MAX_TOOL_ROUNDS exhaustion leaves the round's
+            # toolResult unsaved; the client_gone break can fire between the
+            # toolUse append and its toolResult). Either shape breaks Bedrock's
+            # role-alternation / tool-pairing validation and poisons EVERY
+            # subsequent call in the session. Rewind past both at the single
+            # load choke point, down to the last complete assistant(text) (or
+            # fully-paired tool) boundary.
+            while messages:
+                last = messages[-1]
+                role = last.get("role")
+                if role == "user":
+                    messages.pop()
+                    continue
+                if role == "assistant" and any(
+                    isinstance(b, dict) and "toolUse" in b for b in last.get("content", [])
+                ):
+                    messages.pop()
+                    continue
+                break
             return messages
         return []
     except Exception as e:
@@ -1062,7 +1076,14 @@ def _apigw_client(endpoint):
 
 
 def _post_ws(apigw, connection_id, payload):
-    """Post a JSON message to a WebSocket connection. Returns False if gone."""
+    """Post a JSON message to a WebSocket connection.
+
+    Returns False only when the connection is confirmed gone (GoneException)
+    -- callers treat False as "stop streaming, the client left". A transient
+    error (throttling, a flaky post) does NOT mean the client is gone, so it
+    must not be treated the same way or one blip silently truncates an
+    otherwise-healthy multi-round streamed answer.
+    """
     try:
         apigw.post_to_connection(
             ConnectionId=connection_id,
@@ -1073,8 +1094,8 @@ def _post_ws(apigw, connection_id, payload):
         logger.info(f"WebSocket {connection_id} is gone; aborting stream")
         return False
     except Exception as e:
-        logger.warning(f"post_to_connection failed: {e}")
-        return False
+        logger.warning(f"post_to_connection failed (treated as transient, not gone): {e}")
+        return True
 
 
 def handle_ask_stream(event):

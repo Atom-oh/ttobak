@@ -88,6 +88,48 @@ class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
         self.get_item.return_value = _stored(history)
         self.assertEqual(handler.load_session('s1', user_id='u1'), history)
 
+    def test_trims_dangling_tooluse_left_by_max_rounds_exhaustion(self):
+        # MAX_TOOL_ROUNDS exhaustion can leave the round's toolResult unsaved
+        # -- history ends in user(toolResult) whose matching assistant(toolUse)
+        # is now dangling once the trailing user message is popped.
+        self.get_item.return_value = _stored([
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'text': 'a1'}]},
+            {'role': 'user', 'content': [{'text': 'q2'}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+            {'role': 'user', 'content': [{'toolResult': {'toolUseId': 't1', 'content': [{'text': 'r'}]}}]},
+        ])
+        result = handler.load_session('s1', user_id='u1')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[-1]['content'], [{'text': 'a1'}])
+
+    def test_trims_dangling_tooluse_left_by_client_gone_break(self):
+        # client_gone can break between appending assistant(toolUse) and
+        # producing its toolResult -- history ends directly in the
+        # unresolved toolUse with no trailing user message to pop first.
+        self.get_item.return_value = _stored([
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'text': 'a1'}]},
+            {'role': 'user', 'content': [{'text': 'q2'}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+        ])
+        result = handler.load_session('s1', user_id='u1')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[-1]['content'], [{'text': 'a1'}])
+
+    def test_preserves_assistant_with_mixed_text_and_resolved_toolresult_pairing(self):
+        # A resolved tool round (toolUse followed by its toolResult, then a
+        # final assistant text) must NOT be trimmed -- only an unresolved
+        # trailing toolUse is dangling.
+        history = [
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+            {'role': 'user', 'content': [{'toolResult': {'toolUseId': 't1', 'content': [{'text': 'r'}]}}]},
+            {'role': 'assistant', 'content': [{'text': 'final answer'}]},
+        ]
+        self.get_item.return_value = _stored(history)
+        self.assertEqual(handler.load_session('s1', user_id='u1'), history)
+
     def test_all_user_history_trims_to_empty(self):
         self.get_item.return_value = _stored([
             {'role': 'user', 'content': [{'text': 'q1'}]},

@@ -7,6 +7,37 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
+func TestBuildSummarizeUserPrompt_SegmentsWithPriorContextIncludesBoth(t *testing.T) {
+	// Regression guard for the bug where the segments branch unconditionally
+	// reassigned userPrompt, discarding priorContext (the persisted live
+	// summary) on every diarized meeting — the default Whisper batch STT path.
+	segments := []speakerSegment{{Speaker: "spk_0", Text: "hello", StartTime: 1, EndTime: 2}}
+	got := buildSummarizeUserPrompt("raw transcript", "LIVE_SUMMARY_MARKER", segments)
+	if !strings.Contains(got, "LIVE_SUMMARY_MARKER") {
+		t.Fatalf("priorContext missing from segments-branch prompt: %q", got)
+	}
+	if !strings.Contains(got, "spk_0") {
+		t.Fatalf("speaker-segment content missing from prompt: %q", got)
+	}
+}
+
+func TestBuildSummarizeUserPrompt_PlainTranscriptWithPriorContextIncludesBoth(t *testing.T) {
+	got := buildSummarizeUserPrompt("raw transcript", "LIVE_SUMMARY_MARKER", nil)
+	if !strings.Contains(got, "LIVE_SUMMARY_MARKER") {
+		t.Fatalf("priorContext missing from plain-transcript prompt: %q", got)
+	}
+	if !strings.Contains(got, "raw transcript") {
+		t.Fatalf("transcript missing from prompt: %q", got)
+	}
+}
+
+func TestBuildSummarizeUserPrompt_NoPriorContextOmitsMarker(t *testing.T) {
+	got := buildSummarizeUserPrompt("raw transcript", "", nil)
+	if strings.Contains(got, "---") {
+		t.Fatalf("unexpected priorContext separator with no priorContext: %q", got)
+	}
+}
+
 func TestParseMeetingInsights_KeepsValidDropsInvalid(t *testing.T) {
 	raw := "```json\n" + `[
 	  {"type":"risk","text":"PoC 일정 지연 가능"},

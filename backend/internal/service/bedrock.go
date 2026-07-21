@@ -205,6 +205,32 @@ var mdEscaper = strings.NewReplacer(
 
 func sanitizeMarkdownText(s string) string { return mdEscaper.Replace(s) }
 
+// buildSummarizeUserPrompt assembles SummarizeTranscript's user-turn prompt:
+// the speaker-segment transcript if segments were parsed, else the plain
+// transcript, with priorContext (e.g. a persisted live summary) always
+// prepended when present. Extracted as a pure function so both prompt
+// branches are covered by table-driven tests, and priorContext can never
+// again be silently dropped by a segments-branch reassignment (see ADR/PR
+// history: it used to be discarded on every diarized meeting, which is the
+// default STT path).
+func buildSummarizeUserPrompt(transcript, priorContext string, segments []speakerSegment) string {
+	var body string
+	if len(segments) > 0 {
+		var sb strings.Builder
+		sb.WriteString("다음은 화자별로 분리된 회의 녹취록입니다:\n\n")
+		for _, seg := range segments {
+			sb.WriteString(fmt.Sprintf("[%s %.0f초~%.0f초] %s\n", seg.Speaker, seg.StartTime, seg.EndTime, seg.Text))
+		}
+		body = sb.String() + "\n\n위 녹취록을 바탕으로 회의록을 작성해주세요."
+	} else {
+		body = fmt.Sprintf("다음 회의 녹취록을 바탕으로 회의록을 작성해주세요:\n\n%s", transcript)
+	}
+	if priorContext != "" {
+		return priorContext + "\n\n---\n\n" + body
+	}
+	return body
+}
+
 // SummarizeTranscript generates meeting notes (content) from the transcript using Claude.
 // userID enables strongly-consistent base table read instead of GSI.
 // priorContext is optional linked-meeting context prepended to the prompt.
@@ -268,27 +294,13 @@ ADR-013 — 트랜스크립트 딥 링크:
 - 마커는 본문 텍스트와 분리된 형태로(문장 끝, 마침표 또는 따옴표 뒤) 적고, 그 외 형식의 시간 표기(예: "5분 30초")는 따로 만들지 말 것.
 - 한 항목에 여러 발언이 묶인 경우 가장 핵심 발언의 시점 하나만 표기.`
 
-	// Build speaker-labeled prompt if segments exist
-	var userPrompt string
-	if priorContext != "" {
-		userPrompt = priorContext + "\n\n---\n\n다음 회의 녹취록을 바탕으로 회의록을 작성해주세요:\n\n" + transcript
-	} else {
-		userPrompt = fmt.Sprintf("다음 회의 녹취록을 바탕으로 회의록을 작성해주세요:\n\n%s", transcript)
-	}
-
 	// Parsed segments are reused after the LLM call to resolve ADR-013
 	// `[TS:NNN]` markers into `transcript://{segmentId}` deep links.
 	var parsedSegments []speakerSegment
 	if meeting.TranscriptSegments != "" {
-		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &parsedSegments); err == nil && len(parsedSegments) > 0 {
-			var sb strings.Builder
-			sb.WriteString("다음은 화자별로 분리된 회의 녹취록입니다:\n\n")
-			for _, seg := range parsedSegments {
-				sb.WriteString(fmt.Sprintf("[%s %.0f초~%.0f초] %s\n", seg.Speaker, seg.StartTime, seg.EndTime, seg.Text))
-			}
-			userPrompt = sb.String() + "\n\n위 녹취록을 바탕으로 회의록을 작성해주세요."
-		}
+		_ = json.Unmarshal([]byte(meeting.TranscriptSegments), &parsedSegments)
 	}
+	userPrompt := buildSummarizeUserPrompt(transcript, priorContext, parsedSegments)
 
 	// Include screenshot analysis results if available
 	attachments, _ := s.repo.ListAttachments(ctx, meetingID)

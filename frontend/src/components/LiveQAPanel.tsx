@@ -76,6 +76,13 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       setIsAsking(false);
       activeEntryIdRef.current = null;
       inputRef.current?.focus();
+      // The stalled request/socket is still live server-side — a late
+      // delta/complete for it would otherwise land on whatever entry becomes
+      // active next (there's no per-request id, only activeEntryIdRef).
+      // Dropping the socket here stops that at the source; ensureWebSocket
+      // opens a fresh one for the next question.
+      wsRef.current?.disconnect();
+      wsRef.current = null;
     }, 60_000);
   }, [clearWatchdog]);
 

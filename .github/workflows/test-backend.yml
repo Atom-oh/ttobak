@@ -49,10 +49,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Run Python crawler + research-agent tests
+      - name: Run Python crawler + research-agent + qa tests
         run: |
           # Capped at <2: these tests exercise botocore.auth.SigV4Auth, a
           # quasi-internal API that a boto3 major bump could change shape.
           pip install 'boto3<2'
           cd backend/python/crawler && python3 -m unittest test_crawlers -v
           cd ../research-agent && python3 -m unittest test_tools -v
+          cd ../qa && python3 -m unittest test_handler -v
