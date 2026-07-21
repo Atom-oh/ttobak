@@ -1308,6 +1308,14 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 })
             messages.append({'role': 'user', 'content': tool_results})
 
+            if client_gone:
+                # Finish this round's tool_results first so every toolUse
+                # keeps its matching toolResult (else load_session's dangling
+                # -toolUse rewind kicks in next load) -- then stop before the
+                # next Bedrock round, which would otherwise run to completion
+                # on a socket nothing is listening on.
+                break
+
     save_session(session_id, messages, user_id=user_id)
 
     seen = set()

@@ -137,6 +137,56 @@ class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
         self.assertEqual(handler.load_session('s1', user_id='u1'), [])
 
 
+class TestAgenticConverseStreamClientGone(unittest.TestCase):
+    """A client that disconnects mid-tool-round must stop the loop before the
+    next (wasted) Bedrock round -- not just rearm-then-ignore the signal."""
+
+    def _tool_use_stream(self, tool_use_id='t1'):
+        return {'stream': [
+            {'contentBlockStart': {'start': {'toolUse': {'toolUseId': tool_use_id, 'name': 'some_tool'}}}},
+            {'contentBlockDelta': {'delta': {'toolUse': {'input': '{}'}}}},
+            {'contentBlockStop': {}},
+            {'messageStop': {'stopReason': 'tool_use'}},
+        ]}
+
+    @mock.patch.object(handler, 'execute_tool')
+    @mock.patch.object(handler, 'bedrock_runtime')
+    @mock.patch.object(handler, 'table')
+    def test_stops_before_next_bedrock_round_when_client_gone_during_tool_round(
+        self, mock_table, mock_bedrock, mock_execute_tool,
+    ):
+        mock_bedrock.converse_stream.return_value = self._tool_use_stream()
+        mock_execute_tool.return_value = ('tool result', [])
+
+        apigw = mock.MagicMock()
+
+        class FakeGoneException(Exception):
+            pass
+        apigw.exceptions.GoneException = FakeGoneException
+        # tool_progress heartbeat is the very first post_to_connection call
+        # inside the tool branch -- fail it to simulate a mid-tool-round
+        # disconnect.
+        apigw.post_to_connection.side_effect = FakeGoneException()
+
+        handler.agentic_converse_stream(
+            messages=[{'role': 'user', 'content': [{'text': 'q'}]}],
+            transcript='',
+            session_id='s1',
+            user_id='u1',
+            apigw=apigw,
+            connection_id='c1',
+        )
+
+        self.assertEqual(
+            mock_bedrock.converse_stream.call_count, 1,
+            "client_gone during the tool round must stop the loop before a second "
+            "(wasted) Bedrock round -- the signal must not be silently reset/ignored",
+        )
+        saved = json.loads(mock_table.put_item.call_args.kwargs['Item']['messages'])
+        self.assertEqual(saved[-1]['role'], 'user')
+        self.assertIn('toolResult', saved[-1]['content'][0])
+
+
 def make_get_item(share_origin='', member_exists=True, shared_to_account=True, account_id='acc-1', share_exists=True):
     """Build a get_item side_effect covering all three live re-checks
     _list_shared_meetings performs: the Share row itself (SHARED#), the
