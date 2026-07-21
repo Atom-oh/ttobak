@@ -36,6 +36,16 @@ const suggestedQuestions = [
 
 const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
 
+/** Tail-truncate to at most maxBytes of UTF-8, without splitting a multi-byte char. */
+function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): string | undefined {
+  if (!text) return text;
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= maxBytes) return text;
+  let start = bytes.length - maxBytes;
+  while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++; // skip stray continuation byte
+  return new TextDecoder().decode(bytes.slice(start));
+}
+
 export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, onAskedQuestion, onSaveToNotes }: LiveQAPanelProps) {
   const [question, setQuestion] = useState('');
   const [qaHistory, setQaHistory] = useState<QAEntry[]>([]);
@@ -247,13 +257,12 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     // Try WebSocket streaming first
     const ws = await ensureWebSocket();
     if (ws) {
-      // API Gateway WebSocket caps messages at 128KB — send only the tail of a
-      // long transcript (24,000 chars ≈ 72KB worst-case UTF-8) so delivery
-      // never dies silently on long meetings.
-      const wsContext =
-        transcriptContext && transcriptContext.length > 24000
-          ? transcriptContext.slice(-24000)
-          : transcriptContext;
+      // API Gateway WebSocket has a 32KB per-frame limit (separate from, and
+      // much smaller than, the 128KB message limit) that the browser can't
+      // control the framing around — a char-count cap on Korean-heavy text
+      // can still serialize past it and die silently. Cap by actual UTF-8
+      // byte length instead, with headroom for the JSON envelope.
+      const wsContext = truncateToUtf8ByteLimit(transcriptContext, 28_000);
       ws.askLive(q.trim(), wsContext, meetingId, sessionId);
       armWatchdog();
       return;
