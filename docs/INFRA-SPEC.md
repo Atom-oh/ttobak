@@ -179,7 +179,7 @@ TtobakApp (bin/ttobak.ts)
   - `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`
   - `KB_ID`, `KB_DATASOURCE_ID` (note: api reads `KB_DATASOURCE_ID`, not the `DATA_SOURCE_ID` name summarize uses)
   - `AWS_REGION`
-- **Permissions**: DynamoDB CRUD, S3 read/write, Cognito ListUsers, Bedrock Retrieve, Bedrock StartIngestionJob (for `POST /api/kb/sync`)
+- **Permissions**: DynamoDB CRUD, S3 read/write, Cognito ListUsers, Bedrock Retrieve, Bedrock StartIngestionJob scoped to the KB ARN (for `POST /api/kb/sync`)
 
 #### Transcribe Lambda
 - **Trigger**: S3 Event Notification (prefix: `audio/`, suffix: `.webm,.m4a,.mp4`) via EventBridge

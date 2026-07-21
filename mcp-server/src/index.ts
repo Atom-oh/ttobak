@@ -196,11 +196,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'ttobak_kb_sync',
       description:
-        'Trigger Knowledge Base ingestion for files uploaded via ttobak_kb_upload since the last sync. ' +
-        'Returns status "started" (with a job id) once deployed with the KB env vars/IAM this PR adds; ' +
-        'returns "skipped" on any deployment still missing them, in which case uploads are still indexed ' +
-        'by the next ingestion run another pipeline triggers (every completed meeting summary, and any ' +
-        'daily crawler run that found new documents).',
+        'Trigger a Knowledge Base ingestion job. This is a full-data-source sync -- it indexes KB uploads, ' +
+        'meeting exports, and crawler docs alike, not just your ttobak_kb_upload files. Returns status ' +
+        '"started" with a job id; returns "skipped" on a deployment where the API Lambda lacks the KB env ' +
+        'vars, in which case uploads are still indexed by the next ingestion run another pipeline triggers ' +
+        '(every completed meeting summary, and any daily crawler run that found new documents).',
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {

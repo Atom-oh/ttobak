@@ -14,6 +14,8 @@ export interface AiStackProps extends cdk.StackProps {
   userPoolArn: string;
   webSearchGatewayArn: string;
   researchAgentExecutionRoleArn: string;
+  /** Bedrock Knowledge Base ID — scopes the api role's StartIngestionJob grant to this KB's ARN. */
+  knowledgeBaseId?: string;
 }
 
 export class AiStack extends cdk.Stack {
@@ -100,15 +102,21 @@ export class AiStack extends cdk.Stack {
     );
 
     // Bedrock KB ingestion (for POST /api/kb/sync — same action summarize/kb
-    // roles hold; without it SyncKB would only ever return "skipped").
-    this.apiRole.addToPolicy(
-      new iam.PolicyStatement({
-        sid: 'BedrockKBIngestion',
-        effect: iam.Effect.ALLOW,
-        actions: ['bedrock:StartIngestionJob'],
-        resources: ['*'],
-      })
-    );
+    // roles hold, but scoped to the one KB this deployment uses instead of
+    // their legacy '*': the IAM mandate bans NEW unconditioned wildcard
+    // statements; tightening the pre-existing three is tracked follow-up).
+    if (props.knowledgeBaseId) {
+      this.apiRole.addToPolicy(
+        new iam.PolicyStatement({
+          sid: 'BedrockKBIngestion',
+          effect: iam.Effect.ALLOW,
+          actions: ['bedrock:StartIngestionJob'],
+          resources: [
+            `arn:${cdk.Aws.PARTITION}:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:knowledge-base/${props.knowledgeBaseId}`,
+          ],
+        })
+      );
+    }
 
     // Admin user invitation — scoped to this User Pool only. AdminCreateUser
     // triggers Cognito's built-in invite email (username + temp password, no
