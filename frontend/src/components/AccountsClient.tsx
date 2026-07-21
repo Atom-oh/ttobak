@@ -2,11 +2,18 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useAuth } from '@/components/auth/AuthProvider';
 import { accountApi } from '@/lib/api';
-import type { AccountSummary } from '@/types/meeting';
+import { MemberPicker } from '@/components/MemberPicker';
+import type { AccountSummary, User } from '@/types/meeting';
+
+interface PendingMember extends User {
+  role: string;
+}
 
 export default function AccountsClient() {
   const router = useRouter();
+  const { user } = useAuth();
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -15,6 +22,8 @@ export default function AccountsClient() {
   const [name, setName] = useState('');
   const [aliases, setAliases] = useState('');
   const [industry, setIndustry] = useState('');
+  const [pendingMembers, setPendingMembers] = useState<PendingMember[]>([]);
+  const [pendingRole, setPendingRole] = useState('SSA');
   const [creating, setCreating] = useState(false);
 
   const fetchAccounts = useCallback(async () => {
@@ -45,10 +54,29 @@ export default function AccountsClient() {
         aliases: aliases.split(',').map((s) => s.trim()).filter(Boolean),
         industry: industry.trim() || undefined,
       });
+      const failed: string[] = [];
+      for (const m of pendingMembers) {
+        try {
+          await accountApi.addMember(created.accountId, { email: m.email, role: m.role });
+        } catch {
+          failed.push(m.email);
+        }
+      }
       setShowForm(false);
       setName('');
       setAliases('');
       setIndustry('');
+      setPendingMembers([]);
+      if (failed.length > 0) {
+        // Stay on the accounts list so the error is actually visible -- the account
+        // still exists and is reachable from the (refreshed) list below, where the
+        // owner can open it and retry adding the failed members from its detail page.
+        // fetchAccounts() must run BEFORE setError(): it calls setError(null) on entry,
+        // which would otherwise wipe this message in the same tick it was set.
+        await fetchAccounts();
+        setError(`Account created, but failed to add: ${failed.join(', ')}. Open the account below and retry.`);
+        return;
+      }
       router.push(`/accounts/${created.accountId}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create account');
@@ -95,6 +123,48 @@ export default function AccountsClient() {
             placeholder="Industry (optional)"
             className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
           />
+
+          <div>
+            <p className="text-xs font-semibold text-slate-500 dark:text-text-muted mb-1">Members (optional)</p>
+            <div className="flex gap-2">
+              <div className="flex-1">
+                <MemberPicker
+                  excludeUserIds={user ? [user.userId, ...pendingMembers.map((m) => m.userId)] : pendingMembers.map((m) => m.userId)}
+                  onPick={(u) => setPendingMembers((prev) => [...prev, { ...u, role: pendingRole }])}
+                  placeholder="Search colleague by name or email"
+                />
+              </div>
+              <select
+                value={pendingRole}
+                onChange={(e) => setPendingRole(e.target.value)}
+                className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm h-fit"
+              >
+                <option value="AM">AM</option>
+                <option value="TAM">TAM</option>
+                <option value="SSA">SSA</option>
+              </select>
+            </div>
+            {pendingMembers.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {pendingMembers.map((m) => (
+                  <div key={m.userId} className="flex items-center justify-between text-sm px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-white/5">
+                    <span className="text-slate-700 dark:text-text-secondary truncate">{m.name || m.email}</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary">{m.role}</span>
+                      <button
+                        type="button"
+                        onClick={() => setPendingMembers((prev) => prev.filter((p) => p.userId !== m.userId))}
+                        className="text-slate-400 hover:text-red-500"
+                      >
+                        <span className="material-symbols-outlined text-base">close</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <button
             type="submit"
             disabled={creating || !name.trim()}

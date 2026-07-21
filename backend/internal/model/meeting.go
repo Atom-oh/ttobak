@@ -80,9 +80,28 @@ type Share struct {
 	SharedToID string    `dynamodbav:"sharedToId"`
 	Email      string    `dynamodbav:"email"`
 	Permission string    `dynamodbav:"permission"` // "read" or "edit"
+	// Origin distinguishes a share created by ShareMeetingToAccount ("account")
+	// from one created by the owner directly via ShareMeetingByEmail (""/direct).
+	// RemoveMember's cleanup must only ever delete "account"-origin shares -- a
+	// direct share is a separate grant the owner made explicitly and removing a
+	// team member must never silently revoke it.
+	Origin string `dynamodbav:"origin,omitempty"`
+	// AccountID is set only on Origin=="account" shares (by CreateShareIfMember,
+	// and retroactively by the backfill CLI) to the account that granted them.
+	// DeleteShareIfAccountOrigin ties its delete condition to this field so a
+	// meeting re-shared to a DIFFERENT account between RemoveMember's cleanup
+	// read and its delete can never have that new account's grant swept up by
+	// the old account's removal -- the meeting.AccountID re-check that guards
+	// the read is a separate, non-atomic call and can't by itself prevent that
+	// race; only a condition on the row being deleted can.
+	AccountID  string    `dynamodbav:"accountId,omitempty"`
 	CreatedAt  time.Time `dynamodbav:"createdAt"`
 	EntityType string    `dynamodbav:"entityType"` // "SHARE"
 }
+
+const (
+	ShareOriginAccount = "account"
+)
 
 // User represents a user record (for search functionality)
 // PK: USER#{userId}, SK: PROFILE

@@ -67,6 +67,10 @@ type AddMemberRequest struct {
 	Role  string `json:"role"`
 }
 
+type UpdateMemberRequest struct {
+	Role string `json:"role"`
+}
+
 type AccountMemberDTO struct {
 	UserID string `json:"userId"`
 	Email  string `json:"email,omitempty"`

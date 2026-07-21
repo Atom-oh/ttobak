@@ -146,6 +146,78 @@ func (h *AccountHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, dto)
 }
 
+func (h *AccountHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	targetUserID := chi.URLParam(r, "userId")
+	if accountID == "" || targetUserID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID and user ID are required")
+		return
+	}
+	var req model.UpdateMemberRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+	dto, err := h.accountService.UpdateMemberRole(ctx, userID, accountID, targetUserID, &req)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can change member roles")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Member not found")
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid role (AM/TAM/SSA) or target is the owner")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, dto)
+}
+
+func (h *AccountHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	targetUserID := chi.URLParam(r, "userId")
+	if accountID == "" || targetUserID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID and user ID are required")
+		return
+	}
+	force := r.URL.Query().Get("force") == "true"
+	result, err := h.accountService.RemoveMember(ctx, userID, accountID, targetUserID, force)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can remove members")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Member not found")
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "The owner cannot be removed")
+		case errors.Is(err, service.ErrAmbiguousShareBlocksRemoval):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "This member holds an untagged share that may be a direct grant or a legacy account-share; pass ?force=true to remove anyway (the share will be left untouched and reported in the response)")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	// The membership removal itself always succeeds at this point -- 204 is
+	// reserved for the fully-clean case (no body, matching HTTP semantics);
+	// when Share cleanup failed or found an ambiguous untagged Share, surface
+	// it in a 200 body instead of leaving the caller without a signal.
+	if len(result.FailedMeetingIDs) > 0 || len(result.AmbiguousUntaggedMeetingIDs) > 0 {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"removed":                     true,
+			"cleanupFailedForMeetings":    result.FailedMeetingIDs,
+			"ambiguousUntaggedMeetingIDs": result.AmbiguousUntaggedMeetingIDs,
+		})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *AccountHandler) ListAccountMeetings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := middleware.GetUserID(ctx)

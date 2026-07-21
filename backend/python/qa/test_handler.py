@@ -1,0 +1,203 @@
+"""Unit tests for handler.py's _list_shared_meetings origin/membership gate.
+
+Verifies the fix for the PR #114 review MAJORs: an account-origin share row
+must not grant access once the caller is no longer an account member, even
+if RemoveMember's best-effort cleanup never deleted the row -- and that
+revocation is visible immediately (origin/membership/sharedToAccount are all
+re-checked live on every call, uncached), not bounded by the raw
+share-list's SHARED_MEETINGS_CACHE_TTL_SECONDS (which only caches the
+immutable meetingId/ownerId identity of each share, not any authorization
+decision).
+"""
+
+import os
+import sys
+import time
+import unittest
+from unittest import mock
+
+os.environ.setdefault('TABLE_NAME', 'test-table')
+os.environ.setdefault('AWS_DEFAULT_REGION', 'us-east-1')
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+import handler  # noqa: E402
+
+
+def make_get_item(share_origin='', member_exists=True, shared_to_account=True, account_id='acc-1', share_exists=True):
+    """Build a get_item side_effect covering all three live re-checks
+    _list_shared_meetings performs: the Share row itself (SHARED#), the
+    meeting's account linkage (MEETING#), and account membership (MEMBER#)."""
+    def get_item(Key, **kwargs):
+        sk = Key['SK']
+        if sk.startswith('SHARED#'):
+            if not share_exists:
+                return {}
+            item = {'origin': share_origin} if share_origin else {}
+            return {'Item': item}
+        if sk.startswith('MEETING#'):
+            return {'Item': {'accountId': account_id, 'sharedToAccount': shared_to_account}}
+        if sk.startswith('MEMBER#'):
+            return {'Item': {'role': 'TAM'}} if member_exists else {}
+        return {}
+    return get_item
+
+
+class TestListSharedMeetings(unittest.TestCase):
+    def setUp(self):
+        # Each test gets a clean cache -- module-level dicts persist across
+        # tests otherwise (mirrors the real warm-Lambda cache behavior this
+        # code is designed for, but would make tests order-dependent).
+        handler._shared_meetings_cache.clear()
+        handler._shared_meetings_cache_expiry.clear()
+
+    @mock.patch.object(handler, 'table')
+    def test_direct_share_included_when_still_present(self, mock_table):
+        mock_table.query.return_value = {'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1'}]}
+        mock_table.get_item.side_effect = make_get_item(share_origin='')
+        result = handler._list_shared_meetings('reader-1')
+        self.assertEqual(result, [{'meetingId': 'm-1', 'ownerId': 'owner-1'}])
+
+    @mock.patch.object(handler, 'table')
+    def test_direct_share_excluded_once_revoked(self, mock_table):
+        # The raw list is cached, but the Share row itself is re-checked live
+        # -- a revoked direct share (owner called RevokeShare) must not leak
+        # just because it was still present when the raw list was cached.
+        mock_table.query.return_value = {'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1'}]}
+        mock_table.get_item.side_effect = make_get_item(share_exists=False)
+        result = handler._list_shared_meetings('reader-1')
+        self.assertEqual(result, [])
+
+    @mock.patch.object(handler, 'table')
+    def test_account_share_included_when_still_member(self, mock_table):
+        mock_table.query.return_value = {
+            'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1'}],
+        }
+        mock_table.get_item.side_effect = make_get_item(share_origin='account', member_exists=True)
+        result = handler._list_shared_meetings('member-1')
+        self.assertEqual(result, [{'meetingId': 'm-1', 'ownerId': 'owner-1'}])
+        member_check_call = [c for c in mock_table.get_item.call_args_list if c.kwargs['Key']['SK'].startswith('MEMBER#')][0]
+        self.assertTrue(member_check_call.kwargs.get('ConsistentRead'), "membership check must use ConsistentRead -- an eventual read could return stale removed=False")
+
+    @mock.patch.object(handler, 'table')
+    def test_account_share_excluded_when_membership_removed(self, mock_table):
+        # The exact permanent-access gap this fix closes: the Share row is
+        # still present (RemoveMember's cleanup delete never ran), but the
+        # AccountMember row is gone.
+        mock_table.query.return_value = {
+            'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1'}],
+        }
+        mock_table.get_item.side_effect = make_get_item(share_origin='account', member_exists=False)
+        result = handler._list_shared_meetings('removed-1')
+        self.assertEqual(result, [])
+
+    @mock.patch.object(handler, 'table')
+    def test_account_share_excluded_when_unshared_from_account(self, mock_table):
+        # Mirrors the Go backend's resolveSharedAccess predicate: a meeting
+        # the owner un-shared from the account (or that was only ever
+        # Link-only), sharedToAccount=False, must not leak here even with a
+        # lingering account-origin Share row and valid membership.
+        mock_table.query.return_value = {
+            'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1'}],
+        }
+        mock_table.get_item.side_effect = make_get_item(share_origin='account', member_exists=True, shared_to_account=False)
+        result = handler._list_shared_meetings('member-1')
+        self.assertEqual(result, [])
+
+    @mock.patch.object(handler, 'table')
+    def test_membership_revocation_seen_immediately_despite_warm_raw_cache(self, mock_table):
+        # The raw list (meetingId/ownerId identity only) stays cached across
+        # calls, but membership/origin/sharedToAccount are all re-checked
+        # live on every call -- so revocation is visible on the very next
+        # call, NOT bounded by SHARED_MEETINGS_CACHE_TTL_SECONDS.
+        mock_table.query.return_value = {
+            'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1'}],
+        }
+        is_still_member = {'value': True}
+
+        def get_item(Key, **kwargs):
+            return make_get_item(share_origin='account', member_exists=is_still_member['value'])(Key, **kwargs)
+
+        mock_table.get_item.side_effect = get_item
+        result = handler._list_shared_meetings('member-1')
+        self.assertEqual(result, [{'meetingId': 'm-1', 'ownerId': 'owner-1'}])
+        self.assertEqual(mock_table.query.call_count, 1)
+
+        # Membership revoked -- raw cache is still warm (not expired), yet
+        # the very next call must reflect the revocation immediately.
+        is_still_member['value'] = False
+        result = handler._list_shared_meetings('member-1')
+        self.assertEqual(result, [])
+        self.assertEqual(mock_table.query.call_count, 1, "raw share-list cache should still be warm -- no re-query needed")
+
+    @mock.patch.object(handler, 'table')
+    def test_raw_share_list_cache_expires_and_requeries(self, mock_table):
+        mock_table.query.return_value = {
+            'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1'}],  # direct share
+        }
+        mock_table.get_item.side_effect = make_get_item(share_origin='')
+        handler._list_shared_meetings('reader-1')
+        self.assertEqual(mock_table.query.call_count, 1)
+        handler._list_shared_meetings('reader-1')
+        self.assertEqual(mock_table.query.call_count, 1, "second call within TTL should hit the raw cache, not re-query")
+
+        handler._shared_meetings_cache_expiry['reader-1'] = time.time() - 1
+        handler._list_shared_meetings('reader-1')
+        self.assertEqual(mock_table.query.call_count, 2, "expired cache should trigger a fresh query")
+
+
+class TestKBCacheAccessSignature(unittest.TestCase):
+    def setUp(self):
+        handler._shared_meetings_cache.clear()
+        handler._shared_meetings_cache_expiry.clear()
+
+    @mock.patch.object(handler, 'bedrock_agent_runtime')
+    @mock.patch.object(handler, 'table')
+    def test_kb_cache_miss_when_access_changed_since_cached(self, mock_table, mock_bedrock):
+        # First call: user has access to m-1, result gets cached under that
+        # access signature.
+        mock_table.query.return_value = {'Items': [{'meetingId': 'm-1', 'ownerId': 'owner-1'}]}
+        mock_table.get_item.side_effect = make_get_item(share_origin='')
+        mock_bedrock.retrieve.return_value = {'retrievalResults': [
+            {'score': 0.9, 'content': {'text': 'secret transcript excerpt'}, 'location': {'s3Location': {'uri': 's3://x'}}}
+        ]}
+
+        # Disable the real DynamoDB-backed KB cache reads/writes by making
+        # get_item/put_item behave like an empty cache initially.
+        cache_store = {}
+
+        def get_item(Key, **kwargs):
+            pk = Key['PK']
+            if pk.startswith('CACHE#KB#'):
+                item = cache_store.get(pk)
+                return {'Item': item} if item else {}
+            return make_get_item(share_origin='')(Key, **kwargs)
+
+        def put_item(Item):
+            cache_store[Item['PK']] = Item
+
+        mock_table.get_item.side_effect = get_item
+        mock_table.put_item.side_effect = put_item
+
+        results1 = handler.retrieve_from_kb('what was discussed', user_id='reader-1')
+        self.assertEqual(len(results1), 1)
+        self.assertEqual(mock_bedrock.retrieve.call_count, 1)
+
+        # Second call, same question/user, access UNCHANGED -- must hit the
+        # KB cache (no second Bedrock call).
+        results2 = handler.retrieve_from_kb('what was discussed', user_id='reader-1')
+        self.assertEqual(results2, results1)
+        self.assertEqual(mock_bedrock.retrieve.call_count, 1, "unchanged access should still hit the KB cache")
+
+        # Access revoked (the share is gone) -- even though the KB cache
+        # entry is still within TTL, the access signature no longer matches,
+        # so it must NOT be served; Bedrock must be called again (and the
+        # live filter now grants nothing).
+        handler._shared_meetings_cache_expiry.clear()  # force the raw list to re-query too
+        mock_table.query.return_value = {'Items': []}
+        results3 = handler.retrieve_from_kb('what was discussed', user_id='reader-1')
+        self.assertEqual(mock_bedrock.retrieve.call_count, 2, "revoked access must bypass the stale KB cache entry")
+
+
+if __name__ == '__main__':
+    unittest.main()

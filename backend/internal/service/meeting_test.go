@@ -21,6 +21,23 @@ type mockMeetingRepo struct {
 	members         map[string]*model.AccountMember // "accountID|userID"
 	meetingRefs     map[string][]model.MeetingRef   // accountID -> refs
 	accountInsights []model.AccountInsight
+
+	// forceGetMemberNil simulates a concurrent RemoveMember that completed
+	// between ShareMeetingToAccount's ListAccountMembers snapshot and its
+	// per-member GetMember recheck: GetMember returns nil for this exact
+	// "accountID|userID" key even though the member is still present in the
+	// `members` map (so ListAccountMembers -- which reads `members` directly,
+	// not through GetMember -- still returns the stale snapshot including
+	// this member, exactly reproducing the race window the recheck exists to
+	// close).
+	forceGetMemberNil string
+
+	// getMemberErrCount, when non-zero, makes the next N GetMember calls for
+	// ANY key return an error instead of consulting `members` -- used to
+	// verify a transient GetMember failure in ListMeetings isn't cached as
+	// "not a member" (which would incorrectly suppress every other meeting
+	// for the same account on the same page).
+	getMemberErrCount int
 }
 
 func newMockMeetingRepo() *mockMeetingRepo {
@@ -164,7 +181,13 @@ func (m *mockMeetingRepo) ListMeetings(_ context.Context, params repository.List
 			meetings = append(meetings, *mtg)
 		}
 	}
-	return &repository.ListMeetingsResult{Meetings: meetings}, nil
+	var shares []model.Share
+	for key, sh := range m.shares {
+		if strings.HasPrefix(key, params.UserID+"|") {
+			shares = append(shares, *sh)
+		}
+	}
+	return &repository.ListMeetingsResult{Meetings: meetings, Shares: shares}, nil
 }
 
 func (m *mockMeetingRepo) BatchGetMeetings(_ context.Context, keys []repository.MeetingKey) ([]*model.Meeting, error) {
@@ -189,15 +212,24 @@ func (m *mockMeetingRepo) GetUserByEmail(_ context.Context, email string) (*mode
 	return u, nil
 }
 
-func (m *mockMeetingRepo) CreateShare(_ context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error) {
+func (m *mockMeetingRepo) CreateShare(_ context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, origin string) (*model.Share, error) {
+	key := shareKey(sharedToID, meetingID)
+	if origin == model.ShareOriginAccount {
+		if existing, ok := m.shares[key]; ok && existing.Origin != model.ShareOriginAccount {
+			// Never let an account-share write clobber a pre-existing direct
+			// share for the same recipient+meeting.
+			return existing, nil
+		}
+	}
 	sh := &model.Share{
 		MeetingID:  meetingID,
 		OwnerID:    ownerID,
 		SharedToID: sharedToID,
 		Email:      email,
 		Permission: permission,
+		Origin:     origin,
 	}
-	m.shares[shareKey(sharedToID, meetingID)] = sh
+	m.shares[key] = sh
 	return sh, nil
 }
 
@@ -206,7 +238,45 @@ func (m *mockMeetingRepo) DeleteShare(_ context.Context, sharedToID, meetingID s
 	return nil
 }
 
+// CreateShareIfMember mirrors the real repo's atomic membership-check +
+// clobber-guarded write. It reuses the forceGetMemberNil hook (same
+// semantics as the standalone GetMember: simulates the member having been
+// removed by write time even though ListAccountMembers' earlier snapshot --
+// which reads `members` directly -- still included them), so a test can
+// force the write-time check to fail for one specific member without ever
+// removing them from the map ListAccountMembers already iterated.
+func (m *mockMeetingRepo) CreateShareIfMember(_ context.Context, meetingID, ownerID, ownerEmail, accountID, sharedToID, email, permission string) (*model.Share, error) {
+	memberKey := accountID + "|" + sharedToID
+	if m.forceGetMemberNil != "" && m.forceGetMemberNil == memberKey {
+		return nil, repository.ErrMemberRemoved
+	}
+	if _, ok := m.members[memberKey]; !ok {
+		return nil, repository.ErrMemberRemoved
+	}
+	key := shareKey(sharedToID, meetingID)
+	if existing, ok := m.shares[key]; ok && existing.Origin != model.ShareOriginAccount {
+		return existing, nil
+	}
+	sh := &model.Share{
+		MeetingID:  meetingID,
+		OwnerID:    ownerID,
+		SharedToID: sharedToID,
+		Email:      email,
+		Permission: permission,
+		Origin:     model.ShareOriginAccount,
+	}
+	m.shares[key] = sh
+	return sh, nil
+}
+
 func (m *mockMeetingRepo) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
+	if m.getMemberErrCount > 0 {
+		m.getMemberErrCount--
+		return nil, errors.New("simulated transient GetMember error")
+	}
+	if m.forceGetMemberNil != "" && m.forceGetMemberNil == accountID+"|"+userID {
+		return nil, nil
+	}
 	mem, ok := m.members[accountID+"|"+userID]
 	if !ok {
 		return nil, nil
@@ -324,6 +394,81 @@ func TestShareMeetingToAccount_GrantsAndRefs(t *testing.T) {
 	}
 	if len(repo.meetingRefs["acc-1"]) != 1 || repo.meetingRefs["acc-1"][0].MeetingID != "m-1" {
 		t.Errorf("expected 1 meeting ref for acc-1, got %+v", repo.meetingRefs["acc-1"])
+	}
+}
+
+func TestShareMeetingToAccount_SkipsRemovedMember(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "ROSA 리뷰", Status: model.StatusDone})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+	repo.addMember("acc-1", "tam-1", model.RoleTAM)
+	repo.addMember("acc-1", "ssa-1", model.RoleSSA)
+
+	// Simulate tam-1 having been removed from the account in the gap between
+	// ListAccountMembers' snapshot (which still includes tam-1, since it reads
+	// the `members` map directly) and CreateShareIfMember's atomic
+	// membership-check-and-write for this member.
+	repo.forceGetMemberNil = "acc-1|tam-1"
+
+	res, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.SharedWith != 1 { // only ssa-1; tam-1 skipped, owner excluded
+		t.Errorf("expected 1 share (ssa-1 only), got %d", res.SharedWith)
+	}
+	if repo.shares[shareKey("tam-1", "m-1")] != nil {
+		t.Error("expected no share created for tam-1 (removed mid-race)")
+	}
+	if repo.shares[shareKey("ssa-1", "m-1")] == nil {
+		t.Error("expected share created for ssa-1")
+	}
+}
+
+func TestCreateShare_AccountOriginNeverClobbersDirectShare(t *testing.T) {
+	repo := newMockMeetingRepo()
+	// Seed a pre-existing direct share for tam-1/m-1.
+	repo.shares[shareKey("tam-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionEdit, Origin: "",
+	}
+
+	got, err := repo.CreateShare(context.Background(), "m-1", "owner-1", "o@x.com", "tam-1", "tam@x.com", model.PermissionRead, model.ShareOriginAccount)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Origin == model.ShareOriginAccount || got.Permission != model.PermissionEdit {
+		t.Errorf("expected the pre-existing direct share preserved unchanged, got %+v", got)
+	}
+	stored := repo.shares[shareKey("tam-1", "m-1")]
+	if stored.Origin == model.ShareOriginAccount {
+		t.Errorf("direct share must not be overwritten by an account-origin write, got %+v", stored)
+	}
+}
+
+func TestShareMeetingToAccount_TransactionalWriteNeverClobbersDirectShare(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "ROSA 리뷰", Status: model.StatusDone})
+	repo.addMember("acc-1", "owner-1", model.RoleOwner)
+	repo.addMember("acc-1", "tam-1", model.RoleTAM)
+
+	// tam-1 already has a direct (non-account-origin) share on this meeting,
+	// e.g. from an earlier ShareMeetingByEmail call by the owner.
+	repo.shares[shareKey("tam-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionEdit, Origin: "",
+	}
+
+	res, err := svc.ShareMeetingToAccount(context.Background(), "owner-1", "o@x.com", "m-1", "acc-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.SharedWith != 1 {
+		t.Errorf("expected tam-1 counted as shared (already has access via direct share), got %d", res.SharedWith)
+	}
+	stored := repo.shares[shareKey("tam-1", "m-1")]
+	if stored.Origin == model.ShareOriginAccount || stored.Permission != model.PermissionEdit {
+		t.Errorf("expected pre-existing direct share preserved unchanged through the transactional path, got %+v", stored)
 	}
 }
 
@@ -866,6 +1011,236 @@ func TestGetMeetingDetail_LinkedButNotSharedStaysPrivate(t *testing.T) {
 
 	if _, err := svc.GetMeetingDetail(context.Background(), "late-1", "m-2"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("linked-but-not-shared meeting must stay private to account members, got %v", err)
+	}
+}
+
+func TestResolveSharedAccessOrNotFound_NoAccessReturnsErrNotFound(t *testing.T) {
+	repo := newMockMeetingRepo()
+	// No meeting, no share, no membership at all -- resolveSharedAccess's
+	// zero-value (nil, "", nil) contract must be converted to ErrNotFound by
+	// the OrNotFound wrapper, the exact regression flagged for
+	// KnowledgeService.Ask (a caller that has no fallthrough of its own and
+	// needs an error, not a value it must remember to nil-check).
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone})
+
+	meeting, permission, err := resolveSharedAccessOrNotFound(context.Background(), repo, "stranger-1", "m-1")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+	if meeting != nil {
+		t.Errorf("expected nil meeting on no access, got %+v", meeting)
+	}
+	if permission != "" {
+		t.Errorf("expected empty permission on no access, got %q", permission)
+	}
+}
+
+func TestResolveSharedAccessOrNotFound_ValidShareReturnsNoError(t *testing.T) {
+	repo := newMockMeetingRepo()
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone})
+	repo.shares[shareKey("reader-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "reader-1", Permission: model.PermissionRead,
+	}
+
+	meeting, permission, err := resolveSharedAccessOrNotFound(context.Background(), repo, "reader-1", "m-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if meeting == nil || meeting.MeetingID != "m-1" {
+		t.Errorf("expected meeting m-1, got %+v", meeting)
+	}
+	if permission != model.PermissionRead {
+		t.Errorf("expected read permission, got %q", permission)
+	}
+}
+
+func TestGetMeetingDetail_StaleAccountShareDeniedAfterMembershipRemoved(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// Simulates RemoveMember's cleanup failing to delete the account-origin
+	// Share row (e.g. a transient DynamoDB error) after membership itself was
+	// already deleted -- the exact permanent-access gap this checkAccess fix
+	// closes: read-time membership re-verification denies access even though
+	// the stale Share row is still present.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.shares[shareKey("removed-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "removed-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+	// "removed-1" is NOT in repo.members -- membership already deleted.
+
+	if _, err := svc.GetMeetingDetail(context.Background(), "removed-1", "m-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound for a removed member with a stale account-origin share, got %v", err)
+	}
+}
+
+func TestGetMeetingDetail_DirectSharePersistsAfterMembershipRemoved(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// A direct share (Origin=="") is an independent grant the owner made
+	// explicitly -- it must survive account membership removal, unlike an
+	// account-origin share.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.shares[shareKey("direct-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "direct-1",
+		Permission: model.PermissionRead,
+	}
+	// "direct-1" is NOT an account member at all.
+
+	if _, err := svc.GetMeetingDetail(context.Background(), "direct-1", "m-1"); err != nil {
+		t.Errorf("expected direct share to grant access regardless of account membership, got %v", err)
+	}
+}
+
+func TestGetMeetingDetail_AccountShareGrantsAccessDespiteSnapshotRace(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// Simulates the snapshot-race MAJOR: a CreateShareIfMember transaction
+	// commits a Share row for a member NOT present in RemoveMember's earlier
+	// ListMeetingRefsForAccount snapshot (e.g. the ref was created after the
+	// snapshot). Read-time membership re-verification means this doesn't
+	// depend on the Share row being freshly written -- it works the same way
+	// whether or not the member is still present.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.addMember("acc-1", "late-1", model.RoleTAM)
+	repo.shares[shareKey("late-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "late-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+
+	if _, err := svc.GetMeetingDetail(context.Background(), "late-1", "m-1"); err != nil {
+		t.Errorf("expected account member with a valid account-origin share to have access, got %v", err)
+	}
+}
+
+func TestListMeetings_StaleAccountShareOmittedAfterMembershipRemoved(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// Metadata (title/summary) must not leak via the list endpoint either --
+	// checkAccess blocking the detail view isn't enough on its own.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "Secret Plans", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.shares[shareKey("removed-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "removed-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+	// "removed-1" is NOT in repo.members -- membership already deleted.
+
+	resp, err := svc.ListMeetings(context.Background(), "removed-1", "", "", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, item := range resp.Meetings {
+		if item.MeetingID == "m-1" {
+			t.Errorf("expected stale account-origin share to be omitted from list, got %+v", item)
+		}
+	}
+}
+
+func TestListMeetings_ValidAccountShareIncluded(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "Team Sync", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.addMember("acc-1", "member-1", model.RoleTAM)
+	repo.shares[shareKey("member-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "member-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+
+	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found := false
+	for _, item := range resp.Meetings {
+		if item.MeetingID == "m-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected valid account-origin share to appear in list")
+	}
+}
+
+func TestListMeetings_UnsharedFromAccountOmittedDespiteLingeringShareAndMembership(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// The owner un-shared the meeting from the account (or it was only ever
+	// Link-only) -- SharedToAccount is false -- but a stale account-origin
+	// Share row lingers, and the caller is still a member of the account.
+	// Without the SharedToAccount check, this leaks the title/summary here
+	// even though checkAccess correctly blocks the detail view for the same
+	// row (an invariant mismatch the review flagged).
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "Confidential", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: false})
+	repo.addMember("acc-1", "member-1", model.RoleTAM)
+	repo.shares[shareKey("member-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "member-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+
+	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, item := range resp.Meetings {
+		if item.MeetingID == "m-1" {
+			t.Errorf("expected unshared-from-account meeting to be omitted from list, got %+v", item)
+		}
+	}
+}
+
+func TestListMeetings_TransientGetMemberErrorNotCachedAsNonMember(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// Two meetings shared via the same account. If a transient GetMember
+	// error were cached as "not a member" (keyed by accountID, shared across
+	// meetings on this page), BOTH meetings would be suppressed instead of
+	// just the one whose GetMember call actually failed. Map iteration order
+	// is non-deterministic, so this doesn't assert which specific meeting
+	// hits the forced error -- only that exactly one of the two is missing
+	// (the one that errored), not both.
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "First", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.addMeeting(&model.Meeting{MeetingID: "m-2", UserID: "owner-1", Title: "Second", Status: model.StatusDone, AccountID: "acc-1", SharedToAccount: true})
+	repo.addMember("acc-1", "member-1", model.RoleTAM)
+	repo.shares[shareKey("member-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "member-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+	repo.shares[shareKey("member-1", "m-2")] = &model.Share{
+		MeetingID: "m-2", OwnerID: "owner-1", SharedToID: "member-1",
+		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
+	}
+	repo.getMemberErrCount = 1 // exactly one GetMember call fails
+
+	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Meetings) != 1 {
+		t.Errorf("expected exactly 1 meeting to survive the single transient GetMember error (caching would suppress both), got %d: %+v", len(resp.Meetings), resp.Meetings)
+	}
+}
+
+func TestListMeetings_DirectShareIncludedRegardlessOfMembership(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{MeetingID: "m-1", UserID: "owner-1", Title: "1:1", Status: model.StatusDone})
+	repo.shares[shareKey("direct-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "direct-1",
+		Permission: model.PermissionRead,
+	}
+
+	resp, err := svc.ListMeetings(context.Background(), "direct-1", "", "", 20)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found := false
+	for _, item := range resp.Meetings {
+		if item.MeetingID == "m-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected direct share to appear in list regardless of account membership")
 	}
 }
 

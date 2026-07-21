@@ -178,8 +178,14 @@ func (m *mockHandlerMeetingRepo) GetUserByEmail(_ context.Context, email string)
 	}
 	return u, nil
 }
-func (m *mockHandlerMeetingRepo) CreateShare(_ context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error) {
-	return &model.Share{MeetingID: meetingID, SharedToID: sharedToID, Permission: permission}, nil
+func (m *mockHandlerMeetingRepo) CreateShare(_ context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, origin string) (*model.Share, error) {
+	return &model.Share{MeetingID: meetingID, SharedToID: sharedToID, Permission: permission, Origin: origin}, nil
+}
+func (m *mockHandlerMeetingRepo) CreateShareIfMember(_ context.Context, meetingID, ownerID, ownerEmail, accountID, sharedToID, email, permission string) (*model.Share, error) {
+	if _, ok := m.members[accountID+"|"+sharedToID]; !ok {
+		return nil, repository.ErrMemberRemoved
+	}
+	return &model.Share{MeetingID: meetingID, SharedToID: sharedToID, Permission: permission, Origin: model.ShareOriginAccount}, nil
 }
 func (m *mockHandlerMeetingRepo) DeleteShare(_ context.Context, sharedToID, meetingID string) error {
 	return nil

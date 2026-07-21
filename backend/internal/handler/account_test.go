@@ -26,25 +26,40 @@ func withUserEmailCtx(r *http.Request, userID, email string) *http.Request {
 
 // mockHandlerAccountRepo implements service.AccountRepo for handler tests.
 type mockHandlerAccountRepo struct {
-	accounts map[string]*model.Account
-	members  map[string]*model.AccountMember
-	users    map[string]*model.User
-	meetingRefs map[string][]model.MeetingRef
+	accounts          map[string]*model.Account
+	members           map[string]*model.AccountMember
+	users             map[string]*model.User
+	meetingRefs       map[string][]model.MeetingRef
 	insightsByAccount map[string][]model.AccountInsight
-	documents map[string][]model.AccountDocument
-	publicShares map[string]*model.PublicShare
+	documents         map[string][]model.AccountDocument
+	shares            map[string]*model.Share   // "sharedToID|meetingID" -> share
+	meetings          map[string]*model.Meeting // meetingID -> meeting
+	shareOpErr        map[string]error          // meetingID -> forced GetShare/DeleteShare error
+	publicShares      map[string]*model.PublicShare
 }
 
 func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
 	return &mockHandlerAccountRepo{
-		accounts: make(map[string]*model.Account),
-		members:  make(map[string]*model.AccountMember),
-		users:    make(map[string]*model.User),
-		meetingRefs: make(map[string][]model.MeetingRef),
+		accounts:          make(map[string]*model.Account),
+		members:           make(map[string]*model.AccountMember),
+		users:             make(map[string]*model.User),
+		meetingRefs:       make(map[string][]model.MeetingRef),
 		insightsByAccount: make(map[string][]model.AccountInsight),
-		documents: make(map[string][]model.AccountDocument),
-		publicShares: make(map[string]*model.PublicShare),
+		documents:         make(map[string][]model.AccountDocument),
+		shares:            make(map[string]*model.Share),
+		meetings:          make(map[string]*model.Meeting),
+		shareOpErr:        make(map[string]error),
+		publicShares:      make(map[string]*model.PublicShare),
 	}
+}
+
+func (m *mockHandlerAccountRepo) GetMeetingByID(_ context.Context, meetingID string) (*model.Meeting, error) {
+	mtg, ok := m.meetings[meetingID]
+	if !ok {
+		return nil, nil
+	}
+	c := *mtg
+	return &c, nil
 }
 
 func acctMemberKey(accountID, userID string) string { return accountID + "|" + userID }
@@ -75,6 +90,46 @@ func (m *mockHandlerAccountRepo) GetMember(_ context.Context, accountID, userID 
 func (m *mockHandlerAccountRepo) PutMember(_ context.Context, member *model.AccountMember) error {
 	c := *member
 	m.members[acctMemberKey(member.AccountID, member.UserID)] = &c
+	return nil
+}
+func (m *mockHandlerAccountRepo) DeleteMember(_ context.Context, accountID, userID string) error {
+	key := acctMemberKey(accountID, userID)
+	if _, ok := m.members[key]; !ok {
+		return fmt.Errorf("%w: member %s not found", repository.ErrConditionFailed, userID)
+	}
+	delete(m.members, key)
+	return nil
+}
+func (m *mockHandlerAccountRepo) UpdateMemberRole(_ context.Context, accountID, userID, role string) error {
+	key := acctMemberKey(accountID, userID)
+	member, ok := m.members[key]
+	if !ok {
+		return fmt.Errorf("%w: member %s not found", repository.ErrConditionFailed, userID)
+	}
+	member.Role = role
+	return nil
+}
+func (m *mockHandlerAccountRepo) GetShare(_ context.Context, sharedToID, meetingID string) (*model.Share, error) {
+	if err, ok := m.shareOpErr[meetingID]; ok {
+		return nil, err
+	}
+	sh, ok := m.shares[sharedToID+"|"+meetingID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *sh
+	return &cp, nil
+}
+func (m *mockHandlerAccountRepo) DeleteShareIfAccountOrigin(_ context.Context, accountID, sharedToID, meetingID string) error {
+	if err, ok := m.shareOpErr[meetingID]; ok {
+		return err
+	}
+	key := sharedToID + "|" + meetingID
+	existing, ok := m.shares[key]
+	if !ok || existing.Origin != model.ShareOriginAccount || existing.AccountID != accountID {
+		return fmt.Errorf("%w: share %s not account-origin for account %s", repository.ErrConditionFailed, key, accountID)
+	}
+	delete(m.shares, key)
 	return nil
 }
 func (m *mockHandlerAccountRepo) ListAccountMembers(_ context.Context, accountID string) ([]model.AccountMember, error) {
@@ -299,6 +354,244 @@ func TestHandlerListAccountMeetings_Forbidden(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	h.ListAccountMeetings(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerRemoveMember_NoContent(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d (%s)", w.Code, w.Body.String())
+	}
+	if _, ok := repo.members[acctMemberKey("acc-1", "tam-1")]; ok {
+		t.Error("member not removed")
+	}
+}
+
+func TestHandlerRemoveMember_OwnerTargetBadRequest(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/owner-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "owner-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+func TestHandlerRemoveMember_PartialCleanupFailureReturns200WithBody(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1", SharedToAccount: true}
+	repo.shareOpErr["m-1"] = fmt.Errorf("simulated transient error")
+
+	// force=true: without it the precheck now fails closed on this same
+	// transient error before membership is even deleted (see
+	// TestHandlerRemoveMember_PrecheckFailsClosedOnTransientError) -- this
+	// test targets the post-delete cleanup loop's own soft-fail handling.
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1?force=true", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	failed, _ := resp["cleanupFailedForMeetings"].([]interface{})
+	if len(failed) != 1 || failed[0] != "m-1" {
+		t.Errorf("expected cleanupFailedForMeetings=[m-1], got %+v", resp)
+	}
+	if _, ok := repo.members[acctMemberKey("acc-1", "tam-1")]; ok {
+		t.Error("member should still be removed despite cleanup failure")
+	}
+}
+
+func TestHandlerRemoveMember_AmbiguousShareBlockedWithoutForce(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1", SharedToAccount: true}
+	repo.shares["tam-1|m-1"] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // ambiguous shape
+	}
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d (%s)", w.Code, w.Body.String())
+	}
+	if _, ok := repo.members[acctMemberKey("acc-1", "tam-1")]; !ok {
+		t.Error("expected membership to be preserved (untouched) when removal is blocked, but member was removed")
+	}
+}
+
+func TestHandlerRemoveMember_ForceAmbiguousShareReturns200WithBody(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1", SharedToAccount: true}
+	repo.shares["tam-1|m-1"] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "", // ambiguous shape
+	}
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1?force=true", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var resp map[string]interface{}
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	failed, ok := resp["cleanupFailedForMeetings"].([]interface{})
+	if !ok || len(failed) != 0 {
+		t.Errorf("expected cleanupFailedForMeetings=[] (present, empty), got %+v", resp)
+	}
+	ambiguous, _ := resp["ambiguousUntaggedMeetingIDs"].([]interface{})
+	if len(ambiguous) != 1 || ambiguous[0] != "m-1" {
+		t.Errorf("expected ambiguousUntaggedMeetingIDs=[m-1], got %+v", resp)
+	}
+}
+
+func TestHandlerRemoveMember_PrecheckFailsClosedOnTransientError(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1", SharedToAccount: true}
+	repo.shareOpErr["m-1"] = fmt.Errorf("simulated transient error")
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	if w.Code == http.StatusOK {
+		t.Fatalf("expected a non-2xx status when the ambiguous-share precheck fails closed on a transient error, got 200 (%s)", w.Body.String())
+	}
+	if _, ok := repo.members[acctMemberKey("acc-1", "tam-1")]; !ok {
+		t.Error("expected membership to be preserved when the precheck fails closed on a transient error")
+	}
+}
+
+func TestHandlerRemoveMember_LinkOnlyMeetingShareDoesNotBlock(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+	repo.meetingRefs["acc-1"] = []model.MeetingRef{{AccountID: "acc-1", MeetingID: "m-1"}}
+	// Link-only: AccountID set but SharedToAccount false -- never a team
+	// grant, so tam-1's direct share here must not block removal.
+	repo.meetings["m-1"] = &model.Meeting{MeetingID: "m-1", AccountID: "acc-1", SharedToAccount: false}
+	repo.shares["tam-1|m-1"] = &model.Share{
+		MeetingID: "m-1", SharedToID: "tam-1", Permission: model.PermissionRead, Origin: "",
+	}
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/accounts/acc-1/members/tam-1", nil)
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.RemoveMember(w, r)
+
+	// 204: the Link-only share is neither a cleanup failure nor an ambiguous
+	// untagged share (it's outside the account-membership grant entirely),
+	// so this is the fully-clean case -- it must not be blocked with a 400.
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 (Link-only share must not block removal), got %d (%s)", w.Code, w.Body.String())
+	}
+	if repo.shares["tam-1|m-1"] == nil {
+		t.Error("expected Link-only meeting's share to be left untouched")
+	}
+}
+
+func TestHandlerUpdateMemberRole_OK(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Email: "tam@x.com", Role: model.RoleTAM}
+
+	body, _ := json.Marshal(model.UpdateMemberRequest{Role: model.RoleSSA})
+	r := httptest.NewRequest(http.MethodPut, "/api/accounts/acc-1/members/tam-1", bytes.NewReader(body))
+	r = withUserEmailCtx(r, "owner-1", "o@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.UpdateMemberRole(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	var dto model.AccountMemberDTO
+	json.Unmarshal(w.Body.Bytes(), &dto)
+	if dto.Role != model.RoleSSA {
+		t.Errorf("unexpected dto: %+v", dto)
+	}
+}
+
+func TestHandlerUpdateMemberRole_NonOwnerForbidden(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+
+	body, _ := json.Marshal(model.UpdateMemberRequest{Role: model.RoleSSA})
+	r := httptest.NewRequest(http.MethodPut, "/api/accounts/acc-1/members/tam-1", bytes.NewReader(body))
+	r = withUserEmailCtx(r, "tam-1", "tam@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.UpdateMemberRole(w, r)
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d (%s)", w.Code, w.Body.String())

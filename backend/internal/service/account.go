@@ -24,6 +24,19 @@ var (
 	ErrMemberExists   = errors.New("member already exists")
 	ErrAmbiguousAlias = errors.New("alias maps to multiple accounts")
 	ErrLoopGuard      = errors.New("document originated from ttobak (loop guard)")
+	// ErrAmbiguousShareBlocksRemoval is returned by RemoveMember when the
+	// target holds at least one Share with Origin != "account" on a meeting
+	// still linked to this account, AND force was not passed. See
+	// RemoveMemberResult's doc comment for why this ambiguity exists (a
+	// pre-Origin-field legacy account-share is indistinguishable from a
+	// direct grant) -- this precheck is what actually closes the fail-open
+	// gap: previously RemoveMember always deleted membership and merely
+	// reported the ambiguity afterward, so a member who held only legacy
+	// shares kept transcript/Bedrock access forever with no forced
+	// checkpoint for the owner to notice. Passing force=true proceeds
+	// exactly as before (delete membership, leave ambiguous shares
+	// untouched, report them in the response).
+	ErrAmbiguousShareBlocksRemoval = errors.New("ambiguous untagged share blocks removal (pass force=true to proceed anyway)")
 )
 
 const maxInlineDocBytes = 300 * 1024 // mirror repo transcript inline threshold
@@ -62,10 +75,15 @@ type accountRepo interface {
 	GetAccount(ctx context.Context, accountID string) (*model.Account, error)
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	PutMember(ctx context.Context, member *model.AccountMember) error
+	DeleteMember(ctx context.Context, accountID, userID string) error
+	UpdateMemberRole(ctx context.Context, accountID, userID, role string) error
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	ListAccountsForUser(ctx context.Context, userID string) ([]model.AccountMember, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
+	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
+	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
+	DeleteShareIfAccountOrigin(ctx context.Context, accountID, sharedToID, meetingID string) error
 	ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error)
 	PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error
 	UpdateAccountDocumentFields(ctx context.Context, pk, docID string, fields map[string]interface{}, removeFields []string) (map[string]string, error)
@@ -269,6 +287,214 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 		return nil, err
 	}
 	return &model.AccountMemberDTO{UserID: user.UserID, Email: user.Email, Role: req.Role}, nil
+}
+
+// RemoveMemberResult reports the outcome of RemoveMember's best-effort Share
+// cleanup. FailedMeetingIDs is a genuine cleanup error (retryable, worth
+// alerting on). AmbiguousUntaggedMeetingIDs is NOT a failure -- it flags
+// meetings where a Share exists with Origin != "account" on a meeting still
+// shared to this account, so cleanup could not safely touch it. This is a
+// COARSE signal, not a precise "these are legacy" list: Origin=="" is the
+// shape of BOTH a legacy account-share (written before the Origin field
+// existed) AND a perfectly normal direct grant the owner made explicitly --
+// they are indistinguishable at this layer (see model.Share.Origin's doc
+// and CreateShare's clobber-guard). Any meeting where the removed member
+// ALSO holds a direct share to a meeting still linked to this account will
+// appear here too, regardless of whether a legacy account-share also
+// exists; this is intentional noise traded for not silently hiding the
+// legacy case, not a bug. Surfacing this list gives an operator a signal to
+// check whether backfill-share-origin is needed for this account, without
+// RemoveMember itself guessing wrong and revoking an owner's explicit
+// direct share.
+type RemoveMemberResult struct {
+	FailedMeetingIDs            []string
+	AmbiguousUntaggedMeetingIDs []string
+}
+
+// checkNoAmbiguousShares returns ErrAmbiguousShareBlocksRemoval if
+// targetUserID holds a Share with Origin != "account" on any of refs'
+// meetings that are still linked to accountID via SharedToAccount -- the
+// same predicate RemoveMember's cleanup loop uses to populate
+// AmbiguousUntaggedMeetingIDs, run here BEFORE membership is deleted so the
+// caller can block on it instead of only learning about it after the fact.
+//
+// Unlike the cleanup loop (which runs after membership is already gone and
+// can only report failures via FailedMeetingIDs), a GetMeetingByID/GetShare
+// error HERE returns an error instead of silently continuing: this precheck
+// is the security gate that closes RemoveMember's fail-open access-retention
+// gap, so a transient DynamoDB blip must not let it pass silently -- the
+// caller gets a retryable error and membership is left untouched (same
+// fail-closed treatment RemoveMember already gives ListMeetingRefsForAccount
+// failures).
+func (s *AccountService) checkNoAmbiguousShares(ctx context.Context, accountID, targetUserID string, refs []model.MeetingRef) error {
+	for _, ref := range refs {
+		meeting, err := s.repo.GetMeetingByID(ctx, ref.MeetingID)
+		if err != nil {
+			return fmt.Errorf("ambiguous-share precheck: get meeting %s: %w", ref.MeetingID, err)
+		}
+		if meeting == nil || !meeting.SharedToAccount || meeting.AccountID != accountID {
+			continue // stale ref, or Link-only (not a team-share grant) -- same skip the cleanup loop and backfill CLI apply
+		}
+		share, err := s.repo.GetShare(ctx, targetUserID, ref.MeetingID)
+		if err != nil {
+			return fmt.Errorf("ambiguous-share precheck: get share for meeting %s: %w", ref.MeetingID, err)
+		}
+		if share != nil && share.Origin != model.ShareOriginAccount {
+			return ErrAmbiguousShareBlocksRemoval
+		}
+	}
+	return nil
+}
+
+// RemoveMember deletes a non-owner member. Only the account owner may call
+// this; the owner member itself can never be removed (an account must never
+// exist without an owner -- see CreateAccount's transactional invariant).
+// If the target holds any ambiguous untagged share (see RemoveMemberResult)
+// on a meeting still linked to this account, membership is NOT deleted and
+// ErrAmbiguousShareBlocksRemoval is returned instead -- unless force is
+// true, in which case removal proceeds exactly as it always has (delete
+// membership, leave ambiguous shares untouched, report them in the
+// result). This precheck is what actually closes the fail-open access gap:
+// without it, a member holding only legacy (pre-Origin-field) shares could
+// be removed and keep transcript/Bedrock access forever with nothing
+// forcing the owner to notice before that happened.
+func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, accountID, targetUserID string, force bool) (*RemoveMemberResult, error) {
+	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
+	if err != nil {
+		return nil, err
+	}
+	if requester == nil || requester.Role != model.RoleOwner {
+		return nil, ErrForbidden
+	}
+	target, err := s.repo.GetMember(ctx, accountID, targetUserID)
+	if err != nil {
+		return nil, err
+	}
+	if target == nil {
+		return nil, ErrNotFound
+	}
+	if target.Role == model.RoleOwner {
+		return nil, ErrInvalidInput
+	}
+
+	// List refs BEFORE deleting membership: membership is still intact here,
+	// so a list failure can safely return an error (500, retryable) instead
+	// of silently producing a 204 that leaves cleanup un-run with no way to
+	// signal or retry it -- a retried DELETE after membership is gone would
+	// just 404. The precheck below reuses this same list, so a re-list after
+	// the delete (which would also defeat the "membership untouched on early
+	// return" guarantee) is unnecessary.
+	refs, err := s.repo.ListMeetingRefsForAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !force {
+		if err := s.checkNoAmbiguousShares(ctx, accountID, targetUserID, refs); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := s.repo.DeleteMember(ctx, accountID, targetUserID); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil, ErrNotFound // removed concurrently between our Get and Delete
+		}
+		return nil, err
+	}
+
+	result := &RemoveMemberResult{
+		FailedMeetingIDs:            []string{},
+		AmbiguousUntaggedMeetingIDs: []string{},
+	}
+
+	for _, ref := range refs {
+		// A meeting can be re-shared from account A to account B without A's
+		// MeetingRef ever being cleaned up (ADR-016's known non-transactional
+		// write-order gap) -- verifying the meeting is STILL linked to THIS
+		// account before touching its share prevents A's RemoveMember from
+		// deleting a share that actually belongs to B's membership grant. The
+		// !SharedToAccount check additionally excludes Link-only meetings
+		// (AccountID set, SharedToAccount false): those were never a team
+		// grant, so any share the target holds there is unrelated to this
+		// account's membership and must not be swept up as "ambiguous" or
+		// deleted. Mirrors the exact guard checkNoAmbiguousShares and the
+		// backfill CLI both apply (!meeting.SharedToAccount || meeting.AccountID != accountID).
+		meeting, err := s.repo.GetMeetingByID(ctx, ref.MeetingID)
+		if err != nil {
+			log.Printf("cleanup share for removed member %s (meeting %s): get meeting: %v", targetUserID, ref.MeetingID, err)
+			result.FailedMeetingIDs = append(result.FailedMeetingIDs, ref.MeetingID)
+			continue
+		}
+		if meeting == nil || !meeting.SharedToAccount || meeting.AccountID != accountID {
+			continue // stale ref: meeting deleted, re-shared to a different account, or Link-only (never a team grant)
+		}
+		share, err := s.repo.GetShare(ctx, targetUserID, ref.MeetingID)
+		if err != nil {
+			log.Printf("cleanup share for removed member %s (meeting %s): get share: %v", targetUserID, ref.MeetingID, err)
+			result.FailedMeetingIDs = append(result.FailedMeetingIDs, ref.MeetingID)
+			continue
+		}
+		if share == nil {
+			continue
+		}
+		if share.Origin != model.ShareOriginAccount {
+			// Origin != "account" here (in practice always Origin=="") means
+			// cleanup must not touch this share: it might be a legitimate direct
+			// grant, but it is also the shape of a legacy account share.
+			result.AmbiguousUntaggedMeetingIDs = append(result.AmbiguousUntaggedMeetingIDs, ref.MeetingID)
+			continue
+		}
+		// This GetShare read is just a cheap pre-filter to skip meetings with
+		// no account-origin share -- DeleteShareIfAccountOrigin re-checks
+		// origin=="account" AND accountId==accountID as a transaction
+		// condition at delete time, so neither an owner creating a new direct
+		// share NOR this same meeting being re-shared to a DIFFERENT account
+		// in the gap between the read above and this delete can have that
+		// new grant silently swept up: the condition fails and the delete is
+		// skipped instead. The accountID here (not accountID re-derived from
+		// meeting, which the read above already re-checked non-atomically)
+		// is this call's own security boundary against that exact race.
+		if err := s.repo.DeleteShareIfAccountOrigin(ctx, accountID, targetUserID, ref.MeetingID); err != nil {
+			if errors.Is(err, repository.ErrConditionFailed) {
+				continue // origin changed (or row gone) between the read and this delete -- no-op skip, not a failure
+			}
+			log.Printf("cleanup share for removed member %s (meeting %s): delete share: %v", targetUserID, ref.MeetingID, err)
+			result.FailedMeetingIDs = append(result.FailedMeetingIDs, ref.MeetingID)
+		}
+	}
+	return result, nil
+}
+
+// UpdateMemberRole changes a non-owner member's role. Only the account owner
+// may call this; the owner's own role can never be changed via this path.
+func (s *AccountService) UpdateMemberRole(ctx context.Context, requesterUserID, accountID, targetUserID string, req *model.UpdateMemberRequest) (*model.AccountMemberDTO, error) {
+	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
+	if err != nil {
+		return nil, err
+	}
+	if requester == nil || requester.Role != model.RoleOwner {
+		return nil, ErrForbidden
+	}
+	if !isAssignableRole(req.Role) {
+		return nil, ErrInvalidInput
+	}
+	target, err := s.repo.GetMember(ctx, accountID, targetUserID)
+	if err != nil {
+		return nil, err
+	}
+	if target == nil {
+		return nil, ErrNotFound
+	}
+	if target.Role == model.RoleOwner {
+		return nil, ErrInvalidInput
+	}
+	if err := s.repo.UpdateMemberRole(ctx, accountID, targetUserID, req.Role); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil, ErrNotFound // removed concurrently between our Get and Update
+		}
+		return nil, err
+	}
+	return &model.AccountMemberDTO{UserID: target.UserID, Email: target.Email, Role: req.Role}, nil
 }
 
 // ListAccountMeetings returns the shared-meeting references for an account.
@@ -560,8 +786,8 @@ func (s *AccountService) putDoc(ctx context.Context, userID, pk, accountID strin
 		PK: pk, SK: model.PrefixDoc + docID,
 		AccountID: accountID, DocID: docID, Title: strings.TrimSpace(req.Title),
 		DocType: req.DocType, Path: req.Path, Content: markdown,
-		Links:    parseWikilinks(markdown),
-		FileKey:  req.FileKey, FileName: req.FileName, MimeType: req.MimeType, FileSize: req.FileSize,
+		Links:   parseWikilinks(markdown),
+		FileKey: req.FileKey, FileName: req.FileName, MimeType: req.MimeType, FileSize: req.FileSize,
 		SourceUserID: userID, TtobakOrigin: false,
 		CreatedAt: now, UpdatedAt: now, EntityType: entityType,
 	}

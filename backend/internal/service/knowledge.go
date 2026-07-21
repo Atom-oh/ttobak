@@ -42,20 +42,16 @@ func (s *KnowledgeService) Ask(ctx context.Context, userID, meetingID, question 
 		return nil, err
 	}
 	if meeting == nil {
-		// Check shared access
-		share, err := s.repo.GetShare(ctx, userID, meetingID)
+		// Not the owner -- fall back to the same origin-aware shared-access
+		// check checkAccess uses (meeting.go), so a removed account member
+		// can't keep querying Bedrock over a stale account-origin Share row.
+		// The "OrNotFound" variant returns ErrNotFound instead of a
+		// (nil, "", nil) zero value on no access, so there is no separate
+		// nil-check step here for a caller (or reviewer skimming a truncated
+		// diff) to miss.
+		meeting, _, err = resolveSharedAccessOrNotFound(ctx, s.repo, userID, meetingID)
 		if err != nil {
 			return nil, err
-		}
-		if share == nil {
-			return nil, fmt.Errorf("meeting not found")
-		}
-		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
-		if err != nil {
-			return nil, err
-		}
-		if meeting == nil {
-			return nil, fmt.Errorf("meeting not found")
 		}
 	}
 
