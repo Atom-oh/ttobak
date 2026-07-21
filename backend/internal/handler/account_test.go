@@ -174,6 +174,21 @@ func (m *mockHandlerAccountRepo) SetPublicShareTokenIfAbsent(_ context.Context, 
 	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
 }
 
+func (m *mockHandlerAccountRepo) ClearPublicShareTokenIfMatches(_ context.Context, pk, docID, expectedToken string) error {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			if d.PublicShareToken != expectedToken {
+				return fmt.Errorf("%w: doc %s's public share token no longer matches", repository.ErrConditionFailed, docID)
+			}
+			docs[i].PublicShareToken = ""
+			m.documents[pk] = docs
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+
 func newStubAccountHandler() (*AccountHandler, *mockHandlerAccountRepo) {
 	repo := newMockHandlerAccountRepo()
 	svc := service.NewAccountServiceForTest(repo)

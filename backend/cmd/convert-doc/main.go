@@ -115,7 +115,12 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	cmd.Env = sanitizedSofficeEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("soffice convert failed: %w (output: %s)", err, string(out))
+		// Truncated: soffice's stdout/stderr on a malformed/hostile input
+		// can echo fragments of the document (paths, embedded object
+		// names) -- cap what lands in this error (and therefore
+		// CloudWatch, via the Lambda runtime's own error logging) rather
+		// than including it in full.
+		return fmt.Errorf("soffice convert failed: %w (output: %s)", err, truncateOutput(out, 2000))
 	}
 
 	outPath := filepath.Join(outDir, strings.TrimSuffix(filepath.Base(inPath), filepath.Ext(inPath))+".pdf")
@@ -125,6 +130,15 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	log.Printf("converted %s -> %s", key, sidecarKey)
 	return nil
+}
+
+// truncateOutput caps out at n bytes for safe inclusion in an error/log
+// message -- see the soffice CombinedOutput call site.
+func truncateOutput(out []byte, n int) string {
+	if len(out) <= n {
+		return string(out)
+	}
+	return string(out[:n]) + "...(truncated)"
 }
 
 // sanitizedSofficeEnv returns the current process environment with every

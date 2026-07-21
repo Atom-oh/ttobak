@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -235,8 +236,13 @@ func (m *mockResearchMainRepo) DeleteResearchRef(_ context.Context, accountID, r
 	return nil
 }
 
+// ListResearchRefsForAccount sorts by CreatedAt descending (newest first),
+// mirroring the real repo's fix -- SK-based ScanIndexForward was never
+// actually chronological (SK is a random researchId, not a timestamp).
 func (m *mockResearchMainRepo) ListResearchRefsForAccount(_ context.Context, accountID string) ([]model.ResearchRef, error) {
-	return append([]model.ResearchRef(nil), m.refs[accountID]...), nil
+	refs := append([]model.ResearchRef(nil), m.refs[accountID]...)
+	sort.Slice(refs, func(i, j int) bool { return refs[i].CreatedAt.After(refs[j].CreatedAt) })
+	return refs, nil
 }
 
 func seedResearch(repo *mockResearchRepo, id, userID string) *model.Research {
@@ -527,8 +533,8 @@ func TestListAccountResearch_PreservesRefOrderAfterBatchGet(t *testing.T) {
 	// preserve request order. ListAccountResearch used to iterate
 	// BatchGetResearch's return value directly, so its output order was
 	// whatever DynamoDB happened to return rather than the refs' intended
-	// (newest-first) order. The mock's BatchGetResearch deliberately
-	// returns reversed to catch exactly this.
+	// (newest-first, by CreatedAt) order. The mock's BatchGetResearch
+	// deliberately returns reversed to catch exactly this.
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
 	svc := newResearchServiceWithRepo(repo, mainRepo)
@@ -547,13 +553,15 @@ func TestListAccountResearch_PreservesRefOrderAfterBatchGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := []string{"r1", "r2", "r3"}
+	// r3 was linked last, so it has the latest CreatedAt -- newest-first
+	// means it comes first, not r1 (link/insertion order).
+	want := []string{"r3", "r2", "r1"}
 	if len(items) != len(want) {
 		t.Fatalf("expected %d items, got %v", len(want), items)
 	}
 	for i, id := range want {
 		if items[i].ResearchID != id {
-			t.Fatalf("expected refs order %v, got %v", want, items)
+			t.Fatalf("expected newest-first refs order %v, got %v", want, items)
 		}
 	}
 }

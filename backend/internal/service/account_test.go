@@ -26,6 +26,10 @@ type mockAccountRepo struct {
 	// SetPublicShareTokenIfAbsent race: the first call writes this token to
 	// the doc instead of the caller's and returns ErrConditionFailed.
 	raceWinnerToken string
+	// raceTokenAfterGet, if set, simulates a concurrent write landing right
+	// after a GetAccountDocument read: the very next read mutates the
+	// stored doc's PublicShareToken to this value and clears itself.
+	raceTokenAfterGet string
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -127,9 +131,16 @@ func (m *mockAccountRepo) ListAccountDocuments(_ context.Context, pk string) ([]
 	return append([]model.AccountDocument(nil), m.documents[pk]...), nil
 }
 func (m *mockAccountRepo) GetAccountDocument(_ context.Context, pk, docID string) (*model.AccountDocument, error) {
-	for _, d := range m.documents[pk] {
+	for i, d := range m.documents[pk] {
 		if d.DocID == docID {
 			cp := d
+			if m.raceTokenAfterGet != "" {
+				// Simulate a concurrent write landing between this read
+				// and whatever the caller does next: the stored doc gets
+				// a different token than the one just handed back.
+				m.documents[pk][i].PublicShareToken = m.raceTokenAfterGet
+				m.raceTokenAfterGet = ""
+			}
 			return &cp, nil
 		}
 	}
@@ -180,6 +191,21 @@ func (m *mockAccountRepo) SetPublicShareTokenIfAbsent(_ context.Context, pk, doc
 				return fmt.Errorf("%w: doc %s already has a public share token", repository.ErrConditionFailed, docID)
 			}
 			docs[i].PublicShareToken = token
+			m.documents[pk] = docs
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+
+func (m *mockAccountRepo) ClearPublicShareTokenIfMatches(_ context.Context, pk, docID, expectedToken string) error {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			if d.PublicShareToken != expectedToken {
+				return fmt.Errorf("%w: doc %s's public share token no longer matches", repository.ErrConditionFailed, docID)
+			}
+			docs[i].PublicShareToken = ""
 			m.documents[pk] = docs
 			return nil
 		}
@@ -1487,6 +1513,48 @@ func TestUserDocPublicShare_LifecycleAndScope(t *testing.T) {
 	// Revoking a never-shared doc is a no-op, not an error.
 	if err := svc.RevokeUserDocPublicShare(context.Background(), "user-1", "note-1"); err != nil {
 		t.Errorf("expected revoke on unshared doc to be a no-op, got %v", err)
+	}
+}
+
+func TestRevokeUserDocPublicShare_DoesNotClobberConcurrentReshare(t *testing.T) {
+	// Regression: RevokeUserDocPublicShare used to read the doc, then
+	// PutAccountDocument the *entire* stale snapshot back with the token
+	// field cleared. If the doc's token changed between that read and
+	// write (e.g. a concurrent revoke+reshare), the revoke would silently
+	// stomp the new token, breaking a share the caller never asked to
+	// touch. The fix makes the clear a conditional update scoped to the
+	// exact token read, so a mismatch is a no-op rather than a clobber.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	slide := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "slide-1",
+		DocID: "slide-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pdf", FileName: "deck.pdf",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[slide.PK] = append(repo.documents[slide.PK], slide)
+
+	oldToken, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "slide-1")
+	if err != nil {
+		t.Fatalf("initial share failed: %v", err)
+	}
+
+	// Simulate a concurrent revoke+reshare landing between RevokeUserDocPublicShare's
+	// getDoc read (which will see oldToken) and its write: right after that
+	// read, the stored doc's token changes to "newer-token".
+	repo.raceTokenAfterGet = "newer-token"
+
+	if err := svc.RevokeUserDocPublicShare(context.Background(), "user-1", "slide-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := repo.documents[slide.PK][0].PublicShareToken
+	if got != "newer-token" {
+		t.Fatalf("expected the newer token to survive the stale revoke, got %q", got)
+	}
+	if _, ok := repo.publicShares[oldToken]; ok {
+		t.Errorf("expected the old token's pointer to still be cleaned up")
 	}
 }
 

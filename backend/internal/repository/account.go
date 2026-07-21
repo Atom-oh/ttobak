@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -245,12 +246,15 @@ func (r *DynamoDBRepository) ListResearchRefsForAccount(ctx context.Context, acc
 	if err != nil {
 		return nil, fmt.Errorf("build research refs query: %w", err)
 	}
+	// ScanIndexForward is irrelevant here despite the SK prefix match --
+	// SK is RESEARCHREF#{researchId}, and researchId is a random 32-hex
+	// generateID() string, not a timestamp, so sorting by SK sorts by
+	// nothing meaningful. Sort by CreatedAt explicitly below instead.
 	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-		ScanIndexForward:          aws.Bool(false), // newest first
 	})
 	if err != nil {
 		return nil, fmt.Errorf("query research refs: %w", err)
@@ -259,6 +263,7 @@ func (r *DynamoDBRepository) ListResearchRefsForAccount(ctx context.Context, acc
 	if err := attributevalue.UnmarshalListOfMaps(items, &refs); err != nil {
 		return nil, fmt.Errorf("unmarshal research refs: %w", err)
 	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].CreatedAt.After(refs[j].CreatedAt) })
 	return refs, nil
 }
 
@@ -417,9 +422,15 @@ func (r *DynamoDBRepository) PutAccountDocument(ctx context.Context, doc *model.
 // already won the race; the caller is expected to discard its own token
 // and re-read the doc for the winner's.
 func (r *DynamoDBRepository) SetPublicShareTokenIfAbsent(ctx context.Context, pk, docID, token string) error {
-	condition := expression.Or(
-		expression.AttributeNotExists(expression.Name("publicShareToken")),
-		expression.Name("publicShareToken").Equal(expression.Value("")),
+	// attribute_exists(PK) matters because UpdateItem upserts by default:
+	// without it, a doc deleted between the caller's getDoc and this call
+	// would make this UpdateItem silently CREATE a zombie item containing
+	// only PK/SK/publicShareToken/updatedAt instead of failing closed.
+	condition := expression.AttributeExists(expression.Name("PK")).And(
+		expression.Or(
+			expression.AttributeNotExists(expression.Name("publicShareToken")),
+			expression.Name("publicShareToken").Equal(expression.Value("")),
+		),
 	)
 	update := expression.Set(expression.Name("publicShareToken"), expression.Value(token)).
 		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC()))
@@ -441,9 +452,47 @@ func (r *DynamoDBRepository) SetPublicShareTokenIfAbsent(ctx context.Context, pk
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException
 		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: doc %s already has a public share token", ErrConditionFailed, docID)
+			return fmt.Errorf("%w: doc %s was deleted or already has a public share token", ErrConditionFailed, docID)
 		}
 		return fmt.Errorf("set public share token: %w", err)
+	}
+	return nil
+}
+
+// ClearPublicShareTokenIfMatches atomically REMOVEs a doc's publicShareToken,
+// but only if it still equals expectedToken. RevokeUserDocPublicShare reads
+// the doc, then must write back "no token" -- a plain PutAccountDocument of
+// the whole snapshot would otherwise clobber a concurrent
+// CreateUserDocPublicShare's newer token (or any other concurrent field
+// edit) with stale data. Returns ErrConditionFailed if the token no longer
+// matches (e.g. already revoked, or re-shared with a different token) --
+// callers can treat that as "nothing to do" since the caller's specific
+// revoke intent has already been satisfied by whatever changed it.
+func (r *DynamoDBRepository) ClearPublicShareTokenIfMatches(ctx context.Context, pk, docID, expectedToken string) error {
+	condition := expression.Name("publicShareToken").Equal(expression.Value(expectedToken))
+	update := expression.Remove(expression.Name("publicShareToken")).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC()))
+	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
+	if err != nil {
+		return fmt.Errorf("build clear public share token condition: %w", err)
+	}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docID},
+		},
+		ConditionExpression:       expr.Condition(),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: doc %s's public share token no longer matches", ErrConditionFailed, docID)
+		}
+		return fmt.Errorf("clear public share token: %w", err)
 	}
 	return nil
 }

@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -273,7 +276,17 @@ func (s *UploadService) generatePreviewPDFURLWithTTL(ctx context.Context, fileKe
 		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(sidecarKey),
 	}); err != nil {
-		return "", nil // not converted yet (or genuinely missing) -- not an error for the caller
+		var notFound *s3types.NotFound
+		if errors.As(err, &notFound) {
+			return "", nil // not converted yet -- expected, not an error for the caller
+		}
+		// A real error (permission denial, throttling, etc.) looks
+		// identical to "not converted yet" to every caller (they all treat
+		// err != nil the same as "no preview available"), so at least log
+		// it -- otherwise an actual outage is indistinguishable from the
+		// normal pre-conversion window.
+		log.Printf("warn: HeadObject failed for PDF sidecar %s: %v", sidecarKey, err)
+		return "", nil
 	}
 	return s.GeneratePresignedDownloadURLWithTTL(ctx, sidecarKey, ttl)
 }

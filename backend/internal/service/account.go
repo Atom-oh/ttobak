@@ -75,6 +75,7 @@ type accountRepo interface {
 	GetPublicShare(ctx context.Context, token string) (*model.PublicShare, error)
 	DeletePublicShare(ctx context.Context, token string) error
 	SetPublicShareTokenIfAbsent(ctx context.Context, pk, docID, token string) error
+	ClearPublicShareTokenIfMatches(ctx context.Context, pk, docID, expectedToken string) error
 }
 
 // AccountRepo is the exported alias for cross-package (handler) tests.
@@ -973,9 +974,20 @@ func (s *AccountService) RevokeUserDocPublicShare(ctx context.Context, userID, d
 	if err := s.repo.DeletePublicShare(ctx, doc.PublicShareToken); err != nil {
 		log.Printf("cleanup public share pointer for doc %s: %v", docID, err)
 	}
-	doc.PublicShareToken = ""
-	doc.UpdatedAt = time.Now().UTC()
-	return s.repo.PutAccountDocument(ctx, doc)
+	// Conditional REMOVE on just the token field, not PutAccountDocument of
+	// the whole snapshot: a plain overwrite would clobber a concurrent
+	// CreateUserDocPublicShare's newer token (or any other field edited
+	// between our getDoc and this write) with stale data. A condition
+	// failure means the token already changed out from under us -- this
+	// revoke's specific intent (invalidate the token we read) has been
+	// superseded, not failed, so it's not an error.
+	if err := s.repo.ClearPublicShareTokenIfMatches(ctx, doc.PK, docID, doc.PublicShareToken); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // ResolvePublicShare is the ONLY entry point the unauthenticated

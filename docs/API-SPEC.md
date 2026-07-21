@@ -508,7 +508,12 @@ EventBridge S3 이벤트로 트리거되어 headless LibreOffice로 PDF 사이�
 파일을 가리키고, PPTX/PPT면 변환이 끝난 뒤 `previewUrl`(PDF 사이드카)이
 별도 필드로 함께 채워진다 — `downloadUrl`이 사이드카로 바뀌는 일은 없다.
 변환이 아직 끝나지 않았으면 `previewUrl`이 생략된다(폴링해서 재조회). 별도의
-공개 REST 엔드포인트는 없다.
+공개 REST 엔드포인트는 없다. 이 "`downloadUrl`은 절대 사이드카가 아님" 규칙은
+**JSON 응답의 필드 이름에 대한 규칙**이다 — 아래 Public Share Link의
+`GET /api/public/docs/{token}`은 필드가 아니라 302 리다이렉트 자체이고, 그
+리다이렉트 타겟은 (PPTX/PPT면) 의도적으로 사이드카를 향한다: 무인증
+방문자에게 미리보기가 목적이므로, 다른 곳과 반대로 여기서는 사이드카가
+있으면 사이드카로, 없으면 원본으로 리다이렉트한다.
 
 #### Share Document to Account (개인 문서 → 팀 복제)
 
@@ -516,7 +521,11 @@ EventBridge S3 이벤트로 트리거되어 headless LibreOffice로 PDF 사이�
 슬라이드 전용 검증은 없음 — 마크다운 문서는 본문을 그대로 복제). 슬라이드는
 참조가 아니라 **복제** — S3 `CopyObject`로 별도 키
 (`docs/{내 userId}/{ms}_{랜덤ID}_{파일명}`)에 복사하고 새 `AccountDocumentDTO`를
-만든다(원본을 덮어쓰지 않으므로 이후 원본을 바꿔도 공유본은 그대로).
+만든다(원본을 덮어쓰지 않으므로 이후 원본을 바꿔도 공유본은 그대로). 위 Slide
+Upload 절의 `docs/{내 userId}/{타임스탬프}_{파일명}`과 레이아웃이 다른 것처럼
+보이지만 같은 규칙이다 — 업로드는 `{타임스탬프}_{파일명}`, 공유 복제는
+충돌 방지를 위해 `generateID()`가 끼어든 `{ms}_{랜덤ID}_{파일명}`일 뿐, 둘
+다 `docs/{userId}/` 접두어와 파일명 보존 규칙은 동일하다.
 
 ```
 POST /api/documents/{docId}/share-account
