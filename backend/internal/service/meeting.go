@@ -368,6 +368,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		Participants:       meeting.Participants,
 		Content:            meeting.Content,
 		Notes:              meeting.Notes,
+		LiveSummary:        meeting.LiveSummary,
 		TranscriptA:        meeting.TranscriptA,
 		TranscriptB:        meeting.TranscriptB,
 		SelectedTranscript: strPtr(meeting.SelectedTranscript),
@@ -416,6 +417,9 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}
 	if req.Notes != nil {
 		fields["notes"] = *req.Notes
+	}
+	if req.LiveSummary != nil {
+		fields["liveSummary"] = *req.LiveSummary
 	}
 	if req.TranscriptA != "" {
 		fields["transcriptA"] = req.TranscriptA

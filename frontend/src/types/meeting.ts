@@ -109,6 +109,8 @@ export interface User {
 export interface MeetingDetail extends Meeting {
   content?: string;
   notes?: string;
+  /** Real-time summary built during recording (markdown incl. mermaid) */
+  liveSummary?: string;
   transcriptA?: string;
   transcriptB?: string;
   selectedTranscript?: 'A' | 'B' | null;

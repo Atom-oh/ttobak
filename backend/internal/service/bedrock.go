@@ -306,7 +306,9 @@ ADR-013 — 트랜스크립트 딥 링크:
 
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
-		MaxTokens:        4096,
+		// 8192 (not 4096): the integrated summary must have room to preserve
+		// live-summary detail and mermaid diagrams fed in via priorContext.
+		MaxTokens:        8192,
 		System:           systemPrompt,
 		Messages: []ClaudeMessage{
 			{

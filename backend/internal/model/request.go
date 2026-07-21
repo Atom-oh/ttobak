@@ -22,7 +22,10 @@ type UpdateMeetingRequest struct {
 	// distinguishable from "explicitly set to empty string" (non-nil
 	// pointer to "", clears notes) -- a plain string can't represent
 	// "clear the notes" since Go's zero value for string is already "".
-	Notes              *string  `json:"notes,omitempty"`
+	Notes *string `json:"notes,omitempty"`
+	// LiveSummary is a pointer for the same omit-vs-explicit-empty semantics
+	// as Notes: nil preserves the stored value, non-nil "" clears it.
+	LiveSummary        *string  `json:"liveSummary,omitempty"`
 	TranscriptA        string   `json:"transcriptA,omitempty"`
 	SelectedTranscript string   `json:"selectedTranscript,omitempty"` // "A" or "B"
 	Participants       []string `json:"participants,omitempty"`
@@ -111,6 +114,7 @@ type MeetingDetailResponse struct {
 	Participants       []string             `json:"participants,omitempty"`
 	Content            string               `json:"content,omitempty"`
 	Notes              string               `json:"notes,omitempty"`
+	LiveSummary        string               `json:"liveSummary,omitempty"`
 	TranscriptA        string               `json:"transcriptA,omitempty"`
 	TranscriptB        string               `json:"transcriptB,omitempty"`
 	SelectedTranscript *string              `json:"selectedTranscript,omitempty"` // "A" | "B" | null
@@ -435,6 +439,7 @@ func ToMeetingDetailResponse(m *Meeting, attachments []AttachmentResponse, share
 		Participants:       m.Participants,
 		Content:            m.Content,
 		Notes:              m.Notes,
+		LiveSummary:        m.LiveSummary,
 		TranscriptA:        m.TranscriptA,
 		TranscriptB:        m.TranscriptB,
 		SelectedTranscript: selectedTranscript,

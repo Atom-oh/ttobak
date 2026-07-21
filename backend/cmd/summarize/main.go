@@ -460,6 +460,13 @@ func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext s
 		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
 	}
 
+	// Fold the real-time summary built during recording into the prompt so the
+	// final summary integrates its detail and mermaid diagrams instead of
+	// regenerating a short template from the raw transcript alone.
+	if meeting.LiveSummary != "" {
+		priorContext += "\n\n[미팅 중 실시간 생성된 요약 — 아래 세부 내용과 mermaid 다이어그램을 최종 회의록에 통합하고 유지하세요]\n" + meeting.LiveSummary
+	}
+
 	content, err := bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
 	if err != nil {
 		log.Printf("Failed to generate summary: %v", err)

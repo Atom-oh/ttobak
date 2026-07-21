@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, type MutableRefObject } from 'react';
 import { useRouter } from 'next/navigation';
 import { meetingsApi, uploadsApi } from '@/lib/api';
 import { uploadAudioWithRetry } from '@/lib/upload';
@@ -28,10 +28,13 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
 
 interface UsePostRecordingOptions {
   meetingTitle: string;
+  /** Live summary built during recording (useLiveSummary's liveSummaryRef) — persisted at save time when non-empty */
+  liveSummaryRef?: MutableRefObject<string>;
 }
 
 export function usePostRecording({
   meetingTitle,
+  liveSummaryRef,
 }: UsePostRecordingOptions) {
   const router = useRouter();
   const [step, setStep] = useState<PostRecordingStep | null>(null);
@@ -70,6 +73,7 @@ export function usePostRecording({
           meetingsApi.update(meetingId, {
             title: meetingTitle || formatDefaultTitle(new Date()),
             status: 'transcribing',
+            ...(liveSummaryRef?.current ? { liveSummary: liveSummaryRef.current } : {}),
           }),
           15000, 'Save transcript',
         );
@@ -87,6 +91,7 @@ export function usePostRecording({
         await withTimeout(
           meetingsApi.update(meetingId, {
             status: 'transcribing',
+            ...(liveSummaryRef?.current ? { liveSummary: liveSummaryRef.current } : {}),
           }),
           15000, 'Save transcript',
         );
@@ -123,7 +128,7 @@ export function usePostRecording({
       setErrorMessage(err instanceof Error ? err.message : 'Failed to process recording');
       setStep('error');
     }
-  }, [meetingTitle, router, serverMeetingId]);
+  }, [meetingTitle, router, serverMeetingId, liveSummaryRef]);
 
   /** Called when recording blob is ready — pause for notes input */
   const handleBlobReady = useCallback(async (blob: Blob, mimeType: string) => {
