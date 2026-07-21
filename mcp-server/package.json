@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test test/",
+    "test": "npm run build && node --test test/api.test.mjs",
     "bundle": "esbuild src/index.ts --bundle --platform=node --target=node18 --format=esm --outfile=dist/ttobak-mcp.mjs --banner:js=\"#!/usr/bin/env node\"",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts"

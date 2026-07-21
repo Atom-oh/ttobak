@@ -43,7 +43,7 @@ The write path is intentionally narrow (documents only); it never writes meeting
 - Loop-guard ([ADR-017](ADR-017-vault-export-and-inbound-ingest.md)) protects `put_document` from export↔reimport loops. (The post-implementation write tools have no loop-guard — they don't round-trip exported content.)
 
 ### Negative
-- A write-capable MCP surface widens the blast radius if the user's MCP token leaks. The original mitigation ("writes limited to account documents, member-gated") no longer covers the widened surface: KB writes are auth-only (though retrieval stays scoped to the uploader — see Update 2), and account/membership writes are owner-gated rather than member-gated. `guardUploadPath` in `api.ts` narrows the local-file-read side (credential dotdirs under `$HOME`, symlinks resolved, size caps) but is a speed bump, not a sandbox — the MCP host's tool-call approval remains the real gate.
+- A write-capable MCP surface widens the blast radius if the user's MCP token leaks. The original mitigation ("writes limited to account documents, member-gated") no longer covers the widened surface: KB writes are auth-only (though retrieval stays scoped to the uploader — see Update 2), and account/membership writes are owner-gated rather than member-gated. `guardUploadPath` in `api.ts` narrows the local-file-read side (credential dotdirs under `$HOME`, system paths like `/etc`/`/proc`/`/var/run/secrets`, secret-shaped filenames like `.env*`/`*credentials*`/`*.pem`/`id_*`, symlinks resolved, size caps) but is a speed bump, not a sandbox — the MCP host's tool-call approval remains the real gate.
 - Ten tool definitions added by this ADR (three original + seven post-implementation; the server's full tool list is larger) to keep in sync across `api.ts`, `index.ts`, and the README's English/Korean tables.
 
 ### Risks
@@ -97,7 +97,7 @@ The write path is intentionally narrow (documents only); it never writes meeting
 - 루프 가드([ADR-017](ADR-017-vault-export-and-inbound-ingest.md))가 `put_document`를 내보내기↔재임포트 루프에서 보호. (구현 후 추가된 쓰기 도구들에는 루프 가드가 없음 — 내보낸 콘텐츠를 왕복시키는 경로가 아니기 때문.)
 
 ### 부정
-- 쓰기 가능한 MCP 표면은 사용자 MCP 토큰 유출 시 영향 범위를 넓힘. 원래의 완화("쓰기를 계정 문서로 제한, 멤버 게이트")는 확장된 표면을 더 이상 커버하지 못함: KB 쓰기는 인증만 요구하고(다만 검색은 업로더 본인으로 스코프됨 — 업데이트 2 참조), 계정/멤버십 쓰기는 멤버가 아닌 소유자 게이트다. `api.ts`의 `guardUploadPath`가 로컬 파일 읽기 측면($HOME 아래 자격증명 dotdir, symlink 해석, 크기 상한)을 좁히지만 이는 sandbox가 아니라 속도 방지턱 — 실질 게이트는 MCP 호스트의 도구 호출 승인이다.
+- 쓰기 가능한 MCP 표면은 사용자 MCP 토큰 유출 시 영향 범위를 넓힘. 원래의 완화("쓰기를 계정 문서로 제한, 멤버 게이트")는 확장된 표면을 더 이상 커버하지 못함: KB 쓰기는 인증만 요구하고(다만 검색은 업로더 본인으로 스코프됨 — 업데이트 2 참조), 계정/멤버십 쓰기는 멤버가 아닌 소유자 게이트다. `api.ts`의 `guardUploadPath`가 로컬 파일 읽기 측면($HOME 아래 자격증명 dotdir, `/etc`·`/proc`·`/var/run/secrets` 등 시스템 경로, `.env*`·`*credentials*`·`*.pem`·`id_*` 등 시크릿형 파일명, symlink 해석, 크기 상한)을 좁히지만 이는 sandbox가 아니라 속도 방지턱 — 실질 게이트는 MCP 호스트의 도구 호출 승인이다.
 - 이 ADR이 추가한 도구 정의가 총 10개(원래 3개 + 구현 후 7개; 서버 전체 도구 수는 더 많음) — `api.ts`·`index.ts`·README 영/한 표 간 동기화 대상.
 
 ### 위험

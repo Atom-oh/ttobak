@@ -23,16 +23,26 @@ const MIME_BY_EXT: Record<string, string> = {
 export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100MB (presigned document upload)
 export const MAX_KB_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB -- Bedrock KB per-file ingestion limit
 
+// System paths and secret-shaped filenames a prompt-injected agent would
+// reach for first. Checked against the symlink-resolved path/basename.
+const BLOCKED_SYSTEM_PREFIXES = ['/etc', '/proc', '/sys', '/var/run/secrets', '/run/secrets'];
+const BLOCKED_NAME_PATTERNS = [
+  /^\.env(\..*)?$/i, // .env, .env.local, .env.production, ...
+  /credentials/i, // credentials, aws_credentials.json, gcloud-credentials.txt, ...
+  /\.pem$/i,
+  /^id_[a-z0-9]+(\.pub)?$/i, // SSH keypairs: id_rsa, id_ed25519(.pub)
+];
+
 // Best-effort speed bump, NOT a sandbox. What it actually blocks: dotfile/
-// dotdir paths under $HOME (~/.ttobak tokens, ~/.aws, ~/.ssh, ~/.gnupg, ...)
-// -- resolved through realpathSync first so a symlink can't dodge the check,
-// since statSync/readFileSync follow symlinks even though path.resolve()
-// doesn't -- plus non-regular files and anything over the size cap. What it
-// deliberately does NOT claim to block: a prompt-injected agent uploading
-// readable secrets from anywhere else (/etc, /proc, a project .env, a
-// credentials file under ~/Documents). The real gate is the MCP host's
-// tool-call approval; this only takes the most credential-dense targets out
-// of one-click reach.
+// dotdir paths under $HOME (~/.ttobak tokens, ~/.aws, ~/.ssh, ~/.gnupg, ...),
+// system paths (/etc, /proc, /sys, /var/run/secrets), and secret-shaped
+// filenames (.env*, *credentials*, *.pem, id_*) -- all resolved through
+// realpathSync first so a symlink can't dodge the checks, since statSync/
+// readFileSync follow symlinks even though path.resolve() doesn't -- plus
+// non-regular files and anything over the size cap. A readable secret that
+// matches none of these (an oddly-named token file in a project dir) still
+// gets through: the real gate is the MCP host's tool-call approval; this
+// only takes the most credential-dense targets out of one-click reach.
 export function guardUploadPath(filePath: string, maxBytes: number): { path: string; size: number } {
   if (!isAbsolute(filePath)) {
     throw new Error(`filePath must be an absolute path, got "${filePath}".`);
@@ -42,6 +52,14 @@ export function guardUploadPath(filePath: string, maxBytes: number): { path: str
     real = realpathSync(filePath);
   } catch {
     throw new Error(`File not found: "${filePath}".`);
+  }
+  for (const prefix of BLOCKED_SYSTEM_PREFIXES) {
+    if (real === prefix || real.startsWith(prefix + sep)) {
+      throw new Error(`Refusing to upload "${filePath}" -- path is inside the system directory ${prefix}.`);
+    }
+  }
+  if (BLOCKED_NAME_PATTERNS.some((re) => re.test(basename(real)))) {
+    throw new Error(`Refusing to upload "${filePath}" -- filename matches a credential/secret pattern.`);
   }
   const st = statSync(real);
   if (!st.isFile()) {
@@ -259,6 +277,7 @@ export class TtobakApi {
       const req = httpsRequest(
         {
           hostname: url.hostname,
+          port: url.port || undefined,
           path: url.pathname + url.search,
           method: 'PUT',
           headers: { 'Content-Type': contentType, 'Content-Length': String(data.length) },

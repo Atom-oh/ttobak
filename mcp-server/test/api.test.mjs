@@ -80,6 +80,32 @@ test('guardUploadPath: blocks dotdirs under $HOME, including via symlink', () =>
   }
 });
 
+test('guardUploadPath: blocks system paths', () => {
+  // /etc/hosts exists on every Linux/macOS box this server runs on
+  assert.throws(() => guardUploadPath('/etc/hosts', MAX_UPLOAD_BYTES), /system directory/);
+});
+
+test('guardUploadPath: blocks secret-shaped filenames', () => {
+  const dir = mkTmpDir();
+  try {
+    for (const name of ['.env', '.env.local', 'aws_credentials.json', 'server.pem', 'id_rsa', 'id_ed25519.pub']) {
+      writeFileSync(join(dir, name), 'x');
+      assert.throws(
+        () => guardUploadPath(join(dir, name), MAX_UPLOAD_BYTES),
+        /credential\/secret pattern/,
+        `expected ${name} to be blocked`,
+      );
+    }
+    // near-misses stay uploadable
+    writeFileSync(join(dir, 'environment.pdf'), 'x');
+    writeFileSync(join(dir, 'id_photo.jpg.pdf'), 'x');
+    assert.ok(guardUploadPath(join(dir, 'environment.pdf'), MAX_UPLOAD_BYTES).path);
+    assert.ok(guardUploadPath(join(dir, 'id_photo.jpg.pdf'), MAX_UPLOAD_BYTES).path);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('guardUploadPath: allows a normal file outside hidden dirs', () => {
   const dir = mkTmpDir();
   const f = join(dir, 'doc.pdf');
