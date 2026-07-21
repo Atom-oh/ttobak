@@ -29,6 +29,7 @@ npm run lint      # ESLint
   - `speechRecognition.ts` — Web Speech API wrapper
   - `transcribeClient.ts` — Server-side transcription API calls
   - `upload.ts` — S3 presigned URL upload
+  - `tauri.ts` — Tauri desktop app bridge: `isTauri()`, native recording commands/events (see mac-app/CLAUDE.md)
   - `device.ts` — Audio input device enumeration
 - `src/hooks/` — Custom hooks
   - `useRecordingSession` — MediaRecorder + chunk upload orchestration
@@ -53,3 +54,5 @@ npm run lint      # ESLint
 - **SPA fallback**: CloudFront 404→`/index.html` enables client-side routing for dynamic routes like `/meeting/[id]`
 - **AWS SDK in browser**: `@aws-sdk/client-transcribe-streaming` runs in the browser; Cognito identity pool provides temporary credentials via `@aws-sdk/credential-providers`
 - **Recording cleanup**: `RecordButton` must call `audioContextRef.current.close()` and `stream.getTracks().forEach(t => t.stop())` on stop to prevent mic lock
+- **Audio uploads use a progress-stall watchdog, never a fixed total timeout**: `lib/upload.ts`'s `putWithProgress` (and `mac-app/src-tauri/src/upload.rs`'s Rust-side equivalent for the Tauri desktop app) abort only after 60s with *zero progress* — a large recording on a slow-but-healthy connection must be allowed to keep going. A fixed total-request timeout here previously made large files impossible to upload regardless of connection quality (ADR-024).
+- **Tauri desktop app (System Audio mode) hands `usePostRecording` a file path, not a Blob**: `RecordButton`'s native stop path never reads the recording's bytes into the WebView (see mac-app/CLAUDE.md's "Critical: don't ship WAV bytes through IPC") — it calls `onNativeFileReady(path, byteSize)` instead of `onBlobReady(blob, mimeType)`, and `usePostRecording`'s pending-upload state is a tagged union of the two. The temp WAV is deleted only after the backend's upload-complete notification succeeds, never before.
