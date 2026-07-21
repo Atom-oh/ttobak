@@ -269,6 +269,7 @@ func init() {
 		r.Put("/api/projects/{projectId}", projectHandler.UpdateProject)
 		r.Delete("/api/projects/{projectId}", projectHandler.DeleteProject)
 		r.Post("/api/projects/{projectId}/members", projectHandler.AddMember)
+		r.Delete("/api/projects/{projectId}/members/{userId}", projectHandler.RemoveMember)
 		r.Post("/api/projects/{projectId}/accounts", projectHandler.LinkAccount)
 		r.Delete("/api/projects/{projectId}/accounts/{accountId}", projectHandler.UnlinkAccount)
 		r.Post("/api/projects/{projectId}/meetings", projectHandler.LinkMeeting)

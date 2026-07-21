@@ -174,6 +174,24 @@ func (h *ProjectHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, member)
 }
 
+func (h *ProjectHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
+	projectID, ok := projectIDFromRequest(w, r)
+	if !ok {
+		return
+	}
+	targetUserID := chi.URLParam(r, "userId")
+	if targetUserID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "userId is required")
+		return
+	}
+	ctx := r.Context()
+	if err := h.projectService.RemoveMember(ctx, middleware.GetUserID(ctx), projectID, targetUserID); err != nil {
+		writeProjectError(w, err, "Only the owner can remove members")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *ProjectHandler) LinkAccount(w http.ResponseWriter, r *http.Request) {
 	projectID, ok := projectIDFromRequest(w, r)
 	if !ok {

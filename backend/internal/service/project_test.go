@@ -12,19 +12,18 @@ import (
 )
 
 type mockProjectRepo struct {
-	projects             map[string]*model.Project
-	projectMembers       map[string]*model.ProjectMember
-	accountMembers       map[string]*model.AccountMember
-	accounts             map[string]*model.Account
-	users                map[string]*model.User
-	meetings             map[string]*model.Meeting
-	research             map[string]*model.Research
-	projectRefs          map[string][]model.ProjectRef
-	meetingRefs          map[string][]model.ProjectMeetingRef
-	researchRefs         map[string][]model.ProjectResearchRef
-	deleteAfterGet       string
-	failPutRefFor        string
-	failDeleteProjectRef bool
+	projects       map[string]*model.Project
+	projectMembers map[string]*model.ProjectMember
+	accountMembers map[string]*model.AccountMember
+	accounts       map[string]*model.Account
+	users          map[string]*model.User
+	meetings       map[string]*model.Meeting
+	research       map[string]*model.Research
+	projectRefs    map[string][]model.ProjectRef
+	meetingRefs    map[string][]model.ProjectMeetingRef
+	researchRefs   map[string][]model.ProjectResearchRef
+	deleteAfterGet string
+	failPutRefFor  string
 }
 
 func newMockProjectRepo() *mockProjectRepo {
@@ -138,7 +137,11 @@ func (m *mockProjectRepo) DeleteProject(_ context.Context, id, _ string) error {
 	delete(m.projects, id)
 	return nil
 }
-func (m *mockProjectRepo) AddProjectAccountLink(_ context.Context, projectID, accountID string) error {
+func (m *mockProjectRepo) DeleteProjectMember(_ context.Context, projectID, userID string) error {
+	delete(m.projectMembers, projectMemberKey(projectID, userID))
+	return nil
+}
+func (m *mockProjectRepo) ProjectAccountLinkTransactional(_ context.Context, projectID, accountID string, ref *model.ProjectRef) error {
 	p := m.projects[projectID]
 	if p == nil {
 		return fmt.Errorf("%w: project missing", repository.ErrConditionFailed)
@@ -146,9 +149,18 @@ func (m *mockProjectRepo) AddProjectAccountLink(_ context.Context, projectID, ac
 	if !contains(p.AccountIDs, accountID) {
 		p.AccountIDs = append(p.AccountIDs, accountID)
 	}
+	refs := m.projectRefs[accountID]
+	for i := range refs {
+		if refs[i].ProjectID == ref.ProjectID {
+			refs[i] = *ref
+			m.projectRefs[accountID] = refs
+			return nil
+		}
+	}
+	m.projectRefs[accountID] = append(refs, *ref)
 	return nil
 }
-func (m *mockProjectRepo) RemoveProjectAccountLink(_ context.Context, projectID, accountID string) error {
+func (m *mockProjectRepo) ProjectAccountUnlinkTransactional(_ context.Context, projectID, accountID string) error {
 	p := m.projects[projectID]
 	if p == nil {
 		return fmt.Errorf("%w: project missing", repository.ErrConditionFailed)
@@ -160,9 +172,17 @@ func (m *mockProjectRepo) RemoveProjectAccountLink(_ context.Context, projectID,
 		}
 	}
 	p.AccountIDs = out
+	refs := m.projectRefs[accountID]
+	filtered := refs[:0]
+	for _, ref := range refs {
+		if ref.ProjectID != projectID {
+			filtered = append(filtered, ref)
+		}
+	}
+	m.projectRefs[accountID] = filtered
 	return nil
 }
-func (m *mockProjectRepo) AddMeetingProjectLink(_ context.Context, ownerID, meetingID, projectID string) error {
+func (m *mockProjectRepo) MeetingProjectLinkTransactional(_ context.Context, ownerID, meetingID, projectID string, ref *model.ProjectMeetingRef) error {
 	meeting := m.meetings[projectMeetingKey(ownerID, meetingID)]
 	if meeting == nil {
 		return fmt.Errorf("%w: meeting missing", repository.ErrConditionFailed)
@@ -170,9 +190,18 @@ func (m *mockProjectRepo) AddMeetingProjectLink(_ context.Context, ownerID, meet
 	if !contains(meeting.ProjectIDs, projectID) {
 		meeting.ProjectIDs = append(meeting.ProjectIDs, projectID)
 	}
+	refs := m.meetingRefs[ref.ProjectID]
+	for i := range refs {
+		if refs[i].MeetingID == ref.MeetingID {
+			refs[i] = *ref
+			m.meetingRefs[ref.ProjectID] = refs
+			return nil
+		}
+	}
+	m.meetingRefs[ref.ProjectID] = append(refs, *ref)
 	return nil
 }
-func (m *mockProjectRepo) RemoveMeetingProjectLink(_ context.Context, ownerID, meetingID, projectID string) error {
+func (m *mockProjectRepo) MeetingProjectUnlinkTransactional(_ context.Context, ownerID, meetingID, projectID, refSK string) error {
 	meeting := m.meetings[projectMeetingKey(ownerID, meetingID)]
 	if meeting == nil {
 		return fmt.Errorf("%w: meeting missing", repository.ErrConditionFailed)
@@ -184,9 +213,19 @@ func (m *mockProjectRepo) RemoveMeetingProjectLink(_ context.Context, ownerID, m
 		}
 	}
 	meeting.ProjectIDs = out
+	if refSK != "" {
+		refs := m.meetingRefs[projectID]
+		filtered := refs[:0]
+		for _, ref := range refs {
+			if ref.SK != refSK {
+				filtered = append(filtered, ref)
+			}
+		}
+		m.meetingRefs[projectID] = filtered
+	}
 	return nil
 }
-func (m *mockProjectRepo) AddResearchProjectLink(_ context.Context, researchID, projectID string) error {
+func (m *mockProjectRepo) ResearchProjectLinkTransactional(_ context.Context, researchID, projectID string, ref *model.ProjectResearchRef) error {
 	r := m.research[researchID]
 	if r == nil {
 		return fmt.Errorf("%w: research missing", repository.ErrConditionFailed)
@@ -194,9 +233,18 @@ func (m *mockProjectRepo) AddResearchProjectLink(_ context.Context, researchID, 
 	if !contains(r.ProjectIDs, projectID) {
 		r.ProjectIDs = append(r.ProjectIDs, projectID)
 	}
+	refs := m.researchRefs[ref.ProjectID]
+	for i := range refs {
+		if refs[i].ResearchID == ref.ResearchID {
+			refs[i] = *ref
+			m.researchRefs[ref.ProjectID] = refs
+			return nil
+		}
+	}
+	m.researchRefs[ref.ProjectID] = append(refs, *ref)
 	return nil
 }
-func (m *mockProjectRepo) RemoveResearchProjectLink(_ context.Context, researchID, projectID string) error {
+func (m *mockProjectRepo) ResearchProjectUnlinkTransactional(_ context.Context, researchID, projectID string) error {
 	r := m.research[researchID]
 	if r == nil {
 		return fmt.Errorf("%w: research missing", repository.ErrConditionFailed)
@@ -208,6 +256,14 @@ func (m *mockProjectRepo) RemoveResearchProjectLink(_ context.Context, researchI
 		}
 	}
 	r.ProjectIDs = out
+	refs := m.researchRefs[projectID]
+	filtered := refs[:0]
+	for _, ref := range refs {
+		if ref.ResearchID != researchID {
+			filtered = append(filtered, ref)
+		}
+	}
+	m.researchRefs[projectID] = filtered
 	return nil
 }
 func (m *mockProjectRepo) PutProjectRef(_ context.Context, ref *model.ProjectRef) error {
@@ -225,20 +281,6 @@ func (m *mockProjectRepo) PutProjectRef(_ context.Context, ref *model.ProjectRef
 	m.projectRefs[ref.AccountID] = append(refs, *ref)
 	return nil
 }
-func (m *mockProjectRepo) DeleteProjectRef(_ context.Context, accountID, projectID string) error {
-	if m.failDeleteProjectRef {
-		return errors.New("simulated best-effort delete failure")
-	}
-	refs := m.projectRefs[accountID]
-	out := refs[:0]
-	for _, ref := range refs {
-		if ref.ProjectID != projectID {
-			out = append(out, ref)
-		}
-	}
-	m.projectRefs[accountID] = out
-	return nil
-}
 func (m *mockProjectRepo) ListProjectRefsForAccount(_ context.Context, accountID string) ([]model.ProjectRef, error) {
 	return append([]model.ProjectRef(nil), m.projectRefs[accountID]...), nil
 }
@@ -254,17 +296,6 @@ func (m *mockProjectRepo) PutProjectMeetingRef(_ context.Context, ref *model.Pro
 	m.meetingRefs[ref.ProjectID] = append(refs, *ref)
 	return nil
 }
-func (m *mockProjectRepo) DeleteProjectMeetingRef(_ context.Context, projectID, sk string) error {
-	refs := m.meetingRefs[projectID]
-	out := refs[:0]
-	for _, ref := range refs {
-		if ref.SK != sk {
-			out = append(out, ref)
-		}
-	}
-	m.meetingRefs[projectID] = out
-	return nil
-}
 func (m *mockProjectRepo) ListProjectMeetingRefsForProject(_ context.Context, projectID string) ([]model.ProjectMeetingRef, error) {
 	return append([]model.ProjectMeetingRef(nil), m.meetingRefs[projectID]...), nil
 }
@@ -278,17 +309,6 @@ func (m *mockProjectRepo) PutProjectResearchRef(_ context.Context, ref *model.Pr
 		}
 	}
 	m.researchRefs[ref.ProjectID] = append(refs, *ref)
-	return nil
-}
-func (m *mockProjectRepo) DeleteProjectResearchRef(_ context.Context, projectID, researchID string) error {
-	refs := m.researchRefs[projectID]
-	out := refs[:0]
-	for _, ref := range refs {
-		if ref.ResearchID != researchID {
-			out = append(out, ref)
-		}
-	}
-	m.researchRefs[projectID] = out
 	return nil
 }
 func (m *mockProjectRepo) ListProjectResearchRefsForProject(_ context.Context, projectID string) ([]model.ProjectResearchRef, error) {
@@ -361,8 +381,9 @@ func TestCreateProject_SetsOwner(t *testing.T) {
 	if project.ProjectID == "" || project.OwnerUserID != "owner-1" || project.Name != "Migration" {
 		t.Fatalf("unexpected project: %+v", project)
 	}
-	if repo.projects[project.ProjectID] == nil || project.EntityType != model.EntityTypeProject {
-		t.Fatalf("project not persisted correctly: %+v", project)
+	persisted := repo.projects[project.ProjectID]
+	if persisted == nil || persisted.EntityType != model.EntityTypeProject {
+		t.Fatalf("project not persisted correctly: %+v", persisted)
 	}
 }
 
@@ -403,9 +424,16 @@ func TestProjectLinkAccount_ReLinkHealsMissingRef(t *testing.T) {
 	}
 }
 
-func TestLinkAccount_RefFailureSurfacedAndRetryHeals(t *testing.T) {
+// TestLinkAccount_AlreadyLinkedRefFailureSurfacedAndRetryHeals exercises the
+// "already linked" self-heal path: the FIRST link is one atomic
+// TransactWriteItems call (canonical + ref land together, or neither does),
+// but re-linking an already-linked account re-attempts a standalone
+// PutProjectRef so a ref that went missing by some other means (e.g. a
+// pre-transactional-migration write) can still be healed by retrying.
+func TestLinkAccount_AlreadyLinkedRefFailureSurfacedAndRetryHeals(t *testing.T) {
 	repo := newMockProjectRepo()
-	seedProject(repo, "p1", "owner")
+	p := seedProject(repo, "p1", "owner")
+	p.AccountIDs = []string{"a1"} // simulate already-linked canonical state
 	addProjectAccountMember(repo, "a1", "owner")
 	repo.failPutRefFor = "a1"
 	svc := newProjectServiceWithRepo(repo)
@@ -413,7 +441,7 @@ func TestLinkAccount_RefFailureSurfacedAndRetryHeals(t *testing.T) {
 		t.Fatal("expected ref failure")
 	}
 	if !contains(repo.projects["p1"].AccountIDs, "a1") {
-		t.Fatal("canonical ADD should remain committed")
+		t.Fatal("canonical link should remain committed")
 	}
 	repo.failPutRefFor = ""
 	if _, err := svc.LinkAccount(context.Background(), "owner", "p1", "a1"); err != nil {
@@ -438,19 +466,87 @@ func TestLinkAccount_ConcurrentDeleteNoZombie(t *testing.T) {
 	}
 }
 
-func TestUnlinkAccount_CanonicalRemovalToleratesRefDeleteFailure(t *testing.T) {
+// TestUnlinkAccount_RemovesCanonicalAndRef verifies the transactional unlink
+// removes both the canonical accountIds entry and the reverse-index ref
+// (previously two separate requests -- RemoveProjectAccountLink then a
+// best-effort DeleteProjectRef -- which could interleave with a concurrent
+// Link/Unlink of the same pair and leave the set linked but the ref deleted).
+func TestUnlinkAccount_RemovesCanonicalAndRef(t *testing.T) {
 	repo := newMockProjectRepo()
 	p := seedProject(repo, "p1", "owner")
 	p.AccountIDs = []string{"a1"}
 	addProjectAccountMember(repo, "a1", "owner")
 	repo.projectRefs["a1"] = []model.ProjectRef{{ProjectID: "p1", AccountID: "a1"}}
-	repo.failDeleteProjectRef = true
 	ids, err := newProjectServiceWithRepo(repo).UnlinkAccount(context.Background(), "owner", "p1", "a1")
 	if err != nil {
-		t.Fatalf("best-effort ref delete should not fail unlink: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(ids) != 0 || contains(repo.projects["p1"].AccountIDs, "a1") {
 		t.Fatalf("canonical link remains: %v", repo.projects["p1"].AccountIDs)
+	}
+	if len(repo.projectRefs["a1"]) != 0 {
+		t.Fatalf("ref should be removed: %v", repo.projectRefs["a1"])
+	}
+}
+
+// TestUnlinkAccount_OwnerNeedNotCurrentlyBeAccountMember is the regression
+// test for the revocation deadlock: requiring GetMember(accountID, userID)
+// on unlink meant an owner removed from accountID could never unlink it
+// again, while every remaining account member kept indefinite project
+// access via requireProjectAccess's account-inheritance path. Unlink now
+// only requires project ownership, the same authority LinkAccount required
+// to create the link.
+func TestUnlinkAccount_OwnerNeedNotCurrentlyBeAccountMember(t *testing.T) {
+	repo := newMockProjectRepo()
+	p := seedProject(repo, "p1", "owner")
+	p.AccountIDs = []string{"a1"}
+	repo.projectRefs["a1"] = []model.ProjectRef{{ProjectID: "p1", AccountID: "a1"}}
+	// Deliberately no addProjectAccountMember(repo, "a1", "owner") call --
+	// the owner is NOT a member of "a1" (e.g. removed after linking).
+	ids, err := newProjectServiceWithRepo(repo).UnlinkAccount(context.Background(), "owner", "p1", "a1")
+	if err != nil {
+		t.Fatalf("owner should be able to unlink without current account membership: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("expected link removed, got %v", ids)
+	}
+}
+
+func TestRemoveMember_OwnerOnly(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	repo.projectMembers[projectMemberKey("p1", "bob")] = &model.ProjectMember{ProjectID: "p1", UserID: "bob"}
+	svc := newProjectServiceWithRepo(repo)
+
+	if err := svc.RemoveMember(context.Background(), "bob", "p1", "bob"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden for non-owner, got %v", err)
+	}
+	if err := svc.RemoveMember(context.Background(), "owner", "p1", "bob"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if repo.projectMembers[projectMemberKey("p1", "bob")] != nil {
+		t.Fatal("membership should be removed")
+	}
+	if _, err := svc.requireProjectAccess(context.Background(), "bob", "p1"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("removed member should lose access, got %v", err)
+	}
+}
+
+// TestListMyProjects_IncludesDirectMembers is the regression test for the
+// member-visibility gap: ListProjectsForUser used to query only the owner
+// index, so a user added via AddMember had project access
+// (requireProjectAccess found their MEMBER# row) but the project never
+// appeared in GET /api/projects -- present, but undiscoverable.
+func TestListMyProjects_IncludesDirectMembers(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	repo.projectMembers[projectMemberKey("p1", "bob")] = &model.ProjectMember{ProjectID: "p1", UserID: "bob"}
+	projects, err := newProjectServiceWithRepo(repo).ListMyProjects(context.Background(), "bob")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(projects) != 1 || projects[0].ProjectID != "p1" {
+		t.Fatalf("expected direct member to see p1, got %v", projects)
 	}
 }
 

@@ -83,17 +83,30 @@ func (m *mockHandlerProjectRepo) GetMember(_ context.Context, accountID, userID 
 	return &copy, nil
 }
 
-func (m *mockHandlerProjectRepo) AddProjectAccountLink(_ context.Context, projectID, accountID string) error {
+func (m *mockHandlerProjectRepo) ProjectAccountLinkTransactional(_ context.Context, projectID, accountID string, ref *model.ProjectRef) error {
 	project := m.projects[projectID]
 	if project == nil {
 		return fmt.Errorf("%w: project missing", repository.ErrConditionFailed)
 	}
+	found := false
 	for _, existing := range project.AccountIDs {
 		if existing == accountID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		project.AccountIDs = append(project.AccountIDs, accountID)
+	}
+	refs := m.projectRefs[accountID]
+	for i := range refs {
+		if refs[i].ProjectID == ref.ProjectID {
+			refs[i] = *ref
+			m.projectRefs[accountID] = refs
 			return nil
 		}
 	}
-	project.AccountIDs = append(project.AccountIDs, accountID)
+	m.projectRefs[accountID] = append(refs, *ref)
 	return nil
 }
 

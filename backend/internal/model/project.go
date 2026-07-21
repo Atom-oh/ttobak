@@ -4,7 +4,8 @@ import "time"
 
 // Key prefixes / constants for the Project partition.
 // Project CONFIG:       PK: PROJECT#{projectId}, SK: CONFIG
-// Project member:       PK: PROJECT#{projectId}, SK: MEMBER#{userId}
+// Project owner index:  PK: USER#{ownerUserId}, SK: PROJECT#{projectId}  (ListProjectsForUser's owner half)
+// Project member:       PK: PROJECT#{projectId}, SK: MEMBER#{userId}    (GSI1PK: USER#{userId}, GSI1SK: PROJECT#{projectId})
 // Account project ref:  PK: ACCOUNT#{accountId}, SK: PROJECTREF#{projectId}
 // Project meeting ref:  PK: PROJECT#{projectId}, SK: MEETINGREF#{occurredAt}#{meetingId}
 // Project research ref: PK: PROJECT#{projectId}, SK: RESEARCHREF#{researchId}
@@ -17,6 +18,7 @@ const (
 	PrefixProjectResearchRef = PrefixResearchRef
 
 	EntityTypeProject            = "PROJECT"
+	EntityTypeProjectIndex       = "PROJECT_INDEX"
 	EntityTypeProjectMember      = "PROJECT_MEMBER"
 	EntityTypeProjectRef         = "PROJECT_REF"
 	EntityTypeProjectMeetingRef  = "PROJECT_MEETING_REF"
@@ -169,7 +171,10 @@ type ProjectResearchDTO struct {
 	Summary     string `json:"summary,omitempty"`
 	Status      string `json:"status"`
 	OwnerUserID string `json:"ownerUserId"`
-	CreatedAt   string `json:"createdAt"`
+	// CreatedAt is a string (not time.Time, unlike this DTO's siblings) because
+	// it's passed through directly from Research.CreatedAt, which is itself a
+	// string field (see model/meeting.go's Research struct).
+	CreatedAt string `json:"createdAt"`
 }
 
 type ProjectInsightDTO struct {

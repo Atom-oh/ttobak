@@ -31,7 +31,7 @@ func (r *DynamoDBRepository) CreateProject(ctx context.Context, project *model.P
 	indexItem, err := attributevalue.MarshalMap(projectIndexItem{
 		PK:         model.PrefixUser + project.OwnerUserID,
 		SK:         model.PrefixProject + project.ProjectID,
-		EntityType: "PROJECT_INDEX",
+		EntityType: model.EntityTypeProjectIndex,
 		ProjectID:  project.ProjectID,
 	})
 	if err != nil {
@@ -109,6 +109,22 @@ func (r *DynamoDBRepository) PutProjectMember(ctx context.Context, member *model
 	return nil
 }
 
+// DeleteProjectMember removes a direct project membership row. Used for
+// access revocation -- without this, a member added via AddMember could
+// never be removed short of deleting the whole project.
+func (r *DynamoDBRepository) DeleteProjectMember(ctx context.Context, projectID, userID string) error {
+	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixProjectMember + userID},
+		},
+	}); err != nil {
+		return fmt.Errorf("delete project member: %w", err)
+	}
+	return nil
+}
+
 // ListProjectMembers queries every MEMBER# item in the project partition.
 func (r *DynamoDBRepository) ListProjectMembers(ctx context.Context, projectID string) ([]model.ProjectMember, error) {
 	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixProject + projectID)).
@@ -133,7 +149,41 @@ func (r *DynamoDBRepository) ListProjectMembers(ctx context.Context, projectID s
 	return members, nil
 }
 
-// ListProjectsForUser follows the owner index and skips dangling index items.
+// ListProjectMembershipsForUser reverse-looks-up direct project memberships
+// via GSI1 (GSI1PK=USER#{userId}, GSI1SK begins_with PROJECT#) -- mirrors
+// ListAccountsForUser. GSI1 is shared with meeting date-sorting rows and
+// ACCOUNT#-prefixed membership rows for the same user, so the begins_with
+// condition is what isolates project-membership rows specifically.
+func (r *DynamoDBRepository) ListProjectMembershipsForUser(ctx context.Context, userID string) ([]model.ProjectMember, error) {
+	keyEx := expression.Key("GSI1PK").Equal(expression.Value(model.PrefixUser + userID)).
+		And(expression.Key("GSI1SK").BeginsWith(model.PrefixProject))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build project memberships query: %w", err)
+	}
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		IndexName:                 aws.String("GSI1"),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query project memberships: %w", err)
+	}
+	members := []model.ProjectMember{}
+	if err := attributevalue.UnmarshalListOfMaps(items, &members); err != nil {
+		return nil, fmt.Errorf("unmarshal project memberships: %w", err)
+	}
+	return members, nil
+}
+
+// ListProjectsForUser returns every project the user can discover from
+// their own identity: projects they own (the PROJECT# owner index) UNION
+// projects they were added to via AddMember (the GSI1 membership reverse
+// index). Without the GSI1 half, a directly-added member could pass
+// requireProjectAccess but never see the project in GET /api/projects --
+// present in the partition, but undiscoverable.
 func (r *DynamoDBRepository) ListProjectsForUser(ctx context.Context, userID string) ([]model.Project, error) {
 	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixUser + userID)).
 		And(expression.Key("SK").BeginsWith(model.PrefixProject))
@@ -155,11 +205,29 @@ func (r *DynamoDBRepository) ListProjectsForUser(ctx context.Context, userID str
 	if err := attributevalue.UnmarshalListOfMaps(items, &indexes); err != nil {
 		return nil, fmt.Errorf("unmarshal project index items: %w", err)
 	}
-	projects := make([]model.Project, 0, len(indexes))
+	memberships, err := r.ListProjectMembershipsForUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list project memberships: %w", err)
+	}
+	seen := make(map[string]bool, len(indexes)+len(memberships))
+	projectIDs := make([]string, 0, len(indexes)+len(memberships))
 	for _, index := range indexes {
-		project, err := r.GetProject(ctx, index.ProjectID)
+		if !seen[index.ProjectID] {
+			seen[index.ProjectID] = true
+			projectIDs = append(projectIDs, index.ProjectID)
+		}
+	}
+	for _, member := range memberships {
+		if !seen[member.ProjectID] {
+			seen[member.ProjectID] = true
+			projectIDs = append(projectIDs, member.ProjectID)
+		}
+	}
+	projects := make([]model.Project, 0, len(projectIDs))
+	for _, projectID := range projectIDs {
+		project, err := r.GetProject(ctx, projectID)
 		if err != nil {
-			return nil, fmt.Errorf("get project %s: %w", index.ProjectID, err)
+			return nil, fmt.Errorf("get project %s: %w", projectID, err)
 		}
 		if project != nil {
 			projects = append(projects, *project)
@@ -237,188 +305,254 @@ func (r *DynamoDBRepository) DeleteProject(ctx context.Context, projectID, owner
 	return nil
 }
 
-// AddProjectAccountLink atomically adds accountID to project.accountIds.
-func (r *DynamoDBRepository) AddProjectAccountLink(ctx context.Context, projectID, accountID string) error {
-	// attribute_exists(PK) prevents UpdateItem from creating a zombie CONFIG
-	// item if the project is concurrently deleted after the service read.
-	expr, err := expression.NewBuilder().
+// mapProjectTransactionCanceledError inspects a TransactWriteItems
+// cancellation and maps a ConditionalCheckFailed reason to ErrConditionFailed
+// (mirrors ResearchRepository's mapTransactionCanceledError, same package).
+func mapProjectTransactionCanceledError(err error, entityID, entityLabel, verb string) error {
+	var tce *types.TransactionCanceledException
+	if errors.As(err, &tce) {
+		if len(tce.CancellationReasons) > 0 && aws.ToString(tce.CancellationReasons[0].Code) == "ConditionalCheckFailed" {
+			return fmt.Errorf("%w: %s %s not found", ErrConditionFailed, entityLabel, entityID)
+		}
+		return fmt.Errorf("failed to %s: transaction canceled, retry: %w", verb, err)
+	}
+	return fmt.Errorf("failed to %s transactionally: %w", verb, err)
+}
+
+// ProjectAccountLinkTransactional atomically ADDs accountID to
+// project.accountIds AND puts the PROJECTREF# reverse-index item in one
+// TransactWriteItems call. Two separate requests here (the original
+// AddProjectAccountLink + PutProjectRef) would leave a gap: a concurrent
+// Link/Unlink pair for the SAME (project, account) could interleave such
+// that the canonical set ends up linked but the reverse-index ref ends up
+// deleted -- ListAccountProjects reads from that ref, so the project would
+// then be permanently invisible from the account's list. One transaction
+// makes that interleaving impossible, not just less likely (mirrors
+// ResearchRepository.LinkAccountTransactional).
+func (r *DynamoDBRepository) ProjectAccountLinkTransactional(ctx context.Context, projectID, accountID string, ref *model.ProjectRef) error {
+	refItem, err := attributevalue.MarshalMap(ref)
+	if err != nil {
+		return fmt.Errorf("marshal project ref: %w", err)
+	}
+	updateExpr, err := expression.NewBuilder().
 		WithCondition(expression.AttributeExists(expression.Name("PK"))).
 		WithUpdate(expression.Add(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}}))).
 		Build()
 	if err != nil {
-		return fmt.Errorf("build add project account link expression: %w", err)
+		return fmt.Errorf("build project account link expression: %w", err)
 	}
-	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
-			"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Update: &types.Update{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
+					"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
+				},
+				ConditionExpression:       updateExpr.Condition(),
+				UpdateExpression:          updateExpr.Update(),
+				ExpressionAttributeNames:  updateExpr.Names(),
+				ExpressionAttributeValues: updateExpr.Values(),
+			}},
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}},
 		},
-		ConditionExpression:       expr.Condition(),
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: project %s not found", ErrConditionFailed, projectID)
-		}
-		return fmt.Errorf("add project account link: %w", err)
+		return mapProjectTransactionCanceledError(err, projectID, "project", "link project account")
 	}
 	return nil
 }
 
-// RemoveProjectAccountLink atomically removes accountID from project.accountIds.
-func (r *DynamoDBRepository) RemoveProjectAccountLink(ctx context.Context, projectID, accountID string) error {
-	expr, err := expression.NewBuilder().
+// ProjectAccountUnlinkTransactional is ProjectAccountLinkTransactional's
+// inverse: atomic set-DELETE + ref-delete in one TransactWriteItems call.
+func (r *DynamoDBRepository) ProjectAccountUnlinkTransactional(ctx context.Context, projectID, accountID string) error {
+	updateExpr, err := expression.NewBuilder().
 		WithCondition(expression.AttributeExists(expression.Name("PK"))).
 		WithUpdate(expression.Delete(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}}))).
 		Build()
 	if err != nil {
-		return fmt.Errorf("build remove project account link expression: %w", err)
+		return fmt.Errorf("build project account unlink expression: %w", err)
 	}
-	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
-			"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Update: &types.Update{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
+					"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
+				},
+				ConditionExpression:       updateExpr.Condition(),
+				UpdateExpression:          updateExpr.Update(),
+				ExpressionAttributeNames:  updateExpr.Names(),
+				ExpressionAttributeValues: updateExpr.Values(),
+			}},
+			{Delete: &types.Delete{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixProjectRef + projectID},
+				},
+			}},
 		},
-		ConditionExpression:       expr.Condition(),
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: project %s not found", ErrConditionFailed, projectID)
-		}
-		return fmt.Errorf("remove project account link: %w", err)
+		return mapProjectTransactionCanceledError(err, projectID, "project", "unlink project account")
 	}
 	return nil
 }
 
-// AddMeetingProjectLink atomically adds projectID to meeting.projectIds.
-func (r *DynamoDBRepository) AddMeetingProjectLink(ctx context.Context, ownerUserID, meetingID, projectID string) error {
-	// The condition prevents UpdateItem's default upsert from resurrecting a
-	// meeting deleted between its ownership check and this mutation.
-	expr, err := expression.NewBuilder().
+// MeetingProjectLinkTransactional atomically ADDs projectID to
+// meeting.projectIds AND puts the project's MEETINGREF# item in one
+// TransactWriteItems call (same interleaving hazard/fix as
+// ProjectAccountLinkTransactional above).
+func (r *DynamoDBRepository) MeetingProjectLinkTransactional(ctx context.Context, ownerUserID, meetingID, projectID string, ref *model.ProjectMeetingRef) error {
+	refItem, err := attributevalue.MarshalMap(ref)
+	if err != nil {
+		return fmt.Errorf("marshal project meeting ref: %w", err)
+	}
+	updateExpr, err := expression.NewBuilder().
 		WithCondition(expression.AttributeExists(expression.Name("PK"))).
 		WithUpdate(expression.Add(expression.Name("projectIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{projectID}}))).
 		Build()
 	if err != nil {
-		return fmt.Errorf("build add meeting project link expression: %w", err)
+		return fmt.Errorf("build meeting project link expression: %w", err)
 	}
-	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + ownerUserID},
-			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Update: &types.Update{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + ownerUserID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+				},
+				ConditionExpression:       updateExpr.Condition(),
+				UpdateExpression:          updateExpr.Update(),
+				ExpressionAttributeNames:  updateExpr.Names(),
+				ExpressionAttributeValues: updateExpr.Values(),
+			}},
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}},
 		},
-		ConditionExpression:       expr.Condition(),
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: meeting %s not found", ErrConditionFailed, meetingID)
-		}
-		return fmt.Errorf("add meeting project link: %w", err)
+		return mapProjectTransactionCanceledError(err, meetingID, "meeting", "link meeting project")
 	}
 	return nil
 }
 
-// RemoveMeetingProjectLink atomically removes projectID from meeting.projectIds.
-func (r *DynamoDBRepository) RemoveMeetingProjectLink(ctx context.Context, ownerUserID, meetingID, projectID string) error {
-	expr, err := expression.NewBuilder().
+// MeetingProjectUnlinkTransactional is MeetingProjectLinkTransactional's
+// inverse. refSK is the ref's exact existing SK (looked up by the caller,
+// not recomputed from the meeting's current Date) -- Date is a mutable
+// field, so recomputing it here could target a different item than the one
+// LinkMeeting actually wrote, orphaning the original ref.
+func (r *DynamoDBRepository) MeetingProjectUnlinkTransactional(ctx context.Context, ownerUserID, meetingID, projectID, refSK string) error {
+	updateExpr, err := expression.NewBuilder().
 		WithCondition(expression.AttributeExists(expression.Name("PK"))).
 		WithUpdate(expression.Delete(expression.Name("projectIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{projectID}}))).
 		Build()
 	if err != nil {
-		return fmt.Errorf("build remove meeting project link expression: %w", err)
+		return fmt.Errorf("build meeting project unlink expression: %w", err)
 	}
-	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + ownerUserID},
-			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
-		},
-		ConditionExpression:       expr.Condition(),
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	})
-	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: meeting %s not found", ErrConditionFailed, meetingID)
-		}
-		return fmt.Errorf("remove meeting project link: %w", err)
+	transactItems := []types.TransactWriteItem{
+		{Update: &types.Update{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + ownerUserID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+			},
+			ConditionExpression:       updateExpr.Condition(),
+			UpdateExpression:          updateExpr.Update(),
+			ExpressionAttributeNames:  updateExpr.Names(),
+			ExpressionAttributeValues: updateExpr.Values(),
+		}},
+	}
+	if refSK != "" {
+		transactItems = append(transactItems, types.TransactWriteItem{
+			Delete: &types.Delete{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
+					"SK": &types.AttributeValueMemberS{Value: refSK},
+				},
+			},
+		})
+	}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: transactItems}); err != nil {
+		return mapProjectTransactionCanceledError(err, meetingID, "meeting", "unlink meeting project")
 	}
 	return nil
 }
 
-// AddResearchProjectLink atomically adds projectID to research.projectIds.
-func (r *DynamoDBRepository) AddResearchProjectLink(ctx context.Context, researchID, projectID string) error {
-	// The condition prevents UpdateItem's default upsert from resurrecting a
-	// research CONFIG item deleted between the service read and this write.
-	expr, err := expression.NewBuilder().
+// ResearchProjectLinkTransactional atomically ADDs projectID to
+// research.projectIds AND puts the project's RESEARCHREF# item in one
+// TransactWriteItems call (same interleaving hazard/fix as the account and
+// meeting variants above).
+func (r *DynamoDBRepository) ResearchProjectLinkTransactional(ctx context.Context, researchID, projectID string, ref *model.ProjectResearchRef) error {
+	refItem, err := attributevalue.MarshalMap(ref)
+	if err != nil {
+		return fmt.Errorf("marshal project research ref: %w", err)
+	}
+	updateExpr, err := expression.NewBuilder().
 		WithCondition(expression.AttributeExists(expression.Name("PK"))).
 		WithUpdate(expression.Add(expression.Name("projectIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{projectID}}))).
 		Build()
 	if err != nil {
-		return fmt.Errorf("build add research project link expression: %w", err)
+		return fmt.Errorf("build research project link expression: %w", err)
 	}
-	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchID},
-			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Update: &types.Update{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+				},
+				ConditionExpression:       updateExpr.Condition(),
+				UpdateExpression:          updateExpr.Update(),
+				ExpressionAttributeNames:  updateExpr.Names(),
+				ExpressionAttributeValues: updateExpr.Values(),
+			}},
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}},
 		},
-		ConditionExpression:       expr.Condition(),
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: research %s not found", ErrConditionFailed, researchID)
-		}
-		return fmt.Errorf("add research project link: %w", err)
+		return mapProjectTransactionCanceledError(err, researchID, "research", "link research project")
 	}
 	return nil
 }
 
-// RemoveResearchProjectLink atomically removes projectID from research.projectIds.
-func (r *DynamoDBRepository) RemoveResearchProjectLink(ctx context.Context, researchID, projectID string) error {
-	expr, err := expression.NewBuilder().
+// ResearchProjectUnlinkTransactional is ResearchProjectLinkTransactional's inverse.
+func (r *DynamoDBRepository) ResearchProjectUnlinkTransactional(ctx context.Context, researchID, projectID string) error {
+	updateExpr, err := expression.NewBuilder().
 		WithCondition(expression.AttributeExists(expression.Name("PK"))).
 		WithUpdate(expression.Delete(expression.Name("projectIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{projectID}}))).
 		Build()
 	if err != nil {
-		return fmt.Errorf("build remove research project link expression: %w", err)
+		return fmt.Errorf("build research project unlink expression: %w", err)
 	}
-	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchID},
-			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Update: &types.Update{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+				},
+				ConditionExpression:       updateExpr.Condition(),
+				UpdateExpression:          updateExpr.Update(),
+				ExpressionAttributeNames:  updateExpr.Names(),
+				ExpressionAttributeValues: updateExpr.Values(),
+			}},
+			{Delete: &types.Delete{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixProjectResearchRef + researchID},
+				},
+			}},
 		},
-		ConditionExpression:       expr.Condition(),
-		UpdateExpression:          expr.Update(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: research %s not found", ErrConditionFailed, researchID)
-		}
-		return fmt.Errorf("remove research project link: %w", err)
+		return mapProjectTransactionCanceledError(err, researchID, "research", "unlink research project")
 	}
 	return nil
 }

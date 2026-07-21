@@ -20,24 +20,22 @@ type projectRepo interface {
 	GetProject(context.Context, string) (*model.Project, error)
 	GetProjectMember(context.Context, string, string) (*model.ProjectMember, error)
 	PutProjectMember(context.Context, *model.ProjectMember) error
+	DeleteProjectMember(context.Context, string, string) error
 	ListProjectMembers(context.Context, string) ([]model.ProjectMember, error)
 	ListProjectsForUser(context.Context, string) ([]model.Project, error)
 	UpdateProjectFields(context.Context, string, map[string]interface{}) error
 	DeleteProject(context.Context, string, string) error
-	AddProjectAccountLink(context.Context, string, string) error
-	RemoveProjectAccountLink(context.Context, string, string) error
-	AddMeetingProjectLink(context.Context, string, string, string) error
-	RemoveMeetingProjectLink(context.Context, string, string, string) error
-	AddResearchProjectLink(context.Context, string, string) error
-	RemoveResearchProjectLink(context.Context, string, string) error
+	ProjectAccountLinkTransactional(context.Context, string, string, *model.ProjectRef) error
+	ProjectAccountUnlinkTransactional(context.Context, string, string) error
+	MeetingProjectLinkTransactional(context.Context, string, string, string, *model.ProjectMeetingRef) error
+	MeetingProjectUnlinkTransactional(context.Context, string, string, string, string) error
+	ResearchProjectLinkTransactional(context.Context, string, string, *model.ProjectResearchRef) error
+	ResearchProjectUnlinkTransactional(context.Context, string, string) error
 	PutProjectRef(context.Context, *model.ProjectRef) error
-	DeleteProjectRef(context.Context, string, string) error
 	ListProjectRefsForAccount(context.Context, string) ([]model.ProjectRef, error)
 	PutProjectMeetingRef(context.Context, *model.ProjectMeetingRef) error
-	DeleteProjectMeetingRef(context.Context, string, string) error
 	ListProjectMeetingRefsForProject(context.Context, string) ([]model.ProjectMeetingRef, error)
 	PutProjectResearchRef(context.Context, *model.ProjectResearchRef) error
-	DeleteProjectResearchRef(context.Context, string, string) error
 	ListProjectResearchRefsForProject(context.Context, string) ([]model.ProjectResearchRef, error)
 	GetMember(context.Context, string, string) (*model.AccountMember, error)
 	GetAccount(context.Context, string) (*model.Account, error)
@@ -67,7 +65,7 @@ func NewProjectServiceForTest(repo ProjectRepo) *ProjectService {
 	return &ProjectService{repo: repo}
 }
 
-func (s *ProjectService) CreateProject(ctx context.Context, ownerUserID, ownerEmail string, req *model.CreateProjectRequest) (*model.Project, error) {
+func (s *ProjectService) CreateProject(ctx context.Context, ownerUserID, ownerEmail string, req *model.CreateProjectRequest) (*model.ProjectResponse, error) {
 	if req == nil || strings.TrimSpace(req.Name) == "" {
 		return nil, ErrInvalidInput
 	}
@@ -83,7 +81,11 @@ func (s *ProjectService) CreateProject(ctx context.Context, ownerUserID, ownerEm
 	if err := s.repo.CreateProject(ctx, project); err != nil {
 		return nil, err
 	}
-	return project, nil
+	// Wrap in the same camelCase ProjectResponse contract GetProject/UpdateProject
+	// return -- the raw *model.Project only carries dynamodbav tags, so
+	// serializing it directly would leak PK/SK/EntityType and break the
+	// client's response shape immediately after creation.
+	return projectResponse(project, nil), nil
 }
 
 func (s *ProjectService) requireProjectAccess(ctx context.Context, userID, projectID string) (*model.Project, error) {
@@ -248,6 +250,25 @@ func (s *ProjectService) AddMember(ctx context.Context, requesterUserID, project
 	return &model.ProjectMemberDTO{UserID: user.UserID, Email: user.Email}, nil
 }
 
+// RemoveMember revokes a direct membership (owner only). Without this, a
+// member added via AddMember could never be removed short of deleting the
+// whole project -- a real access-revocation gap, since members can read
+// every linked meeting's insights and linked research for as long as their
+// membership row exists.
+func (s *ProjectService) RemoveMember(ctx context.Context, requesterUserID, projectID, targetUserID string) error {
+	project, err := s.repo.GetProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if project == nil {
+		return ErrNotFound
+	}
+	if project.OwnerUserID != requesterUserID {
+		return ErrForbidden
+	}
+	return s.repo.DeleteProjectMember(ctx, projectID, targetUserID)
+}
+
 func (s *ProjectService) putProjectRef(ctx context.Context, project *model.Project, accountID string) error {
 	return s.repo.PutProjectRef(ctx, &model.ProjectRef{
 		PK: model.PrefixAccount + accountID, SK: model.PrefixProjectRef + project.ProjectID,
@@ -256,6 +277,8 @@ func (s *ProjectService) putProjectRef(ctx context.Context, project *model.Proje
 	})
 }
 
+// LinkAccount links a project (owner only) to an account the caller is a
+// member of. Idempotent: linking an already-linked account is a no-op.
 func (s *ProjectService) LinkAccount(ctx context.Context, userID, projectID, accountID string) ([]string, error) {
 	project, err := s.repo.GetProject(ctx, projectID)
 	if err != nil {
@@ -275,27 +298,45 @@ func (s *ProjectService) LinkAccount(ctx context.Context, userID, projectID, acc
 		return nil, ErrForbidden
 	}
 	if contains(project.AccountIDs, accountID) {
-		// The canonical link may have succeeded while a prior reverse-index
-		// write failed. Re-attempt the idempotent Put so retries self-heal.
+		// Already linked in the canonical record, but re-attempt the ref
+		// write anyway: a *previous* LinkAccount call could have committed
+		// the transactional link while this project was on an older,
+		// non-transactional code path -- this branch heals any pre-existing
+		// gap without requiring a data migration.
 		if err := s.putProjectRef(ctx, project, accountID); err != nil {
 			return nil, fmt.Errorf("account link succeeded but the account's index write failed -- retry to heal: %w", err)
 		}
 		return append([]string{}, project.AccountIDs...), nil
 	}
-	if err := s.repo.AddProjectAccountLink(ctx, projectID, accountID); err != nil {
+	// Atomic ADD on accountIds + PROJECTREF# Put, in ONE TransactWriteItems
+	// call -- two separate requests here could interleave with a concurrent
+	// Link/Unlink of the SAME (project, account) pair and land with the
+	// canonical set linked but the ref deleted, permanently hiding a
+	// genuinely-linked project from ListAccountProjects (mirrors
+	// ResearchService.LinkAccount / AGENTS.md's documented convention).
+	ref := &model.ProjectRef{
+		PK: model.PrefixAccount + accountID, SK: model.PrefixProjectRef + projectID,
+		AccountID: accountID, ProjectID: projectID, OwnerUserID: project.OwnerUserID,
+		Name: project.Name, CreatedAt: time.Now().UTC(), EntityType: model.EntityTypeProjectRef,
+	}
+	if err := s.repo.ProjectAccountLinkTransactional(ctx, projectID, accountID, ref); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return nil, ErrNotFound
 		}
-		return nil, err
-	}
-	// Surface the reverse-index failure: the canonical ADD is committed and
-	// a caller retry will take the already-linked self-healing path above.
-	if err := s.putProjectRef(ctx, project, accountID); err != nil {
-		return nil, fmt.Errorf("account link succeeded but the account's index write failed -- retry to heal: %w", err)
+		return nil, fmt.Errorf("failed to link account: %w", err)
 	}
 	return append(append([]string{}, project.AccountIDs...), accountID), nil
 }
 
+// UnlinkAccount removes a project↔account link (project owner only). Unlike
+// LinkAccount, this does NOT require the caller to currently be a member of
+// accountID: requiring it created a revocation deadlock -- if the owner is
+// later removed from that account, GetMember would return nil and nobody
+// could ever unlink it again, while every remaining member of that account
+// keeps indefinite access to the project's meetings/research/insights via
+// requireProjectAccess's account-inheritance path. Unlinking an existing
+// link should only need proof of project ownership, the same authority that
+// created the link in the first place.
 func (s *ProjectService) UnlinkAccount(ctx context.Context, userID, projectID, accountID string) ([]string, error) {
 	project, err := s.repo.GetProject(ctx, projectID)
 	if err != nil {
@@ -307,21 +348,14 @@ func (s *ProjectService) UnlinkAccount(ctx context.Context, userID, projectID, a
 	if project.OwnerUserID != userID {
 		return nil, ErrForbidden
 	}
-	member, err := s.repo.GetMember(ctx, accountID, userID)
-	if err != nil {
-		return nil, err
-	}
-	if member == nil {
-		return nil, ErrForbidden
-	}
-	if err := s.repo.RemoveProjectAccountLink(ctx, projectID, accountID); err != nil {
+	// Atomic DELETE on accountIds + ref delete, in ONE TransactWriteItems
+	// call -- see LinkAccount's comment for why the two writes must land
+	// together, not as separate requests.
+	if err := s.repo.ProjectAccountUnlinkTransactional(ctx, projectID, accountID); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return nil, ErrNotFound
 		}
 		return nil, err
-	}
-	if err := s.repo.DeleteProjectRef(ctx, accountID, projectID); err != nil {
-		log.Printf("warn: failed to delete project ref %s/%s: %v", accountID, projectID, err)
 	}
 	remaining := make([]string, 0, len(project.AccountIDs))
 	for _, id := range project.AccountIDs {
@@ -358,14 +392,21 @@ func (s *ProjectService) LinkMeeting(ctx context.Context, userID, projectID, mee
 	if contains(meeting.ProjectIDs, projectID) {
 		return s.putProjectMeetingRef(ctx, projectID, userID, meeting)
 	}
-	if err := s.repo.AddMeetingProjectLink(ctx, userID, meetingID, projectID); err != nil {
+	// Atomic ADD on meeting.projectIds + MEETINGREF# Put, in ONE
+	// TransactWriteItems call -- same interleaving hazard as
+	// LinkAccount/UnlinkAccount above.
+	ref := &model.ProjectMeetingRef{
+		PK: model.PrefixProject + projectID, SK: projectMeetingRefSK(meeting),
+		ProjectID: projectID, MeetingID: meeting.MeetingID, OwnerUserID: userID,
+		Title: meeting.Title, Date: meeting.Date, EntityType: model.EntityTypeProjectMeetingRef,
+	}
+	if err := s.repo.MeetingProjectLinkTransactional(ctx, userID, meetingID, projectID, ref); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return ErrNotFound
 		}
 		return err
 	}
-	// Surface ref failures so a retry can heal through the idempotent path.
-	return s.putProjectMeetingRef(ctx, projectID, userID, meeting)
+	return nil
 }
 
 func (s *ProjectService) UnlinkMeeting(ctx context.Context, userID, projectID, meetingID string) error {
@@ -379,14 +420,27 @@ func (s *ProjectService) UnlinkMeeting(ctx context.Context, userID, projectID, m
 	if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
 		return err
 	}
-	if err := s.repo.RemoveMeetingProjectLink(ctx, userID, meetingID, projectID); err != nil {
+	// Look up the ref's ACTUAL existing SK rather than recomputing it from
+	// meeting.Date: Date is mutable, so if it changed since LinkMeeting ran,
+	// recomputing would target a different item than the one actually
+	// written, orphaning the original ref (fail-closed reads mask this --
+	// the orphan just accumulates -- but it should still be deleted).
+	refs, err := s.repo.ListProjectMeetingRefsForProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	var refSK string
+	for _, ref := range refs {
+		if ref.MeetingID == meetingID {
+			refSK = ref.SK
+			break
+		}
+	}
+	if err := s.repo.MeetingProjectUnlinkTransactional(ctx, userID, meetingID, projectID, refSK); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return ErrNotFound
 		}
 		return err
-	}
-	if err := s.repo.DeleteProjectMeetingRef(ctx, projectID, projectMeetingRefSK(meeting)); err != nil {
-		log.Printf("warn: failed to delete project meeting ref %s/%s: %v", projectID, meetingID, err)
 	}
 	return nil
 }
@@ -416,13 +470,21 @@ func (s *ProjectService) LinkResearch(ctx context.Context, userID, projectID, re
 	if contains(research.ProjectIDs, projectID) {
 		return s.putProjectResearchRef(ctx, projectID, research)
 	}
-	if err := s.repo.AddResearchProjectLink(ctx, researchID, projectID); err != nil {
+	// Atomic ADD on research.projectIds + RESEARCHREF# Put, in ONE
+	// TransactWriteItems call -- same interleaving hazard as the account and
+	// meeting variants above.
+	ref := &model.ProjectResearchRef{
+		PK: model.PrefixProject + projectID, SK: model.PrefixProjectResearchRef + research.ResearchID,
+		ProjectID: projectID, ResearchID: research.ResearchID, OwnerUserID: research.UserID,
+		Topic: research.Topic, CreatedAt: time.Now().UTC(), EntityType: model.EntityTypeProjectResearchRef,
+	}
+	if err := s.repo.ResearchProjectLinkTransactional(ctx, researchID, projectID, ref); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return ErrNotFound
 		}
 		return err
 	}
-	return s.putProjectResearchRef(ctx, projectID, research)
+	return nil
 }
 
 func (s *ProjectService) UnlinkResearch(ctx context.Context, userID, projectID, researchID string) error {
@@ -439,14 +501,11 @@ func (s *ProjectService) UnlinkResearch(ctx context.Context, userID, projectID, 
 	if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
 		return err
 	}
-	if err := s.repo.RemoveResearchProjectLink(ctx, researchID, projectID); err != nil {
+	if err := s.repo.ResearchProjectUnlinkTransactional(ctx, researchID, projectID); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return ErrNotFound
 		}
 		return err
-	}
-	if err := s.repo.DeleteProjectResearchRef(ctx, projectID, researchID); err != nil {
-		log.Printf("warn: failed to delete project research ref %s/%s: %v", projectID, researchID, err)
 	}
 	return nil
 }
