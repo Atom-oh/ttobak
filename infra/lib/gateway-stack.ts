@@ -454,17 +454,19 @@ export class GatewayStack extends cdk.Stack {
       // close an SSRF/RCE-via-linked-content vector -- only removing the
       // network path can. PRIVATE_ISOLATED has no route to an internet
       // gateway or NAT, so a compromised soffice process has nowhere to
-      // exfiltrate to or fetch remote content from; the S3 gateway
-      // endpoint below is the one hole punched through, scoped to S3 only
-      // (no internet, no other AWS service reachable this way).
+      // exfiltrate to or fetch remote content from; S3 access for the
+      // sidecar upload goes out through this shared VPC's PRE-EXISTING S3
+      // gateway endpoint (already attached to every route table here,
+      // including both PRIVATE_ISOLATED subnets below -- verified via
+      // `aws ec2 describe-vpc-endpoints`) -- do NOT add a second gateway
+      // endpoint for the same service; a route table can only hold one
+      // route to a given prefix list, so CloudFormation rejects the
+      // duplicate (`AlreadyExists` on the S3 prefix-list route) and rolls
+      // the whole stack update back.
       let vpcConfig: { vpc: ec2.IVpc; vpcSubnets: ec2.SubnetSelection; securityGroups: ec2.ISecurityGroup[] } | undefined;
       if (props.vpcId) {
         const vpc = ec2.Vpc.fromLookup(this, 'ConvertDocVpc', { vpcId: props.vpcId });
         const isolatedSubnets: ec2.SubnetSelection = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
-        vpc.addGatewayEndpoint('ConvertDocS3Endpoint', {
-          service: ec2.GatewayVpcEndpointAwsService.S3,
-          subnets: [isolatedSubnets],
-        });
         const convertDocSg = new ec2.SecurityGroup(this, 'ConvertDocSg', {
           vpc,
           securityGroupName: 'ttobak-convert-doc',
