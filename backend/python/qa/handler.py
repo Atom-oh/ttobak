@@ -1279,6 +1279,15 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                     continue
                 tool = block['toolUse']
                 logger.info(f"Tool call (stream): {tool['name']}")
+                # Tool execution (KB retrieve, research kickoff, etc.) sends no
+                # answer_delta, so the client's stall watchdog would otherwise
+                # go un-rearmed and time out a perfectly healthy long-running
+                # tool round. This heartbeat rearms it without touching the
+                # answer text.
+                _post_ws(apigw, connection_id, {
+                    'type': 'tool_progress',
+                    'sessionId': session_id,
+                })
                 try:
                     result, result_sources = execute_tool(tool['name'], tool['input'], context)
                 except Exception as e:

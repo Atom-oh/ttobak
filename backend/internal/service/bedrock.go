@@ -298,7 +298,9 @@ ADR-013 — 트랜스크립트 딥 링크:
 	// `[TS:NNN]` markers into `transcript://{segmentId}` deep links.
 	var parsedSegments []speakerSegment
 	if meeting.TranscriptSegments != "" {
-		_ = json.Unmarshal([]byte(meeting.TranscriptSegments), &parsedSegments)
+		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &parsedSegments); err != nil {
+			parsedSegments = nil
+		}
 	}
 	userPrompt := buildSummarizeUserPrompt(transcript, priorContext, parsedSegments)
 

@@ -149,6 +149,13 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
           )
         );
         break;
+      case 'tool_progress':
+        // Tool execution (KB retrieve, research kickoff, etc.) produces no
+        // answer text, but the round is still alive server-side — rearm
+        // without touching the answer so a long tool round doesn't trip the
+        // stall watchdog.
+        armWatchdog();
+        break;
       case 'answer_complete':
         clearWatchdog();
         setQaHistory(prev =>

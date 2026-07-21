@@ -8,6 +8,7 @@ export interface WebSocketMessage {
     | 'answer_delta'
     | 'answer_complete'
     | 'answer_error'
+    | 'tool_progress'
     | 'error';
   text?: string;
   sessionId?: string;
