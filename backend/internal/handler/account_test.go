@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
@@ -108,6 +109,44 @@ func (m *mockHandlerAccountRepo) ListMeetingRefsForAccount(_ context.Context, ac
 func (m *mockHandlerAccountRepo) ListInsightsForAccount(_ context.Context, accountID string) ([]model.AccountInsight, error) {
 	return append([]model.AccountInsight(nil), m.insightsByAccount[accountID]...), nil
 }
+func (m *mockHandlerAccountRepo) UpdateAccountDocumentFields(_ context.Context, pk, docID string, fields map[string]interface{}) error {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			for k, v := range fields {
+				switch k {
+				case "title":
+					d.Title = v.(string)
+				case "docType":
+					d.DocType = v.(string)
+				case "path":
+					d.Path = v.(string)
+				case "content":
+					d.Content = v.(string)
+				case "links":
+					d.Links = v.([]string)
+				case "fileKey":
+					d.FileKey = v.(string)
+				case "fileName":
+					d.FileName = v.(string)
+				case "mimeType":
+					d.MimeType = v.(string)
+				case "fileSize":
+					d.FileSize = v.(int64)
+				case "updatedAt":
+					d.UpdatedAt = v.(time.Time)
+				default:
+					return fmt.Errorf("unexpected field %q in UpdateAccountDocumentFields", k)
+				}
+			}
+			docs[i] = d
+			m.documents[pk] = docs
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+
 func (m *mockHandlerAccountRepo) PutAccountDocument(_ context.Context, doc *model.AccountDocument) error {
 	docs := m.documents[doc.PK]
 	for i, d := range docs {

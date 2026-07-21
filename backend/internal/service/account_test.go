@@ -26,6 +26,10 @@ type mockAccountRepo struct {
 	// SetPublicShareTokenIfAbsent race: the first call writes this token to
 	// the doc instead of the caller's and returns ErrConditionFailed.
 	raceWinnerToken string
+	// deleteAfterGet, if set, simulates a concurrent delete landing right
+	// after the next GetAccountDocument read for this docID: the entry is
+	// removed immediately after the read returns its copy.
+	deleteAfterGet string
 	// raceTokenAfterGet, if set, simulates a concurrent write landing right
 	// after a GetAccountDocument read: the very next read mutates the
 	// stored doc's PublicShareToken to this value and clears itself.
@@ -115,6 +119,49 @@ func (m *mockAccountRepo) ListInsightsForAccount(_ context.Context, accountID st
 	return append([]model.AccountInsight(nil), m.insightsByAccount[accountID]...), nil
 }
 
+// UpdateAccountDocumentFields applies exactly the given fields, mirroring
+// the real repo's field-scoped UpdateItem -- notably, it must NOT touch
+// PublicShareToken (fields never includes it; this mock doesn't special-case
+// it either, so a bug that added it to the caller's fields map would show
+// up here too).
+func (m *mockAccountRepo) UpdateAccountDocumentFields(_ context.Context, pk, docID string, fields map[string]interface{}) error {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			for k, v := range fields {
+				switch k {
+				case "title":
+					d.Title = v.(string)
+				case "docType":
+					d.DocType = v.(string)
+				case "path":
+					d.Path = v.(string)
+				case "content":
+					d.Content = v.(string)
+				case "links":
+					d.Links = v.([]string)
+				case "fileKey":
+					d.FileKey = v.(string)
+				case "fileName":
+					d.FileName = v.(string)
+				case "mimeType":
+					d.MimeType = v.(string)
+				case "fileSize":
+					d.FileSize = v.(int64)
+				case "updatedAt":
+					d.UpdatedAt = v.(time.Time)
+				default:
+					return fmt.Errorf("unexpected field %q in UpdateAccountDocumentFields", k)
+				}
+			}
+			docs[i] = d
+			m.documents[pk] = docs
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+
 func (m *mockAccountRepo) PutAccountDocument(_ context.Context, doc *model.AccountDocument) error {
 	docs := m.documents[doc.PK]
 	for i, d := range docs {
@@ -134,6 +181,11 @@ func (m *mockAccountRepo) GetAccountDocument(_ context.Context, pk, docID string
 	for i, d := range m.documents[pk] {
 		if d.DocID == docID {
 			cp := d
+			if m.deleteAfterGet == docID {
+				m.documents[pk] = append(m.documents[pk][:i], m.documents[pk][i+1:]...)
+				m.deleteAfterGet = ""
+				return &cp, nil
+			}
 			if m.raceTokenAfterGet != "" {
 				// Simulate a concurrent write landing between this read
 				// and whatever the caller does next: the stored doc gets
@@ -1177,12 +1229,14 @@ func TestUpdateUserDocument_SlideToNoteRevokesPublicShare(t *testing.T) {
 }
 
 func TestUpdateUserDocument_TitleOnlyEditDoesNotClobberConcurrentToken(t *testing.T) {
-	// Regression: updateDoc carries existing.PublicShareToken through from
-	// its initial getDoc snapshot into the final whole-item
+	// Regression: updateDoc used to carry existing.PublicShareToken through
+	// from its initial getDoc snapshot into a final whole-item
 	// PutAccountDocument. A title-only edit (no file/body change at all)
-	// shouldn't touch sharing state, but without re-reading the live
-	// token immediately before the write, a concurrent share/revoke
-	// landing in between would get clobbered back to the stale value.
+	// shouldn't touch sharing state at all -- the fix (UpdateAccountDocumentFields,
+	// a field-scoped UpdateItem that never includes "publicShareToken")
+	// makes that structural rather than best-effort: a concurrent
+	// share/revoke landing mid-request simply can't be clobbered by a
+	// write that never names the field.
 	repo := newMockAccountRepo()
 	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
 
@@ -1210,6 +1264,28 @@ func TestUpdateUserDocument_TitleOnlyEditDoesNotClobberConcurrentToken(t *testin
 	got := repo.documents[model.PrefixUser+"user-1"][0].PublicShareToken
 	if got != "concurrent-new-token" {
 		t.Fatalf("expected the concurrently-changed token to survive the title-only edit, got %q", got)
+	}
+}
+
+func TestUpdateUserDocument_DeletedBetweenGetAndUpdate_ReturnsNotFound(t *testing.T) {
+	// UpdateAccountDocumentFields' attribute_exists(PK) condition should
+	// fail closed with ErrNotFound rather than the raw ErrConditionFailed,
+	// matching LinkAccount/UnlinkAccount's mapping for the same race.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	created, err := svc.PutUserDocument(context.Background(), "user-1", &model.PutDocumentRequest{
+		Title: "Note", Markdown: mdPtr("body"),
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	repo.deleteAfterGet = created.DocID
+
+	if _, err := svc.UpdateUserDocument(context.Background(), "user-1", created.DocID, &model.PutDocumentRequest{
+		Title: "Note v2",
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 

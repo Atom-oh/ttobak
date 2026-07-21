@@ -1,5 +1,5 @@
 # Builds the convert-doc Lambda as a container image (LibreOffice has no
-# equivalent of the ARM64 zip-Lambda build used by the other 5 Go functions --
+# equivalent of the ARM64 zip-Lambda build used by the other 8 zip-deployed Go functions --
 # it's a native binary + a large font/office dependency tree, not a single
 # static Go binary).
 FROM golang:1.25-bookworm AS build
@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o /out/co
 # `docker buildx --platform` flag pulls the amd64 debian image, so
 # LibreOffice/fonts/ca-certificates install as amd64 while the COPYed Go
 # binary is arm64 -- a mixed-arch image that fails at Lambda runtime, unlike
-# the other 5 Go Lambdas which are pure ARM64 zip deploys.
+# the other 8 zip-deployed Go Lambdas which are pure ARM64 zip deploys.
 FROM --platform=linux/arm64 debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \

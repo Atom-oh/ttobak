@@ -400,6 +400,54 @@ func (r *DynamoDBRepository) DeletePublicShare(ctx context.Context, token string
 	return nil
 }
 
+// UpdateAccountDocumentFields updates exactly the given fields via a
+// field-scoped UpdateItem, instead of PutAccountDocument's whole-item
+// overwrite. updateDoc (account.go) uses this specifically so its write can
+// never touch publicShareToken -- that field has its own independent
+// writers (CreateUserDocPublicShare/RevokeUserDocPublicShare), and a
+// whole-item Put built from a getDoc-time snapshot would otherwise clobber
+// whatever either of those wrote concurrently, no matter how late that
+// snapshot was refreshed. fields must not include "PK"/"SK"/"publicShareToken".
+func (r *DynamoDBRepository) UpdateAccountDocumentFields(ctx context.Context, pk, docID string, fields map[string]interface{}) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	var update expression.UpdateBuilder
+	first := true
+	for k, v := range fields {
+		if first {
+			update = expression.Set(expression.Name(k), expression.Value(v))
+			first = false
+		} else {
+			update = update.Set(expression.Name(k), expression.Value(v))
+		}
+	}
+	condition := expression.AttributeExists(expression.Name("PK"))
+	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
+	if err != nil {
+		return fmt.Errorf("build account doc update expression: %w", err)
+	}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docID},
+		},
+		ConditionExpression:       expr.Condition(),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: doc %s not found", ErrConditionFailed, docID)
+		}
+		return fmt.Errorf("update account doc fields: %w", err)
+	}
+	return nil
+}
+
 func (r *DynamoDBRepository) PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error {
 	item, err := attributevalue.MarshalMap(doc)
 	if err != nil {

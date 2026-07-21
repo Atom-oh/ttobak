@@ -68,6 +68,7 @@ type accountRepo interface {
 	ListMeetingRefsForAccount(ctx context.Context, accountID string) ([]model.MeetingRef, error)
 	ListInsightsForAccount(ctx context.Context, accountID string) ([]model.AccountInsight, error)
 	PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error
+	UpdateAccountDocumentFields(ctx context.Context, pk, docID string, fields map[string]interface{}) error
 	ListAccountDocuments(ctx context.Context, pk string) ([]model.AccountDocument, error)
 	GetAccountDocument(ctx context.Context, pk, docID string) (*model.AccountDocument, error)
 	DeleteAccountDocument(ctx context.Context, pk, docID string) error
@@ -658,11 +659,14 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 		}
 	}
 	existing.Title = strings.TrimSpace(req.Title)
+	fields := map[string]interface{}{"title": existing.Title}
 	if req.DocType != "" {
 		existing.DocType = req.DocType
+		fields["docType"] = existing.DocType
 	}
 	if req.Path != "" {
 		existing.Path = req.Path
+		fields["path"] = existing.Path
 	}
 	oldFileKey := existing.FileKey
 	if bodyChanging {
@@ -673,35 +677,47 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 		existing.Content = markdown
 		existing.Links = parseWikilinks(markdown)
 		existing.FileKey, existing.FileName, existing.MimeType, existing.FileSize = req.FileKey, req.FileName, req.MimeType, req.FileSize
-	}
-	// existing.PublicShareToken is a stale snapshot from the getDoc call
-	// above; PutAccountDocument below is a whole-item overwrite, so left
-	// untouched it would clobber a CreateUserDocPublicShare/RevokeUserDocPublicShare
-	// that raced this update. Two cases:
-	revokingPublicShare := oldFileKey != "" && existing.FileKey == "" && existing.PublicShareToken != ""
-	if revokingPublicShare {
-		// (1) This edit is turning a file-backed doc into a markdown one
-		// (slide -> note): any live public link must die with the file,
-		// not survive to expose whatever content the doc has *later* (a
-		// markdown body now, possibly a different file after a future
-		// edit) to whoever held the old token.
-		staleToken := existing.PublicShareToken
-		if err := s.repo.DeletePublicShare(ctx, staleToken); err != nil {
-			log.Printf("cleanup public share pointer for doc %s during file->markdown conversion: %v", docID, err)
-		}
-		existing.PublicShareToken = ""
-	} else if fresh, err := s.repo.GetAccountDocument(ctx, pk, docID); err == nil && fresh != nil {
-		// (2) Otherwise, re-read the live token immediately before this
-		// write instead of carrying the getDoc snapshot through -- this
-		// doesn't fully close the race (a share/revoke landing between
-		// this re-read and the Put below is still possible) but shrinks
-		// the window from "this whole request's duration" to one more
-		// round-trip.
-		existing.PublicShareToken = fresh.PublicShareToken
+		fields["content"] = existing.Content
+		fields["links"] = existing.Links
+		fields["fileKey"] = existing.FileKey
+		fields["fileName"] = existing.FileName
+		fields["mimeType"] = existing.MimeType
+		fields["fileSize"] = existing.FileSize
 	}
 	existing.UpdatedAt = time.Now().UTC()
-	if err := s.repo.PutAccountDocument(ctx, existing); err != nil {
+	fields["updatedAt"] = existing.UpdatedAt
+	// Deliberately NOT PutAccountDocument (whole-item overwrite) and
+	// deliberately NOT including "publicShareToken" in fields: that field
+	// has its own independent writers (CreateUserDocPublicShare /
+	// RevokeUserDocPublicShare), and existing.PublicShareToken is a stale
+	// snapshot from the getDoc call above. A whole-item Put -- even one
+	// that re-reads the token right before writing -- still clobbers
+	// whatever landed in the gap between that re-read and the write.
+	// UpdateAccountDocumentFields only ever touches the fields named
+	// here, so it structurally cannot race on a field it never writes.
+	if err := s.repo.UpdateAccountDocumentFields(ctx, pk, docID, fields); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil, ErrNotFound // deleted concurrently between our getDoc and this write
+		}
 		return nil, err
+	}
+	if oldFileKey != "" && existing.FileKey == "" && existing.PublicShareToken != "" {
+		// This edit turned a file-backed doc into a markdown one (slide ->
+		// note): any live public link must die with the file, not survive
+		// to expose whatever content the doc has *later* (a markdown body
+		// now, possibly a different file after a future edit) to whoever
+		// held the old token. Same conditional-clear-then-delete ordering
+		// as RevokeUserDocPublicShare, for the same reason (a losing race
+		// against a concurrent re-share leaves an inert orphan pointer,
+		// not a token handed out that's already dead).
+		staleToken := existing.PublicShareToken
+		if err := s.repo.ClearPublicShareTokenIfMatches(ctx, pk, docID, staleToken); err != nil && !errors.Is(err, repository.ErrConditionFailed) {
+			log.Printf("clear public share token for doc %s during file->markdown conversion: %v", docID, err)
+		} else if err == nil {
+			if err := s.repo.DeletePublicShare(ctx, staleToken); err != nil {
+				log.Printf("cleanup public share pointer for doc %s during file->markdown conversion: %v", docID, err)
+			}
+		}
 	}
 	if oldFileKey != "" && oldFileKey != existing.FileKey && ownsFileKey(userID, oldFileKey) && s.s3 != nil {
 		// Best-effort, same as deleteDoc: the DB row is already committed to
