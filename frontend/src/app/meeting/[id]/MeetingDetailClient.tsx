@@ -291,6 +291,10 @@ function MeetingDetailContent() {
         detail.actionItems = normalizeActionItems(detail.actionItems);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         detail.attachments = normalizeAttachments((data as any).attachments);
+        // API returns the shared-users list as `shares`; MeetingHeader/ShareButton
+        // read `sharedWith` -- without this, a fresh fetch always shows an empty
+        // share list even though the share was persisted server-side.
+        detail.sharedWith = detail.shares;
         setMeeting(detail);
       } catch (err) {
         console.error('Failed to fetch meeting:', err);
@@ -309,6 +313,7 @@ function MeetingDetailContent() {
       detail.actionItems = normalizeActionItems(detail.actionItems);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       detail.attachments = normalizeAttachments((data as any).attachments);
+      detail.sharedWith = detail.shares;
       setMeeting(detail);
     } catch (err) {
       console.error('Failed to refetch meeting:', err);
