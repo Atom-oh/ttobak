@@ -27,6 +27,20 @@
 // ever removed, even if the share was actually a direct grant). Running one
 // --account-id at a time is the recommended, safer rollout.
 //
+// ORPHANED CANDIDATES (reported, never auto-tagged): a ref in this
+// account's ListMeetingRefsForAccount whose meeting is no longer
+// SharedToAccount, or whose AccountID has since changed to a different
+// account, is printed as an ORPHANED line but is NEVER tagged, even under
+// --apply. Tagging it would require deciding which account it belongs to
+// now -- this account (its original grantor, per the stale ref) or the
+// meeting's current AccountID (if any) -- and this tool cannot safely infer
+// that. A share left in this state stays Origin=="" indefinitely and is
+// honored by resolveSharedAccess as an unconditional direct grant (no
+// membership re-verification applies to it at all, unlike a tagged
+// account-origin share) -- see ADR-022 §5 for the manual remediation
+// procedure (the owner must use RevokeShare after manually confirming the
+// share is not a genuine direct grant).
+//
 // Requires the TABLE_NAME env var (and standard AWS credentials/region via
 // the default credential chain) -- there is no hardcoded fallback, since a
 // data-mutating tool guessing the wrong table under --apply is worse than
@@ -117,6 +131,7 @@ func main() {
 	tagged := 0
 	failed := 0
 	skipped := 0
+	orphaned := 0
 	for _, ref := range refs {
 		meeting, err := repo.GetMeetingByID(ctx, ref.MeetingID)
 		if err != nil {
@@ -125,7 +140,35 @@ func main() {
 			continue
 		}
 		if meeting == nil || !meeting.SharedToAccount || meeting.AccountID != *accountID {
-			continue // ref exists but the meeting no longer matches ShareMeetingToAccount's invariants
+			// The meeting was un-shared from this account (or moved to a
+			// different one) since this ref was written -- report any
+			// still-untagged Origin=="" share on it as ORPHANED. This is
+			// detect-only: never tagged, under --apply or otherwise. See the
+			// package doc comment for why auto-tagging here is unsafe.
+			if meeting != nil {
+				orphanShares, err := repo.ListSharesForMeeting(ctx, ref.MeetingID)
+				if err != nil {
+					log.Printf("skip orphan-check for meeting %s: list shares: %v", ref.MeetingID, err)
+					failed++
+					continue
+				}
+				for _, sh := range orphanShares {
+					if sh.Origin != "" {
+						continue
+					}
+					orphaned++
+					detail := ""
+					if *verbose {
+						detail = fmt.Sprintf(" (%s / %q)", sh.Email, meeting.Title)
+					}
+					fmt.Printf("  ORPHANED: sharedTo=%s meeting=%s%s -- meeting is no longer SharedToAccount to %s"+
+						" (current AccountID=%q). This share is un-taggable by this tool and is honored as an"+
+						" unconditional direct grant by resolveSharedAccess. Manual remediation: confirm with the"+
+						" meeting owner whether this is a genuine direct grant; if not, the owner must call"+
+						" RevokeShare.\n", sh.SharedToID, ref.MeetingID, detail, *accountID, meeting.AccountID)
+				}
+			}
+			continue
 		}
 		// Enumerate this meeting's Share rows directly instead of joining
 		// through ListAccountMembers -- this is what covers a user who has
@@ -184,9 +227,12 @@ func main() {
 		}
 	}
 
-	fmt.Printf("[%s] done: %d candidate(s) found, %d tagged, %d skipped (concurrent change), %d failed\n", mode, candidates, tagged, skipped, failed)
+	fmt.Printf("[%s] done: %d candidate(s) found, %d tagged, %d skipped (concurrent change), %d orphaned (un-taggable, see above), %d failed\n", mode, candidates, tagged, skipped, orphaned, failed)
 	if !*apply && candidates > 0 {
 		fmt.Println("Re-run with --apply after reviewing the candidates above.")
+	}
+	if orphaned > 0 {
+		fmt.Println("ORPHANED shares require manual remediation -- see ADR-022 §5. They are never tagged by this tool.")
 	}
 	if failed > 0 {
 		// A partial-failure run left some candidates untagged -- exit non-zero

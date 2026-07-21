@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -278,6 +279,7 @@ func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor s
 							// on this page, not just the one call that failed.
 							// Skip only this meeting; a later share for the same
 							// account on this page gets its own fresh attempt.
+							log.Printf("ListMeetings: get member for account %s (meeting %s): %v", meeting.AccountID, meeting.MeetingID, err)
 							continue
 						}
 						isMember = member != nil
