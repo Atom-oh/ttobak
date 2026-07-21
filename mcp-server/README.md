@@ -161,7 +161,7 @@ Use the ttobak_login tool to authenticate.
 | `ttobak_get_document` | Get an ingested document with content | "Show the Hana Bank prep doc" |
 | `ttobak_ask` | RAG Q&A across meetings and the Knowledge Base | "What decisions were made about the API redesign?" |
 | `ttobak_kb_upload` | Upload a local file (pdf/md/pptx/docx) into the Knowledge Base | "Upload this whitepaper to the KB" |
-| `ttobak_kb_sync` | Trigger Knowledge Base ingestion for uploaded files | "Sync the KB now" |
+| `ttobak_kb_sync` | Trigger Knowledge Base ingestion for uploaded files (currently a no-op on production — see tool description) | "Sync the KB now" |
 | `ttobak_kb_list_files` | List your uploaded KB files | "What have I uploaded to the KB?" |
 | `ttobak_kb_delete_file` | Delete a KB file by ID | "Delete that old KB file" |
 | `ttobak_upload_document` | Upload a local file (pdf/pptx/ppt) as a document, personal or account-shared | "Upload this deck to Hana Bank" |
@@ -376,7 +376,7 @@ TTOBAK에 로그인해줘
 | `ttobak_get_document` | 인제스트 문서 전체 내용 조회 | "하나은행 prep 문서 보여줘" |
 | `ttobak_ask` | 미팅 + Knowledge Base 기반 RAG Q&A | "API 재설계에 대해 어떤 결정이 있었어?" |
 | `ttobak_kb_upload` | 로컬 파일(pdf/md/pptx/docx)을 Knowledge Base에 업로드 | "이 백서를 KB에 올려줘" |
-| `ttobak_kb_sync` | 업로드된 파일에 대해 Knowledge Base 인제스천 실행 | "지금 KB 동기화해줘" |
+| `ttobak_kb_sync` | 업로드된 파일에 대해 Knowledge Base 인제스천 실행 (현재 프로덕션에서는 no-op — 도구 설명 참조) | "지금 KB 동기화해줘" |
 | `ttobak_kb_list_files` | 내가 업로드한 KB 파일 목록 | "내가 KB에 뭐 올렸었지?" |
 | `ttobak_kb_delete_file` | KB 파일 ID로 삭제 | "그 오래된 KB 파일 삭제해줘" |
 | `ttobak_upload_document` | 로컬 파일(pdf/pptx/ppt)을 문서로 업로드(개인 또는 Account 공유) | "이 덱을 하나은행에 업로드해줘" |

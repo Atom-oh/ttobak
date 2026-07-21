@@ -192,7 +192,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'ttobak_kb_sync',
-      description: 'Trigger Knowledge Base ingestion for files uploaded via ttobak_kb_upload since the last sync.',
+      description:
+        'Trigger Knowledge Base ingestion for files uploaded via ttobak_kb_upload since the last sync. ' +
+        'NOTE: on the current production deployment this is a no-op (returns status "skipped") -- the API ' +
+        'Lambda is not yet configured with the Knowledge Base ID/data source needed to start an ingestion job.',
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {
@@ -402,7 +405,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { fileId } = args as { fileId: string };
         if (!fileId) return error('fileId is required');
         await api.deleteKBFile(fileId);
-        return text(`Deleted Knowledge Base file ${fileId}.`);
+        return text(`Deleted Knowledge Base file ${fileId}. It stays searchable until the next ttobak_kb_sync (currently a no-op in production -- see that tool's description).`);
       }
 
       case 'ttobak_upload_document': {

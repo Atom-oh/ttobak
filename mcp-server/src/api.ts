@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
-import { basename, extname } from 'node:path';
+import { basename, extname, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
 import { URL } from 'node:url';
 import type { CognitoAuth } from './auth.js';
 
@@ -16,9 +17,30 @@ const MIME_BY_EXT: Record<string, string> = {
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 };
 
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100MB
+const BLOCKED_PATH_PREFIXES = [resolve(homedir(), '.ttobak')];
+
+// Reject the TTOBAK token directory and anything over the size cap before we
+// ever read bytes off disk -- these upload tools accept an arbitrary local
+// filePath, so a prompt-injected agent could otherwise be steered into
+// reading and exfiltrating ~/.ttobak/tokens.json via a shared/account upload.
+function guardUploadPath(filePath: string): string {
+  const resolved = resolve(filePath);
+  for (const blocked of BLOCKED_PATH_PREFIXES) {
+    if (resolved === blocked || resolved.startsWith(blocked + sep)) {
+      throw new Error(`Refusing to upload "${filePath}" -- path is inside the TTOBAK credentials directory.`);
+    }
+  }
+  const size = statSync(resolved).size;
+  if (size > MAX_UPLOAD_BYTES) {
+    throw new Error(`Refusing to upload "${filePath}" -- ${size} bytes exceeds the ${MAX_UPLOAD_BYTES}-byte limit.`);
+  }
+  return resolved;
+}
+
 function resolveFileMeta(filePath: string, fileName?: string, fileType?: string) {
   const name = fileName || basename(filePath);
-  const type = fileType || MIME_BY_EXT[extname(filePath).toLowerCase()];
+  const type = fileType || MIME_BY_EXT[extname(name).toLowerCase()];
   if (!type) {
     throw new Error(
       `Could not infer a MIME type for "${name}" -- pass fileType explicitly (e.g. application/pdf).`,
@@ -117,12 +139,13 @@ export class TtobakApi {
   /** Upload a local file into the global Knowledge Base. Ingestion doesn't
    * start until syncKB() is called (upload can be batched, then synced once). */
   async uploadToKB(filePath: string, fileName?: string, fileType?: string) {
-    const { name, type } = resolveFileMeta(filePath, fileName, fileType);
+    const resolvedPath = guardUploadPath(filePath);
+    const { name, type } = resolveFileMeta(resolvedPath, fileName, fileType);
     const { uploadUrl, key } = (await this.post('/api/kb/upload', {
       fileName: name,
       fileType: type,
     })) as { uploadUrl: string; key: string };
-    await this.putFile(uploadUrl, filePath, type);
+    await this.putFile(uploadUrl, resolvedPath, type);
     return { key, fileName: name, mimeType: type };
   }
 
@@ -151,14 +174,15 @@ export class TtobakApi {
       path?: string;
     },
   ) {
-    const { name, type } = resolveFileMeta(filePath, opts?.fileName, opts?.fileType);
+    const resolvedPath = guardUploadPath(filePath);
+    const { name, type } = resolveFileMeta(resolvedPath, opts?.fileName, opts?.fileType);
     const { uploadUrl, key } = (await this.post('/api/upload/presigned', {
       fileName: name,
       fileType: type,
       category: 'doc',
     })) as { uploadUrl: string; key: string };
-    await this.putFile(uploadUrl, filePath, type);
-    const fileSize = statSync(filePath).size;
+    await this.putFile(uploadUrl, resolvedPath, type);
+    const fileSize = statSync(resolvedPath).size;
     const target = opts?.accountId
       ? `/api/accounts/${opts.accountId}/documents`
       : '/api/documents';
@@ -210,18 +234,21 @@ export class TtobakApi {
           path: url.pathname + url.search,
           method: 'PUT',
           headers: { 'Content-Type': contentType, 'Content-Length': String(data.length) },
+          timeout: 60_000,
         },
         (res) => {
-          res.on('data', () => {});
+          let body = '';
+          res.on('data', (c) => (body += c));
           res.on('end', () => {
             if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
               resolve();
             } else {
-              reject(new Error(`File upload to S3 failed: HTTP ${res.statusCode}`));
+              reject(new Error(`File upload to S3 failed: HTTP ${res.statusCode}: ${body.slice(0, 300)}`));
             }
           });
         },
       );
+      req.on('timeout', () => req.destroy(new Error('File upload to S3 timed out after 60s')));
       req.on('error', reject);
       req.write(data);
       req.end();
