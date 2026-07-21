@@ -61,11 +61,11 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/ttobak/backend/internal/repository"
+	"github.com/ttobak/backend/internal/sharebackfill"
 )
 
 func main() {
@@ -80,17 +80,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	excluded := make(map[string]bool)
-	for _, pair := range strings.Split(*excludeFlag, ",") {
-		pair = strings.TrimSpace(pair)
-		if pair == "" {
-			continue
-		}
-		if !strings.Contains(pair, ":") {
-			fmt.Fprintf(os.Stderr, "ERROR: --exclude entry %q must be userId:meetingId\n", pair)
-			os.Exit(1)
-		}
-		excluded[pair] = true
+	excluded, err := sharebackfill.ParseExclude(*excludeFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+		os.Exit(1)
 	}
 
 	ctx := context.Background()
@@ -139,36 +132,8 @@ func main() {
 			failed++
 			continue
 		}
-		if meeting == nil || !meeting.SharedToAccount || meeting.AccountID != *accountID {
-			// The meeting was un-shared from this account (or moved to a
-			// different one) since this ref was written -- report any
-			// still-untagged Origin=="" share on it as ORPHANED. This is
-			// detect-only: never tagged, under --apply or otherwise. See the
-			// package doc comment for why auto-tagging here is unsafe.
-			if meeting != nil {
-				orphanShares, err := repo.ListSharesForMeeting(ctx, ref.MeetingID)
-				if err != nil {
-					log.Printf("skip orphan-check for meeting %s: list shares: %v", ref.MeetingID, err)
-					failed++
-					continue
-				}
-				for _, sh := range orphanShares {
-					if sh.Origin != "" {
-						continue
-					}
-					orphaned++
-					detail := ""
-					if *verbose {
-						detail = fmt.Sprintf(" (%s / %q)", sh.Email, meeting.Title)
-					}
-					fmt.Printf("  ORPHANED: sharedTo=%s meeting=%s%s -- meeting is no longer SharedToAccount to %s"+
-						" (current AccountID=%q). This share is un-taggable by this tool and is honored as an"+
-						" unconditional direct grant by resolveSharedAccess. Manual remediation: confirm with the"+
-						" meeting owner whether this is a genuine direct grant; if not, the owner must call"+
-						" RevokeShare.\n", sh.SharedToID, ref.MeetingID, detail, *accountID, meeting.AccountID)
-				}
-			}
-			continue
+		if meeting == nil {
+			continue // ref exists but the meeting was deleted
 		}
 		// Enumerate this meeting's Share rows directly instead of joining
 		// through ListAccountMembers -- this is what covers a user who has
@@ -183,19 +148,38 @@ func main() {
 			failed++
 			continue
 		}
+		refState := sharebackfill.MeetingRefState{
+			SharedToAccount: meeting.SharedToAccount,
+			AccountID:       meeting.AccountID,
+			UploaderUserID:  meeting.UserID,
+		}
 		for _, sh := range shares {
-			if sh.SharedToID == meeting.UserID {
-				continue // ShareMeetingToAccount skips the meeting's own uploader, not the account owner role -- these can differ (any member can upload a meeting, and the account owner role isn't tied to any specific meeting)
-			}
-			if sh.Origin != "" {
-				continue // already tagged (account or otherwise) -- nothing to do
-			}
-			candidates++
-			pairKey := sh.SharedToID + ":" + ref.MeetingID
+			verdict := sharebackfill.Classify(*accountID, refState, sharebackfill.ShareState{
+				SharedToID: sh.SharedToID,
+				Origin:     sh.Origin,
+			})
 			detail := ""
 			if *verbose {
 				detail = fmt.Sprintf(" (%s / %q)", sh.Email, meeting.Title)
 			}
+			switch verdict {
+			case sharebackfill.VerdictSkip:
+				continue
+			case sharebackfill.VerdictOrphaned:
+				// The meeting was un-shared from this account (or moved to a
+				// different one) since this ref was written. This is
+				// detect-only: never tagged, under --apply or otherwise. See
+				// the package doc comment for why auto-tagging here is unsafe.
+				orphaned++
+				fmt.Printf("  ORPHANED: sharedTo=%s meeting=%s%s -- meeting is no longer SharedToAccount to %s"+
+					" (current AccountID=%q). This share is un-taggable by this tool and is honored as an"+
+					" unconditional direct grant by resolveSharedAccess. Manual remediation: confirm with the"+
+					" meeting owner whether this is a genuine direct grant; if not, the owner must call"+
+					" RevokeShare.\n", sh.SharedToID, ref.MeetingID, detail, *accountID, meeting.AccountID)
+				continue
+			}
+			candidates++
+			pairKey := sh.SharedToID + ":" + ref.MeetingID
 			fmt.Printf("  CANDIDATE: sharedTo=%s meeting=%s%s -- untaggable ambiguity: this heuristic cannot tell a true legacy\n"+
 				"    account-share apart from a direct share that happens to exist on a meeting also shared to this account.\n"+
 				"    Review before trusting this tag. To skip it, pass --exclude %s\n", sh.SharedToID, ref.MeetingID, detail, pairKey)
@@ -206,7 +190,7 @@ func main() {
 				fmt.Printf("    skipped (--exclude %s)\n", pairKey)
 				continue
 			}
-			if err := repo.BackfillShareOrigin(ctx, *accountID, sh.SharedToID, ref.MeetingID); err != nil {
+			if err := repo.BackfillShareOrigin(ctx, *accountID, meeting.UserID, sh.SharedToID, ref.MeetingID); err != nil {
 				if errors.Is(err, repository.ErrConditionFailed) {
 					// Benign: the row's origin changed (or the row itself
 					// was deleted) between the ListSharesForMeeting read

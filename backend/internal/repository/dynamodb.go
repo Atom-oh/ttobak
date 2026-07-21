@@ -1219,16 +1219,23 @@ func isConditionalCheckFailedTransaction(err error) bool {
 //  1. ConditionCheck on the AccountMember item (attribute_exists(PK)) --
 //     fails with ErrMemberRemoved if the member was removed.
 //  2. ConditionExpression on each Share Put (attribute_not_exists(PK) OR
-//     origin = :accountOrigin) -- ports CreateShare's existing clobber-guard
-//     (dynamodb.go's plain CreateShare, added in a prior fix) into the
-//     transaction so this path can NEVER overwrite a pre-existing direct
-//     share. Conditioning on PK (not on the `origin` attribute itself)
-//     matters: Origin has `dynamodbav:"origin,omitempty"`, so a direct share
-//     (Origin=="") never writes the origin attribute at all --
-//     attribute_not_exists(origin) would be true for a direct share too,
-//     wrongly permitting the clobber that attribute_not_exists(PK) correctly
-//     excludes. The caller sees this outcome as an existing (direct) share
-//     returned unchanged, matching the plain CreateShare's behavior.
+//     (origin = :accountOrigin AND accountId = :accountID)) -- ports
+//     CreateShare's existing clobber-guard (dynamodb.go's plain CreateShare,
+//     added in a prior fix) into the transaction so this path can NEVER
+//     overwrite a pre-existing direct share, NOR a pre-existing account-origin
+//     share belonging to a DIFFERENT account (a meeting re-shared from
+//     account A to account B: without the accountId half of this condition,
+//     a stale/delayed A-origin write landing after B's grant was created
+//     could silently clobber B's row, since both rows satisfy plain
+//     origin==:accountOrigin). Conditioning on PK (not on the `origin`
+//     attribute itself) matters: Origin has `dynamodbav:"origin,omitempty"`,
+//     so a direct share (Origin=="") never writes the origin attribute at
+//     all -- attribute_not_exists(origin) would be true for a direct share
+//     too, wrongly permitting the clobber that attribute_not_exists(PK)
+//     correctly excludes. The caller sees either failure mode (a genuine
+//     direct share, or another account's grant) as an existing share
+//     returned unchanged, matching the plain CreateShare's behavior --
+//     it does not need to distinguish which case blocked the write.
 func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID, ownerID, ownerEmail, accountID, sharedToID, email, permission string) (*model.Share, error) {
 	now := time.Now().UTC()
 
@@ -1272,7 +1279,9 @@ func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID,
 
 	shareExpr, err := expression.NewBuilder().WithCondition(
 		expression.AttributeNotExists(expression.Name("PK")).Or(
-			expression.Name("origin").Equal(expression.Value(model.ShareOriginAccount)),
+			expression.Name("origin").Equal(expression.Value(model.ShareOriginAccount)).And(
+				expression.Name("accountId").Equal(expression.Value(accountID)),
+			),
 		),
 	).Build()
 	if err != nil {
@@ -1374,10 +1383,21 @@ func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID,
 // tagged or neither does: there is no partially-tagged pair for a re-run to
 // miss (a re-run's CLI-level candidate detection, GetShare on the recipient
 // row, would otherwise see Origin=="account" already and skip
-// re-attempting a still-stale meeting-lookup row). On
-// TransactionCanceledException this returns ErrConditionFailed and the
+// re-attempting a still-stale meeting-lookup row).
+//
+// A third ConditionCheck item verifies the meeting row still has
+// sharedToAccount=true and accountId==accountID at commit time -- the CLI's
+// own eligibility check (GetMeetingByID) happens BEFORE this transaction,
+// non-atomically, so without this the meeting could be un-shared or
+// re-shared to a different account in that gap, and this call would tag the
+// share for an accountID that the meeting no longer has anything to do
+// with (sharebackfill.Classify would have called it VerdictOrphaned had the
+// CLI re-checked at this instant). This closes that race at the actual
+// write, not just at the read the CLI already does.
+//
+// On TransactionCanceledException this returns ErrConditionFailed and the
 // caller treats that meeting/member pair as a no-op skip, not an error.
-func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, accountID, sharedToID, meetingID string) error {
+func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, accountID, meetingOwnerUserID, sharedToID, meetingID string) error {
 	condition := expression.AttributeExists(expression.Name("PK")).And(
 		expression.Or(
 			expression.AttributeNotExists(expression.Name("origin")),
@@ -1400,9 +1420,9 @@ func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, accountID,
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixShareTo + sharedToID},
 		},
 	}
-	items := make([]types.TransactWriteItem, len(keys))
-	for i, key := range keys {
-		items[i] = types.TransactWriteItem{
+	items := make([]types.TransactWriteItem, 0, len(keys)+1)
+	for _, key := range keys {
+		items = append(items, types.TransactWriteItem{
 			Update: &types.Update{
 				TableName:                 aws.String(r.tableName),
 				Key:                       key,
@@ -1411,12 +1431,32 @@ func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, accountID,
 				ExpressionAttributeNames:  expr.Names(),
 				ExpressionAttributeValues: expr.Values(),
 			},
-		}
+		})
 	}
+	meetingExpr, err := expression.NewBuilder().WithCondition(
+		expression.Name("sharedToAccount").Equal(expression.Value(true)).And(
+			expression.Name("accountId").Equal(expression.Value(accountID)),
+		),
+	).Build()
+	if err != nil {
+		return fmt.Errorf("build backfill meeting-state condition: %w", err)
+	}
+	items = append(items, types.TransactWriteItem{
+		ConditionCheck: &types.ConditionCheck{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + meetingOwnerUserID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+			},
+			ConditionExpression:       meetingExpr.Condition(),
+			ExpressionAttributeNames:  meetingExpr.Names(),
+			ExpressionAttributeValues: meetingExpr.Values(),
+		},
+	})
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
 	if err != nil {
 		if isConditionalCheckFailedTransaction(err) {
-			return fmt.Errorf("%w: share %s/%s not eligible (missing, or origin already set)", ErrConditionFailed, sharedToID, meetingID)
+			return fmt.Errorf("%w: share %s/%s not eligible (missing, origin already set, or meeting no longer shared to this account)", ErrConditionFailed, sharedToID, meetingID)
 		}
 		return fmt.Errorf("backfill share origin: %w", err)
 	}
