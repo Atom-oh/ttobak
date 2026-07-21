@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -37,6 +38,11 @@ export interface GatewayStackProps extends cdk.StackProps {
   agentCoreRuntimeArn?: string;
   researchWorkerRole?: iam.IRole;
   convertDocRole?: iam.IRole;
+  // VPC ID for convert-doc's network isolation (ADR-022 residual-risk
+  // follow-up) -- same pre-existing VPC WhisperStack already uses
+  // (ec2.Vpc.fromLookup, not a stack this one depends on). Optional so
+  // unit tests that omit convertDocRole don't need a VPC context lookup.
+  vpcId?: string;
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
   originVerifySecret?: string;
@@ -442,6 +448,32 @@ export class GatewayStack extends cdk.Stack {
     // researchWorkerRole above) so unit tests that omit convertDocRole don't
     // trigger a Docker build during `npm test`.
     if (props.convertDocRole) {
+      // Network-isolate convert-doc (ADR-022 residual-risk follow-up):
+      // LibreOffice parses untrusted, attacker-controllable PPTX/PPT
+      // content, and app-layer mitigations (AWS_* env stripping) can't
+      // close an SSRF/RCE-via-linked-content vector -- only removing the
+      // network path can. PRIVATE_ISOLATED has no route to an internet
+      // gateway or NAT, so a compromised soffice process has nowhere to
+      // exfiltrate to or fetch remote content from; the S3 gateway
+      // endpoint below is the one hole punched through, scoped to S3 only
+      // (no internet, no other AWS service reachable this way).
+      let vpcConfig: { vpc: ec2.IVpc; vpcSubnets: ec2.SubnetSelection; securityGroups: ec2.ISecurityGroup[] } | undefined;
+      if (props.vpcId) {
+        const vpc = ec2.Vpc.fromLookup(this, 'ConvertDocVpc', { vpcId: props.vpcId });
+        const isolatedSubnets: ec2.SubnetSelection = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
+        vpc.addGatewayEndpoint('ConvertDocS3Endpoint', {
+          service: ec2.GatewayVpcEndpointAwsService.S3,
+          subnets: [isolatedSubnets],
+        });
+        const convertDocSg = new ec2.SecurityGroup(this, 'ConvertDocSg', {
+          vpc,
+          securityGroupName: 'ttobak-convert-doc',
+          description: 'convert-doc Lambda -- isolated subnet, no internet route; outbound limited to the VPC (S3 via gateway endpoint)',
+          allowAllOutbound: true,
+        });
+        vpcConfig = { vpc, vpcSubnets: isolatedSubnets, securityGroups: [convertDocSg] };
+      }
+
       this.convertDocFunction = new lambda.DockerImageFunction(this, 'ConvertDocFunction', {
         functionName: 'ttobak-convert-doc',
         code: lambda.DockerImageCode.fromImageAsset('../backend', {
@@ -456,6 +488,7 @@ export class GatewayStack extends cdk.Stack {
         timeout: cdk.Duration.minutes(5),
         memorySize: 3008,
         ephemeralStorageSize: cdk.Size.mebibytes(2048),
+        ...vpcConfig,
       });
 
       const docSlideUploadRule = new events.Rule(this, 'DocSlideUploadRule', {

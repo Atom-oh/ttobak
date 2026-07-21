@@ -234,7 +234,16 @@ TtobakApp (bin/ttobak.ts)
 - **Permissions**: scoped `grantRead('docs/*')` + `grantPut('docs-pdf/*')` — narrower than
   the bucket-wide `grantReadWrite` other upload-triggered Lambdas share, because this role
   additionally runs a third-party parser (LibreOffice) against untrusted file content.
-  The `soffice` subprocess itself has every `AWS_*` env var stripped before exec.
+  The `soffice` subprocess itself has every `AWS_*` env var stripped before exec. Still
+  cross-tenant within that `docs/*` grant (any user's uploads, not just the triggering
+  key) — tracked as a residual risk in ADR-022, not yet closed.
+- **Network**: deployed into `PRIVATE_ISOLATED` subnets of the pre-existing VPC
+  `vpc-04e77172c67f19814` (same VPC `WhisperStack` reuses via `ec2.Vpc.fromLookup` —
+  no new VPC/NAT cost), with a dedicated S3 gateway VPC endpoint (`ConvertDocS3Endpoint`)
+  scoped to just those subnets' route tables. No internet/NAT route at all; S3 is the
+  only reachable network destination. Closes the network half of the LibreOffice RCE
+  surface (SSRF via linked/remote document content, network exfiltration) — see
+  ADR-022 Consequences for what this does and doesn't close.
 
 ### EventBridge Rules
 - **audio-uploaded**: S3 PutObject (prefix: `audio/`) → Transcribe Lambda

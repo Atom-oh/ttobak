@@ -121,6 +121,10 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   agentCoreRuntimeArn,
   researchWorkerRole: aiStack.researchWorkerRole,
   convertDocRole: aiStack.convertDocRole,
+  // Same pre-existing VPC WhisperStack uses (ec2.Vpc.fromLookup) --
+  // convert-doc's PRIVATE_ISOLATED placement below is a GatewayStack
+  // resource, not a WhisperStack dependency.
+  vpcId: app.node.tryGetContext('ttobak:whisperVpcId') || 'vpc-04e77172c67f19814',
 });
 gatewayStack.addDependency(authStack);
 gatewayStack.addDependency(storageStack);

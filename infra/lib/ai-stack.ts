@@ -321,6 +321,12 @@ export class AiStack extends cdk.Stack {
     );
     props.bucket.grantRead(this.convertDocRole, 'docs/*');
     props.bucket.grantPut(this.convertDocRole, 'docs-pdf/*');
+    // Required for gateway-stack.ts's VPC placement (ADR-022 network
+    // isolation) -- ENI create/describe/delete for the Lambda's VPC
+    // attachment. Harmless if VPC config is ever omitted (unused grant).
+    this.convertDocRole.addManagedPolicy(
+      iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')
+    );
 
     // ==================== KB Role ====================
     // Needs: DynamoDB R/W, S3 R/W (kb bucket), Bedrock KB, OpenSearch Serverless
