@@ -101,13 +101,17 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	defer cancel()
 	cmd := exec.CommandContext(convertCtx, "soffice",
 		"--headless", "--norestore", "--convert-to", "pdf", "--outdir", outDir, inPath)
-	// soffice parses an untrusted, attacker-controllable PPTX/PPT and can
-	// fetch remote resources a document references -- a parser
-	// vulnerability or SSRF-style resource fetch could otherwise read this
-	// Lambda's temporary AWS_* credential env vars (inherited by default
-	// from exec.Command's nil Env) and exfiltrate them, extending well
-	// beyond convert-doc's own IAM scope. Strip them; soffice itself needs
-	// no AWS access.
+	// soffice parses an untrusted, attacker-controllable PPTX/PPT. Stripping
+	// AWS_* env vars (inherited by default from exec.Command's nil Env)
+	// closes the *accidental* leak path -- an env dump, crash log, or error
+	// message that includes the process's own environment -- but is NOT a
+	// real barrier against a determined exploit: a same-UID child can still
+	// recover the parent Go process's env via /proc/<ppid>/environ, and
+	// this does nothing about SSRF or local-file-read via a document's
+	// linked/remote content. LibreOffice conversion of untrusted input is
+	// an inherent RCE surface; see ADR-022's Consequences for the tracked
+	// residual risk (this Lambda's docs/* IAM grant is bucket-wide across
+	// all users, not scoped to the triggering key) and follow-up.
 	cmd.Env = sanitizedSofficeEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {

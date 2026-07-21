@@ -419,8 +419,11 @@ GET /api/accounts/{accountId}/documents/{docId}
 Response: 200 OK
 { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": ["하나은행"], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n\n[[하나은행]] 미팅 준비..." }
 
-슬라이드(`fileName` 있는 문서)는 `content`가 빈 문자열이고 `downloadUrl`(1시간
-유효 presigned GET URL, 없으면 필드 생략)이 채워진다.
+슬라이드(`fileName` 있는 문서)는 `content`가 빈 문자열이고 `downloadUrl`(원본
+파일, 1시간 유효 presigned GET URL)이 채워진다. PPTX/PPT는 추가로 `previewUrl`
+(PDF 사이드카, 변환이 끝난 뒤에만 존재 — ADR-022)이 함께 채워질 수 있다;
+`downloadUrl`은 항상 원본을 가리키고 사이드카로 바뀌지 않는다. 둘 다 값이
+없으면 필드 자체가 응답에서 생략된다.
 
 Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (문서 없음)
@@ -501,16 +504,19 @@ Error: 400 Bad Request (fileType이 pdf/PowerPoint MIME이 아님)
 `docs/` 접두어에 업로드된 PPTX/PPT는 별도 컨테이너 Lambda(`cmd/convert-doc`)가
 EventBridge S3 이벤트로 트리거되어 headless LibreOffice로 PDF 사이드카를
 생성한다(결정론적 키, DynamoDB 쓰기 없음 — 문서 레코드가 아직 없을 수 있기
-때문). Get Account/Personal Document 응답의 `downloadUrl`은 원본 PPTX가
-아니라 이 PDF 사이드카를 가리킨다 — 변환이 아직 끝나지 않았으면 필드가
-생략된다(폴링해서 재조회). 별도의 공개 REST 엔드포인트는 없다.
+때문). Get Account/Personal Document 응답에서 `downloadUrl`은 **항상 원본**
+파일을 가리키고, PPTX/PPT면 변환이 끝난 뒤 `previewUrl`(PDF 사이드카)이
+별도 필드로 함께 채워진다 — `downloadUrl`이 사이드카로 바뀌는 일은 없다.
+변환이 아직 끝나지 않았으면 `previewUrl`이 생략된다(폴링해서 재조회). 별도의
+공개 REST 엔드포인트는 없다.
 
-#### Share Document to Account (개인 슬라이드 → 팀 복제)
+#### Share Document to Account (개인 문서 → 팀 복제)
 
-개인 슬라이드 문서를 Account 팀에 공유한다. 참조가 아니라 **복제** — S3
-`CopyObject`로 별도 키(`docs/{내 userId}/{ms}_{랜덤ID}_{파일명}`)에 복사하고
-새 `AccountDocumentDTO`를 만든다(원본을 덮어쓰지 않으므로 이후 원본을
-바꿔도 공유본은 그대로).
+개인 문서를 Account 팀에 공유한다. 슬라이드/노트 모두 가능하다(코드에
+슬라이드 전용 검증은 없음 — 마크다운 문서는 본문을 그대로 복제). 슬라이드는
+참조가 아니라 **복제** — S3 `CopyObject`로 별도 키
+(`docs/{내 userId}/{ms}_{랜덤ID}_{파일명}`)에 복사하고 새 `AccountDocumentDTO`를
+만든다(원본을 덮어쓰지 않으므로 이후 원본을 바꿔도 공유본은 그대로).
 
 ```
 POST /api/documents/{docId}/share-account
@@ -519,22 +525,25 @@ POST /api/documents/{docId}/share-account
 Response: 201 Created
 { "docId": "new-doc-uuid", "title": "발표자료", "docType": "slide", "fileName": "deck.pdf", ... }  (AccountDocumentDTO)
 
-Error: 400 Bad Request (accountId 누락, 또는 대상 문서가 슬라이드가 아님)
+Error: 400 Bad Request (accountId 누락)
 Error: 403 Forbidden (문서 소유자가 아님, 또는 accountId 멤버가 아님)
 Error: 404 Not Found (문서 없음)
 ```
 
-#### Public Share Link (개인 슬라이드 무인증 공개 링크)
+#### Public Share Link (개인 파일 문서 무인증 공개 링크)
 
 128비트 랜덤 토큰(`crypto/rand`)을 발급해 인증 없이 접근 가능한 링크를
-만든다. 슬라이드 문서에만 허용된다. 발급/철회는 인증된 소유자만 가능하지만,
-링크 자체(`GET /api/public/docs/{token}`)는 이 코드베이스에서 유일하게
-무인증으로 열리는 라우트다 — CloudFront `/api/public/*` behavior가
-Lambda@Edge JWT 체크를 우회하고, API Gateway에도 authorizer 없는 별도
-literal 라우트로 등록되어 있다(자세한 내용은
+만든다. `fileKey`가 있는 문서(슬라이드/PDF 등 — 마크다운 노트는 제외)에만
+허용된다. 발급/철회는 인증된 소유자만 가능하지만, 링크 자체
+(`GET /api/public/docs/{token}`)는 CloudFront `/api/public/*` behavior에
+등록되어 있어 API Gateway JWT authorizer와 Lambda@Edge JWT 체크를 둘 다
+건너뛴다 — `/api/*`의 다른 모든 라우트가 이 두 계층을 모두 통과해야 하는 것과
+다르다(자세한 내용은
 [ADR-022](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md)).
 핸들러는 문서 내용을 직접 반환하지 않고 항상 302로 presigned S3 GET URL(또는
-PDF 사이드카가 있으면 그쪽)로 리다이렉트한다.
+PDF 사이드카가 있으면 그쪽)로 리다이렉트한다. 발급은 동시 요청 간 원자적
+(`SetPublicShareTokenIfAbsent` 조건부 쓰기)이라 더블클릭으로 토큰 두 개가
+발급돼 한쪽이 깨지는 경우가 없다.
 
 ```
 POST /api/documents/{docId}/public-share
@@ -545,15 +554,17 @@ DELETE /api/documents/{docId}/public-share
 Response: 204 No Content
 
 GET /api/public/docs/{token}   (인증 헤더 없음)
-Response: 302 Found → Location: <1시간 유효 presigned S3 GET URL>
+Response: 302 Found → Location: <5분 유효 presigned S3 GET URL>
 
-Error: 400 Bad Request (대상 문서가 슬라이드가 아님)
+Error: 400 Bad Request (대상 문서에 fileKey가 없음 — 마크다운 노트는 공개 공유 불가)
 Error: 403 Forbidden (문서 소유자가 아님 — public-share 발급/철회 시에만)
 Error: 404 Not Found (문서 없음, 또는 토큰이 철회/만료됨)
 ```
 
-철회 후에도 이미 발급된 presigned URL은 자체 TTL(1시간)까지 유효하다 —
-알려진 한계, [ADR-022](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md) 참조.
+이 라우트가 발급하는 presigned URL은 5분 TTL(`PublicShareURLTTL`)로, 다른
+모든 곳(1시간)보다 짧다 — 철회 후 이미 발급된 URL이 살아있는 창을 좁히기
+위한 의도적 단축(ADR-022). 5분도 0은 아니므로 철회 즉시 완전히 막히는 것은
+아니라는 점은 여전히 알려진 한계다.
 
 #### Export Vault (Obsidian 마크다운 내보내기)
 

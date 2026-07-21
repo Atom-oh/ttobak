@@ -137,7 +137,10 @@ func (h *DocumentHandler) ShareToAccount(w http.ResponseWriter, r *http.Request)
 }
 
 // CreatePublicShare handles POST /api/documents/{docId}/public-share —
-// mints an unauthenticated share link for a personal slide document.
+// mints an unauthenticated share link for a personal file-backed document
+// (gated on FileKey != "" in AccountService.CreateUserDocPublicShare, not
+// docType == "slide" specifically; in practice the only file-backed
+// personal docType is "slide").
 func (h *DocumentHandler) CreatePublicShare(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := middleware.GetUserID(ctx)
@@ -170,12 +173,13 @@ func (h *DocumentHandler) RevokePublicShare(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// PublicGetDoc handles GET /api/public/docs/{token} — the ONE unauthenticated
-// route in this codebase (see cmd/api/main.go's route registration comment
-// and infra/lib/gateway-stack.ts / frontend-stack.ts for how it bypasses
-// both the API Gateway JWT authorizer and the Lambda@Edge check). It never
-// returns document content directly, only a 302 redirect to a short-lived
-// presigned S3 URL, and never trusts a caller-identity header of any kind.
+// PublicGetDoc handles GET /api/public/docs/{token} — the one route
+// registered under a CloudFront behavior with no Lambda@Edge JWT check
+// and no API Gateway authorizer (see cmd/api/main.go's route registration
+// comment and infra/lib/gateway-stack.ts / frontend-stack.ts for how it
+// bypasses both). It never returns document content directly, only a 302
+// redirect to a short-lived presigned S3 URL, and never trusts a
+// caller-identity header of any kind.
 func (h *DocumentHandler) PublicGetDoc(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	token := chi.URLParam(r, "token")
@@ -193,7 +197,7 @@ func (h *DocumentHandler) PublicGetDoc(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Short-lived (publicShareURLTTL, not the usual 1-hour default): this URL
+	// Short-lived (PublicShareURLTTL, not the usual 1-hour default): this URL
 	// leaks to an unauthenticated caller, so a revoke should close the window
 	// quickly rather than leaving it valid for an hour (ADR-022).
 	targetKey := doc.FileKey

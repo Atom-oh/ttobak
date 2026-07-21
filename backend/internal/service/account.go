@@ -74,6 +74,7 @@ type accountRepo interface {
 	PutPublicShare(ctx context.Context, share *model.PublicShare) error
 	GetPublicShare(ctx context.Context, token string) (*model.PublicShare, error)
 	DeletePublicShare(ctx context.Context, token string) error
+	SetPublicShareTokenIfAbsent(ctx context.Context, pk, docID, token string) error
 }
 
 // AccountRepo is the exported alias for cross-package (handler) tests.
@@ -778,6 +779,16 @@ func (s *AccountService) deleteDoc(ctx context.Context, userID, pk, docID string
 		}
 		return err
 	}
+	if doc.PublicShareToken != "" {
+		// Best-effort, same reasoning as the S3 cleanup below: the DynamoDB
+		// doc item is already gone, so a failure here just leaves an
+		// orphaned PUBSHARE# pointer (ResolvePublicShare's getDoc lookup on
+		// the now-deleted doc will 404 it, so it's inert, not exploitable)
+		// rather than blocking the delete the caller already committed to.
+		if err := s.repo.DeletePublicShare(ctx, doc.PublicShareToken); err != nil {
+			log.Printf("cleanup public share pointer for deleted doc %s: %v", docID, err)
+		}
+	}
 	if doc.FileKey != "" && ownsFileKey(userID, doc.FileKey) && s.s3 != nil {
 		// Best-effort: the DynamoDB item is already gone, so a failure here
 		// just leaves an orphaned S3 object rather than blocking (or
@@ -925,10 +936,26 @@ func (s *AccountService) CreateUserDocPublicShare(ctx context.Context, userID, d
 	}); err != nil {
 		return "", err
 	}
-	doc.PublicShareToken = token
-	doc.UpdatedAt = time.Now().UTC()
-	if err := s.repo.PutAccountDocument(ctx, doc); err != nil {
-		return "", err
+	// Conditional: guards against a concurrent double-mint (two requests
+	// both read PublicShareToken=="" above before either writes) --
+	// without this, the second doc write would silently clobber the
+	// first's token, leaving that caller holding a token whose pointer
+	// exists but no longer matches the doc (see SetPublicShareTokenIfAbsent).
+	if err := s.repo.SetPublicShareTokenIfAbsent(ctx, doc.PK, docID, token); err != nil {
+		if delErr := s.repo.DeletePublicShare(ctx, token); delErr != nil {
+			log.Printf("cleanup orphaned public share pointer %s: %v", token, delErr)
+		}
+		if !errors.Is(err, repository.ErrConditionFailed) {
+			return "", err
+		}
+		// Lost the race -- another request's token is now canonical;
+		// hand the caller that one instead of a token whose pointer we
+		// just deleted.
+		fresh, getErr := s.getDoc(ctx, model.PrefixUser+userID, docID)
+		if getErr != nil {
+			return "", getErr
+		}
+		return fresh.PublicShareToken, nil
 	}
 	return token, nil
 }

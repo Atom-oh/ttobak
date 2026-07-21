@@ -21,6 +21,11 @@ type mockAccountRepo struct {
 	insightsByAccount map[string][]model.AccountInsight
 	documents map[string][]model.AccountDocument // PK -> docs
 	publicShares map[string]*model.PublicShare   // token -> share
+
+	// raceWinnerToken, if set, simulates a concurrent request winning the
+	// SetPublicShareTokenIfAbsent race: the first call writes this token to
+	// the doc instead of the caller's and returns ErrConditionFailed.
+	raceWinnerToken string
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -157,6 +162,29 @@ func (m *mockAccountRepo) GetPublicShare(_ context.Context, token string) (*mode
 func (m *mockAccountRepo) DeletePublicShare(_ context.Context, token string) error {
 	delete(m.publicShares, token)
 	return nil
+}
+
+// SetPublicShareTokenIfAbsent mirrors the real repo's conditional UpdateItem:
+// only wins if the doc's publicShareToken is currently empty.
+func (m *mockAccountRepo) SetPublicShareTokenIfAbsent(_ context.Context, pk, docID, token string) error {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			if m.raceWinnerToken != "" {
+				docs[i].PublicShareToken = m.raceWinnerToken
+				m.documents[pk] = docs
+				m.raceWinnerToken = ""
+				return fmt.Errorf("%w: doc %s already has a public share token", repository.ErrConditionFailed, docID)
+			}
+			if d.PublicShareToken != "" {
+				return fmt.Errorf("%w: doc %s already has a public share token", repository.ErrConditionFailed, docID)
+			}
+			docs[i].PublicShareToken = token
+			m.documents[pk] = docs
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
 }
 
 // mdPtr always returns a non-nil pointer, unlike strPtr (meeting.go), which
@@ -1459,5 +1487,77 @@ func TestUserDocPublicShare_LifecycleAndScope(t *testing.T) {
 	// Revoking a never-shared doc is a no-op, not an error.
 	if err := svc.RevokeUserDocPublicShare(context.Background(), "user-1", "note-1"); err != nil {
 		t.Errorf("expected revoke on unshared doc to be a no-op, got %v", err)
+	}
+}
+
+func TestCreateUserDocPublicShare_ConcurrentMintReturnsWinnerToken(t *testing.T) {
+	// Regression: two concurrent CreateUserDocPublicShare calls both read
+	// PublicShareToken=="" before either writes. Without a conditional
+	// write, the second doc write would silently clobber the first,
+	// leaving the first caller holding a token whose PublicShare pointer
+	// exists but no longer matches the doc -- ResolvePublicShare rejects it
+	// as stale. The loser must instead discard its own token and return
+	// the actual winner's.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	slide := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "slide-1",
+		DocID: "slide-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pdf", FileName: "deck.pdf",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[slide.PK] = append(repo.documents[slide.PK], slide)
+
+	repo.raceWinnerToken = "winner-token"
+
+	token, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "slide-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != "winner-token" {
+		t.Fatalf("expected the race winner's token, got %q", token)
+	}
+
+	// The loser's own pointer must have been cleaned up -- only the
+	// winner's token should resolve.
+	found := 0
+	for tok := range repo.publicShares {
+		if tok == "winner-token" {
+			continue
+		}
+		found++
+	}
+	if found != 0 {
+		t.Fatalf("expected the loser's orphaned PublicShare pointer to be deleted, found %d extra", found)
+	}
+}
+
+func TestDeleteUserDocument_CleansUpPublicSharePointer(t *testing.T) {
+	// Regression: deleting a publicly-shared doc used to leave its
+	// PUBSHARE# pointer item behind -- inert (getDoc on the deleted doc
+	// 404s) but an orphan that accumulates forever.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	slide := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "slide-1",
+		DocID: "slide-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pdf", FileName: "deck.pdf",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[slide.PK] = append(repo.documents[slide.PK], slide)
+
+	token, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "slide-1")
+	if err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+
+	if err := svc.DeleteUserDocument(context.Background(), "user-1", "slide-1"); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+
+	if _, ok := repo.publicShares[token]; ok {
+		t.Fatalf("expected PublicShare pointer %q to be cleaned up on doc delete", token)
 	}
 }

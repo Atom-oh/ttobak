@@ -105,10 +105,14 @@ func (m *mockResearchRepo) ListUserResearch(_ context.Context, userId string) ([
 	return out, nil
 }
 
+// BatchGetResearch deliberately returns items in reverse of the requested
+// id order -- real DynamoDB BatchGetItem does not preserve request order,
+// and a mock that happened to preserve it would hide a caller bug that
+// relies on BatchGetResearch's output order matching its input order.
 func (m *mockResearchRepo) BatchGetResearch(_ context.Context, ids []string) ([]model.Research, error) {
 	out := []model.Research{}
-	for _, id := range ids {
-		if r, ok := m.byID[id]; ok {
+	for i := len(ids) - 1; i >= 0; i-- {
+		if r, ok := m.byID[ids[i]]; ok {
 			out = append(out, *r)
 		}
 	}
@@ -168,8 +172,9 @@ func (m *mockResearchRepo) ListSharesForResearch(_ context.Context, researchID s
 
 // mockResearchMainRepo implements researchMainRepo with in-memory maps.
 type mockResearchMainRepo struct {
-	members map[string]*model.AccountMember // accountID|userID
-	refs    map[string][]model.ResearchRef  // accountID -> refs
+	members       map[string]*model.AccountMember // accountID|userID
+	refs          map[string][]model.ResearchRef  // accountID -> refs
+	failPutRefFor string                          // if set, PutResearchRef fails for this accountID
 }
 
 func newMockResearchMainRepo() *mockResearchMainRepo {
@@ -205,6 +210,9 @@ func (m *mockResearchMainRepo) addMember(accountID, userID string) {
 // so re-linking the same pair overwrites the existing item rather than
 // duplicating it.
 func (m *mockResearchMainRepo) PutResearchRef(_ context.Context, ref *model.ResearchRef) error {
+	if m.failPutRefFor == ref.AccountID {
+		return errors.New("simulated transient write failure")
+	}
 	refs := m.refs[ref.AccountID]
 	for i, r := range refs {
 		if r.ResearchID == ref.ResearchID {
@@ -477,5 +485,75 @@ func TestLinkAccount_ReLinkHealsMissingRef(t *testing.T) {
 	}
 	if len(refs) != 1 || refs[0].ResearchID != "r1" {
 		t.Fatalf("expected the missing ref to be healed by re-linking, got %v", refs)
+	}
+}
+
+func TestLinkAccount_RefWriteFailureIsSurfacedNotSwallowed(t *testing.T) {
+	// Regression: LinkAccount used to log-and-swallow a PutResearchRef
+	// failure, returning 200 with the canonical link updated but the
+	// account's reverse index never written -- permanently, since nothing
+	// else retries it. It must now return an error so the caller knows to
+	// retry (which takes the already-linked healing path).
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newResearchServiceWithRepo(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+	mainRepo.addMember("acc-1", "owner-1")
+	mainRepo.failPutRefFor = "acc-1"
+
+	if _, err := svc.LinkAccount(context.Background(), "owner-1", "r1", "acc-1"); err == nil {
+		t.Fatal("expected LinkAccount to surface the ref write failure, got nil error")
+	}
+
+	if !contains(repo.byID["r1"].AccountIDs, "acc-1") {
+		t.Fatalf("expected the canonical link to still have succeeded, got %v", repo.byID["r1"].AccountIDs)
+	}
+	if refs, _ := mainRepo.ListResearchRefsForAccount(context.Background(), "acc-1"); len(refs) != 0 {
+		t.Fatalf("expected no ref written while the write was failing, got %v", refs)
+	}
+
+	mainRepo.failPutRefFor = ""
+	if _, err := svc.LinkAccount(context.Background(), "owner-1", "r1", "acc-1"); err != nil {
+		t.Fatalf("expected retry to heal, got error: %v", err)
+	}
+	if refs, _ := mainRepo.ListResearchRefsForAccount(context.Background(), "acc-1"); len(refs) != 1 {
+		t.Fatalf("expected retry to write the ref, got %v", refs)
+	}
+}
+
+func TestListAccountResearch_PreservesRefOrderAfterBatchGet(t *testing.T) {
+	// Regression: BatchGetItem (what BatchGetResearch wraps) does not
+	// preserve request order. ListAccountResearch used to iterate
+	// BatchGetResearch's return value directly, so its output order was
+	// whatever DynamoDB happened to return rather than the refs' intended
+	// (newest-first) order. The mock's BatchGetResearch deliberately
+	// returns reversed to catch exactly this.
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newResearchServiceWithRepo(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+	seedResearch(repo, "r2", "owner-1")
+	seedResearch(repo, "r3", "owner-1")
+	mainRepo.addMember("acc-1", "owner-1")
+	for _, id := range []string{"r1", "r2", "r3"} {
+		if _, err := svc.LinkAccount(context.Background(), "owner-1", id, "acc-1"); err != nil {
+			t.Fatalf("link %s failed: %v", id, err)
+		}
+	}
+
+	items, err := svc.ListAccountResearch(context.Background(), "owner-1", "acc-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"r1", "r2", "r3"}
+	if len(items) != len(want) {
+		t.Fatalf("expected %d items, got %v", len(want), items)
+	}
+	for i, id := range want {
+		if items[i].ResearchID != id {
+			t.Fatalf("expected refs order %v, got %v", want, items)
+		}
 	}
 }

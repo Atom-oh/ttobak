@@ -258,7 +258,7 @@ func (s *UploadService) GeneratePreviewPDFURL(ctx context.Context, fileKey strin
 	return s.generatePreviewPDFURLWithTTL(ctx, fileKey, 1*time.Hour)
 }
 
-// GeneratePreviewPDFURLShortLived is GeneratePreviewPDFURL with publicShareURLTTL,
+// GeneratePreviewPDFURLShortLived is GeneratePreviewPDFURL with PublicShareURLTTL,
 // for the unauthenticated public-share route (see PublicShareURLTTL).
 func (s *UploadService) GeneratePreviewPDFURLShortLived(ctx context.Context, fileKey string) (string, error) {
 	return s.generatePreviewPDFURLWithTTL(ctx, fileKey, PublicShareURLTTL)

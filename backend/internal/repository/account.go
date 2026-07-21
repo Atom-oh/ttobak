@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -401,6 +402,48 @@ func (r *DynamoDBRepository) PutAccountDocument(ctx context.Context, doc *model.
 	}
 	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(r.tableName), Item: item}); err != nil {
 		return fmt.Errorf("put account doc: %w", err)
+	}
+	return nil
+}
+
+// SetPublicShareTokenIfAbsent atomically sets doc's publicShareToken, but
+// only if it doesn't already have one. Guards CreateUserDocPublicShare
+// against a concurrent double-mint race: without this, two requests can
+// both read publicShareToken=="" before either writes, each PutPublicShare
+// its own pointer, and then the second doc write silently overwrites the
+// first -- leaving the first caller holding a token whose pointer exists
+// but whose doc.PublicShareToken no longer matches it (ResolvePublicShare
+// then rejects it as stale). Returns ErrConditionFailed if another request
+// already won the race; the caller is expected to discard its own token
+// and re-read the doc for the winner's.
+func (r *DynamoDBRepository) SetPublicShareTokenIfAbsent(ctx context.Context, pk, docID, token string) error {
+	condition := expression.Or(
+		expression.AttributeNotExists(expression.Name("publicShareToken")),
+		expression.Name("publicShareToken").Equal(expression.Value("")),
+	)
+	update := expression.Set(expression.Name("publicShareToken"), expression.Value(token)).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC()))
+	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
+	if err != nil {
+		return fmt.Errorf("build public share token condition: %w", err)
+	}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docID},
+		},
+		ConditionExpression:       expr.Condition(),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: doc %s already has a public share token", ErrConditionFailed, docID)
+		}
+		return fmt.Errorf("set public share token: %w", err)
 	}
 	return nil
 }

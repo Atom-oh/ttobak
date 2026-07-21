@@ -562,10 +562,12 @@ func (s *ResearchService) LinkAccount(ctx context.Context, userID, researchID, a
 		// write anyway: PutResearchRef is a Put (idempotent overwrite, not
 		// a conditional create), and a *previous* LinkAccount call could
 		// have added accountID to accountIds successfully while its own
-		// ref write failed (logged, never retried). Before this fix, the
-		// only place that could heal a missing ref was here -- but the old
-		// unconditional early return meant that path could never run.
-		s.putResearchRefBestEffort(ctx, userID, researchID, accountID, research.Topic)
+		// ref write failed. Before this fix, the only place that could
+		// heal a missing ref was here -- but the old unconditional early
+		// return meant that path could never run.
+		if err := s.putResearchRef(ctx, userID, researchID, accountID, research.Topic); err != nil {
+			return nil, fmt.Errorf("account link succeeded but the account's index write failed -- retry to heal: %w", err)
+		}
 		return research.AccountIDs, nil // already linked
 	}
 
@@ -577,19 +579,23 @@ func (s *ResearchService) LinkAccount(ctx context.Context, userID, researchID, a
 		return nil, fmt.Errorf("failed to link account: %w", err)
 	}
 
-	s.putResearchRefBestEffort(ctx, userID, researchID, accountID, research.Topic)
+	// Surfaced (not best-effort/log-only): ListAccountResearch/qa's
+	// _account_research read this ref as their *starting point*, so a
+	// silently-dropped failure here would leave the canonical link
+	// successful while the research never appears in the account's list --
+	// permanently, since nothing else retries this write. Returning the
+	// error lets the caller retry LinkAccount for the same pair, which
+	// takes the already-linked branch above and re-attempts the ref write.
+	if err := s.putResearchRef(ctx, userID, researchID, accountID, research.Topic); err != nil {
+		return nil, fmt.Errorf("account link succeeded but the account's index write failed -- retry to heal: %w", err)
+	}
 
 	return append(append([]string{}, research.AccountIDs...), accountID), nil
 }
 
-// putResearchRefBestEffort writes (or re-writes) the RESEARCHREF# reverse
-// index item. Failures are logged, not returned -- LinkAccount's own
-// fail-closed read paths (ListAccountResearch, qa/handler.py's
-// _account_research) re-verify accountIds membership before trusting a ref,
-// so a failed write here just means a slightly stale/missing entry until
-// the next LinkAccount call for the same pair heals it, not a security gap.
-func (s *ResearchService) putResearchRefBestEffort(ctx context.Context, userID, researchID, accountID, topic string) {
-	if err := s.mainRepo.PutResearchRef(ctx, &model.ResearchRef{
+// putResearchRef writes (or re-writes) the RESEARCHREF# reverse index item.
+func (s *ResearchService) putResearchRef(ctx context.Context, userID, researchID, accountID, topic string) error {
+	return s.mainRepo.PutResearchRef(ctx, &model.ResearchRef{
 		PK:          model.PrefixAccount + accountID,
 		SK:          model.PrefixResearchRef + researchID,
 		AccountID:   accountID,
@@ -598,9 +604,7 @@ func (s *ResearchService) putResearchRefBestEffort(ctx context.Context, userID, 
 		Topic:       topic,
 		CreatedAt:   time.Now().UTC(),
 		EntityType:  model.EntityTypeResearchRef,
-	}); err != nil {
-		log.Printf("warn: failed to write research ref for account %s: %v", accountID, err)
-	}
+	})
 }
 
 // UnlinkAccount removes a research↔account link (owner only).
@@ -683,17 +687,27 @@ func (s *ResearchService) ListAccountResearch(ctx context.Context, userID, accou
 		return nil, fmt.Errorf("failed to batch get research: %w", err)
 	}
 
-	dtos := make([]model.AccountResearchDTO, 0, len(items))
+	// BatchGetItem does not preserve request order, so reassemble by refs'
+	// newest-first order (ids) rather than iterating items directly --
+	// otherwise the account's research list would come back in whatever
+	// arbitrary order DynamoDB happened to return items in.
+	byID := make(map[string]model.Research, len(items))
 	for _, r := range items {
-		if r.TrashedAt != "" {
+		byID[r.ResearchID] = r
+	}
+
+	dtos := make([]model.AccountResearchDTO, 0, len(items))
+	for _, id := range ids {
+		r, ok := byID[id]
+		if !ok || r.TrashedAt != "" {
 			continue
 		}
 		// Re-verify membership against the canonical accountIds rather than
-		// trusting the RESEARCHREF# index alone: LinkAccount/UnlinkAccount
-		// best-effort the ref write/delete (logged, not retried), so a
-		// failed DeleteResearchRef would otherwise leave a stale ref that
-		// keeps exposing this research's summary to the account after the
-		// owner unlinked it -- fail-closed here instead of fail-open.
+		// trusting the RESEARCHREF# index alone: UnlinkAccount's
+		// DeleteResearchRef is still best-effort (logged, not retried), so a
+		// failed delete would otherwise leave a stale ref that keeps
+		// exposing this research's summary to the account after the owner
+		// unlinked it -- fail-closed here instead of fail-open.
 		if !contains(r.AccountIDs, accountID) {
 			continue
 		}
