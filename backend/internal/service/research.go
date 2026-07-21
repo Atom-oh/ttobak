@@ -576,6 +576,9 @@ func (s *ResearchService) LinkAccount(ctx context.Context, userID, researchID, a
 	// research. The old approach (read the whole list, append, SET it back)
 	// would lose whichever side's write landed second.
 	if err := s.repo.AddAccountLink(ctx, researchID, accountID); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil, ErrNotFound // deleted concurrently between our GetResearch and this write
+		}
 		return nil, fmt.Errorf("failed to link account: %w", err)
 	}
 
@@ -627,6 +630,9 @@ func (s *ResearchService) UnlinkAccount(ctx context.Context, userID, researchID,
 	// comment; same race the old read-modify-write-the-whole-list approach
 	// was exposed to.
 	if err := s.repo.RemoveAccountLink(ctx, researchID, accountID); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil, ErrNotFound
+		}
 		return nil, fmt.Errorf("failed to unlink account: %w", err)
 	}
 

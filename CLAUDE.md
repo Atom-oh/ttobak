@@ -9,15 +9,15 @@ TTOBAK (또박) is a Korean AI meeting assistant: record audio → real-time STT
 ## Build Commands
 
 ```bash
-# Go Lambda binaries (ARM64 cross-compile, all 5 zip-deployed functions)
-cd backend && for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb; do
+# Go Lambda binaries (ARM64 cross-compile, all 8 zip-deployed functions)
+cd backend && for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker cmd/websocket cmd/ws-authorizer; do
   GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o $dir/bootstrap ./$dir
 done
 
 # Build a single Lambda (e.g. after editing only the api handler)
 cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/api/bootstrap ./cmd/api
 
-# 6th Go Lambda, deployed as a container image instead of a zip (LibreOffice +
+# convert-doc is deployed as a container image instead of a zip (LibreOffice +
 # fonts have no equivalent of the ARM64 zip build above) -- CDK's
 # DockerImageCode.fromImageAsset builds this automatically on `cdk deploy`,
 # this is only for a local build/smoke-test:

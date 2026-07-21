@@ -1136,6 +1136,83 @@ func TestUpdateAccountDocument_SlideToNoteCleansUpOldS3Object(t *testing.T) {
 	}
 }
 
+func TestUpdateUserDocument_SlideToNoteRevokesPublicShare(t *testing.T) {
+	// Regression: converting a publicly-shared slide to a markdown note
+	// used to leave PublicShareToken on the doc untouched (updateDoc's
+	// whole-item PutAccountDocument just carried the stale snapshot
+	// value through). ResolvePublicShare's FileKey=="" check happened to
+	// mask this immediately, but attaching a *new* file to the doc later
+	// would have resurrected the old link, exposing the new file to
+	// whoever held the old token without the owner ever re-sharing.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	created, err := svc.PutUserDocument(context.Background(), "user-1", &model.PutDocumentRequest{
+		Title: "Deck", FileKey: "docs/user-1/deck.pdf", FileName: "deck.pdf",
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	token, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", created.DocID)
+	if err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+
+	if _, err := svc.UpdateUserDocument(context.Background(), "user-1", created.DocID, &model.PutDocumentRequest{
+		Title: "Now a note", Markdown: mdPtr("body"),
+	}); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	detail, err := svc.GetUserDocument(context.Background(), "user-1", created.DocID)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if detail.PublicShareToken != "" {
+		t.Errorf("expected PublicShareToken cleared on file->markdown conversion, got %q", detail.PublicShareToken)
+	}
+	if _, ok := repo.publicShares[token]; ok {
+		t.Errorf("expected the old token's pointer to be cleaned up, not left behind")
+	}
+}
+
+func TestUpdateUserDocument_TitleOnlyEditDoesNotClobberConcurrentToken(t *testing.T) {
+	// Regression: updateDoc carries existing.PublicShareToken through from
+	// its initial getDoc snapshot into the final whole-item
+	// PutAccountDocument. A title-only edit (no file/body change at all)
+	// shouldn't touch sharing state, but without re-reading the live
+	// token immediately before the write, a concurrent share/revoke
+	// landing in between would get clobbered back to the stale value.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	created, err := svc.PutUserDocument(context.Background(), "user-1", &model.PutDocumentRequest{
+		Title: "Deck", FileKey: "docs/user-1/deck.pdf", FileName: "deck.pdf",
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if _, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", created.DocID); err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+
+	// Simulate a concurrent revoke+reshare landing right after this
+	// update's initial getDoc read: the stored token changes to a
+	// different value before the update's own write happens.
+	repo.raceTokenAfterGet = "concurrent-new-token"
+
+	if _, err := svc.UpdateUserDocument(context.Background(), "user-1", created.DocID, &model.PutDocumentRequest{
+		Title: "Deck v2",
+	}); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	got := repo.documents[model.PrefixUser+"user-1"][0].PublicShareToken
+	if got != "concurrent-new-token" {
+		t.Fatalf("expected the concurrently-changed token to survive the title-only edit, got %q", got)
+	}
+}
+
 func TestUpdateAccountDocument_KeepingSameFileKeyDoesNotDeleteS3Object(t *testing.T) {
 	repo := newMockAccountRepo()
 	mockS3 := &mockS3Deleter{}
@@ -1523,7 +1600,11 @@ func TestRevokeUserDocPublicShare_DoesNotClobberConcurrentReshare(t *testing.T) 
 	// write (e.g. a concurrent revoke+reshare), the revoke would silently
 	// stomp the new token, breaking a share the caller never asked to
 	// touch. The fix makes the clear a conditional update scoped to the
-	// exact token read, so a mismatch is a no-op rather than a clobber.
+	// exact token read, so a mismatch is a no-op rather than a clobber --
+	// and, since the clear now happens BEFORE the pointer delete (not
+	// after), a mismatch also means the pointer delete never runs, so the
+	// stale token's pointer is left as an inert orphan rather than
+	// unconditionally deleted regardless of what else changed underneath.
 	repo := newMockAccountRepo()
 	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
 
@@ -1553,8 +1634,11 @@ func TestRevokeUserDocPublicShare_DoesNotClobberConcurrentReshare(t *testing.T) 
 	if got != "newer-token" {
 		t.Fatalf("expected the newer token to survive the stale revoke, got %q", got)
 	}
-	if _, ok := repo.publicShares[oldToken]; ok {
-		t.Errorf("expected the old token's pointer to still be cleaned up")
+	// The old token's pointer is left as an inert orphan (not deleted) --
+	// ResolvePublicShare still fails it closed via the doc's
+	// PublicShareToken != token check, so this is safe, just not tidy.
+	if _, ok := repo.publicShares[oldToken]; !ok {
+		t.Errorf("expected the old token's now-orphaned pointer to still exist (clear-before-delete ordering)")
 	}
 }
 

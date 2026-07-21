@@ -214,9 +214,16 @@ func (r *ResearchRepository) UpdateResearchFields(ctx context.Context, researchI
 // on a List, two concurrent LinkAccount calls for different accounts can
 // never lose one side's change.
 func (r *ResearchRepository) AddAccountLink(ctx context.Context, researchId, accountID string) error {
-	expr, err := expression.NewBuilder().WithUpdate(
-		expression.Add(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}})),
-	).Build()
+	// attribute_exists(PK): without it, UpdateItem's default upsert behavior
+	// would silently CREATE a zombie RESEARCH#{id}/CONFIG item containing
+	// only accountIds if the research was deleted between the service
+	// layer's GetResearch call and this write -- same failure mode
+	// SetPublicShareTokenIfAbsent (account.go) guards against, and for the
+	// same reason.
+	expr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		WithUpdate(expression.Add(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}}))).
+		Build()
 	if err != nil {
 		return fmt.Errorf("failed to build update expression: %w", err)
 	}
@@ -227,11 +234,16 @@ func (r *ResearchRepository) AddAccountLink(ctx context.Context, researchId, acc
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchId},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
 		},
+		ConditionExpression:       expr.Condition(),
 		UpdateExpression:          expr.Update(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: research %s not found", ErrConditionFailed, researchId)
+		}
 		return fmt.Errorf("failed to add account link: %w", err)
 	}
 	return nil
@@ -239,11 +251,13 @@ func (r *ResearchRepository) AddAccountLink(ctx context.Context, researchId, acc
 
 // RemoveAccountLink atomically removes accountID from research.accountIds.
 // Same idempotency/race-freedom as AddAccountLink -- DELETE on a set not
-// containing the value is a no-op rather than an error.
+// containing the value is a no-op rather than an error. Same
+// attribute_exists(PK) guard as AddAccountLink, for the same reason.
 func (r *ResearchRepository) RemoveAccountLink(ctx context.Context, researchId, accountID string) error {
-	expr, err := expression.NewBuilder().WithUpdate(
-		expression.Delete(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}})),
-	).Build()
+	expr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		WithUpdate(expression.Delete(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}}))).
+		Build()
 	if err != nil {
 		return fmt.Errorf("failed to build update expression: %w", err)
 	}
@@ -254,11 +268,16 @@ func (r *ResearchRepository) RemoveAccountLink(ctx context.Context, researchId, 
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchId},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
 		},
+		ConditionExpression:       expr.Condition(),
 		UpdateExpression:          expr.Update(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: research %s not found", ErrConditionFailed, researchId)
+		}
 		return fmt.Errorf("failed to remove account link: %w", err)
 	}
 	return nil

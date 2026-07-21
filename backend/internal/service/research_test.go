@@ -3,17 +3,23 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 // mockResearchRepo implements researchRepo with an in-memory map.
 type mockResearchRepo struct {
 	byID   map[string]*model.Research
 	shares map[string]*model.Share // sharedToID|researchID
+	// deleteAfterGet, if set, simulates a concurrent delete landing right
+	// after the next GetResearch read for this id: the entry is removed
+	// from byID immediately after the read returns its copy.
+	deleteAfterGet string
 }
 
 func newMockResearchRepo() *mockResearchRepo {
@@ -35,6 +41,10 @@ func (m *mockResearchRepo) GetResearch(_ context.Context, id string) (*model.Res
 		return nil, nil
 	}
 	cp := *r
+	if m.deleteAfterGet == id {
+		delete(m.byID, id)
+		m.deleteAfterGet = ""
+	}
 	return &cp, nil
 }
 
@@ -56,7 +66,10 @@ func (m *mockResearchRepo) UpdateResearchFields(_ context.Context, id string, fi
 func (m *mockResearchRepo) AddAccountLink(_ context.Context, id, accountID string) error {
 	r, ok := m.byID[id]
 	if !ok {
-		return errors.New("not found")
+		// Mirrors the real repo's attribute_exists(PK) condition failure --
+		// the research was deleted between the caller's GetResearch and
+		// this call.
+		return fmt.Errorf("%w: research %s not found", repository.ErrConditionFailed, id)
 	}
 	for _, existing := range r.AccountIDs {
 		if existing == accountID {
@@ -70,7 +83,7 @@ func (m *mockResearchRepo) AddAccountLink(_ context.Context, id, accountID strin
 func (m *mockResearchRepo) RemoveAccountLink(_ context.Context, id, accountID string) error {
 	r, ok := m.byID[id]
 	if !ok {
-		return errors.New("not found")
+		return fmt.Errorf("%w: research %s not found", repository.ErrConditionFailed, id)
 	}
 	remaining := make([]string, 0, len(r.AccountIDs))
 	for _, existing := range r.AccountIDs {
@@ -525,6 +538,42 @@ func TestLinkAccount_RefWriteFailureIsSurfacedNotSwallowed(t *testing.T) {
 	}
 	if refs, _ := mainRepo.ListResearchRefsForAccount(context.Background(), "acc-1"); len(refs) != 1 {
 		t.Fatalf("expected retry to write the ref, got %v", refs)
+	}
+}
+
+func TestLinkAccount_DeletedBetweenGetAndLink_ReturnsNotFound(t *testing.T) {
+	// Regression: AddAccountLink's UpdateItem upserts by default. Without
+	// an attribute_exists(PK) condition, a research deleted between this
+	// call's GetResearch and the AddAccountLink write would make that
+	// write silently CREATE a zombie RESEARCH#{id}/CONFIG item containing
+	// only accountIds, instead of failing closed with ErrNotFound.
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newResearchServiceWithRepo(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+	mainRepo.addMember("acc-1", "owner-1")
+	repo.deleteAfterGet = "r1"
+
+	if _, err := svc.LinkAccount(context.Background(), "owner-1", "r1", "acc-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+	if _, ok := repo.byID["r1"]; ok {
+		t.Fatalf("expected no zombie research record to be created")
+	}
+}
+
+func TestUnlinkAccount_DeletedBetweenGetAndUnlink_ReturnsNotFound(t *testing.T) {
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newResearchServiceWithRepo(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+	repo.byID["r1"].AccountIDs = []string{"acc-1"}
+	repo.deleteAfterGet = "r1"
+
+	if _, err := svc.UnlinkAccount(context.Background(), "owner-1", "r1", "acc-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 

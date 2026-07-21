@@ -674,6 +674,31 @@ func (s *AccountService) updateDoc(ctx context.Context, userID, pk, docID string
 		existing.Links = parseWikilinks(markdown)
 		existing.FileKey, existing.FileName, existing.MimeType, existing.FileSize = req.FileKey, req.FileName, req.MimeType, req.FileSize
 	}
+	// existing.PublicShareToken is a stale snapshot from the getDoc call
+	// above; PutAccountDocument below is a whole-item overwrite, so left
+	// untouched it would clobber a CreateUserDocPublicShare/RevokeUserDocPublicShare
+	// that raced this update. Two cases:
+	revokingPublicShare := oldFileKey != "" && existing.FileKey == "" && existing.PublicShareToken != ""
+	if revokingPublicShare {
+		// (1) This edit is turning a file-backed doc into a markdown one
+		// (slide -> note): any live public link must die with the file,
+		// not survive to expose whatever content the doc has *later* (a
+		// markdown body now, possibly a different file after a future
+		// edit) to whoever held the old token.
+		staleToken := existing.PublicShareToken
+		if err := s.repo.DeletePublicShare(ctx, staleToken); err != nil {
+			log.Printf("cleanup public share pointer for doc %s during file->markdown conversion: %v", docID, err)
+		}
+		existing.PublicShareToken = ""
+	} else if fresh, err := s.repo.GetAccountDocument(ctx, pk, docID); err == nil && fresh != nil {
+		// (2) Otherwise, re-read the live token immediately before this
+		// write instead of carrying the getDoc snapshot through -- this
+		// doesn't fully close the race (a share/revoke landing between
+		// this re-read and the Put below is still possible) but shrinks
+		// the window from "this whole request's duration" to one more
+		// round-trip.
+		existing.PublicShareToken = fresh.PublicShareToken
+	}
 	existing.UpdatedAt = time.Now().UTC()
 	if err := s.repo.PutAccountDocument(ctx, existing); err != nil {
 		return nil, err
@@ -971,9 +996,17 @@ func (s *AccountService) RevokeUserDocPublicShare(ctx context.Context, userID, d
 	if doc.PublicShareToken == "" {
 		return nil
 	}
-	if err := s.repo.DeletePublicShare(ctx, doc.PublicShareToken); err != nil {
-		log.Printf("cleanup public share pointer for doc %s: %v", docID, err)
-	}
+	// Clear the field FIRST, delete the pointer SECOND -- not the reverse.
+	// If the pointer were deleted first, a CreateUserDocPublicShare racing
+	// in between would read the still-unchanged token via its own
+	// idempotent "already shared" path and hand a caller a token whose
+	// pointer is already gone (dead on arrival). Clearing first means
+	// that window never exists: by the time the field reads as cleared,
+	// the pointer is guaranteed to still be valid, so the worst case this
+	// ordering can produce is an inert orphan pointer (fails closed via
+	// ResolvePublicShare's own token-match check) -- not a token handed
+	// to a caller that's already broken.
+	//
 	// Conditional REMOVE on just the token field, not PutAccountDocument of
 	// the whole snapshot: a plain overwrite would clobber a concurrent
 	// CreateUserDocPublicShare's newer token (or any other field edited
@@ -986,6 +1019,9 @@ func (s *AccountService) RevokeUserDocPublicShare(ctx context.Context, userID, d
 			return nil
 		}
 		return err
+	}
+	if err := s.repo.DeletePublicShare(ctx, doc.PublicShareToken); err != nil {
+		log.Printf("cleanup public share pointer for doc %s: %v", docID, err)
 	}
 	return nil
 }
