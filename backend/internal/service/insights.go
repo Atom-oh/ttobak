@@ -142,21 +142,16 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 	var err error
 
 	if source != "" {
-		docs, totalCount, err = s.listBySource(ctx, source, docType, service, tags, page, limit)
+		docs, totalCount, err = s.listBySource(ctx, source, docType, service, tags, sortBy, page, limit)
 	} else {
-		docs, totalCount, err = s.scanAll(ctx, docType, tags, page, limit)
+		docs, totalCount, err = s.scanAll(ctx, docType, tags, sortBy, page, limit)
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	// Copy before sorting to avoid mutating cached slice
-	sorted := make([]model.CrawledDocument, len(docs))
-	copy(sorted, docs)
-	sortDocuments(sorted, sortBy)
-
 	return &model.InsightsResponse{
-		Documents:  sorted,
+		Documents:  docs,
 		TotalCount: totalCount,
 		Page:       page,
 		Limit:      limit,
@@ -164,10 +159,14 @@ func (s *InsightsService) ListInsights(ctx context.Context, docType, source, ser
 }
 
 // listBySource queries documents from a specific source with optional type/service/tags filters.
-func (s *InsightsService) listBySource(ctx context.Context, source, docType, service string, tags []string, page, limit int) ([]model.CrawledDocument, int, error) {
-	fetchLimit := int32(page * limit)
-
-	docs, _, count, err := s.repo.ListDocuments(ctx, source, docType, fetchLimit, nil)
+// Fetches a generous bound (500, matching scanAll's precedent) rather than
+// page*limit: repo.ListDocuments orders by SK (a docHash), which has no
+// relationship to crawledAt, so truncating at the DynamoDB query layer
+// before sorting would return an arbitrary subset that "newest" sorting can
+// only reorder locally -- silently hiding genuinely new documents that
+// happened to land outside that arbitrary slice.
+func (s *InsightsService) listBySource(ctx context.Context, source, docType, service string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, int, error) {
+	docs, _, count, err := s.repo.ListDocuments(ctx, source, docType, 500, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to list documents for source %s: %w", source, err)
 	}
@@ -182,6 +181,8 @@ func (s *InsightsService) listBySource(ctx context.Context, source, docType, ser
 		count = len(docs)
 	}
 
+	sortDocuments(docs, sortBy)
+
 	start := (page - 1) * limit
 	if start >= len(docs) {
 		return []model.CrawledDocument{}, count, nil
@@ -195,7 +196,7 @@ func (s *InsightsService) listBySource(ctx context.Context, source, docType, ser
 
 // scanAll scans all documents filtered by type with pagination.
 // Results are cached for 30 seconds to avoid repeated full-table scans.
-func (s *InsightsService) scanAll(ctx context.Context, docType string, tags []string, page, limit int) ([]model.CrawledDocument, int, error) {
+func (s *InsightsService) scanAll(ctx context.Context, docType string, tags []string, sortBy string, page, limit int) ([]model.CrawledDocument, int, error) {
 	if docType == "" {
 		docType = "blog"
 	}
@@ -216,6 +217,22 @@ func (s *InsightsService) scanAll(ctx context.Context, docType string, tags []st
 		docs = filterByTags(docs, tags)
 		total = len(docs)
 	}
+
+	// Copy before sorting: allDocs may be the cached slice shared across
+	// concurrent requests with different sortBy values -- sorting in place
+	// would race and leave the cache holding whichever order won last.
+	//
+	// Sorting BEFORE slicing for pagination matters just as much: allDocs
+	// comes from a raw DynamoDB Scan with no chronological guarantee (see
+	// ListAllDocumentsByType), so slicing first would return an arbitrary
+	// subset that "newest" sorting can only reorder locally -- this was the
+	// actual bug (new articles ARE crawled daily, per CrawlHistory, but
+	// rarely surfaced because they landed outside whatever arbitrary page-1
+	// slice the Scan order produced).
+	sorted := make([]model.CrawledDocument, len(docs))
+	copy(sorted, docs)
+	sortDocuments(sorted, sortBy)
+	docs = sorted
 
 	start := (page - 1) * limit
 	if start >= len(docs) {
