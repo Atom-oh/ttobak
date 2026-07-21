@@ -765,6 +765,38 @@ type ListMeetingsResult struct {
 	NextCursor *string
 }
 
+// paginateMeetingsPage decides ListMeetings' final page and resume cursor
+// for its GSI1 filter-loop. DynamoDB's FilterExpression runs after Limit is
+// applied server-side, so that loop can overshoot Limit (concatenating
+// multiple Query pages) before its own stop condition fires.
+//   - Overshot: truncate to exactly limit and resume from the key of the
+//     last KEPT item -- not wherever the underlying query's
+//     LastEvaluatedKey landed, which may be well past the cutoff. Every
+//     Meeting here already carries PK/SK/GSI1PK/GSI1SK (see the
+//     projection), so this is a real, resumable DynamoDB key.
+//   - Otherwise (filled exactly, or under-filled because the loop's own
+//     maxPages bound was hit first): resume from lastEvaluatedKey as-is.
+//     nil means the GSI1 partition is genuinely exhausted (the loop's own
+//     break condition); non-nil means more items exist further down
+//     regardless of how many landed on this page. Forcing it to nil here
+//     was a real bug -- a page that happened to fill exactly Limit lost
+//     its cursor and could never see anything beyond it again, which is
+//     the common case for a user with few/no account-membership rows to
+//     filter out (i.e. most users' very first page).
+func paginateMeetingsPage(meetings []model.Meeting, limit int32, lastEvaluatedKey map[string]types.AttributeValue) ([]model.Meeting, map[string]types.AttributeValue) {
+	if len(meetings) > int(limit) {
+		last := meetings[limit-1]
+		resumeKey := map[string]types.AttributeValue{
+			"PK":     &types.AttributeValueMemberS{Value: last.PK},
+			"SK":     &types.AttributeValueMemberS{Value: last.SK},
+			"GSI1PK": &types.AttributeValueMemberS{Value: last.GSI1PK},
+			"GSI1SK": &types.AttributeValueMemberS{Value: last.GSI1SK},
+		}
+		return meetings[:limit], resumeKey
+	}
+	return meetings, lastEvaluatedKey
+}
+
 // ListMeetings lists meetings for a user with pagination.
 // Uses ProjectionExpression to exclude transcript fields (transcriptA/B, transcriptSegments)
 // and other large fields (actionItems, notes) to stay within DynamoDB's 1MB per-query limit.
@@ -786,8 +818,24 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 		result.Shares = shares
 		result.NextCursor = nextCursor
 	} else {
-		keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixUser + params.UserID)).
-			And(expression.Key("SK").BeginsWith(model.PrefixMeeting))
+		// Query GSI1 (GSI1PK=USER#{userId}, GSI1SK=date) instead of the base
+		// table's PK/SK -- SK is MEETING#{meetingId} (a UUID), so sorting by
+		// it has no relationship to recency at all. Querying the base table
+		// here was the actual cause of "my just-finished meeting doesn't
+		// show up": a user's Nth-most-recent meeting could land outside
+		// page 1 purely because its UUID happened to sort late, while
+		// genuinely older meetings with "smaller" UUIDs filled the page.
+		//
+		// AccountMember rows share this same GSI1PK (USER#{userId}) on GSI1
+		// (see account.go's ListAccountsForUser), disambiguated only by
+		// GSI1SK format (date string vs "ACCOUNT#{id}") -- entityType=MEETING
+		// filters them out. FilterExpression runs AFTER Limit is applied
+		// server-side, so a page can come back with fewer than Limit
+		// matching items even when more meetings exist further down the
+		// index; loop (bounded) until enough are collected or the
+		// partition is exhausted in this scan direction.
+		keyEx := expression.Key("GSI1PK").Equal(expression.Value(model.PrefixUser + params.UserID))
+		filterEx := expression.Name("entityType").Equal(expression.Value("MEETING"))
 		proj := expression.NamesList(
 			expression.Name("PK"), expression.Name("SK"),
 			expression.Name("meetingId"), expression.Name("userId"),
@@ -802,32 +850,48 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 		)
 		expr, err := expression.NewBuilder().
 			WithKeyCondition(keyEx).
+			WithFilter(filterEx).
 			WithProjection(proj).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to build expression: %w", err)
 		}
 
-		queryResult, err := r.client.Query(ctx, &dynamodb.QueryInput{
-			TableName:                 aws.String(r.tableName),
-			KeyConditionExpression:    expr.KeyCondition(),
-			ProjectionExpression:      expr.Projection(),
-			ExpressionAttributeNames:  expr.Names(),
-			ExpressionAttributeValues: expr.Values(),
-			Limit:                     aws.Int32(params.Limit),
-			ExclusiveStartKey:         exclusiveStartKey,
-			ScanIndexForward:          aws.Bool(false),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to query meetings: %w", err)
+		var meetings []model.Meeting
+		const maxPages = 25 // defensive bound -- this GSI1PK partition only ever mixes in a user's own (typically few) account memberships
+		for i := 0; i < maxPages; i++ {
+			queryResult, err := r.client.Query(ctx, &dynamodb.QueryInput{
+				TableName:                 aws.String(r.tableName),
+				IndexName:                 aws.String("GSI1"),
+				KeyConditionExpression:    expr.KeyCondition(),
+				FilterExpression:          expr.Filter(),
+				ProjectionExpression:      expr.Projection(),
+				ExpressionAttributeNames:  expr.Names(),
+				ExpressionAttributeValues: expr.Values(),
+				Limit:                     aws.Int32(params.Limit),
+				ExclusiveStartKey:         exclusiveStartKey,
+				ScanIndexForward:          aws.Bool(false),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to query meetings: %w", err)
+			}
+
+			var page []model.Meeting
+			if err := attributevalue.UnmarshalListOfMaps(queryResult.Items, &page); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal meetings: %w", err)
+			}
+			meetings = append(meetings, page...)
+			exclusiveStartKey = queryResult.LastEvaluatedKey
+
+			if len(meetings) >= int(params.Limit) || exclusiveStartKey == nil {
+				break
+			}
 		}
 
-		if err := attributevalue.UnmarshalListOfMaps(queryResult.Items, &result.Meetings); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal meetings: %w", err)
-		}
+		result.Meetings, exclusiveStartKey = paginateMeetingsPage(meetings, params.Limit, exclusiveStartKey)
 
-		if queryResult.LastEvaluatedKey != nil {
-			cursor := encodeCursor(queryResult.LastEvaluatedKey)
+		if exclusiveStartKey != nil {
+			cursor := encodeCursor(exclusiveStartKey)
 			result.NextCursor = &cursor
 		}
 

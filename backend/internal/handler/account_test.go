@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
@@ -31,6 +32,7 @@ type mockHandlerAccountRepo struct {
 	meetingRefs map[string][]model.MeetingRef
 	insightsByAccount map[string][]model.AccountInsight
 	documents map[string][]model.AccountDocument
+	publicShares map[string]*model.PublicShare
 }
 
 func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
@@ -41,6 +43,7 @@ func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
 		meetingRefs: make(map[string][]model.MeetingRef),
 		insightsByAccount: make(map[string][]model.AccountInsight),
 		documents: make(map[string][]model.AccountDocument),
+		publicShares: make(map[string]*model.PublicShare),
 	}
 }
 
@@ -106,6 +109,56 @@ func (m *mockHandlerAccountRepo) ListMeetingRefsForAccount(_ context.Context, ac
 func (m *mockHandlerAccountRepo) ListInsightsForAccount(_ context.Context, accountID string) ([]model.AccountInsight, error) {
 	return append([]model.AccountInsight(nil), m.insightsByAccount[accountID]...), nil
 }
+func (m *mockHandlerAccountRepo) UpdateAccountDocumentFields(_ context.Context, pk, docID string, fields map[string]interface{}, removeFields []string) (map[string]string, error) {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			for k, v := range fields {
+				switch k {
+				case "title":
+					d.Title = v.(string)
+				case "docType":
+					d.DocType = v.(string)
+				case "path":
+					d.Path = v.(string)
+				case "content":
+					d.Content = v.(string)
+				case "links":
+					d.Links = v.([]string)
+				case "fileKey":
+					d.FileKey = v.(string)
+				case "fileName":
+					d.FileName = v.(string)
+				case "mimeType":
+					d.MimeType = v.(string)
+				case "fileSize":
+					d.FileSize = v.(int64)
+				case "updatedAt":
+					d.UpdatedAt = v.(time.Time)
+				default:
+					return nil, fmt.Errorf("unexpected field %q in UpdateAccountDocumentFields", k)
+				}
+			}
+			oldValues := make(map[string]string, len(removeFields))
+			for _, k := range removeFields {
+				switch k {
+				case "publicShareToken":
+					if d.PublicShareToken != "" {
+						oldValues[k] = d.PublicShareToken
+					}
+					d.PublicShareToken = ""
+				default:
+					return nil, fmt.Errorf("unexpected removeField %q in UpdateAccountDocumentFields", k)
+				}
+			}
+			docs[i] = d
+			m.documents[pk] = docs
+			return oldValues, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+
 func (m *mockHandlerAccountRepo) PutAccountDocument(_ context.Context, doc *model.AccountDocument) error {
 	docs := m.documents[doc.PK]
 	for i, d := range docs {
@@ -135,6 +188,52 @@ func (m *mockHandlerAccountRepo) DeleteAccountDocument(_ context.Context, pk, do
 	for i, d := range docs {
 		if d.DocID == docID {
 			m.documents[pk] = append(docs[:i], docs[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+func (m *mockHandlerAccountRepo) PutPublicShare(_ context.Context, share *model.PublicShare) error {
+	cp := *share
+	m.publicShares[share.Token] = &cp
+	return nil
+}
+func (m *mockHandlerAccountRepo) GetPublicShare(_ context.Context, token string) (*model.PublicShare, error) {
+	s, ok := m.publicShares[token]
+	if !ok {
+		return nil, nil
+	}
+	cp := *s
+	return &cp, nil
+}
+func (m *mockHandlerAccountRepo) DeletePublicShare(_ context.Context, token string) error {
+	delete(m.publicShares, token)
+	return nil
+}
+func (m *mockHandlerAccountRepo) SetPublicShareTokenIfAbsent(_ context.Context, pk, docID, token string) error {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			if d.PublicShareToken != "" {
+				return fmt.Errorf("%w: doc %s already has a public share token", repository.ErrConditionFailed, docID)
+			}
+			docs[i].PublicShareToken = token
+			m.documents[pk] = docs
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+
+func (m *mockHandlerAccountRepo) ClearPublicShareTokenIfMatches(_ context.Context, pk, docID, expectedToken string) error {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			if d.PublicShareToken != expectedToken {
+				return fmt.Errorf("%w: doc %s's public share token no longer matches", repository.ErrConditionFailed, docID)
+			}
+			docs[i].PublicShareToken = ""
+			m.documents[pk] = docs
 			return nil
 		}
 	}

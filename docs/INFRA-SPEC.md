@@ -149,6 +149,10 @@ TtobakApp (bin/ttobak.ts)
   AllowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
   AllowHeaders: ["Authorization", "Content-Type", "x-user-id"]
   ```
+- **`/api/public/docs/{token}` (ADR-022)**: registered as its own literal route,
+  no JWT authorizer — the one deliberately unauthenticated route in this API.
+  Scoped to exactly this path; see CloudFront behavior note below and
+  [ADR-022](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md).
 
 ### API Gateway WebSocket API
 - **Name**: `ttobak-realtime`
@@ -219,10 +223,38 @@ TtobakApp (bin/ttobak.ts)
 - **Environment**: `TABLE_NAME`, `BUCKET_NAME`, `KB_ID`, `AOSS_ENDPOINT`
 - **Permissions**: Bedrock KB 관리, OpenSearch Serverless, S3 read, DynamoDB read/write
 
+#### Convert-Doc Lambda (ADR-022)
+- **Trigger**: S3 Event (prefix: `docs/`, suffix: `.ppt`/`.pptx`) via EventBridge
+- **Deploy**: container image (`DockerImageCode.fromImageAsset`, `backend/cmd/convert-doc/Dockerfile`,
+  `--platform=linux/arm64` pinned in both the CDK asset option and the Dockerfile itself),
+  not a Go zip like the other 5 API-adjacent Lambdas — bundles headless LibreOffice
+- **Timeout**: bounded by a 4-minute internal `context.WithTimeout` around the `soffice`
+  subprocess, well under the Lambda's own configured timeout
+- **Environment**: `BUCKET_NAME` (fails fast at cold start if unset)
+- **Permissions**: scoped `grantRead('docs/*')` + `grantPut('docs-pdf/*')` — narrower than
+  the bucket-wide `grantReadWrite` other upload-triggered Lambdas share, because this role
+  additionally runs a third-party parser (LibreOffice) against untrusted file content.
+  The `soffice` subprocess itself has every `AWS_*` env var stripped before exec. Still
+  cross-tenant within that `docs/*` grant (any user's uploads, not just the triggering
+  key) — tracked as a residual risk in ADR-022, not yet closed.
+- **Network**: deployed into `PRIVATE_ISOLATED` subnets of the pre-existing VPC
+  `vpc-04e77172c67f19814` (same VPC `WhisperStack` reuses via `ec2.Vpc.fromLookup` —
+  no new VPC/NAT cost). No internet/NAT route at all; S3 access for the sidecar
+  upload goes out through this VPC's **pre-existing** S3 gateway endpoint
+  (`vpce-04a82e15d312f39b8`, already attached to every route table here) —
+  do NOT add a second one (`vpc.addGatewayEndpoint`) for this service; CDK's first
+  deploy attempt did and CloudFormation rejected it (`AlreadyExists` on the S3
+  prefix-list route), rolling back the whole stack update. No internet/NAT route
+  at all otherwise; S3 is the only reachable network destination. Closes the
+  network half of the LibreOffice RCE surface (SSRF via linked/remote document
+  content, network exfiltration) — see
+  ADR-022 Consequences for what this does and doesn't close.
+
 ### EventBridge Rules
 - **audio-uploaded**: S3 PutObject (prefix: `audio/`) → Transcribe Lambda
 - **image-uploaded**: S3 PutObject (prefix: `images/`) → Process Image Lambda
 - **kb-uploaded**: S3 PutObject (prefix: `kb/`) → KB Lambda
+- **doc-slide-uploaded**: S3 PutObject (prefix: `docs/`, suffix: `.ppt`/`.pptx`) → Convert-Doc Lambda
 
 ### Outputs
 - `HttpApiEndpoint`, `HttpApiId`
@@ -347,6 +379,17 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
   - Default root object: index.html
   - Error pages: 403/404 → /index.html (SPA routing)
   - Lambda@Edge: 없음 (정적 파일은 인증 불필요)
+
+- **Public API behavior** (`/api/public/*`, ADR-022) — registered *before*
+  the general `/api/*` behavior below, since CloudFront matches path patterns
+  in insertion order:
+  - Origin: API Gateway HTTP API endpoint (same origin as `/api/*`)
+  - Allowed methods: GET, HEAD only
+  - Cache policy: CachingDisabled
+  - **Lambda@Edge**: none — this is the one behavior that deliberately skips
+    the JWT check, backing `GET /api/public/docs/{token}`. Must stay scoped
+    to exactly this prefix; a broader match here would bypass auth for
+    everything under `/api/*`.
 
 - **API behavior** (`/api/*`):
   - Origin: API Gateway HTTP API endpoint

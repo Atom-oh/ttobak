@@ -20,6 +20,25 @@ type mockAccountRepo struct {
 	meetingRefs map[string][]model.MeetingRef // accountID -> refs
 	insightsByAccount map[string][]model.AccountInsight
 	documents map[string][]model.AccountDocument // PK -> docs
+	publicShares map[string]*model.PublicShare   // token -> share
+
+	// raceWinnerToken, if set, simulates a concurrent request winning the
+	// SetPublicShareTokenIfAbsent race: the first call writes this token to
+	// the doc instead of the caller's and returns ErrConditionFailed.
+	raceWinnerToken string
+	// deleteAfterGet, if set, simulates a concurrent delete landing right
+	// after the next GetAccountDocument read for this docID: the entry is
+	// removed immediately after the read returns its copy.
+	deleteAfterGet string
+	// raceTokenAfterGet, if set, simulates a concurrent write landing right
+	// after a GetAccountDocument read: the very next read mutates the
+	// stored doc's PublicShareToken to this value and clears itself.
+	raceTokenAfterGet string
+	// raceClearFileKeyAfterGet, if set, simulates a concurrent
+	// file->markdown conversion landing right after a GetAccountDocument
+	// read for this docID: the very next read for that docID clears the
+	// stored doc's FileKey and clears this hook.
+	raceClearFileKeyAfterGet string
 }
 
 func newMockAccountRepo() *mockAccountRepo {
@@ -30,6 +49,7 @@ func newMockAccountRepo() *mockAccountRepo {
 		meetingRefs: make(map[string][]model.MeetingRef),
 		insightsByAccount: make(map[string][]model.AccountInsight),
 		documents: make(map[string][]model.AccountDocument),
+		publicShares: make(map[string]*model.PublicShare),
 	}
 }
 
@@ -104,6 +124,61 @@ func (m *mockAccountRepo) ListInsightsForAccount(_ context.Context, accountID st
 	return append([]model.AccountInsight(nil), m.insightsByAccount[accountID]...), nil
 }
 
+// UpdateAccountDocumentFields applies exactly the given fields, mirroring
+// the real repo's field-scoped UpdateItem -- notably, it must NOT touch
+// PublicShareToken (fields never includes it; this mock doesn't special-case
+// it either, so a bug that added it to the caller's fields map would show
+// up here too).
+func (m *mockAccountRepo) UpdateAccountDocumentFields(_ context.Context, pk, docID string, fields map[string]interface{}, removeFields []string) (map[string]string, error) {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			for k, v := range fields {
+				switch k {
+				case "title":
+					d.Title = v.(string)
+				case "docType":
+					d.DocType = v.(string)
+				case "path":
+					d.Path = v.(string)
+				case "content":
+					d.Content = v.(string)
+				case "links":
+					d.Links = v.([]string)
+				case "fileKey":
+					d.FileKey = v.(string)
+				case "fileName":
+					d.FileName = v.(string)
+				case "mimeType":
+					d.MimeType = v.(string)
+				case "fileSize":
+					d.FileSize = v.(int64)
+				case "updatedAt":
+					d.UpdatedAt = v.(time.Time)
+				default:
+					return nil, fmt.Errorf("unexpected field %q in UpdateAccountDocumentFields", k)
+				}
+			}
+			oldValues := make(map[string]string, len(removeFields))
+			for _, k := range removeFields {
+				switch k {
+				case "publicShareToken":
+					if d.PublicShareToken != "" {
+						oldValues[k] = d.PublicShareToken
+					}
+					d.PublicShareToken = ""
+				default:
+					return nil, fmt.Errorf("unexpected removeField %q in UpdateAccountDocumentFields", k)
+				}
+			}
+			docs[i] = d
+			m.documents[pk] = docs
+			return oldValues, nil
+		}
+	}
+	return nil, fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+
 func (m *mockAccountRepo) PutAccountDocument(_ context.Context, doc *model.AccountDocument) error {
 	docs := m.documents[doc.PK]
 	for i, d := range docs {
@@ -120,9 +195,25 @@ func (m *mockAccountRepo) ListAccountDocuments(_ context.Context, pk string) ([]
 	return append([]model.AccountDocument(nil), m.documents[pk]...), nil
 }
 func (m *mockAccountRepo) GetAccountDocument(_ context.Context, pk, docID string) (*model.AccountDocument, error) {
-	for _, d := range m.documents[pk] {
+	for i, d := range m.documents[pk] {
 		if d.DocID == docID {
 			cp := d
+			if m.deleteAfterGet == docID {
+				m.documents[pk] = append(m.documents[pk][:i], m.documents[pk][i+1:]...)
+				m.deleteAfterGet = ""
+				return &cp, nil
+			}
+			if m.raceTokenAfterGet != "" {
+				// Simulate a concurrent write landing between this read
+				// and whatever the caller does next: the stored doc gets
+				// a different token than the one just handed back.
+				m.documents[pk][i].PublicShareToken = m.raceTokenAfterGet
+				m.raceTokenAfterGet = ""
+			}
+			if m.raceClearFileKeyAfterGet == docID {
+				m.documents[pk][i].FileKey = ""
+				m.raceClearFileKeyAfterGet = ""
+			}
 			return &cp, nil
 		}
 	}
@@ -133,6 +224,70 @@ func (m *mockAccountRepo) DeleteAccountDocument(_ context.Context, pk, docID str
 	for i, d := range docs {
 		if d.DocID == docID {
 			m.documents[pk] = append(docs[:i], docs[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+
+func (m *mockAccountRepo) PutPublicShare(_ context.Context, share *model.PublicShare) error {
+	cp := *share
+	m.publicShares[share.Token] = &cp
+	return nil
+}
+func (m *mockAccountRepo) GetPublicShare(_ context.Context, token string) (*model.PublicShare, error) {
+	s, ok := m.publicShares[token]
+	if !ok {
+		return nil, nil
+	}
+	cp := *s
+	return &cp, nil
+}
+func (m *mockAccountRepo) DeletePublicShare(_ context.Context, token string) error {
+	delete(m.publicShares, token)
+	return nil
+}
+
+// SetPublicShareTokenIfAbsent mirrors the real repo's conditional UpdateItem:
+// only wins if the doc's publicShareToken is currently empty.
+func (m *mockAccountRepo) SetPublicShareTokenIfAbsent(_ context.Context, pk, docID, token string) error {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			if m.raceWinnerToken != "" {
+				docs[i].PublicShareToken = m.raceWinnerToken
+				m.documents[pk] = docs
+				m.raceWinnerToken = ""
+				return fmt.Errorf("%w: doc %s already has a public share token", repository.ErrConditionFailed, docID)
+			}
+			// Mirrors the real repo's condition: mint only succeeds
+			// against the doc's LIVE fileKey, not a caller's read-time
+			// snapshot -- closes the race where a concurrent
+			// file->markdown conversion clears fileKey between
+			// CreateUserDocPublicShare's own upfront check and this write.
+			if d.FileKey == "" {
+				return fmt.Errorf("%w: doc %s has no fileKey", repository.ErrConditionFailed, docID)
+			}
+			if d.PublicShareToken != "" {
+				return fmt.Errorf("%w: doc %s already has a public share token", repository.ErrConditionFailed, docID)
+			}
+			docs[i].PublicShareToken = token
+			m.documents[pk] = docs
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: doc %s not found", repository.ErrConditionFailed, docID)
+}
+
+func (m *mockAccountRepo) ClearPublicShareTokenIfMatches(_ context.Context, pk, docID, expectedToken string) error {
+	docs := m.documents[pk]
+	for i, d := range docs {
+		if d.DocID == docID {
+			if d.PublicShareToken != expectedToken {
+				return fmt.Errorf("%w: doc %s's public share token no longer matches", repository.ErrConditionFailed, docID)
+			}
+			docs[i].PublicShareToken = ""
+			m.documents[pk] = docs
 			return nil
 		}
 	}
@@ -947,9 +1102,10 @@ func TestDeleteAccountDocument_RemovesDoc(t *testing.T) {
 	}
 }
 
-// mockS3Deleter records DeleteObject calls for assertion.
+// mockS3Deleter records DeleteObject/CopyObject calls for assertion.
 type mockS3Deleter struct {
 	deletedKeys []string
+	copied      []s3.CopyObjectInput
 	err         error
 }
 
@@ -959,6 +1115,14 @@ func (m *mockS3Deleter) DeleteObject(_ context.Context, params *s3.DeleteObjectI
 	}
 	m.deletedKeys = append(m.deletedKeys, *params.Key)
 	return &s3.DeleteObjectOutput{}, nil
+}
+
+func (m *mockS3Deleter) CopyObject(_ context.Context, params *s3.CopyObjectInput, _ ...func(*s3.Options)) (*s3.CopyObjectOutput, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	m.copied = append(m.copied, *params)
+	return &s3.CopyObjectOutput{}, nil
 }
 
 func TestDeleteAccountDocument_RemovesSlideS3Object(t *testing.T) {
@@ -1050,6 +1214,182 @@ func TestUpdateAccountDocument_SlideToNoteCleansUpOldS3Object(t *testing.T) {
 	}
 	if len(mockS3.deletedKeys) != 1 || mockS3.deletedKeys[0] != "docs/owner-1/old.pdf" {
 		t.Errorf("expected old S3 object docs/owner-1/old.pdf cleaned up, got %v", mockS3.deletedKeys)
+	}
+}
+
+func TestUpdateUserDocument_SlideToNoteRevokesPublicShare(t *testing.T) {
+	// Regression: converting a publicly-shared slide to a markdown note
+	// used to leave PublicShareToken on the doc untouched (updateDoc's
+	// whole-item PutAccountDocument just carried the stale snapshot
+	// value through). ResolvePublicShare's FileKey=="" check happened to
+	// mask this immediately, but attaching a *new* file to the doc later
+	// would have resurrected the old link, exposing the new file to
+	// whoever held the old token without the owner ever re-sharing.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	created, err := svc.PutUserDocument(context.Background(), "user-1", &model.PutDocumentRequest{
+		Title: "Deck", FileKey: "docs/user-1/deck.pdf", FileName: "deck.pdf",
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	token, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", created.DocID)
+	if err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+
+	if _, err := svc.UpdateUserDocument(context.Background(), "user-1", created.DocID, &model.PutDocumentRequest{
+		Title: "Now a note", Markdown: mdPtr("body"),
+	}); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	detail, err := svc.GetUserDocument(context.Background(), "user-1", created.DocID)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if detail.PublicShareToken != "" {
+		t.Errorf("expected PublicShareToken cleared on file->markdown conversion, got %q", detail.PublicShareToken)
+	}
+	if _, ok := repo.publicShares[token]; ok {
+		t.Errorf("expected the old token's pointer to be cleaned up, not left behind")
+	}
+}
+
+func TestCreateUserDocPublicShare_FailsIfFileKeyClearedConcurrently(t *testing.T) {
+	// Regression (round-7 review): CreateUserDocPublicShare's own upfront
+	// `doc.FileKey == ""` check only looks at its own getDoc-time
+	// snapshot. If a concurrent updateDoc clears fileKey (file->markdown
+	// conversion) in the gap between that check and
+	// SetPublicShareTokenIfAbsent's write, the mint would otherwise still
+	// succeed against a now-file-less doc -- inert only until some future
+	// edit reattaches a file, at which point the token would
+	// unauthenticated-expose that new file. SetPublicShareTokenIfAbsent's
+	// condition now also requires the LIVE fileKey to still be non-empty.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	created, err := svc.PutUserDocument(context.Background(), "user-1", &model.PutDocumentRequest{
+		Title: "Deck", FileKey: "docs/user-1/deck.pdf", FileName: "deck.pdf",
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Simulate a concurrent file->markdown conversion landing right after
+	// CreateUserDocPublicShare's own getDoc read (which sees FileKey
+	// non-empty and passes the upfront check).
+	repo.raceClearFileKeyAfterGet = created.DocID
+
+	if _, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", created.DocID); err == nil {
+		t.Fatal("expected the mint to fail once the live fileKey is empty, got nil error")
+	}
+
+	got := repo.documents[model.PrefixUser+"user-1"][0].PublicShareToken
+	if got != "" {
+		t.Fatalf("expected no token to be minted against a file-less doc, got %q", got)
+	}
+}
+
+func TestUpdateUserDocument_SlideToNoteRemovesTokenMintedAfterOwnRead(t *testing.T) {
+	// Regression (round-7 review): a file->markdown conversion's token
+	// cleanup used to be gated on the *snapshot* PublicShareToken read at
+	// the top of updateDoc. If a concurrent CreateUserDocPublicShare
+	// minted a token in the gap between that read and updateDoc's write,
+	// the cleanup branch never ran (snapshot showed ""), leaving a token
+	// that's inert only until some future edit reattaches a file -- at
+	// which point it would unauthenticated-expose the new file. The fix
+	// removes publicShareToken unconditionally, atomically with clearing
+	// fileKey, regardless of what updateDoc's own read saw.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	created, err := svc.PutUserDocument(context.Background(), "user-1", &model.PutDocumentRequest{
+		Title: "Deck", FileKey: "docs/user-1/deck.pdf", FileName: "deck.pdf",
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	// Simulate a concurrent CreateUserDocPublicShare landing right after
+	// updateDoc's own getDoc read (which sees PublicShareToken=="").
+	repo.raceTokenAfterGet = "concurrent-mint"
+	repo.publicShares["concurrent-mint"] = &model.PublicShare{Token: "concurrent-mint", DocPK: model.PrefixUser + "user-1", DocID: created.DocID}
+
+	if _, err := svc.UpdateUserDocument(context.Background(), "user-1", created.DocID, &model.PutDocumentRequest{
+		Title: "Now a note", Markdown: mdPtr("body"),
+	}); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	got := repo.documents[model.PrefixUser+"user-1"][0].PublicShareToken
+	if got != "" {
+		t.Fatalf("expected the concurrently-minted token to be removed too, got %q", got)
+	}
+	if _, ok := repo.publicShares["concurrent-mint"]; ok {
+		t.Errorf("expected the concurrently-minted token's pointer to be cleaned up")
+	}
+}
+
+func TestUpdateUserDocument_TitleOnlyEditDoesNotClobberConcurrentToken(t *testing.T) {
+	// Regression: updateDoc used to carry existing.PublicShareToken through
+	// from its initial getDoc snapshot into a final whole-item
+	// PutAccountDocument. A title-only edit (no file/body change at all)
+	// shouldn't touch sharing state at all -- the fix (UpdateAccountDocumentFields,
+	// a field-scoped UpdateItem that never includes "publicShareToken")
+	// makes that structural rather than best-effort: a concurrent
+	// share/revoke landing mid-request simply can't be clobbered by a
+	// write that never names the field.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	created, err := svc.PutUserDocument(context.Background(), "user-1", &model.PutDocumentRequest{
+		Title: "Deck", FileKey: "docs/user-1/deck.pdf", FileName: "deck.pdf",
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	if _, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", created.DocID); err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+
+	// Simulate a concurrent revoke+reshare landing right after this
+	// update's initial getDoc read: the stored token changes to a
+	// different value before the update's own write happens.
+	repo.raceTokenAfterGet = "concurrent-new-token"
+
+	if _, err := svc.UpdateUserDocument(context.Background(), "user-1", created.DocID, &model.PutDocumentRequest{
+		Title: "Deck v2",
+	}); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	got := repo.documents[model.PrefixUser+"user-1"][0].PublicShareToken
+	if got != "concurrent-new-token" {
+		t.Fatalf("expected the concurrently-changed token to survive the title-only edit, got %q", got)
+	}
+}
+
+func TestUpdateUserDocument_DeletedBetweenGetAndUpdate_ReturnsNotFound(t *testing.T) {
+	// UpdateAccountDocumentFields' attribute_exists(PK) condition should
+	// fail closed with ErrNotFound rather than the raw ErrConditionFailed,
+	// matching LinkAccount/UnlinkAccount's mapping for the same race.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	created, err := svc.PutUserDocument(context.Background(), "user-1", &model.PutDocumentRequest{
+		Title: "Note", Markdown: mdPtr("body"),
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+	repo.deleteAfterGet = created.DocID
+
+	if _, err := svc.UpdateUserDocument(context.Background(), "user-1", created.DocID, &model.PutDocumentRequest{
+		Title: "Note v2",
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 
@@ -1190,5 +1530,366 @@ func TestDeleteAccountDocument_NonMemberForbidden(t *testing.T) {
 	err := svc.DeleteAccountDocument(context.Background(), "stranger-9", acc.AccountID, created.DocID)
 	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestShareUserDocumentToAccount(t *testing.T) {
+	repo := newMockAccountRepo()
+	s3mock := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: s3mock, bucketName: "test-bucket"}
+
+	acc, err := svc.CreateAccount(context.Background(), "user-1", "u1@example.com", &model.CreateAccountRequest{Name: "테스트 어카운트"})
+	if err != nil {
+		t.Fatalf("setup: create account failed: %v", err)
+	}
+	other, err := svc.CreateAccount(context.Background(), "owner-2", "o2@example.com", &model.CreateAccountRequest{Name: "다른 어카운트"})
+	if err != nil {
+		t.Fatalf("setup: create other account failed: %v", err)
+	}
+
+	personalDoc := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "doc-1",
+		DocID: "doc-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pptx", FileName: "deck.pptx",
+		MimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		FileSize: 100, SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[personalDoc.PK] = append(repo.documents[personalDoc.PK], personalDoc)
+
+	// user-1 is not a member of `other` -- sharing there must be forbidden,
+	// and must not have touched S3 (checked below via s3mock.copied == 0).
+	if _, err := svc.ShareUserDocumentToAccount(context.Background(), "user-1", "doc-1", other.AccountID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden for non-member account, got %v", err)
+	}
+	if len(s3mock.copied) != 0 {
+		t.Fatalf("expected no S3 copy for a rejected share, got %d", len(s3mock.copied))
+	}
+
+	dto, err := svc.ShareUserDocumentToAccount(context.Background(), "user-1", "doc-1", acc.AccountID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dto.Title != "Deck" || dto.FileName != "deck.pptx" {
+		t.Errorf("unexpected dto: %+v", dto)
+	}
+	if len(s3mock.copied) != 1 {
+		t.Fatalf("expected 1 CopyObject call, got %d", len(s3mock.copied))
+	}
+	wantSource := "test-bucket/docs/user-1/123_deck.pptx"
+	if got := *s3mock.copied[0].CopySource; got != wantSource {
+		t.Errorf("expected CopySource %q, got %q", wantSource, got)
+	}
+	newKey := *s3mock.copied[0].Key
+	if newKey == personalDoc.FileKey {
+		t.Error("expected a fresh S3 key for the account copy, not the original personal key")
+	}
+
+	accDocs := repo.documents[model.PrefixAccount+acc.AccountID]
+	if len(accDocs) != 1 {
+		t.Fatalf("expected 1 account doc, got %d", len(accDocs))
+	}
+	if accDocs[0].FileKey != newKey {
+		t.Errorf("expected account doc fileKey %q, got %q", newKey, accDocs[0].FileKey)
+	}
+
+	// Deleting the original personal doc must not break the shared copy --
+	// this is the whole reason ShareUserDocumentToAccount copies rather
+	// than reusing the original fileKey.
+	if err := svc.DeleteUserDocument(context.Background(), "user-1", "doc-1"); err != nil {
+		t.Fatalf("delete original failed: %v", err)
+	}
+	if _, err := svc.GetAccountDocument(context.Background(), "user-1", acc.AccountID, accDocs[0].DocID); err != nil {
+		t.Errorf("shared copy should survive original deletion, got error: %v", err)
+	}
+}
+
+func TestShareUserDocumentToAccount_ConcurrentSharesDoNotCollideOnKey(t *testing.T) {
+	// Regression: the S3 destination key used to be docs/{userID}/{millis}_{name}
+	// -- sharing the same doc to two accounts within the same millisecond
+	// produced an identical key, so the second CopyObject silently
+	// overwrote the first share's object.
+	repo := newMockAccountRepo()
+	s3mock := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: s3mock, bucketName: "test-bucket"}
+
+	accA, err := svc.CreateAccount(context.Background(), "user-1", "u1@example.com", &model.CreateAccountRequest{Name: "A"})
+	if err != nil {
+		t.Fatalf("setup: create account A failed: %v", err)
+	}
+	accB, err := svc.CreateAccount(context.Background(), "user-1", "u1@example.com", &model.CreateAccountRequest{Name: "B"})
+	if err != nil {
+		t.Fatalf("setup: create account B failed: %v", err)
+	}
+
+	doc := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "doc-1",
+		DocID: "doc-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pptx", FileName: "deck.pptx",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[doc.PK] = append(repo.documents[doc.PK], doc)
+
+	if _, err := svc.ShareUserDocumentToAccount(context.Background(), "user-1", "doc-1", accA.AccountID); err != nil {
+		t.Fatalf("share to account A failed: %v", err)
+	}
+	if _, err := svc.ShareUserDocumentToAccount(context.Background(), "user-1", "doc-1", accB.AccountID); err != nil {
+		t.Fatalf("share to account B failed: %v", err)
+	}
+
+	if len(s3mock.copied) != 2 {
+		t.Fatalf("expected 2 CopyObject calls, got %d", len(s3mock.copied))
+	}
+	keyA, keyB := *s3mock.copied[0].Key, *s3mock.copied[1].Key
+	if keyA == keyB {
+		t.Fatalf("expected distinct S3 keys for two shares of the same doc, both got %q", keyA)
+	}
+}
+
+func TestEncodeS3CopySourceKey(t *testing.T) {
+	// x-amz-copy-source must be URL-encoded, but "/" path separators
+	// between segments must stay literal, not become "%2F".
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain ascii unaffected", "docs/user-1/deck.pdf", "docs/user-1/deck.pdf"},
+		{"korean filename encoded", "docs/user-1/발표자료.pdf", "docs/user-1/%EB%B0%9C%ED%91%9C%EC%9E%90%EB%A3%8C.pdf"},
+		{"hash and question mark encoded", "docs/user-1/a#b?c.pdf", "docs/user-1/a%23b%3Fc.pdf"},
+		{"space encoded", "docs/user-1/my deck.pdf", "docs/user-1/my%20deck.pdf"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := encodeS3CopySourceKey(tc.in); got != tc.want {
+				t.Errorf("encodeS3CopySourceKey(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestShareUserDocumentToAccount_KoreanFileNameCopySourceEncoded(t *testing.T) {
+	// Regression: an unencoded CopySource containing the Korean file names
+	// routine for this product would be malformed per the x-amz-copy-source
+	// contract.
+	repo := newMockAccountRepo()
+	s3mock := &mockS3Deleter{}
+	svc := &AccountService{repo: repo, s3: s3mock, bucketName: "test-bucket"}
+
+	acc, err := svc.CreateAccount(context.Background(), "user-1", "u1@example.com", &model.CreateAccountRequest{Name: "A"})
+	if err != nil {
+		t.Fatalf("setup: create account failed: %v", err)
+	}
+
+	doc := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "doc-1",
+		DocID: "doc-1", Title: "발표자료", DocType: "slide",
+		FileKey: "docs/user-1/발표자료.pdf", FileName: "발표자료.pdf",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[doc.PK] = append(repo.documents[doc.PK], doc)
+
+	if _, err := svc.ShareUserDocumentToAccount(context.Background(), "user-1", "doc-1", acc.AccountID); err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+
+	want := "test-bucket/docs/user-1/%EB%B0%9C%ED%91%9C%EC%9E%90%EB%A3%8C.pdf"
+	if got := *s3mock.copied[0].CopySource; got != want {
+		t.Errorf("expected encoded CopySource %q, got %q", want, got)
+	}
+}
+
+func TestUserDocPublicShare_LifecycleAndScope(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	slide := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "slide-1",
+		DocID: "slide-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pdf", FileName: "deck.pdf",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[slide.PK] = append(repo.documents[slide.PK], slide)
+
+	note := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "note-1",
+		DocID: "note-1", Title: "Note", DocType: "note", Content: "body",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[note.PK] = append(repo.documents[note.PK], note)
+
+	// Markdown docs are out of scope -- must be rejected.
+	if _, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "note-1"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for a markdown doc, got %v", err)
+	}
+
+	token, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "slide-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token == "" {
+		t.Fatal("expected a non-empty token")
+	}
+
+	// Idempotent: sharing again returns the same token, not a second one.
+	token2, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "slide-1")
+	if err != nil || token2 != token {
+		t.Fatalf("expected idempotent re-share to return %q, got %q err=%v", token, token2, err)
+	}
+
+	// Regression: GetUserDocument's AccountDocumentDetail must surface the
+	// token (DocDetailClient.tsx's setPublicToken(detail.publicShareToken)
+	// on load depends on this) -- toDocumentDTO doesn't map it since it
+	// lives on AccountDocumentDetail, not the embedded DTO.
+	detail, err := svc.GetUserDocument(context.Background(), "user-1", "slide-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if detail.PublicShareToken != token {
+		t.Errorf("expected GetUserDocument to surface PublicShareToken %q, got %q", token, detail.PublicShareToken)
+	}
+
+	resolved, err := svc.ResolvePublicShare(context.Background(), token)
+	if err != nil {
+		t.Fatalf("unexpected error resolving token: %v", err)
+	}
+	if resolved.DocID != "slide-1" {
+		t.Errorf("expected resolved doc slide-1, got %s", resolved.DocID)
+	}
+
+	if _, err := svc.ResolvePublicShare(context.Background(), "bogus-token"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for a bogus token, got %v", err)
+	}
+
+	if err := svc.RevokeUserDocPublicShare(context.Background(), "user-1", "slide-1"); err != nil {
+		t.Fatalf("unexpected error revoking: %v", err)
+	}
+	if _, err := svc.ResolvePublicShare(context.Background(), token); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound after revoke, got %v", err)
+	}
+
+	// Revoking a never-shared doc is a no-op, not an error.
+	if err := svc.RevokeUserDocPublicShare(context.Background(), "user-1", "note-1"); err != nil {
+		t.Errorf("expected revoke on unshared doc to be a no-op, got %v", err)
+	}
+}
+
+func TestRevokeUserDocPublicShare_DoesNotClobberConcurrentReshare(t *testing.T) {
+	// Regression: RevokeUserDocPublicShare used to read the doc, then
+	// PutAccountDocument the *entire* stale snapshot back with the token
+	// field cleared. If the doc's token changed between that read and
+	// write (e.g. a concurrent revoke+reshare), the revoke would silently
+	// stomp the new token, breaking a share the caller never asked to
+	// touch. The fix makes the clear a conditional update scoped to the
+	// exact token read, so a mismatch is a no-op rather than a clobber --
+	// and, since the clear now happens BEFORE the pointer delete (not
+	// after), a mismatch also means the pointer delete never runs, so the
+	// stale token's pointer is left as an inert orphan rather than
+	// unconditionally deleted regardless of what else changed underneath.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	slide := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "slide-1",
+		DocID: "slide-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pdf", FileName: "deck.pdf",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[slide.PK] = append(repo.documents[slide.PK], slide)
+
+	oldToken, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "slide-1")
+	if err != nil {
+		t.Fatalf("initial share failed: %v", err)
+	}
+
+	// Simulate a concurrent revoke+reshare landing between RevokeUserDocPublicShare's
+	// getDoc read (which will see oldToken) and its write: right after that
+	// read, the stored doc's token changes to "newer-token".
+	repo.raceTokenAfterGet = "newer-token"
+
+	if err := svc.RevokeUserDocPublicShare(context.Background(), "user-1", "slide-1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := repo.documents[slide.PK][0].PublicShareToken
+	if got != "newer-token" {
+		t.Fatalf("expected the newer token to survive the stale revoke, got %q", got)
+	}
+	// The old token's pointer is left as an inert orphan (not deleted) --
+	// ResolvePublicShare still fails it closed via the doc's
+	// PublicShareToken != token check, so this is safe, just not tidy.
+	if _, ok := repo.publicShares[oldToken]; !ok {
+		t.Errorf("expected the old token's now-orphaned pointer to still exist (clear-before-delete ordering)")
+	}
+}
+
+func TestCreateUserDocPublicShare_ConcurrentMintReturnsWinnerToken(t *testing.T) {
+	// Regression: two concurrent CreateUserDocPublicShare calls both read
+	// PublicShareToken=="" before either writes. Without a conditional
+	// write, the second doc write would silently clobber the first,
+	// leaving the first caller holding a token whose PublicShare pointer
+	// exists but no longer matches the doc -- ResolvePublicShare rejects it
+	// as stale. The loser must instead discard its own token and return
+	// the actual winner's.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	slide := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "slide-1",
+		DocID: "slide-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pdf", FileName: "deck.pdf",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[slide.PK] = append(repo.documents[slide.PK], slide)
+
+	repo.raceWinnerToken = "winner-token"
+
+	token, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "slide-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != "winner-token" {
+		t.Fatalf("expected the race winner's token, got %q", token)
+	}
+
+	// The loser's own pointer must have been cleaned up -- only the
+	// winner's token should resolve.
+	found := 0
+	for tok := range repo.publicShares {
+		if tok == "winner-token" {
+			continue
+		}
+		found++
+	}
+	if found != 0 {
+		t.Fatalf("expected the loser's orphaned PublicShare pointer to be deleted, found %d extra", found)
+	}
+}
+
+func TestDeleteUserDocument_CleansUpPublicSharePointer(t *testing.T) {
+	// Regression: deleting a publicly-shared doc used to leave its
+	// PUBSHARE# pointer item behind -- inert (getDoc on the deleted doc
+	// 404s) but an orphan that accumulates forever.
+	repo := newMockAccountRepo()
+	svc := &AccountService{repo: repo, s3: &mockS3Deleter{}, bucketName: "test-bucket"}
+
+	slide := model.AccountDocument{
+		PK: model.PrefixUser + "user-1", SK: model.PrefixDoc + "slide-1",
+		DocID: "slide-1", Title: "Deck", DocType: "slide",
+		FileKey: "docs/user-1/123_deck.pdf", FileName: "deck.pdf",
+		SourceUserID: "user-1", EntityType: model.EntityTypeUserDoc,
+	}
+	repo.documents[slide.PK] = append(repo.documents[slide.PK], slide)
+
+	token, err := svc.CreateUserDocPublicShare(context.Background(), "user-1", "slide-1")
+	if err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+
+	if err := svc.DeleteUserDocument(context.Background(), "user-1", "slide-1"); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+
+	if _, ok := repo.publicShares[token]; ok {
+		t.Fatalf("expected PublicShare pointer %q to be cleaned up on doc delete", token)
 	}
 }

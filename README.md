@@ -95,7 +95,7 @@ Auth + Storage (parallel)
 | WhisperStack | ECS Cluster, g5.xlarge Spot ASG (0-10), GPU task definition, ECR repo |
 | KnowledgeStack | OpenSearch Serverless, Bedrock KB, KB S3 bucket |
 | EdgeAuthStack | Lambda@Edge JWT validation (us-east-1) |
-| GatewayStack | API Gateway, 8 Lambda functions, EventBridge rules, WebSocket API |
+| GatewayStack | API Gateway, 10 Lambda functions (9 Go incl. convert-doc container image + 1 Python qa), EventBridge rules, WebSocket API |
 | CrawlerStack | Step Functions, 4 crawler Lambdas, daily EventBridge schedule |
 | ResearchAgentStack | Bedrock Agent for deep research, tool Lambdas |
 | FrontendStack | S3 site bucket, CloudFront distribution, SPA router |

@@ -141,7 +141,7 @@ TOOL_DEFINITIONS = [
     {
         "toolSpec": {
             "name": "get_account_brief",
-            "description": "특정 고객사(Account)의 한눈 브리프 — 메타 + 유형별 인사이트 + 공유 미팅 목록을 한 번에. Player Card/분기 리뷰 준비, 어카운트 전반 파악에 사용. account는 고객사 이름/별칭.",
+            "description": "특정 고객사(Account)의 한눈 브리프 — 메타 + 유형별 인사이트 + 공유 미팅 + 연결된 리서치 목록을 한 번에. Player Card/분기 리뷰 준비, 어카운트 전반 파악에 사용. account는 고객사 이름/별칭.",
             "inputSchema": {"json": {"type": "object", "properties": {
                 "account": {"type": "string", "description": "고객사 이름 또는 별칭 (예: 하나은행)"}
             }, "required": ["account"]}}
@@ -354,7 +354,7 @@ def format_account_insights(res):
 
 
 def format_account_brief(res):
-    """Format the one-shot account brief (meta + insights-by-type + meetings)."""
+    """Format the one-shot account brief (meta + insights-by-type + meetings + linked research)."""
     name = res.get("account", "")
     parts = [f"## {name} 브리프"]
     if res.get("industry"):
@@ -375,4 +375,12 @@ def format_account_brief(res):
         for m in meetings:
             when = (m.get("date", "") or "")[:10]
             parts.append(f"  - {m.get('title', '(제목없음)')}{(' (' + when + ')') if when else ''}")
+    research = res.get("research", [])
+    if research:
+        parts.append(f"\n### 연결된 리서치 {len(research)}건")
+        for r in research:
+            status = r.get("status", "")
+            parts.append(f"  - {r.get('topic', '(제목없음)')}{(' [' + status + ']') if status else ''}")
+            if r.get("summary"):
+                parts.append(f"    {r['summary'][:200]}")
     return "\n".join(parts)

@@ -10,6 +10,7 @@ import { researchApi, researchChatApi } from '@/lib/api';
 import { ResearchChat } from '@/components/ResearchChat';
 import { ResearchPageTree } from '@/components/ResearchPageTree';
 import { ShareButton } from '@/components/ShareButton';
+import ResearchAccountChips from '@/components/ResearchAccountChips';
 import type { Research, ResearchDetail, SharedUser } from '@/types/meeting';
 
 function formatDate(value: string | number): string {
@@ -416,6 +417,16 @@ export default function ResearchDetailPage() {
                       </span>
                     )}
                   </div>
+
+                  {!research.isShared && (
+                    <ResearchAccountChips
+                      researchId={research.researchId}
+                      accountIds={research.accountIds || []}
+                      onChange={(accountIds) =>
+                        setResearch((prev) => (prev ? { ...prev, accountIds } : prev))
+                      }
+                    />
+                  )}
                 </div>
 
                 {/* Running / Approved state */}

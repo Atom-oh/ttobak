@@ -345,6 +345,26 @@ Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (Account 없음)
 ```
 
+#### List Account Research (연동된 리서치 목록 — 멤버 전용)
+
+리서치를 Account에 연동(`POST /api/research/{researchId}/accounts`,
+`DELETE /api/research/{researchId}/accounts/{accountId}` — 리서치 CRUD
+자체의 나머지 엔드포인트는 이 문서에 아직 반영되지 않은 기존 기능)한 뒤
+Account 쪽에서 조회하는 read 경로. 연동 시 `accountIds`는 DynamoDB String
+Set에 원자적 `ADD`/`DELETE`로 갱신되어 동시 연동 요청 간 write race가 없다.
+조회 시 각 항목의 `accountIds`가 실제로 대상 accountId를 포함하는지
+재검증한다(fail-closed) — 연동 해제 후 역참조(`ACCOUNT#{id}/RESEARCH_REF#`)
+정리가 실패해도 목록에는 노출되지 않는다.
+
+```
+GET /api/accounts/{accountId}/research
+
+Response: 200 OK
+{ "research": [ { "researchId": "r-uuid", "topic": "...", "summary": "...", "status": "done", "ownerUserId": "...", "createdAt": "..." } ] }
+
+Error: 403 Forbidden (멤버가 아님)
+```
+
 #### Put Account Document (로컬 문서 인제스트 — 멤버 전용)
 
 로컬에서 작성한 문서(이메일/캘린더/prep 노트 등)를 Account에 인라인 마크다운
@@ -399,8 +419,11 @@ GET /api/accounts/{accountId}/documents/{docId}
 Response: 200 OK
 { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": ["하나은행"], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n\n[[하나은행]] 미팅 준비..." }
 
-슬라이드(`fileName` 있는 문서)는 `content`가 빈 문자열이고 `downloadUrl`(1시간
-유효 presigned GET URL, 없으면 필드 생략)이 채워진다.
+슬라이드(`fileName` 있는 문서)는 `content`가 빈 문자열이고 `downloadUrl`(원본
+파일, 1시간 유효 presigned GET URL)이 채워진다. PPTX/PPT는 추가로 `previewUrl`
+(PDF 사이드카, 변환이 끝난 뒤에만 존재 — ADR-022)이 함께 채워질 수 있다;
+`downloadUrl`은 항상 원본을 가리키고 사이드카로 바뀌지 않는다. 둘 다 값이
+없으면 필드 자체가 응답에서 생략된다.
 
 Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (문서 없음)
@@ -475,6 +498,82 @@ Error: 400 Bad Request (fileType이 pdf/PowerPoint MIME이 아님)
 
 이후 `uploadUrl`로 파일을 직접 PUT하고, 응답의 `key`를 Put Document의
 `fileKey`로 전달한다 — `/api/upload/complete` 호출은 없다.
+
+#### Slide Preview (PPTX → PDF 변환, ADR-022)
+
+`docs/` 접두어에 업로드된 PPTX/PPT는 별도 컨테이너 Lambda(`cmd/convert-doc`)가
+EventBridge S3 이벤트로 트리거되어 headless LibreOffice로 PDF 사이드카를
+생성한다(결정론적 키, DynamoDB 쓰기 없음 — 문서 레코드가 아직 없을 수 있기
+때문). Get Account/Personal Document 응답에서 `downloadUrl`은 **항상 원본**
+파일을 가리키고, PPTX/PPT면 변환이 끝난 뒤 `previewUrl`(PDF 사이드카)이
+별도 필드로 함께 채워진다 — `downloadUrl`이 사이드카로 바뀌는 일은 없다.
+변환이 아직 끝나지 않았으면 `previewUrl`이 생략된다(폴링해서 재조회). 별도의
+공개 REST 엔드포인트는 없다. 이 "`downloadUrl`은 절대 사이드카가 아님" 규칙은
+**JSON 응답의 필드 이름에 대한 규칙**이다 — 아래 Public Share Link의
+`GET /api/public/docs/{token}`은 필드가 아니라 302 리다이렉트 자체이고, 그
+리다이렉트 타겟은 (PPTX/PPT면) 의도적으로 사이드카를 향한다: 무인증
+방문자에게 미리보기가 목적이므로, 다른 곳과 반대로 여기서는 사이드카가
+있으면 사이드카로, 없으면 원본으로 리다이렉트한다.
+
+#### Share Document to Account (개인 문서 → 팀 복제)
+
+개인 문서를 Account 팀에 공유한다. 슬라이드/노트 모두 가능하다(코드에
+슬라이드 전용 검증은 없음 — 마크다운 문서는 본문을 그대로 복제). 슬라이드는
+참조가 아니라 **복제** — S3 `CopyObject`로 별도 키
+(`docs/{내 userId}/{ms}_{랜덤ID}_{파일명}`)에 복사하고 새 `AccountDocumentDTO`를
+만든다(원본을 덮어쓰지 않으므로 이후 원본을 바꿔도 공유본은 그대로). 위 Slide
+Upload 절의 `docs/{내 userId}/{타임스탬프}_{파일명}`과 레이아웃이 다른 것처럼
+보이지만 같은 규칙이다 — 업로드는 `{타임스탬프}_{파일명}`, 공유 복제는
+충돌 방지를 위해 `generateID()`가 끼어든 `{ms}_{랜덤ID}_{파일명}`일 뿐, 둘
+다 `docs/{userId}/` 접두어와 파일명 보존 규칙은 동일하다.
+
+```
+POST /api/documents/{docId}/share-account
+{ "accountId": "acc-uuid" }
+
+Response: 201 Created
+{ "docId": "new-doc-uuid", "title": "발표자료", "docType": "slide", "fileName": "deck.pdf", ... }  (AccountDocumentDTO)
+
+Error: 400 Bad Request (accountId 누락)
+Error: 403 Forbidden (문서 소유자가 아님, 또는 accountId 멤버가 아님)
+Error: 404 Not Found (문서 없음)
+```
+
+#### Public Share Link (개인 파일 문서 무인증 공개 링크)
+
+128비트 랜덤 토큰(`crypto/rand`)을 발급해 인증 없이 접근 가능한 링크를
+만든다. `fileKey`가 있는 문서(슬라이드/PDF 등 — 마크다운 노트는 제외)에만
+허용된다. 발급/철회는 인증된 소유자만 가능하지만, 링크 자체
+(`GET /api/public/docs/{token}`)는 CloudFront `/api/public/*` behavior에
+등록되어 있어 API Gateway JWT authorizer와 Lambda@Edge JWT 체크를 둘 다
+건너뛴다 — `/api/*`의 다른 모든 라우트가 이 두 계층을 모두 통과해야 하는 것과
+다르다(자세한 내용은
+[ADR-022](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md)).
+핸들러는 문서 내용을 직접 반환하지 않고 항상 302로 presigned S3 GET URL(또는
+PDF 사이드카가 있으면 그쪽)로 리다이렉트한다. 발급은 동시 요청 간 원자적
+(`SetPublicShareTokenIfAbsent` 조건부 쓰기)이라 더블클릭으로 토큰 두 개가
+발급돼 한쪽이 깨지는 경우가 없다.
+
+```
+POST /api/documents/{docId}/public-share
+Response: 200 OK
+{ "token": "8f2c...랜덤128비트..." }
+
+DELETE /api/documents/{docId}/public-share
+Response: 204 No Content
+
+GET /api/public/docs/{token}   (인증 헤더 없음)
+Response: 302 Found → Location: <5분 유효 presigned S3 GET URL>
+
+Error: 400 Bad Request (대상 문서에 fileKey가 없음 — 마크다운 노트는 공개 공유 불가)
+Error: 403 Forbidden (문서 소유자가 아님 — public-share 발급/철회 시에만)
+Error: 404 Not Found (문서 없음, 또는 토큰이 철회/만료됨)
+```
+
+이 라우트가 발급하는 presigned URL은 5분 TTL(`PublicShareURLTTL`)로, 다른
+모든 곳(1시간)보다 짧다 — 철회 후 이미 발급된 URL이 살아있는 창을 좁히기
+위한 의도적 단축(ADR-022). 5분도 0은 아니므로 철회 즉시 완전히 막히는 것은
+아니라는 점은 여전히 알려진 한계다.
 
 #### Export Vault (Obsidian 마크다운 내보내기)
 
@@ -1095,6 +1194,19 @@ Response: 201 Created
   3. 유효하면 요청 통과, userId를 헤더에 추가
   4. 무효하면 401 응답 또는 로그인 리다이렉트
 - **환경변수**: COGNITO_USER_POOL_ID, COGNITO_REGION (us-east-1 배포)
+
+### 8. Convert-Doc Lambda (cmd/convert-doc, 컨테이너 이미지, ADR-022)
+- **트리거**: S3 Event (docs/ prefix, .ppt/.pptx만) via EventBridge
+- **역할**: 업로드된 PPTX/PPT를 headless LibreOffice로 PDF 사이드카로 변환
+  (in-browser 미리보기용, 기존 PDF `<iframe>` 뷰어 재사용)
+- **처리**:
+  1. S3에서 PPTX/PPT 다운로드
+  2. `soffice --headless --convert-to pdf` 실행 (AWS_* 환경변수 제거 후
+     exec — 신뢰 불가 입력 파싱 시 자격증명 유출 방지)
+  3. 결정론적 사이드카 키로 PDF 업로드 (DynamoDB 쓰기 없음)
+- **IAM**: `docs/*` 읽기 + `docs-pdf/*` 쓰기로 스코프(다른 업로드 카테고리의
+  버킷 전체 `grantReadWrite`보다 좁음)
+- **환경변수**: BUCKET_NAME (미설정 시 콜드스타트에서 즉시 `log.Fatal`)
 
 ---
 

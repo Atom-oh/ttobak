@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
@@ -36,6 +37,12 @@ export interface GatewayStackProps extends cdk.StackProps {
   dataSourceId?: string;
   agentCoreRuntimeArn?: string;
   researchWorkerRole?: iam.IRole;
+  convertDocRole?: iam.IRole;
+  // VPC ID for convert-doc's network isolation (ADR-022 residual-risk
+  // follow-up) -- same pre-existing VPC WhisperStack already uses
+  // (ec2.Vpc.fromLookup, not a stack this one depends on). Optional so
+  // unit tests that omit convertDocRole don't need a VPC context lookup.
+  vpcId?: string;
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
   originVerifySecret?: string;
@@ -51,6 +58,7 @@ export class GatewayStack extends cdk.Stack {
   public readonly qaFunction: lambda.Function;
   public readonly websocketApi: apigatewayv2.WebSocketApi;
   public readonly websocketFunction: lambda.Function;
+  public convertDocFunction?: lambda.DockerImageFunction;
   constructor(scope: Construct, id: string, props: GatewayStackProps) {
     super(scope, id, props);
 
@@ -326,6 +334,27 @@ export class GatewayStack extends cdk.Stack {
       authorizer: jwtAuthorizer,
     });
 
+    // Public slide-share redirect — deliberately registered WITHOUT
+    // jwtAuthorizer. This literal-segment route ("public", "docs") is more
+    // specific than the /api/{proxy+} catch-all above, so API Gateway
+    // matches it first and skips the authorizer entirely (HTTP API route
+    // matching is by path specificity, not registration order); the Go
+    // handler (DocumentHandler.PublicGetDoc) does its own token lookup
+    // instead of trusting any caller identity. Anything else added under
+    // /api/public/ in the future is automatically unauthenticated too —
+    // keep that path to exactly this one redirect handler.
+    //
+    // Registered AFTER the catch-all above (not before) so the shared
+    // `apiIntegration` object's underlying CfnIntegration resource keeps
+    // being created from the catch-all route as it always has — reusing it
+    // from a route added earlier in the file would rename/replace that
+    // resource for no functional reason.
+    this.httpApi.addRoutes({
+      path: '/api/public/docs/{token}',
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: apiIntegration,
+    });
+
     // Warm the API Lambda every 5 minutes to eliminate cold starts
     const warmingRule = new events.Rule(this, 'ApiWarmingRule', {
       ruleName: 'ttobak-api-warming',
@@ -413,6 +442,75 @@ export class GatewayStack extends cdk.Stack {
       },
     });
     allPartsTranscribedRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction));
+
+    // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
+    // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like
+    // researchWorkerRole above) so unit tests that omit convertDocRole don't
+    // trigger a Docker build during `npm test`.
+    if (props.convertDocRole) {
+      // Network-isolate convert-doc (ADR-022 residual-risk follow-up):
+      // LibreOffice parses untrusted, attacker-controllable PPTX/PPT
+      // content, and app-layer mitigations (AWS_* env stripping) can't
+      // close an SSRF/RCE-via-linked-content vector -- only removing the
+      // network path can. PRIVATE_ISOLATED has no route to an internet
+      // gateway or NAT, so a compromised soffice process has nowhere to
+      // exfiltrate to or fetch remote content from; S3 access for the
+      // sidecar upload goes out through this shared VPC's PRE-EXISTING S3
+      // gateway endpoint (already attached to every route table here,
+      // including both PRIVATE_ISOLATED subnets below -- verified via
+      // `aws ec2 describe-vpc-endpoints`) -- do NOT add a second gateway
+      // endpoint for the same service; a route table can only hold one
+      // route to a given prefix list, so CloudFormation rejects the
+      // duplicate (`AlreadyExists` on the S3 prefix-list route) and rolls
+      // the whole stack update back.
+      let vpcConfig: { vpc: ec2.IVpc; vpcSubnets: ec2.SubnetSelection; securityGroups: ec2.ISecurityGroup[] } | undefined;
+      if (props.vpcId) {
+        const vpc = ec2.Vpc.fromLookup(this, 'ConvertDocVpc', { vpcId: props.vpcId });
+        const isolatedSubnets: ec2.SubnetSelection = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
+        const convertDocSg = new ec2.SecurityGroup(this, 'ConvertDocSg', {
+          vpc,
+          securityGroupName: 'ttobak-convert-doc',
+          description: 'convert-doc Lambda -- isolated subnet, no internet route; outbound limited to the VPC (S3 via gateway endpoint)',
+          allowAllOutbound: true,
+        });
+        vpcConfig = { vpc, vpcSubnets: isolatedSubnets, securityGroups: [convertDocSg] };
+      }
+
+      this.convertDocFunction = new lambda.DockerImageFunction(this, 'ConvertDocFunction', {
+        functionName: 'ttobak-convert-doc',
+        code: lambda.DockerImageCode.fromImageAsset('../backend', {
+          file: 'cmd/convert-doc/Dockerfile',
+          platform: cdk.aws_ecr_assets.Platform.LINUX_ARM64,
+        }),
+        architecture: lambda.Architecture.ARM_64,
+        role: props.convertDocRole as iam.Role,
+        environment: {
+          BUCKET_NAME: props.bucket.bucketName,
+        },
+        timeout: cdk.Duration.minutes(5),
+        memorySize: 3008,
+        ephemeralStorageSize: cdk.Size.mebibytes(2048),
+        ...vpcConfig,
+      });
+
+      const docSlideUploadRule = new events.Rule(this, 'DocSlideUploadRule', {
+        ruleName: 'ttobak-doc-slide-upload',
+        description: 'Trigger convert-doc Lambda when a PPTX/PPT slide is uploaded to S3',
+        eventPattern: {
+          source: ['aws.s3'],
+          detailType: ['Object Created'],
+          detail: {
+            bucket: {
+              name: [props.bucket.bucketName],
+            },
+            object: {
+              key: [{ wildcard: 'docs/*.pptx' }, { wildcard: 'docs/*.ppt' }],
+            },
+          },
+        },
+      });
+      docSlideUploadRule.addTarget(new eventsTargets.LambdaFunction(this.convertDocFunction));
+    }
 
     // ==================== WebSocket API (Live QA Streaming) ====================
 
