@@ -197,10 +197,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       name: 'ttobak_kb_sync',
       description:
         'Trigger Knowledge Base ingestion for files uploaded via ttobak_kb_upload since the last sync. ' +
-        'NOTE: on the current production deployment this is a no-op (returns status "skipped") -- the API ' +
-        'Lambda is not yet configured with the Knowledge Base ID/data source needed to start an ingestion job. ' +
-        'Until that is fixed, uploads are indexed by the next ingestion run another pipeline triggers: every ' +
-        'completed meeting summary starts one, and so does any daily crawler run that found new documents.',
+        'Returns status "started" (with a job id) once deployed with the KB env vars/IAM this PR adds; ' +
+        'returns "skipped" on any deployment still missing them, in which case uploads are still indexed ' +
+        'by the next ingestion run another pipeline triggers (every completed meeting summary, and any ' +
+        'daily crawler run that found new documents).',
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {
@@ -396,8 +396,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return text(
           `Uploaded to Knowledge Base: ${JSON.stringify(result)}\n` +
             'Retrieval is scoped to you -- only your own ttobak_ask queries can find this file. ' +
-            'Indexing happens at the next ingestion run (ttobak_kb_sync is currently a no-op in production; ' +
-            'ingestion is triggered by every completed meeting summary and by crawler runs that found new documents).',
+            'Call ttobak_kb_sync to index it now; if that returns "skipped" (a deployment without the KB ' +
+            'env vars), it is still indexed by the next completed meeting summary or document-bearing crawler run.',
         );
       }
 
@@ -417,8 +417,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await api.deleteKBFile(fileId);
         return text(
           `Deleted Knowledge Base file ${fileId}. It stays retrievable (by you only -- retrieval is ` +
-            'user-scoped) until the next ingestion run; with ttobak_kb_sync a no-op in production, that ' +
-            'means the next completed meeting summary or the next crawler run that found new documents.',
+            'user-scoped) until the next ingestion run: call ttobak_kb_sync to reindex now, or wait for ' +
+            'the next completed meeting summary / document-bearing crawler run.',
         );
       }
 

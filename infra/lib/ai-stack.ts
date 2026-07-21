@@ -99,6 +99,17 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // Bedrock KB ingestion (for POST /api/kb/sync — same action summarize/kb
+    // roles hold; without it SyncKB would only ever return "skipped").
+    this.apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockKBIngestion',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:StartIngestionJob'],
+        resources: ['*'],
+      })
+    );
+
     // Admin user invitation — scoped to this User Pool only. AdminCreateUser
     // triggers Cognito's built-in invite email (username + temp password, no
     // login link); AdminAddUserToGroup adds the new user to "admins" when

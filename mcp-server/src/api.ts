@@ -29,7 +29,7 @@ const BLOCKED_SYSTEM_PREFIXES = ['/etc', '/proc', '/sys', '/var/run/secrets', '/
 const BLOCKED_NAME_PATTERNS = [
   /^\.env(\..*)?$/i, // .env, .env.local, .env.production, ...
   /credentials/i, // credentials, aws_credentials.json, gcloud-credentials.txt, ...
-  /\.pem$/i,
+  /\.(pem|key|p12|pfx)$/i, // TLS/private-key material
   /^id_[a-z0-9]+(\.pub)?$/i, // SSH keypairs: id_rsa, id_ed25519(.pub)
 ];
 
@@ -79,7 +79,10 @@ export function guardUploadPath(filePath: string, maxBytes: number): { path: str
 }
 
 export function resolveFileMeta(filePath: string, fileName?: string, fileType?: string) {
-  const name = fileName || basename(filePath);
+  // basename() on the override too: a fileName containing path separators
+  // must never reach the S3 key (the backend sanitizes as well -- this is
+  // defense-in-depth at the client layer).
+  const name = fileName ? basename(fileName) : basename(filePath);
   const type = fileType || MIME_BY_EXT[extname(name).toLowerCase()];
   if (!type) {
     throw new Error(

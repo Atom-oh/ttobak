@@ -33,6 +33,10 @@ test('resolveFileMeta: fileName override drives MIME inference, not the local pa
   assert.equal(type, 'application/pdf');
 });
 
+test('resolveFileMeta: path separators in a fileName override are stripped to its basename', () => {
+  assert.equal(resolveFileMeta('/x/deck.pptx', '../other-user/evil.pdf').name, 'evil.pdf');
+});
+
 test('guardUploadPath: rejects relative paths', () => {
   assert.throws(() => guardUploadPath('relative/doc.pdf', MAX_UPLOAD_BYTES), /absolute path/);
 });
@@ -88,7 +92,7 @@ test('guardUploadPath: blocks system paths', () => {
 test('guardUploadPath: blocks secret-shaped filenames', () => {
   const dir = mkTmpDir();
   try {
-    for (const name of ['.env', '.env.local', 'aws_credentials.json', 'server.pem', 'id_rsa', 'id_ed25519.pub']) {
+    for (const name of ['.env', '.env.local', 'aws_credentials.json', 'server.pem', 'tls.key', 'cert.p12', 'cert.pfx', 'id_rsa', 'id_ed25519.pub']) {
       writeFileSync(join(dir, name), 'x');
       assert.throws(
         () => guardUploadPath(join(dir, name), MAX_UPLOAD_BYTES),
