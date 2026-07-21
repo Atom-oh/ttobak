@@ -27,7 +27,6 @@ type researchMainRepo interface {
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	PutResearchRef(ctx context.Context, ref *model.ResearchRef) error
-	DeleteResearchRef(ctx context.Context, accountID, researchID string) error
 	ListResearchRefsForAccount(ctx context.Context, accountID string) ([]model.ResearchRef, error)
 }
 
@@ -39,8 +38,8 @@ type researchRepo interface {
 	GetResearch(ctx context.Context, researchId string) (*model.Research, error)
 	UpdateResearchFieldsConditional(ctx context.Context, researchId string, fields map[string]interface{}, expectedStatus string) error
 	UpdateResearchFields(ctx context.Context, researchId string, fields map[string]interface{}) error
-	AddAccountLink(ctx context.Context, researchId, accountID string) error
-	RemoveAccountLink(ctx context.Context, researchId, accountID string) error
+	LinkAccountTransactional(ctx context.Context, researchId, accountID string, ref *model.ResearchRef) error
+	UnlinkAccountTransactional(ctx context.Context, researchId, accountID string) error
 	ListUserResearch(ctx context.Context, userId string) ([]model.Research, error)
 	BatchGetResearch(ctx context.Context, researchIds []string) ([]model.Research, error)
 	ListSubPages(ctx context.Context, userId, parentId string) ([]model.Research, error)
@@ -571,26 +570,25 @@ func (s *ResearchService) LinkAccount(ctx context.Context, userID, researchID, a
 		return research.AccountIDs, nil // already linked
 	}
 
-	// Atomic ADD on the accountIds string set -- safe against a concurrent
-	// Link/UnlinkAccount call for a *different* accountID racing on the same
-	// research. The old approach (read the whole list, append, SET it back)
-	// would lose whichever side's write landed second.
-	if err := s.repo.AddAccountLink(ctx, researchID, accountID); err != nil {
+	// Atomic ADD on the accountIds string set + the RESEARCHREF# reverse
+	// index Put, in ONE TransactWriteItems call. Two separate requests here
+	// (the old AddAccountLink + putResearchRef) left a gap: a concurrent
+	// LinkAccount/UnlinkAccount pair for the SAME (research, account) could
+	// interleave their four writes such that the canonical set ends up
+	// linked but the reverse-index ref ends up deleted -- ListAccountResearch
+	// reads from that ref, so the research would then be permanently
+	// invisible from the account's list. Doing both writes as a single
+	// transaction makes that interleaving impossible, not just less likely.
+	ref := &model.ResearchRef{
+		PK: model.PrefixAccount + accountID, SK: model.PrefixResearchRef + researchID,
+		AccountID: accountID, ResearchID: researchID, OwnerUserID: userID,
+		Topic: research.Topic, CreatedAt: time.Now().UTC(), EntityType: model.EntityTypeResearchRef,
+	}
+	if err := s.repo.LinkAccountTransactional(ctx, researchID, accountID, ref); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return nil, ErrNotFound // deleted concurrently between our GetResearch and this write
 		}
 		return nil, fmt.Errorf("failed to link account: %w", err)
-	}
-
-	// Surfaced (not best-effort/log-only): ListAccountResearch/qa's
-	// _account_research read this ref as their *starting point*, so a
-	// silently-dropped failure here would leave the canonical link
-	// successful while the research never appears in the account's list --
-	// permanently, since nothing else retries this write. Returning the
-	// error lets the caller retry LinkAccount for the same pair, which
-	// takes the already-linked branch above and re-attempts the ref write.
-	if err := s.putResearchRef(ctx, userID, researchID, accountID, research.Topic); err != nil {
-		return nil, fmt.Errorf("account link succeeded but the account's index write failed -- retry to heal: %w", err)
 	}
 
 	return append(append([]string{}, research.AccountIDs...), accountID), nil
@@ -626,18 +624,14 @@ func (s *ResearchService) UnlinkAccount(ctx context.Context, userID, researchID,
 		return nil, ErrForbidden
 	}
 
-	// Atomic DELETE on the accountIds string set -- see LinkAccount's
-	// comment; same race the old read-modify-write-the-whole-list approach
-	// was exposed to.
-	if err := s.repo.RemoveAccountLink(ctx, researchID, accountID); err != nil {
+	// Atomic DELETE on the accountIds string set + the reverse-index ref
+	// delete, in ONE TransactWriteItems call -- see LinkAccount's comment
+	// for why the two writes must land together, not as separate requests.
+	if err := s.repo.UnlinkAccountTransactional(ctx, researchID, accountID); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to unlink account: %w", err)
-	}
-
-	if err := s.mainRepo.DeleteResearchRef(ctx, accountID, researchID); err != nil {
-		log.Printf("warn: failed to delete research ref for account %s: %v", accountID, err)
 	}
 
 	remaining := make([]string, 0, len(research.AccountIDs))
@@ -709,11 +703,12 @@ func (s *ResearchService) ListAccountResearch(ctx context.Context, userID, accou
 			continue
 		}
 		// Re-verify membership against the canonical accountIds rather than
-		// trusting the RESEARCHREF# index alone: UnlinkAccount's
-		// DeleteResearchRef is still best-effort (logged, not retried), so a
-		// failed delete would otherwise leave a stale ref that keeps
-		// exposing this research's summary to the account after the owner
-		// unlinked it -- fail-closed here instead of fail-open.
+		// trusting the RESEARCHREF# index alone: Link/UnlinkAccount write
+		// the canonical set and this ref transactionally now (see
+		// LinkAccountTransactional/UnlinkAccountTransactional), but this
+		// fail-closed check stays as defense-in-depth against a stale ref
+		// from any other source -- e.g. data written before that fix --
+		// rather than trusting the index alone.
 		if !contains(r.AccountIDs, accountID) {
 			continue
 		}

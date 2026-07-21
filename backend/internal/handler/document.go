@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -66,10 +67,18 @@ func (h *DocumentHandler) GetDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if detail.FileKey != "" {
-		if url, presignErr := h.uploadService.GeneratePresignedDownloadURL(ctx, detail.FileKey); presignErr == nil {
+		// Presign failure is logged and swallowed, matching account.go's
+		// withDownloadURL -- the caller still gets the doc metadata, just
+		// without a working download/preview link, rather than a 500 for
+		// an unrelated S3 hiccup.
+		if url, presignErr := h.uploadService.GeneratePresignedDownloadURL(ctx, detail.FileKey); presignErr != nil {
+			log.Printf("presign download URL for doc %s: %v", detail.DocID, presignErr)
+		} else {
 			detail.DownloadURL = url
 		}
-		if previewURL, err := h.uploadService.GeneratePreviewPDFURL(ctx, detail.FileKey); err == nil {
+		if previewURL, err := h.uploadService.GeneratePreviewPDFURL(ctx, detail.FileKey); err != nil {
+			log.Printf("presign preview URL for doc %s: %v", detail.DocID, err)
+		} else {
 			detail.PreviewURL = previewURL
 		}
 	}

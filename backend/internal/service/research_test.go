@@ -12,6 +12,17 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
+// newTestResearchService wires repo/mainRepo like newResearchServiceWithRepo,
+// plus cross-links the two mocks so LinkAccountTransactional/UnlinkAccountTransactional
+// can simulate a real TransactWriteItems call spanning both -- in production
+// both writes land in the same DynamoDB table (just different PK/SK) via one
+// client, but these mocks split research's own accountIds set and the
+// RESEARCHREF# item across two separate structs.
+func newTestResearchService(repo *mockResearchRepo, mainRepo *mockResearchMainRepo) *ResearchService {
+	repo.mainRepo = mainRepo
+	return newResearchServiceWithRepo(repo, mainRepo)
+}
+
 // mockResearchRepo implements researchRepo with an in-memory map.
 type mockResearchRepo struct {
 	byID   map[string]*model.Research
@@ -20,6 +31,13 @@ type mockResearchRepo struct {
 	// after the next GetResearch read for this id: the entry is removed
 	// from byID immediately after the read returns its copy.
 	deleteAfterGet string
+	// mainRepo lets LinkAccountTransactional/UnlinkAccountTransactional
+	// simulate a real TransactWriteItems call, which spans both the
+	// research's own accountIds set AND the RESEARCHREF# item that in
+	// production lives in the same DynamoDB table (just a different
+	// PK/SK) but in these mocks lives in a separate struct. Wired up by
+	// newResearchServiceWithRepo.
+	mainRepo *mockResearchMainRepo
 }
 
 func newMockResearchRepo() *mockResearchRepo {
@@ -92,6 +110,32 @@ func (m *mockResearchRepo) RemoveAccountLink(_ context.Context, id, accountID st
 		}
 	}
 	r.AccountIDs = remaining
+	return nil
+}
+
+// LinkAccountTransactional/UnlinkAccountTransactional simulate a
+// TransactWriteItems call by running the set-update and the ref write/delete
+// back-to-back against the two mocks (m and m.mainRepo, wired by
+// newTestResearchService) -- not truly atomic/rollback-capable like the
+// real DynamoDB transaction, but sufficient to test the outcome both writes
+// are meant to produce together.
+func (m *mockResearchRepo) LinkAccountTransactional(ctx context.Context, id, accountID string, ref *model.ResearchRef) error {
+	if err := m.AddAccountLink(ctx, id, accountID); err != nil {
+		return err
+	}
+	if m.mainRepo != nil {
+		return m.mainRepo.PutResearchRef(ctx, ref)
+	}
+	return nil
+}
+
+func (m *mockResearchRepo) UnlinkAccountTransactional(ctx context.Context, id, accountID string) error {
+	if err := m.RemoveAccountLink(ctx, id, accountID); err != nil {
+		return err
+	}
+	if m.mainRepo != nil {
+		return m.mainRepo.DeleteResearchRef(ctx, accountID, id)
+	}
 	return nil
 }
 
@@ -267,7 +311,7 @@ func seedResearch(repo *mockResearchRepo, id, userID string) *model.Research {
 func TestLinkAccount_OwnerAndMember_Succeeds(t *testing.T) {
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	mainRepo.addMember("acc-1", "owner-1")
@@ -293,7 +337,7 @@ func TestLinkAccount_OwnerAndMember_Succeeds(t *testing.T) {
 func TestLinkAccount_NonMemberOfAccount_Forbidden(t *testing.T) {
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	// owner-1 is NOT a member of acc-1
@@ -307,7 +351,7 @@ func TestLinkAccount_NonMemberOfAccount_Forbidden(t *testing.T) {
 func TestLinkAccount_NonOwnerOfResearch_Forbidden(t *testing.T) {
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	mainRepo.addMember("acc-1", "stranger")
@@ -321,7 +365,7 @@ func TestLinkAccount_NonOwnerOfResearch_Forbidden(t *testing.T) {
 func TestUnlinkAccount_RemovesRefAndField(t *testing.T) {
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	mainRepo.addMember("acc-1", "owner-1")
@@ -345,7 +389,7 @@ func TestUnlinkAccount_RemovesRefAndField(t *testing.T) {
 func TestGetResearchDetail_AccountMemberAccess(t *testing.T) {
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	mainRepo.addMember("acc-1", "owner-1")
@@ -386,7 +430,7 @@ func TestGetResearchDetail_AccountMemberAccess(t *testing.T) {
 func TestListAccountResearch_MemberOnlyExcludesTrashed(t *testing.T) {
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	seedResearch(repo, "r2", "owner-1")
@@ -417,7 +461,7 @@ func TestListAccountResearch_MemberOnlyExcludesTrashed(t *testing.T) {
 func TestListAccountResearch_StaleRefExcludedAfterUnlinkFailure(t *testing.T) {
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	mainRepo.addMember("acc-1", "owner-1")
@@ -452,7 +496,7 @@ func TestLinkAccount_MultipleAccountsAllPersist(t *testing.T) {
 	// calls for different accounts on the same research could hit).
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	mainRepo.addMember("acc-1", "owner-1")
@@ -479,7 +523,7 @@ func TestLinkAccount_ReLinkHealsMissingRef(t *testing.T) {
 	// to heal it, so that path must attempt the ref write too.
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	mainRepo.addMember("acc-1", "owner-1")
@@ -515,7 +559,7 @@ func TestLinkAccount_RefWriteFailureIsSurfacedNotSwallowed(t *testing.T) {
 	// retry (which takes the already-linked healing path).
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	mainRepo.addMember("acc-1", "owner-1")
@@ -549,7 +593,7 @@ func TestLinkAccount_DeletedBetweenGetAndLink_ReturnsNotFound(t *testing.T) {
 	// only accountIds, instead of failing closed with ErrNotFound.
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	mainRepo.addMember("acc-1", "owner-1")
@@ -566,7 +610,7 @@ func TestLinkAccount_DeletedBetweenGetAndLink_ReturnsNotFound(t *testing.T) {
 func TestUnlinkAccount_DeletedBetweenGetAndUnlink_ReturnsNotFound(t *testing.T) {
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	repo.byID["r1"].AccountIDs = []string{"acc-1"}
@@ -586,7 +630,7 @@ func TestListAccountResearch_PreservesRefOrderAfterBatchGet(t *testing.T) {
 	// deliberately returns reversed to catch exactly this.
 	repo := newMockResearchRepo()
 	mainRepo := newMockResearchMainRepo()
-	svc := newResearchServiceWithRepo(repo, mainRepo)
+	svc := newTestResearchService(repo, mainRepo)
 
 	seedResearch(repo, "r1", "owner-1")
 	seedResearch(repo, "r2", "owner-1")
