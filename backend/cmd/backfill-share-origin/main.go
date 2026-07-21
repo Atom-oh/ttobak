@@ -11,7 +11,7 @@
 // who have ALREADY been removed from the account by the time this CLI runs,
 // not just current members. An earlier version of this tool only checked
 // current members, which meant a member removed before backfill ran had no
-// remediation path at all (see ADR-022's "Known Limitation" for why that gap
+// remediation path at all (see ADR-023's "Known Limitation" for why that gap
 // existed and this fix).
 //
 // IMPORTANT — the discriminator this tool uses cannot distinguish a true
@@ -37,7 +37,7 @@
 // that. A share left in this state stays Origin=="" indefinitely and is
 // honored by resolveSharedAccess as an unconditional direct grant (no
 // membership re-verification applies to it at all, unlike a tagged
-// account-origin share) -- see ADR-022 §5 for the manual remediation
+// account-origin share) -- see ADR-023 §5 for the manual remediation
 // procedure (the owner must use RevokeShare after manually confirming the
 // share is not a genuine direct grant).
 //
@@ -46,7 +46,7 @@
 // data-mutating tool guessing the wrong table under --apply is worse than
 // failing outright.
 //
-// Also see ADR-022 for the full migration procedure, operational sequencing
+// Also see ADR-023 for the full migration procedure, operational sequencing
 // ("run this before removing a member from a legacy account"), and rollback.
 //
 // Usage:
@@ -232,7 +232,7 @@ func main() {
 		fmt.Println("Re-run with --apply after reviewing the candidates above.")
 	}
 	if orphaned > 0 {
-		fmt.Println("ORPHANED shares require manual remediation -- see ADR-022 §5. They are never tagged by this tool.")
+		fmt.Println("ORPHANED shares require manual remediation -- see ADR-023 §5. They are never tagged by this tool.")
 	}
 	if failed > 0 {
 		// A partial-failure run left some candidates untagged -- exit non-zero

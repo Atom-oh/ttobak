@@ -18,9 +18,42 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
+// researchMainRepo is the slice of the main-table repository ResearchService
+// needs (user lookup for sharing, account membership + refs for account
+// linking). Kept as an interface, mirroring AccountService's accountRepo, so
+// tests can supply an in-memory fake instead of a real DynamoDB table.
+type researchMainRepo interface {
+	ListSharesForUser(ctx context.Context, userID string) ([]model.Share, error)
+	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
+	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
+	PutResearchRef(ctx context.Context, ref *model.ResearchRef) error
+	ListResearchRefsForAccount(ctx context.Context, accountID string) ([]model.ResearchRef, error)
+}
+
+// researchRepo is the slice of ResearchRepository ResearchService needs.
+// Kept as an interface (mirrors researchMainRepo above) so tests can supply
+// an in-memory fake instead of a real DynamoDB table.
+type researchRepo interface {
+	CreateResearch(ctx context.Context, research *model.Research) error
+	GetResearch(ctx context.Context, researchId string) (*model.Research, error)
+	UpdateResearchFieldsConditional(ctx context.Context, researchId string, fields map[string]interface{}, expectedStatus string) error
+	UpdateResearchFields(ctx context.Context, researchId string, fields map[string]interface{}) error
+	LinkAccountTransactional(ctx context.Context, researchId, accountID string, ref *model.ResearchRef) error
+	UnlinkAccountTransactional(ctx context.Context, researchId, accountID string) error
+	ListUserResearch(ctx context.Context, userId string) ([]model.Research, error)
+	BatchGetResearch(ctx context.Context, researchIds []string) ([]model.Research, error)
+	ListSubPages(ctx context.Context, userId, parentId string) ([]model.Research, error)
+	RemoveResearchField(ctx context.Context, researchId, fieldName string) error
+	DeleteResearch(ctx context.Context, researchId, userId string) error
+	CreateResearchShare(ctx context.Context, researchID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error)
+	GetResearchShare(ctx context.Context, sharedToID, researchID string) (*model.Share, error)
+	DeleteResearchShare(ctx context.Context, sharedToID, researchID string) error
+	ListSharesForResearch(ctx context.Context, researchID string) ([]model.Share, error)
+}
+
 type ResearchService struct {
-	repo            *repository.ResearchRepository
-	mainRepo        *repository.DynamoDBRepository
+	repo            researchRepo
+	mainRepo        researchMainRepo
 	s3Client        *s3.Client
 	sfnClient       *sfn.Client
 	kbBucketName    string
@@ -36,6 +69,13 @@ func NewResearchService(repo *repository.ResearchRepository, mainRepo *repositor
 		kbBucketName:    kbBucketName,
 		stateMachineArn: stateMachineArn,
 	}
+}
+
+// newResearchServiceWithRepo is for same-package (service) tests: it accepts
+// the researchMainRepo interface directly so a test can supply an in-memory
+// fake instead of a real DynamoDB table (mirrors newAccountServiceWithRepo).
+func newResearchServiceWithRepo(repo researchRepo, mainRepo researchMainRepo) *ResearchService {
+	return &ResearchService{repo: repo, mainRepo: mainRepo}
 }
 
 func generateID() string {
@@ -182,7 +222,15 @@ func (s *ResearchService) GetResearchDetail(ctx context.Context, researchId, use
 		if err != nil {
 			return nil, fmt.Errorf("failed to check share: %w", err)
 		}
-		if share == nil {
+		if share != nil {
+			research.IsShared = true
+		} else if s.mainRepo != nil && s.hasAccountAccess(ctx, research.AccountIDs, userId) {
+			// Not shared directly, but the caller is a member of an account
+			// this research is linked to -- grant read access. IsShared=true
+			// keeps the owner-only UI (account chips, share button) hidden
+			// for this viewer, same as a direct share would.
+			research.IsShared = true
+		} else {
 			return nil, ErrForbidden
 		}
 	}
@@ -466,4 +514,213 @@ func (s *ResearchService) RevokeResearchShare(ctx context.Context, ownerID, rese
 	}
 
 	return s.repo.DeleteResearchShare(ctx, sharedToID, researchId)
+}
+
+// hasAccountAccess reports whether userId is a member of any account in accountIDs.
+func (s *ResearchService) hasAccountAccess(ctx context.Context, accountIDs []string, userId string) bool {
+	for _, accID := range accountIDs {
+		member, err := s.mainRepo.GetMember(ctx, accID, userId)
+		if err != nil {
+			log.Printf("warn: failed to check account membership %s for research access: %v", accID, err)
+			continue
+		}
+		if member != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// LinkAccount links a research (owner only) to an account the caller is a
+// member of. Idempotent: linking an already-linked account is a no-op.
+func (s *ResearchService) LinkAccount(ctx context.Context, userID, researchID, accountID string) ([]string, error) {
+	if s.mainRepo == nil {
+		return nil, fmt.Errorf("account linking not configured")
+	}
+	research, err := s.repo.GetResearch(ctx, researchID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get research: %w", err)
+	}
+	if research == nil {
+		return nil, ErrNotFound
+	}
+	if research.UserID != userID {
+		return nil, ErrForbidden
+	}
+
+	member, err := s.mainRepo.GetMember(ctx, accountID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check account membership: %w", err)
+	}
+	if member == nil {
+		return nil, ErrForbidden
+	}
+
+	if contains(research.AccountIDs, accountID) {
+		// Already linked in the canonical record, but re-attempt the ref
+		// write anyway: PutResearchRef is a Put (idempotent overwrite, not
+		// a conditional create), and a *previous* LinkAccount call could
+		// have added accountID to accountIds successfully while its own
+		// ref write failed. Before this fix, the only place that could
+		// heal a missing ref was here -- but the old unconditional early
+		// return meant that path could never run.
+		if err := s.putResearchRef(ctx, userID, researchID, accountID, research.Topic); err != nil {
+			return nil, fmt.Errorf("account link succeeded but the account's index write failed -- retry to heal: %w", err)
+		}
+		return research.AccountIDs, nil // already linked
+	}
+
+	// Atomic ADD on the accountIds string set + the RESEARCHREF# reverse
+	// index Put, in ONE TransactWriteItems call. Two separate requests here
+	// (the old AddAccountLink + putResearchRef) left a gap: a concurrent
+	// LinkAccount/UnlinkAccount pair for the SAME (research, account) could
+	// interleave their four writes such that the canonical set ends up
+	// linked but the reverse-index ref ends up deleted -- ListAccountResearch
+	// reads from that ref, so the research would then be permanently
+	// invisible from the account's list. Doing both writes as a single
+	// transaction makes that interleaving impossible, not just less likely.
+	ref := &model.ResearchRef{
+		PK: model.PrefixAccount + accountID, SK: model.PrefixResearchRef + researchID,
+		AccountID: accountID, ResearchID: researchID, OwnerUserID: userID,
+		Topic: research.Topic, CreatedAt: time.Now().UTC(), EntityType: model.EntityTypeResearchRef,
+	}
+	if err := s.repo.LinkAccountTransactional(ctx, researchID, accountID, ref); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil, ErrNotFound // deleted concurrently between our GetResearch and this write
+		}
+		return nil, fmt.Errorf("failed to link account: %w", err)
+	}
+
+	return append(append([]string{}, research.AccountIDs...), accountID), nil
+}
+
+// putResearchRef writes (or re-writes) the RESEARCHREF# reverse index item.
+func (s *ResearchService) putResearchRef(ctx context.Context, userID, researchID, accountID, topic string) error {
+	return s.mainRepo.PutResearchRef(ctx, &model.ResearchRef{
+		PK:          model.PrefixAccount + accountID,
+		SK:          model.PrefixResearchRef + researchID,
+		AccountID:   accountID,
+		ResearchID:  researchID,
+		OwnerUserID: userID,
+		Topic:       topic,
+		CreatedAt:   time.Now().UTC(),
+		EntityType:  model.EntityTypeResearchRef,
+	})
+}
+
+// UnlinkAccount removes a research↔account link (owner only).
+func (s *ResearchService) UnlinkAccount(ctx context.Context, userID, researchID, accountID string) ([]string, error) {
+	if s.mainRepo == nil {
+		return nil, fmt.Errorf("account linking not configured")
+	}
+	research, err := s.repo.GetResearch(ctx, researchID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get research: %w", err)
+	}
+	if research == nil {
+		return nil, ErrNotFound
+	}
+	if research.UserID != userID {
+		return nil, ErrForbidden
+	}
+
+	// Atomic DELETE on the accountIds string set + the reverse-index ref
+	// delete, in ONE TransactWriteItems call -- see LinkAccount's comment
+	// for why the two writes must land together, not as separate requests.
+	if err := s.repo.UnlinkAccountTransactional(ctx, researchID, accountID); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to unlink account: %w", err)
+	}
+
+	remaining := make([]string, 0, len(research.AccountIDs))
+	for _, id := range research.AccountIDs {
+		if id != accountID {
+			remaining = append(remaining, id)
+		}
+	}
+	return remaining, nil
+}
+
+// summaryPreviewMaxLen caps AccountResearchDTO.Summary so the account
+// reference panel's list view never carries a full research summary.
+const summaryPreviewMaxLen = 300
+
+// truncateRunes cuts s to at most n runes, rune-boundary safe (Korean/multi-byte
+// text would otherwise risk a byte-index cut landing mid-character).
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
+// ListAccountResearch returns research linked to accountID, for members only.
+func (s *ResearchService) ListAccountResearch(ctx context.Context, userID, accountID string) ([]model.AccountResearchDTO, error) {
+	if s.mainRepo == nil {
+		return nil, fmt.Errorf("account linking not configured")
+	}
+	member, err := s.mainRepo.GetMember(ctx, accountID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check account membership: %w", err)
+	}
+	if member == nil {
+		return nil, ErrForbidden
+	}
+
+	refs, err := s.mainRepo.ListResearchRefsForAccount(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list research refs: %w", err)
+	}
+	if len(refs) == 0 {
+		return []model.AccountResearchDTO{}, nil
+	}
+
+	ids := make([]string, len(refs))
+	for i, ref := range refs {
+		ids[i] = ref.ResearchID
+	}
+	items, err := s.repo.BatchGetResearch(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch get research: %w", err)
+	}
+
+	// BatchGetItem does not preserve request order, so reassemble by refs'
+	// newest-first order (ids) rather than iterating items directly --
+	// otherwise the account's research list would come back in whatever
+	// arbitrary order DynamoDB happened to return items in.
+	byID := make(map[string]model.Research, len(items))
+	for _, r := range items {
+		byID[r.ResearchID] = r
+	}
+
+	dtos := make([]model.AccountResearchDTO, 0, len(items))
+	for _, id := range ids {
+		r, ok := byID[id]
+		if !ok || r.TrashedAt != "" {
+			continue
+		}
+		// Re-verify membership against the canonical accountIds rather than
+		// trusting the RESEARCHREF# index alone: Link/UnlinkAccount write
+		// the canonical set and this ref transactionally now (see
+		// LinkAccountTransactional/UnlinkAccountTransactional), but this
+		// fail-closed check stays as defense-in-depth against a stale ref
+		// from any other source -- e.g. data written before that fix --
+		// rather than trusting the index alone.
+		if !contains(r.AccountIDs, accountID) {
+			continue
+		}
+		summary := truncateRunes(r.Summary, summaryPreviewMaxLen)
+		dtos = append(dtos, model.AccountResearchDTO{
+			ResearchID:  r.ResearchID,
+			Topic:       r.Topic,
+			Summary:     summary,
+			Status:      r.Status,
+			OwnerUserID: r.UserID,
+			CreatedAt:   r.CreatedAt,
+		})
+	}
+	return dtos, nil
 }

@@ -16,6 +16,7 @@ import os
 import re
 import socket
 import time
+from datetime import datetime, timezone
 from html.parser import HTMLParser
 from urllib.error import URLError
 from urllib.parse import urlparse
@@ -25,6 +26,7 @@ import boto3
 import botocore.session
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -404,6 +406,15 @@ def _sanitize_snippet(text: str) -> str:
 # Bedrock summarization + auto-tagging
 # ---------------------------------------------------------------------------
 
+def _response_text(resp: dict) -> str:
+    """Return the first text content block from a Bedrock converse()
+    response. content[0] isn't guaranteed to be the text block (Bedrock can
+    add other block types), so scan for one instead of indexing blindly."""
+    content = resp['output']['message']['content']
+    block = next((b for b in content if 'text' in b), None)
+    return block['text'] if block else ''
+
+
 def _summarize_and_tag(title: str, text: str, source_name: str = '') -> tuple:
     """Generate SA briefing + auto-tags. Returns (summary, tags_list).
 
@@ -447,7 +458,7 @@ def _summarize_and_tag(title: str, text: str, source_name: str = '') -> tuple:
             messages=[{'role': 'user', 'content': [{'text': prompt}]}],
             inferenceConfig={'maxTokens': 1500},
         )
-        response_text = resp['output']['message']['content'][0]['text']
+        response_text = _response_text(resp)
 
         start_idx = response_text.find('{')
         if start_idx >= 0:
@@ -567,6 +578,69 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
 
 
 # ---------------------------------------------------------------------------
+# Crawl history (Settings UI history list + source status badge)
+# ---------------------------------------------------------------------------
+
+def _record_history(source_id: str, docs_added: int, docs_updated: int,
+                    errors: list, start_time: float, update_status: bool = True) -> None:
+    """Write a HISTORY# item so the Settings UI's crawl history list
+    (previously always empty -- nothing wrote these) reflects real runs, and
+    optionally flip the source's CONFIG status so its badge isn't stuck on
+    'idle' forever. update_status=False for the synthetic __tech__/__auto__
+    source IDs, which have no real CONFIG item to update.
+
+    No TTL on the HISTORY# items -- daily cadence means ~365 items/year/
+    source, not worth pruning.
+    """
+    timestamp = datetime.now(timezone.utc).isoformat()
+    try:
+        table.put_item(Item={
+            'PK': f'CRAWLER#{source_id}',
+            'SK': f'HISTORY#{timestamp}',
+            'timestamp': timestamp,
+            'docsAdded': docs_added,
+            'docsUpdated': docs_updated,
+            'errors': errors[:20],
+            # milliseconds -- CrawlerSettings.tsx:462 renders this as
+            # `(h.duration / 1000).toFixed(1)}s`
+            'duration': int((time.time() - start_time) * 1000),
+        })
+        if update_status:
+            try:
+                table.update_item(
+                    Key={'PK': f'CRAWLER#{source_id}', 'SK': 'CONFIG'},
+                    # attribute_exists(PK) matters as much as the disabled
+                    # check: UpdateItem upserts by default, so a source
+                    # deleted between the orchestrator's scan and this crawl
+                    # finishing (DELETE /api/crawler/sources/{id}) would
+                    # otherwise have this call silently recreate its CONFIG
+                    # item -- a self-reviving zombie that the next scan picks
+                    # up again. A user disabling a source mid-run hits the
+                    # same guard via the disabled check.
+                    ConditionExpression=(
+                        'attribute_exists(PK) AND '
+                        '(attribute_not_exists(#status) OR #status <> :disabled)'
+                    ),
+                    UpdateExpression='SET #status = :status, lastCrawledAt = :ts',
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':status': 'error' if errors else 'active',
+                        ':ts': timestamp,
+                        ':disabled': 'disabled',
+                    },
+                )
+            except ClientError as e:
+                if e.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                    raise
+                logger.info(f'Skipping status update for {source_id}: source was deleted or disabled mid-run')
+    except Exception as e:
+        # Covers both put_item (HISTORY# write) and update_item (CONFIG
+        # status) failing -- if only the latter fails, the HISTORY# item
+        # from put_item above was already written successfully.
+        logger.warning(f'Failed to record crawl history/status for {source_id}: {e}')
+
+
+# ---------------------------------------------------------------------------
 # Lambda handler
 # ---------------------------------------------------------------------------
 
@@ -636,6 +710,7 @@ def handler(event, context):
     Search results come from the AgentCore Web Search connector (snippet
     only). Custom URLs are still fetched directly and their body extracted.
     """
+    start_time = time.time()
     source_id = event.get('sourceId', 'unknown')
     source_name = event.get('sourceName', '')
     keywords = event.get('newsQueries') or []
@@ -750,4 +825,7 @@ def handler(event, context):
         'errors': errors,
     }
     logger.info(f'News crawler complete: {json.dumps(result)}')
+    is_synthetic_source = source_id.startswith('__')
+    _record_history(source_id, docs_added, docs_updated, errors, start_time,
+                    update_status=not is_synthetic_source)
     return result

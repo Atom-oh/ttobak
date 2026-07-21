@@ -56,13 +56,19 @@ def handler(event, context):
                 if aws_services:
                     all_aws_services.update(aws_services)
 
-                news_sources.append({
-                    'sourceId': source_id,
-                    'sourceName': item.get('sourceName', ''),
-                    'newsQueries': item.get('newsQueries', []),
-                    'customUrls': item.get('customUrls', []),
-                    'newsSources': item.get('newsSources', ['google']),
-                })
+                # Synthetic sources (sourceId prefixed "__", e.g. "__auto__"
+                # registered by tech_crawler.py's new-service discovery)
+                # only ever carry awsServices -- they have no real customer
+                # news config, so exclude them from the per-customer news
+                # fan-out.
+                if not source_id.startswith('__'):
+                    news_sources.append({
+                        'sourceId': source_id,
+                        'sourceName': item.get('sourceName', ''),
+                        'newsQueries': item.get('newsQueries', []),
+                        'customUrls': item.get('customUrls', []),
+                        'newsSources': item.get('newsSources', ['google']),
+                    })
 
             last_key = resp.get('LastEvaluatedKey')
             if not last_key:

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -269,6 +271,64 @@ func (r *DynamoDBRepository) ListMeetingRefsForAccount(ctx context.Context, acco
 	return refs, nil
 }
 
+// PutResearchRef writes a ResearchRef item (caller builds PK/SK).
+func (r *DynamoDBRepository) PutResearchRef(ctx context.Context, ref *model.ResearchRef) error {
+	item, err := attributevalue.MarshalMap(ref)
+	if err != nil {
+		return fmt.Errorf("marshal research ref: %w", err)
+	}
+	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(r.tableName),
+		Item:      item,
+	}); err != nil {
+		return fmt.Errorf("put research ref: %w", err)
+	}
+	return nil
+}
+
+// DeleteResearchRef removes the ResearchRef item linking researchID to accountID.
+func (r *DynamoDBRepository) DeleteResearchRef(ctx context.Context, accountID, researchID string) error {
+	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixResearchRef + researchID},
+		},
+	}); err != nil {
+		return fmt.Errorf("delete research ref: %w", err)
+	}
+	return nil
+}
+
+// ListResearchRefsForAccount queries the account partition for RESEARCHREF# items.
+func (r *DynamoDBRepository) ListResearchRefsForAccount(ctx context.Context, accountID string) ([]model.ResearchRef, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").BeginsWith(model.PrefixResearchRef))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build research refs query: %w", err)
+	}
+	// ScanIndexForward is irrelevant here despite the SK prefix match --
+	// SK is RESEARCHREF#{researchId}, and researchId is a random 32-hex
+	// generateID() string, not a timestamp, so sorting by SK sorts by
+	// nothing meaningful. Sort by CreatedAt explicitly below instead.
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query research refs: %w", err)
+	}
+	refs := []model.ResearchRef{}
+	if err := attributevalue.UnmarshalListOfMaps(items, &refs); err != nil {
+		return nil, fmt.Errorf("unmarshal research refs: %w", err)
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].CreatedAt.After(refs[j].CreatedAt) })
+	return refs, nil
+}
+
 // PutAccountInsights REPLACES the account insights for a single meeting: it first
 // deletes any existing items sharing the meeting's SK prefix
 // (INSIGHT#{occurredAt}#{meetingId}#) and then writes the fresh set. This makes a
@@ -353,6 +413,128 @@ func (r *DynamoDBRepository) ListInsightsForAccount(ctx context.Context, account
 	return insights, nil
 }
 
+// PutPublicShare writes a token -> document pointer item (caller builds PK/SK).
+func (r *DynamoDBRepository) PutPublicShare(ctx context.Context, share *model.PublicShare) error {
+	item, err := attributevalue.MarshalMap(share)
+	if err != nil {
+		return fmt.Errorf("marshal public share: %w", err)
+	}
+	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(r.tableName),
+		Item:      item,
+	}); err != nil {
+		return fmt.Errorf("put public share: %w", err)
+	}
+	return nil
+}
+
+func (r *DynamoDBRepository) GetPublicShare(ctx context.Context, token string) (*model.PublicShare, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixPubShare + token},
+			"SK": &types.AttributeValueMemberS{Value: model.SKPubShare},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get public share: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+	var share model.PublicShare
+	if err := attributevalue.UnmarshalMap(result.Item, &share); err != nil {
+		return nil, fmt.Errorf("unmarshal public share: %w", err)
+	}
+	return &share, nil
+}
+
+func (r *DynamoDBRepository) DeletePublicShare(ctx context.Context, token string) error {
+	if _, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixPubShare + token},
+			"SK": &types.AttributeValueMemberS{Value: model.SKPubShare},
+		},
+	}); err != nil {
+		return fmt.Errorf("delete public share: %w", err)
+	}
+	return nil
+}
+
+// UpdateAccountDocumentFields updates exactly the given fields (SET) and
+// removes exactly removeFields (REMOVE), in one atomic UpdateItem, instead
+// of PutAccountDocument's whole-item overwrite. updateDoc (account.go)
+// uses this so its write can never merely-happen-to-touch publicShareToken
+// via a stale snapshot -- that field has its own independent writers
+// (CreateUserDocPublicShare/RevokeUserDocPublicShare) -- but CAN
+// deliberately and atomically remove it via removeFields when a
+// file->markdown conversion must revoke any live share in the same write
+// that clears fileKey (see updateDoc's comment for why "same atomic write"
+// matters here, not just "also call revoke separately"). fields/removeFields
+// must not include "PK"/"SK". Returns the pre-update value of each
+// removeFields entry that had one (via ReturnValues=UPDATED_OLD), so the
+// caller can best-effort clean up a PublicShare pointer for whatever token
+// was actually removed -- not a value read separately beforehand, which
+// could itself be stale.
+func (r *DynamoDBRepository) UpdateAccountDocumentFields(ctx context.Context, pk, docID string, fields map[string]interface{}, removeFields []string) (map[string]string, error) {
+	if len(fields) == 0 && len(removeFields) == 0 {
+		return nil, nil
+	}
+	var update expression.UpdateBuilder
+	first := true
+	for k, v := range fields {
+		if first {
+			update = expression.Set(expression.Name(k), expression.Value(v))
+			first = false
+		} else {
+			update = update.Set(expression.Name(k), expression.Value(v))
+		}
+	}
+	for _, k := range removeFields {
+		if first {
+			update = expression.Remove(expression.Name(k))
+			first = false
+		} else {
+			update = update.Remove(expression.Name(k))
+		}
+	}
+	condition := expression.AttributeExists(expression.Name("PK"))
+	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build account doc update expression: %w", err)
+	}
+	out, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docID},
+		},
+		ConditionExpression:       expr.Condition(),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ReturnValues:              types.ReturnValueUpdatedOld,
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return nil, fmt.Errorf("%w: doc %s not found", ErrConditionFailed, docID)
+		}
+		return nil, fmt.Errorf("update account doc fields: %w", err)
+	}
+	oldValues := make(map[string]string, len(removeFields))
+	for _, k := range removeFields {
+		if av, ok := out.Attributes[k]; ok {
+			var s string
+			if err := attributevalue.Unmarshal(av, &s); err == nil && s != "" {
+				oldValues[k] = s
+			}
+		}
+	}
+	return oldValues, nil
+}
+
 func (r *DynamoDBRepository) PutAccountDocument(ctx context.Context, doc *model.AccountDocument) error {
 	item, err := attributevalue.MarshalMap(doc)
 	if err != nil {
@@ -360,6 +542,103 @@ func (r *DynamoDBRepository) PutAccountDocument(ctx context.Context, doc *model.
 	}
 	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{TableName: aws.String(r.tableName), Item: item}); err != nil {
 		return fmt.Errorf("put account doc: %w", err)
+	}
+	return nil
+}
+
+// SetPublicShareTokenIfAbsent atomically sets doc's publicShareToken, but
+// only if it doesn't already have one. Guards CreateUserDocPublicShare
+// against a concurrent double-mint race: without this, two requests can
+// both read publicShareToken=="" before either writes, each PutPublicShare
+// its own pointer, and then the second doc write silently overwrites the
+// first -- leaving the first caller holding a token whose pointer exists
+// but whose doc.PublicShareToken no longer matches it (ResolvePublicShare
+// then rejects it as stale). Returns ErrConditionFailed if another request
+// already won the race; the caller is expected to discard its own token
+// and re-read the doc for the winner's.
+func (r *DynamoDBRepository) SetPublicShareTokenIfAbsent(ctx context.Context, pk, docID, token string) error {
+	// attribute_exists(PK) matters because UpdateItem upserts by default:
+	// without it, a doc deleted between the caller's getDoc and this call
+	// would make this UpdateItem silently CREATE a zombie item containing
+	// only PK/SK/publicShareToken/updatedAt instead of failing closed.
+	//
+	// fileKey <> "" (live, not the caller's read-time snapshot) closes a
+	// race CreateUserDocPublicShare's own upfront FileKey=="" check can't:
+	// that check reads fileKey once before calling this, but a concurrent
+	// updateDoc can clear fileKey to "" (file -> markdown conversion) in
+	// the gap between that read and this write. Without this condition,
+	// the mint would still succeed against a now-file-less doc, leaving a
+	// token that's inert only until some *future* edit reattaches a file
+	// -- at which point it would unauthenticated-expose that new file to
+	// whoever holds the old token, without the owner ever re-sharing.
+	condition := expression.AttributeExists(expression.Name("PK")).
+		And(expression.AttributeExists(expression.Name("fileKey"))).
+		And(expression.Name("fileKey").NotEqual(expression.Value(""))).
+		And(expression.Or(
+			expression.AttributeNotExists(expression.Name("publicShareToken")),
+			expression.Name("publicShareToken").Equal(expression.Value("")),
+		))
+	update := expression.Set(expression.Name("publicShareToken"), expression.Value(token)).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC()))
+	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
+	if err != nil {
+		return fmt.Errorf("build public share token condition: %w", err)
+	}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docID},
+		},
+		ConditionExpression:       expr.Condition(),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: doc %s was deleted or already has a public share token", ErrConditionFailed, docID)
+		}
+		return fmt.Errorf("set public share token: %w", err)
+	}
+	return nil
+}
+
+// ClearPublicShareTokenIfMatches atomically REMOVEs a doc's publicShareToken,
+// but only if it still equals expectedToken. RevokeUserDocPublicShare reads
+// the doc, then must write back "no token" -- a plain PutAccountDocument of
+// the whole snapshot would otherwise clobber a concurrent
+// CreateUserDocPublicShare's newer token (or any other concurrent field
+// edit) with stale data. Returns ErrConditionFailed if the token no longer
+// matches (e.g. already revoked, or re-shared with a different token) --
+// callers can treat that as "nothing to do" since the caller's specific
+// revoke intent has already been satisfied by whatever changed it.
+func (r *DynamoDBRepository) ClearPublicShareTokenIfMatches(ctx context.Context, pk, docID, expectedToken string) error {
+	condition := expression.Name("publicShareToken").Equal(expression.Value(expectedToken))
+	update := expression.Remove(expression.Name("publicShareToken")).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC()))
+	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
+	if err != nil {
+		return fmt.Errorf("build clear public share token condition: %w", err)
+	}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: pk},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docID},
+		},
+		ConditionExpression:       expr.Condition(),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: doc %s's public share token no longer matches", ErrConditionFailed, docID)
+		}
+		return fmt.Errorf("clear public share token: %w", err)
 	}
 	return nil
 }

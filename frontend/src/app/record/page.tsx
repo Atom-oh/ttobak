@@ -12,6 +12,8 @@ import { RecordingTabs } from '@/components/RecordingTabs';
 import { TranslationView } from '@/components/TranslationView';
 import { LiveSummary } from '@/components/LiveSummary';
 import { LiveQAPanel } from '@/components/LiveQAPanel';
+import ReferenceTabs from '@/components/ReferenceTabs';
+import ReferencePanel from '@/components/ReferencePanel';
 import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingConfig';
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
@@ -67,6 +69,9 @@ function RecordPageInner() {
   // Mobile Q&A bottom sheet state
   const [isQAOpen, setIsQAOpen] = useState(false);
   const [detectedCount, setDetectedCount] = useState(0);
+  // Hoisted so the desktop aside and mobile bottom sheet ReferencePanel
+  // instances share one selection -- the mobile sheet unmounts on close.
+  const [referenceAccountId, setReferenceAccountId] = useState('');
 
   // In-meeting note-taking
   const [notes, setNotes] = useState('');
@@ -1020,16 +1025,25 @@ function RecordPageInner() {
       {/* Desktop Side Panel: AI Q&A during recording */}
       {session.isRecording && (
         <aside className="hidden lg:flex w-96 shrink-0 border-l border-slate-200 dark:border-white/10 flex-col">
-          <div className="flex-1 min-h-0 flex flex-col">
-            <LiveQAPanel
-              transcriptContext={qaContext}
-              meetingId={postRecording.serverMeetingId || undefined}
-              onDetectedQuestionsChange={setDetectedCount}
-              serverDetectedQuestions={summary.detectedQuestions}
-              onAskedQuestion={summary.addAskedQuestion}
-              onSaveToNotes={handleSaveQAToNotes}
-            />
-          </div>
+          <ReferenceTabs
+            qaPanel={
+              <LiveQAPanel
+                transcriptContext={qaContext}
+                meetingId={postRecording.serverMeetingId || undefined}
+                onDetectedQuestionsChange={setDetectedCount}
+                serverDetectedQuestions={summary.detectedQuestions}
+                onAskedQuestion={summary.addAskedQuestion}
+                onSaveToNotes={handleSaveQAToNotes}
+              />
+            }
+            referencePanel={
+              <ReferencePanel
+                accountId={referenceAccountId}
+                onAccountChange={setReferenceAccountId}
+                transcriptTail={session.transcriptContext}
+              />
+            }
+          />
         </aside>
       )}
       </div>
@@ -1071,13 +1085,24 @@ function RecordPageInner() {
               <div className="w-10 h-1 rounded-full bg-slate-300 dark:bg-slate-600" />
             </button>
             <div className="flex-1 min-h-0">
-              <LiveQAPanel
-                transcriptContext={qaContext}
-                meetingId={postRecording.serverMeetingId || undefined}
-                onDetectedQuestionsChange={setDetectedCount}
-                serverDetectedQuestions={summary.detectedQuestions}
-                onAskedQuestion={summary.addAskedQuestion}
-                onSaveToNotes={handleSaveQAToNotes}
+              <ReferenceTabs
+                qaPanel={
+                  <LiveQAPanel
+                    transcriptContext={qaContext}
+                    meetingId={postRecording.serverMeetingId || undefined}
+                    onDetectedQuestionsChange={setDetectedCount}
+                    serverDetectedQuestions={summary.detectedQuestions}
+                    onAskedQuestion={summary.addAskedQuestion}
+                    onSaveToNotes={handleSaveQAToNotes}
+                  />
+                }
+                referencePanel={
+                  <ReferencePanel
+                    accountId={referenceAccountId}
+                    onAccountChange={setReferenceAccountId}
+                    transcriptTail={session.transcriptContext}
+                  />
+                }
               />
             </div>
           </div>

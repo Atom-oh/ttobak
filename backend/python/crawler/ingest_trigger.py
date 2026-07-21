@@ -22,23 +22,38 @@ bedrock_agent = boto3.client('bedrock-agent')
 def handler(event, context):
     """Trigger Bedrock KB ingestion job.
 
-    Expected event (from Step Functions aggregation of crawler results):
-      {
-        "crawlerResults": [
-          {"docsAdded": 5, "docsUpdated": 0, "errors": []},
-          ...
-        ]
-      }
+    Expected event -- the Step Functions ParallelCrawl branch outputs,
+    unwrapped: [techResult, [newsResult, ...]] (a bare list; techResult and
+    each newsResult are {"docsAdded", "docsUpdated", "errors"} dicts). A
+    dict shaped {"crawlerResults": [...]} is also accepted for direct/test
+    invocation.
 
-    Returns:
+    Returns on success:
       {
-        "status": "STARTED" | "SKIPPED" | "ERROR",
+        "status": "STARTED" | "SKIPPED",
         "ingestionJobId": "...",
         "totalDocsAdded": N,
         "totalErrors": N
       }
+
+    Raises (rather than returning an "ERROR" status) if KB_ID/DATA_SOURCE_ID
+    is unset or start_ingestion_job fails, so the failure surfaces as a
+    FAILED Step Functions execution instead of a silently-successful one.
     """
-    # Step Functions Map outputs a list of per-source results (each is [tech_result, news_result])
+    # Validate config before the SKIPPED short-circuit below -- otherwise a
+    # KB_ID/DATA_SOURCE_ID regression goes unnoticed on any night with zero
+    # new/updated docs, since the config check would never run and the
+    # execution reports SUCCEEDED regardless. 'PENDING' is checked
+    # explicitly (not just falsiness): it's the actual placeholder
+    # knowledge-stack.ts hardcodes before the real KB/DataSource are wired
+    # up (see ADR-021) -- a truthy, non-empty string that `not KB_ID` alone
+    # would let straight through.
+    if not KB_ID or not DATA_SOURCE_ID or 'PENDING' in (KB_ID, DATA_SOURCE_ID):
+        raise RuntimeError(f'KB_ID/DATA_SOURCE_ID not configured (KB_ID={KB_ID!r}, DATA_SOURCE_ID={DATA_SOURCE_ID!r})')
+
+    # Step Functions ParallelCrawl outputs a bare list, one entry per branch
+    # (techResult, then the news Map's own list of per-source results) --
+    # extend() flattens that one level of list nesting into crawler_results.
     raw = event if isinstance(event, list) else event.get('crawlerResults', [])
     crawler_results = []
     for item in raw:
@@ -63,39 +78,25 @@ def handler(event, context):
             'totalErrors': total_errors,
         }
 
-    if not KB_ID or not DATA_SOURCE_ID:
-        logger.error('KB_ID or DATA_SOURCE_ID not configured')
-        return {
-            'status': 'ERROR',
-            'ingestionJobId': None,
-            'error': 'KB_ID or DATA_SOURCE_ID environment variable not set',
-            'totalDocsAdded': total_added,
-            'totalErrors': total_errors,
-        }
+    # Raise (rather than return an "ERROR" result) so a start_ingestion_job
+    # failure surfaces as a FAILED Step Functions execution instead of a
+    # silently-successful one -- for 7 weeks this returned {"status":
+    # "ERROR"} and the workflow kept reporting SUCCEEDED every night while
+    # the KB never got the day's crawled docs.
 
-    try:
-        resp = bedrock_agent.start_ingestion_job(
-            knowledgeBaseId=KB_ID,
-            dataSourceId=DATA_SOURCE_ID,
-        )
-        job = resp.get('ingestionJob', {})
-        job_id = job.get('ingestionJobId', 'unknown')
-        status = job.get('status', 'UNKNOWN')
+    resp = bedrock_agent.start_ingestion_job(
+        knowledgeBaseId=KB_ID,
+        dataSourceId=DATA_SOURCE_ID,
+    )
+    job = resp.get('ingestionJob', {})
+    job_id = job.get('ingestionJobId', 'unknown')
+    status = job.get('status', 'UNKNOWN')
 
-        logger.info(f'Ingestion job started: id={job_id}, status={status}')
-        return {
-            'status': 'STARTED',
-            'ingestionJobId': job_id,
-            'ingestionStatus': status,
-            'totalDocsAdded': total_added,
-            'totalErrors': total_errors,
-        }
-    except Exception as e:
-        logger.error(f'Failed to start ingestion job: {e}', exc_info=True)
-        return {
-            'status': 'ERROR',
-            'ingestionJobId': None,
-            'error': str(e),
-            'totalDocsAdded': total_added,
-            'totalErrors': total_errors,
-        }
+    logger.info(f'Ingestion job started: id={job_id}, status={status}')
+    return {
+        'status': 'STARTED',
+        'ingestionJobId': job_id,
+        'ingestionStatus': status,
+        'totalDocsAdded': total_added,
+        'totalErrors': total_errors,
+    }

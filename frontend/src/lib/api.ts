@@ -2,7 +2,7 @@
 
 import { getIdToken, refreshSession } from './auth';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
-import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest } from '@/types/meeting';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -377,6 +377,10 @@ export const researchApi = {
     api.post<{ sharedWith: { userId: string; email: string; permission: string } }>(`/api/research/${encodeURIComponent(researchId)}/share`, data),
   unshare: (researchId: string, userId: string) =>
     api.delete(`/api/research/${encodeURIComponent(researchId)}/share/${userId}`),
+  linkAccount: (researchId: string, accountId: string) =>
+    api.post<{ accountIds: string[] }>(`/api/research/${encodeURIComponent(researchId)}/accounts`, { accountId }),
+  unlinkAccount: (researchId: string, accountId: string) =>
+    api.delete<void>(`/api/research/${encodeURIComponent(researchId)}/accounts/${encodeURIComponent(accountId)}`),
 };
 
 export const researchChatApi = {
@@ -434,6 +438,8 @@ export const accountApi = {
       `/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`, data),
   deleteDocument: (id: string, docId: string) =>
     api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
+  research: (id: string) =>
+    api.get<{ research: AccountResearchRef[] }>(`/api/accounts/${encodeURIComponent(id)}/research`),
 };
 
 // Personal (account-less) document API endpoints
@@ -449,6 +455,12 @@ export const docApi = {
   update: (docId: string, data: PutDocumentRequest) =>
     api.put<AccountDocument>(`/api/documents/${encodeURIComponent(docId)}`, data),
   delete: (docId: string) => api.delete<void>(`/api/documents/${encodeURIComponent(docId)}`),
+  shareToAccount: (docId: string, accountId: string) =>
+    api.post<AccountDocument>(`/api/documents/${encodeURIComponent(docId)}/share-account`, { accountId }),
+  createPublicShare: (docId: string) =>
+    api.post<{ token: string }>(`/api/documents/${encodeURIComponent(docId)}/public-share`, {}),
+  revokePublicShare: (docId: string) =>
+    api.delete<void>(`/api/documents/${encodeURIComponent(docId)}/public-share`),
 };
 
 export const meetingAccountApi = {

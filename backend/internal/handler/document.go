@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -66,8 +67,19 @@ func (h *DocumentHandler) GetDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if detail.FileKey != "" {
-		if url, presignErr := h.uploadService.GeneratePresignedDownloadURL(ctx, detail.FileKey); presignErr == nil {
+		// Presign failure is logged and swallowed, matching account.go's
+		// withDownloadURL -- the caller still gets the doc metadata, just
+		// without a working download/preview link, rather than a 500 for
+		// an unrelated S3 hiccup.
+		if url, presignErr := h.uploadService.GeneratePresignedDownloadURL(ctx, detail.FileKey); presignErr != nil {
+			log.Printf("presign download URL for doc %s: %v", detail.DocID, presignErr)
+		} else {
 			detail.DownloadURL = url
+		}
+		if previewURL, err := h.uploadService.GeneratePreviewPDFURL(ctx, detail.FileKey); err != nil {
+			log.Printf("presign preview URL for doc %s: %v", detail.DocID, err)
+		} else {
+			detail.PreviewURL = previewURL
 		}
 	}
 	writeJSON(w, http.StatusOK, detail)
@@ -107,6 +119,115 @@ func (h *DocumentHandler) DeleteDocument(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ShareToAccount handles POST /api/documents/{docId}/share-account — copies
+// a personal document into an account's document list (see
+// AccountService.ShareUserDocumentToAccount for why it copies rather than links).
+func (h *DocumentHandler) ShareToAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	docID := chi.URLParam(r, "docId")
+	if docID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Document ID is required")
+		return
+	}
+	var req model.ShareToAccountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AccountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "accountId is required")
+		return
+	}
+	dto, err := h.accountService.ShareUserDocumentToAccount(ctx, userID, docID, req.AccountID)
+	if err != nil {
+		writeDocumentServiceError(w, err, "")
+		return
+	}
+	writeJSON(w, http.StatusCreated, dto)
+}
+
+// CreatePublicShare handles POST /api/documents/{docId}/public-share —
+// mints an unauthenticated share link for a personal file-backed document
+// (gated on FileKey != "" in AccountService.CreateUserDocPublicShare, not
+// docType == "slide" specifically; in practice the only file-backed
+// personal docType is "slide").
+func (h *DocumentHandler) CreatePublicShare(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	docID := chi.URLParam(r, "docId")
+	if docID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Document ID is required")
+		return
+	}
+	token, err := h.accountService.CreateUserDocPublicShare(ctx, userID, docID)
+	if err != nil {
+		writeDocumentServiceError(w, err, "파일이 첨부된 문서만 공개 공유할 수 있습니다")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": token})
+}
+
+// RevokePublicShare handles DELETE /api/documents/{docId}/public-share.
+func (h *DocumentHandler) RevokePublicShare(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	docID := chi.URLParam(r, "docId")
+	if docID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Document ID is required")
+		return
+	}
+	if err := h.accountService.RevokeUserDocPublicShare(ctx, userID, docID); err != nil {
+		writeDocumentServiceError(w, err, "")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// PublicGetDoc handles GET /api/public/docs/{token} — the one route
+// registered under a CloudFront behavior with no Lambda@Edge JWT check
+// and no API Gateway authorizer (see cmd/api/main.go's route registration
+// comment and infra/lib/gateway-stack.ts / frontend-stack.ts for how it
+// bypasses both). It never returns document content directly, only a 302
+// redirect to a short-lived presigned S3 URL, and never trusts a
+// caller-identity header of any kind.
+func (h *DocumentHandler) PublicGetDoc(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	token := chi.URLParam(r, "token")
+	if token == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "token is required")
+		return
+	}
+	doc, err := h.accountService.ResolvePublicShare(ctx, token)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "공개 링크를 찾을 수 없습니다")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	// Short-lived (PublicShareURLTTL, not the usual 1-hour default): this URL
+	// leaks to an unauthenticated caller, so a revoke should close the window
+	// quickly rather than leaving it valid for an hour (ADR-022).
+	targetKey := doc.FileKey
+	if sidecarKey := service.SidecarPDFKey(doc.FileKey); sidecarKey != "" {
+		previewURL, err := h.uploadService.GeneratePreviewPDFURLShortLived(ctx, doc.FileKey)
+		if err != nil || previewURL == "" {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "PDF로 변환 중입니다. 잠시 후 다시 시도해 주세요")
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		http.Redirect(w, r, previewURL, http.StatusFound)
+		return
+	}
+
+	url, err := h.uploadService.GeneratePresignedDownloadURLWithTTL(ctx, targetKey, service.PublicShareURLTTL)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, url, http.StatusFound)
 }
 
 // writeDocumentServiceError maps the account-document sentinel errors shared

@@ -149,6 +149,10 @@ TtobakApp (bin/ttobak.ts)
   AllowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
   AllowHeaders: ["Authorization", "Content-Type", "x-user-id"]
   ```
+- **`/api/public/docs/{token}` (ADR-022)**: registered as its own literal route,
+  no JWT authorizer — the one deliberately unauthenticated route in this API.
+  Scoped to exactly this path; see CloudFront behavior note below and
+  [ADR-022](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md).
 
 ### API Gateway WebSocket API
 - **Name**: `ttobak-realtime`
@@ -219,10 +223,38 @@ TtobakApp (bin/ttobak.ts)
 - **Environment**: `TABLE_NAME`, `BUCKET_NAME`, `KB_ID`, `AOSS_ENDPOINT`
 - **Permissions**: Bedrock KB 관리, OpenSearch Serverless, S3 read, DynamoDB read/write
 
+#### Convert-Doc Lambda (ADR-022)
+- **Trigger**: S3 Event (prefix: `docs/`, suffix: `.ppt`/`.pptx`) via EventBridge
+- **Deploy**: container image (`DockerImageCode.fromImageAsset`, `backend/cmd/convert-doc/Dockerfile`,
+  `--platform=linux/arm64` pinned in both the CDK asset option and the Dockerfile itself),
+  not a Go zip like the other 5 API-adjacent Lambdas — bundles headless LibreOffice
+- **Timeout**: bounded by a 4-minute internal `context.WithTimeout` around the `soffice`
+  subprocess, well under the Lambda's own configured timeout
+- **Environment**: `BUCKET_NAME` (fails fast at cold start if unset)
+- **Permissions**: scoped `grantRead('docs/*')` + `grantPut('docs-pdf/*')` — narrower than
+  the bucket-wide `grantReadWrite` other upload-triggered Lambdas share, because this role
+  additionally runs a third-party parser (LibreOffice) against untrusted file content.
+  The `soffice` subprocess itself has every `AWS_*` env var stripped before exec. Still
+  cross-tenant within that `docs/*` grant (any user's uploads, not just the triggering
+  key) — tracked as a residual risk in ADR-022, not yet closed.
+- **Network**: deployed into `PRIVATE_ISOLATED` subnets of the pre-existing VPC
+  `vpc-04e77172c67f19814` (same VPC `WhisperStack` reuses via `ec2.Vpc.fromLookup` —
+  no new VPC/NAT cost). No internet/NAT route at all; S3 access for the sidecar
+  upload goes out through this VPC's **pre-existing** S3 gateway endpoint
+  (`vpce-04a82e15d312f39b8`, already attached to every route table here) —
+  do NOT add a second one (`vpc.addGatewayEndpoint`) for this service; CDK's first
+  deploy attempt did and CloudFormation rejected it (`AlreadyExists` on the S3
+  prefix-list route), rolling back the whole stack update. No internet/NAT route
+  at all otherwise; S3 is the only reachable network destination. Closes the
+  network half of the LibreOffice RCE surface (SSRF via linked/remote document
+  content, network exfiltration) — see
+  ADR-022 Consequences for what this does and doesn't close.
+
 ### EventBridge Rules
 - **audio-uploaded**: S3 PutObject (prefix: `audio/`) → Transcribe Lambda
 - **image-uploaded**: S3 PutObject (prefix: `images/`) → Process Image Lambda
 - **kb-uploaded**: S3 PutObject (prefix: `kb/`) → KB Lambda
+- **doc-slide-uploaded**: S3 PutObject (prefix: `docs/`, suffix: `.ppt`/`.pptx`) → Convert-Doc Lambda
 
 ### Outputs
 - `HttpApiEndpoint`, `HttpApiId`
@@ -252,6 +284,27 @@ TtobakApp (bin/ttobak.ts)
 ### Outputs
 - `KnowledgeBaseId`, `KnowledgeBaseArn`
 - `CollectionEndpoint`, `CollectionArn`
+
+> **참고**: `AWS::Bedrock::KnowledgeBase`/`DataSource` CFN 리소스(Phase 2)는 `infra/lib/knowledge-stack.ts`에서 여전히 주석 처리돼 있음 — 실제 KB는 out-of-band로 생성됨 (KB ID `BJJLVLFTOR`, DataSource ID `3AVMMT3RF3`, 하드코딩). **`TtobakKnowledgeStack`은 절대 재배포하지 않음** — Phase 1 리소스만 합성하며, 배포 시 이 out-of-band KB의 삭제를 스테이징하게 됨.
+
+## 6A. CrawlerStack
+
+크롤러 파이프라인 — 매일 04:00 KST(`cron(0 19 * * ? *)`)에 EventBridge 규칙 `ttobak-crawler-daily`가 Step Functions 상태머신 `ttobak-crawler-workflow`를 트리거.
+
+### Lambda Functions
+- `ttobak-crawler-orchestrator` (256MB, 30s) — DynamoDB에서 `PK begins_with CRAWLER#, SK=CONFIG, status≠disabled` 스캔. `sourceId`가 `__`로 시작하는 합성 소스(예: `__auto__`)는 `awsServices`만 techConfig에 병합하고 뉴스 팬아웃에서는 제외.
+- `ttobak-crawler-tech` (512MB, 14min) — AWS What's New/Blog RSS + AgentCore Gateway Web Search로 신규 서비스 발표를 추가 검색. 실행마다 별도 웹서치 1회로 미등록 AWS 서비스를 발견해 Bedrock으로 slug를 추출, `CRAWLER#__auto__/CONFIG`에 등록(최대 30개, 회당 최대 5개 신규).
+- `ttobak-crawler-news` (512MB, 14min) — 고객사별 뉴스 검색(AgentCore Gateway Web Search) + customUrls 직접 fetch.
+- `ttobak-crawler-ingest` (256MB, 30s) — Bedrock KB `StartIngestionJob`. `KB_ID`/`DATA_SOURCE_ID` 검증이 SKIPPED 판정보다 먼저 실행되므로(신규 문서 0건인 조용한 밤에도 설정 회귀를 놓치지 않음) — 미설정(`'PENDING'` sentinel 포함)이거나 이후 API 호출이 실패하면 **예외를 raise**해 Step Functions 실행이 FAILED로 표면화됨(과거엔 `{"status":"ERROR"}`를 리턴해 7주간 무증상으로 인제스천이 멈췄던 원인). 검증을 통과했는데 신규 문서가 0건이면 SKIPPED.
+
+### Step Functions 페이로드
+`ListActiveSources` → `Parallel(CrawlTechDocs ‖ Map(CrawlNews))` → `TriggerIngestion`. `CrawlTechDocs`는 `OutputPath`로, `MapNewsSources`는 `resultPath`를 생략(Map 기본 출력)해 각각 래퍼 없는 결과를 내보내므로, `crawlResults`는 `[techResult, [newsResult, ...]]` 형태 — `ingest_trigger.py`가 이 한 단계 중첩을 그대로 flatten해 집계.
+
+### 크롤 이력/상태
+각 크롤러 실행 끝에 `CRAWLER#{sourceId}/HISTORY#{ISO8601}` 아이템을 기록하고(뉴스 소스는) CONFIG의 `status`(`active`/`error`)와 `lastCrawledAt`을 갱신 — Settings 페이지의 크롤 이력/상태 배지가 이 데이터를 표시.
+
+### Outputs
+- `StateMachineArn`
 
 ## 7. WhisperStack
 
@@ -326,6 +379,17 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
   - Default root object: index.html
   - Error pages: 403/404 → /index.html (SPA routing)
   - Lambda@Edge: 없음 (정적 파일은 인증 불필요)
+
+- **Public API behavior** (`/api/public/*`, ADR-022) — registered *before*
+  the general `/api/*` behavior below, since CloudFront matches path patterns
+  in insertion order:
+  - Origin: API Gateway HTTP API endpoint (same origin as `/api/*`)
+  - Allowed methods: GET, HEAD only
+  - Cache policy: CachingDisabled
+  - **Lambda@Edge**: none — this is the one behavior that deliberately skips
+    the JWT check, backing `GET /api/public/docs/{token}`. Must stay scoped
+    to exactly this prefix; a broader match here would bypass auth for
+    everything under `/api/*`.
 
 - **API behavior** (`/api/*`):
   - Origin: API Gateway HTTP API endpoint

@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -187,16 +190,105 @@ func (s *UploadService) GeneratePresignedDownloadURL(
 	ctx context.Context,
 	s3Key string,
 ) (string, error) {
-	expiresIn := 1 * time.Hour
+	return s.GeneratePresignedDownloadURLWithTTL(ctx, s3Key, 1*time.Hour)
+}
+
+// PublicShareURLTTL bounds how long a presigned URL handed out via the
+// unauthenticated GET /api/public/docs/{token} route stays valid -- much
+// shorter than the 1-hour default used elsewhere, since it's the window an
+// already-issued URL keeps working even after RevokeUserDocPublicShare
+// clears the token (ADR-022).
+const PublicShareURLTTL = 5 * time.Minute
+
+// GeneratePresignedDownloadURLWithTTL is GeneratePresignedDownloadURL with a
+// caller-chosen expiry, for routes that need a tighter revocation window.
+func (s *UploadService) GeneratePresignedDownloadURLWithTTL(
+	ctx context.Context,
+	s3Key string,
+	ttl time.Duration,
+) (string, error) {
 	presignedURL, err := s.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(s3Key),
-	}, s3.WithPresignExpires(expiresIn))
+	}, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
 	}
 
 	return presignedURL.URL, nil
+}
+
+// docsPDFSidecarPrefix mirrors the "docs/" upload prefix, one level over --
+// a converted PDF lives at docsPDFSidecarPrefix + strings.TrimPrefix(fileKey, "docs/") + ".pdf",
+// e.g. docs/{uid}/123_deck.pptx -> docs-pdf/{uid}/123_deck.pptx.pdf. Kept
+// outside "docs/" so the convert-doc Lambda's own PutObject never re-triggers
+// the EventBridge rule that invokes it, and outside ownsFileKey's docs/
+// prefix so the sidecar is never mistaken for a client-suppliable fileKey.
+const docsPDFSidecarPrefix = "docs-pdf/"
+
+// pptxExtensions are the slide file types that get a PDF sidecar converted
+// by the convert-doc Lambda (see infra's EventBridge rule on the docs/ prefix).
+var pptxExtensions = []string{".pptx", ".ppt"}
+
+// SidecarPDFKey returns the deterministic PDF sidecar key for a docs/
+// upload, or "" if fileKey isn't a docs/ upload or isn't a PPTX/PPT (a PDF
+// upload needs no conversion; anything else -- images, audio -- has no
+// sidecar concept at all).
+func SidecarPDFKey(fileKey string) string {
+	if !strings.HasPrefix(fileKey, "docs/") {
+		return ""
+	}
+	lower := strings.ToLower(fileKey)
+	isSlide := false
+	for _, ext := range pptxExtensions {
+		if strings.HasSuffix(lower, ext) {
+			isSlide = true
+			break
+		}
+	}
+	if !isSlide {
+		return ""
+	}
+	return docsPDFSidecarPrefix + strings.TrimPrefix(fileKey, "docs/") + ".pdf"
+}
+
+// GeneratePreviewPDFURL returns a presigned GET URL for fileKey's PDF
+// sidecar if the conversion has completed, or ("", nil) if fileKey isn't a
+// PPTX/PPT upload or the conversion hasn't finished yet -- callers treat
+// both as "no preview available" rather than an error (the doc is still
+// perfectly usable via its download link either way).
+func (s *UploadService) GeneratePreviewPDFURL(ctx context.Context, fileKey string) (string, error) {
+	return s.generatePreviewPDFURLWithTTL(ctx, fileKey, 1*time.Hour)
+}
+
+// GeneratePreviewPDFURLShortLived is GeneratePreviewPDFURL with PublicShareURLTTL,
+// for the unauthenticated public-share route (see PublicShareURLTTL).
+func (s *UploadService) GeneratePreviewPDFURLShortLived(ctx context.Context, fileKey string) (string, error) {
+	return s.generatePreviewPDFURLWithTTL(ctx, fileKey, PublicShareURLTTL)
+}
+
+func (s *UploadService) generatePreviewPDFURLWithTTL(ctx context.Context, fileKey string, ttl time.Duration) (string, error) {
+	sidecarKey := SidecarPDFKey(fileKey)
+	if sidecarKey == "" {
+		return "", nil
+	}
+	if _, err := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(sidecarKey),
+	}); err != nil {
+		var notFound *s3types.NotFound
+		if errors.As(err, &notFound) {
+			return "", nil // not converted yet -- expected, not an error for the caller
+		}
+		// A real error (permission denial, throttling, etc.) looks
+		// identical to "not converted yet" to every caller (they all treat
+		// err != nil the same as "no preview available"), so at least log
+		// it -- otherwise an actual outage is indistinguishable from the
+		// normal pre-conversion window.
+		log.Printf("warn: HeadObject failed for PDF sidecar %s: %v", sidecarKey, err)
+		return "", nil
+	}
+	return s.GeneratePresignedDownloadURLWithTTL(ctx, sidecarKey, ttl)
 }
 
 // inferAttachTypeFromMime determines the attachment type from the MIME type

@@ -6,8 +6,8 @@ import { Construct } from 'constructs';
 /**
  * AgentCore Gateway fronting the AWS-managed Web Search connector.
  * us-east-1 only (the web-search connector is region-locked). Callers
- * (news crawler Lambda in ap-northeast-2, research-agent container) invoke
- * it cross-region with SigV4 (IAM inbound auth).
+ * (news + tech crawler Lambdas in ap-northeast-2, research-agent container)
+ * invoke it cross-region with SigV4 (IAM inbound auth).
  */
 export class WebSearchGatewayStack extends cdk.Stack {
   public readonly gateway: agentcore.Gateway;
@@ -52,7 +52,7 @@ export class WebSearchGatewayStack extends cdk.Stack {
 
     this.gateway = new agentcore.Gateway(this, 'WebSearchGateway', {
       gatewayName: 'ttobak-web-search-gateway',
-      description: 'TTOBAK news crawler + research-agent web search (AWS Web Search connector)',
+      description: 'TTOBAK news/tech crawler + research-agent web search (AWS Web Search connector)',
       authorizerConfiguration: agentcore.GatewayAuthorizer.usingAwsIam(),
       role: gatewayServiceRole,
     });

@@ -175,11 +175,22 @@ export class KnowledgeStack extends cdk.Stack {
       })
     );
 
-    // Phase 1: AOSS collection + index must exist before KB can be created
-    // After deploying Phase 1, create the AOSS vector index out-of-band,
-    // then uncomment Phase 2 below and redeploy.
-    this.knowledgeBaseId = 'PENDING';
-    this.dataSourceId = 'PENDING';
+    // Phase 1: AOSS collection + index must exist before KB can be created.
+    // The actual KnowledgeBase/DataSource were created out-of-band (not by
+    // the commented-out Phase 2 CFN resources below) -- these are their real
+    // IDs, not placeholders. Do not redeploy TtobakKnowledgeStack; it stages
+    // a teardown of this out-of-band KB (see root CLAUDE.md Known Issues).
+    //
+    // Read from context (cdk.json's ttobak:knowledgeBaseId/dataSourceId) per
+    // CLAUDE.md's "extract hardcoded infra values to CDK context" known
+    // issue, but fall back to the real values -- not 'PENDING' -- if that
+    // context key is ever missing. Falling back to the placeholder is
+    // exactly the regression ADR-021 exists to prevent: it silently breaks
+    // RAG for every stack that reads these props (QAFunction,
+    // SummarizeFunction, the crawler's ingest trigger) for 7 weeks with no
+    // visible error.
+    this.knowledgeBaseId = this.node.tryGetContext('ttobak:knowledgeBaseId') || 'BJJLVLFTOR';
+    this.dataSourceId = this.node.tryGetContext('ttobak:dataSourceId') || '3AVMMT3RF3';
 
     /* Phase 2: Uncomment after AOSS index is created
     const knowledgeBase = new cdk.CfnResource(this, 'BedrockKnowledgeBase', {

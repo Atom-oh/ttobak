@@ -9,6 +9,8 @@ import { AudioUploader } from '@/components/AudioUploader';
 import { AttachmentGallery } from '@/components/AttachmentGallery';
 import { FileUploader } from '@/components/FileUploader';
 import { QAPanel } from '@/components/QAPanel';
+import ReferenceTabs from '@/components/ReferenceTabs';
+import ReferencePanel from '@/components/ReferencePanel';
 import { MeetingHeader } from '@/components/meeting/MeetingHeader';
 import { AISummaryCard } from '@/components/meeting/AISummaryCard';
 import { ActionItemsCard } from '@/components/meeting/ActionItemsCard';
@@ -606,9 +608,12 @@ function MeetingDetailContent() {
           </div>
         </div>
 
-        {/* Q&A Side Panel - Desktop only */}
+        {/* Q&A / 참조 Side Panel - Desktop only */}
         <aside className="hidden lg:flex lg:w-80 xl:w-96 border-l border-slate-200 dark:border-white/10 dark:bg-surface-lowest/50 flex-col sticky top-0 h-screen">
-          <QAPanel meetingId={meeting.meetingId} />
+          <ReferenceTabs
+            qaPanel={<QAPanel meetingId={meeting.meetingId} />}
+            referencePanel={<ReferencePanel accountId={meeting.accountId} />}
+          />
         </aside>
       </div>
     </AppLayout>

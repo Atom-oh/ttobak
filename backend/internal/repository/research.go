@@ -208,6 +208,198 @@ func (r *ResearchRepository) UpdateResearchFields(ctx context.Context, researchI
 	return nil
 }
 
+// AddAccountLink atomically adds accountID to research.accountIds (a
+// DynamoDB String Set). ADD on a set already containing the value is a
+// no-op, so this is idempotent and race-free -- unlike a read-modify-write
+// on a List, two concurrent LinkAccount calls for different accounts can
+// never lose one side's change.
+func (r *ResearchRepository) AddAccountLink(ctx context.Context, researchId, accountID string) error {
+	// attribute_exists(PK): without it, UpdateItem's default upsert behavior
+	// would silently CREATE a zombie RESEARCH#{id}/CONFIG item containing
+	// only accountIds if the research was deleted between the service
+	// layer's GetResearch call and this write -- same failure mode
+	// SetPublicShareTokenIfAbsent (account.go) guards against, and for the
+	// same reason.
+	expr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		WithUpdate(expression.Add(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}}))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to build update expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchId},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		},
+		ConditionExpression:       expr.Condition(),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: research %s not found", ErrConditionFailed, researchId)
+		}
+		return fmt.Errorf("failed to add account link: %w", err)
+	}
+	return nil
+}
+
+// RemoveAccountLink atomically removes accountID from research.accountIds.
+// Same idempotency/race-freedom as AddAccountLink -- DELETE on a set not
+// containing the value is a no-op rather than an error. Same
+// attribute_exists(PK) guard as AddAccountLink, for the same reason.
+func (r *ResearchRepository) RemoveAccountLink(ctx context.Context, researchId, accountID string) error {
+	expr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		WithUpdate(expression.Delete(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}}))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to build update expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchId},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		},
+		ConditionExpression:       expr.Condition(),
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: research %s not found", ErrConditionFailed, researchId)
+		}
+		return fmt.Errorf("failed to remove account link: %w", err)
+	}
+	return nil
+}
+
+// mapTransactionCanceledError inspects a TransactWriteItems cancellation to
+// determine whether item 0 -- the CONFIG Update in both
+// LinkAccountTransactional and UnlinkAccountTransactional -- is what
+// actually failed its condition. TransactionCanceledException also fires
+// for TransactionConflict (a concurrent transaction touching the same
+// item, exactly what racing Link/Unlink calls for the same research
+// produce) and throttling, neither of which mean the research doesn't
+// exist. Mapping every cancellation to ErrConditionFailed would turn a
+// transient, retryable conflict into a wrong "research not found" 404 for
+// a caller who did nothing wrong.
+func mapTransactionCanceledError(err error, researchId, verb string) error {
+	var tce *types.TransactionCanceledException
+	if errors.As(err, &tce) {
+		if len(tce.CancellationReasons) > 0 && aws.ToString(tce.CancellationReasons[0].Code) == "ConditionalCheckFailed" {
+			return fmt.Errorf("%w: research %s not found", ErrConditionFailed, researchId)
+		}
+		return fmt.Errorf("failed to %s account: transaction canceled, retry: %w", verb, err)
+	}
+	return fmt.Errorf("failed to %s account transactionally: %w", verb, err)
+}
+
+// LinkAccountTransactional atomically ADDs accountID to research.accountIds
+// AND puts the RESEARCHREF# reverse-index item in one TransactWriteItems
+// call. Doing these as two separate requests (the original AddAccountLink +
+// mainRepo.PutResearchRef) left a gap: a concurrent LinkAccount/UnlinkAccount
+// pair for the SAME (research, account) could interleave as
+// "unlink's set-DELETE, link's set-ADD, link's ref-PUT, unlink's ref-DELETE"
+// -- leaving the canonical accountIds set linked but the reverse-index ref
+// deleted. ListAccountResearch reads from that ref, so a genuinely-linked
+// research would then be permanently invisible from the account's list
+// until someone happens to call LinkAccount again for the same pair.
+// TransactWriteItems makes both writes land or fail together, closing that
+// window entirely rather than narrowing it.
+func (r *ResearchRepository) LinkAccountTransactional(ctx context.Context, researchId, accountID string, ref *model.ResearchRef) error {
+	refItem, err := attributevalue.MarshalMap(ref)
+	if err != nil {
+		return fmt.Errorf("marshal research ref: %w", err)
+	}
+	updateExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		WithUpdate(expression.Add(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}}))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("build update expression: %w", err)
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Update: &types.Update{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchId},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+					},
+					ConditionExpression:       updateExpr.Condition(),
+					UpdateExpression:          updateExpr.Update(),
+					ExpressionAttributeNames:  updateExpr.Names(),
+					ExpressionAttributeValues: updateExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName: aws.String(r.tableName),
+					Item:      refItem,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return mapTransactionCanceledError(err, researchId, "link")
+	}
+	return nil
+}
+
+// UnlinkAccountTransactional is LinkAccountTransactional's inverse: atomic
+// set-DELETE + ref-delete in one TransactWriteItems call, for the same
+// reason (closing the canonical-vs-reverse-index interleaving gap).
+func (r *ResearchRepository) UnlinkAccountTransactional(ctx context.Context, researchId, accountID string) error {
+	updateExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		WithUpdate(expression.Delete(expression.Name("accountIds"), expression.Value(&types.AttributeValueMemberSS{Value: []string{accountID}}))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("build update expression: %w", err)
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Update: &types.Update{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixResearch + researchId},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+					},
+					ConditionExpression:       updateExpr.Condition(),
+					UpdateExpression:          updateExpr.Update(),
+					ExpressionAttributeNames:  updateExpr.Names(),
+					ExpressionAttributeValues: updateExpr.Values(),
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixResearchRef + researchId},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		return mapTransactionCanceledError(err, researchId, "unlink")
+	}
+	return nil
+}
+
 // ListUserResearch lists all research tasks for a user
 // Query PK=USER#{userId}, SK begins_with RESEARCH#, then fetch each full record
 func (r *ResearchRepository) ListUserResearch(ctx context.Context, userId string) ([]model.Research, error) {

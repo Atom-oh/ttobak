@@ -239,11 +239,21 @@ export interface Research {
   trashedAt?: string;
   isShared?: boolean;
   sharedBy?: string;
+  accountIds?: string[];
 }
 
 export interface ResearchDetail extends Research {
   content?: string;
   shares?: SharedUser[];
+}
+
+export interface AccountResearchRef {
+  researchId: string;
+  topic: string;
+  summary?: string;
+  status: Research['status'];
+  ownerUserId: string;
+  createdAt: string;
 }
 
 export interface AccountSummary {
@@ -298,6 +308,12 @@ export interface AccountDocument {
   updatedAt?: string;
   content?: string;
   downloadUrl?: string;
+  /** Presigned URL for the PDF sidecar of a PPTX/PPT slide, once the
+   * convert-doc Lambda's conversion has finished. Absent otherwise. */
+  previewUrl?: string;
+  /** Set once a public share link has been minted for this (personal,
+   * slide) document; see docApi.createPublicShare. */
+  publicShareToken?: string;
 }
 
 export interface PutDocumentRequest {
