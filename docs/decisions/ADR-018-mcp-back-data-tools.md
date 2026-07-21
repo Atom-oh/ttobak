@@ -24,7 +24,7 @@ Add account-scoped MCP tools to `mcp-server`, each a thin wrapper over an authen
 
 The write path is intentionally narrow (documents only); it never writes meetings or membership. Tool names, the API client (`mcp-server/src/api.ts`), and the README tool list are kept in lockstep.
 
-> **Superseded in part** — see [Post-Implementation Updates](#post-implementation-updates) below: account/membership writes were added, so "it never writes meetings or membership" is no longer accurate as of that update.
+> **Superseded in part** — see [Post-Implementation Updates](#post-implementation-updates) below: account/membership writes were added, so the membership half of "it never writes meetings or membership" no longer holds. Meetings are still never written.
 
 ## Post-Implementation Updates
 
@@ -33,21 +33,22 @@ The write path is intentionally narrow (documents only); it never writes meeting
    - **`ttobak_upload_document`** → `POST /api/upload/presigned` (category `doc`) + `POST /api/accounts/{id}/documents` or `POST /api/documents`. Extends the original `put_document` (markdown text only) to binary files (pdf/pptx/ppt) — same loop-guard-free path as the REST API itself already allowed, just now reachable from MCP.
    - **`ttobak_create_account`** / **`ttobak_add_account_member`** → `POST /api/accounts`, `POST /api/accounts/{id}/members`. This is the one genuine expansion beyond "documents only": account and membership writes are now MCP-reachable, where the original decision explicitly said "it never writes meetings or membership." Membership adds still require the caller to already be the account owner (server-enforced), and role is restricted to `AM`/`TAM`/`SSA` (never `owner`) — same restriction the REST endpoint itself enforces.
 2. **KB uploads are not account-scoped**: unlike documents, KB files ingest into one shared Bedrock Knowledge Base regardless of which account they're "about" — there's no account-membership gate on `/api/kb/*`, only authentication. Any authenticated user can add to the shared KB; `ttobak_kb_delete_file` is scoped server-side to the caller's own uploaded files (`kb/{userID}/` prefix in `backend/internal/service/kb.go`), not any file in the shared KB. Deletion also only removes the S3 object — the Bedrock index still returns it until the next ingestion sync.
-3. **`ttobak_kb_sync` is currently a no-op on the deployed API Lambda**: `infra/lib/gateway-stack.ts`'s `ApiFunction` gets no `KB_ID`/`KB_DATASOURCE_ID` env vars (only `SummarizeFunction`/`QAFunction` do), and `apiRole` has no `bedrock:StartIngestionJob` IAM permission (only `summarizeRole`/`kbRole`/`crawlerRole` do, in `infra/lib/ai-stack.ts`) — so `kb.go`'s `SyncKB` always returns `{status: "skipped"}`. Files uploaded via `ttobak_kb_upload` aren't permanently unindexed, though: the news/tech crawler already triggers periodic ingestion on the same Bedrock data source, so an uploaded file becomes searchable at the next crawler-driven sync rather than never. Follow-up (tracked, not yet scheduled): a small infra PR injecting the two env vars + the IAM action into `ApiFunction`/`apiRole`, scoped to the KB's ARN — note the name landmine: `cmd/api/main.go` reads `KB_DATASOURCE_ID`, but CDK's existing pattern for `SummarizeFunction`/`QAFunction` injects a differently-named `DATA_SOURCE_ID`, so copying that pattern verbatim would still leave `api` reading an unset variable.
+3. **`ttobak_kb_sync` is currently a no-op on the deployed API Lambda**: `infra/lib/gateway-stack.ts`'s `ApiFunction` gets no `KB_ID`/`KB_DATASOURCE_ID` env vars (`SummarizeFunction` gets `KB_ID` + `DATA_SOURCE_ID`; `QAFunction` gets only `KB_ID`), and `apiRole` has no `bedrock:StartIngestionJob` IAM permission (only `summarizeRole`/`kbRole`/`crawlerRole` do, in `infra/lib/ai-stack.ts`) — so `kb.go`'s `SyncKB` always returns `{status: "skipped"}`. There is **no guaranteed indexing fallback**: the daily crawler does trigger ingestion on the same Bedrock data source, but `backend/python/crawler/ingest_trigger.py` skips ingestion entirely when the crawler itself added/updated zero documents, and MCP KB uploads don't count toward those counters — so an uploaded file only becomes searchable at the next crawler run that happened to find new documents of its own, which has no upper bound. Both upload/delete tool messages disclose this. Follow-up (tracked, not yet scheduled): a small infra PR injecting the two env vars + the IAM action into `ApiFunction`/`apiRole`, scoped to the KB's ARN — note the name landmine: `cmd/api/main.go` reads `KB_DATASOURCE_ID`, but CDK's existing pattern for `SummarizeFunction` injects a differently-named `DATA_SOURCE_ID`, so copying that pattern verbatim would still leave `api` reading an unset variable.
 
 ## Consequences
 
 ### Positive
 - TTOBAK becomes bidirectional: SAs can round-trip account knowledge through their own agents/tools.
-- Authorization is unchanged and centralized — MCP tools reuse the same member-gated REST endpoints, so no parallel auth path.
-- Loop-guard ([ADR-017](ADR-017-vault-export-and-inbound-ingest.md)) protects the one write tool from export↔reimport loops.
+- Authorization is unchanged and centralized — MCP tools reuse the same REST endpoints and their server-side gates (member-gated for account documents, owner-gated for membership, auth-only for the shared KB), so no parallel auth path.
+- Loop-guard ([ADR-017](ADR-017-vault-export-and-inbound-ingest.md)) protects `put_document` from export↔reimport loops. (The post-implementation write tools have no loop-guard — they don't round-trip exported content.)
 
 ### Negative
-- A write-capable MCP surface widens the blast radius if the user's MCP token leaks (mitigated: writes limited to account documents, member-gated).
-- Three more tool definitions to keep in sync across `api.ts`, `index.ts`, and the README.
+- A write-capable MCP surface widens the blast radius if the user's MCP token leaks. The original mitigation ("writes limited to account documents, member-gated") no longer covers the widened surface: KB writes are auth-only into an org-shared index, and account/membership writes are owner-gated rather than member-gated. `guardUploadPath` in `api.ts` narrows the local-file-read side (credential dotdirs under `$HOME`, symlinks resolved, size caps) but is a speed bump, not a sandbox — the MCP host's tool-call approval remains the real gate.
+- Ten tool definitions (three original + seven post-implementation) to keep in sync across `api.ts`, `index.ts`, and the README's English/Korean tables.
 
 ### Risks
 - Agents may push low-quality or duplicative documents; only the marker loop-guard exists today, not content-quality checks.
+- Anything uploaded to the shared KB is retrievable by every authenticated user via `ttobak_ask`, and (per Post-Implementation Update 3) removal has no guaranteed deadline while `kb_sync` is a no-op.
 
 ## Alternatives Considered
 | Option | Pros | Cons |
@@ -77,7 +78,7 @@ The write path is intentionally narrow (documents only); it never writes meeting
 
 쓰기 경로는 의도적으로 좁다(문서 전용). 미팅·멤버십은 절대 쓰지 않는다. 도구명·API 클라이언트(`mcp-server/src/api.ts`)·README 도구 목록을 일치 유지.
 
-> **일부 결정이 이후 대체됨** — 아래 [구현 후 업데이트](#구현-후-업데이트) 참조: 계정/멤버십 쓰기가 추가되어 "미팅·멤버십은 절대 쓰지 않는다"는 더 이상 사실이 아니다(해당 업데이트 이후).
+> **일부 결정이 이후 대체됨** — 아래 [구현 후 업데이트](#구현-후-업데이트) 참조: 계정/멤버십 쓰기가 추가되어 "미팅·멤버십은 절대 쓰지 않는다" 중 **멤버십** 부분은 더 이상 성립하지 않는다. 미팅은 여전히 쓰지 않는다.
 
 ## 구현 후 업데이트
 
@@ -86,21 +87,22 @@ The write path is intentionally narrow (documents only); it never writes meeting
    - **`ttobak_upload_document`** → `POST /api/upload/presigned`(category `doc`) + `POST /api/accounts/{id}/documents` 또는 `POST /api/documents`. 기존 `put_document`(마크다운 텍스트만)를 바이너리 파일(pdf/pptx/ppt)로 확장 — REST API 자체가 이미 허용하던 경로를 MCP에서도 도달 가능하게 만든 것뿐이다.
    - **`ttobak_create_account`** / **`ttobak_add_account_member`** → `POST /api/accounts`, `POST /api/accounts/{id}/members`. "문서 전용"을 실질적으로 넘어서는 유일한 확장 — 원래 결정이 명시적으로 "미팅·멤버십은 절대 쓰지 않는다"고 했던 부분이 이제 MCP에서 계정·멤버십 쓰기로 확장됐다. 멤버 추가는 여전히 호출자가 이미 계정 소유자여야 하고(서버 강제), role은 `AM`/`TAM`/`SSA`로만 제한(`owner`는 불가) — REST 엔드포인트 자체가 강제하는 것과 동일한 제약이다.
 2. **KB 업로드는 Account 범위가 아님**: 문서와 달리 KB 파일은 "어느 Account에 대한 것인지"와 무관하게 하나의 공유 Bedrock Knowledge Base로 인제스트된다 — `/api/kb/*`에는 계정 멤버십 게이트가 없고 인증만 필요하다. 인증된 사용자라면 누구나 공유 KB에 추가할 수 있으나, `ttobak_kb_delete_file`은 서버 측에서 호출자 본인이 업로드한 파일(`backend/internal/service/kb.go`의 `kb/{userID}/` prefix)로만 제한되며 공유 KB의 임의 파일을 삭제할 수 없다. 또한 삭제는 S3 객체만 제거하므로 다음 인제스천 sync 전까지는 Bedrock 인덱스에 여전히 검색된다.
-3. **`ttobak_kb_sync`는 현재 배포된 API Lambda에서 no-op**: `infra/lib/gateway-stack.ts`의 `ApiFunction`에는 `KB_ID`/`KB_DATASOURCE_ID` env가 주입되지 않고(`SummarizeFunction`/`QAFunction`에만 주입됨), `apiRole`에는 `bedrock:StartIngestionJob` IAM 권한이 없다(`summarizeRole`/`kbRole`/`crawlerRole`에만 있음, `infra/lib/ai-stack.ts`) — 그래서 `kb.go`의 `SyncKB`는 항상 `{status: "skipped"}`를 반환한다. 다만 `ttobak_kb_upload`로 올린 파일이 영원히 미인덱싱되는 것은 아니다 — 뉴스/기술 크롤러가 이미 동일 Bedrock 데이터소스에 주기적 인제스천을 트리거하므로, 다음 크롤러 주도 sync 시점에는 검색 가능해진다. 후속 작업(추적 중, 아직 일정 미정): `ApiFunction`/`apiRole`에 두 env + IAM 액션을 KB ARN으로 스코프하여 주입하는 소규모 infra PR — 이름 함정 주의: `cmd/api/main.go`는 `KB_DATASOURCE_ID`를 읽지만, CDK가 `SummarizeFunction`/`QAFunction`에 쓰는 기존 패턴은 이름이 다른 `DATA_SOURCE_ID`를 주입하므로 그 패턴을 그대로 복사하면 api는 여전히 미설정 변수를 읽게 된다.
+3. **`ttobak_kb_sync`는 현재 배포된 API Lambda에서 no-op**: `infra/lib/gateway-stack.ts`의 `ApiFunction`에는 `KB_ID`/`KB_DATASOURCE_ID` env가 주입되지 않고(`SummarizeFunction`은 `KB_ID` + `DATA_SOURCE_ID`를, `QAFunction`은 `KB_ID`만 받음), `apiRole`에는 `bedrock:StartIngestionJob` IAM 권한이 없다(`summarizeRole`/`kbRole`/`crawlerRole`에만 있음, `infra/lib/ai-stack.ts`) — 그래서 `kb.go`의 `SyncKB`는 항상 `{status: "skipped"}`를 반환한다. **보장된 인덱싱 대체 경로는 없다**: 일일 크롤러가 동일 Bedrock 데이터소스에 인제스천을 트리거하긴 하지만, `backend/python/crawler/ingest_trigger.py`는 크롤러 자신이 추가/갱신한 문서가 0건이면 인제스천을 통째로 skip하며, MCP KB 업로드는 그 카운터에 잡히지 않는다 — 즉 업로드 파일은 크롤러가 자체 신규 문서를 얻은 다음 실행에서야 검색 가능해지고, 그 시점에는 상한이 없다. 업로드/삭제 도구 메시지 양쪽에 이 사실을 고지한다. 후속 작업(추적 중, 아직 일정 미정): `ApiFunction`/`apiRole`에 두 env + IAM 액션을 KB ARN으로 스코프하여 주입하는 소규모 infra PR — 이름 함정 주의: `cmd/api/main.go`는 `KB_DATASOURCE_ID`를 읽지만, CDK가 `SummarizeFunction`에 쓰는 기존 패턴은 이름이 다른 `DATA_SOURCE_ID`를 주입하므로 그 패턴을 그대로 복사하면 api는 여전히 미설정 변수를 읽게 된다.
 
 ## 결과
 
 ### 긍정
 - TTOBAK이 양방향이 됨: SA가 자기 에이전트/도구로 Account 지식을 왕복.
-- 권한은 변경 없이 중앙화 — MCP 도구가 동일한 멤버 게이트 REST를 재사용해 병렬 인증 경로 없음.
-- 루프 가드([ADR-017](ADR-017-vault-export-and-inbound-ingest.md))가 유일한 쓰기 도구를 내보내기↔재임포트 루프에서 보호.
+- 권한은 변경 없이 중앙화 — MCP 도구가 동일한 REST 엔드포인트와 그 서버 측 게이트(계정 문서는 멤버 게이트, 멤버십은 소유자 게이트, 공유 KB는 인증만)를 재사용해 병렬 인증 경로 없음.
+- 루프 가드([ADR-017](ADR-017-vault-export-and-inbound-ingest.md))가 `put_document`를 내보내기↔재임포트 루프에서 보호. (구현 후 추가된 쓰기 도구들에는 루프 가드가 없음 — 내보낸 콘텐츠를 왕복시키는 경로가 아니기 때문.)
 
 ### 부정
-- 쓰기 가능한 MCP 표면은 사용자 MCP 토큰 유출 시 영향 범위를 넓힘(완화: 쓰기를 계정 문서로 제한, 멤버 게이트).
-- `api.ts`·`index.ts`·README 간 동기화할 도구 정의 3개 추가.
+- 쓰기 가능한 MCP 표면은 사용자 MCP 토큰 유출 시 영향 범위를 넓힘. 원래의 완화("쓰기를 계정 문서로 제한, 멤버 게이트")는 확장된 표면을 더 이상 커버하지 못함: KB 쓰기는 인증만으로 조직 공유 인덱스에 들어가고, 계정/멤버십 쓰기는 멤버가 아닌 소유자 게이트다. `api.ts`의 `guardUploadPath`가 로컬 파일 읽기 측면($HOME 아래 자격증명 dotdir, symlink 해석, 크기 상한)을 좁히지만 이는 sandbox가 아니라 속도 방지턱 — 실질 게이트는 MCP 호스트의 도구 호출 승인이다.
+- `api.ts`·`index.ts`·README 영/한 표 간 동기화할 도구 정의가 총 10개(원래 3개 + 구현 후 7개).
 
 ### 위험
 - 에이전트가 저품질/중복 문서를 밀어넣을 수 있음; 현재는 마커 루프 가드만 있고 콘텐츠 품질 검사는 없음.
+- 공유 KB에 올라간 내용은 모든 인증 사용자가 `ttobak_ask`로 조회 가능하며, (구현 후 업데이트 3 참조) `kb_sync`가 no-op인 동안에는 제거에도 보장된 기한이 없음.
 
 ## 검토한 대안
 | 옵션 | 장점 | 단점 |

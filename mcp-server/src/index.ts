@@ -179,7 +179,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'ttobak_kb_upload',
       description:
-        'Upload a local file (pdf, md, pptx, docx) into the shared Knowledge Base. Ingestion does not start until you call ttobak_kb_sync -- upload several files first, then sync once.',
+        'Upload a local file (pdf, md, pptx, docx) into the shared Knowledge Base. ' +
+        'WARNING: the KB is shared org-wide -- anything uploaded here becomes searchable by ALL ' +
+        'authenticated TTOBAK users via ttobak_ask, so never upload private or account-confidential material. ' +
+        'Indexing happens at the next ingestion run, not immediately (see ttobak_kb_sync).',
       inputSchema: {
         type: 'object' as const,
         properties: {
@@ -195,7 +198,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         'Trigger Knowledge Base ingestion for files uploaded via ttobak_kb_upload since the last sync. ' +
         'NOTE: on the current production deployment this is a no-op (returns status "skipped") -- the API ' +
-        'Lambda is not yet configured with the Knowledge Base ID/data source needed to start an ingestion job.',
+        'Lambda is not yet configured with the Knowledge Base ID/data source needed to start an ingestion job. ' +
+        'Until that is fixed, uploads are only indexed when the daily crawler triggers ingestion, and it skips ' +
+        'runs where it found no new documents of its own -- so indexing latency is unbounded.',
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {
@@ -246,12 +251,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'ttobak_add_account_member',
-      description: "Add a teammate to an account by email. Only the account owner can do this. role must be AM, TAM, or SSA.",
+      description: 'Add a teammate to an account by email. Only the account owner can do this. role must be AM, TAM, or SSA.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           accountId: { type: 'string', description: 'Account ID' },
-          email: { type: 'string', description: "Teammate's TTOBAK email" },
+          email: { type: 'string', description: 'TTOBAK email of the teammate to add' },
           role: { type: 'string', enum: ['AM', 'TAM', 'SSA'], description: 'Role to assign' },
         },
         required: ['accountId', 'email', 'role'],
@@ -388,7 +393,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         if (!filePath) return error('filePath is required');
         const result = await api.uploadToKB(filePath, fileName, fileType);
-        return text(`Uploaded to Knowledge Base: ${JSON.stringify(result)}\nCall ttobak_kb_sync to start ingestion.`);
+        return text(
+          `Uploaded to Knowledge Base: ${JSON.stringify(result)}\n` +
+            'Reminder: the KB is shared -- this file becomes searchable by all authenticated users once indexed. ' +
+            'Indexing happens at the next ingestion run (ttobak_kb_sync is currently a no-op in production; ' +
+            'ingestion is triggered by crawler runs that found new documents).',
+        );
       }
 
       case 'ttobak_kb_sync': {
@@ -405,7 +415,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { fileId } = args as { fileId: string };
         if (!fileId) return error('fileId is required');
         await api.deleteKBFile(fileId);
-        return text(`Deleted Knowledge Base file ${fileId}. It stays searchable until the next ttobak_kb_sync (currently a no-op in production -- see that tool's description).`);
+        return text(
+          `Deleted Knowledge Base file ${fileId}. It stays searchable until the next ingestion run -- ` +
+            'and since ttobak_kb_sync is currently a no-op in production and crawler-triggered ingestion ' +
+            'skips runs with no new crawler documents, that removal has no guaranteed deadline.',
+        );
       }
 
       case 'ttobak_upload_document': {
