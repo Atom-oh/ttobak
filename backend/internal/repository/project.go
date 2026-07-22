@@ -311,8 +311,18 @@ func (r *DynamoDBRepository) DeleteProject(ctx context.Context, projectID, owner
 func mapProjectTransactionCanceledError(err error, entityID, entityLabel, verb string) error {
 	var tce *types.TransactionCanceledException
 	if errors.As(err, &tce) {
-		if len(tce.CancellationReasons) > 0 && aws.ToString(tce.CancellationReasons[0].Code) == "ConditionalCheckFailed" {
-			return fmt.Errorf("%w: %s %s not found", ErrConditionFailed, entityLabel, entityID)
+		// Check EVERY reason, not just index 0: CancellationReasons is
+		// positional (one per TransactItem, "None" for items that weren't
+		// the cause), and the meeting/research-link transactions have a
+		// ConditionCheck on the project CONFIG item at index 2, not 0 --
+		// checking only index 0 would silently miss a condition failure
+		// there and fall through to the generic "retry" error instead of
+		// ErrConditionFailed/ErrNotFound, defeating that ConditionCheck's
+		// entire purpose (closing the delete-vs-link race).
+		for _, reason := range tce.CancellationReasons {
+			if aws.ToString(reason.Code) == "ConditionalCheckFailed" {
+				return fmt.Errorf("%w: %s %s not found", ErrConditionFailed, entityLabel, entityID)
+			}
 		}
 		return fmt.Errorf("failed to %s: transaction canceled, retry: %w", verb, err)
 	}

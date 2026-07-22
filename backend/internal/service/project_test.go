@@ -819,3 +819,43 @@ func TestUnlinkResearch_StrangerForbidden(t *testing.T) {
 		t.Fatalf("expected ErrForbidden, got %v", err)
 	}
 }
+
+// TestUnlinkMeeting_ResourceOwnerCanUnlinkAfterLosingProjectAccess is the
+// regression test for the OTHER direction of the revocation deadlock: a
+// member linked their own meeting, was then removed from the project
+// (RemoveMember), and must still be able to unlink their own meeting even
+// though they no longer pass requireProjectAccess. An earlier version
+// called requireProjectAccess unconditionally before checking resource
+// ownership, denying exactly this caller.
+func TestUnlinkMeeting_ResourceOwnerCanUnlinkAfterLosingProjectAccess(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	meeting := &model.Meeting{MeetingID: "m1", UserID: "former-member", ProjectIDs: []string{"p1"}}
+	repo.meetings[projectMeetingKey("former-member", "m1")] = meeting
+	repo.meetingRefs["p1"] = []model.ProjectMeetingRef{{
+		SK: projectMeetingRefSK(meeting), ProjectID: "p1", MeetingID: "m1", OwnerUserID: "former-member",
+	}}
+	// No repo.projectMembers entry for "former-member" -- they were removed
+	// and have no other path (not owner, not account-inherited) to project
+	// access.
+
+	if err := newProjectServiceWithRepo(repo).UnlinkMeeting(context.Background(), "former-member", "p1", "m1"); err != nil {
+		t.Fatalf("resource owner should be able to unlink their own meeting even without project access: %v", err)
+	}
+	if contains(meeting.ProjectIDs, "p1") {
+		t.Fatal("expected meeting.ProjectIDs to no longer contain p1")
+	}
+}
+
+func TestUnlinkResearch_ResourceOwnerCanUnlinkAfterLosingProjectAccess(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	repo.research["r1"] = &model.Research{ResearchID: "r1", UserID: "former-member", ProjectIDs: []string{"p1"}}
+
+	if err := newProjectServiceWithRepo(repo).UnlinkResearch(context.Background(), "former-member", "p1", "r1"); err != nil {
+		t.Fatalf("resource owner should be able to unlink their own research even without project access: %v", err)
+	}
+	if contains(repo.research["r1"].ProjectIDs, "p1") {
+		t.Fatal("expected research.ProjectIDs to no longer contain p1")
+	}
+}

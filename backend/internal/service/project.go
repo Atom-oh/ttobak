@@ -484,19 +484,21 @@ func (s *ProjectService) LinkMeeting(ctx context.Context, userID, projectID, mee
 }
 
 func (s *ProjectService) UnlinkMeeting(ctx context.Context, userID, projectID, meetingID string) error {
-	project, err := s.requireProjectAccess(ctx, userID, projectID)
+	// Deliberately NOT requireProjectAccess here (see below): that call
+	// would deny a former member who lost project access via RemoveMember
+	// but still owns the meeting they linked, recreating the exact deadlock
+	// this function exists to avoid -- just in the other direction (the
+	// resource owner, instead of the project owner, unable to unlink).
+	project, err := s.repo.GetProject(ctx, projectID)
 	if err != nil {
 		return err
 	}
+	if project == nil {
+		return ErrNotFound
+	}
 	// Look up the ref's ACTUAL existing SK and owner (see
 	// existingProjectMeetingRef's comment) rather than recomputing the SK
-	// from the meeting's current Date, and rather than requiring the caller
-	// to own the meeting (LinkMeeting's caller-scoped GetMeeting means only
-	// the meeting's owner could have linked it, but that owner may since
-	// have lost project access -- e.g. via RemoveMember -- while the
-	// project owner never owned the meeting themselves; requiring resource
-	// ownership on Unlink the way Link does would make such a link
-	// permanently un-unlinkable by anyone, blocking DeleteProject forever).
+	// from the meeting's current Date.
 	refSK, ownerUserID, err := s.existingProjectMeetingRef(ctx, projectID, meetingID)
 	if err != nil {
 		return err
@@ -508,7 +510,15 @@ func (s *ProjectService) UnlinkMeeting(ctx context.Context, userID, projectID, m
 		// error the caller can't do anything about.
 		return nil
 	}
-	if project.OwnerUserID != userID && ownerUserID != userID {
+	// Authorized if EITHER: the caller owns the linked meeting (regardless
+	// of their current project access -- a resource owner can always
+	// revoke their own contribution), OR the caller owns the project
+	// (regardless of whether they ever owned this particular meeting --
+	// see LinkMeeting's comment on the mirror-image deadlock this avoids).
+	// Neither check goes through requireProjectAccess's broader
+	// direct-member/account-inherited-member allowance: an ordinary
+	// project member with no stake in this specific link cannot unlink it.
+	if ownerUserID != userID && project.OwnerUserID != userID {
 		return ErrForbidden
 	}
 	if err := s.repo.MeetingProjectUnlinkTransactional(ctx, ownerUserID, meetingID, projectID, refSK); err != nil {
@@ -570,15 +580,18 @@ func (s *ProjectService) UnlinkResearch(ctx context.Context, userID, projectID, 
 	if research == nil {
 		return ErrNotFound
 	}
-	project, err := s.requireProjectAccess(ctx, userID, projectID)
+	// Deliberately GetProject, not requireProjectAccess -- see UnlinkMeeting's
+	// comment. Authorized if EITHER the caller owns the research (regardless
+	// of current project access) OR the caller owns the project (regardless
+	// of research ownership); an ordinary project member with no stake in
+	// this specific link cannot unlink it.
+	project, err := s.repo.GetProject(ctx, projectID)
 	if err != nil {
 		return err
 	}
-	// The project owner may unlink any research linked to their own project,
-	// not just research they personally own -- see UnlinkMeeting's comment
-	// on the equivalent deadlock this avoids (a non-owner member who linked
-	// their own research, then lost project access via RemoveMember, would
-	// otherwise be the only one who could ever unlink it).
+	if project == nil {
+		return ErrNotFound
+	}
 	if research.UserID != userID && project.OwnerUserID != userID {
 		return ErrForbidden
 	}

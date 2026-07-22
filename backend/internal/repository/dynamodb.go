@@ -354,40 +354,79 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	// atomic ADD/DELETE and never race each other -- but that guarantee means
 	// nothing if this call reads a Meeting BEFORE a concurrent (Un)LinkMeeting
 	// commits and then overwrites the whole item AFTER, silently reverting or
-	// (since the tag is `omitempty`) deleting the link. Re-fetching just this
-	// one attribute here -- after the S3 transcript uploads above (which can
-	// take a while) and immediately before the marshal+PutItem below -- closes
-	// the window down to ordinary single-item consistency instead of
-	// "however long this caller held its in-memory copy plus however long the
-	// S3 upload took," which for STT pipeline callers (transcribe.go,
-	// cmd/transcribe/main.go) can be the entire transcription run.
+	// (since the tag is `omitempty`) deleting the link.
 	//
-	// A failed fetch here must abort the whole update, not proceed with
-	// whatever ProjectIDs the caller's in-memory Meeting happened to carry
-	// (typically nil for STT pipeline callers, which never populate it) --
-	// silently continuing would risk wiping every project link on a single
-	// transient GetItem error, which is worse than the race this exists to
-	// close in the first place.
-	current, err := r.getMeetingProjectIDs(ctx, meeting.UserID, meeting.MeetingID)
-	if err != nil {
-		return fmt.Errorf("failed to preserve projectIds on meeting update: %w", err)
-	}
-	meeting.ProjectIDs = current
+	// A plain re-read-then-write (read projectIds, then PutItem) only
+	// NARROWS that window to ordinary read-then-write latency -- it doesn't
+	// close it: a Link/Unlink can still land in the gap between this read
+	// and the PutItem below. Narrowing isn't enough for a field this
+	// codebase's own conventions single out (AGENTS.md: "a field another
+	// code path can mutate concurrently ... needs a conditional UpdateItem,
+	// not a whole-item PutItem carrying a stale read-time snapshot").
+	// Closing it for real means detecting the race, not just shrinking it:
+	// the PutItem below carries a ConditionExpression asserting projectIds
+	// still equals what was just read, and a ConditionalCheckFailedException
+	// (someone changed it in between) triggers a bounded retry -- re-read,
+	// re-attempt -- instead of either silently overwriting the change or
+	// giving up. A failed *read* (not a lost race) still aborts the whole
+	// update rather than proceeding with whatever ProjectIDs the caller's
+	// in-memory Meeting happened to carry (typically nil for STT pipeline
+	// callers, which never populate it) -- proceeding on a read failure
+	// risks wiping every project link on one transient GetItem error, which
+	// is worse than the race this exists to close.
+	const maxProjectIDsAttempts = 3
+	for attempt := 1; ; attempt++ {
+		current, err := r.getMeetingProjectIDs(ctx, meeting.UserID, meeting.MeetingID)
+		if err != nil {
+			return fmt.Errorf("failed to preserve projectIds on meeting update: %w", err)
+		}
+		meeting.ProjectIDs = current
 
-	item, err := attributevalue.MarshalMap(meeting)
-	if err != nil {
-		return fmt.Errorf("failed to marshal meeting: %w", err)
-	}
+		item, err := attributevalue.MarshalMap(meeting)
+		if err != nil {
+			return fmt.Errorf("failed to marshal meeting: %w", err)
+		}
 
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      item,
-	})
-	if err != nil {
+		condExpr, err := projectIDsUnchangedCondition(current)
+		if err != nil {
+			return fmt.Errorf("build projectIds-unchanged condition: %w", err)
+		}
+
+		_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+			TableName:                 aws.String(r.tableName),
+			Item:                      item,
+			ConditionExpression:       condExpr.Condition(),
+			ExpressionAttributeNames:  condExpr.Names(),
+			ExpressionAttributeValues: condExpr.Values(),
+		})
+		if err == nil {
+			return nil
+		}
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) && attempt < maxProjectIDsAttempts {
+			continue
+		}
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("failed to update meeting: projectIds changed concurrently %d times, giving up", maxProjectIDsAttempts)
+		}
 		return fmt.Errorf("failed to update meeting: %w", err)
 	}
+}
 
-	return nil
+// projectIDsUnchangedCondition builds the PutItem ConditionExpression
+// UpdateMeeting uses to detect (not just narrow) a concurrent
+// LinkMeeting/UnlinkMeeting -- see UpdateMeeting's comment. DynamoDB
+// compares Set-typed attributes by their contents, not insertion order, so
+// this correctly matches a projectIds set re-read in a different element
+// order than when it was written.
+func projectIDsUnchangedCondition(current []string) (expression.Expression, error) {
+	var cond expression.ConditionBuilder
+	if len(current) == 0 {
+		cond = expression.AttributeNotExists(expression.Name("projectIds"))
+	} else {
+		cond = expression.Name("projectIds").Equal(expression.Value(&types.AttributeValueMemberSS{Value: current}))
+	}
+	return expression.NewBuilder().WithCondition(cond).Build()
 }
 
 // getMeetingProjectIDs reads only the projectIds attribute of a meeting,
