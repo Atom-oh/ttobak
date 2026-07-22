@@ -4,11 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { accountApi } from '@/lib/api';
+import { accountApi, projectApi } from '@/lib/api';
 import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
 import { INSIGHT_TYPES } from '@/types/meeting';
-import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef, User } from '@/types/meeting';
+import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef, ProjectSummary, User } from '@/types/meeting';
 
 export default function AccountDetailClient() {
   const pathname = usePathname();
@@ -22,6 +22,7 @@ export default function AccountDetailClient() {
   const [insights, setInsights] = useState<AccountInsight[]>([]);
   const [documents, setDocuments] = useState<AccountDocument[]>([]);
   const [research, setResearch] = useState<AccountResearchRef[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [activeType, setActiveType] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -35,18 +36,20 @@ export default function AccountDetailClient() {
     setLoading(true);
     setError(null);
     try {
-      const [acc, mtg, ins, docs, res] = await Promise.all([
+      const [acc, mtg, ins, docs, res, projectRes] = await Promise.all([
         accountApi.get(accountId),
         accountApi.meetings(accountId),
         accountApi.insights(accountId),
         accountApi.listDocuments(accountId),
         accountApi.research(accountId),
+        projectApi.accountProjects(accountId),
       ]);
       setAccount(acc);
       setMeetings(mtg?.meetings ?? []);
       setInsights(ins?.insights ?? []);
       setDocuments(docs?.documents ?? []);
       setResearch(res?.research ?? []);
+      setProjects(projectRes?.projects ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load account');
     } finally {
@@ -286,6 +289,37 @@ export default function AccountDetailClient() {
                       </div>
                       <p className="text-sm text-slate-700 dark:text-text-secondary">{ins.text}</p>
                     </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {/* Linked projects */}
+            <section className="mb-8">
+              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">연결된 프로젝트</h3>
+              {projects.length === 0 ? (
+                <p className="text-sm text-slate-400 dark:text-text-muted">연결된 프로젝트가 없습니다.</p>
+              ) : (
+                <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
+                  {projects.map((project) => (
+                    <a
+                      key={project.projectId}
+                      href={`/projects/${project.projectId}`}
+                      className="block p-3 hover:bg-slate-50 dark:hover:bg-white/5"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="material-symbols-outlined text-primary text-lg">work</span>
+                        <span className="text-sm font-medium text-slate-900 dark:text-text-main">{project.name}</span>
+                        {project.stage && (
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                            {project.stage}
+                          </span>
+                        )}
+                      </div>
+                      {project.sfdcOpptyId && (
+                        <p className="text-xs text-slate-400 dark:text-text-muted mt-1">{project.sfdcOpptyId}</p>
+                      )}
+                    </a>
                   ))}
                 </div>
               )}

@@ -7,6 +7,7 @@ import { useAuth } from '@/components/auth/AuthProvider';
 const mainNav = [
   { href: '/', icon: 'video_camera_front', label: 'Meetings' },
   { href: '/accounts', icon: 'corporate_fare', label: 'Accounts' },
+  { href: '/projects', icon: 'work', label: 'Projects' },
   { href: '/docs', icon: 'article', label: 'Documents' },
   { href: '/chat', icon: 'smart_toy', label: 'Assistant' },
   { href: '/files', icon: 'description', label: 'Files' },
