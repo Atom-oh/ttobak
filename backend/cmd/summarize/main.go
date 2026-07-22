@@ -601,12 +601,17 @@ func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) stri
 		if err != nil || linked == nil || linked.Content == "" {
 			continue
 		}
-		// Defense-in-depth: `LinkMeetings` handler validates ownership at
-		// link time, but if a future code path (direct DDB write, admin
-		// import, migration) ever planted another user's id into
-		// LinkedMeetingIDs we don't want to embed their summary into this
-		// meeting's prompt. Skip silently so the prompt remains valid but
-		// drops the orphaned reference.
+		// Access check (belt): `LinkMeetings` (internal/handler/meeting.go)
+		// already enforces this at write time -- it fetches every candidate
+		// via `h.repo.GetMeeting(ctx, userID, linkedID)`, scoped to the
+		// CALLER's own USER#{userID} partition, so only meetings the caller
+		// already owns can ever be written into LinkedMeetingIDs; a
+		// cross-tenant meetingId simply returns nil there and gets rejected
+		// before the link is ever stored. This re-check (suspenders) is pure
+		// defense-in-depth for a future code path that writes
+		// LinkedMeetingIDs some other way (direct DDB write, admin import,
+		// migration) without going through that handler. Skip silently so
+		// the prompt remains valid but drops the orphaned reference.
 		if linked.UserID != meeting.UserID {
 			log.Printf("Skipping linked meeting %s — owner mismatch (%s vs %s)",
 				linkedID, linked.UserID, meeting.UserID)

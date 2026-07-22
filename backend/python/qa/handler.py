@@ -3,6 +3,7 @@ import json
 import os
 import base64
 import logging
+import threading
 import time
 import boto3
 
@@ -1169,6 +1170,38 @@ def handle_ask_stream(event):
     return {'status': 'ok'}
 
 
+def _execute_tool_with_heartbeat(tool_name, tool_input, context, apigw, connection_id, session_id, interval=15):
+    """Run execute_tool while sending a tool_progress heartbeat immediately
+    and then every `interval` seconds it's still running. A single heartbeat
+    sent only before the call starts can't cover a tool that itself runs
+    past the client's stall watchdog (KB retrieve, research kickoff, etc.
+    are usually fast, but nothing guarantees that) -- this keeps rearming
+    for the whole duration instead of just once at the start.
+
+    Returns (result, result_sources, client_gone) -- client_gone is True if
+    any heartbeat during the run found the socket gone, checked after the
+    tool call finishes (execute_tool itself is not interrupted).
+    """
+    done = threading.Event()
+    client_gone = [False]
+
+    def _heartbeat_loop():
+        while True:
+            if not _post_ws(apigw, connection_id, {'type': 'tool_progress', 'sessionId': session_id}):
+                client_gone[0] = True
+            if done.wait(interval):
+                return
+
+    heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    heartbeat_thread.start()
+    try:
+        result, result_sources = execute_tool(tool_name, tool_input, context)
+    finally:
+        done.set()
+        heartbeat_thread.join()
+    return result, result_sources, client_gone[0]
+
+
 def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, connection_id):
     """Agentic tool-use loop using ConverseStream. Streams text deltas to the WebSocket."""
     context = {
@@ -1279,21 +1312,23 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                     continue
                 tool = block['toolUse']
                 logger.info(f"Tool call (stream): {tool['name']}")
-                # Tool execution (KB retrieve, research kickoff, etc.) sends no
-                # answer_delta, so the client's stall watchdog would otherwise
-                # go un-rearmed and time out a perfectly healthy long-running
-                # tool round. This heartbeat rearms it without touching the
-                # answer text. Its return value also doubles as the earliest
-                # client-gone signal during a tool round (the alternative,
-                # burning Bedrock/tool calls until the next answer_delta
-                # notices, wastes a full round of work on a dead socket).
-                if not _post_ws(apigw, connection_id, {
-                    'type': 'tool_progress',
-                    'sessionId': session_id,
-                }):
-                    client_gone = True
+                # Tool execution (KB retrieve, research kickoff, etc.) sends
+                # no answer_delta, so the client's stall watchdog would
+                # otherwise go un-rearmed and time out a perfectly healthy
+                # long-running tool round. _execute_tool_with_heartbeat sends
+                # tool_progress every 15s for the whole call, not just once
+                # before it starts, so a tool that itself runs past the
+                # watchdog's window still keeps it alive. Its client_gone
+                # signal also doubles as the earliest gone-detection during a
+                # tool round (the alternative, burning Bedrock/tool calls
+                # until the next answer_delta notices, wastes a full round of
+                # work on a dead socket).
                 try:
-                    result, result_sources = execute_tool(tool['name'], tool['input'], context)
+                    result, result_sources, tool_client_gone = _execute_tool_with_heartbeat(
+                        tool['name'], tool['input'], context, apigw, connection_id, session_id,
+                    )
+                    if tool_client_gone:
+                        client_gone = True
                 except Exception as e:
                     logger.warning(f"Tool execution failed ({tool['name']}): {e}")
                     result = f"도구 실행 중 오류가 발생했습니다: {tool['name']}"

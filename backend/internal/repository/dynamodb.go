@@ -1743,10 +1743,10 @@ func (r *DynamoDBRepository) ListSharesForUser(ctx context.Context, userID strin
 
 // ListSharesForMeeting lists all shares for a meeting. Drains every page
 // (queryAllPages) rather than returning only DynamoDB's first ~1MB page --
-// a caller deciding whether ANY share of a kind exists (e.g.
-// service.AnyNonOwnerEditShare, gating cross-meeting prompt injection) must
-// see the complete set, not a possibly-truncated prefix, or a share past
-// the first page silently defeats the check.
+// a caller deciding whether ANY share exists (e.g. service.AnyNonOwnerShare,
+// gating cross-meeting prompt injection) must see the complete set, not a
+// possibly-truncated prefix, or a share past the first page silently
+// defeats the check.
 func (r *DynamoDBRepository) ListSharesForMeeting(ctx context.Context, meetingID string) ([]model.Share, error) {
 	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixMeeting + meetingID)).
 		And(expression.Key("SK").BeginsWith(model.PrefixShareTo))

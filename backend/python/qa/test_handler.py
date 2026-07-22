@@ -137,6 +137,56 @@ class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
         self.assertEqual(handler.load_session('s1', user_id='u1'), [])
 
 
+class TestExecuteToolWithHeartbeat(unittest.TestCase):
+    """A single heartbeat sent only before the call starts can't cover a
+    tool that itself runs past the client's stall watchdog -- heartbeats
+    must keep firing for the whole duration of a slow tool call."""
+
+    @mock.patch.object(handler, 'execute_tool')
+    def test_sends_periodic_heartbeats_for_a_slow_tool(self, mock_execute_tool):
+        def slow_tool(name, tool_input, context):
+            time.sleep(0.05)
+            return 'result', []
+        mock_execute_tool.side_effect = slow_tool
+
+        apigw = mock.MagicMock()
+        apigw.post_to_connection.return_value = None
+
+        result, sources, client_gone = handler._execute_tool_with_heartbeat(
+            'some_tool', {}, {}, apigw, 'c1', 's1', interval=0.01,
+        )
+
+        self.assertEqual(result, 'result')
+        self.assertFalse(client_gone)
+        # At 0.01s interval over a 0.05s tool call, multiple heartbeats must
+        # have fired -- not just the one sent before the call started.
+        self.assertGreaterEqual(apigw.post_to_connection.call_count, 2)
+        for call in apigw.post_to_connection.call_args_list:
+            payload = json.loads(call.kwargs['Data'])
+            self.assertEqual(payload['type'], 'tool_progress')
+
+    @mock.patch.object(handler, 'execute_tool')
+    def test_client_gone_detected_mid_run_even_though_tool_call_itself_succeeds(self, mock_execute_tool):
+        def slow_tool(name, tool_input, context):
+            time.sleep(0.05)
+            return 'result', []
+        mock_execute_tool.side_effect = slow_tool
+
+        class FakeGoneException(Exception):
+            pass
+
+        apigw = mock.MagicMock()
+        apigw.exceptions.GoneException = FakeGoneException
+        apigw.post_to_connection.side_effect = FakeGoneException()
+
+        result, sources, client_gone = handler._execute_tool_with_heartbeat(
+            'some_tool', {}, {}, apigw, 'c1', 's1', interval=0.01,
+        )
+
+        self.assertEqual(result, 'result')
+        self.assertTrue(client_gone)
+
+
 class TestAgenticConverseStreamClientGone(unittest.TestCase):
     """A client that disconnects mid-tool-round must stop the loop before the
     next (wasted) Bedrock round -- not just rearm-then-ignore the signal."""
