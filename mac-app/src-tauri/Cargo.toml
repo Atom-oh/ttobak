@@ -20,9 +20,18 @@ serde_json = "1"
 thiserror = "1"
 log = "0.4"
 env_logger = "0.11"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "fs", "time"] }
 parking_lot = "0.12"
 hound = "3.5"
+base64 = "0.22"
+
+# Streaming upload of the recorded WAV straight to a presigned S3 URL — see
+# `src/upload.rs`. Bulk audio bytes must never cross the Tauri IPC bridge to
+# the WebView again (the whole point of this module's `upload_recording`
+# command), so the HTTP client lives here, not in the frontend.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # macOS-only system audio capture via ScreenCaptureKit
 [target.'cfg(target_os = "macos")'.dependencies]

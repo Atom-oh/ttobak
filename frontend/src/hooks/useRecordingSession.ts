@@ -34,6 +34,10 @@ const speechErrorMessages: Record<string, string> = {
   'transcribe-auth-failed': 'AWS 인증 실패. Browser Speech로 전환합니다.',
   'transcribe-stream-error': 'Transcribe Streaming 오류. Browser Speech로 전환합니다.',
   'transcribe-no-stream': 'Transcribe Streaming 연결 실패. Browser Speech로 전환합니다.',
+  // System Audio mode has no microphone, so there is no Web Speech fallback
+  // here — unlike the other transcribe-* errors above, this one can't
+  // "switch to" anything.
+  'transcribe-native-unavailable': '실시간 자막을 사용할 수 없습니다 (AWS 인증/연결 필요). 녹음은 계속되며 종료 후 자동으로 전사됩니다.',
 };
 
 interface UseRecordingSessionOptions {
@@ -132,10 +136,13 @@ export function useRecordingSession({
     }
   }, []);
 
-  const startSession = useCallback((previewCleanup: () => void, stream: MediaStream) => {
-    previewCleanup();
-
-    // Reset state
+  /** Shared setup for both `startSession` (browser mic/tab, has a
+   * MediaStream) and `startNativeSession` (Tauri System Audio, no
+   * MediaStream — see below): resets transcript/translation state and
+   * constructs the SttManager with the same callbacks either way. Callers
+   * are responsible for calling `manager.start(stream, ...)` or
+   * `manager.startNative(...)` themselves. */
+  const createManager = useCallback(() => {
     setIsRecording(true);
     setIsPaused(false);
     setTranscripts([]);
@@ -199,16 +206,54 @@ export function useRecordingSession({
       },
     });
 
+    // Stop any previous manager before overwriting the ref — a restart
+    // after a failed native start would otherwise leak its Transcribe
+    // WebSocket (nothing else holds a reference to stop it).
+    sttManagerRef.current?.stop();
     sttManagerRef.current = manager;
 
     // Choose provider: use transcribe-streaming only if configured
-    const preferredProvider = liveSttProvider === 'transcribe-streaming' && hasTranscribeConfig
+    const preferredProvider: LiveSttProvider = liveSttProvider === 'transcribe-streaming' && hasTranscribeConfig
       ? 'transcribe-streaming'
       : 'web-speech';
 
     setActiveProvider(preferredProvider);
-    manager.start(stream, preferredProvider);
+    return { manager, preferredProvider };
   }, [translationEnabled, liveSttProvider, onProviderChange]);
+
+  const startSession = useCallback((previewCleanup: () => void, stream: MediaStream) => {
+    previewCleanup();
+    const { manager, preferredProvider } = createManager();
+    manager.start(stream, preferredProvider);
+  }, [createManager]);
+
+  /**
+   * Start live captions with no MediaStream — Tauri System Audio mode.
+   * Capture happens in Rust via ScreenCaptureKit; audio arrives via
+   * `pushNativePcmChunk` instead of an AudioWorklet. There is no Web
+   * Speech fallback in this mode (it requires a microphone that doesn't
+   * exist here) — see `SttManager.startNative`.
+   */
+  const startNativeSession = useCallback(() => {
+    const { manager } = createManager();
+    // Ignore createManager's preferredProvider here: it respects the
+    // browser-mode provider toggle, which defaults to 'web-speech' -- but
+    // native mode has no Web Speech fallback (no microphone MediaStream),
+    // so gating on the toggle means default users NEVER get System Audio
+    // captions. Use Transcribe Streaming whenever it's configured; only an
+    // actually-missing config surfaces `transcribe-native-unavailable`.
+    const nativeProvider: LiveSttProvider = transcribeConfigRef.current
+      ? 'transcribe-streaming'
+      : 'web-speech';
+    setActiveProvider(nativeProvider);
+    manager.startNative(nativeProvider);
+  }, [createManager]);
+
+  /** Feed one PCM chunk (from `lib/tauri.ts`'s `onNativePcmChunk`) into the
+   * active native session. No-op if `startNativeSession` wasn't called. */
+  const pushNativePcmChunk = useCallback((chunk: Uint8Array) => {
+    sttManagerRef.current?.pushNativeChunk(chunk);
+  }, []);
 
   const pauseSession = useCallback(() => {
     setIsPaused(true);
@@ -257,6 +302,8 @@ export function useRecordingSession({
     transcriptContext,
     activeProvider,
     startSession,
+    startNativeSession,
+    pushNativePcmChunk,
     pauseSession,
     resumeSession,
     stopSession,
