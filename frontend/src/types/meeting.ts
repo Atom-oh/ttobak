@@ -296,6 +296,64 @@ export interface AccountInsight {
   entities?: string[];
 }
 
+export interface ProjectMember {
+  userId: string;
+  email?: string;
+}
+
+export interface ProjectSummary {
+  projectId: string;
+  name: string;
+  stage?: string;
+  sfdcOpptyId?: string;
+}
+
+export interface Project {
+  projectId: string;
+  name: string;
+  description?: string;
+  sfdcOpptyId?: string;
+  sfdcUrl?: string;
+  stage?: string;
+  ownerUserId: string;
+  accountIds: string[];
+  members: ProjectMember[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectMeetingRef {
+  meetingId: string;
+  ownerUserId: string;
+  title: string;
+  date: string;
+}
+
+export interface ProjectResearchRef {
+  researchId: string;
+  topic: string;
+  summary?: string;
+  status: string;
+  ownerUserId: string;
+  createdAt: string;
+}
+
+export interface ProjectInsight {
+  type: string;
+  text: string;
+  sourceId: string;
+  occurredAt: string;
+  tsMarker?: string;
+  entities?: string[];
+}
+
+export interface ProjectBrief {
+  project: Project;
+  insightsByType: Record<string, ProjectInsight[]>;
+  meetings: ProjectMeetingRef[];
+  research: ProjectResearchRef[];
+}
+
 export interface AccountDocument {
   docId: string;
   title: string;

@@ -2,7 +2,7 @@
 
 import { getIdToken, refreshSession } from './auth';
 import { triggerAuthFailure } from '@/components/auth/AuthProvider';
-import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef } from '@/types/meeting';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -440,6 +440,49 @@ export const accountApi = {
     api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
   research: (id: string) =>
     api.get<{ research: AccountResearchRef[] }>(`/api/accounts/${encodeURIComponent(id)}/research`),
+};
+
+export const projectApi = {
+  list: () => api.get<{ projects: ProjectSummary[] }>('/api/projects'),
+  get: (id: string) => api.get<Project>(`/api/projects/${encodeURIComponent(id)}`),
+  create: (data: { name: string; description?: string; sfdcOpptyId?: string; sfdcUrl?: string; stage?: string }) =>
+    api.post<Project>('/api/projects', data),
+  update: (id: string, data: { name: string; description?: string; sfdcOpptyId?: string; sfdcUrl?: string; stage?: string }) =>
+    api.put<Project>(`/api/projects/${encodeURIComponent(id)}`, data),
+  delete: (id: string) => api.delete<void>(`/api/projects/${encodeURIComponent(id)}`),
+  addMember: (id: string, data: { email: string }) =>
+    api.post<ProjectMember>(`/api/projects/${encodeURIComponent(id)}/members`, data),
+  removeMember: (id: string, userId: string) =>
+    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`),
+  linkAccount: (id: string, accountId: string) =>
+    api.post<{ accountIds: string[] }>(`/api/projects/${encodeURIComponent(id)}/accounts`, { accountId }),
+  unlinkAccount: (id: string, accountId: string) =>
+    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/accounts/${encodeURIComponent(accountId)}`),
+  linkMeeting: (id: string, meetingId: string) =>
+    api.post<void>(`/api/projects/${encodeURIComponent(id)}/meetings`, { meetingId }),
+  unlinkMeeting: (id: string, meetingId: string) =>
+    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/meetings/${encodeURIComponent(meetingId)}`),
+  linkResearch: (id: string, researchId: string) =>
+    api.post<void>(`/api/projects/${encodeURIComponent(id)}/research`, { researchId }),
+  unlinkResearch: (id: string, researchId: string) =>
+    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/research/${encodeURIComponent(researchId)}`),
+  meetings: (id: string) =>
+    api.get<{ meetings: ProjectMeetingRef[] }>(`/api/projects/${encodeURIComponent(id)}/meetings`),
+  research: (id: string) =>
+    api.get<{ research: ProjectResearchRef[] }>(`/api/projects/${encodeURIComponent(id)}/research`),
+  insights: (id: string, params?: { from?: string; to?: string; types?: string[] }) => {
+    const q = new URLSearchParams();
+    if (params?.from) q.set('from', params.from);
+    if (params?.to) q.set('to', params.to);
+    if (params?.types?.length) q.set('types', params.types.join(','));
+    const qs = q.toString();
+    return api.get<{ insights: ProjectInsight[] }>(
+      `/api/projects/${encodeURIComponent(id)}/insights${qs ? `?${qs}` : ''}`);
+  },
+  brief: (id: string) =>
+    api.get<ProjectBrief>(`/api/projects/${encodeURIComponent(id)}/brief`),
+  accountProjects: (accountId: string) =>
+    api.get<{ projects: ProjectSummary[] }>(`/api/accounts/${encodeURIComponent(accountId)}/projects`),
 };
 
 // Personal (account-less) document API endpoints
