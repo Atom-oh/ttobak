@@ -805,9 +805,15 @@ DELETE /api/projects/{projectId}/meetings/{meetingId}
 POST   /api/projects/{projectId}/research          Request: { "researchId": "uuid" }
 DELETE /api/projects/{projectId}/research/{researchId}
 
-Error: 403 Forbidden — Link(POST): 대상 미팅/리서치의 owner가 아니거나, 프로젝트 접근 권한(owner/직접 멤버/연결된 Account 멤버) 없음
+Error: 404 Not Found — Link(POST) Meeting: 대상 미팅이 호출자 소유가 아님(호출자
+       자신의 파티션에서만 조회하므로 타인 미팅은 "없음"과 구분되지 않음) 또는
+       미팅/프로젝트 자체가 없음
+Error: 403 Forbidden — Link(POST) Research: 대상 리서치가 호출자 소유가 아님
+       (Research는 조회 자체는 owner 무관하게 되므로 소유 여부를 직접 검사)
+Error: 403 Forbidden — Link(POST) 공통: 위 소유권 검사를 통과해도 프로젝트
+       접근 권한(owner/직접 멤버/연결된 Account 멤버) 없으면 거부
 Error: 403 Forbidden — Unlink(DELETE): 대상의 owner도 아니고 프로젝트 owner도 아님 (아래 비대칭 설명 참고)
-Error: 404 Not Found (미팅/리서치/프로젝트 없음)
+Error: 404 Not Found (리서치/프로젝트 없음)
 ```
 
 `Meeting.projectIds`/`Research.projectIds`도 동일하게 String Set + 원자적

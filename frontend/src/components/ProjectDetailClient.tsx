@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -34,7 +34,26 @@ export default function ProjectDetailClient() {
   const [accountId, setAccountId] = useState('');
   const [linkingAccount, setLinkingAccount] = useState(false);
 
+  // This component is never remounted across /projects/A -> /projects/B
+  // navigation (single static `_` route, reused across all project IDs --
+  // same as AccountDetailClient), so a slow fetch for A can still resolve
+  // after the user has navigated to B. Without this guard, A's response
+  // would land on B's screen and, worse, B's mutation handlers (which read
+  // projectId fresh from the URL) would act on B while the member list the
+  // user is looking at is actually A's stale data.
+  const activeProjectIdRef = useRef(projectId);
+
   const fetchAll = useCallback(async () => {
+    activeProjectIdRef.current = projectId;
+    // Reset immediately so stale data from a previous projectId never
+    // lingers on screen while the new project's fetch is in flight.
+    setProject(null);
+    setMeetings([]);
+    setResearch([]);
+    setInsights([]);
+    setMeetingsError(false);
+    setResearchError(false);
+    setInsightsError(false);
     if (!projectId || projectId === '_') {
       setLoading(false);
       return;
@@ -53,12 +72,14 @@ export default function ProjectDetailClient() {
       // when a mutation handler re-runs fetchAll and this fetch transiently
       // fails).
       const proj = await projectApi.get(projectId);
+      if (activeProjectIdRef.current !== projectId) return; // superseded by a later navigation
       setProject(proj);
       const [mtg, res, ins] = await Promise.allSettled([
         projectApi.meetings(projectId),
         projectApi.research(projectId),
         projectApi.insights(projectId),
       ]);
+      if (activeProjectIdRef.current !== projectId) return; // superseded by a later navigation
       setMeetingsError(mtg.status === 'rejected');
       if (mtg.status === 'fulfilled') setMeetings(mtg.value.meetings ?? []);
       setResearchError(res.status === 'rejected');
@@ -66,9 +87,10 @@ export default function ProjectDetailClient() {
       setInsightsError(ins.status === 'rejected');
       if (ins.status === 'fulfilled') setInsights(ins.value.insights ?? []);
     } catch (err) {
+      if (activeProjectIdRef.current !== projectId) return; // superseded by a later navigation
       setError(err instanceof Error ? err.message : 'Failed to load project');
     } finally {
-      setLoading(false);
+      if (activeProjectIdRef.current === projectId) setLoading(false);
     }
   }, [projectId]);
 
