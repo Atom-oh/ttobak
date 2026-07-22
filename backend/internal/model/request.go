@@ -14,6 +14,11 @@ type CreateMeetingRequest struct {
 	LinkedMeetingIDs []string `json:"linkedMeetingIds,omitempty"`
 }
 
+// MaxLiveSummaryRunes caps the client-settable liveSummary field, both at
+// write time (service.UpdateMeeting) and when folded into the summarize
+// prompt (cmd/summarize) -- one shared limit so the two can't drift.
+const MaxLiveSummaryRunes = 32000
+
 // UpdateMeetingRequest represents the request body for updating a meeting
 type UpdateMeetingRequest struct {
 	Title   string `json:"title,omitempty"`
@@ -25,6 +30,8 @@ type UpdateMeetingRequest struct {
 	Notes *string `json:"notes,omitempty"`
 	// LiveSummary is a pointer for the same omit-vs-explicit-empty semantics
 	// as Notes: nil preserves the stored value, non-nil "" clears it.
+	// Capped at MaxLiveSummaryRunes on write (service.UpdateMeeting) and
+	// again when folded into the summarize prompt (cmd/summarize).
 	LiveSummary        *string  `json:"liveSummary,omitempty"`
 	TranscriptA        string   `json:"transcriptA,omitempty"`
 	SelectedTranscript string   `json:"selectedTranscript,omitempty"` // "A" or "B"

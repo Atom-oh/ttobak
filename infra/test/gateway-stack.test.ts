@@ -85,6 +85,14 @@ describe('GatewayStack', () => {
     });
   });
 
+  test('QA Lambda async invoke has retries disabled', () => {
+    // Documented in INFRA-SPEC: a retried async invoke would re-stream stale
+    // deltas onto a WebSocket whose client already gave up or moved on.
+    template.hasResourceProperties('AWS::Lambda::EventInvokeConfig', {
+      MaximumRetryAttempts: 0,
+    });
+  });
+
   test('QA Lambda uses Python 3.12', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-qa',

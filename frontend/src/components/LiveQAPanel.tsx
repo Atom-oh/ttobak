@@ -79,7 +79,15 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       setQaHistory(prev =>
         prev.map(e =>
           e.id === entryId
-            ? { ...e, answer: e.answer || '응답 시간 초과 — 다시 시도해주세요.', isStreaming: false }
+            ? {
+                ...e,
+                // A partial answer must not silently pass for a complete one
+                // -- later questions build on this history.
+                answer: e.answer
+                  ? e.answer + '\n\n> ⚠️ 응답 시간 초과 — 답변이 여기서 잘렸을 수 있습니다.'
+                  : '응답 시간 초과 — 다시 시도해주세요.',
+                isStreaming: false,
+              }
             : e
         )
       );
@@ -260,9 +268,22 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       // API Gateway WebSocket has a 32KB per-frame limit (separate from, and
       // much smaller than, the 128KB message limit) that the browser can't
       // control the framing around — a char-count cap on Korean-heavy text
-      // can still serialize past it and die silently. Cap by actual UTF-8
-      // byte length instead, with headroom for the JSON envelope.
-      const wsContext = truncateToUtf8ByteLimit(transcriptContext, 28_000);
+      // can still serialize past it and die silently. Budget by the size of
+      // the ACTUAL serialized frame, not the raw context: JSON escaping
+      // (quotes, newlines → \n) plus the question/session envelope can push
+      // a raw-28KB context past the limit, so shrink until the whole frame
+      // fits with headroom.
+      let wsContext = truncateToUtf8ByteLimit(transcriptContext, 28_000);
+      const frameBytes = () =>
+        new TextEncoder().encode(
+          JSON.stringify({ action: 'ask_live', question: q.trim(), context: wsContext, meetingId, sessionId }),
+        ).length;
+      while (wsContext && frameBytes() > 30_000) {
+        wsContext = truncateToUtf8ByteLimit(
+          wsContext,
+          Math.floor(new TextEncoder().encode(wsContext).length * 0.85),
+        );
+      }
       ws.askLive(q.trim(), wsContext, meetingId, sessionId);
       armWatchdog();
       return;
