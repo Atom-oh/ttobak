@@ -63,6 +63,11 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   // spinning forever on a stalled stream.
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [sessionId, setSessionId] = useState(() => `qa-${meetingId || 'live'}-${Date.now()}`);
+  useEffect(() => {
+    setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
+  }, [meetingId]);
+
   const clearWatchdog = useCallback(() => {
     if (watchdogRef.current) {
       clearTimeout(watchdogRef.current);
@@ -101,13 +106,15 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       // opens a fresh one for the next question.
       wsRef.current?.disconnect();
       wsRef.current = null;
+      // The zombie Lambda invocation also keeps running server-side and
+      // will save_session (a whole-item put) when it eventually finishes.
+      // Rotating the session id means the NEXT question writes a different
+      // session item, so the zombie's late save can't race/clobber it.
+      // Conversation continuity for the timed-out thread is deliberately
+      // sacrificed — correctness over context.
+      setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
     }, 60_000);
-  }, [clearWatchdog]);
-
-  const sessionId = useMemo(() => {
-    const ts = Date.now();
-    return `qa-${meetingId || 'live'}-${ts}`;
-  }, [meetingId]);
+  }, [clearWatchdog, meetingId]);
 
   useEffect(() => {
     if (containerRef.current) {
@@ -209,7 +216,16 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         inputRef.current?.focus();
         break;
       case 'error':
+        // Socket-level error frame: without clearing the watchdog here the
+        // user stares at a spinner for the full 60s before the timeout
+        // banner appears on top of this error.
+        clearWatchdog();
         setError(msg.error || 'WebSocket error');
+        setQaHistory(prev =>
+          prev.map(e => (e.id === entryId ? { ...e, isStreaming: false } : e))
+        );
+        setIsAsking(false);
+        activeEntryIdRef.current = null;
         break;
     }
   }, [armWatchdog, clearWatchdog]);
@@ -283,6 +299,17 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
           wsContext,
           Math.floor(new TextEncoder().encode(wsContext).length * 0.85),
         );
+      }
+      if (frameBytes() > 30_000) {
+        // Context is already empty and the frame STILL exceeds the budget --
+        // the question itself is too large. Sending anyway would die
+        // silently at the gateway's 32KB frame limit and burn a 60s
+        // watchdog wait; reject up front instead.
+        setQaHistory(prev => prev.filter(e => e.id !== entryId));
+        activeEntryIdRef.current = null;
+        setIsAsking(false);
+        setError('질문이 너무 깁니다 — 내용을 줄여서 다시 시도해주세요.');
+        return;
       }
       ws.askLive(q.trim(), wsContext, meetingId, sessionId);
       armWatchdog();
