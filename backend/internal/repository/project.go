@@ -292,7 +292,7 @@ func (r *DynamoDBRepository) UpdateProjectFields(ctx context.Context, projectID 
 // directly on the item being deleted here and can be asserted in the same
 // transaction. The equivalent race for MEMBER#/MEETINGREF#/RESEARCHREF#
 // items (which live on OTHER items this transaction doesn't touch) is a
-// known, accepted residual risk -- see ADR-024's Risks section for why
+// known, accepted residual risk -- see ADR-025's Risks section for why
 // closing it fully would need a broader tombstone-and-reject-concurrent-
 // writes redesign disproportionate to the actual impact (unreachable dead
 // storage in a deleted project's own partition, never incorrectly
