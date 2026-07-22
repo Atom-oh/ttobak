@@ -651,14 +651,27 @@ func TestDeleteProject_RejectsWhileLinked(t *testing.T) {
 	})
 	t.Run("linked meeting", func(t *testing.T) {
 		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
-			r.meetingRefs["p1"] = []model.ProjectMeetingRef{{ProjectID: "p1", MeetingID: "m1"}}
+			r.meetings[projectMeetingKey("owner", "m1")] = &model.Meeting{MeetingID: "m1", UserID: "owner", ProjectIDs: []string{"p1"}}
+			r.meetingRefs["p1"] = []model.ProjectMeetingRef{{ProjectID: "p1", MeetingID: "m1", OwnerUserID: "owner"}}
 		})
 		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
 			t.Fatalf("expected ErrProjectHasLinks, got %v", err)
 		}
 	})
+	t.Run("stale meeting ref alone does not block (canonical reverification)", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			// Ref exists but the underlying meeting is gone (or its
+			// ProjectIDs no longer contains "p1") -- an orphan, not an
+			// actual link, so it must not block deletion.
+			r.meetingRefs["p1"] = []model.ProjectMeetingRef{{ProjectID: "p1", MeetingID: "m1", OwnerUserID: "owner"}}
+		})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); err != nil {
+			t.Fatalf("expected deletion to succeed past a stale ref, got %v", err)
+		}
+	})
 	t.Run("linked research", func(t *testing.T) {
 		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			r.research["r1"] = &model.Research{ResearchID: "r1", UserID: "owner", ProjectIDs: []string{"p1"}}
 			r.researchRefs["p1"] = []model.ProjectResearchRef{{ProjectID: "p1", ResearchID: "r1"}}
 		})
 		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
@@ -727,5 +740,82 @@ func TestListProjectMeetings_DedupsByMeetingID(t *testing.T) {
 	insights, err := svc.GetProjectInsights(context.Background(), "owner", "p1", time.Time{}, time.Time{}, nil)
 	if err != nil || len(insights) != 1 {
 		t.Fatalf("expected exactly 1 deduped insight, got %v err=%v", insights, err)
+	}
+}
+
+// TestUnlinkMeeting_ProjectOwnerCanUnlinkAnothersLinkedMeeting is the
+// regression test for the revocation deadlock: a member linked their own
+// meeting, then lost project access (e.g. via RemoveMember). Only the
+// project owner can still reach the link -- the former member no longer
+// passes requireProjectAccess, and the project owner never owned the
+// meeting, so a resource-owner-only check would leave nobody able to
+// unlink it, permanently blocking DeleteProject.
+func TestUnlinkMeeting_ProjectOwnerCanUnlinkAnothersLinkedMeeting(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	meeting := &model.Meeting{MeetingID: "m1", UserID: "member", ProjectIDs: []string{"p1"}}
+	repo.meetings[projectMeetingKey("member", "m1")] = meeting
+	repo.meetingRefs["p1"] = []model.ProjectMeetingRef{{
+		PK: model.PrefixProject + "p1", SK: projectMeetingRefSK(meeting),
+		ProjectID: "p1", MeetingID: "m1", OwnerUserID: "member",
+	}}
+
+	if err := newProjectServiceWithRepo(repo).UnlinkMeeting(context.Background(), "owner", "p1", "m1"); err != nil {
+		t.Fatalf("project owner should be able to unlink: %v", err)
+	}
+	if contains(meeting.ProjectIDs, "p1") {
+		t.Fatal("expected meeting.ProjectIDs to no longer contain p1")
+	}
+	if len(repo.meetingRefs["p1"]) != 0 {
+		t.Fatal("expected the ref to be removed")
+	}
+}
+
+func TestUnlinkMeeting_StrangerForbidden(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	meeting := &model.Meeting{MeetingID: "m1", UserID: "member", ProjectIDs: []string{"p1"}}
+	repo.meetings[projectMeetingKey("member", "m1")] = meeting
+	repo.meetingRefs["p1"] = []model.ProjectMeetingRef{{SK: projectMeetingRefSK(meeting), ProjectID: "p1", MeetingID: "m1", OwnerUserID: "member"}}
+	// Give the stranger project access (direct member) but they neither own
+	// the meeting nor own the project -- must still be forbidden.
+	repo.projectMembers[projectMemberKey("p1", "stranger")] = &model.ProjectMember{ProjectID: "p1", UserID: "stranger"}
+
+	err := newProjectServiceWithRepo(repo).UnlinkMeeting(context.Background(), "stranger", "p1", "m1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestUnlinkMeeting_NoRefIsNoop(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	if err := newProjectServiceWithRepo(repo).UnlinkMeeting(context.Background(), "owner", "p1", "nonexistent"); err != nil {
+		t.Fatalf("expected no-op success when no ref exists, got %v", err)
+	}
+}
+
+func TestUnlinkResearch_ProjectOwnerCanUnlinkAnothersLinkedResearch(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	repo.research["r1"] = &model.Research{ResearchID: "r1", UserID: "member", ProjectIDs: []string{"p1"}}
+
+	if err := newProjectServiceWithRepo(repo).UnlinkResearch(context.Background(), "owner", "p1", "r1"); err != nil {
+		t.Fatalf("project owner should be able to unlink: %v", err)
+	}
+	if contains(repo.research["r1"].ProjectIDs, "p1") {
+		t.Fatal("expected research.ProjectIDs to no longer contain p1")
+	}
+}
+
+func TestUnlinkResearch_StrangerForbidden(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	repo.research["r1"] = &model.Research{ResearchID: "r1", UserID: "member", ProjectIDs: []string{"p1"}}
+	repo.projectMembers[projectMemberKey("p1", "stranger")] = &model.ProjectMember{ProjectID: "p1", UserID: "stranger"}
+
+	err := newProjectServiceWithRepo(repo).UnlinkResearch(context.Background(), "stranger", "p1", "r1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
 	}
 }

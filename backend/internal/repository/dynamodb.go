@@ -326,24 +326,6 @@ func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, keys []Meetin
 func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.Meeting) error {
 	meeting.UpdatedAt = time.Now().UTC()
 
-	// UpdateMeeting is a whole-item PutItem, not a partial UpdateItem -- every
-	// field on the in-memory *model.Meeting the caller passes in overwrites
-	// whatever is currently stored, including ProjectIDs. ProjectIDs is a
-	// String Set precisely so LinkMeeting/UnlinkMeeting can mutate it with
-	// atomic ADD/DELETE and never race each other -- but that guarantee means
-	// nothing if this call reads a Meeting BEFORE a concurrent (Un)LinkMeeting
-	// commits and then overwrites the whole item AFTER, silently reverting or
-	// (since the tag is `omitempty`) deleting the link. Re-fetching just this
-	// one attribute right before the write closes the window down to ordinary
-	// single-item consistency instead of "however long this caller held its
-	// in-memory copy" -- which, for STT pipeline callers (transcribe.go,
-	// cmd/transcribe/main.go), can be the entire transcription run.
-	if current, err := r.getMeetingProjectIDs(ctx, meeting.UserID, meeting.MeetingID); err != nil {
-		log.Printf("warn: failed to preserve projectIds on meeting update %s: %v", meeting.MeetingID, err)
-	} else {
-		meeting.ProjectIDs = current
-	}
-
 	// Store large transcripts in S3 if S3 client is available
 	if r.s3Client != nil && r.bucketName != "" {
 		// Store transcriptA if needed
@@ -364,6 +346,33 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 			meeting.TranscriptB = ref
 		}
 	}
+
+	// UpdateMeeting is a whole-item PutItem, not a partial UpdateItem -- every
+	// field on the in-memory *model.Meeting the caller passes in overwrites
+	// whatever is currently stored, including ProjectIDs. ProjectIDs is a
+	// String Set precisely so LinkMeeting/UnlinkMeeting can mutate it with
+	// atomic ADD/DELETE and never race each other -- but that guarantee means
+	// nothing if this call reads a Meeting BEFORE a concurrent (Un)LinkMeeting
+	// commits and then overwrites the whole item AFTER, silently reverting or
+	// (since the tag is `omitempty`) deleting the link. Re-fetching just this
+	// one attribute here -- after the S3 transcript uploads above (which can
+	// take a while) and immediately before the marshal+PutItem below -- closes
+	// the window down to ordinary single-item consistency instead of
+	// "however long this caller held its in-memory copy plus however long the
+	// S3 upload took," which for STT pipeline callers (transcribe.go,
+	// cmd/transcribe/main.go) can be the entire transcription run.
+	//
+	// A failed fetch here must abort the whole update, not proceed with
+	// whatever ProjectIDs the caller's in-memory Meeting happened to carry
+	// (typically nil for STT pipeline callers, which never populate it) --
+	// silently continuing would risk wiping every project link on a single
+	// transient GetItem error, which is worse than the race this exists to
+	// close in the first place.
+	current, err := r.getMeetingProjectIDs(ctx, meeting.UserID, meeting.MeetingID)
+	if err != nil {
+		return fmt.Errorf("failed to preserve projectIds on meeting update: %w", err)
+	}
+	meeting.ProjectIDs = current
 
 	item, err := attributevalue.MarshalMap(meeting)
 	if err != nil {

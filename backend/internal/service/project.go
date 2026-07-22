@@ -228,18 +228,27 @@ func (s *ProjectService) DeleteProject(ctx context.Context, userID, projectID st
 	if len(members) > 0 {
 		return ErrProjectHasLinks
 	}
-	meetingRefs, err := s.repo.ListProjectMeetingRefsForProject(ctx, projectID)
+	// Canonical-reverified counts, not raw ref counts: a MEETINGREF#/
+	// RESEARCHREF# item can outlive the meeting/research it points at (e.g.
+	// the meeting is deleted through the ordinary, unrelated meeting-delete
+	// path, which knows nothing about project refs) and sit there forever
+	// as an orphan -- a raw len(refs) > 0 check would then block deletion
+	// of a project with no *actually* linked meetings/research left,
+	// permanently. ListProjectMeetings/ListProjectResearch already do this
+	// fail-closed re-verification (and MeetingID/ResearchID dedup); reuse
+	// them here instead of re-deriving the same logic.
+	meetings, err := s.ListProjectMeetings(ctx, userID, projectID)
 	if err != nil {
 		return err
 	}
-	if len(meetingRefs) > 0 {
+	if len(meetings) > 0 {
 		return ErrProjectHasLinks
 	}
-	researchRefs, err := s.repo.ListProjectResearchRefsForProject(ctx, projectID)
+	research, err := s.ListProjectResearch(ctx, userID, projectID)
 	if err != nil {
 		return err
 	}
-	if len(researchRefs) > 0 {
+	if len(research) > 0 {
 		return ErrProjectHasLinks
 	}
 	return s.repo.DeleteProject(ctx, projectID, project.OwnerUserID)
@@ -405,29 +414,31 @@ func projectMeetingRefSK(meeting *model.Meeting) string {
 	return model.PrefixProjectMeetingRef + meeting.Date.UTC().Format(time.RFC3339) + "#" + meeting.MeetingID
 }
 
-// existingProjectMeetingRefSK finds the SK of an already-written
-// MEETINGREF# item for meetingID, if one exists. The SK embeds
-// meeting.Date at link time; recomputing it from the meeting's CURRENT
-// (mutable) Date instead of looking this up would target a different item
-// than the one actually written whenever Date changed since the link, and
-// re-Put a second ref rather than refreshing the original -- duplicating
-// this meeting in every ref-driven read (ListProjectMeetings,
-// GetProjectInsights, GetProjectBrief).
-func (s *ProjectService) existingProjectMeetingRefSK(ctx context.Context, projectID, meetingID string) (string, error) {
+// existingProjectMeetingRef finds an already-written MEETINGREF# item for
+// meetingID, if one exists, returning its SK and the meeting owner's userID
+// recorded on the ref (needed by UnlinkMeeting to target the right Meeting
+// item -- Meeting's PK includes its owner's userID, which the caller of
+// Unlink is not necessarily). The SK embeds meeting.Date at link time;
+// recomputing it from the meeting's CURRENT (mutable) Date instead of
+// looking this up would target a different item than the one actually
+// written whenever Date changed since the link, and re-Put a second ref
+// rather than refreshing the original -- duplicating this meeting in every
+// ref-driven read (ListProjectMeetings, GetProjectInsights, GetProjectBrief).
+func (s *ProjectService) existingProjectMeetingRef(ctx context.Context, projectID, meetingID string) (sk, ownerUserID string, err error) {
 	refs, err := s.repo.ListProjectMeetingRefsForProject(ctx, projectID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	for _, ref := range refs {
 		if ref.MeetingID == meetingID {
-			return ref.SK, nil
+			return ref.SK, ref.OwnerUserID, nil
 		}
 	}
-	return "", nil
+	return "", "", nil
 }
 
 func (s *ProjectService) putProjectMeetingRef(ctx context.Context, projectID, ownerUserID string, meeting *model.Meeting) error {
-	sk, err := s.existingProjectMeetingRefSK(ctx, projectID, meeting.MeetingID)
+	sk, _, err := s.existingProjectMeetingRef(ctx, projectID, meeting.MeetingID)
 	if err != nil {
 		return err
 	}
@@ -473,23 +484,34 @@ func (s *ProjectService) LinkMeeting(ctx context.Context, userID, projectID, mee
 }
 
 func (s *ProjectService) UnlinkMeeting(ctx context.Context, userID, projectID, meetingID string) error {
-	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
+	project, err := s.requireProjectAccess(ctx, userID, projectID)
 	if err != nil {
 		return err
 	}
-	if meeting == nil {
-		return ErrNotFound
-	}
-	if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
-		return err
-	}
-	// Look up the ref's ACTUAL existing SK (see existingProjectMeetingRefSK's
-	// comment) rather than recomputing it from the meeting's current Date.
-	refSK, err := s.existingProjectMeetingRefSK(ctx, projectID, meetingID)
+	// Look up the ref's ACTUAL existing SK and owner (see
+	// existingProjectMeetingRef's comment) rather than recomputing the SK
+	// from the meeting's current Date, and rather than requiring the caller
+	// to own the meeting (LinkMeeting's caller-scoped GetMeeting means only
+	// the meeting's owner could have linked it, but that owner may since
+	// have lost project access -- e.g. via RemoveMember -- while the
+	// project owner never owned the meeting themselves; requiring resource
+	// ownership on Unlink the way Link does would make such a link
+	// permanently un-unlinkable by anyone, blocking DeleteProject forever).
+	refSK, ownerUserID, err := s.existingProjectMeetingRef(ctx, projectID, meetingID)
 	if err != nil {
 		return err
 	}
-	if err := s.repo.MeetingProjectUnlinkTransactional(ctx, userID, meetingID, projectID, refSK); err != nil {
+	if refSK == "" {
+		// No ref exists (already unlinked, or the meeting itself was deleted
+		// out-of-band -- meeting deletion doesn't know about project refs --
+		// leaving nothing here to clean up). Idempotent no-op rather than an
+		// error the caller can't do anything about.
+		return nil
+	}
+	if project.OwnerUserID != userID && ownerUserID != userID {
+		return ErrForbidden
+	}
+	if err := s.repo.MeetingProjectUnlinkTransactional(ctx, ownerUserID, meetingID, projectID, refSK); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return ErrNotFound
 		}
@@ -548,11 +570,17 @@ func (s *ProjectService) UnlinkResearch(ctx context.Context, userID, projectID, 
 	if research == nil {
 		return ErrNotFound
 	}
-	if research.UserID != userID {
-		return ErrForbidden
-	}
-	if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
+	project, err := s.requireProjectAccess(ctx, userID, projectID)
+	if err != nil {
 		return err
+	}
+	// The project owner may unlink any research linked to their own project,
+	// not just research they personally own -- see UnlinkMeeting's comment
+	// on the equivalent deadlock this avoids (a non-owner member who linked
+	// their own research, then lost project access via RemoveMember, would
+	// otherwise be the only one who could ever unlink it).
+	if research.UserID != userID && project.OwnerUserID != userID {
+		return ErrForbidden
 	}
 	if err := s.repo.ResearchProjectUnlinkTransactional(ctx, researchID, projectID); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {

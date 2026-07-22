@@ -417,6 +417,12 @@ func (r *DynamoDBRepository) MeetingProjectLinkTransactional(ctx context.Context
 	if err != nil {
 		return fmt.Errorf("build meeting project link expression: %w", err)
 	}
+	projectExistsExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("build project-exists condition: %w", err)
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Update: &types.Update{
@@ -431,6 +437,22 @@ func (r *DynamoDBRepository) MeetingProjectLinkTransactional(ctx context.Context
 				ExpressionAttributeValues: updateExpr.Values(),
 			}},
 			{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}},
+			// Guards against linking to a project concurrently deleted after
+			// requireProjectAccess's read but before this transaction commits
+			// -- without this, the link could succeed against a project that
+			// canonically no longer exists (an orphan ref + a ghost projectId
+			// left in the meeting's ProjectIDs set), the same class of
+			// delete-vs-link race attribute_exists(PK) already guards against
+			// elsewhere (e.g. ProjectAccountLinkTransactional's own Update).
+			{ConditionCheck: &types.ConditionCheck{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
+					"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
+				},
+				ConditionExpression:      projectExistsExpr.Condition(),
+				ExpressionAttributeNames: projectExistsExpr.Names(),
+			}},
 		},
 	})
 	if err != nil {
@@ -498,6 +520,12 @@ func (r *DynamoDBRepository) ResearchProjectLinkTransactional(ctx context.Contex
 	if err != nil {
 		return fmt.Errorf("build research project link expression: %w", err)
 	}
+	projectExistsExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("build project-exists condition: %w", err)
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Update: &types.Update{
@@ -512,6 +540,17 @@ func (r *DynamoDBRepository) ResearchProjectLinkTransactional(ctx context.Contex
 				ExpressionAttributeValues: updateExpr.Values(),
 			}},
 			{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}},
+			// See MeetingProjectLinkTransactional's comment on this same
+			// ConditionCheck -- closes the delete-vs-link race for research too.
+			{ConditionCheck: &types.ConditionCheck{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
+					"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
+				},
+				ConditionExpression:      projectExistsExpr.Condition(),
+				ExpressionAttributeNames: projectExistsExpr.Names(),
+			}},
 		},
 	})
 	if err != nil {
