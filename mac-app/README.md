@@ -190,7 +190,7 @@ the record button through native commands:
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
 export function startNativeRecording(meetingId: string): Promise<StartResponse>;
 export function stopNativeRecording(): Promise<StopResponse>;
-export function uploadRecording(path: string, uploadUrl: string, contentType: string): Promise<void>;
+export function uploadRecording(path: string, uploadUrl: string, contentType: string): Promise<number>; // resolves to bytes uploaded
 export function cleanupRecording(path: string): Promise<void>;
 ```
 

@@ -94,6 +94,9 @@ export function RecordButton({
   const barsContainerRef = useRef<HTMLDivElement>(null);
   const [showCamera, setShowCamera] = useState(false);
   const nativeTempPathRef = useRef<string | null>(null);
+  // Blocks double-starts during startRecording's async window (see the
+  // guard at its entry) — must be a ref: state wouldn't flip synchronously.
+  const startInFlightRef = useRef(false);
   const nativeLevelRef = useRef(0);
   const nativeUnlistenRef = useRef<(() => void) | null>(null);
   const nativePcmUnlistenRef = useRef<(() => void) | null>(null);
@@ -215,6 +218,22 @@ export function RecordButton({
     // starting a second recording into it could clobber the first
     // recording's retry state before it finishes.
     if (disabled) return;
+    // Synchronous re-entry guard: during the native path's
+    // `await onRecordingStart` window the button still reads idle (no state
+    // has flipped yet), so a second click would create a second draft and
+    // race a second native start into Rust's AlreadyRunning rejection —
+    // whose onError teardown then demolishes the FIRST, healthy recording's
+    // UI/STT while capture keeps running.
+    if (startInFlightRef.current) return;
+    startInFlightRef.current = true;
+    try {
+      await startRecordingInner();
+    } finally {
+      startInFlightRef.current = false;
+    }
+  };
+
+  const startRecordingInner = async () => {
 
     // Clean up any leftover resources from a previous recording
     cleanupAudioResources();

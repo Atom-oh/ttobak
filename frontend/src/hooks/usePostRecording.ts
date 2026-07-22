@@ -4,7 +4,7 @@ import { useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { meetingsApi, uploadsApi } from '@/lib/api';
 import { putWithProgress, type UploadProgress } from '@/lib/upload';
-import { uploadRecording, onNativeUploadProgress, cleanupRecording } from '@/lib/tauri';
+import { uploadRecording, onNativeUploadProgress, cleanupRecording, isCommandNotFound } from '@/lib/tauri';
 import type { PostRecordingStep } from '@/components/record/PostRecordingBanner';
 
 function formatDefaultTitle(date: Date): string {
@@ -65,7 +65,10 @@ export function usePostRecording({
     // A stale pending payload from a previous, never-resolved recording
     // (e.g. the user started a new recording without retrying or
     // dismissing an earlier upload error) must not bleed into this new
-    // session — its own draft meeting is about to be created below.
+    // session — its own draft meeting is about to be created below. The
+    // same goes for the meeting id: if creation below fails, a lingering
+    // previous id would route THIS recording's audio into the old meeting.
+    setServerMeetingId(null);
     pendingAudioRef.current = null;
     putDoneRef.current = null;
     try {
@@ -185,7 +188,15 @@ export function usePostRecording({
       router.push(`/meeting/${meetingId}`);
     } catch (err) {
       console.error('Failed to process recording:', err);
-      setErrorMessage(err instanceof Error ? err.message : 'Failed to process recording');
+      // Version skew: an older installed Mac app without the
+      // upload_recording command (ADR-024) needs an update, not a retry.
+      if (isCommandNotFound(err)) {
+        setErrorMessage(
+          '설치된 Mac 앱 버전이 오래되어 업로드 명령이 없습니다 — 앱을 업데이트한 뒤 /record?mode=upload 로 다시 시도해주세요.',
+        );
+      } else {
+        setErrorMessage(err instanceof Error ? err.message : 'Failed to process recording');
+      }
       setStep('error');
       // Deliberately do NOT clear pendingAudioRef/putDoneRef here — that's
       // what makes handleRetry (below) able to resume instead of losing
@@ -211,10 +222,33 @@ export function usePostRecording({
     setStep('notes');
   }, []);
 
+  // Shared by every path that can start resumeUploadFlow (notes submit,
+  // notes skip, retry): the pending payload deliberately survives until a
+  // confirmed upload (data safety), which means a double-click would run two
+  // concurrent flows — both seeing putDoneRef null, both PUTting under
+  // different presigned keys, both notifying → duplicate EventBridge
+  // transcription triggers.
+  const uploadInFlightRef = useRef(false);
+  const runUploadFlow = useCallback(async (pending: PendingAudio) => {
+    if (uploadInFlightRef.current) return;
+    // Stale-payload check: a caller that captured `pending` before awaiting
+    // (notes save) may reach here after another flow already uploaded and
+    // cleared it — putDoneRef is null again by then, so without this the
+    // stale payload would re-upload in full.
+    if (pendingAudioRef.current !== pending) return;
+    uploadInFlightRef.current = true;
+    try {
+      await resumeUploadFlow(pending);
+    } finally {
+      uploadInFlightRef.current = false;
+    }
+  }, [resumeUploadFlow]);
+
   /** User submitted notes — save to meeting then resume upload */
   const handleNotesSubmit = useCallback(async (notes: string) => {
     const pending = pendingAudioRef.current;
     if (!pending) return;
+    if (uploadInFlightRef.current) return; // double-click while notes save runs
 
     try {
       // Save notes to meeting if we have a draft -- always send, even when
@@ -231,15 +265,15 @@ export function usePostRecording({
       console.warn('Failed to save notes, continuing with upload:', err);
     }
 
-    await resumeUploadFlow(pending);
-  }, [serverMeetingId, resumeUploadFlow]);
+    await runUploadFlow(pending);
+  }, [serverMeetingId, runUploadFlow]);
 
   /** User skipped notes — resume upload immediately */
   const handleNotesSkip = useCallback(async () => {
     const pending = pendingAudioRef.current;
     if (!pending) return;
-    await resumeUploadFlow(pending);
-  }, [resumeUploadFlow]);
+    await runUploadFlow(pending);
+  }, [runUploadFlow]);
 
   /** Legacy callback for iOS native capture fallback */
   const handleRecordingComplete = useCallback(async () => {
@@ -261,7 +295,6 @@ export function usePostRecording({
    * the retained pending payload (fresh presign; `resumeUploadFlow` skips
    * straight to `notifyComplete` if the PUT itself already succeeded).
    * Falls back to a plain reset if there's nothing to retry. */
-  const retryInFlightRef = useRef(false);
   const handleRetry = useCallback(() => {
     const pending = pendingAudioRef.current;
     if (!pending) {
@@ -269,16 +302,9 @@ export function usePostRecording({
       setErrorMessage(null);
       return;
     }
-    // A double-click here would run resumeUploadFlow twice concurrently:
-    // both see putDoneRef null, both PUT, both notify — and a duplicate
-    // notify means a duplicate EventBridge transcription trigger.
-    if (retryInFlightRef.current) return;
-    retryInFlightRef.current = true;
     setErrorMessage(null);
-    void resumeUploadFlow(pending).finally(() => {
-      retryInFlightRef.current = false;
-    });
-  }, [resumeUploadFlow]);
+    void runUploadFlow(pending); // shared in-flight guard (see runUploadFlow)
+  }, [runUploadFlow]);
 
   /** Surface a terminal recording failure on the standard error banner
    * ([Try Again]/[Home]) — used by native stop/start failures, which have

@@ -32,7 +32,7 @@ npm run lint      # ESLint
   - `tauri.ts` — Tauri desktop app bridge: `isTauri()`, native recording commands/events (see mac-app/CLAUDE.md)
   - `device.ts` — Audio input device enumeration
 - `src/hooks/` — Custom hooks
-  - `useRecordingSession` — MediaRecorder + chunk upload orchestration
+  - `useRecordingSession` — live STT session orchestration: browser modes via MediaStream (`startSession`), Tauri System Audio via Rust-pushed PCM (`startNativeSession`/`pushNativePcmChunk`, ADR-024)
   - `useLiveSummary` — Polls /api/meetings/{id}/summary during recording
   - `usePostRecording` — Post-recording status polling and finalization
   - `useAudioDevices` — Enumerate and select mic devices

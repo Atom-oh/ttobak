@@ -83,6 +83,13 @@ export class SttManager {
         return;
       } catch (err) {
         console.warn('Transcribe Streaming (native) failed:', err);
+        // The session object was assigned BEFORE the await above — if the
+        // connect failed (SDK import/credential exchange), it must not
+        // survive: pushNativeChunk would keep queueing PCM into a session
+        // with no consumer, ~32KB/s, ~115MB over an hour-long recording --
+        // exactly the WebView memory blowup this feature exists to avoid.
+        this.transcribeSession?.stop();
+        this.transcribeSession = null;
       }
     }
     this.config.callbacks.onError('transcribe-native-unavailable');
