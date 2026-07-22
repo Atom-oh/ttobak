@@ -7,7 +7,6 @@ const navItems = [
   { href: '/chat', icon: 'smart_toy', label: 'AI' },
   { href: '/record', icon: 'mic', label: 'Record' },
   { href: '/insights', icon: 'insights', label: 'Insights' },
-  { href: '/projects', icon: 'work', label: 'Projects' },
   { href: '/profile', icon: 'person', label: 'Profile' },
 ];
 

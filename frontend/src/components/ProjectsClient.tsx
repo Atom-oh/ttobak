@@ -47,6 +47,10 @@ export default function ProjectsClient() {
         sfdcUrl: sfdcUrl.trim() || undefined,
         stage: stage.trim() || undefined,
       });
+      if (!created.projectId) {
+        setError('Project created but the server response was missing an ID');
+        return;
+      }
       router.push(`/projects/${encodeURIComponent(created.projectId)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project');

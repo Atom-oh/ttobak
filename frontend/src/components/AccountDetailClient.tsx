@@ -23,6 +23,7 @@ export default function AccountDetailClient() {
   const [documents, setDocuments] = useState<AccountDocument[]>([]);
   const [research, setResearch] = useState<AccountResearchRef[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [projectsError, setProjectsError] = useState(false);
   const [activeType, setActiveType] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,23 +37,25 @@ export default function AccountDetailClient() {
     setLoading(true);
     setError(null);
     try {
-      const [acc, mtg, ins, docs, res, projectRes] = await Promise.all([
+      const [acc, mtg, ins, docs, res] = await Promise.all([
         accountApi.get(accountId),
         accountApi.meetings(accountId),
         accountApi.insights(accountId),
         accountApi.listDocuments(accountId),
         accountApi.research(accountId),
-        // Degrade independently: the rest of the account page must still
-        // load even if the Project entity endpoint is unavailable (e.g. its
-        // backend hasn't been deployed yet) or errors for any other reason.
-        projectApi.accountProjects(accountId).catch(() => null),
       ]);
       setAccount(acc);
       setMeetings(mtg?.meetings ?? []);
       setInsights(ins?.insights ?? []);
       setDocuments(docs?.documents ?? []);
       setResearch(res?.research ?? []);
-      setProjects(projectRes?.projects ?? []);
+      // Degrade independently, mirroring ProjectDetailClient's
+      // allSettled+error-flag pattern: a rejected fetch here must not be
+      // indistinguishable from "no linked projects," nor wipe a previously
+      // successful result on a later refetch.
+      const projectRes = await projectApi.accountProjects(accountId).catch(() => null);
+      setProjectsError(projectRes === null);
+      if (projectRes !== null) setProjects(projectRes.projects ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load account');
     } finally {
@@ -300,7 +303,9 @@ export default function AccountDetailClient() {
             {/* Linked projects */}
             <section className="mb-8">
               <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">연결된 프로젝트</h3>
-              {projects.length === 0 ? (
+              {projectsError ? (
+                <p className="text-sm text-red-500">프로젝트를 불러오지 못했습니다.</p>
+              ) : projects.length === 0 ? (
                 <p className="text-sm text-slate-400 dark:text-text-muted">연결된 프로젝트가 없습니다.</p>
               ) : (
                 <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">

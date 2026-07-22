@@ -845,7 +845,7 @@ Knowledge Base 파일 업로드 및 목록 관리 컴포넌트.
 | 비교 | compare | 이미지 비교 |
 | 업로드 | upload_file | 파일 업로드 |
 | 팀 | group | 사이드바 |
-| 프로젝트 (SFDC Oppty) | work | 사이드바 / 모바일 하단 네비 |
+| 프로젝트 (SFDC Oppty) | work | 사이드바 (모바일 하단 네비는 4-5 items 제약으로 제외 — §2.1) |
 | 인사이트 | analytics / insights | 사이드바 |
 | 번역 | translate | 실시간 번역 |
 | Q&A | question_answer | 미팅 Q&A |
