@@ -231,8 +231,18 @@ export function useRecordingSession({
    * exist here) — see `SttManager.startNative`.
    */
   const startNativeSession = useCallback(() => {
-    const { manager, preferredProvider } = createManager();
-    manager.startNative(preferredProvider);
+    const { manager } = createManager();
+    // Ignore createManager's preferredProvider here: it respects the
+    // browser-mode provider toggle, which defaults to 'web-speech' -- but
+    // native mode has no Web Speech fallback (no microphone MediaStream),
+    // so gating on the toggle means default users NEVER get System Audio
+    // captions. Use Transcribe Streaming whenever it's configured; only an
+    // actually-missing config surfaces `transcribe-native-unavailable`.
+    const nativeProvider: LiveSttProvider = transcribeConfigRef.current
+      ? 'transcribe-streaming'
+      : 'web-speech';
+    setActiveProvider(nativeProvider);
+    manager.startNative(nativeProvider);
   }, [createManager]);
 
   /** Feed one PCM chunk (from `lib/tauri.ts`'s `onNativePcmChunk`) into the

@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { isIOS, getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk } from '@/lib/tauri';
+import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 interface RecordButtonProps {
@@ -25,7 +25,7 @@ interface RecordButtonProps {
    * AudioWorklet on the MediaStream instead). */
   onNativePcmChunk?: (chunk: Uint8Array) => void;
   onError?: (error: string) => void;
-  onRecordingStart?: (stream: MediaStream | null) => void;
+  onRecordingStart?: (stream: MediaStream | null) => void | Promise<void>;
   onRecordingPause?: () => void;
   onRecordingResume?: () => void;
   onRecordingStop?: () => void;
@@ -229,9 +229,14 @@ export function RecordButton({
     // temp ID).
     if (audioSource === 'system' && isTauri()) {
       try {
-        // Fire onRecordingStart first so parent creates the draft meeting.
-        // Note: native capture has no MediaStream — pass null.
-        onRecordingStart?.(null);
+        // AWAIT onRecordingStart before starting native capture: the parent
+        // creates the draft meeting and starts the STT session in it. Firing
+        // native capture concurrently invites a zombie state — native start
+        // fails fast, onError tears everything down, and the still-running
+        // handler then re-latches isNativeRecording/STT with no capture
+        // behind it. Sequential ordering also means the STT session exists
+        // before the first PCM chunks arrive. Note: no MediaStream — null.
+        await onRecordingStart?.(null);
 
         // Subscribe to the native audio level + PCM chunk events before
         // starting capture so we don't miss the first samples. The Rust
@@ -444,15 +449,40 @@ export function RecordButton({
         const resp = await stopNativeRecording();
         nativeTempPathRef.current = null;
         if (resp.stop_timed_out) {
-          console.warn(
-            'Native stop timed out — proceeding with the WAV as finalized up to the last periodic flush.',
-          );
+          // The Rust stop task still owns the writer and keeps appending in
+          // the background. Handing the file to upload now would freeze
+          // Content-Length at its current size (upload.rs measures at open)
+          // and silently drop everything appended after — so wait (bounded)
+          // for the background finalize to actually finish first. Once it
+          // has, the open-time measurement sees the complete file; the
+          // byte_size passed below may slightly undercount but is display-
+          // only.
+          console.warn('Native stop timed out — waiting for background finalize to complete.');
+          let finalized = false;
+          for (let i = 0; i < 30; i++) {
+            await new Promise((r) => setTimeout(r, 1000));
+            try {
+              const status = await getNativeRecordingStatus();
+              if (!status.recording) {
+                finalized = true;
+                break;
+              }
+            } catch {
+              break; // status unavailable — fall through to the error path
+            }
+          }
+          if (!finalized) {
+            throw new Error('녹음 종료가 완료되지 않았습니다 (finalize 대기 시간 초과)');
+          }
         }
         onRecordingStop?.();
         setRecordingState('idle');
         setElapsedTime(0);
         onNativeFileReady?.(tempPath, resp.byte_size);
       } catch (err) {
+        // Clear the ref: the file is preserved on disk (message below), but
+        // keeping the ref would let a re-record silently overwrite it.
+        nativeTempPathRef.current = null;
         const message = err instanceof Error ? err.message : 'Native recording stop failed';
         onError?.(
           `${message} — 녹음 파일은 보존되어 있습니다: ${tempPath}. /record?mode=upload 에서 직접 업로드할 수 있습니다.`,

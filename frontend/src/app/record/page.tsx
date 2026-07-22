@@ -818,11 +818,16 @@ function RecordPageInner() {
                 // from RecordButton's native start/stop catch blocks (the
                 // native branch returns before reaching any browser-mode
                 // code) — always a terminal failure, e.g. a stop that names
-                // the preserved file path for manual recovery. Show it;
-                // don't route it through the "clear stale banner state"
-                // branch below, which would silently discard the message.
+                // the preserved file path for manual recovery. Terminal
+                // means the WHOLE session ends: stopSession() releases the
+                // STT session too, or session.isRecording stays latched
+                // (AppLayout stuck in recording mode, Transcribe WebSocket
+                // left open). The failure surfaces on the post-recording
+                // error banner ([Try Again]/[Home]) alongside upload
+                // failures, not the live-captions channel.
                 setIsNativeRecording(false);
-                session.setSpeechError(error);
+                session.stopSession();
+                postRecording.failWithError(error);
               } else if (session.isRecording) {
                 postRecording.reset(); // clear any previous banner state
                 // setStep and errorMessage handled by handleBlobReady on

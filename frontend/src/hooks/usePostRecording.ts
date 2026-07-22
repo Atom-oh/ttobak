@@ -267,6 +267,17 @@ export function usePostRecording({
     void resumeUploadFlow(pending);
   }, [resumeUploadFlow]);
 
+  /** Surface a terminal recording failure on the standard error banner
+   * ([Try Again]/[Home]) — used by native stop/start failures, which have
+   * no pending payload; "Try Again" then just clears the banner (see
+   * handleRetry's no-pending fallback). Keeps recovery messaging (e.g. the
+   * preserved-WAV path) in the same place as upload failures instead of
+   * the live-captions error channel. */
+  const failWithError = useCallback((message: string) => {
+    setErrorMessage(message);
+    setStep('error');
+  }, []);
+
   /** Clears all post-recording UI/pending state without attempting any
    * upload — used for "Home"/dismiss, where the user is deliberately
    * walking away rather than retrying. */
@@ -290,6 +301,7 @@ export function usePostRecording({
     handleNotesSkip,
     handleRecordingComplete,
     handleRetry,
+    failWithError,
     reset,
   };
 }
