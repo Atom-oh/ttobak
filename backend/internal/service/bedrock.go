@@ -316,6 +316,28 @@ func AnyNonOwnerShare(shares []model.Share, ownerID string) bool {
 	return false
 }
 
+// HasNonOwnerCollaborator reports whether meeting has any reader/writer
+// other than its owner -- either a direct Share row (any permission level,
+// via AnyNonOwnerShare) or live account membership.
+//
+// Account membership must be checked separately from Share rows:
+// resolveSharedAccess (service/meeting.go) grants account members read
+// access to a meeting with SharedToAccount=true purely from live
+// AccountMember lookups -- a member added after the share was written gets
+// access immediately too, by that function's own design -- and AddMember
+// never backfills a Share row for meetings already shared to the account.
+// So a meeting shared to an account, with a member who joined after that
+// share, has a real non-owner reader with NO corresponding Share row at
+// all; relying on AnyNonOwnerShare alone would miss them. Conservatively
+// treating any account-shared meeting as having a collaborator (skipping
+// the per-member membership query entirely) is the cheap, fail-closed fix.
+func HasNonOwnerCollaborator(meeting *model.Meeting, shares []model.Share) bool {
+	if meeting.SharedToAccount && meeting.AccountID != "" {
+		return true
+	}
+	return AnyNonOwnerShare(shares, meeting.UserID)
+}
+
 // buildSummarizeUserPrompt assembles SummarizeTranscript's user-turn prompt:
 // the speaker-segment transcript if segments were parsed, else the plain
 // transcript, with priorContext (e.g. a persisted live summary) always

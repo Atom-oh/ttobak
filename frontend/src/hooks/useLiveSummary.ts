@@ -24,6 +24,12 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
   // dropping that increment (or, if it's the meeting's very first summary,
   // the entire live summary).
   const pendingSummaryRef = useRef<Promise<void> | null>(null);
+  // Requests can resolve out of order (a later-started call's response can
+  // arrive before an earlier one's). Each checkThreshold call captures the
+  // post-increment generation; a response only updates liveSummaryRef if its
+  // generation is still the latest -- otherwise it's a stale response and is
+  // dropped instead of regressing the ref backward.
+  const summaryGenerationRef = useRef(0);
 
   // Keep refs in sync
   useEffect(() => { summaryIntervalRef.current = summaryInterval; }, [summaryInterval]);
@@ -37,6 +43,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     liveSummaryRef.current = '';
     askedQuestionsRef.current = [];
     pendingSummaryRef.current = null;
+    summaryGenerationRef.current = 0;
   }, []);
 
   /**
@@ -76,12 +83,17 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
       ? allTranscriptText.slice(-2000)
       : allTranscriptText;
 
+    const generation = ++summaryGenerationRef.current;
     const summaryPromise = summaryApi.summarizeLive(
       meetingId,
       allTranscriptText,
       liveSummaryRef.current || undefined,
     )
       .then((res) => {
+        // A newer request may have already started (and possibly finished)
+        // since this one began -- if so, this response is stale and must
+        // not regress the ref backward past a newer summary.
+        if (generation !== summaryGenerationRef.current) return;
         setLiveSummary(res.summary);
         liveSummaryRef.current = res.summary;
       })

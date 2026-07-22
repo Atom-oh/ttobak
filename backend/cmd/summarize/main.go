@@ -641,21 +641,19 @@ func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) stri
 	return sb.String()
 }
 
-// hasNonOwnerCollaborator reports whether meeting has been shared (any
-// permission level) with anyone other than its owner. Errors are treated as
-// "yes, assume a collaborator exists" (fail closed toward skipping linked
-// context, not toward leaking it). ListSharesForMeeting drains every
-// DynamoDB page (see its own doc comment), so this sees the complete share
-// set, not a possibly-truncated first page. The actual decision logic is
-// service.AnyNonOwnerShare, kept in internal/ (and unit-tested there) for
-// the same CI-test-scope reason as FoldLiveSummary.
+// hasNonOwnerCollaborator wraps service.HasNonOwnerCollaborator with the
+// ListSharesForMeeting fetch. Errors are treated as "yes, assume a
+// collaborator exists" (fail closed toward skipping linked context, not
+// toward leaking it). The decision logic itself (Share rows + account
+// membership) is service.HasNonOwnerCollaborator, kept in internal/ (and
+// unit-tested there) for the same CI-test-scope reason as FoldLiveSummary.
 func hasNonOwnerCollaborator(ctx context.Context, meeting *model.Meeting) bool {
 	shares, err := repo.ListSharesForMeeting(ctx, meeting.MeetingID)
 	if err != nil {
 		log.Printf("ListSharesForMeeting failed for %s, assuming a collaborator exists: %v", meeting.MeetingID, err)
 		return true
 	}
-	return service.AnyNonOwnerShare(shares, meeting.UserID)
+	return service.HasNonOwnerCollaborator(meeting, shares)
 }
 
 // emitAllPartsTranscribedEvent publishes a custom EventBridge event when all parts are transcribed
