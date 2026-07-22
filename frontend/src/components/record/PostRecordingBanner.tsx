@@ -1,12 +1,25 @@
 'use client';
 
 import { useState } from 'react';
+import { formatFileSize } from '@/lib/upload';
 
 export type PostRecordingStep = 'creating' | 'notes' | 'saving' | 'uploading' | 'redirecting' | 'error';
+
+export interface PostRecordingUploadProgress {
+  loaded: number;
+  total: number;
+  percentage: number;
+}
 
 interface PostRecordingBannerProps {
   step: PostRecordingStep;
   errorMessage?: string | null;
+  /** Live progress during the 'uploading' step (native System Audio and
+   * browser mic/tab modes both report this now — see
+   * `usePostRecording`'s `uploadProgress`). Null before the first progress
+   * event arrives, in which case the plain "Uploading audio..." label is
+   * shown instead. */
+  uploadProgress?: PostRecordingUploadProgress | null;
   onRetry: () => void;
   onDismiss: () => void;
   onNotesSubmit?: (notes: string) => void;
@@ -22,7 +35,7 @@ const STEP_LABELS: Record<string, string> = {
   redirecting: 'Opening meeting...',
 };
 
-export function PostRecordingBanner({ step, errorMessage, onRetry, onDismiss, onNotesSubmit, onNotesSkip, initialNotes }: PostRecordingBannerProps) {
+export function PostRecordingBanner({ step, errorMessage, uploadProgress, onRetry, onDismiss, onNotesSubmit, onNotesSkip, initialNotes }: PostRecordingBannerProps) {
   const [notes, setNotes] = useState(initialNotes || '');
   const isError = step === 'error';
   const isNotes = step === 'notes';
@@ -95,9 +108,21 @@ export function PostRecordingBanner({ step, errorMessage, onRetry, onDismiss, on
         ) : (
           <>
             <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent shrink-0" />
-            <p className="flex-1 text-sm font-medium text-slate-900 dark:text-gray-100">
-              {STEP_LABELS[step]}
-            </p>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-slate-900 dark:text-gray-100">
+                {step === 'uploading' && uploadProgress
+                  ? `업로드 중... ${uploadProgress.percentage}% (${formatFileSize(uploadProgress.loaded)} / ${formatFileSize(uploadProgress.total)})`
+                  : STEP_LABELS[step]}
+              </p>
+              {step === 'uploading' && uploadProgress && (
+                <div className="mt-1.5 h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-700 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-primary transition-[width] duration-300"
+                    style={{ width: `${Math.min(100, Math.max(0, uploadProgress.percentage))}%` }}
+                  />
+                </div>
+              )}
+            </div>
             <button
               onClick={onDismiss}
               className="p-1.5 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-md transition-colors shrink-0"

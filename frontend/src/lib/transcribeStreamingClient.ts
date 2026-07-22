@@ -10,6 +10,17 @@
  * This bypasses browser Web Speech API limitations (Chrome 5-min limit,
  * tab visibility kills, network flakiness) by connecting directly to
  * Amazon Transcribe's WebSocket endpoint.
+ *
+ * Two ways to feed it audio:
+ * - `start(stream)`: browser mic/tab modes — sets up an AudioWorklet that
+ *   downsamples the MediaStream to 16kHz mono PCM.
+ * - `startNative()`: Tauri System Audio mode, where there is no
+ *   MediaStream at all (capture happens in Rust via ScreenCaptureKit).
+ *   Chunks are pushed in externally via `pushChunk` — see
+ *   `useRecordingSession`'s native path, fed by `lib/tauri.ts`'s
+ *   `onNativePcmChunk`. Rust downsamples to the same 16kHz mono format the
+ *   AudioWorklet produces, so both paths feed this class identically from
+ *   here on.
  */
 
 import type {
@@ -43,14 +54,62 @@ export class TranscribeStreamingSession {
   private isActive = false;
   private abortController: AbortController | null = null;
 
-  // Queue for bridging AudioWorklet messages → async iterable
+  // Queue for bridging PCM chunks (from either the AudioWorklet or an
+  // external pushChunk() caller) → async iterable.
   private audioQueue: Array<Uint8Array> = [];
   private audioResolve: ((value: IteratorResult<AudioChunkMessage>) => void) | null = null;
   private audioDone = false;
 
   constructor(private config: TranscribeStreamingConfig) {}
 
+  /** Start from a browser MediaStream (mic/tab modes). */
   async start(stream: MediaStream): Promise<void> {
+    this.audioContext = new AudioContext({ sampleRate: 48000 });
+    await this.audioContext.audioWorklet.addModule('/pcm-processor.js');
+    const source = this.audioContext.createMediaStreamSource(stream);
+    this.audioWorkletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor');
+    source.connect(this.audioWorkletNode);
+    this.audioWorkletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+      this.pushChunk(new Uint8Array(event.data));
+    };
+
+    await this.connectAndTranscribe();
+  }
+
+  /**
+   * Start with no MediaStream — Tauri System Audio mode. Audio arrives
+   * exclusively via `pushChunk`, called by the caller as
+   * `native-pcm-chunk` events come in from Rust.
+   */
+  async startNative(): Promise<void> {
+    await this.connectAndTranscribe();
+  }
+
+  /**
+   * Feed one 16kHz mono 16-bit PCM chunk into the transcription stream.
+   * The `start(stream)` AudioWorklet bridge calls this internally; for
+   * `startNative()` this is the ONLY source of audio, so callers must call
+   * it directly for every chunk they receive.
+   */
+  pushChunk(chunk: Uint8Array): void {
+    if (this.audioResolve) {
+      const resolve = this.audioResolve;
+      this.audioResolve = null;
+      resolve({ value: { AudioEvent: { AudioChunk: chunk } }, done: false });
+    } else {
+      this.audioQueue.push(chunk);
+    }
+  }
+
+  private async connectAndTranscribe(): Promise<void> {
+    // Reset the queue BEFORE any await: chunks produced while the SDK
+    // import/credential exchange below is in flight (native PCM starts
+    // flowing as soon as capture does) must be queued and sent, not wiped
+    // by a post-await reset — that used to drop the first utterance.
+    this.audioQueue = [];
+    this.audioResolve = null;
+    this.audioDone = false;
+
     // Dynamically import SDK to avoid bundling when not used
     const [{ TranscribeStreamingClient, StartStreamTranscriptionCommand }, { fromCognitoIdentityPool }] =
       await Promise.all([
@@ -78,29 +137,6 @@ export class TranscribeStreamingSession {
         clientConfig: { region: this.config.region },
       }),
     });
-
-    // Set up AudioWorklet for PCM conversion
-    this.audioContext = new AudioContext({ sampleRate: 48000 });
-    await this.audioContext.audioWorklet.addModule('/pcm-processor.js');
-    const source = this.audioContext.createMediaStreamSource(stream);
-    this.audioWorkletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor');
-    source.connect(this.audioWorkletNode);
-
-    // Bridge AudioWorklet messages → audio queue
-    this.audioQueue = [];
-    this.audioResolve = null;
-    this.audioDone = false;
-
-    this.audioWorkletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-      const chunk = new Uint8Array(event.data);
-      if (this.audioResolve) {
-        const resolve = this.audioResolve;
-        this.audioResolve = null;
-        resolve({ value: { AudioEvent: { AudioChunk: chunk } }, done: false });
-      } else {
-        this.audioQueue.push(chunk);
-      }
-    };
 
     // Create async iterable for the SDK
     const audioStream: AsyncIterable<AudioChunkMessage> = {
@@ -190,7 +226,8 @@ export class TranscribeStreamingSession {
     this.abortController?.abort();
     this.abortController = null;
 
-    // Disconnect AudioWorklet
+    // Disconnect AudioWorklet (no-op if this session was started via
+    // startNative(), which never sets these)
     if (this.audioWorkletNode) {
       this.audioWorkletNode.port.onmessage = null;
       this.audioWorkletNode.disconnect();

@@ -68,6 +68,42 @@ export class SttManager {
     this.activeProvider = 'web-speech';
   }
 
+  /**
+   * Start live captions with no MediaStream — Tauri System Audio mode.
+   * There is no microphone in this mode, so Web Speech (which requires
+   * one) can never be a fallback here: if Transcribe Streaming isn't
+   * configured or fails, this surfaces `transcribe-native-unavailable`
+   * instead of silently producing no captions.
+   */
+  async startNative(preferredProvider: LiveSttProvider): Promise<void> {
+    if (preferredProvider === 'transcribe-streaming' && this.config.transcribeStreamingConfig) {
+      try {
+        await this.startTranscribeStreamingNative();
+        this.activeProvider = 'transcribe-streaming';
+        return;
+      } catch (err) {
+        console.warn('Transcribe Streaming (native) failed:', err);
+        // The session object was assigned BEFORE the await above — if the
+        // connect failed (SDK import/credential exchange), it must not
+        // survive: pushNativeChunk would keep queueing PCM into a session
+        // with no consumer, ~32KB/s, ~115MB over an hour-long recording --
+        // exactly the WebView memory blowup this feature exists to avoid.
+        this.transcribeSession?.stop();
+        this.transcribeSession = null;
+      }
+    }
+    this.config.callbacks.onError('transcribe-native-unavailable');
+  }
+
+  /**
+   * Feed one 16kHz mono 16-bit PCM chunk (from `lib/tauri.ts`'s
+   * `onNativePcmChunk`) into the active Transcribe Streaming session. No-op
+   * if `startNative` wasn't called or already failed.
+   */
+  pushNativeChunk(chunk: Uint8Array): void {
+    this.transcribeSession?.pushChunk(chunk);
+  }
+
   private lastDetectedLang = 'ko';
 
   private async startTranscribeStreaming(stream: MediaStream): Promise<void> {
@@ -110,6 +146,39 @@ export class SttManager {
       this.activeProvider = 'web-speech';
       this.config.onProviderChange?.('web-speech');
     });
+  }
+
+  private async startTranscribeStreamingNative(): Promise<void> {
+    const tsConfig = this.config.transcribeStreamingConfig!;
+
+    this.transcribeSession = new TranscribeStreamingSession({
+      region: tsConfig.region,
+      identityPoolId: tsConfig.identityPoolId,
+      userPoolId: tsConfig.userPoolId,
+      multiLanguage: true,
+      languageOptions: 'ko-KR,en-US',
+      preferredLanguage: 'ko-KR',
+      vocabularyName: tsConfig.vocabularyName,
+      onTranscript: (text, isFinal, detectedLang) => {
+        if (detectedLang) {
+          this.lastDetectedLang = detectedLang.substring(0, 2);
+        }
+        this.config.callbacks.onTranscript(text, isFinal);
+        if (isFinal) {
+          this.handleFinalTranslation(text);
+        } else {
+          this.handleInterimTranslation(text);
+        }
+      },
+      onError: (error) => {
+        console.error('Transcribe Streaming (native) error:', error);
+        this.transcribeSession?.stop();
+        this.transcribeSession = null;
+        this.config.callbacks.onError('transcribe-native-unavailable');
+      },
+    });
+
+    await this.transcribeSession.startNative();
   }
 
   private startWebSpeech(sourceLang: string): void {
