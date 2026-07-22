@@ -110,6 +110,7 @@ export default function ProjectDetailClient() {
   };
 
   const handleUnlinkAccount = async (linkedAccountId: string) => {
+    if (!confirm('Unlink this account? Its members will lose inherited access to this project.')) return;
     setError(null);
     try {
       await projectApi.unlinkAccount(projectId, linkedAccountId);
@@ -142,7 +143,18 @@ export default function ProjectDetailClient() {
             {error}
           </div>
         )}
-        {loading || !project ? (
+        {error && !project && !loading ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
+            <span className="material-symbols-outlined text-red-400 text-4xl">error</span>
+            <p className="text-sm text-slate-500 dark:text-text-secondary">Failed to load this project.</p>
+            <button
+              onClick={() => fetchAll()}
+              className="text-sm font-semibold text-primary hover:underline"
+            >
+              Retry
+            </button>
+          </div>
+        ) : loading || !project ? (
           <div className="flex items-center justify-center py-16">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
           </div>
