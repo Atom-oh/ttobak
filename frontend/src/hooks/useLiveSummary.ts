@@ -26,10 +26,21 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
   const pendingSummaryRef = useRef<Promise<void> | null>(null);
   // Requests can resolve out of order (a later-started call's response can
   // arrive before an earlier one's). Each checkThreshold call captures the
-  // post-increment generation; a response only updates liveSummaryRef if its
-  // generation is still the latest -- otherwise it's a stale response and is
-  // dropped instead of regressing the ref backward.
+  // post-increment generation. Two refs, not one:
+  //   - summaryGenerationRef: the last STARTED generation (strictly
+  //     monotonic -- reset() bumps it forward, never back to 0, so a
+  //     straggling response from a PREVIOUS recording can never collide
+  //     with a fresh recording's generation numbers and overwrite its ref
+  //     with the old meeting's summary).
+  //   - appliedGenerationRef: the generation of the last response actually
+  //     written into liveSummaryRef. A response applies only if its
+  //     generation is newer than what's already applied -- comparing
+  //     against "last STARTED" instead would drop a valid, successful
+  //     response whenever a newer request had already been fired but then
+  //     failed (its catch() never touches this ref), silently losing the
+  //     only summary that actually succeeded.
   const summaryGenerationRef = useRef(0);
+  const appliedGenerationRef = useRef(0);
 
   // Keep refs in sync
   useEffect(() => { summaryIntervalRef.current = summaryInterval; }, [summaryInterval]);
@@ -43,7 +54,13 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     liveSummaryRef.current = '';
     askedQuestionsRef.current = [];
     pendingSummaryRef.current = null;
-    summaryGenerationRef.current = 0;
+    // Bump forward, never back to 0: any request still in flight from the
+    // recording that just ended is immediately stale against this new
+    // baseline, and the next recording's generations start strictly above
+    // it -- so a late response from the OLD recording can never satisfy
+    // "generation > appliedGenerationRef.current" for the NEW one.
+    summaryGenerationRef.current += 1;
+    appliedGenerationRef.current = summaryGenerationRef.current;
   }, []);
 
   /**
@@ -90,10 +107,11 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
       liveSummaryRef.current || undefined,
     )
       .then((res) => {
-        // A newer request may have already started (and possibly finished)
-        // since this one began -- if so, this response is stale and must
-        // not regress the ref backward past a newer summary.
-        if (generation !== summaryGenerationRef.current) return;
+        // Apply only if this is newer than the last APPLIED response, not
+        // merely older than the last STARTED one -- a newer request that
+        // later failed must not cost us this (older but successful) result.
+        if (generation <= appliedGenerationRef.current) return;
+        appliedGenerationRef.current = generation;
         setLiveSummary(res.summary);
         liveSummaryRef.current = res.summary;
       })

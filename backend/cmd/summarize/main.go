@@ -642,15 +642,19 @@ func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) stri
 }
 
 // hasNonOwnerCollaborator wraps service.HasNonOwnerCollaborator with the
-// ListSharesForMeeting fetch. Errors are treated as "yes, assume a
-// collaborator exists" (fail closed toward skipping linked context, not
-// toward leaking it). The decision logic itself (Share rows + account
-// membership) is service.HasNonOwnerCollaborator, kept in internal/ (and
-// unit-tested there) for the same CI-test-scope reason as FoldLiveSummary.
+// ListSharesForMeetingConsistent fetch (strongly consistent -- this is a
+// confidentiality gate deciding whether untrusted content may be folded
+// into a prompt, so it must not miss a share/membership grant made an
+// instant ago to eventual-consistency lag; see that method's doc comment).
+// Errors are treated as "yes, assume a collaborator exists" (fail closed
+// toward skipping linked context, not toward leaking it). The decision
+// logic itself (Share rows + account membership) is
+// service.HasNonOwnerCollaborator, kept in internal/ (and unit-tested
+// there) for the same CI-test-scope reason as FoldLiveSummary.
 func hasNonOwnerCollaborator(ctx context.Context, meeting *model.Meeting) bool {
-	shares, err := repo.ListSharesForMeeting(ctx, meeting.MeetingID)
+	shares, err := repo.ListSharesForMeetingConsistent(ctx, meeting.MeetingID)
 	if err != nil {
-		log.Printf("ListSharesForMeeting failed for %s, assuming a collaborator exists: %v", meeting.MeetingID, err)
+		log.Printf("ListSharesForMeetingConsistent failed for %s, assuming a collaborator exists: %v", meeting.MeetingID, err)
 		return true
 	}
 	return service.HasNonOwnerCollaborator(meeting, shares)
