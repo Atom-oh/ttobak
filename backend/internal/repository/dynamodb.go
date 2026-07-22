@@ -326,6 +326,24 @@ func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, keys []Meetin
 func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.Meeting) error {
 	meeting.UpdatedAt = time.Now().UTC()
 
+	// UpdateMeeting is a whole-item PutItem, not a partial UpdateItem -- every
+	// field on the in-memory *model.Meeting the caller passes in overwrites
+	// whatever is currently stored, including ProjectIDs. ProjectIDs is a
+	// String Set precisely so LinkMeeting/UnlinkMeeting can mutate it with
+	// atomic ADD/DELETE and never race each other -- but that guarantee means
+	// nothing if this call reads a Meeting BEFORE a concurrent (Un)LinkMeeting
+	// commits and then overwrites the whole item AFTER, silently reverting or
+	// (since the tag is `omitempty`) deleting the link. Re-fetching just this
+	// one attribute right before the write closes the window down to ordinary
+	// single-item consistency instead of "however long this caller held its
+	// in-memory copy" -- which, for STT pipeline callers (transcribe.go,
+	// cmd/transcribe/main.go), can be the entire transcription run.
+	if current, err := r.getMeetingProjectIDs(ctx, meeting.UserID, meeting.MeetingID); err != nil {
+		log.Printf("warn: failed to preserve projectIds on meeting update %s: %v", meeting.MeetingID, err)
+	} else {
+		meeting.ProjectIDs = current
+	}
+
 	// Store large transcripts in S3 if S3 client is available
 	if r.s3Client != nil && r.bucketName != "" {
 		// Store transcriptA if needed
@@ -361,6 +379,44 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	}
 
 	return nil
+}
+
+// getMeetingProjectIDs reads only the projectIds attribute of a meeting,
+// via ProjectionExpression -- see UpdateMeeting's comment for why this
+// read-before-write matters. A missing item or missing attribute both
+// resolve to a nil slice (not an error): the caller is mid-write on a
+// meeting that either doesn't exist yet or has no project links, and in
+// both cases overwriting with nil is correct, not a failure to report.
+func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUserID, meetingID string) ([]string, error) {
+	expr, err := expression.NewBuilder().
+		WithProjection(expression.NamesList(expression.Name("projectIds"))).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("build projectIds projection: %w", err)
+	}
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:                aws.String(r.tableName),
+		ConsistentRead:           aws.Bool(true),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + ownerUserID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		ProjectionExpression:     expr.Projection(),
+		ExpressionAttributeNames: expr.Names(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get meeting projectIds: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+	var projected struct {
+		ProjectIDs []string `dynamodbav:"projectIds,omitempty,stringset"`
+	}
+	if err := attributevalue.UnmarshalMap(result.Item, &projected); err != nil {
+		return nil, fmt.Errorf("unmarshal meeting projectIds: %w", err)
+	}
+	return projected.ProjectIDs, nil
 }
 
 // UpdateMeetingFields atomically updates only the specified fields on a meeting item

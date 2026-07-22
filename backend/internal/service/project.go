@@ -14,6 +14,17 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
+// ErrProjectHasLinks is returned by DeleteProject when the project still has
+// linked accounts, meetings, research, or direct members. DeleteProject's
+// repository call only removes the CONFIG + owner-index items -- it does
+// NOT cascade-delete MEMBER# rows, the account/meeting/research reverse
+// refs, or the projectId entries in linked meetings'/research's ProjectIDs
+// sets, and no unlink API can reach a deleted project's own relations
+// afterward (requireProjectAccess would return ErrNotFound first). Rejecting
+// deletion while any relation exists avoids orphaning that data outright,
+// rather than accepting silent, permanently-unreachable garbage.
+var ErrProjectHasLinks = errors.New("project still has linked accounts, meetings, research, or members")
+
 // projectRepo is the narrow persistence seam used by ProjectService.
 type projectRepo interface {
 	CreateProject(context.Context, *model.Project) error
@@ -207,6 +218,30 @@ func (s *ProjectService) DeleteProject(ctx context.Context, userID, projectID st
 	if project.OwnerUserID != userID {
 		return ErrForbidden
 	}
+	if len(project.AccountIDs) > 0 {
+		return ErrProjectHasLinks
+	}
+	members, err := s.repo.ListProjectMembers(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if len(members) > 0 {
+		return ErrProjectHasLinks
+	}
+	meetingRefs, err := s.repo.ListProjectMeetingRefsForProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if len(meetingRefs) > 0 {
+		return ErrProjectHasLinks
+	}
+	researchRefs, err := s.repo.ListProjectResearchRefsForProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if len(researchRefs) > 0 {
+		return ErrProjectHasLinks
+	}
 	return s.repo.DeleteProject(ctx, projectID, project.OwnerUserID)
 }
 
@@ -370,9 +405,37 @@ func projectMeetingRefSK(meeting *model.Meeting) string {
 	return model.PrefixProjectMeetingRef + meeting.Date.UTC().Format(time.RFC3339) + "#" + meeting.MeetingID
 }
 
+// existingProjectMeetingRefSK finds the SK of an already-written
+// MEETINGREF# item for meetingID, if one exists. The SK embeds
+// meeting.Date at link time; recomputing it from the meeting's CURRENT
+// (mutable) Date instead of looking this up would target a different item
+// than the one actually written whenever Date changed since the link, and
+// re-Put a second ref rather than refreshing the original -- duplicating
+// this meeting in every ref-driven read (ListProjectMeetings,
+// GetProjectInsights, GetProjectBrief).
+func (s *ProjectService) existingProjectMeetingRefSK(ctx context.Context, projectID, meetingID string) (string, error) {
+	refs, err := s.repo.ListProjectMeetingRefsForProject(ctx, projectID)
+	if err != nil {
+		return "", err
+	}
+	for _, ref := range refs {
+		if ref.MeetingID == meetingID {
+			return ref.SK, nil
+		}
+	}
+	return "", nil
+}
+
 func (s *ProjectService) putProjectMeetingRef(ctx context.Context, projectID, ownerUserID string, meeting *model.Meeting) error {
+	sk, err := s.existingProjectMeetingRefSK(ctx, projectID, meeting.MeetingID)
+	if err != nil {
+		return err
+	}
+	if sk == "" {
+		sk = projectMeetingRefSK(meeting)
+	}
 	return s.repo.PutProjectMeetingRef(ctx, &model.ProjectMeetingRef{
-		PK: model.PrefixProject + projectID, SK: projectMeetingRefSK(meeting),
+		PK: model.PrefixProject + projectID, SK: sk,
 		ProjectID: projectID, MeetingID: meeting.MeetingID, OwnerUserID: ownerUserID,
 		Title: meeting.Title, Date: meeting.Date, EntityType: model.EntityTypeProjectMeetingRef,
 	})
@@ -420,21 +483,11 @@ func (s *ProjectService) UnlinkMeeting(ctx context.Context, userID, projectID, m
 	if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
 		return err
 	}
-	// Look up the ref's ACTUAL existing SK rather than recomputing it from
-	// meeting.Date: Date is mutable, so if it changed since LinkMeeting ran,
-	// recomputing would target a different item than the one actually
-	// written, orphaning the original ref (fail-closed reads mask this --
-	// the orphan just accumulates -- but it should still be deleted).
-	refs, err := s.repo.ListProjectMeetingRefsForProject(ctx, projectID)
+	// Look up the ref's ACTUAL existing SK (see existingProjectMeetingRefSK's
+	// comment) rather than recomputing it from the meeting's current Date.
+	refSK, err := s.existingProjectMeetingRefSK(ctx, projectID, meetingID)
 	if err != nil {
 		return err
-	}
-	var refSK string
-	for _, ref := range refs {
-		if ref.MeetingID == meetingID {
-			refSK = ref.SK
-			break
-		}
 	}
 	if err := s.repo.MeetingProjectUnlinkTransactional(ctx, userID, meetingID, projectID, refSK); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
@@ -543,14 +596,20 @@ func (s *ProjectService) ListProjectMeetings(ctx context.Context, userID, projec
 	if err != nil {
 		return nil, err
 	}
+	seen := make(map[string]bool, len(refs))
 	out := make([]model.ProjectMeetingRefDTO, 0, len(refs))
 	for _, ref := range refs {
 		meeting, ok := byID[ref.MeetingID]
 		// Refs are candidates only. Re-check the canonical string set and
 		// fail closed if an unlink left a stale reverse-index item behind.
-		if !ok || !contains(meeting.ProjectIDs, projectID) {
+		// Also dedup by MeetingID -- defense-in-depth against a duplicate ref
+		// (e.g. two MEETINGREF# items for the same meeting at different SKs,
+		// which existingProjectMeetingRefSK now prevents going forward, but
+		// this guard is cheap and catches it regardless of cause.
+		if !ok || !contains(meeting.ProjectIDs, projectID) || seen[meeting.MeetingID] {
 			continue
 		}
+		seen[meeting.MeetingID] = true
 		out = append(out, model.ProjectMeetingRefDTO{
 			MeetingID: meeting.MeetingID, OwnerUserID: ref.OwnerUserID,
 			Title: meeting.Title, Date: meeting.Date,
@@ -610,12 +669,17 @@ func (s *ProjectService) GetProjectInsights(ctx context.Context, userID, project
 	for _, insightType := range types {
 		typeSet[insightType] = true
 	}
+	seen := make(map[string]bool, len(refs))
 	out := make([]model.ProjectInsightDTO, 0)
 	for _, ref := range refs {
 		meeting, ok := byID[ref.MeetingID]
-		if !ok || !contains(meeting.ProjectIDs, projectID) {
+		// Dedup by MeetingID -- see ListProjectMeetings' comment. Without
+		// this, a duplicate ref would double-count every insight from that
+		// meeting, not just list the meeting twice.
+		if !ok || !contains(meeting.ProjectIDs, projectID) || seen[meeting.MeetingID] {
 			continue
 		}
+		seen[meeting.MeetingID] = true
 		if !from.IsZero() && meeting.Date.Before(from) {
 			continue
 		}

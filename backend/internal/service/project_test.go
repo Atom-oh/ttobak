@@ -625,3 +625,107 @@ func TestLinkMeeting_NonOwnerNotFound(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestDeleteProject_RejectsWhileLinked(t *testing.T) {
+	ctx := context.Background()
+	newRepoWith := func(setup func(*mockProjectRepo, *model.Project)) *mockProjectRepo {
+		repo := newMockProjectRepo()
+		p := seedProject(repo, "p1", "owner")
+		setup(repo, p)
+		return repo
+	}
+
+	t.Run("linked account", func(t *testing.T) {
+		repo := newRepoWith(func(_ *mockProjectRepo, p *model.Project) { p.AccountIDs = []string{"a1"} })
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected ErrProjectHasLinks, got %v", err)
+		}
+	})
+	t.Run("direct member", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			r.projectMembers[projectMemberKey("p1", "bob")] = &model.ProjectMember{ProjectID: "p1", UserID: "bob"}
+		})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected ErrProjectHasLinks, got %v", err)
+		}
+	})
+	t.Run("linked meeting", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			r.meetingRefs["p1"] = []model.ProjectMeetingRef{{ProjectID: "p1", MeetingID: "m1"}}
+		})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected ErrProjectHasLinks, got %v", err)
+		}
+	})
+	t.Run("linked research", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			r.researchRefs["p1"] = []model.ProjectResearchRef{{ProjectID: "p1", ResearchID: "r1"}}
+		})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected ErrProjectHasLinks, got %v", err)
+		}
+	})
+	t.Run("clean project deletes", func(t *testing.T) {
+		repo := newRepoWith(func(_ *mockProjectRepo, _ *model.Project) {})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if repo.projects["p1"] != nil {
+			t.Fatal("project should be deleted")
+		}
+	})
+}
+
+// TestLinkMeeting_ReLinkAfterDateChangeReusesRef is the regression test for
+// the duplicate-ref bug: re-linking an already-linked meeting after its
+// Date changed used to Put a second ref at a freshly-computed SK instead of
+// updating the original, since the SK embeds the (mutable) Date.
+func TestLinkMeeting_ReLinkAfterDateChangeReusesRef(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	original := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	meeting := &model.Meeting{MeetingID: "m1", UserID: "owner", Date: original, ProjectIDs: []string{"p1"}}
+	repo.meetings[projectMeetingKey("owner", "m1")] = meeting
+	repo.meetingRefs["p1"] = []model.ProjectMeetingRef{{
+		PK: model.PrefixProject + "p1", SK: projectMeetingRefSK(meeting),
+		ProjectID: "p1", MeetingID: "m1", OwnerUserID: "owner", Date: original,
+	}}
+
+	meeting.Date = time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC) // mutate Date after the original link
+	if err := newProjectServiceWithRepo(repo).LinkMeeting(context.Background(), "owner", "p1", "m1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.meetingRefs["p1"]) != 1 {
+		t.Fatalf("expected the original ref to be updated in place, got %d refs: %+v", len(repo.meetingRefs["p1"]), repo.meetingRefs["p1"])
+	}
+	if repo.meetingRefs["p1"][0].Date != meeting.Date {
+		t.Fatalf("expected ref Date refreshed to %v, got %v", meeting.Date, repo.meetingRefs["p1"][0].Date)
+	}
+}
+
+// TestListProjectMeetings_DedupsByMeetingID is defense-in-depth: even if two
+// MEETINGREF# items somehow exist for the same meeting (any cause, not just
+// the SK-drift bug above), the meeting must only be listed once and its
+// insights must only be counted once.
+func TestListProjectMeetings_DedupsByMeetingID(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	repo.meetings[projectMeetingKey("owner", "m1")] = &model.Meeting{
+		MeetingID: "m1", UserID: "owner", ProjectIDs: []string{"p1"},
+		Insights: `[{"type":"risk","text":"dup risk"}]`,
+	}
+	repo.meetingRefs["p1"] = []model.ProjectMeetingRef{
+		{ProjectID: "p1", MeetingID: "m1", OwnerUserID: "owner", SK: "MEETINGREF#a"},
+		{ProjectID: "p1", MeetingID: "m1", OwnerUserID: "owner", SK: "MEETINGREF#b"},
+	}
+	svc := newProjectServiceWithRepo(repo)
+
+	meetings, err := svc.ListProjectMeetings(context.Background(), "owner", "p1")
+	if err != nil || len(meetings) != 1 {
+		t.Fatalf("expected exactly 1 deduped meeting, got %v err=%v", meetings, err)
+	}
+	insights, err := svc.GetProjectInsights(context.Background(), "owner", "p1", time.Time{}, time.Time{}, nil)
+	if err != nil || len(insights) != 1 {
+		t.Fatalf("expected exactly 1 deduped insight, got %v err=%v", insights, err)
+	}
+}
