@@ -8,6 +8,7 @@ const pathLabels: Record<string, string> = {
   '/files': 'Files',
   '/kb': 'Knowledge Base',
   '/insights': 'Insights',
+  '/projects': 'Projects',
   '/settings': 'Settings',
   '/record': 'Recording',
   '/profile': 'Profile',

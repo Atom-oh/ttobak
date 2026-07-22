@@ -164,6 +164,48 @@ export class TtobakApi {
     return this.get(`/api/accounts/${accountId}/brief${qs ? '?' + qs : ''}`);
   }
 
+  async createProject(project: {
+    name: string;
+    description?: string;
+    sfdcOpptyId?: string;
+    sfdcUrl?: string;
+    stage?: string;
+  }) {
+    return this.post('/api/projects', project);
+  }
+
+  async listProjects() {
+    return this.get('/api/projects');
+  }
+
+  async getProject(projectId: string) {
+    return this.get(`/api/projects/${encodeURIComponent(projectId)}`);
+  }
+
+  async getProjectBrief(
+    projectId: string,
+    opts?: { from?: string; to?: string; types?: string[] },
+  ) {
+    const q = new URLSearchParams();
+    if (opts?.from) q.set('from', opts.from);
+    if (opts?.to) q.set('to', opts.to);
+    if (opts?.types && opts.types.length) q.set('types', opts.types.join(','));
+    const qs = q.toString();
+    return this.get(`/api/projects/${encodeURIComponent(projectId)}/brief${qs ? '?' + qs : ''}`);
+  }
+
+  async getProjectInsights(
+    projectId: string,
+    opts?: { from?: string; to?: string; types?: string[] },
+  ) {
+    const q = new URLSearchParams();
+    if (opts?.from) q.set('from', opts.from);
+    if (opts?.to) q.set('to', opts.to);
+    if (opts?.types && opts.types.length) q.set('types', opts.types.join(','));
+    const qs = q.toString();
+    return this.get(`/api/projects/${encodeURIComponent(projectId)}/insights${qs ? '?' + qs : ''}`);
+  }
+
   async exportVault() {
     return this.get('/api/vault/export');
   }

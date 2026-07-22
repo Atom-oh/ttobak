@@ -119,6 +119,64 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'ttobak_create_project',
+      description: 'Create a project for an SFDC Oppty with optional description, URL, and stage metadata.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          name: { type: 'string', description: 'Project name' },
+          description: { type: 'string', description: 'Optional project description' },
+          sfdcOpptyId: { type: 'string', description: 'Optional SFDC Oppty ID' },
+          sfdcUrl: { type: 'string', description: 'Optional SFDC Oppty URL' },
+          stage: { type: 'string', description: 'Optional project stage' },
+        },
+        required: ['name'],
+      },
+    },
+    {
+      name: 'ttobak_list_projects',
+      description:
+        'List projects you own, are directly invited to, or can reach via a linked Account\'s membership (projectId, name, stage, SFDC Oppty ID).',
+      inputSchema: { type: 'object' as const, properties: {} },
+    },
+    {
+      name: 'ttobak_get_project',
+      description: 'Get project detail for an SFDC Oppty: metadata, linked accounts, and members.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: { projectId: { type: 'string', description: 'Project ID' } },
+        required: ['projectId'],
+      },
+    },
+    {
+      name: 'ttobak_get_project_brief',
+      description: 'Get bundled raw material for a project: meta + insights grouped by type + linked meetings + linked research.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          projectId: { type: 'string', description: 'Project ID' },
+          from: { type: 'string', description: 'Optional start (RFC3339)' },
+          to: { type: 'string', description: 'Optional end (RFC3339)' },
+          types: { type: 'array', items: { type: 'string' }, description: 'Optional insight types to include' },
+        },
+        required: ['projectId'],
+      },
+    },
+    {
+      name: 'ttobak_get_project_insights',
+      description: 'Get typed field insights for a project. Filter by period and insight types (trend, need, competitive, risk, opportunity, tech, stakeholder, action).',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          projectId: { type: 'string', description: 'Project ID' },
+          from: { type: 'string', description: 'Optional start (RFC3339, e.g. 2026-05-01T00:00:00Z)' },
+          to: { type: 'string', description: 'Optional end (RFC3339)' },
+          types: { type: 'array', items: { type: 'string' }, description: 'Optional insight types to include' },
+        },
+        required: ['projectId'],
+      },
+    },
+    {
       name: 'ttobak_export_vault',
       description: 'Export your meetings as Obsidian-ready markdown files [{path, markdown}], placed under Accounts/{name}/ (shared) or _Private/Meetings/. Write each to your local vault.',
       inputSchema: { type: 'object' as const, properties: {} },
@@ -342,6 +400,55 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         if (!accountId) return error('accountId is required');
         const result = await api.getAccountBrief(accountId, { from, to, types });
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_create_project': {
+        const { name, description, sfdcOpptyId, sfdcUrl, stage } = args as {
+          name: string;
+          description?: string;
+          sfdcOpptyId?: string;
+          sfdcUrl?: string;
+          stage?: string;
+        };
+        if (!name) return error('name is required');
+        const result = await api.createProject({ name, description, sfdcOpptyId, sfdcUrl, stage });
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_list_projects': {
+        const result = await api.listProjects();
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_get_project': {
+        const { projectId } = args as { projectId: string };
+        if (!projectId) return error('projectId is required');
+        const result = await api.getProject(projectId);
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_get_project_brief': {
+        const { projectId, from, to, types } = args as {
+          projectId: string;
+          from?: string;
+          to?: string;
+          types?: string[];
+        };
+        if (!projectId) return error('projectId is required');
+        const result = await api.getProjectBrief(projectId, { from, to, types });
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_get_project_insights': {
+        const { projectId, from, to, types } = args as {
+          projectId: string;
+          from?: string;
+          to?: string;
+          types?: string[];
+        };
+        if (!projectId) return error('projectId is required');
+        const result = await api.getProjectInsights(projectId, { from, to, types });
         return text(JSON.stringify(result, null, 2));
       }
 
