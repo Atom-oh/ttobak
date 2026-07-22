@@ -347,20 +347,149 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 		}
 	}
 
-	item, err := attributevalue.MarshalMap(meeting)
-	if err != nil {
-		return fmt.Errorf("failed to marshal meeting: %w", err)
-	}
+	// UpdateMeeting is a whole-item PutItem, not a partial UpdateItem -- every
+	// field on the in-memory *model.Meeting the caller passes in overwrites
+	// whatever is currently stored, including ProjectIDs. ProjectIDs is a
+	// String Set precisely so LinkMeeting/UnlinkMeeting can mutate it with
+	// atomic ADD/DELETE and never race each other -- but that guarantee means
+	// nothing if this call reads a Meeting BEFORE a concurrent (Un)LinkMeeting
+	// commits and then overwrites the whole item AFTER, silently reverting or
+	// (since the tag is `omitempty`) deleting the link.
+	//
+	// A plain re-read-then-write (read projectIds, then PutItem) only
+	// NARROWS that window to ordinary read-then-write latency -- it doesn't
+	// close it: a Link/Unlink can still land in the gap between this read
+	// and the PutItem below. Narrowing isn't enough for a field this
+	// codebase's own conventions single out (AGENTS.md: "a field another
+	// code path can mutate concurrently ... needs a conditional UpdateItem,
+	// not a whole-item PutItem carrying a stale read-time snapshot").
+	// Closing it for real means detecting the race, not just shrinking it:
+	// the PutItem below carries a ConditionExpression asserting projectIds
+	// still equals what was just read, and a ConditionalCheckFailedException
+	// (someone changed it in between) triggers a bounded retry -- re-read,
+	// re-attempt -- instead of either silently overwriting the change or
+	// giving up. A failed *read* (not a lost race) still aborts the whole
+	// update rather than proceeding with whatever ProjectIDs the caller's
+	// in-memory Meeting happened to carry (typically nil for STT pipeline
+	// callers, which never populate it) -- proceeding on a read failure
+	// risks wiping every project link on one transient GetItem error, which
+	// is worse than the race this exists to close.
+	const maxProjectIDsAttempts = 3
+	for attempt := 1; ; attempt++ {
+		current, err := r.getMeetingProjectIDs(ctx, meeting.UserID, meeting.MeetingID)
+		if err != nil {
+			return fmt.Errorf("failed to preserve projectIds on meeting update: %w", err)
+		}
+		meeting.ProjectIDs = current
 
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      item,
+		item, err := attributevalue.MarshalMap(meeting)
+		if err != nil {
+			return fmt.Errorf("failed to marshal meeting: %w", err)
+		}
+
+		condExpr, err := projectIDsUnchangedCondition(current)
+		if err != nil {
+			return fmt.Errorf("build projectIds-unchanged condition: %w", err)
+		}
+
+		_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+			TableName:                 aws.String(r.tableName),
+			Item:                      item,
+			ConditionExpression:       condExpr.Condition(),
+			ExpressionAttributeNames:  condExpr.Names(),
+			ExpressionAttributeValues: condExpr.Values(),
+		})
+		action, terminalErr := classifyProjectIDsPutItemErr(err, attempt, maxProjectIDsAttempts)
+		if action == putItemRetryActionRetry {
+			continue
+		}
+		return terminalErr
+	}
+}
+
+// putItemRetryAction is the outcome classifyProjectIDsPutItemErr decides for
+// one PutItem attempt in UpdateMeeting's projectIds-preserving retry loop.
+type putItemRetryAction int
+
+const (
+	putItemRetryActionDone putItemRetryAction = iota
+	putItemRetryActionRetry
+)
+
+// classifyProjectIDsPutItemErr decides UpdateMeeting's retry loop outcome for
+// one PutItem attempt: retry on ConditionalCheckFailedException while
+// attempts remain, a distinct terminal error once exhausted (so a caller
+// can tell "gave up after retrying" apart from any other DynamoDB failure),
+// nil error on success, or the wrapped original error for anything else.
+// Extracted as a pure function -- per AGENTS.md's rule that
+// security/correctness-critical branching be unit-testable -- so this
+// decision logic can be tested without a live DynamoDB client.
+func classifyProjectIDsPutItemErr(err error, attempt, maxAttempts int) (action putItemRetryAction, terminalErr error) {
+	if err == nil {
+		return putItemRetryActionDone, nil
+	}
+	var ccfe *types.ConditionalCheckFailedException
+	if errors.As(err, &ccfe) {
+		if attempt < maxAttempts {
+			return putItemRetryActionRetry, nil
+		}
+		return putItemRetryActionDone, fmt.Errorf("failed to update meeting: projectIds changed concurrently %d times, giving up", maxAttempts)
+	}
+	return putItemRetryActionDone, fmt.Errorf("failed to update meeting: %w", err)
+}
+
+// projectIDsUnchangedCondition builds the PutItem ConditionExpression
+// UpdateMeeting uses to detect (not just narrow) a concurrent
+// LinkMeeting/UnlinkMeeting -- see UpdateMeeting's comment. DynamoDB
+// compares Set-typed attributes by their contents, not insertion order, so
+// this correctly matches a projectIds set re-read in a different element
+// order than when it was written.
+func projectIDsUnchangedCondition(current []string) (expression.Expression, error) {
+	var cond expression.ConditionBuilder
+	if len(current) == 0 {
+		cond = expression.AttributeNotExists(expression.Name("projectIds"))
+	} else {
+		cond = expression.Name("projectIds").Equal(expression.Value(&types.AttributeValueMemberSS{Value: current}))
+	}
+	return expression.NewBuilder().WithCondition(cond).Build()
+}
+
+// getMeetingProjectIDs reads only the projectIds attribute of a meeting,
+// via ProjectionExpression -- see UpdateMeeting's comment for why this
+// read-before-write matters. A missing item or missing attribute both
+// resolve to a nil slice (not an error): the caller is mid-write on a
+// meeting that either doesn't exist yet or has no project links, and in
+// both cases overwriting with nil is correct, not a failure to report.
+func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUserID, meetingID string) ([]string, error) {
+	expr, err := expression.NewBuilder().
+		WithProjection(expression.NamesList(expression.Name("projectIds"))).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("build projectIds projection: %w", err)
+	}
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:                aws.String(r.tableName),
+		ConsistentRead:           aws.Bool(true),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + ownerUserID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		ProjectionExpression:     expr.Projection(),
+		ExpressionAttributeNames: expr.Names(),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to update meeting: %w", err)
+		return nil, fmt.Errorf("get meeting projectIds: %w", err)
 	}
-
-	return nil
+	if result.Item == nil {
+		return nil, nil
+	}
+	var projected struct {
+		ProjectIDs []string `dynamodbav:"projectIds,omitempty,stringset"`
+	}
+	if err := attributevalue.UnmarshalMap(result.Item, &projected); err != nil {
+		return nil, fmt.Errorf("unmarshal meeting projectIds: %w", err)
+	}
+	return projected.ProjectIDs, nil
 }
 
 // UpdateMeetingFields atomically updates only the specified fields on a meeting item

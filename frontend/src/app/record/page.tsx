@@ -52,6 +52,23 @@ function RecordPageInner() {
   const [liveSttProvider, setLiveSttProvider] = useState<LiveSttProvider>('web-speech');
   const [audioSource, setAudioSource] = useState<'mic' | 'tab' | 'system'>('mic');
   const [tabSharingLabel, setTabSharingLabel] = useState<string | null>(null);
+  // Tauri System Audio mode has no MediaStream, so `session.isRecording`
+  // (which only flips true inside session.startSession, given a stream)
+  // stays false for the whole recording. Without this separate signal, the
+  // during-recording banner/title/nav-lock never rendered and the screen
+  // looked blank/broken even though capture was working fine.
+  const [isNativeRecording, _setIsNativeRecording] = useState(false);
+  // Ref mirror for callbacks whose closure predates the state flip:
+  // RecordButton's onError is created in the render where the user CLICKED
+  // (isNativeRecording still false), but fires after handleRecordingStart
+  // has already latched native mode — reading the state there takes the
+  // wrong branch and leaves a zombie recording UI. Callbacks must read the
+  // ref; rendering reads the state.
+  const isNativeRecordingRef = useRef(false);
+  const setIsNativeRecording = useCallback((v: boolean) => {
+    isNativeRecordingRef.current = v;
+    _setIsNativeRecording(v);
+  }, []);
 
   // Analyser nodes for MicSelector level meter
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
@@ -392,6 +409,7 @@ function RecordPageInner() {
     // the meeting stays stuck in 'recording' status with no linked audioKey.
     await postRecording.createDraftMeeting();
     if (stream) {
+      setIsNativeRecording(false);
       // Browser modes (mic/tab): start live STT session with the MediaStream.
       session.startSession(() => {
         previewStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -400,11 +418,18 @@ function RecordPageInner() {
         previewCtxRef.current = null;
         setPreviewAnalyser(null);
       }, stream);
+    } else if (isTauri() && audioSource === 'system') {
+      // Native (system audio): no MediaStream — capture happens in Rust via
+      // ScreenCaptureKit, and RecordButton manages its own timer/state.
+      // isNativeRecording drives the during-recording UI immediately,
+      // rather than waiting on the async STT session start below.
+      setIsNativeRecording(true);
+      // Live captions: no MediaStream exists to hand an AudioWorklet, so
+      // this starts a session fed by PCM chunks pushed in via
+      // RecordButton's onNativePcmChunk prop instead (see
+      // useRecordingSession's startNativeSession/pushNativePcmChunk).
+      session.startNativeSession();
     }
-    // Native (system audio): no MediaStream, no live STT — capture happens
-    // in Rust via ScreenCaptureKit. RecordButton manages timer + state on
-    // its own. session.isRecording stays false, so LiveTranscript / LiveQAPanel
-    // are not rendered (correctly — there is no live transcript to render).
   };
 
   const handleCheckpoint = async (blob: Blob, mimeType: string) => {
@@ -544,7 +569,7 @@ function RecordPageInner() {
   };
 
   return (
-    <AppLayout activePath="/record" showMobileNav={true} isRecording={session.isRecording} breadcrumbs={[{ label: 'Recording' }, { label: meetingTitle || 'New Meeting' }]}>
+    <AppLayout activePath="/record" showMobileNav={true} isRecording={session.isRecording || isNativeRecording} breadcrumbs={[{ label: 'Recording' }, { label: meetingTitle || 'New Meeting' }]}>
       {/* Header */}
       <header className="lg:hidden flex items-center justify-between px-6 py-4 bg-white/80 dark:bg-background-dark/80 backdrop-blur-md sticky top-0 z-10 border-b border-slate-100 dark:border-white/10">
         <button
@@ -736,7 +761,7 @@ function RecordPageInner() {
               <div className="flex flex-col gap-1 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300">
                 <div className="flex items-center gap-2">
                   <span className="material-symbols-outlined text-base">speaker</span>
-                  Zoom·Teams 데스크탑 앱과 Chrome의 Zoom Web·Google Meet 등 시스템 오디오를 캡처합니다 (실시간 자막 미지원)
+                  Zoom·Teams 데스크탑 앱과 Chrome의 Zoom Web·Google Meet 등 시스템 오디오를 캡처합니다 (실시간 자막은 베스트에포트로 시도되며, 연결에 실패해도 녹음 종료 후 자동으로 전사됩니다)
                 </div>
                 <div className="text-xs text-purple-600/80 dark:text-purple-300/70 ml-6">
                   ⚠️ 다른 참가자 음성만 녹음됩니다 — 본인 마이크는 별도로 잡지 않습니다
@@ -757,7 +782,7 @@ function RecordPageInner() {
         )}
 
         {/* Desktop: Meeting title during recording */}
-        {session.isRecording && (
+        {(session.isRecording || isNativeRecording) && (
           <div className="hidden lg:block mb-4">
             <h1 className="text-xl font-bold text-slate-900 dark:text-white dark:font-headline text-center tracking-tight">
               {meetingTitle || 'Untitled Meeting'}
@@ -772,11 +797,17 @@ function RecordPageInner() {
             Sharing: {tabSharingLabel}
           </div>
         )}
-        {/* System audio status during recording */}
-        {audioSource === 'system' && session.isRecording && (
+        {/* System audio status during recording. isNativeRecording (set
+            synchronously as soon as native capture starts) drives this
+            rather than session.isRecording alone: startNativeSession()
+            does eventually set session.isRecording true too once the STT
+            session spins up, but isNativeRecording covers the moment
+            before that resolves and the case where Transcribe Streaming
+            isn't configured/fails to connect at all. */}
+        {audioSource === 'system' && isNativeRecording && (
           <div className="flex items-center gap-2 px-4 py-2 bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 rounded-lg text-sm text-purple-700 dark:text-purple-300 mb-4">
             <span className="material-symbols-outlined text-base animate-pulse">speaker</span>
-            시스템 오디오 캡처 중
+            시스템 오디오 캡처 중 — 실시간 자막은 연결되면 표시됩니다. 녹음 종료 후 자동으로 전사·요약됩니다.
           </div>
         )}
 
@@ -786,14 +817,36 @@ function RecordPageInner() {
             meetingId={clientMeetingId}
             meetingTitle={meetingTitle || 'Untitled Meeting'}
             audioSource={audioSource}
+            disabled={!!postRecording.step}
             deviceId={audioSource === 'mic' ? (selectedDeviceId || undefined) : undefined}
             onRecordingComplete={postRecording.handleRecordingComplete}
             onBlobReady={postRecording.handleBlobReady}
+            onNativeFileReady={postRecording.handleNativeFileReady}
+            onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error) => {
-              if (session.isRecording) {
-                postRecording.handleRetry(); // clear any previous state
-                // setStep and errorMessage handled by handleBlobReady on real errors
-                // For recording errors, show blocking overlay
+              if (isNativeRecordingRef.current) {
+                // Read the REF, not the state: this closure was created in
+                // the render where the user clicked (state still false) but
+                // fires after handleRecordingStart latched native mode — a
+                // state read takes the wrong branch on a native START
+                // failure (e.g. Screen Recording TCC denial) and leaves a
+                // zombie recording UI. Every onError while native mode is
+                // latched comes from RecordButton's native start/stop catch
+                // blocks — always a terminal failure. Terminal means the
+                // WHOLE session ends: stopSession() releases the STT session
+                // too, or session.isRecording stays latched (AppLayout stuck
+                // in recording mode, Transcribe WebSocket left open). The
+                // failure surfaces on the post-recording error banner
+                // ([Try Again]/[Home]) alongside upload failures, not the
+                // live-captions channel.
+                setIsNativeRecording(false);
+                session.stopSession();
+                postRecording.failWithError(error);
+              } else if (session.isRecording) {
+                postRecording.reset(); // clear any previous banner state
+                // setStep and errorMessage handled by handleBlobReady on
+                // real post-recording errors. For recording errors, show
+                // blocking overlay instead.
                 session.setSpeechError(null);
               } else {
                 session.setSpeechError(error);
@@ -802,7 +855,7 @@ function RecordPageInner() {
             onRecordingStart={handleRecordingStart}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
-            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); }}
+            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); }}
             onPermissionGranted={refreshDevices}
             onCaptureImage={handleFileAttach}
             onAnalyserReady={setAnalyserNode}
@@ -1053,8 +1106,9 @@ function RecordPageInner() {
         <PostRecordingBanner
           step={postRecording.step}
           errorMessage={postRecording.errorMessage}
+          uploadProgress={postRecording.uploadProgress}
           onRetry={handleRetry}
-          onDismiss={() => { postRecording.handleRetry(); setContextText(''); router.push('/'); }}
+          onDismiss={() => { postRecording.reset(); setContextText(''); router.push('/'); }}
           onNotesSubmit={handleFinalNotesSubmit}
           onNotesSkip={handleFinalNotesSkip}
           initialNotes={notes}

@@ -700,7 +700,7 @@ Project(SFDC Opportunity)는 미팅노트·리서치·인사이트를 영업 기
 1급 엔티티다. Account와 달리 **다대다 그래프**로 여러 Account에 동시에 연결될
 수 있다(파트너사+엔드고객 등). Research↔Account 연동과 동일한 그래프 레퍼런스
 패턴(문자열 집합 + 역참조 아이템 + fail-closed 재검증)을 재사용한다 — 자세한
-내부 데이터 모델은 ADR-024 참고.
+내부 데이터 모델은 ADR-025 참고.
 
 **접근 권한**은 하이브리드: project owner, 직접 초대된 멤버(`POST .../members`),
 또는 **연결된 Account 중 하나의 멤버**면 통과한다. 즉 Account를 프로젝트에
@@ -793,7 +793,7 @@ Response: 204 No Content
 
 연동/해제 모두 `Project.accountIds`(String Set)와 역참조
 (`ACCOUNT#{accountId}/PROJECTREF#{projectId}`)를 **단일 `TransactWriteItems`
-로 원자적으로** 갱신한다(ADR-024) — 해제 시 owner가 그 Account의 현재
+로 원자적으로** 갱신한다(ADR-025) — 해제 시 owner가 그 Account의 현재
 멤버가 아니어도 된다(해제는 project ownership만으로 충분 — 그렇지 않으면
 owner가 Account에서 제거된 뒤 영구히 연동을 못 푸는 상황이 생긴다).
 
@@ -815,9 +815,9 @@ Error: 404 Not Found (미팅/리서치/프로젝트 없음)
 요구하지만, **언링크**는 그 owner이거나 **프로젝트 owner**면 충분하다 —
 링크한 멤버가 이후 `RemoveMember`로 제거되면 본인도(프로젝트 접근권 상실),
 프로젝트 owner도(그 미팅/리서치의 owner가 아님) 언링크를 못 하게 되는
-데드락을 막기 위한 비대칭이다(ADR-024). `SharedToAccount`(계정 공유 게이트)
+데드락을 막기 위한 비대칭이다(ADR-025). `SharedToAccount`(계정 공유 게이트)
 와는 별개다 — 프로젝트에 링크된 미팅의 제목/인사이트는 프로젝트 접근 권한이
-있는 사람 모두에게 노출된다(ADR-024 참고, `SharedToAccount`를 의도적으로
+있는 사람 모두에게 노출된다(ADR-025 참고, `SharedToAccount`를 의도적으로
 우회하는 별도 공유 채널).
 
 #### List Project Meetings / Research
@@ -836,7 +836,7 @@ Error: 403 Forbidden (프로젝트 접근 권한 없음)
 여전히 포함되는지 재검증한다(fail-closed) — 링크된 미팅이 이 API가 모르는
 경로(기존 미팅 삭제 등)로 지워져 역참조만 고아로 남는 경우처럼, 트랜잭션
 경계 밖의 다른 실패 모드로 생긴 stale ref도 조회 결과에는 절대 노출되지
-않는다. `meetingId` 기준으로도 중복 제거한다(ADR-024의 mutable-Date
+않는다. `meetingId` 기준으로도 중복 제거한다(ADR-025의 mutable-Date
 레퍼런스 SK 이슈에 대한 방어).
 
 #### Get Project Insights

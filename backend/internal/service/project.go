@@ -14,6 +14,17 @@ import (
 	"github.com/ttobak/backend/internal/repository"
 )
 
+// ErrProjectHasLinks is returned by DeleteProject when the project still has
+// linked accounts, meetings, research, or direct members. DeleteProject's
+// repository call only removes the CONFIG + owner-index items -- it does
+// NOT cascade-delete MEMBER# rows, the account/meeting/research reverse
+// refs, or the projectId entries in linked meetings'/research's ProjectIDs
+// sets, and no unlink API can reach a deleted project's own relations
+// afterward (requireProjectAccess would return ErrNotFound first). Rejecting
+// deletion while any relation exists avoids orphaning that data outright,
+// rather than accepting silent, permanently-unreachable garbage.
+var ErrProjectHasLinks = errors.New("project still has linked accounts, meetings, research, or members")
+
 // projectRepo is the narrow persistence seam used by ProjectService.
 type projectRepo interface {
 	CreateProject(context.Context, *model.Project) error
@@ -23,6 +34,7 @@ type projectRepo interface {
 	DeleteProjectMember(context.Context, string, string) error
 	ListProjectMembers(context.Context, string) ([]model.ProjectMember, error)
 	ListProjectsForUser(context.Context, string) ([]model.Project, error)
+	ListAccountsForUser(context.Context, string) ([]model.AccountMember, error)
 	UpdateProjectFields(context.Context, string, map[string]interface{}) error
 	DeleteProject(context.Context, string, string) error
 	ProjectAccountLinkTransactional(context.Context, string, string, *model.ProjectRef) error
@@ -65,7 +77,7 @@ func NewProjectServiceForTest(repo ProjectRepo) *ProjectService {
 	return &ProjectService{repo: repo}
 }
 
-func (s *ProjectService) CreateProject(ctx context.Context, ownerUserID, ownerEmail string, req *model.CreateProjectRequest) (*model.ProjectResponse, error) {
+func (s *ProjectService) CreateProject(ctx context.Context, ownerUserID string, req *model.CreateProjectRequest) (*model.ProjectResponse, error) {
 	if req == nil || strings.TrimSpace(req.Name) == "" {
 		return nil, ErrInvalidInput
 	}
@@ -106,15 +118,27 @@ func (s *ProjectService) requireProjectAccess(ctx context.Context, userID, proje
 	if member != nil {
 		return project, nil
 	}
+	// A transient GetMember failure on one linked Account must not short-circuit
+	// the others -- keep checking every account before giving up, so a real
+	// membership on account B still grants access even if account A's lookup
+	// errored. Only report the transient error (instead of a flat 403) if NO
+	// account granted access AND at least one lookup actually failed --
+	// otherwise a real DynamoDB outage looks identical to "not a member" to
+	// the caller, which is safe (fail-closed) but makes the failure invisible.
+	var lookupErr error
 	for _, accountID := range project.AccountIDs {
 		member, err := s.repo.GetMember(ctx, accountID, userID)
 		if err != nil {
 			log.Printf("warn: failed to check account membership %s for project access: %v", accountID, err)
+			lookupErr = err
 			continue
 		}
 		if member != nil {
 			return project, nil
 		}
+	}
+	if lookupErr != nil {
+		return nil, lookupErr
 	}
 	return nil, ErrForbidden
 }
@@ -145,13 +169,75 @@ func (s *ProjectService) GetProject(ctx context.Context, userID, projectID strin
 	return projectResponse(project, members), nil
 }
 
+// ListMyProjects unions the project's three hybrid-access discovery paths:
+// owner + direct member (ListProjectsForUser, a plain repo query) and
+// account-inherited (this method's own policy, not the repository's) --
+// mirrors where ListAccountResearch's canonical re-verification lives (the
+// service layer), not the repository. A project reachable ONLY through a
+// linked Account's membership must still surface here, or a member added
+// solely via that Account could pass requireProjectAccess yet never see
+// the project in GET /api/projects at all.
 func (s *ProjectService) ListMyProjects(ctx context.Context, userID string) ([]model.ProjectSummary, error) {
 	projects, err := s.repo.ListProjectsForUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
+	seen := make(map[string]bool, len(projects))
 	out := make([]model.ProjectSummary, 0, len(projects))
 	for _, project := range projects {
+		seen[project.ProjectID] = true
+		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
+	}
+
+	accountMemberships, err := s.repo.ListAccountsForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	// candidateAccountIDs tracks which account(s) surfaced each candidate so
+	// the fail-closed check below can accept it if ANY of them is still a
+	// canonical link, not just the first one found.
+	candidateAccountIDs := make(map[string][]string)
+	for _, accountMember := range accountMemberships {
+		refs, err := s.repo.ListProjectRefsForAccount(ctx, accountMember.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range refs {
+			if seen[ref.ProjectID] {
+				continue
+			}
+			candidateAccountIDs[ref.ProjectID] = append(candidateAccountIDs[ref.ProjectID], accountMember.AccountID)
+		}
+	}
+	for projectID, accountIDs := range candidateAccountIDs {
+		project, err := s.repo.GetProject(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		if project == nil {
+			continue
+		}
+		// A reverse-index ref is a candidate only -- never trust one without
+		// checking the canonical AccountIDs set (same principle as
+		// ListAccountProjects). A stale ACCOUNT#/PROJECTREF# must never
+		// surface a project the user no longer actually has account-inherited
+		// access to.
+		linked := false
+		for _, accountID := range accountIDs {
+			for _, linkedID := range project.AccountIDs {
+				if linkedID == accountID {
+					linked = true
+					break
+				}
+			}
+			if linked {
+				break
+			}
+		}
+		if !linked {
+			continue
+		}
+		seen[projectID] = true
 		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
 	}
 	return out, nil
@@ -207,7 +293,61 @@ func (s *ProjectService) DeleteProject(ctx context.Context, userID, projectID st
 	if project.OwnerUserID != userID {
 		return ErrForbidden
 	}
-	return s.repo.DeleteProject(ctx, projectID, project.OwnerUserID)
+	if len(project.AccountIDs) > 0 {
+		return ErrProjectHasLinks
+	}
+	members, err := s.repo.ListProjectMembers(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if len(members) > 0 {
+		return ErrProjectHasLinks
+	}
+	// Canonical-reverified counts, not raw ref counts: a MEETINGREF#/
+	// RESEARCHREF# item can outlive the meeting/research it points at (e.g.
+	// the meeting is deleted through the ordinary, unrelated meeting-delete
+	// path, which knows nothing about project refs) and sit there forever
+	// as an orphan -- a raw len(refs) > 0 check would then block deletion
+	// of a project with no *actually* linked meetings/research left,
+	// permanently. ListProjectMeetings/ListProjectResearch already do this
+	// fail-closed re-verification (and MeetingID/ResearchID dedup); reuse
+	// them here instead of re-deriving the same logic.
+	meetings, err := s.ListProjectMeetings(ctx, userID, projectID)
+	if err != nil {
+		return err
+	}
+	if len(meetings) > 0 {
+		return ErrProjectHasLinks
+	}
+	// NOT ListProjectResearch: that function filters out trashed research
+	// (correct for a user-facing list -- nobody wants trashed items showing
+	// up), but that same filter breaks the deletion guard's invariant. A
+	// research trashed WHILE still linked would fail this check as if it
+	// weren't linked, letting DeleteProject through; the trashed research's
+	// canonical ProjectIDs still contains this project's id, and restoring
+	// it (TrashResearch is reversible) resurrects an orphan link this
+	// project's ID can never be reached to unlink again (GetProject 404s).
+	// hasLinkedResearch below is the same canonical-reverification logic
+	// minus the TrashedAt filter, precisely because this check cares about
+	// "is the link still real," not "should this show up in a list."
+	hasResearch, err := s.hasLinkedResearch(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	if hasResearch {
+		return ErrProjectHasLinks
+	}
+	if err := s.repo.DeleteProject(ctx, projectID, project.OwnerUserID); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			// The condition on the CONFIG delete (no accountIds) failed --
+			// a LinkAccount committed between this function's guard reads
+			// above and this delete. Same conclusion the guard would have
+			// reached had it re-read a moment later: still linked.
+			return ErrProjectHasLinks
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *ProjectService) AddMember(ctx context.Context, requesterUserID, projectID string, req *model.AddProjectMemberRequest) (*model.ProjectMemberDTO, error) {
@@ -370,9 +510,39 @@ func projectMeetingRefSK(meeting *model.Meeting) string {
 	return model.PrefixProjectMeetingRef + meeting.Date.UTC().Format(time.RFC3339) + "#" + meeting.MeetingID
 }
 
+// existingProjectMeetingRef finds an already-written MEETINGREF# item for
+// meetingID, if one exists, returning its SK and the meeting owner's userID
+// recorded on the ref (needed by UnlinkMeeting to target the right Meeting
+// item -- Meeting's PK includes its owner's userID, which the caller of
+// Unlink is not necessarily). The SK embeds meeting.Date at link time;
+// recomputing it from the meeting's CURRENT (mutable) Date instead of
+// looking this up would target a different item than the one actually
+// written whenever Date changed since the link, and re-Put a second ref
+// rather than refreshing the original -- duplicating this meeting in every
+// ref-driven read (ListProjectMeetings, GetProjectInsights, GetProjectBrief).
+func (s *ProjectService) existingProjectMeetingRef(ctx context.Context, projectID, meetingID string) (sk, ownerUserID string, err error) {
+	refs, err := s.repo.ListProjectMeetingRefsForProject(ctx, projectID)
+	if err != nil {
+		return "", "", err
+	}
+	for _, ref := range refs {
+		if ref.MeetingID == meetingID {
+			return ref.SK, ref.OwnerUserID, nil
+		}
+	}
+	return "", "", nil
+}
+
 func (s *ProjectService) putProjectMeetingRef(ctx context.Context, projectID, ownerUserID string, meeting *model.Meeting) error {
+	sk, _, err := s.existingProjectMeetingRef(ctx, projectID, meeting.MeetingID)
+	if err != nil {
+		return err
+	}
+	if sk == "" {
+		sk = projectMeetingRefSK(meeting)
+	}
 	return s.repo.PutProjectMeetingRef(ctx, &model.ProjectMeetingRef{
-		PK: model.PrefixProject + projectID, SK: projectMeetingRefSK(meeting),
+		PK: model.PrefixProject + projectID, SK: sk,
 		ProjectID: projectID, MeetingID: meeting.MeetingID, OwnerUserID: ownerUserID,
 		Title: meeting.Title, Date: meeting.Date, EntityType: model.EntityTypeProjectMeetingRef,
 	})
@@ -410,33 +580,44 @@ func (s *ProjectService) LinkMeeting(ctx context.Context, userID, projectID, mee
 }
 
 func (s *ProjectService) UnlinkMeeting(ctx context.Context, userID, projectID, meetingID string) error {
-	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
+	// Deliberately NOT requireProjectAccess here (see below): that call
+	// would deny a former member who lost project access via RemoveMember
+	// but still owns the meeting they linked, recreating the exact deadlock
+	// this function exists to avoid -- just in the other direction (the
+	// resource owner, instead of the project owner, unable to unlink).
+	project, err := s.repo.GetProject(ctx, projectID)
 	if err != nil {
 		return err
 	}
-	if meeting == nil {
+	if project == nil {
 		return ErrNotFound
 	}
-	if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
-		return err
-	}
-	// Look up the ref's ACTUAL existing SK rather than recomputing it from
-	// meeting.Date: Date is mutable, so if it changed since LinkMeeting ran,
-	// recomputing would target a different item than the one actually
-	// written, orphaning the original ref (fail-closed reads mask this --
-	// the orphan just accumulates -- but it should still be deleted).
-	refs, err := s.repo.ListProjectMeetingRefsForProject(ctx, projectID)
+	// Look up the ref's ACTUAL existing SK and owner (see
+	// existingProjectMeetingRef's comment) rather than recomputing the SK
+	// from the meeting's current Date.
+	refSK, ownerUserID, err := s.existingProjectMeetingRef(ctx, projectID, meetingID)
 	if err != nil {
 		return err
 	}
-	var refSK string
-	for _, ref := range refs {
-		if ref.MeetingID == meetingID {
-			refSK = ref.SK
-			break
-		}
+	if refSK == "" {
+		// No ref exists (already unlinked, or the meeting itself was deleted
+		// out-of-band -- meeting deletion doesn't know about project refs --
+		// leaving nothing here to clean up). Idempotent no-op rather than an
+		// error the caller can't do anything about.
+		return nil
 	}
-	if err := s.repo.MeetingProjectUnlinkTransactional(ctx, userID, meetingID, projectID, refSK); err != nil {
+	// Authorized if EITHER: the caller owns the linked meeting (regardless
+	// of their current project access -- a resource owner can always
+	// revoke their own contribution), OR the caller owns the project
+	// (regardless of whether they ever owned this particular meeting --
+	// see LinkMeeting's comment on the mirror-image deadlock this avoids).
+	// Neither check goes through requireProjectAccess's broader
+	// direct-member/account-inherited-member allowance: an ordinary
+	// project member with no stake in this specific link cannot unlink it.
+	if ownerUserID != userID && project.OwnerUserID != userID {
+		return ErrForbidden
+	}
+	if err := s.repo.MeetingProjectUnlinkTransactional(ctx, ownerUserID, meetingID, projectID, refSK); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
 			return ErrNotFound
 		}
@@ -495,11 +676,20 @@ func (s *ProjectService) UnlinkResearch(ctx context.Context, userID, projectID, 
 	if research == nil {
 		return ErrNotFound
 	}
-	if research.UserID != userID {
-		return ErrForbidden
-	}
-	if _, err := s.requireProjectAccess(ctx, userID, projectID); err != nil {
+	// Deliberately GetProject, not requireProjectAccess -- see UnlinkMeeting's
+	// comment. Authorized if EITHER the caller owns the research (regardless
+	// of current project access) OR the caller owns the project (regardless
+	// of research ownership); an ordinary project member with no stake in
+	// this specific link cannot unlink it.
+	project, err := s.repo.GetProject(ctx, projectID)
+	if err != nil {
 		return err
+	}
+	if project == nil {
+		return ErrNotFound
+	}
+	if research.UserID != userID && project.OwnerUserID != userID {
+		return ErrForbidden
 	}
 	if err := s.repo.ResearchProjectUnlinkTransactional(ctx, researchID, projectID); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
@@ -518,9 +708,19 @@ func (s *ProjectService) projectMeetings(ctx context.Context, projectID string) 
 	if len(refs) == 0 {
 		return refs, map[string]*model.Meeting{}, nil
 	}
-	keys := make([]repository.MeetingKey, len(refs))
-	for i, ref := range refs {
-		keys[i] = repository.MeetingKey{OwnerID: ref.OwnerUserID, MeetingID: ref.MeetingID}
+	// DynamoDB's BatchGetItem rejects duplicate keys with a ValidationException,
+	// so a duplicate MEETINGREF# (e.g. from a pre-existingProjectMeetingRefSK
+	// race) must be deduped here, before the batch call -- the dedup-by-ID
+	// guard in ListProjectMeetings runs on the result and can't protect this.
+	seenKeys := make(map[repository.MeetingKey]bool, len(refs))
+	keys := make([]repository.MeetingKey, 0, len(refs))
+	for _, ref := range refs {
+		key := repository.MeetingKey{OwnerID: ref.OwnerUserID, MeetingID: ref.MeetingID}
+		if seenKeys[key] {
+			continue
+		}
+		seenKeys[key] = true
+		keys = append(keys, key)
 	}
 	meetings, err := s.repo.BatchGetMeetings(ctx, keys)
 	if err != nil {
@@ -543,20 +743,56 @@ func (s *ProjectService) ListProjectMeetings(ctx context.Context, userID, projec
 	if err != nil {
 		return nil, err
 	}
+	seen := make(map[string]bool, len(refs))
 	out := make([]model.ProjectMeetingRefDTO, 0, len(refs))
 	for _, ref := range refs {
 		meeting, ok := byID[ref.MeetingID]
 		// Refs are candidates only. Re-check the canonical string set and
 		// fail closed if an unlink left a stale reverse-index item behind.
-		if !ok || !contains(meeting.ProjectIDs, projectID) {
+		// Also dedup by MeetingID -- defense-in-depth against a duplicate ref
+		// (e.g. two MEETINGREF# items for the same meeting at different SKs,
+		// which existingProjectMeetingRefSK now prevents going forward, but
+		// this guard is cheap and catches it regardless of cause.
+		if !ok || !contains(meeting.ProjectIDs, projectID) || seen[meeting.MeetingID] {
 			continue
 		}
+		seen[meeting.MeetingID] = true
 		out = append(out, model.ProjectMeetingRefDTO{
 			MeetingID: meeting.MeetingID, OwnerUserID: ref.OwnerUserID,
 			Title: meeting.Title, Date: meeting.Date,
 		})
 	}
 	return out, nil
+}
+
+// hasLinkedResearch reports whether any research is canonically still
+// linked to projectID -- the same reverification ListProjectResearch does
+// (refs are candidates only; canonical ProjectIDs is authoritative),
+// deliberately WITHOUT filtering out trashed research. See DeleteProject's
+// comment: a research trashed while linked is still linked (TrashResearch
+// is reversible), so the deletion guard must not treat it as unlinked.
+func (s *ProjectService) hasLinkedResearch(ctx context.Context, projectID string) (bool, error) {
+	refs, err := s.repo.ListProjectResearchRefsForProject(ctx, projectID)
+	if err != nil {
+		return false, err
+	}
+	if len(refs) == 0 {
+		return false, nil
+	}
+	ids := make([]string, len(refs))
+	for i, ref := range refs {
+		ids[i] = ref.ResearchID
+	}
+	items, err := s.repo.BatchGetResearchByIDs(ctx, ids)
+	if err != nil {
+		return false, err
+	}
+	for _, research := range items {
+		if contains(research.ProjectIDs, projectID) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *ProjectService) ListProjectResearch(ctx context.Context, userID, projectID string) ([]model.ProjectResearchDTO, error) {
@@ -610,12 +846,17 @@ func (s *ProjectService) GetProjectInsights(ctx context.Context, userID, project
 	for _, insightType := range types {
 		typeSet[insightType] = true
 	}
+	seen := make(map[string]bool, len(refs))
 	out := make([]model.ProjectInsightDTO, 0)
 	for _, ref := range refs {
 		meeting, ok := byID[ref.MeetingID]
-		if !ok || !contains(meeting.ProjectIDs, projectID) {
+		// Dedup by MeetingID -- see ListProjectMeetings' comment. Without
+		// this, a duplicate ref would double-count every insight from that
+		// meeting, not just list the meeting twice.
+		if !ok || !contains(meeting.ProjectIDs, projectID) || seen[meeting.MeetingID] {
 			continue
 		}
+		seen[meeting.MeetingID] = true
 		if !from.IsZero() && meeting.Date.Before(from) {
 			continue
 		}

@@ -178,12 +178,15 @@ func (r *DynamoDBRepository) ListProjectMembershipsForUser(ctx context.Context, 
 	return members, nil
 }
 
-// ListProjectsForUser returns every project the user can discover from
-// their own identity: projects they own (the PROJECT# owner index) UNION
-// projects they were added to via AddMember (the GSI1 membership reverse
-// index). Without the GSI1 half, a directly-added member could pass
-// requireProjectAccess but never see the project in GET /api/projects --
-// present in the partition, but undiscoverable.
+// ListProjectsForUser is a query primitive: projects the user owns (the
+// PROJECT# owner index) UNION projects they were added to via AddMember
+// (the GSI1 membership reverse index). It does NOT include the
+// account-inherited leg of requireProjectAccess's hybrid access check --
+// that policy decision (which accounts count, how a candidate is
+// fail-closed re-verified against canonical state) lives in
+// ProjectService.ListMyProjects, not here, mirroring where
+// ListAccountResearch's equivalent canonical re-verification lives (the
+// service layer) rather than in the repository.
 func (r *DynamoDBRepository) ListProjectsForUser(ctx context.Context, userID string) ([]model.Project, error) {
 	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixUser + userID)).
 		And(expression.Key("SK").BeginsWith(model.PrefixProject))
@@ -281,7 +284,29 @@ func (r *DynamoDBRepository) UpdateProjectFields(ctx context.Context, projectID 
 }
 
 // DeleteProject removes the canonical project and owner index atomically.
+// The CONFIG delete additionally asserts accountIds is still empty --
+// closing the narrowest, cheapest-to-close slice of the service layer's
+// check-then-delete race: a LinkAccount that commits between
+// ProjectService.DeleteProject's non-atomic guard reads and this
+// transaction would otherwise land unnoticed, since accountIds lives
+// directly on the item being deleted here and can be asserted in the same
+// transaction. The equivalent race for MEMBER#/MEETINGREF#/RESEARCHREF#
+// items (which live on OTHER items this transaction doesn't touch) is a
+// known, accepted residual risk -- see ADR-025's Risks section for why
+// closing it fully would need a broader tombstone-and-reject-concurrent-
+// writes redesign disproportionate to the actual impact (unreachable dead
+// storage in a deleted project's own partition, never incorrectly
+// exposed -- every read path re-verifies canonical state independently).
 func (r *DynamoDBRepository) DeleteProject(ctx context.Context, projectID, ownerUserID string) error {
+	noAccountsExpr, err := expression.NewBuilder().
+		WithCondition(expression.Or(
+			expression.AttributeNotExists(expression.Name("accountIds")),
+			expression.Size(expression.Name("accountIds")).Equal(expression.Value(0)),
+		)).
+		Build()
+	if err != nil {
+		return fmt.Errorf("build no-accounts-linked condition: %w", err)
+	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Delete: &types.Delete{
@@ -290,6 +315,9 @@ func (r *DynamoDBRepository) DeleteProject(ctx context.Context, projectID, owner
 					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
 					"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
 				},
+				ConditionExpression:       noAccountsExpr.Condition(),
+				ExpressionAttributeNames:  noAccountsExpr.Names(),
+				ExpressionAttributeValues: noAccountsExpr.Values(),
 			}},
 			{Delete: &types.Delete{
 				TableName: aws.String(r.tableName),
@@ -300,7 +328,7 @@ func (r *DynamoDBRepository) DeleteProject(ctx context.Context, projectID, owner
 			}},
 		},
 	}); err != nil {
-		return fmt.Errorf("delete project transaction: %w", err)
+		return mapProjectTransactionCanceledError(err, projectID, "project", "delete project")
 	}
 	return nil
 }
@@ -311,8 +339,18 @@ func (r *DynamoDBRepository) DeleteProject(ctx context.Context, projectID, owner
 func mapProjectTransactionCanceledError(err error, entityID, entityLabel, verb string) error {
 	var tce *types.TransactionCanceledException
 	if errors.As(err, &tce) {
-		if len(tce.CancellationReasons) > 0 && aws.ToString(tce.CancellationReasons[0].Code) == "ConditionalCheckFailed" {
-			return fmt.Errorf("%w: %s %s not found", ErrConditionFailed, entityLabel, entityID)
+		// Check EVERY reason, not just index 0: CancellationReasons is
+		// positional (one per TransactItem, "None" for items that weren't
+		// the cause), and the meeting/research-link transactions have a
+		// ConditionCheck on the project CONFIG item at index 2, not 0 --
+		// checking only index 0 would silently miss a condition failure
+		// there and fall through to the generic "retry" error instead of
+		// ErrConditionFailed/ErrNotFound, defeating that ConditionCheck's
+		// entire purpose (closing the delete-vs-link race).
+		for _, reason := range tce.CancellationReasons {
+			if aws.ToString(reason.Code) == "ConditionalCheckFailed" {
+				return fmt.Errorf("%w: %s %s not found", ErrConditionFailed, entityLabel, entityID)
+			}
 		}
 		return fmt.Errorf("failed to %s: transaction canceled, retry: %w", verb, err)
 	}
@@ -417,6 +455,12 @@ func (r *DynamoDBRepository) MeetingProjectLinkTransactional(ctx context.Context
 	if err != nil {
 		return fmt.Errorf("build meeting project link expression: %w", err)
 	}
+	projectExistsExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("build project-exists condition: %w", err)
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Update: &types.Update{
@@ -431,6 +475,22 @@ func (r *DynamoDBRepository) MeetingProjectLinkTransactional(ctx context.Context
 				ExpressionAttributeValues: updateExpr.Values(),
 			}},
 			{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}},
+			// Guards against linking to a project concurrently deleted after
+			// requireProjectAccess's read but before this transaction commits
+			// -- without this, the link could succeed against a project that
+			// canonically no longer exists (an orphan ref + a ghost projectId
+			// left in the meeting's ProjectIDs set), the same class of
+			// delete-vs-link race attribute_exists(PK) already guards against
+			// elsewhere (e.g. ProjectAccountLinkTransactional's own Update).
+			{ConditionCheck: &types.ConditionCheck{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
+					"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
+				},
+				ConditionExpression:      projectExistsExpr.Condition(),
+				ExpressionAttributeNames: projectExistsExpr.Names(),
+			}},
 		},
 	})
 	if err != nil {
@@ -498,6 +558,12 @@ func (r *DynamoDBRepository) ResearchProjectLinkTransactional(ctx context.Contex
 	if err != nil {
 		return fmt.Errorf("build research project link expression: %w", err)
 	}
+	projectExistsExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("build project-exists condition: %w", err)
+	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Update: &types.Update{
@@ -512,6 +578,17 @@ func (r *DynamoDBRepository) ResearchProjectLinkTransactional(ctx context.Contex
 				ExpressionAttributeValues: updateExpr.Values(),
 			}},
 			{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}},
+			// See MeetingProjectLinkTransactional's comment on this same
+			// ConditionCheck -- closes the delete-vs-link race for research too.
+			{ConditionCheck: &types.ConditionCheck{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
+					"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
+				},
+				ConditionExpression:      projectExistsExpr.Condition(),
+				ExpressionAttributeNames: projectExistsExpr.Names(),
+			}},
 		},
 	})
 	if err != nil {

@@ -12,18 +12,20 @@ import (
 )
 
 type mockProjectRepo struct {
-	projects       map[string]*model.Project
-	projectMembers map[string]*model.ProjectMember
-	accountMembers map[string]*model.AccountMember
-	accounts       map[string]*model.Account
-	users          map[string]*model.User
-	meetings       map[string]*model.Meeting
-	research       map[string]*model.Research
-	projectRefs    map[string][]model.ProjectRef
-	meetingRefs    map[string][]model.ProjectMeetingRef
-	researchRefs   map[string][]model.ProjectResearchRef
-	deleteAfterGet string
-	failPutRefFor  string
+	projects            map[string]*model.Project
+	projectMembers      map[string]*model.ProjectMember
+	accountMembers      map[string]*model.AccountMember
+	accounts            map[string]*model.Account
+	users               map[string]*model.User
+	meetings            map[string]*model.Meeting
+	research            map[string]*model.Research
+	projectRefs         map[string][]model.ProjectRef
+	meetingRefs         map[string][]model.ProjectMeetingRef
+	researchRefs        map[string][]model.ProjectResearchRef
+	deleteAfterGet      string
+	failPutRefFor       string
+	batchGetResearchErr error
+	getMemberErrFor     string
 }
 
 func newMockProjectRepo() *mockProjectRepo {
@@ -104,6 +106,20 @@ func (m *mockProjectRepo) ListProjectsForUser(_ context.Context, userID string) 
 	for _, p := range m.projects {
 		if p.OwnerUserID == userID || m.projectMembers[projectMemberKey(p.ProjectID, userID)] != nil {
 			out = append(out, *cloneProject(p))
+		}
+	}
+	return out, nil
+}
+
+// ListAccountsForUser mirrors DynamoDBRepository's GSI1 reverse lookup:
+// every AccountMember row for this user, found by scanning the mock's
+// accountMembers map (which is keyed by accountID|userID, not by userID
+// alone) since a test double has no secondary index to query.
+func (m *mockProjectRepo) ListAccountsForUser(_ context.Context, userID string) ([]model.AccountMember, error) {
+	out := []model.AccountMember{}
+	for _, member := range m.accountMembers {
+		if member.UserID == userID {
+			out = append(out, *member)
 		}
 	}
 	return out, nil
@@ -315,6 +331,9 @@ func (m *mockProjectRepo) ListProjectResearchRefsForProject(_ context.Context, p
 	return append([]model.ProjectResearchRef(nil), m.researchRefs[projectID]...), nil
 }
 func (m *mockProjectRepo) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
+	if m.getMemberErrFor != "" && m.getMemberErrFor == accountID {
+		return nil, fmt.Errorf("mock GetMember: transient failure for account %s", accountID)
+	}
 	member := m.accountMembers[projectAccountMemberKey(accountID, userID)]
 	if member == nil {
 		return nil, nil
@@ -345,6 +364,17 @@ func (m *mockProjectRepo) GetResearchByID(_ context.Context, researchID string) 
 	return cloneProjectResearch(m.research[researchID]), nil
 }
 func (m *mockProjectRepo) BatchGetMeetings(_ context.Context, keys []repository.MeetingKey) ([]*model.Meeting, error) {
+	// Real DynamoDB BatchGetItem rejects duplicate keys with a
+	// ValidationException -- mirror that here so a regression in the
+	// caller's dedup (projectMeetings) fails this mock instead of silently
+	// passing, the way it would against the real service.
+	seen := make(map[repository.MeetingKey]bool, len(keys))
+	for _, key := range keys {
+		if seen[key] {
+			return nil, fmt.Errorf("mock BatchGetMeetings: duplicate key %+v (real DynamoDB would return ValidationException)", key)
+		}
+		seen[key] = true
+	}
 	out := []*model.Meeting{}
 	for i := len(keys) - 1; i >= 0; i-- {
 		if meeting := cloneProjectMeeting(m.meetings[projectMeetingKey(keys[i].OwnerID, keys[i].MeetingID)]); meeting != nil {
@@ -354,6 +384,9 @@ func (m *mockProjectRepo) BatchGetMeetings(_ context.Context, keys []repository.
 	return out, nil
 }
 func (m *mockProjectRepo) BatchGetResearchByIDs(_ context.Context, ids []string) ([]model.Research, error) {
+	if m.batchGetResearchErr != nil {
+		return nil, m.batchGetResearchErr
+	}
 	out := []model.Research{}
 	for i := len(ids) - 1; i >= 0; i-- {
 		if r := cloneProjectResearch(m.research[ids[i]]); r != nil {
@@ -374,7 +407,7 @@ func addProjectAccountMember(repo *mockProjectRepo, accountID, userID string) {
 
 func TestCreateProject_SetsOwner(t *testing.T) {
 	repo := newMockProjectRepo()
-	project, err := newProjectServiceWithRepo(repo).CreateProject(context.Background(), "owner-1", "owner@example.com", &model.CreateProjectRequest{Name: "  Migration  "})
+	project, err := newProjectServiceWithRepo(repo).CreateProject(context.Background(), "owner-1", &model.CreateProjectRequest{Name: "  Migration  "})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -404,6 +437,39 @@ func TestRequireProjectAccess(t *testing.T) {
 	}
 	if _, err := svc.requireProjectAccess(context.Background(), "owner", "missing"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// A transient GetMember failure on the only linked Account must surface as
+// an error, not get silently swallowed into a flat ErrForbidden -- a real
+// DynamoDB outage should not be indistinguishable from "genuinely not a
+// member" to whoever's debugging a 403 that shouldn't be one.
+func TestRequireProjectAccess_SurfacesTransientAccountLookupError(t *testing.T) {
+	repo := newMockProjectRepo()
+	project := seedProject(repo, "p1", "owner")
+	project.AccountIDs = []string{"a1"}
+	repo.getMemberErrFor = "a1"
+	svc := newProjectServiceWithRepo(repo)
+
+	_, err := svc.requireProjectAccess(context.Background(), "stranger", "p1")
+	if err == nil || errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected the transient GetMember error to surface, got %v", err)
+	}
+}
+
+// If ANY linked account grants membership, a transient failure checking a
+// DIFFERENT linked account must not deny access -- every account is still
+// checked before giving up.
+func TestRequireProjectAccess_OtherAccountGrantsDespiteOneTransientFailure(t *testing.T) {
+	repo := newMockProjectRepo()
+	project := seedProject(repo, "p1", "owner")
+	project.AccountIDs = []string{"a1", "a2"}
+	repo.getMemberErrFor = "a1"
+	addProjectAccountMember(repo, "a2", "carol")
+	svc := newProjectServiceWithRepo(repo)
+
+	if _, err := svc.requireProjectAccess(context.Background(), "carol", "p1"); err != nil {
+		t.Fatalf("expected access via a2 despite a1's transient failure, got %v", err)
 	}
 }
 
@@ -550,6 +616,47 @@ func TestListMyProjects_IncludesDirectMembers(t *testing.T) {
 	}
 }
 
+// Regression test for the account-inherited discoverability gap: a user who
+// only has access via a linked Account's membership (the third leg of
+// requireProjectAccess's hybrid check) previously could pass access checks
+// but never see the project in GET /api/projects at all -- present and
+// accessible, but undiscoverable except through GET
+// /api/accounts/{accountId}/projects instead.
+func TestListMyProjects_IncludesAccountInheritedProjects(t *testing.T) {
+	repo := newMockProjectRepo()
+	project := seedProject(repo, "p1", "owner")
+	project.AccountIDs = []string{"acc1"}
+	repo.accountMembers[projectAccountMemberKey("acc1", "carol")] = &model.AccountMember{AccountID: "acc1", UserID: "carol"}
+	repo.projectRefs["acc1"] = []model.ProjectRef{{ProjectID: "p1", AccountID: "acc1"}}
+
+	projects, err := newProjectServiceWithRepo(repo).ListMyProjects(context.Background(), "carol")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(projects) != 1 || projects[0].ProjectID != "p1" {
+		t.Fatalf("expected account-inherited member to see p1, got %v", projects)
+	}
+}
+
+// A stale reverse-index ref must never surface a project the canonical
+// AccountIDs set no longer actually links -- unlinking the account should
+// remove p1 from carol's discoverable projects even if a leftover ref exists.
+func TestListMyProjects_AccountInheritedFailsClosedOnUnlinkedAccount(t *testing.T) {
+	repo := newMockProjectRepo()
+	project := seedProject(repo, "p1", "owner")
+	project.AccountIDs = []string{} // unlinked -- canonical set no longer contains acc1
+	repo.accountMembers[projectAccountMemberKey("acc1", "carol")] = &model.AccountMember{AccountID: "acc1", UserID: "carol"}
+	repo.projectRefs["acc1"] = []model.ProjectRef{{ProjectID: "p1", AccountID: "acc1"}} // stale ref left behind by the unlink
+
+	projects, err := newProjectServiceWithRepo(repo).ListMyProjects(context.Background(), "carol")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("expected no projects for an unlinked account membership, got %v", projects)
+	}
+}
+
 func TestProjectLists_ExcludeStaleCanonicalLinks(t *testing.T) {
 	repo := newMockProjectRepo()
 	seedProject(repo, "p1", "owner")
@@ -623,5 +730,273 @@ func TestLinkMeeting_NonOwnerNotFound(t *testing.T) {
 	err := newProjectServiceWithRepo(repo).LinkMeeting(context.Background(), "stranger", "p1", "m1")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestDeleteProject_RejectsWhileLinked(t *testing.T) {
+	ctx := context.Background()
+	newRepoWith := func(setup func(*mockProjectRepo, *model.Project)) *mockProjectRepo {
+		repo := newMockProjectRepo()
+		p := seedProject(repo, "p1", "owner")
+		setup(repo, p)
+		return repo
+	}
+
+	t.Run("linked account", func(t *testing.T) {
+		repo := newRepoWith(func(_ *mockProjectRepo, p *model.Project) { p.AccountIDs = []string{"a1"} })
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected ErrProjectHasLinks, got %v", err)
+		}
+	})
+	t.Run("direct member", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			r.projectMembers[projectMemberKey("p1", "bob")] = &model.ProjectMember{ProjectID: "p1", UserID: "bob"}
+		})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected ErrProjectHasLinks, got %v", err)
+		}
+	})
+	t.Run("linked meeting", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			r.meetings[projectMeetingKey("owner", "m1")] = &model.Meeting{MeetingID: "m1", UserID: "owner", ProjectIDs: []string{"p1"}}
+			r.meetingRefs["p1"] = []model.ProjectMeetingRef{{ProjectID: "p1", MeetingID: "m1", OwnerUserID: "owner"}}
+		})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected ErrProjectHasLinks, got %v", err)
+		}
+	})
+	t.Run("stale meeting ref alone does not block (canonical reverification)", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			// Ref exists but the underlying meeting is gone (or its
+			// ProjectIDs no longer contains "p1") -- an orphan, not an
+			// actual link, so it must not block deletion.
+			r.meetingRefs["p1"] = []model.ProjectMeetingRef{{ProjectID: "p1", MeetingID: "m1", OwnerUserID: "owner"}}
+		})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); err != nil {
+			t.Fatalf("expected deletion to succeed past a stale ref, got %v", err)
+		}
+	})
+	t.Run("linked research", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			r.research["r1"] = &model.Research{ResearchID: "r1", UserID: "owner", ProjectIDs: []string{"p1"}}
+			r.researchRefs["p1"] = []model.ProjectResearchRef{{ProjectID: "p1", ResearchID: "r1"}}
+		})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected ErrProjectHasLinks, got %v", err)
+		}
+	})
+	// Regression test: ListProjectResearch (the user-facing list) correctly
+	// filters out trashed research, but DeleteProject's guard must NOT reuse
+	// that filter -- a trashed-but-still-linked research is still linked
+	// (TrashResearch is reversible), and letting deletion through here would
+	// let a later restore resurrect an orphan link to a project that no
+	// longer canonically exists.
+	t.Run("trashed but still linked research still blocks", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			r.research["r1"] = &model.Research{ResearchID: "r1", UserID: "owner", ProjectIDs: []string{"p1"}, TrashedAt: "2026-01-01T00:00:00Z"}
+			r.researchRefs["p1"] = []model.ProjectResearchRef{{ProjectID: "p1", ResearchID: "r1"}}
+		})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected ErrProjectHasLinks for trashed-but-linked research, got %v", err)
+		}
+	})
+	// Regression test: hasLinkedResearch must fail closed if BatchGetResearchByIDs
+	// errors (e.g. the repo's underlying BatchGetItem gave up with unprocessed
+	// keys after retries -- see backend/internal/repository/research.go's
+	// BatchGetResearch) rather than silently treating a research it couldn't
+	// read as "not linked" and letting an irreversible DeleteProject through.
+	t.Run("BatchGetResearchByIDs error blocks deletion instead of proceeding", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			r.research["r1"] = &model.Research{ResearchID: "r1", UserID: "owner", ProjectIDs: []string{"p1"}}
+			r.researchRefs["p1"] = []model.ProjectResearchRef{{ProjectID: "p1", ResearchID: "r1"}}
+			r.batchGetResearchErr = fmt.Errorf("BatchGetResearch: 1 keys unprocessed after retries")
+		})
+		err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1")
+		if err == nil || errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected the BatchGetResearchByIDs error to propagate (fail closed), got %v", err)
+		}
+		if repo.projects["p1"] == nil {
+			t.Fatal("project should NOT have been deleted when the linked-research check itself failed")
+		}
+	})
+	t.Run("clean project deletes", func(t *testing.T) {
+		repo := newRepoWith(func(_ *mockProjectRepo, _ *model.Project) {})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if repo.projects["p1"] != nil {
+			t.Fatal("project should be deleted")
+		}
+	})
+}
+
+// TestLinkMeeting_ReLinkAfterDateChangeReusesRef is the regression test for
+// the duplicate-ref bug: re-linking an already-linked meeting after its
+// Date changed used to Put a second ref at a freshly-computed SK instead of
+// updating the original, since the SK embeds the (mutable) Date.
+func TestLinkMeeting_ReLinkAfterDateChangeReusesRef(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	original := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	meeting := &model.Meeting{MeetingID: "m1", UserID: "owner", Date: original, ProjectIDs: []string{"p1"}}
+	repo.meetings[projectMeetingKey("owner", "m1")] = meeting
+	repo.meetingRefs["p1"] = []model.ProjectMeetingRef{{
+		PK: model.PrefixProject + "p1", SK: projectMeetingRefSK(meeting),
+		ProjectID: "p1", MeetingID: "m1", OwnerUserID: "owner", Date: original,
+	}}
+
+	meeting.Date = time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC) // mutate Date after the original link
+	if err := newProjectServiceWithRepo(repo).LinkMeeting(context.Background(), "owner", "p1", "m1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.meetingRefs["p1"]) != 1 {
+		t.Fatalf("expected the original ref to be updated in place, got %d refs: %+v", len(repo.meetingRefs["p1"]), repo.meetingRefs["p1"])
+	}
+	if repo.meetingRefs["p1"][0].Date != meeting.Date {
+		t.Fatalf("expected ref Date refreshed to %v, got %v", meeting.Date, repo.meetingRefs["p1"][0].Date)
+	}
+}
+
+// TestListProjectMeetings_DedupsByMeetingID is defense-in-depth: even if two
+// MEETINGREF# items somehow exist for the same meeting (any cause, not just
+// the SK-drift bug above), the meeting must only be listed once and its
+// insights must only be counted once.
+func TestListProjectMeetings_DedupsByMeetingID(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	repo.meetings[projectMeetingKey("owner", "m1")] = &model.Meeting{
+		MeetingID: "m1", UserID: "owner", ProjectIDs: []string{"p1"},
+		Insights: `[{"type":"risk","text":"dup risk"}]`,
+	}
+	repo.meetingRefs["p1"] = []model.ProjectMeetingRef{
+		{ProjectID: "p1", MeetingID: "m1", OwnerUserID: "owner", SK: "MEETINGREF#a"},
+		{ProjectID: "p1", MeetingID: "m1", OwnerUserID: "owner", SK: "MEETINGREF#b"},
+	}
+	svc := newProjectServiceWithRepo(repo)
+
+	meetings, err := svc.ListProjectMeetings(context.Background(), "owner", "p1")
+	if err != nil || len(meetings) != 1 {
+		t.Fatalf("expected exactly 1 deduped meeting, got %v err=%v", meetings, err)
+	}
+	insights, err := svc.GetProjectInsights(context.Background(), "owner", "p1", time.Time{}, time.Time{}, nil)
+	if err != nil || len(insights) != 1 {
+		t.Fatalf("expected exactly 1 deduped insight, got %v err=%v", insights, err)
+	}
+}
+
+// TestUnlinkMeeting_ProjectOwnerCanUnlinkAnothersLinkedMeeting is the
+// regression test for the revocation deadlock: a member linked their own
+// meeting, then lost project access (e.g. via RemoveMember). Only the
+// project owner can still reach the link -- the former member no longer
+// passes requireProjectAccess, and the project owner never owned the
+// meeting, so a resource-owner-only check would leave nobody able to
+// unlink it, permanently blocking DeleteProject.
+func TestUnlinkMeeting_ProjectOwnerCanUnlinkAnothersLinkedMeeting(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	meeting := &model.Meeting{MeetingID: "m1", UserID: "member", ProjectIDs: []string{"p1"}}
+	repo.meetings[projectMeetingKey("member", "m1")] = meeting
+	repo.meetingRefs["p1"] = []model.ProjectMeetingRef{{
+		PK: model.PrefixProject + "p1", SK: projectMeetingRefSK(meeting),
+		ProjectID: "p1", MeetingID: "m1", OwnerUserID: "member",
+	}}
+
+	if err := newProjectServiceWithRepo(repo).UnlinkMeeting(context.Background(), "owner", "p1", "m1"); err != nil {
+		t.Fatalf("project owner should be able to unlink: %v", err)
+	}
+	if contains(meeting.ProjectIDs, "p1") {
+		t.Fatal("expected meeting.ProjectIDs to no longer contain p1")
+	}
+	if len(repo.meetingRefs["p1"]) != 0 {
+		t.Fatal("expected the ref to be removed")
+	}
+}
+
+func TestUnlinkMeeting_StrangerForbidden(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	meeting := &model.Meeting{MeetingID: "m1", UserID: "member", ProjectIDs: []string{"p1"}}
+	repo.meetings[projectMeetingKey("member", "m1")] = meeting
+	repo.meetingRefs["p1"] = []model.ProjectMeetingRef{{SK: projectMeetingRefSK(meeting), ProjectID: "p1", MeetingID: "m1", OwnerUserID: "member"}}
+	// Give the stranger project access (direct member) but they neither own
+	// the meeting nor own the project -- must still be forbidden.
+	repo.projectMembers[projectMemberKey("p1", "stranger")] = &model.ProjectMember{ProjectID: "p1", UserID: "stranger"}
+
+	err := newProjectServiceWithRepo(repo).UnlinkMeeting(context.Background(), "stranger", "p1", "m1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestUnlinkMeeting_NoRefIsNoop(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	if err := newProjectServiceWithRepo(repo).UnlinkMeeting(context.Background(), "owner", "p1", "nonexistent"); err != nil {
+		t.Fatalf("expected no-op success when no ref exists, got %v", err)
+	}
+}
+
+func TestUnlinkResearch_ProjectOwnerCanUnlinkAnothersLinkedResearch(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	repo.research["r1"] = &model.Research{ResearchID: "r1", UserID: "member", ProjectIDs: []string{"p1"}}
+
+	if err := newProjectServiceWithRepo(repo).UnlinkResearch(context.Background(), "owner", "p1", "r1"); err != nil {
+		t.Fatalf("project owner should be able to unlink: %v", err)
+	}
+	if contains(repo.research["r1"].ProjectIDs, "p1") {
+		t.Fatal("expected research.ProjectIDs to no longer contain p1")
+	}
+}
+
+func TestUnlinkResearch_StrangerForbidden(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	repo.research["r1"] = &model.Research{ResearchID: "r1", UserID: "member", ProjectIDs: []string{"p1"}}
+	repo.projectMembers[projectMemberKey("p1", "stranger")] = &model.ProjectMember{ProjectID: "p1", UserID: "stranger"}
+
+	err := newProjectServiceWithRepo(repo).UnlinkResearch(context.Background(), "stranger", "p1", "r1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+}
+
+// TestUnlinkMeeting_ResourceOwnerCanUnlinkAfterLosingProjectAccess is the
+// regression test for the OTHER direction of the revocation deadlock: a
+// member linked their own meeting, was then removed from the project
+// (RemoveMember), and must still be able to unlink their own meeting even
+// though they no longer pass requireProjectAccess. An earlier version
+// called requireProjectAccess unconditionally before checking resource
+// ownership, denying exactly this caller.
+func TestUnlinkMeeting_ResourceOwnerCanUnlinkAfterLosingProjectAccess(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	meeting := &model.Meeting{MeetingID: "m1", UserID: "former-member", ProjectIDs: []string{"p1"}}
+	repo.meetings[projectMeetingKey("former-member", "m1")] = meeting
+	repo.meetingRefs["p1"] = []model.ProjectMeetingRef{{
+		SK: projectMeetingRefSK(meeting), ProjectID: "p1", MeetingID: "m1", OwnerUserID: "former-member",
+	}}
+	// No repo.projectMembers entry for "former-member" -- they were removed
+	// and have no other path (not owner, not account-inherited) to project
+	// access.
+
+	if err := newProjectServiceWithRepo(repo).UnlinkMeeting(context.Background(), "former-member", "p1", "m1"); err != nil {
+		t.Fatalf("resource owner should be able to unlink their own meeting even without project access: %v", err)
+	}
+	if contains(meeting.ProjectIDs, "p1") {
+		t.Fatal("expected meeting.ProjectIDs to no longer contain p1")
+	}
+}
+
+func TestUnlinkResearch_ResourceOwnerCanUnlinkAfterLosingProjectAccess(t *testing.T) {
+	repo := newMockProjectRepo()
+	seedProject(repo, "p1", "owner")
+	repo.research["r1"] = &model.Research{ResearchID: "r1", UserID: "former-member", ProjectIDs: []string{"p1"}}
+
+	if err := newProjectServiceWithRepo(repo).UnlinkResearch(context.Background(), "former-member", "p1", "r1"); err != nil {
+		t.Fatalf("resource owner should be able to unlink their own research even without project access: %v", err)
+	}
+	if contains(repo.research["r1"].ProjectIDs, "p1") {
+		t.Fatal("expected research.ProjectIDs to no longer contain p1")
 	}
 }

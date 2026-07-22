@@ -491,7 +491,14 @@ func (r *ResearchRepository) BatchGetResearch(ctx context.Context, researchIds [
 			}
 		}
 		if len(pending) > 0 {
-			log.Printf("warn: BatchGetResearch had %d unprocessed keys after retries", len(pending))
+			// Unprocessed keys after exhausting retries means some requested
+			// items were never actually read -- silently returning what we
+			// did get (the previous behavior) is indistinguishable from "the
+			// item doesn't exist" to every caller, including ones using this
+			// as a canonical-membership check for a destructive-delete guard
+			// (ProjectService.hasLinkedResearch). Fail closed instead of
+			// letting a throttled batch masquerade as a complete result.
+			return researches, fmt.Errorf("BatchGetResearch: %d keys unprocessed after retries", len(pending))
 		}
 	}
 

@@ -284,6 +284,38 @@ Layout:
         - Export button
 ```
 
+### 2.6a Post-Recording Banner & System Audio Mode (current implementation, ADR-024)
+
+`components/record/PostRecordingBanner.tsx` — fixed top toast shown while
+`usePostRecording`'s `step` is non-null (`creating` → `notes` → `saving` →
+`uploading` → `redirecting`, or `error`; `notes` pauses the flow for the
+notes-input dialog before the save/upload resumes).
+
+```
+Uploading step:
+  spinner + "업로드 중... N% (X MB / Y MB)" when `uploadProgress` is set
+  (both browser blob uploads and Tauri native file uploads report this now)
+  else: plain "Uploading audio..." label
+  thin progress bar (bg-primary, width = percentage) underneath the label
+
+Error step:
+  red banner, error icon, message truncated to one line
+  [Try Again] — re-runs the upload from the retained pending payload
+  [Home] — clears state and navigates away (does NOT retry)
+```
+
+Tauri desktop app, System Audio mode (`audioSource === 'system'`,
+`isTauri()`): the pre-recording setup notice and the during-recording
+banner (purple, `speaker` icon) both state that live captions are
+best-effort in this mode (fed by Rust-downsampled PCM over
+`native-pcm-chunk` into the same Transcribe Streaming pipeline mic/tab
+modes use — no Web Speech fallback exists here) and that transcription
+happens automatically after the meeting ends regardless. `isNativeRecording`
+(`app/record/page.tsx`) drives the during-recording banner/title/nav-lock
+independent of `session.isRecording`, since it needs to be true from the
+moment native capture starts — before the async STT session start
+resolves, and even if Transcribe Streaming never successfully connects.
+
 ### 2.7 Meeting Detail (Mobile)
 
 ```
