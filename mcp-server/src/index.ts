@@ -136,7 +136,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'ttobak_list_projects',
       description:
-        'List projects you own or are directly invited to (projectId, name, stage, SFDC Oppty ID). Excludes projects reachable only through a linked Account\'s membership -- see those from the account side instead.',
+        'List projects you own, are directly invited to, or can reach via a linked Account\'s membership (projectId, name, stage, SFDC Oppty ID).',
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {
