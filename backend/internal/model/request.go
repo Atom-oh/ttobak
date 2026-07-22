@@ -32,6 +32,19 @@ type UpdateMeetingRequest struct {
 	// as Notes: nil preserves the stored value, non-nil "" clears it.
 	// Capped at MaxLiveSummaryRunes on write (service.UpdateMeeting) and
 	// again when folded into the summarize prompt (cmd/summarize).
+	//
+	// Known residual risk (narrow window, not closed by this field): it's
+	// written via a partial UpdateItem (UpdateMeetingFields), but other
+	// mutations (UpdateSpeakers, SelectTranscript, account linking) still go
+	// through UpdateMeeting's whole-item PutItem. A concurrent PutItem
+	// carrying a read-time snapshot from before this field's write would
+	// silently revert it -- the exact class of pre-existing, cross-cutting
+	// issue ADR-025's Consequences section already tracks for AccountID/
+	// SharedToAccount (fixed there only for ProjectIDs, via a
+	// ConditionExpression + retry). Real-world exposure here is small: the
+	// writers above run at points in a meeting's lifecycle that rarely
+	// overlap with active live-summary writes (during/just after
+	// recording).
 	LiveSummary        *string  `json:"liveSummary,omitempty"`
 	TranscriptA        string   `json:"transcriptA,omitempty"`
 	SelectedTranscript string   `json:"selectedTranscript,omitempty"` // "A" or "B"

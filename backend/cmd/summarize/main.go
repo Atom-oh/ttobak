@@ -646,9 +646,20 @@ func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) stri
 // confidentiality gate deciding whether untrusted content may be folded
 // into a prompt, so it must not miss a share/membership grant made an
 // instant ago to eventual-consistency lag; see that method's doc comment).
-// Errors are treated as "yes, assume a collaborator exists" (fail closed
-// toward skipping linked context, not toward leaking it). The decision
-// logic itself (Share rows + account membership) is
+//
+// The account-membership branch of that decision (meeting.SharedToAccount /
+// meeting.AccountID) needs the same strong-consistency guarantee, but the
+// `meeting` passed in here can NOT provide it: it was fetched via
+// GetMeetingByID, which queries GSI3 -- and DynamoDB Global Secondary
+// Indexes cannot use ConsistentRead at all (not "default off", structurally
+// unsupported), so those two fields are always potentially stale. Re-fetch
+// via GetMeeting (a base-table PK/SK GetItem, which DOES support
+// ConsistentRead) and use ITS copy of those fields for the gate -- without
+// this, an account-shared meeting could read as SharedToAccount=false in
+// the split-second after sharing, letting linked content leak to that
+// account's members. Errors are treated as "yes, assume a collaborator
+// exists" (fail closed toward skipping linked context, not toward leaking
+// it). The decision logic itself (Share rows + account membership) is
 // service.HasNonOwnerCollaborator, kept in internal/ (and unit-tested
 // there) for the same CI-test-scope reason as FoldLiveSummary.
 func hasNonOwnerCollaborator(ctx context.Context, meeting *model.Meeting) bool {
@@ -657,7 +668,12 @@ func hasNonOwnerCollaborator(ctx context.Context, meeting *model.Meeting) bool {
 		log.Printf("ListSharesForMeetingConsistent failed for %s, assuming a collaborator exists: %v", meeting.MeetingID, err)
 		return true
 	}
-	return service.HasNonOwnerCollaborator(meeting, shares)
+	consistentMeeting, err := repo.GetMeeting(ctx, meeting.UserID, meeting.MeetingID)
+	if err != nil || consistentMeeting == nil {
+		log.Printf("consistent re-fetch failed for %s, assuming a collaborator exists: %v", meeting.MeetingID, err)
+		return true
+	}
+	return service.HasNonOwnerCollaborator(consistentMeeting, shares)
 }
 
 // emitAllPartsTranscribedEvent publishes a custom EventBridge event when all parts are transcribed

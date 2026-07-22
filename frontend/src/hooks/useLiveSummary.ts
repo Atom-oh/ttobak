@@ -17,13 +17,17 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
   const summaryIntervalRef = useRef(summaryInterval);
   const liveSummaryRef = useRef('');
   const askedQuestionsRef = useRef<string[]>([]);
-  // The most recently started summarizeLive request, so a caller about to
-  // read liveSummaryRef (e.g. usePostRecording saving on recording stop)
-  // can await it first -- without this, a summary triggered just before stop
-  // resolves into the ref only after the save PUT already fired, silently
-  // dropping that increment (or, if it's the meeting's very first summary,
-  // the entire live summary).
-  const pendingSummaryRef = useRef<Promise<void> | null>(null);
+  // Every summarizeLive request currently in flight, so a caller about to
+  // read liveSummaryRef (e.g. usePostRecording saving on recording stop) can
+  // await ALL of them first -- without this, a summary triggered just before
+  // stop resolves into the ref only after the save PUT already fired,
+  // silently dropping that increment (or, if it's the meeting's very first
+  // summary, the entire live summary). A Set, not a single "latest" ref:
+  // if request N (latest-started) fails while an earlier request N-1 is
+  // still pending, tracking only N would let flushPendingSummary return the
+  // instant N settles -- before N-1's still-in-flight, eventually-successful
+  // response ever reaches the ref.
+  const pendingSummariesRef = useRef<Set<Promise<void>>>(new Set());
   // Requests can resolve out of order (a later-started call's response can
   // arrive before an earlier one's). Each checkThreshold call captures the
   // post-increment generation. Two refs, not one:
@@ -53,7 +57,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     lastSummaryWordCountRef.current = 0;
     liveSummaryRef.current = '';
     askedQuestionsRef.current = [];
-    pendingSummaryRef.current = null;
+    pendingSummariesRef.current.clear();
     // Bump forward, never back to 0: any request still in flight from the
     // recording that just ended is immediately stale against this new
     // baseline, and the next recording's generations start strictly above
@@ -64,17 +68,17 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
   }, []);
 
   /**
-   * Await the most recently started summarizeLive request (if any) before
-   * reading liveSummaryRef.current -- call this right before persisting the
-   * live summary on recording stop. Bounded by `timeoutMs` so a slow/stuck
+   * Await every in-flight summarizeLive request before reading
+   * liveSummaryRef.current -- call this right before persisting the live
+   * summary on recording stop. Bounded by `timeoutMs` so a slow/stuck
    * request can't block finishing the recording indefinitely; on timeout
    * the ref is read as-is (best-effort, same behavior as before this fix).
    */
   const flushPendingSummary = useCallback(async (timeoutMs = 8000) => {
-    const pending = pendingSummaryRef.current;
-    if (!pending) return;
+    const pending = Array.from(pendingSummariesRef.current);
+    if (pending.length === 0) return;
     await Promise.race([
-      pending,
+      Promise.all(pending),
       new Promise((resolve) => setTimeout(resolve, timeoutMs)),
     ]);
   }, []);
@@ -101,7 +105,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
       : allTranscriptText;
 
     const generation = ++summaryGenerationRef.current;
-    const summaryPromise = summaryApi.summarizeLive(
+    const summaryPromise: Promise<void> = summaryApi.summarizeLive(
       meetingId,
       allTranscriptText,
       liveSummaryRef.current || undefined,
@@ -115,8 +119,14 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
         setLiveSummary(res.summary);
         liveSummaryRef.current = res.summary;
       })
-      .catch((err) => console.error('Summary failed:', err));
-    pendingSummaryRef.current = summaryPromise;
+      .catch((err) => console.error('Summary failed:', err))
+      .finally(() => {
+        // Referencing `summaryPromise` here is safe despite being inside its
+        // own initializer: this callback only runs asynchronously, after
+        // the `const` assignment below has completed.
+        pendingSummariesRef.current.delete(summaryPromise);
+      });
+    pendingSummariesRef.current.add(summaryPromise);
 
     const detectPromise = qaApi.detectQuestions(
       trimmedContext,
