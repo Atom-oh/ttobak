@@ -58,11 +58,21 @@ interface UsePostRecordingOptions {
   meetingTitle: string;
   /** Live summary built during recording (useLiveSummary's liveSummaryRef) — persisted at save time when non-empty */
   liveSummaryRef?: MutableRefObject<string>;
+  /**
+   * Awaits the most recently started summarizeLive request (useLiveSummary's
+   * flushPendingSummary) before liveSummaryRef.current is read below --
+   * without this, a summary triggered near recording-stop resolves into the
+   * ref only after the save PUT already fired, silently dropping that
+   * increment (or, if it was the meeting's very first summary, the entire
+   * live summary).
+   */
+  flushPendingSummary?: () => Promise<void>;
 }
 
 export function usePostRecording({
   meetingTitle,
   liveSummaryRef,
+  flushPendingSummary,
 }: UsePostRecordingOptions) {
   const router = useRouter();
   const [step, setStep] = useState<PostRecordingStep | null>(null);
@@ -111,6 +121,7 @@ export function usePostRecording({
    * is retried. */
   const resumeUploadFlow = useCallback(async (payload: PendingAudio) => {
     try {
+      await flushPendingSummary?.();
       let meetingId = serverMeetingId;
 
       if (meetingId) {
@@ -222,7 +233,7 @@ export function usePostRecording({
       // what makes handleRetry (below) able to resume instead of losing
       // the recording.
     }
-  }, [meetingTitle, router, serverMeetingId, liveSummaryRef]);
+  }, [meetingTitle, router, serverMeetingId, liveSummaryRef, flushPendingSummary]);
 
   /** Called when a browser-mode (mic/tab) recording blob is ready — pause
    * for notes input. */

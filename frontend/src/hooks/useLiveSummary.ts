@@ -17,6 +17,13 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
   const summaryIntervalRef = useRef(summaryInterval);
   const liveSummaryRef = useRef('');
   const askedQuestionsRef = useRef<string[]>([]);
+  // The most recently started summarizeLive request, so a caller about to
+  // read liveSummaryRef (e.g. usePostRecording saving on recording stop)
+  // can await it first -- without this, a summary triggered just before stop
+  // resolves into the ref only after the save PUT already fired, silently
+  // dropping that increment (or, if it's the meeting's very first summary,
+  // the entire live summary).
+  const pendingSummaryRef = useRef<Promise<void> | null>(null);
 
   // Keep refs in sync
   useEffect(() => { summaryIntervalRef.current = summaryInterval; }, [summaryInterval]);
@@ -29,6 +36,23 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     lastSummaryWordCountRef.current = 0;
     liveSummaryRef.current = '';
     askedQuestionsRef.current = [];
+    pendingSummaryRef.current = null;
+  }, []);
+
+  /**
+   * Await the most recently started summarizeLive request (if any) before
+   * reading liveSummaryRef.current -- call this right before persisting the
+   * live summary on recording stop. Bounded by `timeoutMs` so a slow/stuck
+   * request can't block finishing the recording indefinitely; on timeout
+   * the ref is read as-is (best-effort, same behavior as before this fix).
+   */
+  const flushPendingSummary = useCallback(async (timeoutMs = 8000) => {
+    const pending = pendingSummaryRef.current;
+    if (!pending) return;
+    await Promise.race([
+      pending,
+      new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+    ]);
   }, []);
 
   /**
@@ -62,6 +86,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
         liveSummaryRef.current = res.summary;
       })
       .catch((err) => console.error('Summary failed:', err));
+    pendingSummaryRef.current = summaryPromise;
 
     const detectPromise = qaApi.detectQuestions(
       trimmedContext,
@@ -90,6 +115,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     askedQuestionsRef,
     checkThreshold,
     addAskedQuestion,
+    flushPendingSummary,
     reset,
   };
 }
