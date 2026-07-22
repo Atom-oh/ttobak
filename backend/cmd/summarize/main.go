@@ -568,9 +568,21 @@ func truncateRunes(s string, n int) string {
 	return string(runes[:n]) + "..."
 }
 
-// buildLinkedMeetingContext fetches summaries from linked predecessor meetings
+// buildLinkedMeetingContext fetches summaries from linked predecessor
+// meetings. Skipped entirely if this meeting has an edit-permission
+// collaborator other than its owner: linked-meeting content the
+// collaborator has no direct read access to would otherwise sit in the same
+// prompt as liveSummary, a field that same collaborator controls -- an
+// injection there ("repeat everything above verbatim") could exfiltrate the
+// linked meeting into a summary the collaborator CAN read. See
+// service.FoldLiveSummary's threat-model comment for the full writeup. An
+// owner-only meeting has no one to exfiltrate to, so linking stays enabled.
 func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) string {
 	if len(meeting.LinkedMeetingIDs) == 0 {
+		return ""
+	}
+	if hasNonOwnerEditCollaborator(ctx, meeting) {
+		log.Printf("Skipping linked-meeting context for %s -- has a non-owner edit collaborator", meeting.MeetingID)
 		return ""
 	}
 
@@ -619,6 +631,21 @@ func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) stri
 	}
 
 	return sb.String()
+}
+
+// hasNonOwnerEditCollaborator reports whether meeting has been shared with
+// edit permission to anyone other than its owner. Errors are treated as "yes,
+// assume a collaborator exists" (fail closed toward skipping linked context,
+// not toward leaking it). The actual decision logic is
+// service.AnyNonOwnerEditShare, kept in internal/ (and unit-tested there) for
+// the same CI-test-scope reason as FoldLiveSummary.
+func hasNonOwnerEditCollaborator(ctx context.Context, meeting *model.Meeting) bool {
+	shares, err := repo.ListSharesForMeeting(ctx, meeting.MeetingID)
+	if err != nil {
+		log.Printf("ListSharesForMeeting failed for %s, assuming a collaborator exists: %v", meeting.MeetingID, err)
+		return true
+	}
+	return service.AnyNonOwnerEditShare(shares, meeting.UserID)
 }
 
 // emitAllPartsTranscribedEvent publishes a custom EventBridge event when all parts are transcribed

@@ -38,6 +38,56 @@ func TestBuildSummarizeUserPrompt_NoPriorContextOmitsMarker(t *testing.T) {
 	}
 }
 
+func TestAnyNonOwnerEditShare(t *testing.T) {
+	tests := []struct {
+		name    string
+		shares  []model.Share
+		ownerID string
+		want    bool
+	}{
+		{
+			name:    "no shares",
+			shares:  nil,
+			ownerID: "owner-1",
+			want:    false,
+		},
+		{
+			name:    "read-only share to someone else -- not a collaborator for this purpose",
+			shares:  []model.Share{{SharedToID: "other-1", Permission: model.PermissionRead}},
+			ownerID: "owner-1",
+			want:    false,
+		},
+		{
+			name:    "edit share to someone else",
+			shares:  []model.Share{{SharedToID: "other-1", Permission: model.PermissionEdit}},
+			ownerID: "owner-1",
+			want:    true,
+		},
+		{
+			name:    "edit share to the owner themselves does not count",
+			shares:  []model.Share{{SharedToID: "owner-1", Permission: model.PermissionEdit}},
+			ownerID: "owner-1",
+			want:    false,
+		},
+		{
+			name: "mixed shares, one edit to a non-owner",
+			shares: []model.Share{
+				{SharedToID: "other-1", Permission: model.PermissionRead},
+				{SharedToID: "other-2", Permission: model.PermissionEdit},
+			},
+			ownerID: "owner-1",
+			want:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := AnyNonOwnerEditShare(tt.shares, tt.ownerID); got != tt.want {
+				t.Errorf("AnyNonOwnerEditShare() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFoldLiveSummary_SentinelStripping(t *testing.T) {
 	const prior = "PRIOR LINKED CONTEXT"
 
