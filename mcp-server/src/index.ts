@@ -135,7 +135,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'ttobak_list_projects',
-      description: 'List projects you belong to (projectId, name, stage, SFDC Oppty ID).',
+      description:
+        'List projects you own or are directly invited to (projectId, name, stage, SFDC Oppty ID). Excludes projects reachable only through a linked Account\'s membership -- see those from the account side instead.',
       inputSchema: { type: 'object' as const, properties: {} },
     },
     {
@@ -149,10 +150,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'ttobak_get_project_brief',
-      description: 'Get bundled raw material for a project: meta + insights grouped by type + shared meetings + linked research.',
+      description: 'Get bundled raw material for a project: meta + insights grouped by type + linked meetings + linked research.',
       inputSchema: {
         type: 'object' as const,
-        properties: { projectId: { type: 'string', description: 'Project ID' } },
+        properties: {
+          projectId: { type: 'string', description: 'Project ID' },
+          from: { type: 'string', description: 'Optional start (RFC3339)' },
+          to: { type: 'string', description: 'Optional end (RFC3339)' },
+          types: { type: 'array', items: { type: 'string' }, description: 'Optional insight types to include' },
+        },
         required: ['projectId'],
       },
     },
@@ -337,9 +343,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'ttobak_get_project_brief': {
-        const { projectId } = args as { projectId: string };
+        const { projectId, from, to, types } = args as {
+          projectId: string;
+          from?: string;
+          to?: string;
+          types?: string[];
+        };
         if (!projectId) return error('projectId is required');
-        const result = await api.getProjectBrief(projectId);
+        const result = await api.getProjectBrief(projectId, { from, to, types });
         return text(JSON.stringify(result, null, 2));
       }
 

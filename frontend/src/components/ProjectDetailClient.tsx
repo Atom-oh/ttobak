@@ -32,15 +32,22 @@ export default function ProjectDetailClient() {
   const [linkingAccount, setLinkingAccount] = useState(false);
 
   const fetchAll = useCallback(async () => {
-    if (!projectId || projectId === '_') return;
+    if (!projectId || projectId === '_') {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
+      // The project itself must load (no project, nothing to show -- a real
+      // error). Meetings/research/insights degrade independently instead of
+      // failing the whole page: one of these erroring shouldn't take down
+      // the header/members/accounts sections that already loaded fine.
       const [proj, mtg, res, ins] = await Promise.all([
         projectApi.get(projectId),
-        projectApi.meetings(projectId),
-        projectApi.research(projectId),
-        projectApi.insights(projectId),
+        projectApi.meetings(projectId).catch(() => null),
+        projectApi.research(projectId).catch(() => null),
+        projectApi.insights(projectId).catch(() => null),
       ]);
       setProject(proj);
       setMeetings(mtg?.meetings ?? []);

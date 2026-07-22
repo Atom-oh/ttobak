@@ -85,8 +85,16 @@ export class TtobakApi {
     return this.get(`/api/projects/${projectId}`);
   }
 
-  async getProjectBrief(projectId: string) {
-    return this.get(`/api/projects/${projectId}/brief`);
+  async getProjectBrief(
+    projectId: string,
+    opts?: { from?: string; to?: string; types?: string[] },
+  ) {
+    const q = new URLSearchParams();
+    if (opts?.from) q.set('from', opts.from);
+    if (opts?.to) q.set('to', opts.to);
+    if (opts?.types && opts.types.length) q.set('types', opts.types.join(','));
+    const qs = q.toString();
+    return this.get(`/api/projects/${projectId}/brief${qs ? '?' + qs : ''}`);
   }
 
   async getProjectInsights(

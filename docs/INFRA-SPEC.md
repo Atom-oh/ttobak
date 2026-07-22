@@ -379,6 +379,24 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
   - Default root object: index.html
   - Error pages: 403/404 → /index.html (SPA routing)
   - Lambda@Edge: 없음 (정적 파일은 인증 불필요)
+  - **CloudFront Function** (`SpaRouterFunction`, `infra/lib/frontend-stack.ts`,
+    `VIEWER_REQUEST`): Next.js static export는 `/meeting/abc123`처럼 동적
+    라우트마다 개별 HTML 파일을 만들지 않고 `/meeting/_.html`(대표 파일)만
+    빌드하므로, 이 함수가 요청 URI의 동적 세그먼트를 `_`로 치환해 그 대표
+    파일로 라우팅한다(예: `/meeting/abc123` → `/meeting/_`, `/accounts/{id}` →
+    `/accounts/_`, `/accounts/{id}/docs/{docId}` → `/accounts/_/docs/_`,
+    `/projects/{id}` → `/projects/_`, `/insights/{sourceId}/{docHash}` →
+    `/insights/_/_`, `/insights/research/{id}` → `/insights/research/_`,
+    `/docs/{docId}` → `/docs/_`). 정규식은 `[^\/\.]+`로 세그먼트를 매칭해 `.`
+    (확장자)와 `/`(하위 경로) 앞에서 멈추므로 `.txt`(RSC payload)나 정적 자산
+    하위 경로는 보존된다. 중첩 라우트(`/accounts/{id}/docs/{docId}`)는 단일
+    세그먼트 라우트(`/accounts/{id}`)보다 먼저 매칭해야 한다 — 순서가 바뀌면
+    단일 세그먼트 규칙이 먼저 걸려 중첩 케이스를 그르친다. 마지막으로,
+    `knownPages` 목록에 있는 정적 페이지는 `.html`을 붙이고, 그 외 미인식
+    경로는 전부 `/index.html`(SPA fallback)로 보낸다 — **새 정적 라우트를
+    추가할 때마다 이 목록과 동적 세그먼트 정규식을 갱신해야 하며, 잊으면
+    그 라우트는 항상 SPA fallback으로 떨어진다** (CLAUDE.md Important
+    Gotchas 참고).
 
 - **Public API behavior** (`/api/public/*`, ADR-022) — registered *before*
   the general `/api/*` behavior below, since CloudFront matches path patterns

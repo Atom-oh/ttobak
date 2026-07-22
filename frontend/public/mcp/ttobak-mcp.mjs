@@ -21087,8 +21087,13 @@ var TtobakApi = class {
   async getProject(projectId) {
     return this.get(`/api/projects/${projectId}`);
   }
-  async getProjectBrief(projectId) {
-    return this.get(`/api/projects/${projectId}/brief`);
+  async getProjectBrief(projectId, opts) {
+    const q = new URLSearchParams();
+    if (opts?.from) q.set("from", opts.from);
+    if (opts?.to) q.set("to", opts.to);
+    if (opts?.types && opts.types.length) q.set("types", opts.types.join(","));
+    const qs = q.toString();
+    return this.get(`/api/projects/${projectId}/brief${qs ? "?" + qs : ""}`);
   }
   async getProjectInsights(projectId, opts) {
     const q = new URLSearchParams();
@@ -21279,7 +21284,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "ttobak_list_projects",
-      description: "List projects you belong to (projectId, name, stage, SFDC Oppty ID).",
+      description: "List projects you own or are directly invited to (projectId, name, stage, SFDC Oppty ID). Excludes projects reachable only through a linked Account's membership -- see those from the account side instead.",
       inputSchema: { type: "object", properties: {} }
     },
     {
@@ -21293,10 +21298,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "ttobak_get_project_brief",
-      description: "Get bundled raw material for a project: meta + insights grouped by type + shared meetings + linked research.",
+      description: "Get bundled raw material for a project: meta + insights grouped by type + linked meetings + linked research.",
       inputSchema: {
         type: "object",
-        properties: { projectId: { type: "string", description: "Project ID" } },
+        properties: {
+          projectId: { type: "string", description: "Project ID" },
+          from: { type: "string", description: "Optional start (RFC3339)" },
+          to: { type: "string", description: "Optional end (RFC3339)" },
+          types: { type: "array", items: { type: "string" }, description: "Optional insight types to include" }
+        },
         required: ["projectId"]
       }
     },
@@ -21450,9 +21460,9 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_get_project_brief": {
-        const { projectId } = args;
+        const { projectId, from, to, types } = args;
         if (!projectId) return error2("projectId is required");
-        const result = await api.getProjectBrief(projectId);
+        const result = await api.getProjectBrief(projectId, { from, to, types });
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_get_project_insights": {
