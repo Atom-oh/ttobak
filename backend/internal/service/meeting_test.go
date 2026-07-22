@@ -125,6 +125,8 @@ func (m *mockMeetingRepo) UpdateMeetingFields(_ context.Context, userID, meeting
 			cp.Content = v.(string)
 		case "notes":
 			cp.Notes = v.(string)
+		case "liveSummary":
+			cp.LiveSummary = v.(string)
 		case "transcriptA":
 			cp.TranscriptA = v.(string)
 		case "selectedTranscript":
@@ -694,6 +696,67 @@ func TestUpdateMeeting_ExplicitEmptyNotesClearsExisting(t *testing.T) {
 	if repo.meetingsByID["m-1"].Notes != "" {
 		t.Errorf("expected notes cleared to empty, got %q", repo.meetingsByID["m-1"].Notes)
 	}
+}
+
+func TestUpdateMeeting_LiveSummarySemantics(t *testing.T) {
+	// Same omit-vs-explicit-empty contract as Notes, plus the write-time cap
+	// (untrusted client input fed into the summarize prompt).
+	newRepoWith := func(liveSummary string) (*mockMeetingRepo, *MeetingService) {
+		repo := newMockMeetingRepo()
+		repo.addMeeting(&model.Meeting{
+			MeetingID: "m-1", UserID: "user-1", Title: "Title", LiveSummary: liveSummary,
+			Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		})
+		return repo, newMeetingServiceWithRepo(repo)
+	}
+
+	t.Run("omitted preserves existing", func(t *testing.T) {
+		repo, svc := newRepoWith("existing live summary")
+		if _, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{Title: "Title"}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := repo.meetingsByID["m-1"].LiveSummary; got != "existing live summary" {
+			t.Errorf("expected live summary preserved when omitted, got %q", got)
+		}
+	})
+
+	t.Run("explicit empty clears existing", func(t *testing.T) {
+		repo, svc := newRepoWith("existing live summary")
+		if _, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{
+			Title: "Title", LiveSummary: mdPtr(""),
+		}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := repo.meetingsByID["m-1"].LiveSummary; got != "" {
+			t.Errorf("expected live summary cleared to empty, got %q", got)
+		}
+	})
+
+	t.Run("set stores the value", func(t *testing.T) {
+		repo, svc := newRepoWith("")
+		if _, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{
+			Title: "Title", LiveSummary: mdPtr("## live\nnew summary"),
+		}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := repo.meetingsByID["m-1"].LiveSummary; got != "## live\nnew summary" {
+			t.Errorf("expected live summary stored, got %q", got)
+		}
+	})
+
+	t.Run("over-cap rejected with ErrInvalidInput", func(t *testing.T) {
+		repo, svc := newRepoWith("keep me")
+		oversized := strings.Repeat("가", model.MaxLiveSummaryRunes+1)
+		_, err := svc.UpdateMeeting(context.Background(), "user-1", "m-1", &model.UpdateMeetingRequest{
+			Title: "Title", LiveSummary: mdPtr(oversized),
+		})
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("expected ErrInvalidInput, got %v", err)
+		}
+		if got := repo.meetingsByID["m-1"].LiveSummary; got != "keep me" {
+			t.Errorf("expected stored live summary untouched after rejection, got %d chars", len(got))
+		}
+	})
 }
 
 func TestUpdateMeeting_OutOfOrderNotesUpdateDoesNotClobberOtherFields(t *testing.T) {

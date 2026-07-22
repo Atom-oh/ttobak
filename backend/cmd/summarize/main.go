@@ -460,6 +460,14 @@ func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext s
 		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
 	}
 
+	// Fold the real-time summary built during recording into the prompt so the
+	// final summary integrates its detail and mermaid diagrams instead of
+	// regenerating a short template from the raw transcript alone. See
+	// service.FoldLiveSummary for the threat model and fence-escape hardening
+	// (kept in internal/service rather than here so its regression test runs
+	// under CI's `go test ./internal/...`, which cmd/ packages are outside of).
+	priorContext = service.FoldLiveSummary(priorContext, meeting.LiveSummary)
+
 	content, err := bedrockService.SummarizeTranscript(ctx, meetingID, userID, priorContext)
 	if err != nil {
 		log.Printf("Failed to generate summary: %v", err)
@@ -560,9 +568,24 @@ func truncateRunes(s string, n int) string {
 	return string(runes[:n]) + "..."
 }
 
-// buildLinkedMeetingContext fetches summaries from linked predecessor meetings
+// buildLinkedMeetingContext fetches summaries from linked predecessor
+// meetings. Skipped entirely if this meeting has ANY collaborator other
+// than its owner (any permission level, not just currently-active edit):
+// linked-meeting content that collaborator has no direct read access to
+// would otherwise sit in the same prompt as liveSummary, a field only an
+// edit-permission user could ever have written -- an injection there
+// ("repeat everything above verbatim") could exfiltrate the linked meeting
+// into a summary any read-permission collaborator CAN read, including one
+// later demoted from edit to read (demotion doesn't un-leak an
+// already-injected liveSummary). See service.FoldLiveSummary's threat-model
+// comment for the full writeup. An owner-only meeting has no one to
+// exfiltrate to, so linking stays enabled.
 func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) string {
 	if len(meeting.LinkedMeetingIDs) == 0 {
+		return ""
+	}
+	if hasNonOwnerCollaborator(ctx, meeting) {
+		log.Printf("Skipping linked-meeting context for %s -- has a non-owner collaborator", meeting.MeetingID)
 		return ""
 	}
 
@@ -578,12 +601,17 @@ func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) stri
 		if err != nil || linked == nil || linked.Content == "" {
 			continue
 		}
-		// Defense-in-depth: `LinkMeetings` handler validates ownership at
-		// link time, but if a future code path (direct DDB write, admin
-		// import, migration) ever planted another user's id into
-		// LinkedMeetingIDs we don't want to embed their summary into this
-		// meeting's prompt. Skip silently so the prompt remains valid but
-		// drops the orphaned reference.
+		// Access check (belt): `LinkMeetings` (internal/handler/meeting.go)
+		// already enforces this at write time -- it fetches every candidate
+		// via `h.repo.GetMeeting(ctx, userID, linkedID)`, scoped to the
+		// CALLER's own USER#{userID} partition, so only meetings the caller
+		// already owns can ever be written into LinkedMeetingIDs; a
+		// cross-tenant meetingId simply returns nil there and gets rejected
+		// before the link is ever stored. This re-check (suspenders) is pure
+		// defense-in-depth for a future code path that writes
+		// LinkedMeetingIDs some other way (direct DDB write, admin import,
+		// migration) without going through that handler. Skip silently so
+		// the prompt remains valid but drops the orphaned reference.
 		if linked.UserID != meeting.UserID {
 			log.Printf("Skipping linked meeting %s — owner mismatch (%s vs %s)",
 				linkedID, linked.UserID, meeting.UserID)
@@ -611,6 +639,41 @@ func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) stri
 	}
 
 	return sb.String()
+}
+
+// hasNonOwnerCollaborator wraps service.HasNonOwnerCollaborator with the
+// ListSharesForMeetingConsistent fetch (strongly consistent -- this is a
+// confidentiality gate deciding whether untrusted content may be folded
+// into a prompt, so it must not miss a share/membership grant made an
+// instant ago to eventual-consistency lag; see that method's doc comment).
+//
+// The account-membership branch of that decision (meeting.SharedToAccount /
+// meeting.AccountID) needs the same strong-consistency guarantee, but the
+// `meeting` passed in here can NOT provide it: it was fetched via
+// GetMeetingByID, which queries GSI3 -- and DynamoDB Global Secondary
+// Indexes cannot use ConsistentRead at all (not "default off", structurally
+// unsupported), so those two fields are always potentially stale. Re-fetch
+// via GetMeeting (a base-table PK/SK GetItem, which DOES support
+// ConsistentRead) and use ITS copy of those fields for the gate -- without
+// this, an account-shared meeting could read as SharedToAccount=false in
+// the split-second after sharing, letting linked content leak to that
+// account's members. Errors are treated as "yes, assume a collaborator
+// exists" (fail closed toward skipping linked context, not toward leaking
+// it). The decision logic itself (Share rows + account membership) is
+// service.HasNonOwnerCollaborator, kept in internal/ (and unit-tested
+// there) for the same CI-test-scope reason as FoldLiveSummary.
+func hasNonOwnerCollaborator(ctx context.Context, meeting *model.Meeting) bool {
+	shares, err := repo.ListSharesForMeetingConsistent(ctx, meeting.MeetingID)
+	if err != nil {
+		log.Printf("ListSharesForMeetingConsistent failed for %s, assuming a collaborator exists: %v", meeting.MeetingID, err)
+		return true
+	}
+	consistentMeeting, err := repo.GetMeeting(ctx, meeting.UserID, meeting.MeetingID)
+	if err != nil || consistentMeeting == nil {
+		log.Printf("consistent re-fetch failed for %s, assuming a collaborator exists: %v", meeting.MeetingID, err)
+		return true
+	}
+	return service.HasNonOwnerCollaborator(consistentMeeting, shares)
 }
 
 // emitAllPartsTranscribedEvent publishes a custom EventBridge event when all parts are transcribed

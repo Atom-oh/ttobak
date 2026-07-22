@@ -1741,8 +1741,31 @@ func (r *DynamoDBRepository) ListSharesForUser(ctx context.Context, userID strin
 	return shares, nil
 }
 
-// ListSharesForMeeting lists all shares for a meeting
+// ListSharesForMeeting lists all shares for a meeting. Drains every page
+// (queryAllPages) rather than returning only DynamoDB's first ~1MB page --
+// a caller deciding whether ANY share exists (e.g. service.AnyNonOwnerShare,
+// gating cross-meeting prompt injection) must see the complete set, not a
+// possibly-truncated prefix, or a share past the first page silently
+// defeats the check. Eventually-consistent (DynamoDB's table default) --
+// fine for the common UI-display callers, but the exfiltration gate itself
+// must NOT use this: see ListSharesForMeetingConsistent.
 func (r *DynamoDBRepository) ListSharesForMeeting(ctx context.Context, meetingID string) ([]model.Share, error) {
+	return r.listSharesForMeeting(ctx, meetingID, false)
+}
+
+// ListSharesForMeetingConsistent is ListSharesForMeeting with
+// ConsistentRead:true -- use this, not the eventually-consistent version,
+// anywhere the result gates whether untrusted content may be folded into a
+// prompt (service.HasNonOwnerCollaborator). Without strong consistency, a
+// share or account-membership grant made an instant before summarize runs
+// could be invisible to this read (TOCTOU), letting a just-added
+// collaborator's injected liveSummary smuggle a linked meeting's content
+// they have no read access to into a summary they DO get to read.
+func (r *DynamoDBRepository) ListSharesForMeetingConsistent(ctx context.Context, meetingID string) ([]model.Share, error) {
+	return r.listSharesForMeeting(ctx, meetingID, true)
+}
+
+func (r *DynamoDBRepository) listSharesForMeeting(ctx context.Context, meetingID string, consistent bool) ([]model.Share, error) {
 	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixMeeting + meetingID)).
 		And(expression.Key("SK").BeginsWith(model.PrefixShareTo))
 	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
@@ -1750,18 +1773,19 @@ func (r *DynamoDBRepository) ListSharesForMeeting(ctx context.Context, meetingID
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
 
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ConsistentRead:            aws.Bool(consistent),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to query shares: %w", err)
 	}
 
 	var shares []model.Share
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &shares); err != nil {
+	if err := attributevalue.UnmarshalListOfMaps(items, &shares); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal shares: %w", err)
 	}
 

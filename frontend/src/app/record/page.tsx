@@ -118,6 +118,8 @@ function RecordPageInner() {
 
   const postRecording = usePostRecording({
     meetingTitle,
+    liveSummaryRef: summary.liveSummaryRef,
+    flushPendingSummary: summary.flushPendingSummary,
   });
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;

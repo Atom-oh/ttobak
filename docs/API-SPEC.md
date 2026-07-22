@@ -100,6 +100,7 @@ Response: 200 OK
   "status": "done",
   "participants": ["Alice", "Bob", "Charlie"],
   "content": "# 회의록\n\n## 안건\n...",     // Markdown
+  "liveSummary": "## 실시간 요약\n...",       // Markdown incl. mermaid, built during recording (omitted if never saved)
   "transcriptA": "Transcribe 결과 전체 텍스트...",
   "transcriptB": "Nova 2 Sonic 결과 전체 텍스트...",
   "selectedTranscript": "A",                    // "A" | "B" | null
@@ -141,6 +142,7 @@ Request:
   "title": "Updated Title",                     // optional
   "content": "# Updated markdown...",           // optional
   "notes": "In-meeting notes...",               // optional, see semantics below
+  "liveSummary": "## 실시간 요약\n...",          // optional, same omit-vs-empty semantics as notes
   "selectedTranscript": "B",                    // optional
   "participants": ["Alice", "Bob", "David"],    // optional
   "status": "done"                              // optional
@@ -154,7 +156,7 @@ Error: 403 Forbidden (shared users with "read" permission cannot edit)
 
 > `content` must be **Markdown**, not HTML. The web editor (TipTap) edits in HTML but converts back to Markdown before saving, because the summary is consumed as Markdown downstream (Notion/Obsidian export). Exporters also normalize any stray HTML to Markdown as a safety net for legacy records.
 
-> `notes` is the only field with omit-vs-explicit-empty semantics: omitting the `notes` key entirely leaves the stored notes untouched, while sending `"notes": ""` explicitly clears them. Every other field in this request follows the older "empty/omitted string means don't touch this field" convention (a plain `string`, not a pointer) — so e.g. sending `"title": ""` does NOT clear the title, it's treated the same as omitting it.
+> `notes` and `liveSummary` are the only fields with omit-vs-explicit-empty semantics: omitting the key entirely leaves the stored value untouched, while sending an explicit `""` clears it. Every other field in this request follows the older "empty/omitted string means don't touch this field" convention (a plain `string`, not a pointer) — so e.g. sending `"title": ""` does NOT clear the title, it's treated the same as omitting it. `liveSummary` is the markdown (incl. mermaid) summary built incrementally during recording — the frontend sends it at save time (both the normal and retry update paths, when present), and the summarize pipeline feeds it into final-summary generation as prior context. Capped server-side at 32,000 characters (`400 BAD_REQUEST` beyond that).
 
 #### Delete Meeting
 

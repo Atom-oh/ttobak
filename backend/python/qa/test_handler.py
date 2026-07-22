@@ -1,27 +1,240 @@
-"""Unit tests for handler.py's _list_shared_meetings origin/membership gate.
+"""Unit tests for the QA Lambda's handler.py.
 
-Verifies the fix for the PR #114 review MAJORs: an account-origin share row
-must not grant access once the caller is no longer an account member, even
-if RemoveMember's best-effort cleanup never deleted the row -- and that
-revocation is visible immediately (origin/membership/sharedToAccount are all
-re-checked live on every call, uncached), not bounded by the raw
-share-list's SHARED_MEETINGS_CACHE_TTL_SECONDS (which only caches the
-immutable meetingId/ownerId identity of each share, not any authorization
-decision).
+Run: cd backend/python/qa && python3 -m unittest test_handler -v
+Same stdlib-unittest pattern as backend/python/crawler/test_crawlers.py.
+
+Covers:
+- load_session's trailing-user-message trim (poisoning guard: a stored
+  history ending in a user-role message would otherwise make Bedrock reject
+  every subsequent call in that meeting with a role-alternation error).
+- _list_shared_meetings' live origin/membership/sharedToAccount re-check
+  (PR #114 review MAJORs: revocation must be visible immediately, not
+  bounded by the raw share-list cache TTL).
+- retrieve_from_kb's access-signature-gated cache (a cached KB answer must
+  not be served once the caller's access has changed).
 """
-
+import json
 import os
 import sys
 import time
 import unittest
 from unittest import mock
 
+# Set env vars BEFORE importing handler (it reads env at import time)
 os.environ.setdefault('TABLE_NAME', 'test-table')
+os.environ.setdefault('KB_ID', 'test-kb')
+os.environ.setdefault('BEDROCK_MODEL_ID', 'test-model')
 os.environ.setdefault('AWS_DEFAULT_REGION', 'us-east-1')
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+# ---------------------------------------------------------------------------
+# Patch boto3 at module level so `import handler` doesn't hit real AWS
+# ---------------------------------------------------------------------------
+_boto3_resource_patcher = mock.patch('boto3.resource', return_value=mock.MagicMock())
+_boto3_client_patcher = mock.patch('boto3.client', return_value=mock.MagicMock())
+_boto3_resource_patcher.start()
+_boto3_client_patcher.start()
+
 import handler  # noqa: E402
+
+
+def _stored(messages):
+    """DynamoDB get_item response holding the given conversation history."""
+    return {'Item': {'PK': 'SESSION#u1#s1', 'SK': 'MESSAGES',
+                     'messages': json.dumps(messages, ensure_ascii=False)}}
+
+
+class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
+    """A stored history ending in user-role messages must be trimmed on load,
+    or Bedrock rejects every subsequent call with a role-alternation error."""
+
+    def setUp(self):
+        self.get_item = mock.MagicMock()
+        patcher = mock.patch.object(handler, 'table', mock.MagicMock(get_item=self.get_item))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_missing_item_returns_empty(self):
+        self.get_item.return_value = {}
+        self.assertEqual(handler.load_session('s1', user_id='u1'), [])
+
+    def test_trims_single_trailing_user_message(self):
+        self.get_item.return_value = _stored([
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'text': 'a1'}]},
+            {'role': 'user', 'content': [{'text': 'q2 (round failed)'}]},
+        ])
+        result = handler.load_session('s1', user_id='u1')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[-1]['role'], 'assistant')
+
+    def test_trims_multiple_trailing_user_messages(self):
+        self.get_item.return_value = _stored([
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'text': 'a1'}]},
+            {'role': 'user', 'content': [{'toolResult': {'toolUseId': 't1', 'content': [{'text': 'r'}]}}]},
+            {'role': 'user', 'content': [{'text': 'q2'}]},
+        ])
+        result = handler.load_session('s1', user_id='u1')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[-1]['role'], 'assistant')
+
+    def test_preserves_history_ending_in_assistant(self):
+        history = [
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'text': 'a1'}]},
+        ]
+        self.get_item.return_value = _stored(history)
+        self.assertEqual(handler.load_session('s1', user_id='u1'), history)
+
+    def test_trims_dangling_tooluse_left_by_max_rounds_exhaustion(self):
+        # MAX_TOOL_ROUNDS exhaustion can leave the round's toolResult unsaved
+        # -- history ends in user(toolResult) whose matching assistant(toolUse)
+        # is now dangling once the trailing user message is popped.
+        self.get_item.return_value = _stored([
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'text': 'a1'}]},
+            {'role': 'user', 'content': [{'text': 'q2'}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+            {'role': 'user', 'content': [{'toolResult': {'toolUseId': 't1', 'content': [{'text': 'r'}]}}]},
+        ])
+        result = handler.load_session('s1', user_id='u1')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[-1]['content'], [{'text': 'a1'}])
+
+    def test_trims_dangling_tooluse_left_by_client_gone_break(self):
+        # client_gone can break between appending assistant(toolUse) and
+        # producing its toolResult -- history ends directly in the
+        # unresolved toolUse with no trailing user message to pop first.
+        self.get_item.return_value = _stored([
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'text': 'a1'}]},
+            {'role': 'user', 'content': [{'text': 'q2'}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+        ])
+        result = handler.load_session('s1', user_id='u1')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[-1]['content'], [{'text': 'a1'}])
+
+    def test_preserves_assistant_with_mixed_text_and_resolved_toolresult_pairing(self):
+        # A resolved tool round (toolUse followed by its toolResult, then a
+        # final assistant text) must NOT be trimmed -- only an unresolved
+        # trailing toolUse is dangling.
+        history = [
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+            {'role': 'assistant', 'content': [{'toolUse': {'toolUseId': 't1', 'name': 'x', 'input': {}}}]},
+            {'role': 'user', 'content': [{'toolResult': {'toolUseId': 't1', 'content': [{'text': 'r'}]}}]},
+            {'role': 'assistant', 'content': [{'text': 'final answer'}]},
+        ]
+        self.get_item.return_value = _stored(history)
+        self.assertEqual(handler.load_session('s1', user_id='u1'), history)
+
+    def test_all_user_history_trims_to_empty(self):
+        self.get_item.return_value = _stored([
+            {'role': 'user', 'content': [{'text': 'q1'}]},
+        ])
+        self.assertEqual(handler.load_session('s1', user_id='u1'), [])
+
+
+class TestExecuteToolWithHeartbeat(unittest.TestCase):
+    """A single heartbeat sent only before the call starts can't cover a
+    tool that itself runs past the client's stall watchdog -- heartbeats
+    must keep firing for the whole duration of a slow tool call."""
+
+    @mock.patch.object(handler, 'execute_tool')
+    def test_sends_periodic_heartbeats_for_a_slow_tool(self, mock_execute_tool):
+        def slow_tool(name, tool_input, context):
+            time.sleep(0.05)
+            return 'result', []
+        mock_execute_tool.side_effect = slow_tool
+
+        apigw = mock.MagicMock()
+        apigw.post_to_connection.return_value = None
+
+        result, sources, client_gone = handler._execute_tool_with_heartbeat(
+            'some_tool', {}, {}, apigw, 'c1', 's1', interval=0.01,
+        )
+
+        self.assertEqual(result, 'result')
+        self.assertFalse(client_gone)
+        # At 0.01s interval over a 0.05s tool call, multiple heartbeats must
+        # have fired -- not just the one sent before the call started.
+        self.assertGreaterEqual(apigw.post_to_connection.call_count, 2)
+        for call in apigw.post_to_connection.call_args_list:
+            payload = json.loads(call.kwargs['Data'])
+            self.assertEqual(payload['type'], 'tool_progress')
+
+    @mock.patch.object(handler, 'execute_tool')
+    def test_client_gone_detected_mid_run_even_though_tool_call_itself_succeeds(self, mock_execute_tool):
+        def slow_tool(name, tool_input, context):
+            time.sleep(0.05)
+            return 'result', []
+        mock_execute_tool.side_effect = slow_tool
+
+        class FakeGoneException(Exception):
+            pass
+
+        apigw = mock.MagicMock()
+        apigw.exceptions.GoneException = FakeGoneException
+        apigw.post_to_connection.side_effect = FakeGoneException()
+
+        result, sources, client_gone = handler._execute_tool_with_heartbeat(
+            'some_tool', {}, {}, apigw, 'c1', 's1', interval=0.01,
+        )
+
+        self.assertEqual(result, 'result')
+        self.assertTrue(client_gone)
+
+
+class TestAgenticConverseStreamClientGone(unittest.TestCase):
+    """A client that disconnects mid-tool-round must stop the loop before the
+    next (wasted) Bedrock round -- not just rearm-then-ignore the signal."""
+
+    def _tool_use_stream(self, tool_use_id='t1'):
+        return {'stream': [
+            {'contentBlockStart': {'start': {'toolUse': {'toolUseId': tool_use_id, 'name': 'some_tool'}}}},
+            {'contentBlockDelta': {'delta': {'toolUse': {'input': '{}'}}}},
+            {'contentBlockStop': {}},
+            {'messageStop': {'stopReason': 'tool_use'}},
+        ]}
+
+    @mock.patch.object(handler, 'execute_tool')
+    @mock.patch.object(handler, 'bedrock_runtime')
+    @mock.patch.object(handler, 'table')
+    def test_stops_before_next_bedrock_round_when_client_gone_during_tool_round(
+        self, mock_table, mock_bedrock, mock_execute_tool,
+    ):
+        mock_bedrock.converse_stream.return_value = self._tool_use_stream()
+        mock_execute_tool.return_value = ('tool result', [])
+
+        apigw = mock.MagicMock()
+
+        class FakeGoneException(Exception):
+            pass
+        apigw.exceptions.GoneException = FakeGoneException
+        # tool_progress heartbeat is the very first post_to_connection call
+        # inside the tool branch -- fail it to simulate a mid-tool-round
+        # disconnect.
+        apigw.post_to_connection.side_effect = FakeGoneException()
+
+        handler.agentic_converse_stream(
+            messages=[{'role': 'user', 'content': [{'text': 'q'}]}],
+            transcript='',
+            session_id='s1',
+            user_id='u1',
+            apigw=apigw,
+            connection_id='c1',
+        )
+
+        self.assertEqual(
+            mock_bedrock.converse_stream.call_count, 1,
+            "client_gone during the tool round must stop the loop before a second "
+            "(wasted) Bedrock round -- the signal must not be silently reset/ignored",
+        )
+        saved = json.loads(mock_table.put_item.call_args.kwargs['Item']['messages'])
+        self.assertEqual(saved[-1]['role'], 'user')
+        self.assertIn('toolResult', saved[-1]['content'][0])
 
 
 def make_get_item(share_origin='', member_exists=True, shared_to_account=True, account_id='acc-1', share_exists=True):

@@ -3,6 +3,7 @@ import json
 import os
 import base64
 import logging
+import threading
 import time
 import boto3
 
@@ -559,7 +560,29 @@ def load_session(session_id, user_id=None):
         result = table.get_item(Key={"PK": pk, "SK": "MESSAGES"})
         item = result.get("Item")
         if item:
-            return json.loads(item.get("messages", "[]"))
+            messages = json.loads(item.get("messages", "[]"))
+            # A failed/aborted round can persist history ending in a user-role
+            # message, OR in an assistant message still holding an unresolved
+            # toolUse block (MAX_TOOL_ROUNDS exhaustion leaves the round's
+            # toolResult unsaved; the client_gone break can fire between the
+            # toolUse append and its toolResult). Either shape breaks Bedrock's
+            # role-alternation / tool-pairing validation and poisons EVERY
+            # subsequent call in the session. Rewind past both at the single
+            # load choke point, down to the last complete assistant(text) (or
+            # fully-paired tool) boundary.
+            while messages:
+                last = messages[-1]
+                role = last.get("role")
+                if role == "user":
+                    messages.pop()
+                    continue
+                if role == "assistant" and any(
+                    isinstance(b, dict) and "toolUse" in b for b in last.get("content", [])
+                ):
+                    messages.pop()
+                    continue
+                break
+            return messages
         return []
     except Exception as e:
         logger.warning(f"Failed to load session {session_id}: {e}")
@@ -1054,7 +1077,14 @@ def _apigw_client(endpoint):
 
 
 def _post_ws(apigw, connection_id, payload):
-    """Post a JSON message to a WebSocket connection. Returns False if gone."""
+    """Post a JSON message to a WebSocket connection.
+
+    Returns False only when the connection is confirmed gone (GoneException)
+    -- callers treat False as "stop streaming, the client left". A transient
+    error (throttling, a flaky post) does NOT mean the client is gone, so it
+    must not be treated the same way or one blip silently truncates an
+    otherwise-healthy multi-round streamed answer.
+    """
     try:
         apigw.post_to_connection(
             ConnectionId=connection_id,
@@ -1065,8 +1095,8 @@ def _post_ws(apigw, connection_id, payload):
         logger.info(f"WebSocket {connection_id} is gone; aborting stream")
         return False
     except Exception as e:
-        logger.warning(f"post_to_connection failed: {e}")
-        return False
+        logger.warning(f"post_to_connection failed (treated as transient, not gone): {e}")
+        return True
 
 
 def handle_ask_stream(event):
@@ -1140,6 +1170,38 @@ def handle_ask_stream(event):
     return {'status': 'ok'}
 
 
+def _execute_tool_with_heartbeat(tool_name, tool_input, context, apigw, connection_id, session_id, interval=15):
+    """Run execute_tool while sending a tool_progress heartbeat immediately
+    and then every `interval` seconds it's still running. A single heartbeat
+    sent only before the call starts can't cover a tool that itself runs
+    past the client's stall watchdog (KB retrieve, research kickoff, etc.
+    are usually fast, but nothing guarantees that) -- this keeps rearming
+    for the whole duration instead of just once at the start.
+
+    Returns (result, result_sources, client_gone) -- client_gone is True if
+    any heartbeat during the run found the socket gone, checked after the
+    tool call finishes (execute_tool itself is not interrupted).
+    """
+    done = threading.Event()
+    client_gone = [False]
+
+    def _heartbeat_loop():
+        while True:
+            if not _post_ws(apigw, connection_id, {'type': 'tool_progress', 'sessionId': session_id}):
+                client_gone[0] = True
+            if done.wait(interval):
+                return
+
+    heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    heartbeat_thread.start()
+    try:
+        result, result_sources = execute_tool(tool_name, tool_input, context)
+    finally:
+        done.set()
+        heartbeat_thread.join()
+    return result, result_sources, client_gone[0]
+
+
 def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, connection_id):
     """Agentic tool-use loop using ConverseStream. Streams text deltas to the WebSocket."""
     context = {
@@ -1180,6 +1242,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         current_block = None
         stop_reason = None
         round_text = ''
+        client_gone = False
 
         for ev in stream_resp.get('stream', []):
             if 'messageStart' in ev:
@@ -1202,11 +1265,12 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                 if 'text' in delta and current_block is not None and 'text' in current_block:
                     current_block['text'] += delta['text']
                     round_text += delta['text']
-                    _post_ws(apigw, connection_id, {
+                    if not _post_ws(apigw, connection_id, {
                         'type': 'answer_delta',
                         'sessionId': session_id,
                         'text': delta['text'],
-                    })
+                    }):
+                        client_gone = True
                 elif 'toolUse' in delta and current_block is not None and 'toolUse' in current_block:
                     current_block['toolUse']['input'] += delta['toolUse'].get('input', '')
                 continue
@@ -1232,6 +1296,12 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         if round_text:
             final_answer_parts.append(round_text)
 
+        if client_gone:
+            # WebSocket client is gone — stop burning Bedrock calls. The
+            # assistant message was appended above so the saved session stays
+            # role-consistent.
+            break
+
         if stop_reason == 'end_turn' or stop_reason is None:
             break
 
@@ -1242,8 +1312,23 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                     continue
                 tool = block['toolUse']
                 logger.info(f"Tool call (stream): {tool['name']}")
+                # Tool execution (KB retrieve, research kickoff, etc.) sends
+                # no answer_delta, so the client's stall watchdog would
+                # otherwise go un-rearmed and time out a perfectly healthy
+                # long-running tool round. _execute_tool_with_heartbeat sends
+                # tool_progress every 15s for the whole call, not just once
+                # before it starts, so a tool that itself runs past the
+                # watchdog's window still keeps it alive. Its client_gone
+                # signal also doubles as the earliest gone-detection during a
+                # tool round (the alternative, burning Bedrock/tool calls
+                # until the next answer_delta notices, wastes a full round of
+                # work on a dead socket).
                 try:
-                    result, result_sources = execute_tool(tool['name'], tool['input'], context)
+                    result, result_sources, tool_client_gone = _execute_tool_with_heartbeat(
+                        tool['name'], tool['input'], context, apigw, connection_id, session_id,
+                    )
+                    if tool_client_gone:
+                        client_gone = True
                 except Exception as e:
                     logger.warning(f"Tool execution failed ({tool['name']}): {e}")
                     result = f"도구 실행 중 오류가 발생했습니다: {tool['name']}"
@@ -1257,6 +1342,14 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                     }
                 })
             messages.append({'role': 'user', 'content': tool_results})
+
+            if client_gone:
+                # Finish this round's tool_results first so every toolUse
+                # keeps its matching toolResult (else load_session's dangling
+                # -toolUse rewind kicks in next load) -- then stop before the
+                # next Bedrock round, which would otherwise run to completion
+                # on a socket nothing is listening on.
+                break
 
     save_session(session_id, messages, user_id=user_id)
 

@@ -30,6 +30,7 @@ type Meeting struct {
 	TranscriptSegments string            `dynamodbav:"transcriptSegments,omitempty"` // JSON string of speaker-labeled segments
 	ActionItems        string            `dynamodbav:"actionItems,omitempty"`        // JSON string of extracted action items
 	Notes              string            `dynamodbav:"notes,omitempty"`              // User-written meeting notes (post-recording)
+	LiveSummary        string            `dynamodbav:"liveSummary,omitempty"`        // Real-time summary built during recording (markdown incl. mermaid)
 	SpeakerMap         map[string]string `dynamodbav:"speakerMap,omitempty"`         // spk_0 -> "김팀장" mapping
 	Participants       []string          `dynamodbav:"participants,omitempty"`
 	Tags               []string          `dynamodbav:"tags,omitempty"`

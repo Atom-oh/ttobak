@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, type MutableRefObject } from 'react';
 import { useRouter } from 'next/navigation';
 import { meetingsApi, uploadsApi } from '@/lib/api';
 import { putWithProgress, type UploadProgress } from '@/lib/upload';
@@ -15,6 +15,21 @@ function formatDefaultTitle(date: Date): string {
   return minute > 0
     ? `${month}월 ${day}일 ${hour}시 ${minute}분 미팅`
     : `${month}월 ${day}일 ${hour}시 미팅`;
+}
+
+// Mirrors backend/internal/model/request.go's MaxLiveSummaryRunes -- the
+// backend now rejects an over-cap liveSummary with 400, and this same PUT
+// also carries the recording->transcribing status transition, so without a
+// matching client-side truncation an oversized live summary (a long
+// meeting's incrementally-grown markdown+mermaid) fails the whole
+// post-recording save, not just the summary field.
+const MAX_LIVE_SUMMARY_CODEPOINTS = 32000;
+
+function truncateLiveSummary(text: string): string {
+  const codePoints = Array.from(text);
+  return codePoints.length > MAX_LIVE_SUMMARY_CODEPOINTS
+    ? codePoints.slice(0, MAX_LIVE_SUMMARY_CODEPOINTS).join('')
+    : text;
 }
 
 /** Race a promise against a timeout */
@@ -41,10 +56,23 @@ type PendingAudio =
 
 interface UsePostRecordingOptions {
   meetingTitle: string;
+  /** Live summary built during recording (useLiveSummary's liveSummaryRef) — persisted at save time when non-empty */
+  liveSummaryRef?: MutableRefObject<string>;
+  /**
+   * Awaits the most recently started summarizeLive request (useLiveSummary's
+   * flushPendingSummary) before liveSummaryRef.current is read below --
+   * without this, a summary triggered near recording-stop resolves into the
+   * ref only after the save PUT already fired, silently dropping that
+   * increment (or, if it was the meeting's very first summary, the entire
+   * live summary).
+   */
+  flushPendingSummary?: () => Promise<void>;
 }
 
 export function usePostRecording({
   meetingTitle,
+  liveSummaryRef,
+  flushPendingSummary,
 }: UsePostRecordingOptions) {
   const router = useRouter();
   const [step, setStep] = useState<PostRecordingStep | null>(null);
@@ -93,6 +121,7 @@ export function usePostRecording({
    * is retried. */
   const resumeUploadFlow = useCallback(async (payload: PendingAudio) => {
     try {
+      await flushPendingSummary?.();
       let meetingId = serverMeetingId;
 
       if (meetingId) {
@@ -101,6 +130,7 @@ export function usePostRecording({
           meetingsApi.update(meetingId, {
             title: meetingTitle || formatDefaultTitle(new Date()),
             status: 'transcribing',
+            ...(liveSummaryRef?.current ? { liveSummary: truncateLiveSummary(liveSummaryRef.current) } : {}),
           }),
           15000, 'Save transcript',
         );
@@ -118,6 +148,7 @@ export function usePostRecording({
         await withTimeout(
           meetingsApi.update(meetingId, {
             status: 'transcribing',
+            ...(liveSummaryRef?.current ? { liveSummary: truncateLiveSummary(liveSummaryRef.current) } : {}),
           }),
           15000, 'Save transcript',
         );
@@ -202,7 +233,7 @@ export function usePostRecording({
       // what makes handleRetry (below) able to resume instead of losing
       // the recording.
     }
-  }, [meetingTitle, router, serverMeetingId]);
+  }, [meetingTitle, router, serverMeetingId, liveSummaryRef, flushPendingSummary]);
 
   /** Called when a browser-mode (mic/tab) recording blob is ready — pause
    * for notes input. */

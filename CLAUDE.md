@@ -28,11 +28,14 @@ cd frontend && npm run build     # static export to out/
 cd frontend && npm run dev       # local dev server
 cd frontend && npm run lint      # eslint
 
-# Python crawler + research-agent unit tests (stdlib unittest; needs boto3/botocore --
+# Python unit tests (stdlib unittest; needs boto3/botocore --
 # present in the Lambda/container runtime, but `pip install 'boto3<2'` locally if running by hand.
-# Capped at <2: these tests exercise botocore.auth.SigV4Auth, a quasi-internal API a major bump could change)
+# The <2 cap matters for crawler/research-agent, whose tests exercise botocore.auth.SigV4Auth, a
+# quasi-internal API a major bump could change; the qa suite mocks boto3 wholesale at import and
+# only needs it importable)
 cd backend/python/crawler && python3 -m unittest test_crawlers -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
+cd backend/python/qa && python3 -m unittest test_handler -v
 cd backend/whisper && python3 -m unittest test_transcribe -v
 
 # CDK

@@ -11,6 +11,8 @@ const pathLabels: Record<string, string> = {
   '/settings': 'Settings',
   '/record': 'Recording',
   '/profile': 'Profile',
+  '/accounts': 'Accounts',
+  '/docs': 'Documents',
 };
 
 interface DesktopHeaderProps {

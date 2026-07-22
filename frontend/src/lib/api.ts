@@ -149,7 +149,7 @@ export const meetingsApi = {
   recover: (meetingId: string) =>
     api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/recover`, {}),
 
-  update: (id: string, data: { title?: string; content?: string; notes?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }, options?: { signal?: AbortSignal }) =>
+  update: (id: string, data: { title?: string; content?: string; notes?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }, options?: { signal?: AbortSignal }) =>
     api.put<{ meetingId: string; updatedAt: string }>(`/api/meetings/${id}`, data, options),
 
   delete: (id: string) => api.delete(`/api/meetings/${id}`),

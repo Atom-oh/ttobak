@@ -263,6 +263,11 @@ export class GatewayStack extends cdk.Stack {
 
     this.qaFunction.addEnvironment('RESEARCH_SFN_ARN', researchSfn.stateMachineArn);
 
+    // The websocket Lambda invokes ttobak-qa with InvocationType=Event; Lambda's
+    // default 2 async retries would replay a failed/timed-out run minutes later,
+    // delivering stale duplicate answer deltas to an already-finished WS session.
+    this.qaFunction.configureAsyncInvoke({ retryAttempts: 0 });
+
     // JWT Authorizer for Cognito
     const jwtAuthorizer = new apigatewayv2Authorizers.HttpJwtAuthorizer(
       'CognitoAuthorizer',

@@ -240,6 +240,10 @@ func (h *MeetingHandler) UpdateMeeting(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
 		}
+		if errors.Is(err, service.ErrInvalidInput) {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
 	}

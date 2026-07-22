@@ -13,6 +13,7 @@ import ReferenceTabs from '@/components/ReferenceTabs';
 import ReferencePanel from '@/components/ReferencePanel';
 import { MeetingHeader } from '@/components/meeting/MeetingHeader';
 import { AISummaryCard } from '@/components/meeting/AISummaryCard';
+import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer';
 import { ActionItemsCard } from '@/components/meeting/ActionItemsCard';
 import { ProcessingStatus } from '@/components/meeting/ProcessingStatus';
 import { TranscriptSection } from '@/components/meeting/TranscriptSection';
@@ -57,6 +58,32 @@ function resolveAttachmentUrls(content: string, attachments?: import('@/types/me
 function resolveTranscriptLinks(content: string): string {
   if (!content) return content;
   return content.replace(/transcript:\/\/([a-zA-Z0-9_\-]+)/g, '#ts-$1');
+}
+
+/** Collapsible card showing the real-time summary captured during recording (markdown incl. mermaid). */
+function LiveSummaryCard({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="mb-8 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center gap-2 px-5 py-4 text-left"
+      >
+        <span className="material-symbols-outlined text-primary">bolt</span>
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-white">실시간 요약</h3>
+        <span className="ml-1 text-xs text-slate-400 dark:text-slate-500">녹음 중 생성됨</span>
+        <span className="material-symbols-outlined ml-auto text-slate-400">
+          {expanded ? 'expand_less' : 'expand_more'}
+        </span>
+      </button>
+      {expanded && (
+        <div className="px-5 pb-5 border-t border-slate-100 dark:border-slate-800 pt-4">
+          <MarkdownRenderer content={content} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Normalize action items from API — handles legacy `done` field and missing `id` */
@@ -449,6 +476,9 @@ function MeetingDetailContent() {
               }}
             />
           )}
+
+          {/* Real-time summary captured during recording (collapsed by default) */}
+          {meeting.liveSummary && <LiveSummaryCard content={meeting.liveSummary} />}
 
           {/* Core Content Grid - show summary when done OR when content exists (e.g. error with saved live summary) */}
           {(meeting.status === 'done' || meeting.content || meeting.summary) ? (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { qaApi } from '@/lib/api';
 import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
 import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
@@ -36,6 +36,16 @@ const suggestedQuestions = [
 
 const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
 
+/** Tail-truncate to at most maxBytes of UTF-8, without splitting a multi-byte char. */
+function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): string | undefined {
+  if (!text) return text;
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= maxBytes) return text;
+  let start = bytes.length - maxBytes;
+  while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++; // skip stray continuation byte
+  return new TextDecoder().decode(bytes.slice(start));
+}
+
 export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, onAskedQuestion, onSaveToNotes }: LiveQAPanelProps) {
   const [question, setQuestion] = useState('');
   const [qaHistory, setQaHistory] = useState<QAEntry[]>([]);
@@ -48,11 +58,63 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   const [askedQuestions, setAskedQuestions] = useState<string[]>([]);
   const wsRef = useRef<RealtimeWebSocket | null>(null);
   const activeEntryIdRef = useRef<string | null>(null);
+  // Watchdog for the WS streaming path: if no message arrives for the active
+  // entry within this window, surface an error and unlock the input instead of
+  // spinning forever on a stalled stream.
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const sessionId = useMemo(() => {
-    const ts = Date.now();
-    return `qa-${meetingId || 'live'}-${ts}`;
+  const [sessionId, setSessionId] = useState(() => `qa-${meetingId || 'live'}-${Date.now()}`);
+  useEffect(() => {
+    setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
   }, [meetingId]);
+
+  const clearWatchdog = useCallback(() => {
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  }, []);
+
+  const armWatchdog = useCallback(() => {
+    clearWatchdog();
+    watchdogRef.current = setTimeout(() => {
+      watchdogRef.current = null;
+      const entryId = activeEntryIdRef.current;
+      if (!entryId) return;
+      setQaHistory(prev =>
+        prev.map(e =>
+          e.id === entryId
+            ? {
+                ...e,
+                // A partial answer must not silently pass for a complete one
+                // -- later questions build on this history.
+                answer: e.answer
+                  ? e.answer + '\n\n> ⚠️ 응답 시간 초과 — 답변이 여기서 잘렸을 수 있습니다.'
+                  : '응답 시간 초과 — 다시 시도해주세요.',
+                isStreaming: false,
+              }
+            : e
+        )
+      );
+      setIsAsking(false);
+      activeEntryIdRef.current = null;
+      inputRef.current?.focus();
+      // The stalled request/socket is still live server-side — a late
+      // delta/complete for it would otherwise land on whatever entry becomes
+      // active next (there's no per-request id, only activeEntryIdRef).
+      // Dropping the socket here stops that at the source; ensureWebSocket
+      // opens a fresh one for the next question.
+      wsRef.current?.disconnect();
+      wsRef.current = null;
+      // The zombie Lambda invocation also keeps running server-side and
+      // will save_session (a whole-item put) when it eventually finishes.
+      // Rotating the session id means the NEXT question writes a different
+      // session item, so the zombie's late save can't race/clobber it.
+      // Conversation continuity for the timed-out thread is deliberately
+      // sacrificed — correctness over context.
+      setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
+    }, 60_000);
+  }, [clearWatchdog, meetingId]);
 
   useEffect(() => {
     if (containerRef.current) {
@@ -105,13 +167,22 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
 
     switch (msg.type) {
       case 'answer_delta':
+        armWatchdog(); // stream is alive — push the stall deadline out
         setQaHistory(prev =>
           prev.map(e =>
             e.id === entryId ? { ...e, answer: e.answer + (msg.text || '') } : e
           )
         );
         break;
+      case 'tool_progress':
+        // Tool execution (KB retrieve, research kickoff, etc.) produces no
+        // answer text, but the round is still alive server-side — rearm
+        // without touching the answer so a long tool round doesn't trip the
+        // stall watchdog.
+        armWatchdog();
+        break;
       case 'answer_complete':
+        clearWatchdog();
         setQaHistory(prev =>
           prev.map(e =>
             e.id === entryId
@@ -132,6 +203,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         inputRef.current?.focus();
         break;
       case 'answer_error':
+        clearWatchdog();
         setQaHistory(prev =>
           prev.map(e =>
             e.id === entryId
@@ -144,10 +216,27 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         inputRef.current?.focus();
         break;
       case 'error':
+        // Socket-level error frame: without clearing the watchdog here the
+        // user stares at a spinner for the full 60s before the timeout
+        // banner appears on top of this error.
+        clearWatchdog();
         setError(msg.error || 'WebSocket error');
+        setQaHistory(prev =>
+          prev.map(e => (e.id === entryId ? { ...e, isStreaming: false } : e))
+        );
+        setIsAsking(false);
+        activeEntryIdRef.current = null;
+        // Mirrors the watchdog-timeout path: this frame type doesn't
+        // guarantee no server-side request is still in flight for every
+        // current and future backend error path, so a late delta/complete
+        // could otherwise land on whatever entry becomes active next. Same
+        // disconnect+rotate, same tradeoff (continuity for correctness).
+        wsRef.current?.disconnect();
+        wsRef.current = null;
+        setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
         break;
     }
-  }, []);
+  }, [armWatchdog, clearWatchdog, meetingId]);
 
   const ensureWebSocket = useCallback(async (): Promise<RealtimeWebSocket | null> => {
     if (!WS_URL) return null;
@@ -165,10 +254,11 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     }
   }, [handleStreamMessage]);
 
-  // Cleanup WebSocket on unmount
+  // Cleanup WebSocket + watchdog on unmount
   useEffect(() => {
     return () => {
       wsRef.current?.disconnect();
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
     };
   }, []);
 
@@ -199,7 +289,38 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     // Try WebSocket streaming first
     const ws = await ensureWebSocket();
     if (ws) {
-      ws.askLive(q.trim(), transcriptContext, meetingId, sessionId);
+      // API Gateway WebSocket has a 32KB per-frame limit (separate from, and
+      // much smaller than, the 128KB message limit) that the browser can't
+      // control the framing around — a char-count cap on Korean-heavy text
+      // can still serialize past it and die silently. Budget by the size of
+      // the ACTUAL serialized frame, not the raw context: JSON escaping
+      // (quotes, newlines → \n) plus the question/session envelope can push
+      // a raw-28KB context past the limit, so shrink until the whole frame
+      // fits with headroom.
+      let wsContext = truncateToUtf8ByteLimit(transcriptContext, 28_000);
+      const frameBytes = () =>
+        new TextEncoder().encode(
+          JSON.stringify({ action: 'ask_live', question: q.trim(), context: wsContext, meetingId, sessionId }),
+        ).length;
+      while (wsContext && frameBytes() > 30_000) {
+        wsContext = truncateToUtf8ByteLimit(
+          wsContext,
+          Math.floor(new TextEncoder().encode(wsContext).length * 0.85),
+        );
+      }
+      if (frameBytes() > 30_000) {
+        // Context is already empty and the frame STILL exceeds the budget --
+        // the question itself is too large. Sending anyway would die
+        // silently at the gateway's 32KB frame limit and burn a 60s
+        // watchdog wait; reject up front instead.
+        setQaHistory(prev => prev.filter(e => e.id !== entryId));
+        activeEntryIdRef.current = null;
+        setIsAsking(false);
+        setError('질문이 너무 깁니다 — 내용을 줄여서 다시 시도해주세요.');
+        return;
+      }
+      ws.askLive(q.trim(), wsContext, meetingId, sessionId);
+      armWatchdog();
       return;
     }
 

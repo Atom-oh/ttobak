@@ -368,6 +368,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		Participants:       meeting.Participants,
 		Content:            meeting.Content,
 		Notes:              meeting.Notes,
+		LiveSummary:        meeting.LiveSummary,
 		TranscriptA:        meeting.TranscriptA,
 		TranscriptB:        meeting.TranscriptB,
 		SelectedTranscript: strPtr(meeting.SelectedTranscript),
@@ -416,6 +417,16 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 	}
 	if req.Notes != nil {
 		fields["notes"] = *req.Notes
+	}
+	if req.LiveSummary != nil {
+		// Untrusted client input fed into the final-summary prompt (see
+		// cmd/summarize/main.go) -- cap at write time so a single PUT can't
+		// park hundreds of KB in the item (DynamoDB 400KB) or dominate the
+		// prompt. Matches the summarize-side rune cap.
+		if len([]rune(*req.LiveSummary)) > model.MaxLiveSummaryRunes {
+			return nil, fmt.Errorf("%w: liveSummary exceeds %d characters", ErrInvalidInput, model.MaxLiveSummaryRunes)
+		}
+		fields["liveSummary"] = *req.LiveSummary
 	}
 	if req.TranscriptA != "" {
 		fields["transcriptA"] = req.TranscriptA
