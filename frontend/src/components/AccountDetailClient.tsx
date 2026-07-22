@@ -42,7 +42,10 @@ export default function AccountDetailClient() {
         accountApi.insights(accountId),
         accountApi.listDocuments(accountId),
         accountApi.research(accountId),
-        projectApi.accountProjects(accountId),
+        // Degrade independently: the rest of the account page must still
+        // load even if the Project entity endpoint is unavailable (e.g. its
+        // backend hasn't been deployed yet) or errors for any other reason.
+        projectApi.accountProjects(accountId).catch(() => null),
       ]);
       setAccount(acc);
       setMeetings(mtg?.meetings ?? []);

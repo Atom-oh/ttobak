@@ -17,7 +17,7 @@ import type {
 export default function ProjectDetailClient() {
   const pathname = usePathname();
   const projectId = decodeURIComponent(pathname.split('/').filter(Boolean).pop() || '');
-  const { isLoading, isAuthenticated } = useAuth();
+  const { user, isLoading, isAuthenticated } = useAuth();
 
   const [project, setProject] = useState<Project | null>(null);
   const [meetings, setMeetings] = useState<ProjectMeetingRef[]>([]);
@@ -125,6 +125,7 @@ export default function ProjectDetailClient() {
   }
 
   const shownInsights = activeType ? insights.filter((insight) => insight.type === activeType) : insights;
+  const isOwner = project ? user?.userId === project.ownerUserId : false;
 
   return (
     <AppLayout activePath="/projects">
@@ -154,7 +155,7 @@ export default function ProjectDetailClient() {
                 {project.sfdcOpptyId && (
                   <p className="text-sm text-slate-500 dark:text-text-muted">{project.sfdcOpptyId}</p>
                 )}
-                {project.sfdcUrl && (
+                {project.sfdcUrl && /^https:\/\//i.test(project.sfdcUrl) && (
                   <a
                     href={project.sfdcUrl}
                     target="_blank"
@@ -177,32 +178,36 @@ export default function ProjectDetailClient() {
                     <span className="text-slate-700 dark:text-text-secondary truncate">
                       {member.email || member.userId}
                     </span>
-                    <button
-                      onClick={() => handleRemoveMember(member.userId)}
-                      className="text-slate-400 hover:text-red-500 shrink-0"
-                      title="Remove member"
-                    >
-                      <span className="material-symbols-outlined text-lg">close</span>
-                    </button>
+                    {isOwner && (
+                      <button
+                        onClick={() => handleRemoveMember(member.userId)}
+                        className="text-slate-400 hover:text-red-500 shrink-0"
+                        title="Remove member"
+                      >
+                        <span className="material-symbols-outlined text-lg">close</span>
+                      </button>
+                    )}
                   </div>
                 ))}
-                <form onSubmit={handleInvite} className="flex gap-2 pt-2">
-                  <input
-                    type="email"
-                    value={inviteEmail}
-                    onChange={(event) => setInviteEmail(event.target.value)}
-                    placeholder="Email"
-                    required
-                    className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
-                  />
-                  <button
-                    type="submit"
-                    disabled={inviting}
-                    className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50"
-                  >
-                    {inviting ? 'Inviting…' : 'Invite'}
-                  </button>
-                </form>
+                {isOwner && (
+                  <form onSubmit={handleInvite} className="flex gap-2 pt-2">
+                    <input
+                      type="email"
+                      value={inviteEmail}
+                      onChange={(event) => setInviteEmail(event.target.value)}
+                      placeholder="Email"
+                      required
+                      className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
+                    />
+                    <button
+                      type="submit"
+                      disabled={inviting}
+                      className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50"
+                    >
+                      {inviting ? 'Inviting…' : 'Invite'}
+                    </button>
+                  </form>
+                )}
               </div>
             </section>
 
@@ -221,33 +226,37 @@ export default function ProjectDetailClient() {
                       >
                         {linkedAccountId}
                       </a>
-                      <button
-                        onClick={() => handleUnlinkAccount(linkedAccountId)}
-                        className="text-slate-400 hover:text-red-500 shrink-0"
-                        title="Unlink account"
-                      >
-                        <span className="material-symbols-outlined text-lg">link_off</span>
-                      </button>
+                      {isOwner && (
+                        <button
+                          onClick={() => handleUnlinkAccount(linkedAccountId)}
+                          className="text-slate-400 hover:text-red-500 shrink-0"
+                          title="Unlink account"
+                        >
+                          <span className="material-symbols-outlined text-lg">link_off</span>
+                        </button>
+                      )}
                     </div>
                   ))
                 )}
-                <form onSubmit={handleLinkAccount} className="flex gap-2 pt-2">
-                  <input
-                    type="text"
-                    value={accountId}
-                    onChange={(event) => setAccountId(event.target.value)}
-                    placeholder="Account ID"
-                    required
-                    className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
-                  />
-                  <button
-                    type="submit"
-                    disabled={linkingAccount}
-                    className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50"
-                  >
-                    {linkingAccount ? 'Linking…' : 'Link'}
-                  </button>
-                </form>
+                {isOwner && (
+                  <form onSubmit={handleLinkAccount} className="flex gap-2 pt-2">
+                    <input
+                      type="text"
+                      value={accountId}
+                      onChange={(event) => setAccountId(event.target.value)}
+                      placeholder="Account ID"
+                      required
+                      className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
+                    />
+                    <button
+                      type="submit"
+                      disabled={linkingAccount}
+                      className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50"
+                    >
+                      {linkingAccount ? 'Linking…' : 'Link'}
+                    </button>
+                  </form>
+                )}
               </div>
             </section>
 

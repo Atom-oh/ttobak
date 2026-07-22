@@ -754,7 +754,8 @@ GET /api/projects/{projectId}
 PUT /api/projects/{projectId}      (owner 전용, Create와 동일한 필드)
 DELETE /api/projects/{projectId}   (owner 전용)
 
-Error: 403 Forbidden (owner/직접 멤버/연결된 Account 멤버 아님 — GET/PUT 공통)
+Error: 403 Forbidden — GET: owner/직접 멤버/연결된 Account 멤버 아님
+Error: 403 Forbidden — PUT/DELETE: owner 아님 (직접 멤버·연결된 Account 멤버여도 거부)
 Error: 404 Not Found
 Error: 400 Bad Request (DELETE: 연결된 Account/미팅/리서치/멤버가 하나라도
        남아있으면 거부 — 고아 관계 데이터를 남기지 않기 위해 전부 해제 후
@@ -807,10 +808,14 @@ Error: 404 Not Found (미팅/리서치/프로젝트 없음)
 ```
 
 `Meeting.projectIds`/`Research.projectIds`도 동일하게 String Set + 원자적
-`TransactWriteItems`로 연동한다. 미팅 링크는 owner일 것만 요구하며,
-`SharedToAccount`(계정 공유 게이트)와는 별개다 — 프로젝트에 링크된 미팅의
-제목/인사이트는 프로젝트 접근 권한이 있는 사람 모두에게 노출된다(ADR-024
-참고, `SharedToAccount`를 의도적으로 우회하는 별도 공유 채널).
+`TransactWriteItems`로 연동한다. **링크**는 대상 미팅/리서치의 owner일 것을
+요구하지만, **언링크**는 그 owner이거나 **프로젝트 owner**면 충분하다 —
+링크한 멤버가 이후 `RemoveMember`로 제거되면 본인도(프로젝트 접근권 상실),
+프로젝트 owner도(그 미팅/리서치의 owner가 아님) 언링크를 못 하게 되는
+데드락을 막기 위한 비대칭이다(ADR-024). `SharedToAccount`(계정 공유 게이트)
+와는 별개다 — 프로젝트에 링크된 미팅의 제목/인사이트는 프로젝트 접근 권한이
+있는 사람 모두에게 노출된다(ADR-024 참고, `SharedToAccount`를 의도적으로
+우회하는 별도 공유 채널).
 
 #### List Project Meetings / Research
 
@@ -825,10 +830,11 @@ Error: 403 Forbidden (프로젝트 접근 권한 없음)
 ```
 
 두 목록 모두 역참조 아이템을 후보로 삼고 canonical `projectIds` 집합에
-여전히 포함되는지 재검증한다(fail-closed) — 언링크 시 역참조 삭제가
-best-effort라 실패해도 조회 결과에는 절대 노출되지 않는다. `meetingId`
-기준으로도 중복 제거한다(ADR-024의 mutable-Date 레퍼런스 SK 이슈에 대한
-방어).
+여전히 포함되는지 재검증한다(fail-closed) — 링크된 미팅이 이 API가 모르는
+경로(기존 미팅 삭제 등)로 지워져 역참조만 고아로 남는 경우처럼, 트랜잭션
+경계 밖의 다른 실패 모드로 생긴 stale ref도 조회 결과에는 절대 노출되지
+않는다. `meetingId` 기준으로도 중복 제거한다(ADR-024의 mutable-Date
+레퍼런스 SK 이슈에 대한 방어).
 
 #### Get Project Insights
 
