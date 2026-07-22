@@ -106,16 +106,20 @@ func (m *mockProjectRepo) ListProjectsForUser(_ context.Context, userID string) 
 	for _, p := range m.projects {
 		if p.OwnerUserID == userID || m.projectMembers[projectMemberKey(p.ProjectID, userID)] != nil {
 			out = append(out, *cloneProject(p))
-			continue
 		}
-		// Third leg, mirroring DynamoDBRepository.ListProjectsForUser: a
-		// project is also discoverable if the user is a member of any
-		// Account the project is canonically linked to.
-		for _, accountID := range p.AccountIDs {
-			if m.accountMembers[projectAccountMemberKey(accountID, userID)] != nil {
-				out = append(out, *cloneProject(p))
-				break
-			}
+	}
+	return out, nil
+}
+
+// ListAccountsForUser mirrors DynamoDBRepository's GSI1 reverse lookup:
+// every AccountMember row for this user, found by scanning the mock's
+// accountMembers map (which is keyed by accountID|userID, not by userID
+// alone) since a test double has no secondary index to query.
+func (m *mockProjectRepo) ListAccountsForUser(_ context.Context, userID string) ([]model.AccountMember, error) {
+	out := []model.AccountMember{}
+	for _, member := range m.accountMembers {
+		if member.UserID == userID {
+			out = append(out, *member)
 		}
 	}
 	return out, nil
@@ -623,6 +627,7 @@ func TestListMyProjects_IncludesAccountInheritedProjects(t *testing.T) {
 	project := seedProject(repo, "p1", "owner")
 	project.AccountIDs = []string{"acc1"}
 	repo.accountMembers[projectAccountMemberKey("acc1", "carol")] = &model.AccountMember{AccountID: "acc1", UserID: "carol"}
+	repo.projectRefs["acc1"] = []model.ProjectRef{{ProjectID: "p1", AccountID: "acc1"}}
 
 	projects, err := newProjectServiceWithRepo(repo).ListMyProjects(context.Background(), "carol")
 	if err != nil {
@@ -641,6 +646,7 @@ func TestListMyProjects_AccountInheritedFailsClosedOnUnlinkedAccount(t *testing.
 	project := seedProject(repo, "p1", "owner")
 	project.AccountIDs = []string{} // unlinked -- canonical set no longer contains acc1
 	repo.accountMembers[projectAccountMemberKey("acc1", "carol")] = &model.AccountMember{AccountID: "acc1", UserID: "carol"}
+	repo.projectRefs["acc1"] = []model.ProjectRef{{ProjectID: "p1", AccountID: "acc1"}} // stale ref left behind by the unlink
 
 	projects, err := newProjectServiceWithRepo(repo).ListMyProjects(context.Background(), "carol")
 	if err != nil {

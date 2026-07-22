@@ -34,6 +34,7 @@ type projectRepo interface {
 	DeleteProjectMember(context.Context, string, string) error
 	ListProjectMembers(context.Context, string) ([]model.ProjectMember, error)
 	ListProjectsForUser(context.Context, string) ([]model.Project, error)
+	ListAccountsForUser(context.Context, string) ([]model.AccountMember, error)
 	UpdateProjectFields(context.Context, string, map[string]interface{}) error
 	DeleteProject(context.Context, string, string) error
 	ProjectAccountLinkTransactional(context.Context, string, string, *model.ProjectRef) error
@@ -168,13 +169,75 @@ func (s *ProjectService) GetProject(ctx context.Context, userID, projectID strin
 	return projectResponse(project, members), nil
 }
 
+// ListMyProjects unions the project's three hybrid-access discovery paths:
+// owner + direct member (ListProjectsForUser, a plain repo query) and
+// account-inherited (this method's own policy, not the repository's) --
+// mirrors where ListAccountResearch's canonical re-verification lives (the
+// service layer), not the repository. A project reachable ONLY through a
+// linked Account's membership must still surface here, or a member added
+// solely via that Account could pass requireProjectAccess yet never see
+// the project in GET /api/projects at all.
 func (s *ProjectService) ListMyProjects(ctx context.Context, userID string) ([]model.ProjectSummary, error) {
 	projects, err := s.repo.ListProjectsForUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
+	seen := make(map[string]bool, len(projects))
 	out := make([]model.ProjectSummary, 0, len(projects))
 	for _, project := range projects {
+		seen[project.ProjectID] = true
+		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
+	}
+
+	accountMemberships, err := s.repo.ListAccountsForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	// candidateAccountIDs tracks which account(s) surfaced each candidate so
+	// the fail-closed check below can accept it if ANY of them is still a
+	// canonical link, not just the first one found.
+	candidateAccountIDs := make(map[string][]string)
+	for _, accountMember := range accountMemberships {
+		refs, err := s.repo.ListProjectRefsForAccount(ctx, accountMember.AccountID)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range refs {
+			if seen[ref.ProjectID] {
+				continue
+			}
+			candidateAccountIDs[ref.ProjectID] = append(candidateAccountIDs[ref.ProjectID], accountMember.AccountID)
+		}
+	}
+	for projectID, accountIDs := range candidateAccountIDs {
+		project, err := s.repo.GetProject(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		if project == nil {
+			continue
+		}
+		// A reverse-index ref is a candidate only -- never trust one without
+		// checking the canonical AccountIDs set (same principle as
+		// ListAccountProjects). A stale ACCOUNT#/PROJECTREF# must never
+		// surface a project the user no longer actually has account-inherited
+		// access to.
+		linked := false
+		for _, accountID := range accountIDs {
+			for _, linkedID := range project.AccountIDs {
+				if linkedID == accountID {
+					linked = true
+					break
+				}
+			}
+			if linked {
+				break
+			}
+		}
+		if !linked {
+			continue
+		}
+		seen[projectID] = true
 		out = append(out, model.ProjectSummary{ProjectID: project.ProjectID, Name: project.Name, Stage: project.Stage, SfdcOpptyID: project.SfdcOpptyID})
 	}
 	return out, nil

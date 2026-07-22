@@ -178,21 +178,15 @@ func (r *DynamoDBRepository) ListProjectMembershipsForUser(ctx context.Context, 
 	return members, nil
 }
 
-// ListProjectsForUser returns every project the user can discover from
-// their own identity: projects they own (the PROJECT# owner index) UNION
-// projects they were added to via AddMember (the GSI1 membership reverse
-// index) UNION projects reachable via a linked Account they belong to (the
-// third leg of requireProjectAccess's hybrid access check). Without the
-// account-inherited leg, an Account member who never got a direct
-// PROJECT#/MEMBER# row could pass requireProjectAccess (via the Account
-// membership) but never see the project here -- present and accessible,
-// but undiscoverable except by already knowing the projectId or going
-// through GET /api/accounts/{accountId}/projects instead. Each
-// account-inherited candidate is re-verified against the project's
-// canonical AccountIDs before being included (mirrors ListAccountProjects'
-// fail-closed check) -- a stale ACCOUNT#/PROJECTREF# left by any failure
-// mode must never surface a project the user no longer actually has
-// account-inherited access to.
+// ListProjectsForUser is a query primitive: projects the user owns (the
+// PROJECT# owner index) UNION projects they were added to via AddMember
+// (the GSI1 membership reverse index). It does NOT include the
+// account-inherited leg of requireProjectAccess's hybrid access check --
+// that policy decision (which accounts count, how a candidate is
+// fail-closed re-verified against canonical state) lives in
+// ProjectService.ListMyProjects, not here, mirroring where
+// ListAccountResearch's equivalent canonical re-verification lives (the
+// service layer) rather than in the repository.
 func (r *DynamoDBRepository) ListProjectsForUser(ctx context.Context, userID string) ([]model.Project, error) {
 	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixUser + userID)).
 		And(expression.Key("SK").BeginsWith(model.PrefixProject))
@@ -232,63 +226,15 @@ func (r *DynamoDBRepository) ListProjectsForUser(ctx context.Context, userID str
 			projectIDs = append(projectIDs, member.ProjectID)
 		}
 	}
-	// Third leg: projects reachable only via a linked Account's membership.
-	// candidateAccountIDs tracks which account(s) surfaced each candidate so
-	// the fail-closed check below can accept it if ANY of them is still a
-	// canonical link, not just the first one found.
-	accountMemberships, err := r.ListAccountsForUser(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("list account memberships: %w", err)
-	}
-	candidateAccountIDs := make(map[string][]string)
-	for _, accountMember := range accountMemberships {
-		refs, err := r.ListProjectRefsForAccount(ctx, accountMember.AccountID)
-		if err != nil {
-			return nil, fmt.Errorf("list project refs for account %s: %w", accountMember.AccountID, err)
-		}
-		for _, ref := range refs {
-			if seen[ref.ProjectID] {
-				continue
-			}
-			candidateAccountIDs[ref.ProjectID] = append(candidateAccountIDs[ref.ProjectID], accountMember.AccountID)
-		}
-	}
-	for projectID := range candidateAccountIDs {
-		seen[projectID] = true
-		projectIDs = append(projectIDs, projectID)
-	}
 	projects := make([]model.Project, 0, len(projectIDs))
 	for _, projectID := range projectIDs {
 		project, err := r.GetProject(ctx, projectID)
 		if err != nil {
 			return nil, fmt.Errorf("get project %s: %w", projectID, err)
 		}
-		if project == nil {
-			continue
+		if project != nil {
+			projects = append(projects, *project)
 		}
-		// Account-inherited candidates are refs, not proof -- never trust one
-		// without checking the canonical AccountIDs set (same principle as
-		// ListAccountProjects). Owner/direct-member candidates need no such
-		// check; they came from the canonical owner index / GSI1 membership
-		// row itself.
-		if accountIDs, isAccountCandidate := candidateAccountIDs[projectID]; isAccountCandidate {
-			linked := false
-			for _, accountID := range accountIDs {
-				for _, linkedID := range project.AccountIDs {
-					if linkedID == accountID {
-						linked = true
-						break
-					}
-				}
-				if linked {
-					break
-				}
-			}
-			if !linked {
-				continue
-			}
-		}
-		projects = append(projects, *project)
 	}
 	return projects, nil
 }

@@ -399,18 +399,43 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 			ExpressionAttributeNames:  condExpr.Names(),
 			ExpressionAttributeValues: condExpr.Values(),
 		})
-		if err == nil {
-			return nil
-		}
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) && attempt < maxProjectIDsAttempts {
+		action, terminalErr := classifyProjectIDsPutItemErr(err, attempt, maxProjectIDsAttempts)
+		if action == putItemRetryActionRetry {
 			continue
 		}
-		if errors.As(err, &ccfe) {
-			return fmt.Errorf("failed to update meeting: projectIds changed concurrently %d times, giving up", maxProjectIDsAttempts)
-		}
-		return fmt.Errorf("failed to update meeting: %w", err)
+		return terminalErr
 	}
+}
+
+// putItemRetryAction is the outcome classifyProjectIDsPutItemErr decides for
+// one PutItem attempt in UpdateMeeting's projectIds-preserving retry loop.
+type putItemRetryAction int
+
+const (
+	putItemRetryActionDone putItemRetryAction = iota
+	putItemRetryActionRetry
+)
+
+// classifyProjectIDsPutItemErr decides UpdateMeeting's retry loop outcome for
+// one PutItem attempt: retry on ConditionalCheckFailedException while
+// attempts remain, a distinct terminal error once exhausted (so a caller
+// can tell "gave up after retrying" apart from any other DynamoDB failure),
+// nil error on success, or the wrapped original error for anything else.
+// Extracted as a pure function -- per AGENTS.md's rule that
+// security/correctness-critical branching be unit-testable -- so this
+// decision logic can be tested without a live DynamoDB client.
+func classifyProjectIDsPutItemErr(err error, attempt, maxAttempts int) (action putItemRetryAction, terminalErr error) {
+	if err == nil {
+		return putItemRetryActionDone, nil
+	}
+	var ccfe *types.ConditionalCheckFailedException
+	if errors.As(err, &ccfe) {
+		if attempt < maxAttempts {
+			return putItemRetryActionRetry, nil
+		}
+		return putItemRetryActionDone, fmt.Errorf("failed to update meeting: projectIds changed concurrently %d times, giving up", maxAttempts)
+	}
+	return putItemRetryActionDone, fmt.Errorf("failed to update meeting: %w", err)
 }
 
 // projectIDsUnchangedCondition builds the PutItem ConditionExpression

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -155,6 +156,115 @@ func TestPaginateMeetingsPage(t *testing.T) {
 		sk := resume["SK"].(*types.AttributeValueMemberS).Value
 		if sk != "MEETING#3" {
 			t.Fatalf("expected resume key for the 3rd kept item (MEETING#3), got %q", sk)
+		}
+	})
+}
+
+// TestClassifyProjectIDsPutItemErr covers UpdateMeeting's retry-loop
+// decision logic in isolation: retry on ConditionalCheckFailedException
+// while attempts remain, a distinct exhaustion error once they don't,
+// success on nil, and pass-through for anything else -- without needing a
+// live DynamoDB client.
+func TestClassifyProjectIDsPutItemErr(t *testing.T) {
+	const maxAttempts = 3
+
+	t.Run("success", func(t *testing.T) {
+		action, err := classifyProjectIDsPutItemErr(nil, 1, maxAttempts)
+		if action != putItemRetryActionDone || err != nil {
+			t.Fatalf("expected done/nil, got action=%v err=%v", action, err)
+		}
+	})
+
+	t.Run("ConditionalCheckFailedException with attempts remaining -- retry", func(t *testing.T) {
+		action, err := classifyProjectIDsPutItemErr(&types.ConditionalCheckFailedException{}, 1, maxAttempts)
+		if action != putItemRetryActionRetry || err != nil {
+			t.Fatalf("expected retry/nil, got action=%v err=%v", action, err)
+		}
+		action, err = classifyProjectIDsPutItemErr(&types.ConditionalCheckFailedException{}, maxAttempts-1, maxAttempts)
+		if action != putItemRetryActionRetry || err != nil {
+			t.Fatalf("expected retry/nil on the last remaining attempt, got action=%v err=%v", action, err)
+		}
+	})
+
+	t.Run("ConditionalCheckFailedException on the final attempt -- exhaustion error, not a retry", func(t *testing.T) {
+		action, err := classifyProjectIDsPutItemErr(&types.ConditionalCheckFailedException{}, maxAttempts, maxAttempts)
+		if action != putItemRetryActionDone {
+			t.Fatalf("expected done (no further retry) at attempt == maxAttempts, got %v", action)
+		}
+		if err == nil {
+			t.Fatal("expected a terminal exhaustion error, got nil")
+		}
+	})
+
+	t.Run("a ConditionalCheckFailedException past maxAttempts is still terminal, not a retry", func(t *testing.T) {
+		// Defends against an off-by-one flip (e.g. <= instead of <) that
+		// would retry forever past the intended cap.
+		action, err := classifyProjectIDsPutItemErr(&types.ConditionalCheckFailedException{}, maxAttempts+1, maxAttempts)
+		if action != putItemRetryActionDone || err == nil {
+			t.Fatalf("expected done/non-nil past maxAttempts, got action=%v err=%v", action, err)
+		}
+	})
+
+	t.Run("non-conditional error passes through, not retried", func(t *testing.T) {
+		wrapped := errors.New("network timeout")
+		action, err := classifyProjectIDsPutItemErr(wrapped, 1, maxAttempts)
+		if action != putItemRetryActionDone {
+			t.Fatalf("expected done (not retried) for a non-conditional error, got %v", action)
+		}
+		if err == nil || !errors.Is(err, wrapped) {
+			t.Fatalf("expected the original error wrapped, got %v", err)
+		}
+	})
+
+	t.Run("wrapped ConditionalCheckFailedException still retried via errors.As", func(t *testing.T) {
+		wrapped := errWrap{err: &types.ConditionalCheckFailedException{}}
+		action, err := classifyProjectIDsPutItemErr(wrapped, 1, maxAttempts)
+		if action != putItemRetryActionRetry || err != nil {
+			t.Fatalf("expected retry/nil for a wrapped CCFE, got action=%v err=%v", action, err)
+		}
+	})
+}
+
+// TestProjectIDsUnchangedCondition covers the two DynamoDB condition shapes
+// UpdateMeeting's retry loop relies on to detect (not just narrow) a
+// concurrent LinkMeeting/UnlinkMeeting: an empty projectIds set must assert
+// the attribute is entirely absent (DynamoDB removes a String Set attribute
+// once its last element is deleted -- it can never exist as an empty set),
+// while a non-empty set must assert equality against the exact value just
+// read.
+func TestProjectIDsUnchangedCondition(t *testing.T) {
+	t.Run("empty current -- asserts attribute_not_exists, not an empty-set equality", func(t *testing.T) {
+		expr, err := projectIDsUnchangedCondition(nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		cond := *expr.Condition()
+		if !strings.Contains(cond, "attribute_not_exists") {
+			t.Fatalf("expected attribute_not_exists in condition, got %q", cond)
+		}
+	})
+
+	t.Run("non-empty current -- asserts equality against the read value", func(t *testing.T) {
+		expr, err := projectIDsUnchangedCondition([]string{"p1", "p2"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		cond := *expr.Condition()
+		if !strings.Contains(cond, "=") {
+			t.Fatalf("expected an equality condition, got %q", cond)
+		}
+		found := false
+		for _, v := range expr.Values() {
+			if ss, ok := v.(*types.AttributeValueMemberSS); ok {
+				for _, id := range ss.Value {
+					if id == "p1" || id == "p2" {
+						found = true
+					}
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("expected the current projectIds to appear as the condition's String Set operand, got %v", expr.Values())
 		}
 	})
 }
