@@ -23,6 +23,9 @@ export default function ProjectDetailClient() {
   const [meetings, setMeetings] = useState<ProjectMeetingRef[]>([]);
   const [research, setResearch] = useState<ProjectResearchRef[]>([]);
   const [insights, setInsights] = useState<ProjectInsight[]>([]);
+  const [meetingsError, setMeetingsError] = useState(false);
+  const [researchError, setResearchError] = useState(false);
+  const [insightsError, setInsightsError] = useState(false);
   const [activeType, setActiveType] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,17 +45,26 @@ export default function ProjectDetailClient() {
       // The project itself must load (no project, nothing to show -- a real
       // error). Meetings/research/insights degrade independently instead of
       // failing the whole page: one of these erroring shouldn't take down
-      // the header/members/accounts sections that already loaded fine.
-      const [proj, mtg, res, ins] = await Promise.all([
-        projectApi.get(projectId),
-        projectApi.meetings(projectId).catch(() => null),
-        projectApi.research(projectId).catch(() => null),
-        projectApi.insights(projectId).catch(() => null),
-      ]);
+      // the header/members/accounts sections that already loaded fine. But a
+      // failure must never be indistinguishable from "genuinely empty" --
+      // allSettled + per-section error flags mean a rejected fetch shows an
+      // error placeholder and keeps whatever was already loaded, instead of
+      // being silently swallowed into setXxx([]) and wiping prior data (e.g.
+      // when a mutation handler re-runs fetchAll and this fetch transiently
+      // fails).
+      const proj = await projectApi.get(projectId);
       setProject(proj);
-      setMeetings(mtg?.meetings ?? []);
-      setResearch(res?.research ?? []);
-      setInsights(ins?.insights ?? []);
+      const [mtg, res, ins] = await Promise.allSettled([
+        projectApi.meetings(projectId),
+        projectApi.research(projectId),
+        projectApi.insights(projectId),
+      ]);
+      setMeetingsError(mtg.status === 'rejected');
+      if (mtg.status === 'fulfilled') setMeetings(mtg.value.meetings ?? []);
+      setResearchError(res.status === 'rejected');
+      if (res.status === 'fulfilled') setResearch(res.value.research ?? []);
+      setInsightsError(ins.status === 'rejected');
+      if (ins.status === 'fulfilled') setInsights(ins.value.insights ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load project');
     } finally {
@@ -282,7 +294,9 @@ export default function ProjectDetailClient() {
             {/* Shared meetings */}
             <section className="mb-8">
               <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Shared Meetings</h3>
-              {meetings.length === 0 ? (
+              {meetingsError ? (
+                <p className="text-sm text-red-500">Failed to load meetings.</p>
+              ) : meetings.length === 0 ? (
                 <p className="text-sm text-slate-400 dark:text-text-muted">No shared meetings.</p>
               ) : (
                 <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
@@ -307,7 +321,9 @@ export default function ProjectDetailClient() {
             {/* Linked research */}
             <section className="mb-8">
               <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Linked Research</h3>
-              {research.length === 0 ? (
+              {researchError ? (
+                <p className="text-sm text-red-500">Failed to load research.</p>
+              ) : research.length === 0 ? (
                 <p className="text-sm text-slate-400 dark:text-text-muted">No linked research.</p>
               ) : (
                 <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
@@ -350,7 +366,9 @@ export default function ProjectDetailClient() {
                   </button>
                 ))}
               </div>
-              {shownInsights.length === 0 ? (
+              {insightsError ? (
+                <p className="text-sm text-red-500">Failed to load insights.</p>
+              ) : shownInsights.length === 0 ? (
                 <p className="text-sm text-slate-400 dark:text-text-muted">No insights yet.</p>
               ) : (
                 <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">

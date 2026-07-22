@@ -392,11 +392,14 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
     하위 경로는 보존된다. 중첩 라우트(`/accounts/{id}/docs/{docId}`)는 단일
     세그먼트 라우트(`/accounts/{id}`)보다 먼저 매칭해야 한다 — 순서가 바뀌면
     단일 세그먼트 규칙이 먼저 걸려 중첩 케이스를 그르친다. 마지막으로,
-    `knownPages` 목록에 있는 정적 페이지는 `.html`을 붙이고, 그 외 미인식
-    경로는 전부 `/index.html`(SPA fallback)로 보낸다 — **새 정적 라우트를
-    추가할 때마다 이 목록과 동적 세그먼트 정규식을 갱신해야 하며, 잊으면
-    그 라우트는 항상 SPA fallback으로 떨어진다** (CLAUDE.md Important
-    Gotchas 참고).
+    `knownPages` 목록에 있는 정적 페이지는 `.html`을 붙이고, 그 외의
+    URI는 `/index.html`(SPA fallback)로 보낸다 — 단 이 분기 자체는
+    `uri !== '/' && !uri.includes('.') && !uri.endsWith('/')`일 때만
+    실행된다(루트 `/`, 확장자가 있는 정적 자산/RSC payload, trailing
+    slash가 있는 URI는 이 블록을 타지 않고 그대로 통과한다). **새 정적
+    라우트를 추가할 때마다 이 목록과 동적 세그먼트 정규식을 갱신해야
+    하며, 잊으면 그 라우트는 항상 SPA fallback으로 떨어진다** (CLAUDE.md
+    Important Gotchas 참고).
 
 - **Public API behavior** (`/api/public/*`, ADR-022) — registered *before*
   the general `/api/*` behavior below, since CloudFront matches path patterns

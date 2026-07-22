@@ -307,7 +307,7 @@ export default function AccountDetailClient() {
                   {projects.map((project) => (
                     <a
                       key={project.projectId}
-                      href={`/projects/${project.projectId}`}
+                      href={`/projects/${encodeURIComponent(project.projectId)}`}
                       className="block p-3 hover:bg-slate-50 dark:hover:bg-white/5"
                     >
                       <div className="flex items-center gap-2">

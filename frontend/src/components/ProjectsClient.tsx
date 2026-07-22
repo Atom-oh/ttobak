@@ -47,7 +47,7 @@ export default function ProjectsClient() {
         sfdcUrl: sfdcUrl.trim() || undefined,
         stage: stage.trim() || undefined,
       });
-      router.push(`/projects/${created.projectId}`);
+      router.push(`/projects/${encodeURIComponent(created.projectId)}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project');
     } finally {
@@ -62,7 +62,7 @@ export default function ProjectsClient() {
         <button
           type="button"
           onClick={() => setShowForm((value) => !value)}
-          className="rounded-lg bg-[#3211d4] hover:bg-primary-hover text-white font-semibold text-sm px-4 py-2 flex items-center gap-1"
+          className="rounded-lg bg-primary hover:bg-primary-hover text-white font-semibold text-sm px-4 py-2 flex items-center gap-1"
         >
           <span className="material-symbols-outlined text-lg">add</span>새 프로젝트
         </button>
@@ -105,7 +105,7 @@ export default function ProjectsClient() {
           <button
             type="submit"
             disabled={creating || !name.trim()}
-            className="rounded-lg bg-[#3211d4] hover:bg-primary-hover text-white font-semibold text-sm px-4 py-2 disabled:opacity-50"
+            className="rounded-lg bg-primary hover:bg-primary-hover text-white font-semibold text-sm px-4 py-2 disabled:opacity-50"
           >
             {creating ? '생성 중…' : '생성'}
           </button>

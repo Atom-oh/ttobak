@@ -805,7 +805,7 @@ DELETE /api/projects/{projectId}/meetings/{meetingId}
 POST   /api/projects/{projectId}/research          Request: { "researchId": "uuid" }
 DELETE /api/projects/{projectId}/research/{researchId}
 
-Error: 403 Forbidden — Link(POST): 대상 미팅/리서치의 owner가 아님
+Error: 403 Forbidden — Link(POST): 대상 미팅/리서치의 owner가 아니거나, 프로젝트 접근 권한(owner/직접 멤버/연결된 Account 멤버) 없음
 Error: 403 Forbidden — Unlink(DELETE): 대상의 owner도 아니고 프로젝트 owner도 아님 (아래 비대칭 설명 참고)
 Error: 404 Not Found (미팅/리서치/프로젝트 없음)
 ```
