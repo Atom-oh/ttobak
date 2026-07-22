@@ -37,16 +37,25 @@ export default function ProjectDetailClient() {
   // This component is never remounted across /projects/A -> /projects/B
   // navigation (single static `_` route, reused across all project IDs --
   // same as AccountDetailClient), so a slow fetch for A can still resolve
-  // after the user has navigated to B. Without this guard, A's response
-  // would land on B's screen and, worse, B's mutation handlers (which read
-  // projectId fresh from the URL) would act on B while the member list the
-  // user is looking at is actually A's stale data.
+  // after the user has navigated to B. activeProjectIdRef is written ONLY
+  // by the projectId-change effect below, never by fetchAll itself -- a
+  // fetchAll invocation started from a mutation handler captured before a
+  // navigation (e.g. the user clicks "invite" on A, then navigates to B
+  // while addMember() is still in flight) must not be able to overwrite
+  // the guard with its own (now-superseded) projectId and let A's data
+  // land on B's screen.
   const activeProjectIdRef = useRef(projectId);
 
-  const fetchAll = useCallback(async () => {
+  // Reset visible state only on an actual navigation to a different
+  // project -- NOT on every fetchAll call. A mutation handler re-running
+  // fetchAll for the *same* project must not wipe project to null first:
+  // if the refetch's projectApi.get() then transiently fails, the whole
+  // page would show "Failed to load this project" even though the
+  // mutation just succeeded and the project was already loaded a moment
+  // ago -- the exact silent-failure-turned-into-a-worse-failure this
+  // pattern exists to avoid.
+  useEffect(() => {
     activeProjectIdRef.current = projectId;
-    // Reset immediately so stale data from a previous projectId never
-    // lingers on screen while the new project's fetch is in flight.
     setProject(null);
     setMeetings([]);
     setResearch([]);
@@ -54,10 +63,17 @@ export default function ProjectDetailClient() {
     setMeetingsError(false);
     setResearchError(false);
     setInsightsError(false);
-    if (!projectId || projectId === '_') {
+    setError(null);
+    setActiveType('');
+  }, [projectId]);
+
+  const fetchAll = useCallback(async () => {
+    const myProjectId = projectId;
+    if (!myProjectId || myProjectId === '_') {
       setLoading(false);
       return;
     }
+    if (activeProjectIdRef.current !== myProjectId) return; // superseded before this call even started
     setLoading(true);
     setError(null);
     try {
@@ -71,15 +87,15 @@ export default function ProjectDetailClient() {
       // being silently swallowed into setXxx([]) and wiping prior data (e.g.
       // when a mutation handler re-runs fetchAll and this fetch transiently
       // fails).
-      const proj = await projectApi.get(projectId);
-      if (activeProjectIdRef.current !== projectId) return; // superseded by a later navigation
+      const proj = await projectApi.get(myProjectId);
+      if (activeProjectIdRef.current !== myProjectId) return; // superseded by a later navigation
       setProject(proj);
       const [mtg, res, ins] = await Promise.allSettled([
-        projectApi.meetings(projectId),
-        projectApi.research(projectId),
-        projectApi.insights(projectId),
+        projectApi.meetings(myProjectId),
+        projectApi.research(myProjectId),
+        projectApi.insights(myProjectId),
       ]);
-      if (activeProjectIdRef.current !== projectId) return; // superseded by a later navigation
+      if (activeProjectIdRef.current !== myProjectId) return; // superseded by a later navigation
       setMeetingsError(mtg.status === 'rejected');
       if (mtg.status === 'fulfilled') setMeetings(mtg.value.meetings ?? []);
       setResearchError(res.status === 'rejected');
@@ -87,10 +103,10 @@ export default function ProjectDetailClient() {
       setInsightsError(ins.status === 'rejected');
       if (ins.status === 'fulfilled') setInsights(ins.value.insights ?? []);
     } catch (err) {
-      if (activeProjectIdRef.current !== projectId) return; // superseded by a later navigation
+      if (activeProjectIdRef.current !== myProjectId) return; // superseded by a later navigation
       setError(err instanceof Error ? err.message : 'Failed to load project');
     } finally {
-      if (activeProjectIdRef.current === projectId) setLoading(false);
+      if (activeProjectIdRef.current === myProjectId) setLoading(false);
     }
   }, [projectId]);
 

@@ -32,8 +32,21 @@ export default function AccountDetailClient() {
   const [inviteRole, setInviteRole] = useState('SSA');
   const [inviting, setInviting] = useState(false);
 
+  // Written ONLY by the accountId-change effect below, never by fetchAll --
+  // see ProjectDetailClient's identical guard for why fetchAll must not be
+  // able to overwrite this with its own (possibly superseded) accountId.
+  // Scoped to the projects section specifically: the other sections here
+  // share the same single-static-route staleness risk, but it's a
+  // pre-existing pattern across this whole component, not something this
+  // PR's new accountProjects fetch should take on fixing wholesale.
+  const activeAccountIdRef = useRef(accountId);
+  useEffect(() => {
+    activeAccountIdRef.current = accountId;
+  }, [accountId]);
+
   const fetchAll = useCallback(async () => {
     if (!accountId || accountId === '_') return;
+    const myAccountId = accountId;
     setLoading(true);
     setError(null);
     try {
@@ -49,11 +62,12 @@ export default function AccountDetailClient() {
       setInsights(ins?.insights ?? []);
       setDocuments(docs?.documents ?? []);
       setResearch(res?.research ?? []);
-      // Degrade independently, mirroring ProjectDetailClient's
-      // allSettled+error-flag pattern: a rejected fetch here must not be
+      // Degrade independently: a rejected fetch here must not be
       // indistinguishable from "no linked projects," nor wipe a previously
-      // successful result on a later refetch.
-      const projectRes = await projectApi.accountProjects(accountId).catch(() => null);
+      // successful result on a later refetch -- and a response for an
+      // accountId superseded by a newer navigation must not land here at all.
+      const projectRes = await projectApi.accountProjects(myAccountId).catch(() => null);
+      if (activeAccountIdRef.current !== myAccountId) return;
       setProjectsError(projectRes === null);
       if (projectRes !== null) setProjects(projectRes.projects ?? []);
     } catch (err) {

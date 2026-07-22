@@ -120,7 +120,7 @@ export default function ProjectsClient() {
         <div className="flex items-center justify-center py-16">
           <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
         </div>
-      ) : projects.length === 0 ? (
+      ) : error && projects.length === 0 ? null : projects.length === 0 ? (
         <div className="text-center py-16 text-slate-400 dark:text-text-muted">
           <span className="material-symbols-outlined text-4xl mb-2 block">work</span>
           아직 프로젝트가 없습니다. 새 프로젝트를 만들어 시작하세요.
