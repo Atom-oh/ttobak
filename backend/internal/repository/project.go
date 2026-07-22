@@ -281,7 +281,30 @@ func (r *DynamoDBRepository) UpdateProjectFields(ctx context.Context, projectID 
 }
 
 // DeleteProject removes the canonical project and owner index atomically.
+// DeleteProject removes the canonical project and owner index atomically.
+// The CONFIG delete additionally asserts accountIds is still empty --
+// closing the narrowest, cheapest-to-close slice of the service layer's
+// check-then-delete race: a LinkAccount that commits between
+// ProjectService.DeleteProject's non-atomic guard reads and this
+// transaction would otherwise land unnoticed, since accountIds lives
+// directly on the item being deleted here and can be asserted in the same
+// transaction. The equivalent race for MEMBER#/MEETINGREF#/RESEARCHREF#
+// items (which live on OTHER items this transaction doesn't touch) is a
+// known, accepted residual risk -- see ADR-024's Risks section for why
+// closing it fully would need a broader tombstone-and-reject-concurrent-
+// writes redesign disproportionate to the actual impact (unreachable dead
+// storage in a deleted project's own partition, never incorrectly
+// exposed -- every read path re-verifies canonical state independently).
 func (r *DynamoDBRepository) DeleteProject(ctx context.Context, projectID, ownerUserID string) error {
+	noAccountsExpr, err := expression.NewBuilder().
+		WithCondition(expression.Or(
+			expression.AttributeNotExists(expression.Name("accountIds")),
+			expression.Size(expression.Name("accountIds")).Equal(expression.Value(0)),
+		)).
+		Build()
+	if err != nil {
+		return fmt.Errorf("build no-accounts-linked condition: %w", err)
+	}
 	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{Delete: &types.Delete{
@@ -290,6 +313,9 @@ func (r *DynamoDBRepository) DeleteProject(ctx context.Context, projectID, owner
 					"PK": &types.AttributeValueMemberS{Value: model.PrefixProject + projectID},
 					"SK": &types.AttributeValueMemberS{Value: model.SKProjectConfig},
 				},
+				ConditionExpression:       noAccountsExpr.Condition(),
+				ExpressionAttributeNames:  noAccountsExpr.Names(),
+				ExpressionAttributeValues: noAccountsExpr.Values(),
 			}},
 			{Delete: &types.Delete{
 				TableName: aws.String(r.tableName),
@@ -300,7 +326,7 @@ func (r *DynamoDBRepository) DeleteProject(ctx context.Context, projectID, owner
 			}},
 		},
 	}); err != nil {
-		return fmt.Errorf("delete project transaction: %w", err)
+		return mapProjectTransactionCanceledError(err, projectID, "project", "delete project")
 	}
 	return nil
 }

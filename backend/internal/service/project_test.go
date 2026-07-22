@@ -678,6 +678,21 @@ func TestDeleteProject_RejectsWhileLinked(t *testing.T) {
 			t.Fatalf("expected ErrProjectHasLinks, got %v", err)
 		}
 	})
+	// Regression test: ListProjectResearch (the user-facing list) correctly
+	// filters out trashed research, but DeleteProject's guard must NOT reuse
+	// that filter -- a trashed-but-still-linked research is still linked
+	// (TrashResearch is reversible), and letting deletion through here would
+	// let a later restore resurrect an orphan link to a project that no
+	// longer canonically exists.
+	t.Run("trashed but still linked research still blocks", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			r.research["r1"] = &model.Research{ResearchID: "r1", UserID: "owner", ProjectIDs: []string{"p1"}, TrashedAt: "2026-01-01T00:00:00Z"}
+			r.researchRefs["p1"] = []model.ProjectResearchRef{{ProjectID: "p1", ResearchID: "r1"}}
+		})
+		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected ErrProjectHasLinks for trashed-but-linked research, got %v", err)
+		}
+	})
 	t.Run("clean project deletes", func(t *testing.T) {
 		repo := newRepoWith(func(_ *mockProjectRepo, _ *model.Project) {})
 		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); err != nil {

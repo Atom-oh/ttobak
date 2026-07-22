@@ -694,6 +694,197 @@ Error: 404 Not Found (미팅 없음)
 
 ---
 
+### Projects
+
+Project(SFDC Opportunity)는 미팅노트·리서치·인사이트를 영업 기회 단위로 묶는
+1급 엔티티다. Account와 달리 **다대다 그래프**로 여러 Account에 동시에 연결될
+수 있다(파트너사+엔드고객 등). Research↔Account 연동과 동일한 그래프 레퍼런스
+패턴(문자열 집합 + 역참조 아이템 + fail-closed 재검증)을 재사용한다 — 자세한
+내부 데이터 모델은 ADR-024 참고.
+
+**접근 권한**은 하이브리드: project owner, 직접 초대된 멤버(`POST .../members`),
+또는 **연결된 Account 중 하나의 멤버**면 통과한다. 즉 Account를 프로젝트에
+연동하면 그 Account의 팀 전체가 자동으로 프로젝트 열람 권한을 얻는다(추가
+멤버 초대 없이). SFDC 연동은 메타데이터 필드(`sfdcOpptyId`/`sfdcUrl`)만
+저장하며, 실제 SFDC 값을 읽어오는 것은 외부 MCP 클라이언트(SFDC MCP →
+`ttobak_create_project`)가 담당한다 — 서버 쪽 SFDC API 연동은 없다.
+
+#### List My Projects
+
+```
+GET /api/projects
+
+Response: 200 OK
+{ "projects": [ { "projectId": "uuid", "name": "...", "stage": "...", "sfdcOpptyId": "..." } ] }
+```
+
+내가 owner이거나 직접 멤버인 프로젝트만 반환한다(owner 인덱스 + GSI1 멤버
+역조회 병합). 연결된 Account 상속으로만 접근 가능한 프로젝트는 이 목록에
+나타나지 않는다 — Account 상세 페이지의 "연결된 프로젝트" 섹션
+(`GET /api/accounts/{accountId}/projects`)에서 확인한다.
+
+#### Create Project
+
+```
+POST /api/projects
+Request:
+{
+  "name": "하나은행 클라우드 마이그레이션",
+  "description": "...",          // optional
+  "sfdcOpptyId": "006XX...",      // optional
+  "sfdcUrl": "https://...",       // optional
+  "stage": "Negotiation"          // optional
+}
+
+Response: 201 Created
+{
+  "projectId": "uuid", "name": "...", "description": "...",
+  "sfdcOpptyId": "006XX...", "sfdcUrl": "https://...", "stage": "Negotiation",
+  "ownerUserId": "owner-uuid", "accountIds": [], "members": [],
+  "createdAt": "2026-07-21T00:00:00Z", "updatedAt": "2026-07-21T00:00:00Z"
+}
+
+Error: 400 Bad Request (name이 비어있음)
+```
+
+#### Get / Update / Delete Project
+
+```
+GET /api/projects/{projectId}
+PUT /api/projects/{projectId}      (owner 전용, Create와 동일한 필드)
+DELETE /api/projects/{projectId}   (owner 전용)
+
+Error: 403 Forbidden — GET: owner/직접 멤버/연결된 Account 멤버 아님
+Error: 403 Forbidden — PUT/DELETE: owner 아님 (직접 멤버·연결된 Account 멤버여도 거부)
+Error: 404 Not Found
+Error: 400 Bad Request (DELETE: 연결된 Account/미팅/리서치/멤버가 하나라도
+       남아있으면 거부 — 고아 관계 데이터를 남기지 않기 위해 전부 해제 후
+       삭제해야 한다)
+```
+
+#### Members (owner 전용)
+
+```
+POST   /api/projects/{projectId}/members
+Request: { "email": "user@example.com" }
+Response: 201 Created — { "userId": "uuid", "email": "user@example.com" }
+Error: 400 Bad Request (이미 멤버) · 404 Not Found (해당 email 유저 없음)
+
+DELETE /api/projects/{projectId}/members/{userId}
+Response: 204 No Content
+```
+
+멤버는 Account처럼 역할(owner/AM/TAM/SSA) 구분이 없다 — 있으면(owner) 있고
+없으면(member) 없는 이진 상태.
+
+#### Link / Unlink Account
+
+```
+POST   /api/projects/{projectId}/accounts        (owner 전용, 대상 Account 멤버여야 함)
+Request: { "accountId": "uuid" }
+Response: 200 OK — { "accountIds": ["uuid", ...] }
+Error: 403 Forbidden (owner 아님 또는 대상 Account 멤버 아님)
+
+DELETE /api/projects/{projectId}/accounts/{accountId}   (owner 전용)
+Response: 204 No Content
+```
+
+연동/해제 모두 `Project.accountIds`(String Set)와 역참조
+(`ACCOUNT#{accountId}/PROJECTREF#{projectId}`)를 **단일 `TransactWriteItems`
+로 원자적으로** 갱신한다(ADR-024) — 해제 시 owner가 그 Account의 현재
+멤버가 아니어도 된다(해제는 project ownership만으로 충분 — 그렇지 않으면
+owner가 Account에서 제거된 뒤 영구히 연동을 못 푸는 상황이 생긴다).
+
+#### Link / Unlink Meeting, Research
+
+```
+POST   /api/projects/{projectId}/meetings          Request: { "meetingId": "uuid" }
+DELETE /api/projects/{projectId}/meetings/{meetingId}
+POST   /api/projects/{projectId}/research          Request: { "researchId": "uuid" }
+DELETE /api/projects/{projectId}/research/{researchId}
+
+Error: 403 Forbidden (미팅/리서치 owner가 아니거나 프로젝트 접근 권한 없음)
+Error: 404 Not Found (미팅/리서치/프로젝트 없음)
+```
+
+`Meeting.projectIds`/`Research.projectIds`도 동일하게 String Set + 원자적
+`TransactWriteItems`로 연동한다. **링크**는 대상 미팅/리서치의 owner일 것을
+요구하지만, **언링크**는 그 owner이거나 **프로젝트 owner**면 충분하다 —
+링크한 멤버가 이후 `RemoveMember`로 제거되면 본인도(프로젝트 접근권 상실),
+프로젝트 owner도(그 미팅/리서치의 owner가 아님) 언링크를 못 하게 되는
+데드락을 막기 위한 비대칭이다(ADR-024). `SharedToAccount`(계정 공유 게이트)
+와는 별개다 — 프로젝트에 링크된 미팅의 제목/인사이트는 프로젝트 접근 권한이
+있는 사람 모두에게 노출된다(ADR-024 참고, `SharedToAccount`를 의도적으로
+우회하는 별도 공유 채널).
+
+#### List Project Meetings / Research
+
+```
+GET /api/projects/{projectId}/meetings
+Response: 200 OK — { "meetings": [ { "meetingId", "ownerUserId", "title", "date" } ] }
+
+GET /api/projects/{projectId}/research
+Response: 200 OK — { "research": [ { "researchId", "topic", "summary", "status", "ownerUserId", "createdAt" } ] }
+
+Error: 403 Forbidden (프로젝트 접근 권한 없음)
+```
+
+두 목록 모두 역참조 아이템을 후보로 삼고 canonical `projectIds` 집합에
+여전히 포함되는지 재검증한다(fail-closed) — 링크된 미팅이 이 API가 모르는
+경로(기존 미팅 삭제 등)로 지워져 역참조만 고아로 남는 경우처럼, 트랜잭션
+경계 밖의 다른 실패 모드로 생긴 stale ref도 조회 결과에는 절대 노출되지
+않는다. `meetingId` 기준으로도 중복 제거한다(ADR-024의 mutable-Date
+레퍼런스 SK 이슈에 대한 방어).
+
+#### Get Project Insights
+
+```
+GET /api/projects/{projectId}/insights?from=RFC3339&to=RFC3339&types=risk,tech
+
+Response: 200 OK
+{ "insights": [ { "type": "risk", "text": "...", "sourceId": "meeting-uuid", "occurredAt": "...", "tsMarker": "[TS:120]", "entities": [] } ] }
+
+Error: 400 Bad Request (from/to가 RFC3339 아님, 또는 유효하지 않은 insight type)
+Error: 403 Forbidden (프로젝트 접근 권한 없음)
+```
+
+**저장하지 않고 읽기 시점에 집계한다** — 링크된 미팅들의 `Insights` JSON을
+매번 파싱해 반환하므로, 미팅이 재요약되어 인사이트가 갱신되면 다음 조회에
+자동 반영된다(Account 인사이트처럼 공유 시점에 스냅샷을 떠서 저장하지
+않음 — 동기화 드리프트 자체가 존재하지 않는다).
+
+#### Get Project Brief
+
+```
+GET /api/projects/{projectId}/brief?from=RFC3339&to=RFC3339&types=risk,tech
+
+Response: 200 OK
+{
+  "project": { ... ProjectResponse ... },
+  "insightsByType": { "risk": [...], "tech": [...] },
+  "meetings": [...],
+  "research": [...]
+}
+```
+
+Get Project + List Meetings + List Research + Get Insights를 한 번에
+묶은 편의 엔드포인트.
+
+#### List Account's Projects
+
+```
+GET /api/accounts/{accountId}/projects   (해당 Account 멤버 전용)
+
+Response: 200 OK
+{ "projects": [ { "projectId", "name", "stage", "sfdcOpptyId" } ] }
+```
+
+Account 쪽에서 "이 Account에 연동된 프로젝트" 역참조를 조회하는 read 경로
+(Research의 `GET /api/accounts/{accountId}/research`와 동일한 패턴).
+
+---
+
+
 ### Sharing
 
 #### Share Meeting

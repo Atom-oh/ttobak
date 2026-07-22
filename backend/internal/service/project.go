@@ -244,14 +244,35 @@ func (s *ProjectService) DeleteProject(ctx context.Context, userID, projectID st
 	if len(meetings) > 0 {
 		return ErrProjectHasLinks
 	}
-	research, err := s.ListProjectResearch(ctx, userID, projectID)
+	// NOT ListProjectResearch: that function filters out trashed research
+	// (correct for a user-facing list -- nobody wants trashed items showing
+	// up), but that same filter breaks the deletion guard's invariant. A
+	// research trashed WHILE still linked would fail this check as if it
+	// weren't linked, letting DeleteProject through; the trashed research's
+	// canonical ProjectIDs still contains this project's id, and restoring
+	// it (TrashResearch is reversible) resurrects an orphan link this
+	// project's ID can never be reached to unlink again (GetProject 404s).
+	// hasLinkedResearch below is the same canonical-reverification logic
+	// minus the TrashedAt filter, precisely because this check cares about
+	// "is the link still real," not "should this show up in a list."
+	hasResearch, err := s.hasLinkedResearch(ctx, projectID)
 	if err != nil {
 		return err
 	}
-	if len(research) > 0 {
+	if hasResearch {
 		return ErrProjectHasLinks
 	}
-	return s.repo.DeleteProject(ctx, projectID, project.OwnerUserID)
+	if err := s.repo.DeleteProject(ctx, projectID, project.OwnerUserID); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			// The condition on the CONFIG delete (no accountIds) failed --
+			// a LinkAccount committed between this function's guard reads
+			// above and this delete. Same conclusion the guard would have
+			// reached had it re-read a moment later: still linked.
+			return ErrProjectHasLinks
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *ProjectService) AddMember(ctx context.Context, requesterUserID, projectID string, req *model.AddProjectMemberRequest) (*model.ProjectMemberDTO, error) {
@@ -657,6 +678,36 @@ func (s *ProjectService) ListProjectMeetings(ctx context.Context, userID, projec
 		})
 	}
 	return out, nil
+}
+
+// hasLinkedResearch reports whether any research is canonically still
+// linked to projectID -- the same reverification ListProjectResearch does
+// (refs are candidates only; canonical ProjectIDs is authoritative),
+// deliberately WITHOUT filtering out trashed research. See DeleteProject's
+// comment: a research trashed while linked is still linked (TrashResearch
+// is reversible), so the deletion guard must not treat it as unlinked.
+func (s *ProjectService) hasLinkedResearch(ctx context.Context, projectID string) (bool, error) {
+	refs, err := s.repo.ListProjectResearchRefsForProject(ctx, projectID)
+	if err != nil {
+		return false, err
+	}
+	if len(refs) == 0 {
+		return false, nil
+	}
+	ids := make([]string, len(refs))
+	for i, ref := range refs {
+		ids[i] = ref.ResearchID
+	}
+	items, err := s.repo.BatchGetResearchByIDs(ctx, ids)
+	if err != nil {
+		return false, err
+	}
+	for _, research := range items {
+		if contains(research.ProjectIDs, projectID) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *ProjectService) ListProjectResearch(ctx context.Context, userID, projectID string) ([]model.ProjectResearchDTO, error) {
