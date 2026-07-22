@@ -171,7 +171,7 @@ Use the ttobak_login tool to authenticate.
 | `ttobak_create_account` | Create a new customer account | "Create an account for Hana Bank" |
 | `ttobak_add_account_member` | Add a teammate to an account (AM/TAM/SSA) | "Add jane@x.com to Hana Bank as TAM" |
 | `ttobak_create_project` | Create a Project (SFDC Opportunity) | "Create a project for the Hana Bank renewal" |
-| `ttobak_list_projects` | List projects you own or are a member of (directly or via account) | "Show my projects" |
+| `ttobak_list_projects` | List projects you own or are directly invited to (excludes account-inherited access -- see those from the account side) | "Show my projects" |
 | `ttobak_get_project` | Project detail: members, linked accounts | "Show the Hana renewal project" |
 | `ttobak_get_project_brief` | Bundled project raw material (meetings, research, insights) | "Give me the Hana renewal project brief" |
 | `ttobak_get_project_insights` | Typed insights aggregated from the project's linked meetings | "What risks came up in the Hana renewal project?" |
@@ -394,7 +394,7 @@ TTOBAK에 로그인해줘
 | `ttobak_create_account` | 신규 고객 Account 생성 | "하나은행 Account 만들어줘" |
 | `ttobak_add_account_member` | Account에 팀원 추가(AM/TAM/SSA) | "jane@x.com을 하나은행에 TAM으로 추가해줘" |
 | `ttobak_create_project` | Project(SFDC Opportunity) 생성 | "하나은행 갱신 프로젝트 만들어줘" |
-| `ttobak_list_projects` | 내가 소유하거나 멤버인(직접 또는 Account 상속) 프로젝트 목록 | "내 프로젝트 목록 보여줘" |
+| `ttobak_list_projects` | 내가 소유하거나 직접 초대된 프로젝트 목록 (Account 상속 접근은 제외 -- Account 쪽에서 확인) | "내 프로젝트 목록 보여줘" |
 | `ttobak_get_project` | 프로젝트 상세: 멤버, 연결 Account | "하나은행 갱신 프로젝트 보여줘" |
 | `ttobak_get_project_brief` | 프로젝트 묶음 원재료(미팅, 리서치, 인사이트) | "하나은행 갱신 프로젝트 브리프 한 번에" |
 | `ttobak_get_project_insights` | 프로젝트에 연결된 미팅에서 집계한 유형별 인사이트 | "하나은행 갱신 프로젝트에서 어떤 리스크가 있었어?" |

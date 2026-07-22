@@ -21154,7 +21154,7 @@ var TtobakApi = class {
     return this.get("/api/projects");
   }
   async getProject(projectId) {
-    return this.get(`/api/projects/${projectId}`);
+    return this.get(`/api/projects/${encodeURIComponent(projectId)}`);
   }
   async getProjectBrief(projectId, opts) {
     const q = new URLSearchParams();
@@ -21162,7 +21162,7 @@ var TtobakApi = class {
     if (opts?.to) q.set("to", opts.to);
     if (opts?.types && opts.types.length) q.set("types", opts.types.join(","));
     const qs = q.toString();
-    return this.get(`/api/projects/${projectId}/brief${qs ? "?" + qs : ""}`);
+    return this.get(`/api/projects/${encodeURIComponent(projectId)}/brief${qs ? "?" + qs : ""}`);
   }
   async getProjectInsights(projectId, opts) {
     const q = new URLSearchParams();
@@ -21170,7 +21170,7 @@ var TtobakApi = class {
     if (opts?.to) q.set("to", opts.to);
     if (opts?.types && opts.types.length) q.set("types", opts.types.join(","));
     const qs = q.toString();
-    return this.get(`/api/projects/${projectId}/insights${qs ? "?" + qs : ""}`);
+    return this.get(`/api/projects/${encodeURIComponent(projectId)}/insights${qs ? "?" + qs : ""}`);
   }
   async exportVault() {
     return this.get("/api/vault/export");
