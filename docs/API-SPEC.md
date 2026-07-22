@@ -718,10 +718,12 @@ Response: 200 OK
 { "projects": [ { "projectId": "uuid", "name": "...", "stage": "...", "sfdcOpptyId": "..." } ] }
 ```
 
-내가 owner이거나 직접 멤버인 프로젝트만 반환한다(owner 인덱스 + GSI1 멤버
-역조회 병합). 연결된 Account 상속으로만 접근 가능한 프로젝트는 이 목록에
-나타나지 않는다 — Account 상세 페이지의 "연결된 프로젝트" 섹션
-(`GET /api/accounts/{accountId}/projects`)에서 확인한다.
+내가 owner이거나 직접 멤버이거나, 내가 속한 Account에 연결된 프로젝트를
+모두 반환한다(owner 인덱스 + GSI1 멤버 역조회 + 내 Account 멤버십을 거쳐
+연결된 프로젝트 목록, 셋 다 canonical 상태로 재검증 — `requireProjectAccess`의
+하이브리드 접근 권한과 정확히 같은 3가지 경로). Account 쪽에서도 동일한
+프로젝트를 `GET /api/accounts/{accountId}/projects`로 볼 수 있다 — 이 둘은
+서로를 대체하는 두 개의 발견 경로다.
 
 #### Create Project
 

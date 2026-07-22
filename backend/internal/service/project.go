@@ -117,15 +117,27 @@ func (s *ProjectService) requireProjectAccess(ctx context.Context, userID, proje
 	if member != nil {
 		return project, nil
 	}
+	// A transient GetMember failure on one linked Account must not short-circuit
+	// the others -- keep checking every account before giving up, so a real
+	// membership on account B still grants access even if account A's lookup
+	// errored. Only report the transient error (instead of a flat 403) if NO
+	// account granted access AND at least one lookup actually failed --
+	// otherwise a real DynamoDB outage looks identical to "not a member" to
+	// the caller, which is safe (fail-closed) but makes the failure invisible.
+	var lookupErr error
 	for _, accountID := range project.AccountIDs {
 		member, err := s.repo.GetMember(ctx, accountID, userID)
 		if err != nil {
 			log.Printf("warn: failed to check account membership %s for project access: %v", accountID, err)
+			lookupErr = err
 			continue
 		}
 		if member != nil {
 			return project, nil
 		}
+	}
+	if lookupErr != nil {
+		return nil, lookupErr
 	}
 	return nil, ErrForbidden
 }

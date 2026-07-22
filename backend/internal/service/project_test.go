@@ -25,6 +25,7 @@ type mockProjectRepo struct {
 	deleteAfterGet      string
 	failPutRefFor       string
 	batchGetResearchErr error
+	getMemberErrFor     string
 }
 
 func newMockProjectRepo() *mockProjectRepo {
@@ -105,6 +106,16 @@ func (m *mockProjectRepo) ListProjectsForUser(_ context.Context, userID string) 
 	for _, p := range m.projects {
 		if p.OwnerUserID == userID || m.projectMembers[projectMemberKey(p.ProjectID, userID)] != nil {
 			out = append(out, *cloneProject(p))
+			continue
+		}
+		// Third leg, mirroring DynamoDBRepository.ListProjectsForUser: a
+		// project is also discoverable if the user is a member of any
+		// Account the project is canonically linked to.
+		for _, accountID := range p.AccountIDs {
+			if m.accountMembers[projectAccountMemberKey(accountID, userID)] != nil {
+				out = append(out, *cloneProject(p))
+				break
+			}
 		}
 	}
 	return out, nil
@@ -316,6 +327,9 @@ func (m *mockProjectRepo) ListProjectResearchRefsForProject(_ context.Context, p
 	return append([]model.ProjectResearchRef(nil), m.researchRefs[projectID]...), nil
 }
 func (m *mockProjectRepo) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
+	if m.getMemberErrFor != "" && m.getMemberErrFor == accountID {
+		return nil, fmt.Errorf("mock GetMember: transient failure for account %s", accountID)
+	}
 	member := m.accountMembers[projectAccountMemberKey(accountID, userID)]
 	if member == nil {
 		return nil, nil
@@ -419,6 +433,39 @@ func TestRequireProjectAccess(t *testing.T) {
 	}
 	if _, err := svc.requireProjectAccess(context.Background(), "owner", "missing"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// A transient GetMember failure on the only linked Account must surface as
+// an error, not get silently swallowed into a flat ErrForbidden -- a real
+// DynamoDB outage should not be indistinguishable from "genuinely not a
+// member" to whoever's debugging a 403 that shouldn't be one.
+func TestRequireProjectAccess_SurfacesTransientAccountLookupError(t *testing.T) {
+	repo := newMockProjectRepo()
+	project := seedProject(repo, "p1", "owner")
+	project.AccountIDs = []string{"a1"}
+	repo.getMemberErrFor = "a1"
+	svc := newProjectServiceWithRepo(repo)
+
+	_, err := svc.requireProjectAccess(context.Background(), "stranger", "p1")
+	if err == nil || errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected the transient GetMember error to surface, got %v", err)
+	}
+}
+
+// If ANY linked account grants membership, a transient failure checking a
+// DIFFERENT linked account must not deny access -- every account is still
+// checked before giving up.
+func TestRequireProjectAccess_OtherAccountGrantsDespiteOneTransientFailure(t *testing.T) {
+	repo := newMockProjectRepo()
+	project := seedProject(repo, "p1", "owner")
+	project.AccountIDs = []string{"a1", "a2"}
+	repo.getMemberErrFor = "a1"
+	addProjectAccountMember(repo, "a2", "carol")
+	svc := newProjectServiceWithRepo(repo)
+
+	if _, err := svc.requireProjectAccess(context.Background(), "carol", "p1"); err != nil {
+		t.Fatalf("expected access via a2 despite a1's transient failure, got %v", err)
 	}
 }
 
@@ -562,6 +609,45 @@ func TestListMyProjects_IncludesDirectMembers(t *testing.T) {
 	}
 	if len(projects) != 1 || projects[0].ProjectID != "p1" {
 		t.Fatalf("expected direct member to see p1, got %v", projects)
+	}
+}
+
+// Regression test for the account-inherited discoverability gap: a user who
+// only has access via a linked Account's membership (the third leg of
+// requireProjectAccess's hybrid check) previously could pass access checks
+// but never see the project in GET /api/projects at all -- present and
+// accessible, but undiscoverable except through GET
+// /api/accounts/{accountId}/projects instead.
+func TestListMyProjects_IncludesAccountInheritedProjects(t *testing.T) {
+	repo := newMockProjectRepo()
+	project := seedProject(repo, "p1", "owner")
+	project.AccountIDs = []string{"acc1"}
+	repo.accountMembers[projectAccountMemberKey("acc1", "carol")] = &model.AccountMember{AccountID: "acc1", UserID: "carol"}
+
+	projects, err := newProjectServiceWithRepo(repo).ListMyProjects(context.Background(), "carol")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(projects) != 1 || projects[0].ProjectID != "p1" {
+		t.Fatalf("expected account-inherited member to see p1, got %v", projects)
+	}
+}
+
+// A stale reverse-index ref must never surface a project the canonical
+// AccountIDs set no longer actually links -- unlinking the account should
+// remove p1 from carol's discoverable projects even if a leftover ref exists.
+func TestListMyProjects_AccountInheritedFailsClosedOnUnlinkedAccount(t *testing.T) {
+	repo := newMockProjectRepo()
+	project := seedProject(repo, "p1", "owner")
+	project.AccountIDs = []string{} // unlinked -- canonical set no longer contains acc1
+	repo.accountMembers[projectAccountMemberKey("acc1", "carol")] = &model.AccountMember{AccountID: "acc1", UserID: "carol"}
+
+	projects, err := newProjectServiceWithRepo(repo).ListMyProjects(context.Background(), "carol")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("expected no projects for an unlinked account membership, got %v", projects)
 	}
 }
 
