@@ -74,6 +74,7 @@ const aiStack = new AiStack(app, 'TtobakAiStack', {
   userPoolArn: authStack.userPool.userPoolArn,
   webSearchGatewayArn: webSearchGatewayStack.gateway.gatewayArn,
   researchAgentExecutionRoleArn,
+  knowledgeBaseId: knowledgeStack.knowledgeBaseId,
 });
 aiStack.addDependency(storageStack);
 aiStack.addDependency(knowledgeStack);

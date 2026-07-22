@@ -84,6 +84,12 @@ export class GatewayStack extends cdk.Stack {
         COGNITO_USER_POOL_ID: props.userPool.userPoolId,
         COGNITO_CLIENT_ID: props.userPoolClient.userPoolClientId,
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
+        // NOTE: api reads KB_DATASOURCE_ID (cmd/api/main.go), NOT the
+        // DATA_SOURCE_ID name the summarize/crawler Lambdas use -- copying
+        // that pattern verbatim leaves api reading an unset variable and
+        // /api/kb/sync permanently returning {status:"skipped"}.
+        KB_ID: props.knowledgeBaseId || '',
+        KB_DATASOURCE_ID: props.dataSourceId || '',
         KMS_KEY_ID: props.kmsKeyId || '',
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
         AWS_REGION_NAME: cdk.Aws.REGION,

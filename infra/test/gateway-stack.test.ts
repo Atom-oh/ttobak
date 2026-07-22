@@ -11,7 +11,10 @@ describe('GatewayStack', () => {
 
   beforeAll(() => {
     const app = new cdk.App({
-      context: { 'ttobak:cloudfrontDomain': 'd2olomx8td8txt.cloudfront.net' },
+      context: {
+        'ttobak:cloudfrontDomain': 'd2olomx8td8txt.cloudfront.net',
+        'ttobak:domainName': 'ttobak.example.com',
+      },
     });
 
     const mockStack = new cdk.Stack(app, 'MockStack');
@@ -41,6 +44,8 @@ describe('GatewayStack', () => {
       userPool,
       userPoolClient,
       kbBucket,
+      knowledgeBaseId: 'test-kb-id',
+      dataSourceId: 'test-ds-id',
     });
 
     template = Template.fromStack(stack);
@@ -69,6 +74,12 @@ describe('GatewayStack', () => {
           BUCKET_NAME: Match.anyValue(),
           COGNITO_USER_POOL_ID: Match.anyValue(),
           COGNITO_CLIENT_ID: Match.anyValue(),
+          // Name landmine: cmd/api/main.go reads KB_DATASOURCE_ID, NOT the
+          // DATA_SOURCE_ID name summarize uses -- if this assertion fails
+          // because someone "unified" the name, /api/kb/sync silently
+          // returns {status:"skipped"} forever.
+          KB_ID: 'test-kb-id',
+          KB_DATASOURCE_ID: 'test-ds-id',
         }),
       },
     });
