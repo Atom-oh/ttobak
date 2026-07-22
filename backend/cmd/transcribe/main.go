@@ -204,7 +204,9 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	if err != nil {
 		log.Printf("Failed to start transcription job: %v", err)
 		if meeting != nil {
-			repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, map[string]interface{}{"status": model.StatusError})
+			if statusErr := repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, map[string]interface{}{"status": model.StatusError}); statusErr != nil {
+				log.Printf("failed to mark meeting %s as error: %v", meeting.MeetingID, statusErr)
+			}
 		}
 		return fmt.Errorf("failed to start transcription job: %w", err)
 	}

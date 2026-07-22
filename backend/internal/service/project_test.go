@@ -12,18 +12,19 @@ import (
 )
 
 type mockProjectRepo struct {
-	projects       map[string]*model.Project
-	projectMembers map[string]*model.ProjectMember
-	accountMembers map[string]*model.AccountMember
-	accounts       map[string]*model.Account
-	users          map[string]*model.User
-	meetings       map[string]*model.Meeting
-	research       map[string]*model.Research
-	projectRefs    map[string][]model.ProjectRef
-	meetingRefs    map[string][]model.ProjectMeetingRef
-	researchRefs   map[string][]model.ProjectResearchRef
-	deleteAfterGet string
-	failPutRefFor  string
+	projects            map[string]*model.Project
+	projectMembers      map[string]*model.ProjectMember
+	accountMembers      map[string]*model.AccountMember
+	accounts            map[string]*model.Account
+	users               map[string]*model.User
+	meetings            map[string]*model.Meeting
+	research            map[string]*model.Research
+	projectRefs         map[string][]model.ProjectRef
+	meetingRefs         map[string][]model.ProjectMeetingRef
+	researchRefs        map[string][]model.ProjectResearchRef
+	deleteAfterGet      string
+	failPutRefFor       string
+	batchGetResearchErr error
 }
 
 func newMockProjectRepo() *mockProjectRepo {
@@ -365,6 +366,9 @@ func (m *mockProjectRepo) BatchGetMeetings(_ context.Context, keys []repository.
 	return out, nil
 }
 func (m *mockProjectRepo) BatchGetResearchByIDs(_ context.Context, ids []string) ([]model.Research, error) {
+	if m.batchGetResearchErr != nil {
+		return nil, m.batchGetResearchErr
+	}
 	out := []model.Research{}
 	for i := len(ids) - 1; i >= 0; i-- {
 		if r := cloneProjectResearch(m.research[ids[i]]); r != nil {
@@ -702,6 +706,25 @@ func TestDeleteProject_RejectsWhileLinked(t *testing.T) {
 		})
 		if err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1"); !errors.Is(err, ErrProjectHasLinks) {
 			t.Fatalf("expected ErrProjectHasLinks for trashed-but-linked research, got %v", err)
+		}
+	})
+	// Regression test: hasLinkedResearch must fail closed if BatchGetResearchByIDs
+	// errors (e.g. the repo's underlying BatchGetItem gave up with unprocessed
+	// keys after retries -- see backend/internal/repository/research.go's
+	// BatchGetResearch) rather than silently treating a research it couldn't
+	// read as "not linked" and letting an irreversible DeleteProject through.
+	t.Run("BatchGetResearchByIDs error blocks deletion instead of proceeding", func(t *testing.T) {
+		repo := newRepoWith(func(r *mockProjectRepo, _ *model.Project) {
+			r.research["r1"] = &model.Research{ResearchID: "r1", UserID: "owner", ProjectIDs: []string{"p1"}}
+			r.researchRefs["p1"] = []model.ProjectResearchRef{{ProjectID: "p1", ResearchID: "r1"}}
+			r.batchGetResearchErr = fmt.Errorf("BatchGetResearch: 1 keys unprocessed after retries")
+		})
+		err := newProjectServiceWithRepo(repo).DeleteProject(ctx, "owner", "p1")
+		if err == nil || errors.Is(err, ErrProjectHasLinks) {
+			t.Fatalf("expected the BatchGetResearchByIDs error to propagate (fail closed), got %v", err)
+		}
+		if repo.projects["p1"] == nil {
+			t.Fatal("project should NOT have been deleted when the linked-research check itself failed")
 		}
 	})
 	t.Run("clean project deletes", func(t *testing.T) {
