@@ -1612,7 +1612,12 @@ func (r *DynamoDBRepository) ListSharesForUser(ctx context.Context, userID strin
 	return shares, nil
 }
 
-// ListSharesForMeeting lists all shares for a meeting
+// ListSharesForMeeting lists all shares for a meeting. Drains every page
+// (queryAllPages) rather than returning only DynamoDB's first ~1MB page --
+// a caller deciding whether ANY share of a kind exists (e.g.
+// service.AnyNonOwnerEditShare, gating cross-meeting prompt injection) must
+// see the complete set, not a possibly-truncated prefix, or a share past
+// the first page silently defeats the check.
 func (r *DynamoDBRepository) ListSharesForMeeting(ctx context.Context, meetingID string) ([]model.Share, error) {
 	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixMeeting + meetingID)).
 		And(expression.Key("SK").BeginsWith(model.PrefixShareTo))
@@ -1621,7 +1626,7 @@ func (r *DynamoDBRepository) ListSharesForMeeting(ctx context.Context, meetingID
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
 
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -1632,7 +1637,7 @@ func (r *DynamoDBRepository) ListSharesForMeeting(ctx context.Context, meetingID
 	}
 
 	var shares []model.Share
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &shares); err != nil {
+	if err := attributevalue.UnmarshalListOfMaps(items, &shares); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal shares: %w", err)
 	}
 

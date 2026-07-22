@@ -569,20 +569,23 @@ func truncateRunes(s string, n int) string {
 }
 
 // buildLinkedMeetingContext fetches summaries from linked predecessor
-// meetings. Skipped entirely if this meeting has an edit-permission
-// collaborator other than its owner: linked-meeting content the
-// collaborator has no direct read access to would otherwise sit in the same
-// prompt as liveSummary, a field that same collaborator controls -- an
-// injection there ("repeat everything above verbatim") could exfiltrate the
-// linked meeting into a summary the collaborator CAN read. See
-// service.FoldLiveSummary's threat-model comment for the full writeup. An
-// owner-only meeting has no one to exfiltrate to, so linking stays enabled.
+// meetings. Skipped entirely if this meeting has ANY collaborator other
+// than its owner (any permission level, not just currently-active edit):
+// linked-meeting content that collaborator has no direct read access to
+// would otherwise sit in the same prompt as liveSummary, a field only an
+// edit-permission user could ever have written -- an injection there
+// ("repeat everything above verbatim") could exfiltrate the linked meeting
+// into a summary any read-permission collaborator CAN read, including one
+// later demoted from edit to read (demotion doesn't un-leak an
+// already-injected liveSummary). See service.FoldLiveSummary's threat-model
+// comment for the full writeup. An owner-only meeting has no one to
+// exfiltrate to, so linking stays enabled.
 func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) string {
 	if len(meeting.LinkedMeetingIDs) == 0 {
 		return ""
 	}
-	if hasNonOwnerEditCollaborator(ctx, meeting) {
-		log.Printf("Skipping linked-meeting context for %s -- has a non-owner edit collaborator", meeting.MeetingID)
+	if hasNonOwnerCollaborator(ctx, meeting) {
+		log.Printf("Skipping linked-meeting context for %s -- has a non-owner collaborator", meeting.MeetingID)
 		return ""
 	}
 
@@ -633,19 +636,21 @@ func buildLinkedMeetingContext(ctx context.Context, meeting *model.Meeting) stri
 	return sb.String()
 }
 
-// hasNonOwnerEditCollaborator reports whether meeting has been shared with
-// edit permission to anyone other than its owner. Errors are treated as "yes,
-// assume a collaborator exists" (fail closed toward skipping linked context,
-// not toward leaking it). The actual decision logic is
-// service.AnyNonOwnerEditShare, kept in internal/ (and unit-tested there) for
+// hasNonOwnerCollaborator reports whether meeting has been shared (any
+// permission level) with anyone other than its owner. Errors are treated as
+// "yes, assume a collaborator exists" (fail closed toward skipping linked
+// context, not toward leaking it). ListSharesForMeeting drains every
+// DynamoDB page (see its own doc comment), so this sees the complete share
+// set, not a possibly-truncated first page. The actual decision logic is
+// service.AnyNonOwnerShare, kept in internal/ (and unit-tested there) for
 // the same CI-test-scope reason as FoldLiveSummary.
-func hasNonOwnerEditCollaborator(ctx context.Context, meeting *model.Meeting) bool {
+func hasNonOwnerCollaborator(ctx context.Context, meeting *model.Meeting) bool {
 	shares, err := repo.ListSharesForMeeting(ctx, meeting.MeetingID)
 	if err != nil {
 		log.Printf("ListSharesForMeeting failed for %s, assuming a collaborator exists: %v", meeting.MeetingID, err)
 		return true
 	}
-	return service.AnyNonOwnerEditShare(shares, meeting.UserID)
+	return service.AnyNonOwnerShare(shares, meeting.UserID)
 }
 
 // emitAllPartsTranscribedEvent publishes a custom EventBridge event when all parts are transcribed

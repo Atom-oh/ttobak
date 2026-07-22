@@ -226,9 +226,17 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         );
         setIsAsking(false);
         activeEntryIdRef.current = null;
+        // Mirrors the watchdog-timeout path: this frame type doesn't
+        // guarantee no server-side request is still in flight for every
+        // current and future backend error path, so a late delta/complete
+        // could otherwise land on whatever entry becomes active next. Same
+        // disconnect+rotate, same tradeoff (continuity for correctness).
+        wsRef.current?.disconnect();
+        wsRef.current = null;
+        setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
         break;
     }
-  }, [armWatchdog, clearWatchdog]);
+  }, [armWatchdog, clearWatchdog, meetingId]);
 
   const ensureWebSocket = useCallback(async (): Promise<RealtimeWebSocket | null> => {
     if (!WS_URL) return null;

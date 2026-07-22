@@ -38,7 +38,7 @@ func TestBuildSummarizeUserPrompt_NoPriorContextOmitsMarker(t *testing.T) {
 	}
 }
 
-func TestAnyNonOwnerEditShare(t *testing.T) {
+func TestAnyNonOwnerShare(t *testing.T) {
 	tests := []struct {
 		name    string
 		shares  []model.Share
@@ -52,10 +52,10 @@ func TestAnyNonOwnerEditShare(t *testing.T) {
 			want:    false,
 		},
 		{
-			name:    "read-only share to someone else -- not a collaborator for this purpose",
+			name:    "read-only share to someone else DOES count -- they can still read an already-leaked summary",
 			shares:  []model.Share{{SharedToID: "other-1", Permission: model.PermissionRead}},
 			ownerID: "owner-1",
-			want:    false,
+			want:    true,
 		},
 		{
 			name:    "edit share to someone else",
@@ -64,25 +64,33 @@ func TestAnyNonOwnerEditShare(t *testing.T) {
 			want:    true,
 		},
 		{
-			name:    "edit share to the owner themselves does not count",
+			name:    "share to the owner themselves does not count",
 			shares:  []model.Share{{SharedToID: "owner-1", Permission: model.PermissionEdit}},
 			ownerID: "owner-1",
 			want:    false,
 		},
 		{
-			name: "mixed shares, one edit to a non-owner",
+			name: "a collaborator demoted from edit to read still counts",
 			shares: []model.Share{
 				{SharedToID: "other-1", Permission: model.PermissionRead},
-				{SharedToID: "other-2", Permission: model.PermissionEdit},
 			},
 			ownerID: "owner-1",
 			want:    true,
 		},
+		{
+			name: "mixed shares, only the owner's own",
+			shares: []model.Share{
+				{SharedToID: "owner-1", Permission: model.PermissionRead},
+				{SharedToID: "owner-1", Permission: model.PermissionEdit},
+			},
+			ownerID: "owner-1",
+			want:    false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := AnyNonOwnerEditShare(tt.shares, tt.ownerID); got != tt.want {
-				t.Errorf("AnyNonOwnerEditShare() = %v, want %v", got, tt.want)
+			if got := AnyNonOwnerShare(tt.shares, tt.ownerID); got != tt.want {
+				t.Errorf("AnyNonOwnerShare() = %v, want %v", got, tt.want)
 			}
 		})
 	}
