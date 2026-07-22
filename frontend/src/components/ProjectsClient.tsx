@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { projectApi } from '@/lib/api';
 import type { ProjectSummary } from '@/types/meeting';
@@ -35,7 +36,7 @@ export default function ProjectsClient() {
     fetchProjects();
   }, [fetchProjects]);
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
     setCreating(true);

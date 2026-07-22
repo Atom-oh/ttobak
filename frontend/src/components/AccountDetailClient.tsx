@@ -42,6 +42,12 @@ export default function AccountDetailClient() {
   const activeAccountIdRef = useRef(accountId);
   useEffect(() => {
     activeAccountIdRef.current = accountId;
+    // Reset so account A's linked projects (and its stale error flag)
+    // don't stay visible under account B's URL while B's fetch is in
+    // flight -- the guard in fetchAll only stops A's *response* from
+    // landing late, it doesn't clear what was already on screen.
+    setProjects([]);
+    setProjectsError(false);
   }, [accountId]);
 
   const fetchAll = useCallback(async () => {

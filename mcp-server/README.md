@@ -20,6 +20,22 @@ Claude Code  ──stdio──>  TTOBAK MCP Server  ──HTTPS──>  CloudFro
                          (Cognito OAuth PKCE)
 ```
 
+### Bundle Provenance
+
+`frontend/public/mcp/ttobak-mcp.mjs` (served to the public web app so users can add the MCP server without installing from source) is a build artifact, not hand-edited. `mcp-server/src/*.ts` is the sole source of truth. After changing `src/`, always regenerate and copy the bundle -- never edit the `.mjs` directly:
+
+```bash
+cd mcp-server && npm run build && npm run bundle
+cp dist/ttobak-mcp.mjs ../frontend/public/mcp/ttobak-mcp.mjs
+```
+
+To verify the committed bundle is a clean rebuild (no drift, no hand-edits) rather than trust a diff-size comparison against a possibly-stale base commit's bundle:
+
+```bash
+cd mcp-server && npm run build && npm run bundle
+diff dist/ttobak-mcp.mjs ../frontend/public/mcp/ttobak-mcp.mjs   # must be empty
+```
+
 ### Prerequisites
 
 - Node.js 18+
