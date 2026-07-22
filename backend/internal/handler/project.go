@@ -93,7 +93,7 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "name is required")
 		return
 	}
-	project, err := h.projectService.CreateProject(ctx, middleware.GetUserID(ctx), middleware.GetUserEmail(ctx), &req)
+	project, err := h.projectService.CreateProject(ctx, middleware.GetUserID(ctx), &req)
 	if err != nil {
 		writeProjectError(w, err, "Access denied")
 		return

@@ -345,6 +345,17 @@ func (m *mockProjectRepo) GetResearchByID(_ context.Context, researchID string) 
 	return cloneProjectResearch(m.research[researchID]), nil
 }
 func (m *mockProjectRepo) BatchGetMeetings(_ context.Context, keys []repository.MeetingKey) ([]*model.Meeting, error) {
+	// Real DynamoDB BatchGetItem rejects duplicate keys with a
+	// ValidationException -- mirror that here so a regression in the
+	// caller's dedup (projectMeetings) fails this mock instead of silently
+	// passing, the way it would against the real service.
+	seen := make(map[repository.MeetingKey]bool, len(keys))
+	for _, key := range keys {
+		if seen[key] {
+			return nil, fmt.Errorf("mock BatchGetMeetings: duplicate key %+v (real DynamoDB would return ValidationException)", key)
+		}
+		seen[key] = true
+	}
 	out := []*model.Meeting{}
 	for i := len(keys) - 1; i >= 0; i-- {
 		if meeting := cloneProjectMeeting(m.meetings[projectMeetingKey(keys[i].OwnerID, keys[i].MeetingID)]); meeting != nil {
@@ -374,7 +385,7 @@ func addProjectAccountMember(repo *mockProjectRepo, accountID, userID string) {
 
 func TestCreateProject_SetsOwner(t *testing.T) {
 	repo := newMockProjectRepo()
-	project, err := newProjectServiceWithRepo(repo).CreateProject(context.Background(), "owner-1", "owner@example.com", &model.CreateProjectRequest{Name: "  Migration  "})
+	project, err := newProjectServiceWithRepo(repo).CreateProject(context.Background(), "owner-1", &model.CreateProjectRequest{Name: "  Migration  "})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

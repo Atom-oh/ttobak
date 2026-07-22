@@ -281,7 +281,6 @@ func (r *DynamoDBRepository) UpdateProjectFields(ctx context.Context, projectID 
 }
 
 // DeleteProject removes the canonical project and owner index atomically.
-// DeleteProject removes the canonical project and owner index atomically.
 // The CONFIG delete additionally asserts accountIds is still empty --
 // closing the narrowest, cheapest-to-close slice of the service layer's
 // check-then-delete race: a LinkAccount that commits between

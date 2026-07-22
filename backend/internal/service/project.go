@@ -76,7 +76,7 @@ func NewProjectServiceForTest(repo ProjectRepo) *ProjectService {
 	return &ProjectService{repo: repo}
 }
 
-func (s *ProjectService) CreateProject(ctx context.Context, ownerUserID, ownerEmail string, req *model.CreateProjectRequest) (*model.ProjectResponse, error) {
+func (s *ProjectService) CreateProject(ctx context.Context, ownerUserID string, req *model.CreateProjectRequest) (*model.ProjectResponse, error) {
 	if req == nil || strings.TrimSpace(req.Name) == "" {
 		return nil, ErrInvalidInput
 	}
@@ -633,9 +633,19 @@ func (s *ProjectService) projectMeetings(ctx context.Context, projectID string) 
 	if len(refs) == 0 {
 		return refs, map[string]*model.Meeting{}, nil
 	}
-	keys := make([]repository.MeetingKey, len(refs))
-	for i, ref := range refs {
-		keys[i] = repository.MeetingKey{OwnerID: ref.OwnerUserID, MeetingID: ref.MeetingID}
+	// DynamoDB's BatchGetItem rejects duplicate keys with a ValidationException,
+	// so a duplicate MEETINGREF# (e.g. from a pre-existingProjectMeetingRefSK
+	// race) must be deduped here, before the batch call -- the dedup-by-ID
+	// guard in ListProjectMeetings runs on the result and can't protect this.
+	seenKeys := make(map[repository.MeetingKey]bool, len(refs))
+	keys := make([]repository.MeetingKey, 0, len(refs))
+	for _, ref := range refs {
+		key := repository.MeetingKey{OwnerID: ref.OwnerUserID, MeetingID: ref.MeetingID}
+		if seenKeys[key] {
+			continue
+		}
+		seenKeys[key] = true
+		keys = append(keys, key)
 	}
 	meetings, err := s.repo.BatchGetMeetings(ctx, keys)
 	if err != nil {
