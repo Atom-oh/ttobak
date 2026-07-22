@@ -1159,15 +1159,20 @@ Response: 200 OK
 
 ```
 POST /api/kb/sync
-Request:
+Request: (no body — always a full-data-source sync)
+
+Response: 200 OK
 {
-  "fileId": "uuid"                  // optional: specific file, omit for full sync
+  "status": "started",
+  "jobId": "bedrock-ingestion-job-id",
+  "message": "Knowledge Base sync started"
 }
 
-Response: 202 Accepted
+// When the API Lambda lacks KB_ID/KB_DATASOURCE_ID (env not deployed):
+Response: 200 OK
 {
-  "syncJobId": "uuid",
-  "status": "indexing"
+  "status": "skipped",
+  "message": "Knowledge Base not configured"
 }
 ```
 
