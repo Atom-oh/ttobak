@@ -21025,8 +21025,77 @@ h1{color:#3211d4;margin:0 0 12px}p{color:#666;margin:0}</style></head>
 }
 
 // src/api.ts
+import { readFileSync as readFileSync2, statSync, realpathSync } from "node:fs";
 import { request as httpsRequest2 } from "node:https";
+import { basename, extname, isAbsolute, sep } from "node:path";
+import { homedir as homedir2 } from "node:os";
 import { URL as URL3 } from "node:url";
+var MIME_BY_EXT = {
+  ".pdf": "application/pdf",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".md": "text/markdown",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+};
+var MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+var MAX_KB_UPLOAD_BYTES = 50 * 1024 * 1024;
+var BLOCKED_SYSTEM_PREFIXES = ["/etc", "/proc", "/sys", "/var/run/secrets", "/run/secrets"];
+var BLOCKED_NAME_PATTERNS = [
+  /^\.env(\..*)?$/i,
+  // .env, .env.local, .env.production, ...
+  /credentials/i,
+  // credentials, aws_credentials.json, gcloud-credentials.txt, ...
+  /\.(pem|key|p12|pfx)$/i,
+  // TLS/private-key material
+  /^id_[a-z0-9]+(\.pub)?$/i
+  // SSH keypairs: id_rsa, id_ed25519(.pub)
+];
+function guardUploadPath(filePath, maxBytes) {
+  if (!isAbsolute(filePath)) {
+    throw new Error(`filePath must be an absolute path, got "${filePath}".`);
+  }
+  let real;
+  try {
+    real = realpathSync(filePath);
+  } catch {
+    throw new Error(`File not found: "${filePath}".`);
+  }
+  for (const prefix of BLOCKED_SYSTEM_PREFIXES) {
+    if (real === prefix || real.startsWith(prefix + sep)) {
+      throw new Error(`Refusing to upload "${filePath}" -- path is inside the system directory ${prefix}.`);
+    }
+  }
+  if (BLOCKED_NAME_PATTERNS.some((re) => re.test(basename(real)))) {
+    throw new Error(`Refusing to upload "${filePath}" -- filename matches a credential/secret pattern.`);
+  }
+  const st = statSync(real);
+  if (!st.isFile()) {
+    throw new Error(`Refusing to upload "${filePath}" -- not a regular file.`);
+  }
+  const home = homedir2();
+  if (real === home || real.startsWith(home + sep)) {
+    const relSegments = real === home ? [] : real.slice(home.length + 1).split(sep);
+    if (relSegments.some((seg) => seg.startsWith("."))) {
+      throw new Error(`Refusing to upload "${filePath}" -- path is inside a hidden/credentials directory under $HOME.`);
+    }
+  }
+  if (st.size > maxBytes) {
+    throw new Error(`Refusing to upload "${filePath}" -- ${st.size} bytes exceeds the ${maxBytes}-byte limit.`);
+  }
+  return { path: real, size: st.size };
+}
+function resolveFileMeta(filePath, fileName, fileType) {
+  const name = fileName ? basename(fileName) : basename(filePath);
+  const type = fileType || MIME_BY_EXT[extname(name).toLowerCase()];
+  if (!type) {
+    throw new Error(
+      `Could not infer a MIME type for "${name}" -- pass fileType explicitly (e.g. application/pdf).`
+    );
+  }
+  const ext = extname(name);
+  const normalizedName = !ext || ext === ext.toLowerCase() ? name : name.slice(0, -ext.length) + ext.toLowerCase();
+  return { name: normalizedName, type };
+}
 var TtobakApi = class {
   constructor(auth2, baseUrl) {
     this.auth = auth2;
@@ -21118,11 +21187,96 @@ var TtobakApi = class {
   async getDocument(accountId, docId) {
     return this.get(`/api/accounts/${accountId}/documents/${docId}`);
   }
+  /** Upload a local file into the global Knowledge Base. Ingestion doesn't
+   * start until syncKB() is called (upload can be batched, then synced once). */
+  async uploadToKB(filePath, fileName, fileType) {
+    const { path: resolvedPath } = guardUploadPath(filePath, MAX_KB_UPLOAD_BYTES);
+    const { name, type } = resolveFileMeta(resolvedPath, fileName, fileType);
+    const { uploadUrl, key } = await this.post("/api/kb/upload", {
+      fileName: name,
+      fileType: type
+    });
+    await this.putFile(uploadUrl, resolvedPath, type);
+    return { key, fileName: name, mimeType: type };
+  }
+  async syncKB() {
+    return this.post("/api/kb/sync", {});
+  }
+  async listKBFiles() {
+    return this.get("/api/kb/files");
+  }
+  async deleteKBFile(fileId) {
+    return this.delete(`/api/kb/files/${encodeURIComponent(fileId)}`);
+  }
+  /** Upload a local file and register it as a document -- either under an
+   * account (accountId set) or as a personal doc (accountId omitted). */
+  async uploadDocument(filePath, title, opts) {
+    const { path: resolvedPath, size: fileSize } = guardUploadPath(filePath, MAX_UPLOAD_BYTES);
+    const { name, type } = resolveFileMeta(resolvedPath, opts?.fileName, opts?.fileType);
+    const { uploadUrl, key } = await this.post("/api/upload/presigned", {
+      fileName: name,
+      fileType: type,
+      category: "doc"
+    });
+    await this.putFile(uploadUrl, resolvedPath, type);
+    const target = opts?.accountId ? `/api/accounts/${encodeURIComponent(opts.accountId)}/documents` : "/api/documents";
+    return this.post(target, {
+      title,
+      fileKey: key,
+      fileName: name,
+      mimeType: type,
+      fileSize,
+      docType: opts?.docType,
+      path: opts?.path
+    });
+  }
+  async createAccount(input) {
+    return this.post("/api/accounts", input);
+  }
+  async addAccountMember(accountId, email3, role) {
+    return this.post(`/api/accounts/${encodeURIComponent(accountId)}/members`, { email: email3, role });
+  }
   async get(path) {
     return this.request("GET", path);
   }
   async post(path, body) {
     return this.request("POST", path, body);
+  }
+  async delete(path) {
+    return this.request("DELETE", path);
+  }
+  /** PUT a local file's bytes directly to a presigned S3 URL -- no TTOBAK
+   * bearer token here, the URL's own signature is the auth. */
+  async putFile(uploadUrl, filePath, contentType) {
+    const data = readFileSync2(filePath);
+    const url2 = new URL3(uploadUrl);
+    return new Promise((resolve, reject) => {
+      const req = httpsRequest2(
+        {
+          hostname: url2.hostname,
+          port: url2.port || void 0,
+          path: url2.pathname + url2.search,
+          method: "PUT",
+          headers: { "Content-Type": contentType, "Content-Length": String(data.length) },
+          timeout: 6e4
+        },
+        (res) => {
+          let body = "";
+          res.on("data", (c) => body += c);
+          res.on("end", () => {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+              resolve();
+            } else {
+              reject(new Error(`File upload to S3 failed: HTTP ${res.statusCode}: ${body.slice(0, 300)}`));
+            }
+          });
+        }
+      );
+      req.on("timeout", () => req.destroy(new Error("File upload to S3 timed out after 60s")));
+      req.on("error", reject);
+      req.write(data);
+      req.end();
+    });
   }
   async request(method, path, body) {
     const idToken = await this.auth.getIdToken();
@@ -21370,7 +21524,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "ttobak_ask",
-      description: "Ask a natural-language question about your meetings. Uses Bedrock RAG with knowledge base. Optionally scope to one meeting.",
+      description: "Ask a natural-language question. Uses Bedrock RAG. Omit meetingId to query across your own Knowledge Base uploads, your meetings (plus ones shared with you), and shared crawler-collected docs; pass meetingId to scope to one meeting.",
       inputSchema: {
         type: "object",
         properties: {
@@ -21379,6 +21533,82 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           sessionId: { type: "string", description: "Optional: continue a conversation" }
         },
         required: ["question"]
+      }
+    },
+    {
+      name: "ttobak_kb_upload",
+      description: "Upload a local file (pdf, md, pptx, docx) into your Knowledge Base space. Retrieval is scoped to you: files land under your own kb/{userId}/ prefix and only your ttobak_ask queries can retrieve them (the underlying Bedrock KB is shared infrastructure, but the QA retrieval filter is per-user). Indexing happens at the next ingestion run, not immediately (see ttobak_kb_sync).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          filePath: { type: "string", description: "Absolute path to the local file to upload" },
+          fileName: { type: "string", description: "Optional: override the uploaded file name (defaults to the local file name)" },
+          fileType: { type: "string", description: "Optional: MIME type override, inferred from the file extension otherwise (pdf/md/pptx/docx)" }
+        },
+        required: ["filePath"]
+      }
+    },
+    {
+      name: "ttobak_kb_sync",
+      description: 'Trigger a Knowledge Base ingestion job. This is a full-data-source sync -- it indexes KB uploads, meeting exports, and crawler docs alike, not just your ttobak_kb_upload files. Returns status "started" with a job id; returns "skipped" on a deployment where the API Lambda lacks the KB env vars, in which case uploads are still indexed by the next ingestion run another pipeline triggers (every completed meeting summary, and any daily crawler run that found new documents).',
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "ttobak_kb_list_files",
+      description: "List your own uploaded Knowledge Base files (fileId, fileName, size, lastModified).",
+      inputSchema: { type: "object", properties: {} }
+    },
+    {
+      name: "ttobak_kb_delete_file",
+      description: "Delete a file from the Knowledge Base by fileId (from ttobak_kb_list_files).",
+      inputSchema: {
+        type: "object",
+        properties: { fileId: { type: "string", description: "File ID from ttobak_kb_list_files" } },
+        required: ["fileId"]
+      }
+    },
+    {
+      name: "ttobak_upload_document",
+      description: "Upload a local file (pdf, pptx, or legacy ppt) and register it as a document, so teammates can preview/download it in TTOBAK. Omit accountId for a personal doc; set it to share into an account.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          filePath: { type: "string", description: "Absolute path to the local file to upload" },
+          title: { type: "string", description: "Document title" },
+          accountId: { type: "string", description: "Optional: Account ID to share into (omit for a personal doc)" },
+          fileName: { type: "string", description: "Optional: override the uploaded file name (defaults to the local file name)" },
+          fileType: { type: "string", description: "Optional: MIME type override (application/pdf, .pptx, or legacy .ppt), inferred from the file extension otherwise" },
+          docType: { type: "string", description: "Optional: prep | reference | slide | ..." },
+          path: { type: "string", description: "Optional: original vault path" }
+        },
+        required: ["filePath", "title"]
+      }
+    },
+    {
+      name: "ttobak_create_account",
+      description: "Create a new customer account. You become its owner.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Account name" },
+          aliases: { type: "array", items: { type: "string" }, description: "Optional: alternate names" },
+          domains: { type: "array", items: { type: "string" }, description: "Optional: email domains" },
+          industry: { type: "string", description: "Optional: industry" }
+        },
+        required: ["name"]
+      }
+    },
+    {
+      name: "ttobak_add_account_member",
+      description: "Add a teammate to an account by email. Only the account owner can do this. role must be AM, TAM, or SSA.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          accountId: { type: "string", description: "Account ID" },
+          email: { type: "string", description: "TTOBAK email of the teammate to add" },
+          role: { type: "string", enum: ["AM", "TAM", "SSA"], description: "Role to assign" }
+        },
+        required: ["accountId", "email", "role"]
       }
     },
     {
@@ -21500,6 +21730,58 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         const { question, meetingId, sessionId } = args;
         if (!question) return error2("question is required");
         const result = await api.askQuestion(question, meetingId, sessionId);
+        return text(JSON.stringify(result, null, 2));
+      }
+      case "ttobak_kb_upload": {
+        const { filePath, fileName, fileType } = args;
+        if (!filePath) return error2("filePath is required");
+        const result = await api.uploadToKB(filePath, fileName, fileType);
+        return text(
+          `Uploaded to Knowledge Base: ${JSON.stringify(result)}
+Retrieval is scoped to you -- only your own ttobak_ask queries can find this file. Call ttobak_kb_sync to index it now; if that returns "skipped" (a deployment without the KB env vars), it is still indexed by the next completed meeting summary or document-bearing crawler run.`
+        );
+      }
+      case "ttobak_kb_sync": {
+        const result = await api.syncKB();
+        return text(JSON.stringify(result, null, 2));
+      }
+      case "ttobak_kb_list_files": {
+        const result = await api.listKBFiles();
+        return text(JSON.stringify(result, null, 2));
+      }
+      case "ttobak_kb_delete_file": {
+        const { fileId } = args;
+        if (!fileId) return error2("fileId is required");
+        await api.deleteKBFile(fileId);
+        return text(
+          `Deleted Knowledge Base file ${fileId}. It stays retrievable (by you only -- retrieval is user-scoped) until the next ingestion run: call ttobak_kb_sync to reindex now, or wait for the next completed meeting summary / document-bearing crawler run.`
+        );
+      }
+      case "ttobak_upload_document": {
+        const { filePath, title, accountId, fileName, fileType, docType, path } = args;
+        if (!filePath) return error2("filePath is required");
+        if (!title) return error2("title is required");
+        const result = await api.uploadDocument(filePath, title, {
+          accountId,
+          fileName,
+          fileType,
+          docType,
+          path
+        });
+        return text(JSON.stringify(result, null, 2));
+      }
+      case "ttobak_create_account": {
+        const { name: name2, aliases, domains, industry } = args;
+        if (!name2) return error2("name is required");
+        const result = await api.createAccount({ name: name2, aliases, domains, industry });
+        return text(JSON.stringify(result, null, 2));
+      }
+      case "ttobak_add_account_member": {
+        const { accountId, email: email3, role } = args;
+        if (!accountId) return error2("accountId is required");
+        if (!email3) return error2("email is required");
+        if (!role) return error2("role is required");
+        const result = await api.addAccountMember(accountId, email3, role);
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_logout": {

@@ -15,6 +15,7 @@ export default function ProjectsPage() {
   }
   if (!isAuthenticated) {
     // Match the existing authenticated-page redirect guard.
+    // eslint-disable-next-line react-hooks/immutability
     if (typeof window !== 'undefined') window.location.href = '/';
     return null;
   }
