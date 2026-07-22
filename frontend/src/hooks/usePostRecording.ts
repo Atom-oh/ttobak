@@ -16,6 +16,21 @@ function formatDefaultTitle(date: Date): string {
     : `${month}월 ${day}일 ${hour}시 미팅`;
 }
 
+// Mirrors backend/internal/model/request.go's MaxLiveSummaryRunes -- the
+// backend now rejects an over-cap liveSummary with 400, and this same PUT
+// also carries the recording->transcribing status transition, so without a
+// matching client-side truncation an oversized live summary (a long
+// meeting's incrementally-grown markdown+mermaid) fails the whole
+// post-recording save, not just the summary field.
+const MAX_LIVE_SUMMARY_CODEPOINTS = 32000;
+
+function truncateLiveSummary(text: string): string {
+  const codePoints = Array.from(text);
+  return codePoints.length > MAX_LIVE_SUMMARY_CODEPOINTS
+    ? codePoints.slice(0, MAX_LIVE_SUMMARY_CODEPOINTS).join('')
+    : text;
+}
+
 /** Race a promise against a timeout */
 export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -73,7 +88,7 @@ export function usePostRecording({
           meetingsApi.update(meetingId, {
             title: meetingTitle || formatDefaultTitle(new Date()),
             status: 'transcribing',
-            ...(liveSummaryRef?.current ? { liveSummary: liveSummaryRef.current } : {}),
+            ...(liveSummaryRef?.current ? { liveSummary: truncateLiveSummary(liveSummaryRef.current) } : {}),
           }),
           15000, 'Save transcript',
         );
@@ -91,7 +106,7 @@ export function usePostRecording({
         await withTimeout(
           meetingsApi.update(meetingId, {
             status: 'transcribing',
-            ...(liveSummaryRef?.current ? { liveSummary: liveSummaryRef.current } : {}),
+            ...(liveSummaryRef?.current ? { liveSummary: truncateLiveSummary(liveSummaryRef.current) } : {}),
           }),
           15000, 'Save transcript',
         );

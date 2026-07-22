@@ -88,7 +88,12 @@ describe('GatewayStack', () => {
   test('QA Lambda async invoke has retries disabled', () => {
     // Documented in INFRA-SPEC: a retried async invoke would re-stream stale
     // deltas onto a WebSocket whose client already gave up or moved on.
+    // FunctionName is pinned to the QAFunction's own logical id (not just
+    // "any EventInvokeConfig has MaximumRetryAttempts: 0") so this doesn't
+    // silently pass for a different Lambda if one is ever given the same
+    // setting.
     template.hasResourceProperties('AWS::Lambda::EventInvokeConfig', {
+      FunctionName: Match.objectLike({ Ref: Match.stringLikeRegexp('^QAFunction') }),
       MaximumRetryAttempts: 0,
     });
   });
