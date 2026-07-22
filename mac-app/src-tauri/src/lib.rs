@@ -17,7 +17,7 @@
 //! `evaluateJavaScript` as one giant JS array literal. JavaScriptCore fatally
 //! asserted while bytecode-compiling it, killing the WebContent process
 //! (surfacing to the user as the whole app freezing). See
-//! `docs/decisions/ADR-024-native-streaming-upload-and-system-audio-captions.md`.
+//! `docs/decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md`.
 
 mod audio;
 mod error;
@@ -25,6 +25,8 @@ mod upload;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -44,6 +46,13 @@ const STOP_CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct RecorderState {
     pub recorder: Mutex<AudioRecorder>,
     pub recorded_paths: Mutex<HashSet<PathBuf>>,
+    /// True while a `stop_and_finalize` is still running — including one
+    /// that outlived `STOP_CAPTURE_TIMEOUT` and kept going in the
+    /// background. `recording_status` exposes this so the frontend can wait
+    /// for the WAV to actually be finalized after a `stop_timed_out: true`
+    /// response: `recording` alone flips false the moment `take_handle()`
+    /// empties the recorder, long before the background finalize is done.
+    pub finalizing: Arc<AtomicBool>,
 }
 
 #[derive(Serialize)]
@@ -69,6 +78,11 @@ pub struct StatusResponse {
     pub recording: bool,
     pub temp_path: Option<String>,
     pub elapsed_ms: u64,
+    /// True while a stop's `stop_and_finalize` is still running (see
+    /// `RecorderState::finalizing`). After a `stop_timed_out` stop, the
+    /// frontend polls until this goes false before uploading — `recording`
+    /// is already false at that point and cannot express "still writing".
+    pub finalizing: bool,
 }
 
 fn allowed_dir() -> PathBuf {
@@ -133,8 +147,17 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
     #[cfg(target_os = "macos")]
     let stop_timed_out = {
         let backend = handle.backend;
-        let stop_task =
-            tauri::async_runtime::spawn_blocking(move || backend.stop_and_finalize());
+        // Raise `finalizing` for the whole stop_and_finalize window and let
+        // the blocking task itself clear it — that way the flag stays
+        // accurate on the timed-out path too, where this command returns
+        // while the task keeps running in the background.
+        state.finalizing.store(true, Ordering::SeqCst);
+        let finalize_done = Arc::clone(&state.finalizing);
+        let stop_task = tauri::async_runtime::spawn_blocking(move || {
+            let result = backend.stop_and_finalize();
+            finalize_done.store(false, Ordering::SeqCst);
+            result
+        });
 
         match tokio::time::timeout(STOP_CAPTURE_TIMEOUT, stop_task).await {
             Ok(Ok(Ok(()))) => false,
@@ -184,6 +207,7 @@ fn recording_status(state: State<'_, RecorderState>) -> StatusResponse {
         recording: snapshot.recording,
         temp_path: snapshot.path.map(|p| p.to_string_lossy().into_owned()),
         elapsed_ms: snapshot.elapsed_ms,
+        finalizing: state.finalizing.load(Ordering::SeqCst),
     }
 }
 
@@ -209,6 +233,7 @@ pub fn run() {
         .manage(RecorderState {
             recorder: Mutex::new(AudioRecorder::new()),
             recorded_paths: Mutex::new(HashSet::new()),
+            finalizing: Arc::new(AtomicBool::new(false)),
         })
         .invoke_handler(tauri::generate_handler![
             start_recording,

@@ -206,6 +206,10 @@ export function useRecordingSession({
       },
     });
 
+    // Stop any previous manager before overwriting the ref — a restart
+    // after a failed native start would otherwise leak its Transcribe
+    // WebSocket (nothing else holds a reference to stop it).
+    sttManagerRef.current?.stop();
     sttManagerRef.current = manager;
 
     // Choose provider: use transcribe-streaming only if configured

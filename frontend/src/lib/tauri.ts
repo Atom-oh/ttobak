@@ -65,6 +65,11 @@ export interface TauriStatusResponse {
   recording: boolean;
   temp_path: string | null;
   elapsed_ms: number;
+  /** True while a stop's background finalize is still writing the WAV.
+   * `recording` flips false the moment the stop command takes the handle,
+   * so after `stop_timed_out` this — not `recording` — is what signals the
+   * file is safe to upload. Optional: older Rust builds don't send it. */
+  finalizing?: boolean;
 }
 
 export interface TauriUploadProgress {

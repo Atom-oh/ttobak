@@ -8,7 +8,7 @@
 //! WebView loads the remote production SPA rather than a local `tauri://`
 //! origin, Tauri delivers IPC binary responses via `evaluateJavaScript` as
 //! one giant JS array literal, and the bytecode compiler fatally asserted on
-//! it. See `docs/decisions/ADR-024-native-streaming-upload-and-system-audio-captions.md`.
+//! it. See `docs/decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md`.
 //!
 //! The fix: bulk audio bytes never cross the IPC bridge again. Presign,
 //! auth, and completion-notification still live in the SPA (unchanged from

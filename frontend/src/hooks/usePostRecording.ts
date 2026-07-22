@@ -169,7 +169,12 @@ export function usePostRecording({
       // Only now — upload confirmed and the backend has acknowledged it —
       // is it safe to delete the source file.
       if (payload.kind === 'native') {
-        await cleanupRecording(payload.path).catch(() => {});
+        await cleanupRecording(payload.path).catch((e) => {
+          // Best-effort but not silent: the leftover WAV in $TMPDIR is
+          // harmless (OS-cleaned), but a persistent cleanup failure is
+          // worth seeing in the console.
+          console.warn('cleanup_recording failed (recording already uploaded):', e);
+        });
       }
       pendingAudioRef.current = null;
       putDoneRef.current = null;
@@ -256,6 +261,7 @@ export function usePostRecording({
    * the retained pending payload (fresh presign; `resumeUploadFlow` skips
    * straight to `notifyComplete` if the PUT itself already succeeded).
    * Falls back to a plain reset if there's nothing to retry. */
+  const retryInFlightRef = useRef(false);
   const handleRetry = useCallback(() => {
     const pending = pendingAudioRef.current;
     if (!pending) {
@@ -263,8 +269,15 @@ export function usePostRecording({
       setErrorMessage(null);
       return;
     }
+    // A double-click here would run resumeUploadFlow twice concurrently:
+    // both see putDoneRef null, both PUT, both notify — and a duplicate
+    // notify means a duplicate EventBridge transcription trigger.
+    if (retryInFlightRef.current) return;
+    retryInFlightRef.current = true;
     setErrorMessage(null);
-    void resumeUploadFlow(pending);
+    void resumeUploadFlow(pending).finally(() => {
+      retryInFlightRef.current = false;
+    });
   }, [resumeUploadFlow]);
 
   /** Surface a terminal recording failure on the standard error banner

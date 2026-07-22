@@ -110,7 +110,19 @@ impl AudioRecorder {
     /// which — unlike `stop_recording`/`start_recording`/`cleanup_recording`
     /// — runs as a *sync* Tauri command on the app's main thread).
     pub fn take_handle(&mut self) -> Result<RecordingHandle, AppError> {
-        self.inner.take().ok_or(AppError::NotRunning)
+        let handle = self.inner.take().ok_or(AppError::NotRunning)?;
+        // Bump the generation at stop-REQUEST time, not just at next start:
+        // the capture callbacks check it before appending samples/emitting
+        // events, so a stop that wedges past STOP_CAPTURE_TIMEOUT stops
+        // RECORDING system audio the moment the user asked, instead of
+        // silently capturing until the next recording begins. (Everything
+        // up to this instant is already in the WAV; the pending finalize
+        // only flushes and closes it.)
+        {
+            use std::sync::atomic::Ordering;
+            self.generation.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(handle)
     }
 }
 

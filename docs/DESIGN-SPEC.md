@@ -287,8 +287,9 @@ Layout:
 ### 2.6a Post-Recording Banner & System Audio Mode (current implementation, ADR-024)
 
 `components/record/PostRecordingBanner.tsx` — fixed top toast shown while
-`usePostRecording`'s `step` is non-null (`creating` → `saving` →
-`uploading` → `redirecting`, or `error`).
+`usePostRecording`'s `step` is non-null (`creating` → `saving` → `notes` →
+`uploading` → `redirecting`, or `error`; `notes` pauses the flow for the
+notes-input dialog before the upload resumes).
 
 ```
 Uploading step:

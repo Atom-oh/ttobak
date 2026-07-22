@@ -81,7 +81,7 @@ src-tauri/
 |--------------------------|----------------------------------------------------|---------------------------------------------------------|
 | `start_recording`        | `meeting_id: string`                                | `{ temp_path }`                                          |
 | `stop_recording`         | —                                                   | `{ temp_path, duration_ms, byte_size, stop_timed_out }`  |
-| `recording_status`       | —                                                   | `{ recording, temp_path?, elapsed_ms }` (no frontend callers today) |
+| `recording_status`       | —                                                   | `{ recording, temp_path?, elapsed_ms, finalizing }` (polled by RecordButton after a `stop_timed_out` stop to wait for the background finalize) |
 | `upload_recording`       | `path: string, uploadUrl: string, contentType: string` | HTTP status code (u16) on success                     |
 | `cleanup_recording`      | `path: string`                                      | deletes temp WAV after upload-complete is confirmed      |
 

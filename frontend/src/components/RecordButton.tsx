@@ -453,17 +453,20 @@ export function RecordButton({
           // the background. Handing the file to upload now would freeze
           // Content-Length at its current size (upload.rs measures at open)
           // and silently drop everything appended after — so wait (bounded)
-          // for the background finalize to actually finish first. Once it
-          // has, the open-time measurement sees the complete file; the
-          // byte_size passed below may slightly undercount but is display-
-          // only.
+          // for the background finalize to actually finish first. That is
+          // signalled by `finalizing` going false: `recording` is ALREADY
+          // false here (the stop command emptied the recorder before the
+          // timeout fired), so polling it would pass instantly and
+          // guarantee nothing. Once finalize completes, upload.rs's
+          // open-time measurement sees the complete file; the byte_size
+          // passed below may slightly undercount but is display-only.
           console.warn('Native stop timed out — waiting for background finalize to complete.');
           let finalized = false;
           for (let i = 0; i < 30; i++) {
             await new Promise((r) => setTimeout(r, 1000));
             try {
               const status = await getNativeRecordingStatus();
-              if (!status.recording) {
+              if (!status.recording && !status.finalizing) {
                 finalized = true;
                 break;
               }

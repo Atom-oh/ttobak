@@ -57,7 +57,18 @@ function RecordPageInner() {
   // stays false for the whole recording. Without this separate signal, the
   // during-recording banner/title/nav-lock never rendered and the screen
   // looked blank/broken even though capture was working fine.
-  const [isNativeRecording, setIsNativeRecording] = useState(false);
+  const [isNativeRecording, _setIsNativeRecording] = useState(false);
+  // Ref mirror for callbacks whose closure predates the state flip:
+  // RecordButton's onError is created in the render where the user CLICKED
+  // (isNativeRecording still false), but fires after handleRecordingStart
+  // has already latched native mode — reading the state there takes the
+  // wrong branch and leaves a zombie recording UI. Callbacks must read the
+  // ref; rendering reads the state.
+  const isNativeRecordingRef = useRef(false);
+  const setIsNativeRecording = useCallback((v: boolean) => {
+    isNativeRecordingRef.current = v;
+    _setIsNativeRecording(v);
+  }, []);
 
   // Analyser nodes for MicSelector level meter
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
@@ -813,18 +824,21 @@ function RecordPageInner() {
             onNativeFileReady={postRecording.handleNativeFileReady}
             onNativePcmChunk={session.pushNativePcmChunk}
             onError={(error) => {
-              if (isNativeRecording) {
-                // Every onError call while isNativeRecording is true comes
-                // from RecordButton's native start/stop catch blocks (the
-                // native branch returns before reaching any browser-mode
-                // code) — always a terminal failure, e.g. a stop that names
-                // the preserved file path for manual recovery. Terminal
-                // means the WHOLE session ends: stopSession() releases the
-                // STT session too, or session.isRecording stays latched
-                // (AppLayout stuck in recording mode, Transcribe WebSocket
-                // left open). The failure surfaces on the post-recording
-                // error banner ([Try Again]/[Home]) alongside upload
-                // failures, not the live-captions channel.
+              if (isNativeRecordingRef.current) {
+                // Read the REF, not the state: this closure was created in
+                // the render where the user clicked (state still false) but
+                // fires after handleRecordingStart latched native mode — a
+                // state read takes the wrong branch on a native START
+                // failure (e.g. Screen Recording TCC denial) and leaves a
+                // zombie recording UI. Every onError while native mode is
+                // latched comes from RecordButton's native start/stop catch
+                // blocks — always a terminal failure. Terminal means the
+                // WHOLE session ends: stopSession() releases the STT session
+                // too, or session.isRecording stays latched (AppLayout stuck
+                // in recording mode, Transcribe WebSocket left open). The
+                // failure surfaces on the post-recording error banner
+                // ([Try Again]/[Home]) alongside upload failures, not the
+                // live-captions channel.
                 setIsNativeRecording(false);
                 session.stopSession();
                 postRecording.failWithError(error);

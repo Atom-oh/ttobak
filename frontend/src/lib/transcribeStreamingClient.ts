@@ -102,6 +102,14 @@ export class TranscribeStreamingSession {
   }
 
   private async connectAndTranscribe(): Promise<void> {
+    // Reset the queue BEFORE any await: chunks produced while the SDK
+    // import/credential exchange below is in flight (native PCM starts
+    // flowing as soon as capture does) must be queued and sent, not wiped
+    // by a post-await reset — that used to drop the first utterance.
+    this.audioQueue = [];
+    this.audioResolve = null;
+    this.audioDone = false;
+
     // Dynamically import SDK to avoid bundling when not used
     const [{ TranscribeStreamingClient, StartStreamTranscriptionCommand }, { fromCognitoIdentityPool }] =
       await Promise.all([
@@ -129,10 +137,6 @@ export class TranscribeStreamingSession {
         clientConfig: { region: this.config.region },
       }),
     });
-
-    this.audioQueue = [];
-    this.audioResolve = null;
-    this.audioDone = false;
 
     // Create async iterable for the SDK
     const audioStream: AsyncIterable<AudioChunkMessage> = {

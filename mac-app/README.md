@@ -37,7 +37,7 @@ native commands for audio capture.
 |                       start_recording(meeting_id)          |
 |                       stop_recording()                     |
 |                       recording_status()                   |
-|                       read_recording_bytes(path)           |
+|                       upload_recording(path, url, ct)      |
 |                       cleanup_recording(path)              |
 +------------------------------------------------------------+
 ```
@@ -190,7 +190,7 @@ the record button through native commands:
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
 export function startNativeRecording(meetingId: string): Promise<StartResponse>;
 export function stopNativeRecording(): Promise<StopResponse>;
-export function readRecordingBytes(path: string): Promise<ArrayBuffer>;
+export function uploadRecording(path: string, uploadUrl: string, contentType: string): Promise<void>;
 export function cleanupRecording(path: string): Promise<void>;
 ```
 
@@ -226,8 +226,9 @@ mac-app/
   captured. Mixing the local mic via AVAudioEngine is Phase 2.
 - **Offline queue**: ADR-006 specifies an offline-first recording mode that
   syncs to S3 when connectivity returns. Not yet implemented.
-- **In-window upload bridge**: `read_recording_bytes` returns the raw WAV; the
-  frontend should chunk-upload via the existing presigned URL flow. The SPA
-  side of this is the integration PR mentioned above.
+- **In-window upload bridge**: removed (ADR-024). Large WAVs crashed the
+  WKWebView heap when ferried over IPC — `upload_recording` now streams the
+  file from disk straight to the presigned URL, and `read_recording_bytes`
+  no longer exists (do not reintroduce it).
 - **Auto-update**: Tauri Updater plugin is not wired up — releases are manual
   for now.
