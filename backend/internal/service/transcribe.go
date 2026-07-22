@@ -163,18 +163,25 @@ func (s *TranscribeService) ProcessTranscriptionComplete(ctx context.Context, me
 		return fmt.Errorf("meeting not found: %s", meetingID)
 	}
 
+	fields := map[string]interface{}{}
 	if isNova {
 		meeting.TranscriptB = transcriptText
+		fields["transcriptB"] = transcriptText
 	} else {
 		meeting.TranscriptA = transcriptText
+		fields["transcriptA"] = transcriptText
 	}
 
 	// Check if both transcripts are complete
 	if meeting.TranscriptA != "" && meeting.TranscriptB != "" {
-		meeting.Status = model.StatusSummarizing
+		fields["status"] = model.StatusSummarizing
 	}
 
-	return s.repo.UpdateMeeting(ctx, meeting)
+	// A partial UpdateItem, not the whole-item UpdateMeeting -- this call site
+	// never populates ProjectIDs, so a whole-item PutItem would race a
+	// concurrent LinkMeeting/UnlinkMeeting (see UpdateMeeting's comment) for
+	// no reason: it only ever needs to touch these two-or-three attributes.
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, fields)
 }
 
 // getMediaFormat determines the media format from the file key
@@ -210,8 +217,7 @@ func (s *TranscribeService) updateMeetingStatus(ctx context.Context, meetingID, 
 		return fmt.Errorf("meeting not found: %s", meetingID)
 	}
 
-	meeting.Status = status
-	return s.repo.UpdateMeeting(ctx, meeting)
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{"status": status})
 }
 
 // resolveVocabularyName returns the vocabulary name to use for transcription.
