@@ -10,15 +10,11 @@
 //! `cargo check` works on Linux dev machines (e.g. CI lint).
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::error::AppError;
-
-pub struct RecordingSummary {
-    pub path: PathBuf,
-    pub duration_ms: u64,
-    pub byte_size: u64,
-}
 
 pub struct RecordingSnapshot {
     pub recording: bool,
@@ -28,18 +24,32 @@ pub struct RecordingSnapshot {
 
 pub struct AudioRecorder {
     inner: Option<RecordingHandle>,
+    /// Bumped by every `start()`. Passed down to each recording's
+    /// `AudioOutput` (see `macos::AudioOutput`) so its callback can detect
+    /// when it's been superseded by a newer recording and stop emitting
+    /// events / writing samples — closes a real bug where a `stop_capture`
+    /// wedged past `stop_recording`'s timeout kept running in the
+    /// background (see `lib.rs`'s `STOP_CAPTURE_TIMEOUT`) and, without this
+    /// guard, its `native-audio-level`/`native-pcm-chunk` events (global
+    /// Tauri broadcasts, no per-recording tag) would leak into whatever
+    /// recording started next.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    generation: Arc<AtomicU64>,
 }
 
-struct RecordingHandle {
-    path: PathBuf,
-    started_at: Instant,
+pub struct RecordingHandle {
+    pub path: PathBuf,
+    pub started_at: Instant,
     #[cfg(target_os = "macos")]
-    backend: macos::Backend,
+    pub backend: macos::Backend,
 }
 
 impl AudioRecorder {
     pub fn new() -> Self {
-        Self { inner: None }
+        Self {
+            inner: None,
+            generation: Arc::new(AtomicU64::new(0)),
+        }
     }
 
     pub fn snapshot(&self) -> RecordingSnapshot {
@@ -71,7 +81,9 @@ impl AudioRecorder {
 
         #[cfg(target_os = "macos")]
         {
-            let backend = macos::Backend::start(&path, app)?;
+            use std::sync::atomic::Ordering;
+            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            let backend = macos::Backend::start(&path, app, generation, Arc::clone(&self.generation))?;
             self.inner = Some(RecordingHandle {
                 path: path.clone(),
                 started_at: Instant::now(),
@@ -87,24 +99,30 @@ impl AudioRecorder {
         }
     }
 
-    pub fn stop(&mut self) -> Result<RecordingSummary, AppError> {
+    /// Take the in-progress recording handle out of this recorder, if any.
+    ///
+    /// Deliberately does NOT stop capture or touch the WAV writer — callers
+    /// (e.g. the `stop_recording` Tauri command) take the handle, drop the
+    /// `RecorderState.recorder` lock, and only then run the blocking
+    /// `stop_capture()` FFI call off the lock. Holding the lock across that
+    /// call is what let a wedged ScreenCaptureKit stop block every other
+    /// command that needs `RecorderState.recorder` (e.g. `recording_status`,
+    /// which — unlike `stop_recording`/`start_recording`/`cleanup_recording`
+    /// — runs as a *sync* Tauri command on the app's main thread).
+    pub fn take_handle(&mut self) -> Result<RecordingHandle, AppError> {
         let handle = self.inner.take().ok_or(AppError::NotRunning)?;
-        let duration_ms = handle.started_at.elapsed().as_millis() as u64;
-
-        #[cfg(target_os = "macos")]
+        // Bump the generation at stop-REQUEST time, not just at next start:
+        // the capture callbacks check it before appending samples/emitting
+        // events, so a stop that wedges past STOP_CAPTURE_TIMEOUT stops
+        // RECORDING system audio the moment the user asked, instead of
+        // silently capturing until the next recording begins. (Everything
+        // up to this instant is already in the WAV; the pending finalize
+        // only flushes and closes it.)
         {
-            handle.backend.stop()?;
+            use std::sync::atomic::Ordering;
+            self.generation.fetch_add(1, Ordering::SeqCst);
         }
-
-        let byte_size = std::fs::metadata(&handle.path)
-            .map(|m| m.len())
-            .unwrap_or(0);
-
-        Ok(RecordingSummary {
-            path: handle.path,
-            duration_ms,
-            byte_size,
-        })
+        Ok(handle)
     }
 }
 
@@ -135,7 +153,7 @@ fn recording_path(meeting_id: &str) -> Result<PathBuf, AppError> {
 // macOS implementation
 // ---------------------------------------------------------------------------
 #[cfg(target_os = "macos")]
-mod macos {
+pub mod macos {
     //! ScreenCaptureKit-backed audio capture.
     //!
     //! API surface targets `screencapturekit = "1"` (1.x series).
@@ -145,6 +163,7 @@ mod macos {
     use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use base64::Engine;
     use hound::{SampleFormat, WavSpec, WavWriter};
     use screencapturekit::prelude::*;
     use tauri::{AppHandle, Emitter};
@@ -158,6 +177,23 @@ mod macos {
 
     const SAMPLE_RATE: u32 = 48_000;
     const CHANNELS: u16 = 2;
+
+    /// Checkpoint the on-disk WAV header every ~5 seconds of audio (counted
+    /// in per-channel samples, matching `samples_written`) so a force-kill
+    /// loses at most ~5s instead of leaving a file whose RIFF/data size
+    /// fields are still hound's zero placeholder (only patched by
+    /// `finalize()`/`flush()`, both of which need the process to still be
+    /// running).
+    const FLUSH_INTERVAL_CHANNEL_SAMPLES: u64 = SAMPLE_RATE as u64 * CHANNELS as u64 * 5;
+
+    /// Live-caption PCM bridge: downsample captured system audio to 16kHz
+    /// mono, matching `frontend/public/pcm-processor.js`'s target rate for
+    /// Amazon Transcribe Streaming (`MediaSampleRateHertz: 16000`).
+    const PCM_TARGET_SAMPLE_RATE: u32 = 16_000;
+    /// Chunk size in samples (~64ms at 16kHz) — mirrors the browser-mode
+    /// AudioWorklet's chunking so both code paths hand Transcribe Streaming
+    /// similarly-shaped audio events.
+    const PCM_CHUNK_SAMPLES: usize = 1024;
 
     pub struct Backend {
         stream: SCStream,
@@ -175,7 +211,15 @@ mod macos {
     }
 
     impl Backend {
-        pub fn start(path: &Path, app: AppHandle) -> Result<Self, AppError> {
+        /// `generation` / `generation_counter`: see `AudioRecorder`'s field
+        /// doc comment in the parent module — lets `AudioOutput` detect
+        /// once it's been superseded by a newer recording and stop acting.
+        pub fn start(
+            path: &Path,
+            app: AppHandle,
+            generation: u64,
+            generation_counter: Arc<AtomicU64>,
+        ) -> Result<Self, AppError> {
             let spec = WavSpec {
                 channels: CHANNELS,
                 sample_rate: SAMPLE_RATE,
@@ -217,6 +261,10 @@ mod macos {
                     logged_first: Arc::new(AtomicU64::new(0)),
                     app,
                     last_emit_ms: Arc::new(AtomicU64::new(0)),
+                    since_flush: Arc::new(AtomicU64::new(0)),
+                    pcm_pending: Arc::new(Mutex::new(Vec::with_capacity(PCM_CHUNK_SAMPLES * 2))),
+                    my_generation: generation,
+                    current_generation: generation_counter,
                 },
                 SCStreamOutputType::Audio,
             );
@@ -240,16 +288,37 @@ mod macos {
             })
         }
 
-        pub fn stop(self) -> Result<(), AppError> {
+        /// Stop ScreenCaptureKit capture. This is the potentially-slow part —
+        /// the underlying FFI call blocks on a completion handler with no
+        /// timeout of its own (see the `screencapturekit` crate's
+        /// `SCStream::stop_capture`, which waits on a plain `Condvar`).
+        /// Callers are expected to run this inside `spawn_blocking` raced
+        /// against a timeout, NOT while holding any lock another command
+        /// needs (see `AudioRecorder::take_handle`).
+        pub fn stop_capture_blocking(&self) -> Result<(), AppError> {
             self.stream
                 .stop_capture()
-                .map_err(|e| AppError::Backend(format!("stop_capture: {e:?}")))?;
+                .map_err(|e| AppError::Backend(format!("stop_capture: {e:?}")))
+        }
 
+        /// Finalize the WAV writer (patches the RIFF/data size header hound
+        /// leaves as a zero placeholder until this runs). Idempotent — safe
+        /// to call more than once, and safe to call whether or not
+        /// `stop_capture_blocking` succeeded, timed out, or was never called
+        /// at all: a partial recording is still a playable WAV once this
+        /// runs at least once.
+        pub fn finalize_writer(&self) -> Result<(), AppError> {
             if let Some(w) = self.writer.lock().expect("writer poisoned").take() {
                 w.finalize()
                     .map_err(|e| AppError::Io(format!("finalize wav: {e}")))?;
             }
+            Ok(())
+        }
 
+        /// Loud diagnostics for silent capture failures. Read-only against
+        /// the atomics the audio callback maintains — safe to call any time
+        /// after `finalize_writer`.
+        pub fn diagnose(&self) -> Result<(), AppError> {
             let cb = self.callbacks.load(Ordering::Relaxed);
             let sw = self.samples_written.load(Ordering::Relaxed);
             let bytes = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
@@ -277,6 +346,26 @@ mod macos {
             }
             Ok(())
         }
+
+        /// Orchestrates the full stop sequence: stop ScreenCaptureKit, THEN
+        /// finalize the writer regardless of whether that stop succeeded,
+        /// THEN diagnose. Finalizing unconditionally (rather than only on
+        /// the success path, as the previous implementation did) closes a
+        /// data-loss bug: a `stop_capture` error used to skip `finalize()`
+        /// entirely, leaving a WAV with an unpatched (zero) size header even
+        /// though ScreenCaptureKit may have already delivered plenty of
+        /// audio.
+        pub fn stop_and_finalize(&self) -> Result<(), AppError> {
+            let stop_result = self.stop_capture_blocking();
+            let finalize_result = self.finalize_writer();
+
+            if let Err(e) = stop_result {
+                log::error!("stop_capture failed (WAV finalized best-effort regardless): {e}");
+                return Err(e);
+            }
+            finalize_result?;
+            self.diagnose()
+        }
     }
 
     struct AudioOutput {
@@ -291,11 +380,41 @@ mod macos {
         /// MediaStream / AnalyserNode on the JS side).
         app: AppHandle,
         last_emit_ms: Arc<AtomicU64>,
+        /// Per-channel samples written since the last `writer.flush()`
+        /// checkpoint. Reset (via `fetch_sub`) once it crosses
+        /// `FLUSH_INTERVAL_CHANNEL_SAMPLES`.
+        since_flush: Arc<AtomicU64>,
+        /// 16kHz-mono samples downsampled from this callback's audio but not
+        /// yet emitted as a full `PCM_CHUNK_SAMPLES`-sized `native-pcm-chunk`
+        /// event. ScreenCaptureKit callback sizes don't divide evenly by the
+        /// downsample ratio or the chunk size, so leftovers carry over.
+        pcm_pending: Arc<Mutex<Vec<f32>>>,
+        /// This recording's generation number, captured at `Backend::start`.
+        my_generation: u64,
+        /// Shared with `AudioRecorder` — bumped by every `start()`. If this
+        /// no longer equals `my_generation`, a newer recording has started
+        /// and this stream is orphaned (e.g. its `stop_capture` wedged past
+        /// `stop_recording`'s timeout and kept running in the background).
+        current_generation: Arc<AtomicU64>,
     }
 
     impl SCStreamOutputTrait for AudioOutput {
         fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
             if !matches!(of_type, SCStreamOutputType::Audio) {
+                return;
+            }
+
+            // A newer recording has started — this stream is orphaned.
+            // Stop writing AND emitting entirely: Tauri events are global
+            // broadcasts with no per-recording tag, so without this check
+            // an orphaned stream's `native-audio-level`/`native-pcm-chunk`
+            // events would leak into whatever recording started next,
+            // corrupting its waveform and feeding stale audio into its live
+            // captions. (Harmless to stop writing too — the newer
+            // recording always uses a fresh file path, so this stream's own
+            // file was already finalized via `stop_and_finalize` or will be
+            // whenever its `stop_capture` eventually returns.)
+            if self.current_generation.load(Ordering::Relaxed) != self.my_generation {
                 return;
             }
 
@@ -337,7 +456,7 @@ mod macos {
                 .collect();
 
             // RMS over this buffer for the level meter event. Computed once,
-            // before we move samples_f32 into the writer loop.
+            // before we move on to the WAV write and PCM downsample passes.
             let rms = if samples_f32.is_empty() {
                 0.0
             } else {
@@ -345,17 +464,35 @@ mod macos {
                 (sum_sq / samples_f32.len() as f32).sqrt()
             };
 
+            // --- WAV write pass (unchanged behavior; iterates by reference
+            // so `samples_f32` is still available for the PCM downsample
+            // pass below) ---
             let mut guard = self.writer.lock().expect("writer poisoned");
-            let Some(w) = guard.as_mut() else { return };
             let mut written = 0u64;
-            for s in samples_f32 {
-                let clamped = s.clamp(-1.0, 1.0);
-                let i16_val = (clamped * i16::MAX as f32) as i16;
-                if let Err(e) = w.write_sample(i16_val) {
-                    log::warn!("wav write error: {e}");
-                    break;
+            if let Some(w) = guard.as_mut() {
+                for &s in &samples_f32 {
+                    let clamped = s.clamp(-1.0, 1.0);
+                    let i16_val = (clamped * i16::MAX as f32) as i16;
+                    if let Err(e) = w.write_sample(i16_val) {
+                        log::warn!("wav write error: {e}");
+                        break;
+                    }
+                    written += 1;
                 }
-                written += 1;
+
+                // Periodic checkpoint: patch the RIFF/data size header now so
+                // a force-kill loses at most ~5s of audio instead of leaving
+                // a WAV whose header still says "0 bytes of data" (hound only
+                // patches it in `flush()`/`finalize()`).
+                let since_flush = self.since_flush.fetch_add(written, Ordering::Relaxed) + written;
+                if since_flush >= FLUSH_INTERVAL_CHANNEL_SAMPLES {
+                    match w.flush() {
+                        Ok(()) => {
+                            self.since_flush.fetch_sub(since_flush, Ordering::Relaxed);
+                        }
+                        Err(e) => log::warn!("periodic wav flush failed (will retry): {e}"),
+                    }
+                }
             }
             drop(guard);
             self.samples_written.fetch_add(written, Ordering::Relaxed);
@@ -373,6 +510,75 @@ mod macos {
                 // a 0–1 meter range. Clamp to avoid >1 spikes from clipping.
                 let level = (rms / 0.25).min(1.0);
                 let _ = self.app.emit("native-audio-level", level);
+            }
+
+            // --- Live-caption PCM bridge: downsample this callback's audio
+            // to 16kHz mono and emit any full chunks. Mirrors
+            // `frontend/public/pcm-processor.js`'s approach (per-callback
+            // linear interpolation, no fractional-position carryover across
+            // callbacks — that file accepts the same tiny phase reset at
+            // each buffer boundary) so both code paths feed Transcribe
+            // Streaming similarly-shaped audio. ---
+            self.emit_pcm_chunks(&samples_f32);
+        }
+    }
+
+    impl AudioOutput {
+        /// Average stereo channels to mono, linearly interpolate 48kHz →
+        /// 16kHz, and emit any complete `PCM_CHUNK_SAMPLES`-sized chunk as a
+        /// base64-encoded `native-pcm-chunk` event (Tauri events are JSON,
+        /// so raw bytes must be encoded — a 1024-sample/64ms chunk is ~2.7KB
+        /// base64, trivially small for the `evaluateJavaScript` bridge,
+        /// unlike the multi-hundred-MB mistake this module used to make).
+        fn emit_pcm_chunks(&self, samples_f32: &[f32]) {
+            if samples_f32.len() < 2 {
+                return;
+            }
+            let mono: Vec<f32> = samples_f32
+                .chunks_exact(CHANNELS as usize)
+                .map(|frame| frame.iter().sum::<f32>() / CHANNELS as f32)
+                .collect();
+            if mono.is_empty() {
+                return;
+            }
+
+            let ratio = SAMPLE_RATE as f64 / PCM_TARGET_SAMPLE_RATE as f64;
+            let out_len = (mono.len() as f64 / ratio).floor() as usize;
+            if out_len == 0 {
+                return;
+            }
+
+            let mut resampled = Vec::with_capacity(out_len);
+            for i in 0..out_len {
+                let src_index = i as f64 * ratio;
+                let src_floor = src_index.floor() as usize;
+                let src_ceil = (src_floor + 1).min(mono.len() - 1);
+                let frac = src_index - src_floor as f64;
+                let sample = mono[src_floor] as f64 * (1.0 - frac) + mono[src_ceil] as f64 * frac;
+                resampled.push(sample as f32);
+            }
+
+            let mut pending = self.pcm_pending.lock().expect("pcm_pending poisoned");
+            pending.extend_from_slice(&resampled);
+
+            while pending.len() >= PCM_CHUNK_SAMPLES {
+                let chunk: Vec<f32> = pending.drain(..PCM_CHUNK_SAMPLES).collect();
+                drop(pending);
+
+                let mut bytes = Vec::with_capacity(PCM_CHUNK_SAMPLES * 2);
+                for s in &chunk {
+                    let clamped = s.clamp(-1.0, 1.0);
+                    let i16_val = if clamped < 0.0 {
+                        (clamped * 0x8000 as f32) as i16
+                    } else {
+                        (clamped * 0x7FFF as f32) as i16
+                    };
+                    bytes.extend_from_slice(&i16_val.to_le_bytes());
+                }
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                let _ = self.app.emit("native-pcm-chunk", encoded);
+
+                pending = self.pcm_pending.lock().expect("pcm_pending poisoned");
             }
         }
     }

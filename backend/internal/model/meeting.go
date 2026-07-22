@@ -38,14 +38,18 @@ type Meeting struct {
 	Insights           string            `dynamodbav:"insights,omitempty"`         // JSON []MeetingInsight
 	LinkedMeetingIDs   []string          `dynamodbav:"linkedMeetingIds,omitempty"` // Chronologically ordered predecessor IDs
 	AccountID          string            `dynamodbav:"accountId,omitempty"`        // linked Account
-	SharedToAccount    bool              `dynamodbav:"sharedToAccount,omitempty"`  // published to account team
-	NotionPageID       string            `dynamodbav:"notionPageId,omitempty"`     // Notion page created by a prior export; re-export updates it in place instead of creating a duplicate
-	Status             string            `dynamodbav:"status"`                     // recording, transcribing, summarizing, done, error
-	CreatedAt          time.Time         `dynamodbav:"createdAt"`
-	UpdatedAt          time.Time         `dynamodbav:"updatedAt"`
-	GSI1PK             string            `dynamodbav:"GSI1PK,omitempty"` // USER#{userId} for date sorting
-	GSI1SK             string            `dynamodbav:"GSI1SK,omitempty"` // timestamp for sorting
-	EntityType         string            `dynamodbav:"entityType"`       // "MEETING"
+	// ProjectIDs links this meeting to zero or more projects (many-to-many).
+	// Stored as a DynamoDB String Set (stringset tag), not a List, so link
+	// mutations can use atomic ADD/DELETE without a read-modify-write race.
+	ProjectIDs      []string  `dynamodbav:"projectIds,omitempty,stringset" json:"projectIds,omitempty"`
+	SharedToAccount bool      `dynamodbav:"sharedToAccount,omitempty"` // published to account team
+	NotionPageID    string    `dynamodbav:"notionPageId,omitempty"`    // Notion page created by a prior export; re-export updates it in place instead of creating a duplicate
+	Status          string    `dynamodbav:"status"`                    // recording, transcribing, summarizing, done, error
+	CreatedAt       time.Time `dynamodbav:"createdAt"`
+	UpdatedAt       time.Time `dynamodbav:"updatedAt"`
+	GSI1PK          string    `dynamodbav:"GSI1PK,omitempty"` // USER#{userId} for date sorting
+	GSI1SK          string    `dynamodbav:"GSI1SK,omitempty"` // timestamp for sorting
+	EntityType      string    `dynamodbav:"entityType"`       // "MEETING"
 }
 
 // Attachment represents a file attachment for a meeting
@@ -204,6 +208,10 @@ type Research struct {
 	// (un)linked concurrently (ADD/DELETE on a set has no such race, and is
 	// naturally idempotent for a value already present/absent).
 	AccountIDs []string `dynamodbav:"accountIds,omitempty,stringset" json:"accountIds,omitempty"`
+	// ProjectIDs links this research to zero or more projects (many-to-many).
+	// Stored as a DynamoDB String Set (stringset tag), not a List, so link
+	// mutations can use atomic ADD/DELETE without a read-modify-write race.
+	ProjectIDs []string `dynamodbav:"projectIds,omitempty,stringset" json:"projectIds,omitempty"`
 }
 
 const MaxAudioParts = 10

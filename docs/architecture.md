@@ -146,6 +146,9 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-020: 문서 허브 v2 — 개인 문서, 위키링크 인덱스, 슬라이드 업로드](decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) (승인됨)
 - [ADR-021: 크롤러 → KB 인제스천 파이프라인 수리 및 AWS 서비스 자동 발견](decisions/ADR-021-crawler-pipeline-repair-and-service-autodiscovery.md) (승인됨)
 - [ADR-022: LibreOffice 변환 기반 PPTX 미리보기 및 무인증 공개 슬라이드 링크](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md) — ADR-020의 "PPTX는 다운로드만" 결정을 대체 (승인됨)
+- [ADR-023: 공유 출처 증명 및 레거시 마이그레이션](decisions/ADR-023-share-origin-provenance-and-legacy-migration.md) (승인됨)
+- [ADR-024: Mac 앱 네이티브 스트리밍 업로드 및 System Audio 라이브 자막](decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md) (승인됨)
+- [ADR-025: Project(SFDC Opportunity) 엔티티 — 그래프 레퍼런스 연동, 하이브리드 멤버십, 읽기 시점 인사이트 집계](decisions/ADR-025-project-entity-sfdc-oppty.md) (승인됨)
 
 ### 운영
 
@@ -241,6 +244,9 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-020: Document Hub v2 — Personal Documents, Wikilink Index, Slide Uploads](decisions/ADR-020-doc-hub-v2-personal-docs-wikilinks-slides.md) (Accepted)
 - [ADR-021: Repair the Crawler → KB Ingestion Pipeline and Add AWS Service Auto-Discovery](decisions/ADR-021-crawler-pipeline-repair-and-service-autodiscovery.md) (Accepted)
 - [ADR-022: LibreOffice-Based PPTX Preview Conversion and Unauthenticated Public Slide Links](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md) — supersedes ADR-020's "PPTX is download-only" decision (Accepted)
+- [ADR-023: Share Origin Provenance and Legacy Migration](decisions/ADR-023-share-origin-provenance-and-legacy-migration.md) (Accepted)
+- [ADR-024: Mac App Native Streaming Upload and System Audio Live Captions](decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md) (Accepted)
+- [ADR-025: Project (SFDC Opportunity) Entity — Graph-Reference Linking, Hybrid Membership, Read-Time Insight Aggregation](decisions/ADR-025-project-entity-sfdc-oppty.md) (Accepted)
 
 ### Operations
 
