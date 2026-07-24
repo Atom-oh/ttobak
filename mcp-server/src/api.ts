@@ -206,6 +206,28 @@ export class TtobakApi {
     return this.get(`/api/projects/${encodeURIComponent(projectId)}/insights${qs ? '?' + qs : ''}`);
   }
 
+  /** Whole-item update, same as CreateProject's shape -- `name` is required
+   * even when only changing e.g. stage (the backend's UpdateProjectRequest
+   * has no partial/omit-preserves semantics, unlike Meeting's *string
+   * pointer fields). */
+  async updateProject(projectId: string, project: {
+    name: string;
+    description?: string;
+    sfdcOpptyId?: string;
+    sfdcUrl?: string;
+    stage?: string;
+  }) {
+    return this.put(`/api/projects/${encodeURIComponent(projectId)}`, project);
+  }
+
+  async linkProjectAccount(projectId: string, accountId: string) {
+    return this.post(`/api/projects/${encodeURIComponent(projectId)}/accounts`, { accountId });
+  }
+
+  async unlinkProjectAccount(projectId: string, accountId: string) {
+    return this.delete(`/api/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}`);
+  }
+
   async exportVault() {
     return this.get('/api/vault/export');
   }
@@ -311,6 +333,10 @@ export class TtobakApi {
 
   private async delete(path: string) {
     return this.request('DELETE', path);
+  }
+
+  private async put(path: string, body: unknown) {
+    return this.request('PUT', path, body);
   }
 
   /** PUT a local file's bytes directly to a presigned S3 URL -- no TTOBAK
