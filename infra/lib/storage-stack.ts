@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 
@@ -138,6 +139,27 @@ export class StorageStack extends cdk.Stack {
         },
       ],
     });
+
+    // Allow CloudFront (the /media/* behavior in FrontendStack, ADR-027) to
+    // read objects via OAC. FrontendStack imports this bucket by name, so CDK
+    // can't attach the OAC policy there — it must live with the bucket owner.
+    // ponytail: distribution/* (own-account only) instead of the exact
+    // distribution ID, breaking a Storage↔Frontend cycle; tighten to the ID
+    // post-deploy if desired.
+    this.bucket.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AllowCloudFrontOACRead',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3:GetObject'],
+        principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
+        resources: [this.bucket.arnForObjects('*')],
+        conditions: {
+          StringLike: {
+            'AWS:SourceArn': `arn:aws:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/*`,
+          },
+        },
+      })
+    );
 
     // Outputs
     new cdk.CfnOutput(this, 'TableName', {

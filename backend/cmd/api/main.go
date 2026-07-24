@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	"github.com/aws/aws-sdk-go-v2/service/translate"
 	"github.com/awslabs/aws-lambda-go-api-proxy/chi"
@@ -69,6 +70,16 @@ func init() {
 	projectService := service.NewProjectService(repo)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
+	// Same-domain CloudFront-signed download URLs (ADR-027). Cold-start-only
+	// SSM fetch; any failure falls back to raw S3 presigns so a deploy that
+	// races ahead of FrontendStack (or local dev) never breaks downloads.
+	if mediaBaseURL := os.Getenv("MEDIA_BASE_URL"); mediaBaseURL != "" {
+		if cfSigner, err := service.NewCloudFrontSigner(context.Background(), ssm.NewFromConfig(cfg), mediaBaseURL); err != nil {
+			log.Printf("warn: CloudFront signing unavailable, falling back to S3 presign: %v", err)
+		} else {
+			uploadService.SetCloudFrontSigner(cfSigner)
+		}
+	}
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)
 	kbService.SetAssetsBucketName(bucketName)
 	notionService := service.NewNotionService()

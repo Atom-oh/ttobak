@@ -26,6 +26,14 @@ type UploadService struct {
 	ebClient      *eventbridge.Client
 	repo          *repository.DynamoDBRepository
 	bucketName    string
+	cfSigner      *CloudFrontSigner
+}
+
+// SetCloudFrontSigner switches GET download URLs from raw S3 presigns to
+// CloudFront-signed /media/* URLs on the site domain (ADR-027). Left unset
+// (local dev, missing SSM params), downloads keep using S3 presigns.
+func (s *UploadService) SetCloudFrontSigner(signer *CloudFrontSigner) {
+	s.cfSigner = signer
 }
 
 // NewUploadService creates a new upload service
@@ -207,6 +215,10 @@ func (s *UploadService) GeneratePresignedDownloadURLWithTTL(
 	s3Key string,
 	ttl time.Duration,
 ) (string, error) {
+	if s.cfSigner != nil {
+		return s.cfSigner.SignedURL(s3Key, ttl)
+	}
+
 	presignedURL, err := s.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(s3Key),

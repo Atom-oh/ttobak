@@ -134,6 +134,22 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // CloudFront signed-URL key material (ADR-027): the private key is a
+    // manually-created SecureString (/ttobak/cloudfront/signing-key, default
+    // aws/ssm KMS key — no extra kms:Decrypt needed); the key-pair-id param
+    // is written by FrontendStack. Fixed literal names, read at Lambda cold
+    // start, so no cross-stack reference exists in either direction.
+    this.apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'CloudFrontSigningParams',
+        effect: iam.Effect.ALLOW,
+        actions: ['ssm:GetParameter'],
+        resources: [
+          `arn:aws:ssm:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:parameter/ttobak/cloudfront/*`,
+        ],
+      })
+    );
+
     // Step Functions StartExecution (for research pipeline)
     this.apiRole.addToPolicy(
       new iam.PolicyStatement({

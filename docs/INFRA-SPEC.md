@@ -410,6 +410,20 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
     하며, 잊으면 그 라우트는 항상 SPA fallback으로 떨어진다** (CLAUDE.md
     Important Gotchas 참고).
 
+- **Media behavior** (`/media/*`, ADR-027) — 데이터 버킷(`ttobak-assets-*`)
+  다운로드를 사이트 도메인으로 서빙해 S3 버킷 주소를 숨긴다:
+  - Origin: 데이터 버킷 (S3, OAC — 버킷은 `Bucket.fromBucketName`으로 import,
+    OAC read 정책은 StorageStack이 부착)
+  - Allowed methods: GET, HEAD only / Cache policy: CachingDisabled
+  - **Viewer 인증**: `trustedKeyGroups` (CloudFront 서명 URL — api Lambda가
+    발급, 기존 S3 presign과 동일한 capability-URL 모델. 공개키는
+    `infra/lib/cloudfront-signing-pub.pem`, 개인키는 SecureString
+    `/ttobak/cloudfront/signing-key`, key-pair-id는 FrontendStack이
+    `/ttobak/cloudfront/key-pair-id` SSM 파라미터로 발행)
+  - **CloudFront Function** (`MediaPrefixStripFunction`, `VIEWER_REQUEST`):
+    origin으로 가기 전 URI에서 `/media` prefix를 제거 (버킷 키가 SPA 라우트
+    `/docs/{id}` 등과 충돌하지 않도록 전용 prefix 사용)
+
 - **Public API behavior** (`/api/public/*`, ADR-022) — registered *before*
   the general `/api/*` behavior below, since CloudFront matches path patterns
   in insertion order:
