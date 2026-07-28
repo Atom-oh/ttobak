@@ -109,11 +109,17 @@ S3 presign 대신 **CloudFront 서명 URL**(trusted key group, canned policy)을
 4. `TtobakGatewayStack` (`MEDIA_BASE_URL` env) → 5. `TtobakFrontendStack`
 (KeyGroup/behavior/key-pair-id 파라미터) → 6. api Lambda 빌드·배포.
 Lambda가 5보다 먼저 배포되어도 폴백 덕에 무해.
-7. **(필수, 5 완료 후)** `TtobakFrontendStack`이 만든 실제 distribution ID로
-   버킷 정책의 `AWS:SourceArn`을 좁힌다 — 5까지는 같은 계정의 다른
-   distribution(생성 권한이 있는 누구든, 또는 실수로 추가된 신규
-   distribution)이 `trustedKeyGroups` 없이도 이 버킷을 origin으로 붙여
-   서명 없는 전 사용자 미디어를 노출시킬 수 있는 창이 열려 있다. 이 스텝을
-   건너뛰면 `/media/*`의 viewer-auth 강제가 "그 distribution만 존재한다"는
-   가정에만 의존하게 된다 — 선택 사항이 아니라 배포 순서의 필수 마지막
-   단계다.
+7. **(필수, 5 완료 후)** `infra/cdk.json`의 `context` 블록에
+   `ttobak:mediaDistributionId`를 `TtobakFrontendStack`이 만든 실제
+   distribution ID로 설정한 뒤 `TtobakStorageStack`을 재배포한다.
+   `storage-stack.ts`는 이 context 값이 있으면 버킷 정책의 `AWS:SourceArn`을
+   정확한 ID로, 없으면 같은 계정 와일드카드(+ `cdk.Annotations` synth 경고)로
+   설정한다. 이 스텝을 건너뛰면 같은 계정의 다른 distribution(생성 권한이
+   있는 누구든, 또는 실수로 추가된 신규 distribution)이 `trustedKeyGroups`
+   없이도 이 버킷을 origin으로 붙여 서명 없는 전 사용자 미디어를 노출시킬
+   수 있는 창이 열려 있다 — 선택 사항이 아니라 배포 순서의 필수 마지막
+   단계다. **`aws s3api put-bucket-policy`로 직접 수동 조이는 것은 대안이
+   아니다** — `deploy-infra.yml`이 매 push마다 `TtobakStorageStack
+   --exclusively`를 재배포하므로 CDK가 선언한 desired state(context
+   미설정 시 와일드카드)로 즉시 되돌아간다. context에 값을 설정해야만
+   재배포를 버텨낸다.

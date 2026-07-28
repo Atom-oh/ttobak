@@ -208,6 +208,27 @@ function handler(event) {
       }
     );
 
+    // docs-pdf/* gets nosniff WITHOUT the sandbox CSP directive that the
+    // other prefixes above use. `CSP: sandbox` on a document served inside
+    // an iframe (exactly how UploadService.GeneratePreviewPDFURL's
+    // previewUrl is consumed, docs-pdf's only purpose) is documented browser
+    // behavior to disable Chrome's built-in PDF viewer plugin -- unlike
+    // audio/img tags elsewhere, which decode media natively and aren't
+    // affected by sandbox at all. This prefix has no attacker-controlled
+    // Content-Type risk to mitigate anyway: convert-doc (the only writer to
+    // docs-pdf/*, ADR-022) always produces a PDF from LibreOffice, never a
+    // client-supplied MIME type.
+    const docsPdfResponseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
+      this,
+      'DocsPdfResponseHeadersPolicy',
+      {
+        responseHeadersPolicyName: `ttobak-docs-pdf-headers-${cdk.Aws.REGION}`,
+        securityHeadersBehavior: {
+          contentTypeOptions: { override: true },
+        },
+      }
+    );
+
     // ACM certificate for custom domain (must be in us-east-1 for CloudFront)
     const certificateArn = this.node.tryGetContext('ttobak:certificateArn');
     const certificate = acm.Certificate.fromCertificateArn(this, 'TtobakCert', certificateArn);
@@ -233,6 +254,24 @@ function handler(event) {
         ],
       },
       additionalBehaviors: {
+        // Must be listed before '/media/*' below (CloudFront evaluates
+        // additionalBehaviors in insertion order, first match wins) --
+        // otherwise every docs-pdf/* request would already match '/media/*'
+        // and pick up the sandbox CSP that breaks its iframe preview.
+        '/media/docs-pdf/*': {
+          origin: mediaOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          trustedKeyGroups: [mediaKeyGroup],
+          responseHeadersPolicy: docsPdfResponseHeadersPolicy,
+          functionAssociations: [
+            {
+              function: mediaPrefixStrip,
+              eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+            },
+          ],
+        },
         // Data-bucket downloads under the site domain (ADR-027). Viewer auth
         // is the trusted key group (CloudFront-signed URLs minted by the api
         // Lambda — the same capability-URL model as the S3 presigns this

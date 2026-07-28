@@ -427,11 +427,23 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
     앱과 동일 origin이 되면서 생기는 stored-XSS 표면(사용자가 임의
     `Content-Type`으로 업로드 가능)을 줄이기 위해 `X-Content-Type-Options:
     nosniff` + `Content-Security-Policy: sandbox`를 부착. `sandbox`는 스크립트
-    실행/폼 제출/팝업을 막되 오디오·이미지·PDF(`previewUrl`) 인라인
-    렌더링은 그대로 허용.
+    실행/폼 제출/팝업을 막되 오디오·이미지 인라인 렌더링은 그대로 허용.
+    `docs-pdf/*`는 `/media/docs-pdf/*`라는 별도의(더 구체적인, `/media/*`보다
+    먼저 매치되는) behavior로 분리해 `DocsPdfResponseHeadersPolicy`(nosniff만,
+    `sandbox` 없음)를 쓴다 — `CSP: sandbox`는 iframe으로 렌더링되는 문서의
+    브라우저 내장 PDF 뷰어를 비활성화시키는 것으로 알려진 동작이라
+    `previewUrl` iframe 미리보기를 깨뜨릴 수 있기 때문. `docs-pdf/*`는
+    convert-doc(LibreOffice)만 쓰는, client-supplied Content-Type 위험이
+    없는 경로라 sandbox 없이도 안전.
   - **버킷 정책 스코프** — StorageStack의 OAC read 정책 리소스는
     `audio/*`, `images/*`, `files/*`, `docs/*`, `docs-pdf/*`로 한정(전체
     버킷이 아님). `transcripts/*`(STT 파이프라인 내부 산출물)는 제외.
+  - **`AWS:SourceArn` 조건** — CDK context `ttobak:mediaDistributionId`가
+    설정되면 정확한 distribution ID로, 미설정 시 같은 계정 와일드카드(+
+    synth 경고)로 스코프. `TtobakFrontendStack` 첫 배포 후 이 context를
+    설정하고 `TtobakStorageStack`을 재배포해야 한다 — ADR-027 배포 순서
+    7단계 참고. 수동 `put-bucket-policy`는 다음 CI push의 재배포로
+    되돌려지므로 대안이 아니다.
   - **신뢰-실패 시 폴백/재시도**: api Lambda cold start에서 SSM 조회가
     실패하면 S3 presign으로 폴백하되, 워밍 인스턴스는 요청마다 최대 5분
     간격으로 CloudFront 서명기 생성을 재시도한다 (`UploadService`의

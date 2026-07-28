@@ -143,21 +143,34 @@ export class StorageStack extends cdk.Stack {
     // Allow CloudFront (the /media/* behavior in FrontendStack, ADR-027) to
     // read objects via OAC. FrontendStack imports this bucket by name, so CDK
     // can't attach the OAC policy there — it must live with the bucket owner.
-    // ponytail: distribution/* (own-account only) instead of the exact
-    // distribution ID, breaking a Storage↔Frontend cycle -- FrontendStack
-    // (which creates the distribution) can't exist yet when this policy is
-    // first attached. This is a REQUIRED post-deploy tightening step, not
-    // optional -- see ADR-027's deploy-order section: after FrontendStack's
-    // first deploy, replace this wildcard with the real distribution ID
-    // (manually via `aws s3api put-bucket-policy`, or by re-running this
-    // stack's deploy with the ID passed through CDK context/SSM once a
-    // follow-up wires that up) so a second same-account distribution can't
-    // read these objects without trustedKeyGroups. Resources are scoped to
-    // the prefixes actually
-    // served through GeneratePresignedDownloadURLWithTTL (audio/images/files/
-    // docs/docs-pdf) -- transcripts/* is internal STT-pipeline data with no
-    // {userId} segment and is never handed out as a download URL, so it's
-    // deliberately excluded from what any same-account distribution can read.
+    // TtobakFrontendStack creates the distribution, and this stack has no
+    // reference to it (breaking a Storage<->Frontend cycle) -- so the exact
+    // distribution ID isn't knowable on first deploy. Pin it via CDK context
+    // (ttobak:mediaDistributionId, set in cdk.json's `context` block once
+    // FrontendStack's first deploy publishes the distribution ID) once
+    // known; every deploy without it running with the wildcard is NOT a safe
+    // steady state -- a manual `aws s3api put-bucket-policy` tighten would
+    // get reverted on the next `deploy-infra.yml` run, which redeploys this
+    // stack via `--exclusively` on every push. Resources are scoped to the
+    // prefixes actually served through GeneratePresignedDownloadURLWithTTL
+    // (audio/images/files/docs/docs-pdf) -- transcripts/* is internal
+    // STT-pipeline data with no {userId} segment and is never handed out as
+    // a download URL, so it's deliberately excluded from what any
+    // same-account distribution can read.
+    const mediaDistributionId = this.node.tryGetContext('ttobak:mediaDistributionId');
+    const sourceArn = mediaDistributionId
+      ? `arn:aws:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/${mediaDistributionId}`
+      : `arn:aws:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/*`;
+    if (!mediaDistributionId) {
+      cdk.Annotations.of(this).addWarning(
+        "ttobak:mediaDistributionId context is not set -- the OAC bucket policy's " +
+          'AWS:SourceArn is a same-account wildcard, so ANY CloudFront distribution ' +
+          'in this account (not just the trusted-key-group-gated /media/* behavior) ' +
+          "can read audio/images/files/docs/docs-pdf without signature verification. " +
+          "Set ttobak:mediaDistributionId in cdk.json's context to the distribution ID " +
+          'from TtobakFrontendStack once it exists, then redeploy TtobakStorageStack.'
+      );
+    }
     this.bucket.addToResourcePolicy(
       new iam.PolicyStatement({
         sid: 'AllowCloudFrontOACRead',
@@ -168,8 +181,12 @@ export class StorageStack extends cdk.Stack {
           this.bucket.arnForObjects(`${prefix}/*`)
         ),
         conditions: {
+          // StringLike (not StringEquals) uniformly for both branches: with
+          // a concrete mediaDistributionId, sourceArn has no wildcard
+          // characters so StringLike behaves as an exact match; without it,
+          // the trailing /* needs StringLike's wildcard semantics.
           StringLike: {
-            'AWS:SourceArn': `arn:aws:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/*`,
+            'AWS:SourceArn': sourceArn,
           },
         },
       })
