@@ -98,11 +98,30 @@ PROMPT_EOF
 # fallback 자체가 무력화된다. chair 전용 CHAIR_PRIMARY_MODEL 로 완전히 분리.
 PRIMARY_MODEL="${CHAIR_PRIMARY_MODEL:-us.anthropic.claude-fable-5}"
 FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-5}"
-# 300s(패널 PANEL_TIMEOUT) 보다 짧으면 정상 응답도 강제 종료된다 — 실측 근거:
-# oh-my-cloud-skills #105, 이 repo 의 러너에서 무타임아웃 chair가 357줄 diff
-# 종합에 286s를 정상 소요. 매트릭스(4→16 패널 출력)는 체어 입력이 더 커 286s
-# 실측조차 밑돎 — 600s로 그 여유를 반영.
-CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-600}"
+# 의장 캡 산정 — 플릿 실측(2026-07-28, 패널 16/16 정상인 실행들):
+#
+#   repo                 diff    패널      체어      리뷰      체어 처리량
+#   cc-on-bedrock         16줄   0m35s    2m07s    5240B     41 B/s
+#   aws-fsi-demo          65줄   0m48s    2m24s    5956B     41 B/s
+#   multi-region-arch     72줄   2m03s    7m43s    7716B     17 B/s
+#   AWS-Demo-Platform    115줄   4m47s    3m01s    6578B     36 B/s
+#   ai-trader-web        294줄   3m03s    5m12s    8113B     26 B/s
+#   awsops              1909줄   5m00s    5m36s    9737B     29 B/s
+#   ttobak #133         1469줄   3m07s   20m00s(캡 2회) 실패
+#   oh-my-cloud-skills  5647줄   2m19s   20m00s(캡 2회) 실패
+#
+# 읽어야 할 것:
+#   ① 병목은 체어다 — 정상 실행에서도 이 단계의 38~78%, 실패 실행에선 86~89%. 패널(kiro×3+
+#      codex 16셀)은 전부 병렬이라 35초~5분에 끝난다.
+#   ② **체어 소요는 diff 줄수와 비례하지 않는다.** awsops 는 1909줄 PR 을 5분 36초에 끝냈고,
+#      mra 는 72줄에 7분 43초를 썼다. 상관 있는 건 체어가 생성하는 리뷰 분량이며 관측 처리량은
+#      17~42 B/s 다(5~10KB 리뷰 = 2~8분).
+#   ③ 그래서 600s 캡은 "정상 범위의 상단"과 겹친다 — 조금 더 긴 종합이 필요한 실행은 코드
+#      결함 없이도 잘려 canned VERDICT: FAIL 이 되고, 큰 PR 이 내용과 무관하게 막힌다.
+# 1500s(25분)면 관측된 최장 정상 체어(7m43s)의 3배 여유이며, 실패한 두 케이스가 실제로 몇 분을
+# 필요로 했는지는 아래 timing 로그(소요·rc·입출력 크기)가 다음 실행부터 알려준다 — 그 값이
+# 나오기 전에 캡을 더 키우거나 입력을 줄이는 판단을 미리 하지 않는다.
+CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-1500}"
 
 chair_label() { case "$1" in
   *fable-5*)  echo "Claude Fable 5" ;;
@@ -110,11 +129,20 @@ chair_label() { case "$1" in
   *)          echo "$1" ;;
 esac ; }
 
+# CHAIR_RC / CHAIR_ELAPSED 를 남긴다 — timeout(124)과 그 밖의 실패를 구분해야 fallback
+# 을 태울지 결정할 수 있고(아래), 소요/입력 크기가 로그에 없으면 "캡 부족"과 "의장 고장"이
+# 구분되지 않는다(이 repo PR#133 이 정확히 그 상태로 반복 실패했다).
+CHAIR_RC=0; CHAIR_ELAPSED=0
 run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해도 || true 로 계속.
   # argv(-p) 는 고정 지시문만(작고 상한 없음) — diff+패널(가변, 큼)은 stdin.
+  local t0 t1
+  t0="$(date +%s)"
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
     < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT" || true
+  CHAIR_RC="${PIPESTATUS[0]}"   # timeout 이 죽였으면 124
+  t1="$(date +%s)"; CHAIR_ELAPSED="$((t1 - t0))"
+  echo "chair $(chair_label "$1"): ${CHAIR_ELAPSED}s, rc=$CHAIR_RC, stdin=$(wc -c < "$WORK/synth-stdin.txt")B, out=$(wc -c < "$OUT")B"
 }
 
 # 요구사항: 마지막 non-empty 줄이 정확히 VERDICT: PASS 또는 VERDICT: FAIL.
@@ -134,10 +162,30 @@ chair_valid() {
 
 run_chair "$PRIMARY_MODEL"
 CHAIR_USED="$PRIMARY_MODEL"
-# PRIMARY_MODEL/FALLBACK_MODEL 이 같은 모델로 resolve 되면(예: job env 의
-# ANTHROPIC_MODEL 이 이미 fallback 기본값과 동일) 재시도는 동일 호출을 그대로
-# 반복할 뿐이라 CHAIR_TIMEOUT 을 두 번 태우고도 아무 이득이 없다 — skip.
-if ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
+# fallback 은 **빠른 실패에만** 태운다.
+#
+# 근거(플릿 로그 전수 확인, 2026-07-28): fallback 이 발동한 모든 실행이 실패로 끝났다 —
+#   ttobak 30364369995 / 30362329844 -> 353B canned
+#   omcs   30350585601               -> 218B canned
+#   omcs   30348322817               -> 16B "Execution error"
+# 단 한 번도 리뷰를 구해낸 적이 없다. 이유는 명확하다: 관측된 실패는 전부 예산 소진이고
+# fallback 은 같은 입력·같은 캡을 받으므로 같은 벽에 부딪히며, 그 사이 CHAIR_TIMEOUT 만큼
+# (실측 10분) 벽시계를 더 태운다.
+#
+# 그렇다고 fallback 자체가 무가치한 건 아니다 — primary 모델이 **불가용**한 경우
+# (fable-5 는 Kiro 카탈로그상 "Experimental preview"/내부용 표기이고, Bedrock 쪽
+# AccessDenied·ValidationException 도 같은 계열)에는 다른 모델이 실제로 답을 낸다. 그리고
+# 그 실패는 몇 초 안에 난다. 그래서 판별선은 모델 id 나 rc 가 아니라 **소요 시간**이다:
+#   - primary 가 CHAIR_FAST_FAIL_S(기본 120s) 안에 실패 -> 모델/인증 문제 가능성 -> fallback
+#   - 그보다 오래 쓰고 실패      -> 예산 문제 -> fallback 은 낭비이므로 건너뛰고 원인을 남긴다
+# rc=124(timeout kill)는 정의상 후자에 속한다.
+CHAIR_FAST_FAIL_S="${CHAIR_FAST_FAIL_S:-120}"
+CHAIR_TIMED_OUT=0; [ "$CHAIR_RC" = 124 ] && CHAIR_TIMED_OUT=1
+CHAIR_SLOW_FAIL=0
+{ [ "$CHAIR_TIMED_OUT" = 1 ] || [ "$CHAIR_ELAPSED" -ge "$CHAIR_FAST_FAIL_S" ]; } && CHAIR_SLOW_FAIL=1
+if ! chair_valid && [ "$CHAIR_SLOW_FAIL" = 1 ]; then
+  echo "::error::chair '$(chair_label "$PRIMARY_MODEL")' 가 ${CHAIR_ELAPSED}s 쓰고 실패(rc=$CHAIR_RC, 캡 ${CHAIR_TIMEOUT}s, 입력 $(wc -c < "$WORK/synth-stdin.txt")B). 빠른 실패가 아니므로 모델 불가용이 아니라 예산/생성량 문제로 보고 fallback 을 건너뜀 — CHAIR_TIMEOUT 상향 또는 PANEL_CELL_CAP/diff truncation 으로 입력 축소가 필요하다."
+elif ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
   # panel/chair stdout 은 scrub_secrets 를 통과시키는데 이 fallback 경고의 stderr 발췌만
   # 빠져 있었다 — claude CLI 에러 메시지에 credential/env 정보가 섞이면 public Actions
   # 로그로 그대로 새는 경로였다(cc-on-bedrock PR#107 리뷰 M4). scrub 을 head -c 뒤에 걸면
@@ -159,7 +207,11 @@ if ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
 fi
 
 if ! chair_valid; then
-  echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 유효한 응답(빈 응답 또는 VERDICT 없음)을 반환하지 않음." > "$OUT"
+  if [ "$CHAIR_SLOW_FAIL" = 1 ]; then
+    echo "리뷰 생성 실패 — 의장($(chair_label "$PRIMARY_MODEL"))이 ${CHAIR_ELAPSED}s 쓰고 유효한 응답을 내지 못함(캡 ${CHAIR_TIMEOUT}s). 이 PR 의 diff/패널 출력이 현재 캡으로 종합하기엔 큼(입력 $(wc -c < "$WORK/synth-stdin.txt")B) — 코드 결함이 아니라 예산 부족이다. CHAIR_TIMEOUT 상향 또는 입력 축소 필요." > "$OUT"
+  else
+    echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 유효한 응답(빈 응답 또는 VERDICT 없음)을 반환하지 않음." > "$OUT"
+  fi
   echo "VERDICT: FAIL" >> "$OUT"
 fi
 
