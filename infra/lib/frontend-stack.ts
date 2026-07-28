@@ -5,7 +5,10 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface FrontendStackProps extends cdk.StackProps {
   httpApiUrl: string;
@@ -127,6 +130,105 @@ function handler(event) {
       `),
     });
 
+    // --- Same-domain media downloads (ADR-027) ---------------------------
+    // The data bucket is imported by its deterministic name rather than a
+    // StorageStack prop: withOriginAccessControl can't attach a policy to an
+    // imported bucket anyway (StorageStack owns the OAC read statement), and
+    // importing avoids a new cross-stack export.
+    const dataBucket = s3.Bucket.fromBucketName(
+      this,
+      'TtobakDataBucket',
+      `ttobak-assets-${cdk.Aws.ACCOUNT_ID}`
+    );
+    const mediaOrigin = origins.S3BucketOrigin.withOriginAccessControl(dataBucket, {
+      originAccessLevels: [cloudfront.AccessLevel.READ],
+    });
+
+    // Viewer auth for /media/*: CloudFront signed URLs against this key group.
+    // The public half is committed (infra/lib/cloudfront-signing-pub.pem); the
+    // private half lives only in the manually-created SecureString
+    // /ttobak/cloudfront/signing-key (same out-of-band pattern as
+    // ttobak-agentcore-research-role).
+    const mediaPublicKey = new cloudfront.PublicKey(this, 'MediaSigningPublicKey', {
+      encodedKey: fs.readFileSync(
+        path.join(__dirname, 'cloudfront-signing-pub.pem'),
+        'utf8'
+      ),
+    });
+    const mediaKeyGroup = new cloudfront.KeyGroup(this, 'MediaKeyGroup', {
+      items: [mediaPublicKey],
+    });
+
+    // Signed URLs are https://{domain}/media/{s3Key}; strip the /media prefix
+    // before the request reaches the S3 origin. Separate from the SPA router
+    // function — different behavior, and bucket keys (audio/, docs/, ...)
+    // must never collide with SPA page routes like /docs/{id}.
+    const mediaPrefixStrip = new cloudfront.Function(this, 'MediaPrefixStripFunction', {
+      functionName: `ttobak-media-prefix-strip-${cdk.Aws.REGION}`,
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var request = event.request;
+  request.uri = request.uri.replace(/^\\/media/, '');
+  return request;
+}
+      `),
+    });
+
+    // Security headers for /media/* (ADR-027 follow-up): moving downloads to
+    // the site's own origin means an uploaded file with an attacker-chosen
+    // Content-Type (upload.go sets it from client-supplied req.FileType with
+    // no allowlist) is now same-origin with the app, not a separate S3
+    // domain -- a stored text/html "download" could otherwise execute as a
+    // page on this origin and read the Cognito tokens auth.ts keeps in
+    // localStorage. `X-Content-Type-Options: nosniff` stops the browser from
+    // reinterpreting a non-HTML response as HTML; `Content-Security-Policy:
+    // sandbox` neutralizes any script that *does* get served with an HTML/SVG
+    // type (no script execution, no same-origin access, no popups) while
+    // still letting audio/image/PDF responses render inline -- unlike
+    // `Content-Disposition: attachment`, this doesn't break the PDF
+    // `previewUrl` iframe or inline audio/image display used elsewhere in the
+    // app.
+    const mediaResponseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
+      this,
+      'MediaResponseHeadersPolicy',
+      {
+        responseHeadersPolicyName: `ttobak-media-headers-${cdk.Aws.REGION}`,
+        securityHeadersBehavior: {
+          contentTypeOptions: { override: true },
+        },
+        customHeadersBehavior: {
+          customHeaders: [
+            {
+              header: 'Content-Security-Policy',
+              value: 'sandbox',
+              override: true,
+            },
+          ],
+        },
+      }
+    );
+
+    // docs-pdf/* gets nosniff WITHOUT the sandbox CSP directive that the
+    // other prefixes above use. `CSP: sandbox` on a document served inside
+    // an iframe (exactly how UploadService.GeneratePreviewPDFURL's
+    // previewUrl is consumed, docs-pdf's only purpose) is documented browser
+    // behavior to disable Chrome's built-in PDF viewer plugin -- unlike
+    // audio/img tags elsewhere, which decode media natively and aren't
+    // affected by sandbox at all. This prefix has no attacker-controlled
+    // Content-Type risk to mitigate anyway: convert-doc (the only writer to
+    // docs-pdf/*, ADR-022) always produces a PDF from LibreOffice, never a
+    // client-supplied MIME type.
+    const docsPdfResponseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
+      this,
+      'DocsPdfResponseHeadersPolicy',
+      {
+        responseHeadersPolicyName: `ttobak-docs-pdf-headers-${cdk.Aws.REGION}`,
+        securityHeadersBehavior: {
+          contentTypeOptions: { override: true },
+        },
+      }
+    );
+
     // ACM certificate for custom domain (must be in us-east-1 for CloudFront)
     const certificateArn = this.node.tryGetContext('ttobak:certificateArn');
     const certificate = acm.Certificate.fromCertificateArn(this, 'TtobakCert', certificateArn);
@@ -152,6 +254,45 @@ function handler(event) {
         ],
       },
       additionalBehaviors: {
+        // Must be listed before '/media/*' below (CloudFront evaluates
+        // additionalBehaviors in insertion order, first match wins) --
+        // otherwise every docs-pdf/* request would already match '/media/*'
+        // and pick up the sandbox CSP that breaks its iframe preview.
+        '/media/docs-pdf/*': {
+          origin: mediaOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          trustedKeyGroups: [mediaKeyGroup],
+          responseHeadersPolicy: docsPdfResponseHeadersPolicy,
+          functionAssociations: [
+            {
+              function: mediaPrefixStrip,
+              eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+            },
+          ],
+        },
+        // Data-bucket downloads under the site domain (ADR-027). Viewer auth
+        // is the trusted key group (CloudFront-signed URLs minted by the api
+        // Lambda — the same capability-URL model as the S3 presigns this
+        // replaces, including the 5-min public-share TTL); origin auth is
+        // OAC. CACHING_DISABLED: per-user objects with per-request signature
+        // params, no reuse worth caching; Range requests (audio seek) still
+        // pass through.
+        '/media/*': {
+          origin: mediaOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          trustedKeyGroups: [mediaKeyGroup],
+          responseHeadersPolicy: mediaResponseHeadersPolicy,
+          functionAssociations: [
+            {
+              function: mediaPrefixStrip,
+              eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+            },
+          ],
+        },
         // Public slide-share redirects — MUST be defined before '/api/*'
         // below: CloudFront evaluates additionalBehaviors path patterns in
         // insertion order (first match wins), so this more-specific pattern
@@ -183,6 +324,26 @@ function handler(event) {
         },
       },
       priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+    });
+
+    // The CloudFront-generated key-pair id is only known post-deploy; publish
+    // it under a fixed name so the api Lambda can read it at runtime without
+    // any stack referencing FrontendStack.
+    new ssm.StringParameter(this, 'MediaKeyPairIdParam', {
+      parameterName: '/ttobak/cloudfront/key-pair-id',
+      stringValue: mediaPublicKey.publicKeyId,
+    });
+
+    // Same reasoning, for StorageStack's OAC bucket policy this time: the
+    // distribution ID is only known post-deploy, and StorageStack deploys
+    // BEFORE this stack (Storage(2) -> ... -> Frontend(5) in the documented
+    // order) so it can't reference this construct directly without a cycle.
+    // Publish it here; StorageStack reads it via a deploy-time SSM lookup
+    // (not a CDK cross-stack ref) that tolerates the parameter not existing
+    // yet on a from-scratch first deploy.
+    new ssm.StringParameter(this, 'MediaDistributionIdParam', {
+      parameterName: '/ttobak/cloudfront/media-distribution-id',
+      stringValue: this.distribution.distributionId,
     });
 
     // Outputs

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -14,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
 	"github.com/aws/aws-sdk-go-v2/service/translate"
 	"github.com/awslabs/aws-lambda-go-api-proxy/chi"
@@ -69,6 +71,27 @@ func init() {
 	projectService := service.NewProjectService(repo)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
+	// Same-domain CloudFront-signed download URLs (ADR-027). Tried once at
+	// cold start; any failure falls back to raw S3 presigns. The reload
+	// callback is registered unconditionally (not just on failure) so a warm
+	// instance also lazily retries -- a deploy that races ahead of
+	// FrontendStack publishing the key-pair-id SSM param would otherwise pin
+	// that instance to the S3 fallback until it's recycled.
+	if mediaBaseURL := os.Getenv("MEDIA_BASE_URL"); mediaBaseURL != "" {
+		ssmClient := ssm.NewFromConfig(cfg)
+		reload := func(ctx context.Context) (*service.CloudFrontSigner, error) {
+			return service.NewCloudFrontSigner(ctx, ssmClient, mediaBaseURL)
+		}
+		coldStartCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		cfSigner, err := reload(coldStartCtx)
+		cancel()
+		if err != nil {
+			log.Printf("warn: CloudFront signing unavailable, falling back to S3 presign (will retry lazily): %v", err)
+		} else {
+			uploadService.SetCloudFrontSigner(cfSigner)
+		}
+		uploadService.SetCloudFrontSignerReload(reload)
+	}
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)
 	kbService.SetAssetsBucketName(bucketName)
 	notionService := service.NewNotionService()

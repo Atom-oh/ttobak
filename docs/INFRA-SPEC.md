@@ -410,6 +410,50 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
     하며, 잊으면 그 라우트는 항상 SPA fallback으로 떨어진다** (CLAUDE.md
     Important Gotchas 참고).
 
+- **Media behavior** (`/media/*`, ADR-027) — 데이터 버킷(`ttobak-assets-*`)
+  다운로드를 사이트 도메인으로 서빙해 S3 버킷 주소를 숨긴다:
+  - Origin: 데이터 버킷 (S3, OAC — 버킷은 `Bucket.fromBucketName`으로 import,
+    OAC read 정책은 StorageStack이 부착)
+  - Allowed methods: GET, HEAD only / Cache policy: CachingDisabled
+  - **Viewer 인증**: `trustedKeyGroups` (CloudFront 서명 URL — api Lambda가
+    발급, 기존 S3 presign과 동일한 capability-URL 모델. 공개키는
+    `infra/lib/cloudfront-signing-pub.pem`, 개인키는 SecureString
+    `/ttobak/cloudfront/signing-key`, key-pair-id는 FrontendStack이
+    `/ttobak/cloudfront/key-pair-id` SSM 파라미터로 발행)
+  - **CloudFront Function** (`MediaPrefixStripFunction`, `VIEWER_REQUEST`):
+    origin으로 가기 전 URI에서 `/media` prefix를 제거 (버킷 키가 SPA 라우트
+    `/docs/{id}` 등과 충돌하지 않도록 전용 prefix 사용)
+  - **ResponseHeadersPolicy** (`MediaResponseHeadersPolicy`) — 다운로드가
+    앱과 동일 origin이 되면서 생기는 stored-XSS 표면(사용자가 임의
+    `Content-Type`으로 업로드 가능)을 줄이기 위해 `X-Content-Type-Options:
+    nosniff` + `Content-Security-Policy: sandbox`를 부착. `sandbox`는 스크립트
+    실행/폼 제출/팝업을 막되 오디오·이미지 인라인 렌더링은 그대로 허용.
+    `docs-pdf/*`는 `/media/docs-pdf/*`라는 별도의(더 구체적인, `/media/*`보다
+    먼저 매치되는) behavior로 분리해 `DocsPdfResponseHeadersPolicy`(nosniff만,
+    `sandbox` 없음)를 쓴다 — `CSP: sandbox`는 iframe으로 렌더링되는 문서의
+    브라우저 내장 PDF 뷰어를 비활성화시키는 것으로 알려진 동작이라
+    `previewUrl` iframe 미리보기를 깨뜨릴 수 있기 때문. `docs-pdf/*`는
+    convert-doc(LibreOffice)만 쓰는, client-supplied Content-Type 위험이
+    없는 경로라 sandbox 없이도 안전.
+  - **버킷 정책 스코프** — StorageStack의 OAC read 정책 리소스는
+    `audio/*`, `images/*`, `files/*`, `docs/*`, `docs-pdf/*`로 한정(전체
+    버킷이 아님). `transcripts/*`(STT 파이프라인 내부 산출물)는 제외.
+  - **`AWS:SourceArn` 조건** — 배포 시점에 커스텀 리소스(`MediaDistributionIdLookupFn`)가
+    FrontendStack이 발행한 SSM 파라미터 `/ttobak/cloudfront/media-distribution-id`를
+    조회해 정확한 distribution ID로 스코프. 그 파라미터가 아직 없으면(첫
+    `TtobakStorageStack` 배포, FrontendStack 이전) **래칫** 상태
+    파라미터(`/ttobak/cloudfront/media-distribution-id-last-known-good`,
+    Lambda 자신이 소유·기록)를 먼저 확인하고, 그것도 없을 때만 같은 계정
+    와일드카드로 폴백 — 실 ID를 한 번이라도 본 적 있는 정책은 원본 파라미터가
+    나중에 삭제/개명돼도 다시 넓어지지 않는다. 수동 개입 불필요 —
+    매 `TtobakStorageStack` 배포마다(CI의 매 push `--exclusively` 재배포
+    포함) 자동으로 최신 값을 재조회한다 — ADR-027 배포 순서 7단계 참고.
+  - **신뢰-실패 시 폴백/재시도**: api Lambda cold start에서 SSM 조회가
+    실패하면 S3 presign으로 폴백하되, 워밍 인스턴스는 요청마다 최대 5분
+    간격으로 CloudFront 서명기 생성을 재시도한다 (`UploadService`의
+    `cfSignerReload`) — FrontendStack 배포가 api Lambda 배포보다 늦게
+    끝나도 재기동 없이 자동 전환된다.
+
 - **Public API behavior** (`/api/public/*`, ADR-022) — registered *before*
   the general `/api/*` behavior below, since CloudFront matches path patterns
   in insertion order:

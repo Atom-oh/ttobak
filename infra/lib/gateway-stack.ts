@@ -94,6 +94,10 @@ export class GatewayStack extends cdk.Stack {
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
         AWS_REGION_NAME: cdk.Aws.REGION,
         FRONTEND_BASE_URL: `https://${domainName}`,
+        // Same-domain CloudFront-signed download URLs (ADR-027). Key material
+        // comes from fixed-name SSM params (/ttobak/cloudfront/*) at runtime,
+        // not env — avoids a FrontendStack→GatewayStack reference.
+        MEDIA_BASE_URL: `https://${domainName}/media`,
       },
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
