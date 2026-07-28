@@ -99,6 +99,29 @@ export function resolveFileMeta(filePath: string, fileName?: string, fileType?: 
   return { name: normalizedName, type };
 }
 
+export const PROJECT_OPTIONAL_FIELDS = ['description', 'sfdcOpptyId', 'sfdcUrl', 'stage'] as const;
+
+export type ProjectFields = {
+  description?: string;
+  sfdcOpptyId?: string;
+  sfdcUrl?: string;
+  stage?: string;
+};
+
+/** Fills any of `patch`'s optional fields left `undefined` with `current`'s
+ * value, so a caller updating only `name` (or `stage`, etc.) doesn't wipe
+ * the rest -- see updateProject's doc comment for why this is needed at all.
+ * A field explicitly passed as '' clears it; only `undefined` inherits. */
+export function mergeProjectUpdate<T extends ProjectFields>(current: ProjectFields, patch: T): T {
+  const merged = { ...patch };
+  for (const field of PROJECT_OPTIONAL_FIELDS) {
+    if (merged[field] === undefined) {
+      merged[field] = current[field] ?? '';
+    }
+  }
+  return merged;
+}
+
 export class TtobakApi {
   constructor(
     private auth: CognitoAuth,
@@ -206,10 +229,12 @@ export class TtobakApi {
     return this.get(`/api/projects/${encodeURIComponent(projectId)}/insights${qs ? '?' + qs : ''}`);
   }
 
-  /** Whole-item update, same as CreateProject's shape -- `name` is required
-   * even when only changing e.g. stage (the backend's UpdateProjectRequest
-   * has no partial/omit-preserves semantics, unlike Meeting's *string
-   * pointer fields). */
+  /** `name` is required even when only changing e.g. stage -- the backend's
+   * UpdateProjectRequest has no partial/omit-preserves semantics of its own
+   * (plain string fields, unlike Meeting's *string pointer fields), so an
+   * omitted optional field would decode to "" server-side and silently wipe
+   * the current value. mergeProjectUpdate fills any field the caller left
+   * undefined from the project's current value before we PUT. */
   async updateProject(projectId: string, project: {
     name: string;
     description?: string;
@@ -217,7 +242,10 @@ export class TtobakApi {
     sfdcUrl?: string;
     stage?: string;
   }) {
-    return this.put(`/api/projects/${encodeURIComponent(projectId)}`, project);
+    const needsMerge = PROJECT_OPTIONAL_FIELDS.some((f) => project[f] === undefined);
+    const current = needsMerge ? (await this.getProject(projectId)) as ProjectFields : undefined;
+    const body = current ? mergeProjectUpdate(current, project) : project;
+    return this.put(`/api/projects/${encodeURIComponent(projectId)}`, body);
   }
 
   async linkProjectAccount(projectId: string, accountId: string) {

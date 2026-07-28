@@ -51,7 +51,7 @@ Project↔Account is many-to-many via `Project.AccountIDs` (DynamoDB String Set)
 - No automatic research generation from project context — research↔project linking is manual only; automated triggering is a follow-up, not this feature.
 - No per-insight linking — insights are visible only via the meeting-level link (a project can't "adopt" one insight out of an otherwise-unlinked meeting).
 - No document↔project linking — only meetings, research, and (transitively, via meetings) insights.
-- No MCP link/member-management tools — only create/read tools (`ttobak_create_project`, `ttobak_list_projects`, `ttobak_get_project`, `ttobak_get_project_brief`, `ttobak_get_project_insights`) are exposed via MCP; linking, unlinking, and member management are REST-only, since those are expected to happen from the ttobak UI, not from an external SFDC-reading agent.
+- No MCP member-management tools — member add/remove stays REST-only; that's still expected to happen from the ttobak UI, not from an external SFDC-reading agent. **Amended (PR #131):** update and Account link/unlink *are* exposed via MCP (`ttobak_update_project`, `ttobak_link_project_account`, `ttobak_unlink_project_account`), alongside the original create/read set (`ttobak_create_project`, `ttobak_list_projects`, `ttobak_get_project`, `ttobak_get_project_brief`, `ttobak_get_project_insights`) — the original assumption that these mutations only happen from the UI didn't hold: an external SFDC-reading agent that observes an Opportunity stage change needs to update the project and (re)attach the right Account without a human round-trip through the ttobak UI.
 
 ## Consequences
 
@@ -142,7 +142,7 @@ Project↔Account는 `Project.AccountIDs`(DynamoDB String Set)와 역참조 아�
 - 프로젝트 컨텍스트로부터의 자동 리서치 생성 없음 — 리서치↔프로젝트 연동은 수동뿐이며, 자동 트리거는 이 기능이 아니라 후속 작업이다.
 - 인사이트 개별 연동 없음 — 인사이트는 미팅 단위 링크를 통해서만 보인다(프로젝트가 링크되지 않은 미팅에서 인사이트 하나만 "가져올" 수는 없다).
 - 문서↔프로젝트 연동 없음 — 미팅·리서치, 그리고 (미팅을 통해 전이적으로) 인사이트만 대상이다.
-- MCP 연동/멤버관리 도구 없음 — MCP로는 생성/조회 도구(`ttobak_create_project`, `ttobak_list_projects`, `ttobak_get_project`, `ttobak_get_project_brief`, `ttobak_get_project_insights`)만 노출하며, 링크·언링크·멤버관리는 REST 전용이다 — 이런 조작은 SFDC를 읽어오는 외부 에이전트가 아니라 TTOBAK UI에서 일어날 것으로 예상하기 때문이다.
+- MCP 멤버관리 도구 없음 — 멤버 추가/삭제는 계속 REST 전용이며, 이는 여전히 TTOBAK UI에서 일어날 것으로 예상한다. **(PR #131에서 개정)** 수정 및 Account 링크·언링크는 MCP로도 노출된다(`ttobak_update_project`, `ttobak_link_project_account`, `ttobak_unlink_project_account`) — 기존 생성/조회 도구(`ttobak_create_project`, `ttobak_list_projects`, `ttobak_get_project`, `ttobak_get_project_brief`, `ttobak_get_project_insights`)에 더해진 것이다. "이런 조작은 UI에서만 일어난다"는 원래 가정이 맞지 않았다: SFDC를 읽어오는 외부 에이전트가 Opportunity의 stage 변경을 감지했을 때, TTOBAK UI를 거치는 사람 개입 없이 프로젝트를 수정하고 올바른 Account를 (재)연결할 수 있어야 한다.
 
 ## 결과
 

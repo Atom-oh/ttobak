@@ -178,12 +178,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'ttobak_update_project',
-      description: 'Update a project. This replaces the whole record, so name must be resent even when only changing another field (e.g. stage) -- it is not preserved if omitted.',
+      description: 'Update a project\'s metadata fields (name, description, SFDC fields, stage). Any field you omit keeps its current value -- links, members, and meetings are unaffected either way. `name` is still required by the backend, so resend it even when only changing e.g. stage.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           projectId: { type: 'string', description: 'Project ID' },
-          name: { type: 'string', description: 'Project name (required -- resend the current value if unchanged)' },
+          name: { type: 'string', description: 'Project name (required by the backend even when unchanged)' },
           description: { type: 'string', description: 'Optional project description' },
           sfdcOpptyId: { type: 'string', description: 'Optional SFDC Oppty ID' },
           sfdcUrl: { type: 'string', description: 'Optional SFDC Oppty URL' },
