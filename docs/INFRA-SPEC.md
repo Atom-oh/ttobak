@@ -438,12 +438,13 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
   - **버킷 정책 스코프** — StorageStack의 OAC read 정책 리소스는
     `audio/*`, `images/*`, `files/*`, `docs/*`, `docs-pdf/*`로 한정(전체
     버킷이 아님). `transcripts/*`(STT 파이프라인 내부 산출물)는 제외.
-  - **`AWS:SourceArn` 조건** — CDK context `ttobak:mediaDistributionId`가
-    설정되면 정확한 distribution ID로, 미설정 시 같은 계정 와일드카드(+
-    synth 경고)로 스코프. `TtobakFrontendStack` 첫 배포 후 이 context를
-    설정하고 `TtobakStorageStack`을 재배포해야 한다 — ADR-027 배포 순서
-    7단계 참고. 수동 `put-bucket-policy`는 다음 CI push의 재배포로
-    되돌려지므로 대안이 아니다.
+  - **`AWS:SourceArn` 조건** — 배포 시점에 커스텀 리소스(`MediaDistributionIdLookupFn`)가
+    FrontendStack이 발행한 SSM 파라미터 `/ttobak/cloudfront/media-distribution-id`를
+    조회해 정확한 distribution ID로 스코프. 그 파라미터가 아직 없으면(첫
+    `TtobakStorageStack` 배포, FrontendStack 이전) Lambda가 직접
+    `ParameterNotFound`를 잡아 같은 계정 와일드카드로 폴백. 수동 개입 불필요 —
+    매 `TtobakStorageStack` 배포마다(CI의 매 push `--exclusively` 재배포
+    포함) 자동으로 최신 값을 재조회한다 — ADR-027 배포 순서 7단계 참고.
   - **신뢰-실패 시 폴백/재시도**: api Lambda cold start에서 SSM 조회가
     실패하면 S3 presign으로 폴백하되, 워밍 인스턴스는 요청마다 최대 5분
     간격으로 CloudFront 서명기 생성을 재시도한다 (`UploadService`의

@@ -68,4 +68,31 @@ describe('FrontendStack', () => {
       }),
     });
   });
+
+  test('/media/docs-pdf/* is listed before /media/* and each references its own headers policy', () => {
+    // CloudFront's additionalBehaviors match by list order (first pattern
+    // wins), not by pattern specificity -- if docs-pdf ever moved after
+    // /media/*, every docs-pdf request would silently pick up the sandbox
+    // CSP instead and break PDF preview. Order is load-bearing, not cosmetic.
+    const dist = Object.values(template.findResources('AWS::CloudFront::Distribution'))[0] as {
+      Properties: {
+        DistributionConfig: {
+          CacheBehaviors: Array<{ PathPattern: string; ResponseHeadersPolicyId: unknown }>;
+        };
+      };
+    };
+    const behaviors = dist.Properties.DistributionConfig.CacheBehaviors;
+    const docsPdfIndex = behaviors.findIndex((b) => b.PathPattern === '/media/docs-pdf/*');
+    const mediaIndex = behaviors.findIndex((b) => b.PathPattern === '/media/*');
+    expect(docsPdfIndex).toBeGreaterThanOrEqual(0);
+    expect(mediaIndex).toBeGreaterThanOrEqual(0);
+    expect(docsPdfIndex).toBeLessThan(mediaIndex);
+
+    // And each behavior's ResponseHeadersPolicyId must resolve to a
+    // DIFFERENT logical resource -- otherwise both point at the same
+    // (sandboxed) policy and the split behavior accomplishes nothing.
+    const docsPdfPolicyRef = JSON.stringify(behaviors[docsPdfIndex].ResponseHeadersPolicyId);
+    const mediaPolicyRef = JSON.stringify(behaviors[mediaIndex].ResponseHeadersPolicyId);
+    expect(docsPdfPolicyRef).not.toEqual(mediaPolicyRef);
+  });
 });

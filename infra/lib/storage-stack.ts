@@ -1,7 +1,9 @@
 import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 
 export class StorageStack extends cdk.Stack {
@@ -143,34 +145,72 @@ export class StorageStack extends cdk.Stack {
     // Allow CloudFront (the /media/* behavior in FrontendStack, ADR-027) to
     // read objects via OAC. FrontendStack imports this bucket by name, so CDK
     // can't attach the OAC policy there — it must live with the bucket owner.
-    // TtobakFrontendStack creates the distribution, and this stack has no
-    // reference to it (breaking a Storage<->Frontend cycle) -- so the exact
-    // distribution ID isn't knowable on first deploy. Pin it via CDK context
-    // (ttobak:mediaDistributionId, set in cdk.json's `context` block once
-    // FrontendStack's first deploy publishes the distribution ID) once
-    // known; every deploy without it running with the wildcard is NOT a safe
-    // steady state -- a manual `aws s3api put-bucket-policy` tighten would
-    // get reverted on the next `deploy-infra.yml` run, which redeploys this
-    // stack via `--exclusively` on every push. Resources are scoped to the
-    // prefixes actually served through GeneratePresignedDownloadURLWithTTL
-    // (audio/images/files/docs/docs-pdf) -- transcripts/* is internal
-    // STT-pipeline data with no {userId} segment and is never handed out as
-    // a download URL, so it's deliberately excluded from what any
-    // same-account distribution can read.
-    const mediaDistributionId = this.node.tryGetContext('ttobak:mediaDistributionId');
-    const sourceArn = mediaDistributionId
-      ? `arn:aws:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/${mediaDistributionId}`
-      : `arn:aws:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/*`;
-    if (!mediaDistributionId) {
-      cdk.Annotations.of(this).addWarning(
-        "ttobak:mediaDistributionId context is not set -- the OAC bucket policy's " +
-          'AWS:SourceArn is a same-account wildcard, so ANY CloudFront distribution ' +
-          'in this account (not just the trusted-key-group-gated /media/* behavior) ' +
-          "can read audio/images/files/docs/docs-pdf without signature verification. " +
-          "Set ttobak:mediaDistributionId in cdk.json's context to the distribution ID " +
-          'from TtobakFrontendStack once it exists, then redeploy TtobakStorageStack.'
-      );
-    }
+    // TtobakFrontendStack creates the distribution, and this stack deploys
+    // BEFORE it (Storage(2) -> ... -> Frontend(5) in the documented order),
+    // so a direct CDK reference would be a cycle and the exact distribution
+    // ID isn't knowable on first deploy anyway. Closed automatically instead
+    // of via a manual step: FrontendStack publishes the distribution ID to
+    // a fixed-name SSM parameter (mirroring key-pair-id's existing pattern);
+    // this AwsCustomResource reads it at CloudFormation DEPLOY time (not CDK
+    // synth time) on every deploy of this stack, tolerating the parameter
+    // not existing yet (first deploy, before FrontendStack has ever run) by
+    // falling back to the same-account wildcard. Once FrontendStack has
+    // published the real ID, every subsequent StorageStack deploy --
+    // including `deploy-infra.yml`'s every-push `--exclusively` redeploy --
+    // picks it up and tightens the policy with no manual step and no
+    // `cdk.json` edit. Resources are scoped to the prefixes actually served
+    // through GeneratePresignedDownloadURLWithTTL (audio/images/files/docs/
+    // docs-pdf) -- transcripts/* is internal STT-pipeline data with no
+    // {userId} segment and is never handed out as a download URL, so it's
+    // deliberately excluded from what any same-account distribution can read.
+    const mediaDistributionIdParamName = '/ttobak/cloudfront/media-distribution-id';
+    // AwsCustomResource's generic SDK-call wrapper has no way to substitute a
+    // default when the requested response field is absent -- referencing a
+    // missing field via getResponseField errors at deploy time, which is
+    // exactly the "parameter doesn't exist yet" case this needs to tolerate.
+    // A small purpose-built Lambda handles the fallback itself instead.
+    const distributionIdLookupFn = new lambda.Function(this, 'MediaDistributionIdLookupFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      timeout: cdk.Duration.seconds(30),
+      code: lambda.Code.fromInline(`
+const { SSMClient, GetParameterCommand } = require('@aws-sdk/client-ssm');
+const ssm = new SSMClient();
+exports.handler = async () => {
+  let distributionId = '*';
+  try {
+    const resp = await ssm.send(new GetParameterCommand({ Name: '${mediaDistributionIdParamName}' }));
+    distributionId = resp.Parameter && resp.Parameter.Value ? resp.Parameter.Value : '*';
+  } catch (err) {
+    if (err.name !== 'ParameterNotFound') throw err;
+  }
+  return { Data: { DistributionId: distributionId } };
+};
+      `),
+    });
+    distributionIdLookupFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ssm:GetParameter'],
+        resources: [
+          `arn:aws:ssm:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:parameter${mediaDistributionIdParamName}`,
+        ],
+      })
+    );
+    const distributionIdProvider = new cr.Provider(this, 'MediaDistributionIdProvider', {
+      onEventHandler: distributionIdLookupFn,
+    });
+    const distributionIdLookup = new cdk.CustomResource(this, 'MediaDistributionIdLookupResource', {
+      serviceToken: distributionIdProvider.serviceToken,
+      properties: {
+        // Changing this on every synth forces CloudFormation to re-invoke
+        // the Lambda on every deploy (not just the first time this resource
+        // is created), so a distribution ID published after this stack's
+        // first deploy is picked up on the next deploy without any manual
+        // step or cdk.json edit.
+        Timestamp: Date.now().toString(),
+      },
+    });
+    const mediaDistributionId = distributionIdLookup.getAttString('DistributionId');
     this.bucket.addToResourcePolicy(
       new iam.PolicyStatement({
         sid: 'AllowCloudFrontOACRead',
@@ -181,12 +221,11 @@ export class StorageStack extends cdk.Stack {
           this.bucket.arnForObjects(`${prefix}/*`)
         ),
         conditions: {
-          // StringLike (not StringEquals) uniformly for both branches: with
-          // a concrete mediaDistributionId, sourceArn has no wildcard
-          // characters so StringLike behaves as an exact match; without it,
-          // the trailing /* needs StringLike's wildcard semantics.
+          // StringLike (not StringEquals): the fallback '*' default needs
+          // wildcard semantics; a real distribution ID has no wildcard
+          // characters so StringLike is an exact match either way.
           StringLike: {
-            'AWS:SourceArn': sourceArn,
+            'AWS:SourceArn': `arn:aws:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/${mediaDistributionId}`,
           },
         },
       })

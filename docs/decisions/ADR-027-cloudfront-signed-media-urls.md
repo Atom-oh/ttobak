@@ -69,11 +69,22 @@ S3 presign 대신 **CloudFront 서명 URL**(trusted key group, canned policy)을
   (`https://{domain}/media/...`)이 되므로, 업로드 콘텐츠(사용자가 임의
   `Content-Type`을 지정할 수 있는 `docs/`/`files/` 등)가 stored-XSS로
   Cognito 토큰(`localStorage`)을 노릴 수 있는 경로가 이론상 열린다. `/media/*`
-  behavior에 `ResponseHeadersPolicy`(`X-Content-Type-Options: nosniff` +
-  `Content-Security-Policy: sandbox`)를 부착해 완화 — `sandbox`는 스크립트
-  실행/폼 제출/팝업을 막으면서도 오디오·이미지·PDF 미리보기(`previewUrl`
-  iframe)는 그대로 인라인 렌더링되게 해, `Content-Disposition: attachment`
-  강제보다 기존 기능을 덜 깨는 선택이다.
+  behavior에 `ResponseHeadersPolicy`(`MediaResponseHeadersPolicy`:
+  `X-Content-Type-Options: nosniff` + `Content-Security-Policy: sandbox`)를
+  부착해 완화 — `sandbox`는 스크립트 실행/폼 제출/팝업을 막아 오디오·이미지
+  인라인 렌더링은 그대로 유지하면서도, `Content-Disposition: attachment`
+  강제보다 기존 기능을 덜 깨는 선택이다. **단, `sandbox`는 iframe으로
+  렌더링되는 문서에서 브라우저 내장 PDF 뷰어를 비활성화시키는 것으로 알려진
+  동작이라 `docs-pdf/*`의 `previewUrl` iframe 미리보기를 깨뜨릴 수 있다** —
+  그래서 `docs-pdf/*`는 `/media/*`보다 먼저 매치되는(CloudFront는 삽입
+  순서로 first-match) 별도의 더 구체적인 behavior `/media/docs-pdf/*`로
+  분리해 `DocsPdfResponseHeadersPolicy`(`nosniff`만, `sandbox` 없음)를 쓴다.
+  `docs-pdf/*`는 convert-doc(LibreOffice, ADR-022)만 쓰는 경로라 클라이언트가
+  임의 `Content-Type`을 지정할 수 있는 위험이 원래부터 없으므로, `sandbox`를
+  빼도 이 완화책의 목적을 훼손하지 않는다. 이 두 behavior의 삽입 순서와
+  분리 자체가 load-bearing 불변식이므로 `infra/test/frontend-stack.test.ts`가
+  순서와 각 behavior가 서로 다른 `ResponseHeadersPolicy`를 참조하는지를
+  직접 assert한다 — "중복"으로 보고 지우면 PDF 미리보기가 조용히 깨진다.
 - **프론트엔드 변경 없음**: URL은 불투명하게 소비되며, 같은 origin이 되면서
   다운로드 경로의 CORS 의존도 사라진다 (버킷 CORS는 업로드 PUT용으로 유지).
 
@@ -103,23 +114,26 @@ S3 presign 대신 **CloudFront 서명 URL**(trusted key group, canned policy)을
 ## 배포 순서 (per-stack `--exclusively`)
 
 1. Out-of-band: 키쌍 생성, `/ttobak/cloudfront/signing-key` SecureString 등록.
-2. `TtobakStorageStack` (버킷 정책, `distribution/*` 와일드카드로 시작 —
-   FrontendStack이 아직 없어 정확한 distribution ID를 알 수 없음) →
+2. `TtobakStorageStack` (버킷 정책 — `AWS:SourceArn`은 배포 시점에
+   `MediaDistributionIdLookupFn` 커스텀 리소스가 SSM 파라미터
+   `/ttobak/cloudfront/media-distribution-id`를 조회해 결정. FrontendStack이
+   아직 없어 그 파라미터가 존재하지 않는 이 시점에는 `ParameterNotFound`를
+   Lambda가 직접 잡아 같은 계정 와일드카드로 폴백) →
 3. `TtobakAiStack` (apiRole SSM 권한) →
 4. `TtobakGatewayStack` (`MEDIA_BASE_URL` env) → 5. `TtobakFrontendStack`
-(KeyGroup/behavior/key-pair-id 파라미터) → 6. api Lambda 빌드·배포.
+(KeyGroup/behavior/key-pair-id 파라미터 + 신규 `media-distribution-id`
+파라미터 발행) → 6. api Lambda 빌드·배포.
 Lambda가 5보다 먼저 배포되어도 폴백 덕에 무해.
-7. **(필수, 5 완료 후)** `infra/cdk.json`의 `context` 블록에
-   `ttobak:mediaDistributionId`를 `TtobakFrontendStack`이 만든 실제
-   distribution ID로 설정한 뒤 `TtobakStorageStack`을 재배포한다.
-   `storage-stack.ts`는 이 context 값이 있으면 버킷 정책의 `AWS:SourceArn`을
-   정확한 ID로, 없으면 같은 계정 와일드카드(+ `cdk.Annotations` synth 경고)로
-   설정한다. 이 스텝을 건너뛰면 같은 계정의 다른 distribution(생성 권한이
-   있는 누구든, 또는 실수로 추가된 신규 distribution)이 `trustedKeyGroups`
-   없이도 이 버킷을 origin으로 붙여 서명 없는 전 사용자 미디어를 노출시킬
-   수 있는 창이 열려 있다 — 선택 사항이 아니라 배포 순서의 필수 마지막
-   단계다. **`aws s3api put-bucket-policy`로 직접 수동 조이는 것은 대안이
-   아니다** — `deploy-infra.yml`이 매 push마다 `TtobakStorageStack
-   --exclusively`를 재배포하므로 CDK가 선언한 desired state(context
-   미설정 시 와일드카드)로 즉시 되돌아간다. context에 값을 설정해야만
-   재배포를 버텨낸다.
+7. **(자동, 수동 스텝 없음)** `TtobakStorageStack`을 아무 이유로든(다음
+   changed-stack 배포, `deploy-infra.yml`의 매 push `--exclusively` 재배포
+   등) 다시 배포하면, 이번엔 5에서 발행된 `media-distribution-id` 파라미터가
+   존재하므로 `MediaDistributionIdLookupFn`이 그 실제 distribution ID를
+   읽어와 버킷 정책의 `AWS:SourceArn`을 정확한 ID로 조인다 — `cdk.json` 편집도
+   `aws s3api put-bucket-policy` 수동 실행도 필요 없다. 이 커스텀 리소스는
+   `Timestamp` 프로퍼티를 매 synth마다 바꿔 CloudFormation이 매 배포마다
+   Lambda를 재호출하도록 강제하므로("no-op Update"로 건너뛰지 않음), 한 번
+   조여진 뒤에도 계속 최신 값을 유지한다. `TtobakStorageStack`이 딱 한 번만
+   배포되고 다시는 배포되지 않는 극단적 시나리오에서만 와일드카드가 영구
+   유지되며, 이는 `infra/test/storage-stack.test.ts`가 SourceArn이 리터럴
+   와일드카드가 아니라 이 커스텀 리소스의 `Fn::GetAtt` 참조임을 assert해
+   회귀를 막는다.

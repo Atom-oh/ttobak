@@ -334,6 +334,18 @@ function handler(event) {
       stringValue: mediaPublicKey.publicKeyId,
     });
 
+    // Same reasoning, for StorageStack's OAC bucket policy this time: the
+    // distribution ID is only known post-deploy, and StorageStack deploys
+    // BEFORE this stack (Storage(2) -> ... -> Frontend(5) in the documented
+    // order) so it can't reference this construct directly without a cycle.
+    // Publish it here; StorageStack reads it via a deploy-time SSM lookup
+    // (not a CDK cross-stack ref) that tolerates the parameter not existing
+    // yet on a from-scratch first deploy.
+    new ssm.StringParameter(this, 'MediaDistributionIdParam', {
+      parameterName: '/ttobak/cloudfront/media-distribution-id',
+      stringValue: this.distribution.distributionId,
+    });
+
     // Outputs
     new cdk.CfnOutput(this, 'SiteBucketName', {
       value: this.siteBucket.bucketName,
