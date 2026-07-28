@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -81,7 +82,10 @@ func init() {
 		reload := func(ctx context.Context) (*service.CloudFrontSigner, error) {
 			return service.NewCloudFrontSigner(ctx, ssmClient, mediaBaseURL)
 		}
-		if cfSigner, err := reload(context.Background()); err != nil {
+		coldStartCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		cfSigner, err := reload(coldStartCtx)
+		cancel()
+		if err != nil {
 			log.Printf("warn: CloudFront signing unavailable, falling back to S3 presign (will retry lazily): %v", err)
 		} else {
 			uploadService.SetCloudFrontSigner(cfSigner)

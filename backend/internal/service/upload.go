@@ -60,20 +60,41 @@ func (s *UploadService) SetCloudFrontSignerReload(reload func(ctx context.Contex
 	s.cfSignerReload = reload
 }
 
+// cfSignerRetryTimeout bounds the SSM round-trip on a lazy retry so a slow
+// or hanging SSM call can't stall the request path indefinitely -- the
+// caller falls back to S3 presign either way, so a bounded wait is strictly
+// better than an unbounded one.
+const cfSignerRetryTimeout = 3 * time.Second
+
 // cloudFrontSigner returns the active signer, lazily retrying setup (at most
-// once per cfSignerRetryInterval) if it isn't configured yet.
+// once per cfSignerRetryInterval) if it isn't configured yet. The reload
+// callback's network I/O runs outside cfSignerMu -- holding a mutex across
+// an SSM round-trip would serialize every concurrent download request on
+// that Lambda instance behind it, not just the ones that hit the retry.
 func (s *UploadService) cloudFrontSigner(ctx context.Context) *CloudFrontSigner {
 	s.cfSignerMu.Lock()
-	defer s.cfSignerMu.Unlock()
 	if s.cfSigner != nil || s.cfSignerReload == nil || time.Now().Before(s.cfSignerRetryAt) {
-		return s.cfSigner
+		signer := s.cfSigner
+		s.cfSignerMu.Unlock()
+		return signer
 	}
 	s.cfSignerRetryAt = time.Now().Add(cfSignerRetryInterval)
-	if signer, err := s.cfSignerReload(ctx); err != nil {
+	reload := s.cfSignerReload
+	s.cfSignerMu.Unlock()
+
+	retryCtx, cancel := context.WithTimeout(ctx, cfSignerRetryTimeout)
+	signer, err := reload(retryCtx)
+	cancel()
+	if err != nil {
 		log.Printf("warn: CloudFront signer retry failed, still falling back to S3 presign: %v", err)
-	} else {
-		s.cfSigner = signer
+		s.cfSignerMu.Lock()
+		defer s.cfSignerMu.Unlock()
+		return s.cfSigner
 	}
+
+	s.cfSignerMu.Lock()
+	defer s.cfSignerMu.Unlock()
+	s.cfSigner = signer
 	return s.cfSigner
 }
 

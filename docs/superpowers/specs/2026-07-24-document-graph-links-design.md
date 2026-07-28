@@ -1,7 +1,7 @@
 # Document ↔ Meeting/Account Graph Links — Design
 
 **Date:** 2026-07-24
-**Status:** Approved
+**Status:** Draft (unimplemented — this design predates and is unrelated to ADR-027's CloudFront-signed URL work; downgraded from Approved since none of its proposed changes, including the `share-account` route removal, have landed yet)
 
 ## Problem
 

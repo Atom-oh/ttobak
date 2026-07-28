@@ -144,8 +144,16 @@ export class StorageStack extends cdk.Stack {
     // read objects via OAC. FrontendStack imports this bucket by name, so CDK
     // can't attach the OAC policy there — it must live with the bucket owner.
     // ponytail: distribution/* (own-account only) instead of the exact
-    // distribution ID, breaking a Storage↔Frontend cycle; tighten to the ID
-    // post-deploy if desired. Resources are scoped to the prefixes actually
+    // distribution ID, breaking a Storage↔Frontend cycle -- FrontendStack
+    // (which creates the distribution) can't exist yet when this policy is
+    // first attached. This is a REQUIRED post-deploy tightening step, not
+    // optional -- see ADR-027's deploy-order section: after FrontendStack's
+    // first deploy, replace this wildcard with the real distribution ID
+    // (manually via `aws s3api put-bucket-policy`, or by re-running this
+    // stack's deploy with the ID passed through CDK context/SSM once a
+    // follow-up wires that up) so a second same-account distribution can't
+    // read these objects without trustedKeyGroups. Resources are scoped to
+    // the prefixes actually
     // served through GeneratePresignedDownloadURLWithTTL (audio/images/files/
     // docs/docs-pdf) -- transcripts/* is internal STT-pipeline data with no
     // {userId} segment and is never handed out as a download URL, so it's

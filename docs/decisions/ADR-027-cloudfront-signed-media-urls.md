@@ -40,8 +40,9 @@ S3 presign 대신 **CloudFront 서명 URL**(trusted key group, canned policy)을
   - FrontendStack은 데이터 버킷을 `Bucket.fromBucketName`(결정적 이름
     `ttobak-assets-{account}`)으로 import — StorageStack↔FrontendStack 참조
     없음. 대신 OAC read 정책은 버킷 소유자인 StorageStack이 직접 부착
-    (`AWS:SourceArn: distribution/*` 와일드카드 — 자기 계정 한정. 배포 후
-    정확한 distribution ID로 조일 수 있음).
+    (`AWS:SourceArn: distribution/*` 와일드카드 — 자기 계정 한정. 배포 순서
+    7단계에서 정확한 distribution ID로 조여야 하는 필수 단계, 선택 사항
+    아님 — 아래 "배포 순서" 참조).
   - key-pair-id는 배포 후에만 알 수 있으므로 FrontendStack이 고정 이름 SSM
     파라미터 `/ttobak/cloudfront/key-pair-id`로 발행하고, api Lambda가
     런타임(cold start)에 이름으로 읽는다 — 어느 스택도 FrontendStack을
@@ -102,7 +103,17 @@ S3 presign 대신 **CloudFront 서명 URL**(trusted key group, canned policy)을
 ## 배포 순서 (per-stack `--exclusively`)
 
 1. Out-of-band: 키쌍 생성, `/ttobak/cloudfront/signing-key` SecureString 등록.
-2. `TtobakStorageStack` (버킷 정책) → 3. `TtobakAiStack` (apiRole SSM 권한) →
+2. `TtobakStorageStack` (버킷 정책, `distribution/*` 와일드카드로 시작 —
+   FrontendStack이 아직 없어 정확한 distribution ID를 알 수 없음) →
+3. `TtobakAiStack` (apiRole SSM 권한) →
 4. `TtobakGatewayStack` (`MEDIA_BASE_URL` env) → 5. `TtobakFrontendStack`
 (KeyGroup/behavior/key-pair-id 파라미터) → 6. api Lambda 빌드·배포.
 Lambda가 5보다 먼저 배포되어도 폴백 덕에 무해.
+7. **(필수, 5 완료 후)** `TtobakFrontendStack`이 만든 실제 distribution ID로
+   버킷 정책의 `AWS:SourceArn`을 좁힌다 — 5까지는 같은 계정의 다른
+   distribution(생성 권한이 있는 누구든, 또는 실수로 추가된 신규
+   distribution)이 `trustedKeyGroups` 없이도 이 버킷을 origin으로 붙여
+   서명 없는 전 사용자 미디어를 노출시킬 수 있는 창이 열려 있다. 이 스텝을
+   건너뛰면 `/media/*`의 viewer-auth 강제가 "그 distribution만 존재한다"는
+   가정에만 의존하게 된다 — 선택 사항이 아니라 배포 순서의 필수 마지막
+   단계다.
