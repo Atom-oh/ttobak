@@ -112,8 +112,11 @@ export type ProjectFields = {
  * value, so a caller updating only `name` (or `stage`, etc.) doesn't wipe
  * the rest -- see updateProject's doc comment for why this is needed at all.
  * A field explicitly passed as '' clears it; only `undefined` inherits. */
-export function mergeProjectUpdate<T extends ProjectFields>(current: ProjectFields, patch: T): T {
-  const merged = { ...patch };
+export function mergeProjectUpdate(
+  current: ProjectFields,
+  patch: { name: string } & ProjectFields,
+): { name: string } & ProjectFields {
+  const merged: { name: string } & ProjectFields = { ...patch };
   for (const field of PROJECT_OPTIONAL_FIELDS) {
     if (merged[field] === undefined) {
       merged[field] = current[field] ?? '';
