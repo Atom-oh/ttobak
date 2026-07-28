@@ -133,14 +133,25 @@ esac ; }
 # 을 태울지 결정할 수 있고(아래), 소요/입력 크기가 로그에 없으면 "캡 부족"과 "의장 고장"이
 # 구분되지 않는다(이 repo PR#133 이 정확히 그 상태로 반복 실패했다).
 CHAIR_RC=0; CHAIR_ELAPSED=0
-run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해도 || true 로 계속.
+run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해도 계속 진행한다.
   # argv(-p) 는 고정 지시문만(작고 상한 없음) — diff+패널(가변, 큼)은 stdin.
+  #
+  # rc 캡처는 `if` 로 감싼다. 이전 형태(`... || true` 다음 줄에서 `${PIPESTATUS[0]}`)는
+  # **항상 0 을 준다** — `|| true` 의 `true` 가 실행되면서 PIPESTATUS 가 그 값으로 덮이기
+  # 때문이다(실측: 124 로 죽는 파이프라인에서도 0). 그 결과 이 스크립트의 timeout 판별
+  # (아래 CHAIR_SLOW_FAIL)이 rc 로는 한 번도 발동하지 못했다(ttobak PR#139 리뷰 L2 MAJOR).
+  # `if pipeline; then ...; else CHAIR_RC="${PIPESTATUS[0]}"; fi` 은 조건절에서 set -e 가
+  # 유보되고 else 진입 전까지 다른 명령이 없어 PIPESTATUS 가 보존된다(실측: 124 유지).
   local t0 t1
   t0="$(date +%s)"
-  ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
-    claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
-    < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT" || true
-  CHAIR_RC="${PIPESTATUS[0]}"   # timeout 이 죽였으면 124
+  if ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
+       claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
+       < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT"
+  then
+    CHAIR_RC=0
+  else
+    CHAIR_RC="${PIPESTATUS[0]}"   # timeout 이 죽였으면 124
+  fi
   t1="$(date +%s)"; CHAIR_ELAPSED="$((t1 - t0))"
   echo "chair $(chair_label "$1"): ${CHAIR_ELAPSED}s, rc=$CHAIR_RC, stdin=$(wc -c < "$WORK/synth-stdin.txt")B, out=$(wc -c < "$OUT")B"
 }
