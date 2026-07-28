@@ -52,8 +52,24 @@ export function InsightsList() {
   const [researchLoading, setResearchLoading] = useState(false);
   const [researchError, setResearchError] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Discards out-of-order responses: two overlapping fetchDocuments calls
+  // (e.g. two concurrent deletes' refetches) can resolve in either order:
+  // only the one matching the latest generation at resolve time is applied,
+  // so a slower, now-stale response can't overwrite fresher state and
+  // "resurrect" an already-deleted document in the list.
+  const fetchGenerationRef = useRef(0);
+  // Dedups the page-back correction across concurrent deletes that both
+  // observe the SAME page going empty -- without this, two such events
+  // each decrement once and skip over an intermediate page. Cleared
+  // whenever `page` itself changes so a later, unrelated emptying of the
+  // same page number isn't blocked by a stale entry.
+  const emptiedPageRef = useRef<number | null>(null);
+  useEffect(() => {
+    emptiedPageRef.current = null;
+  }, [page]);
 
   const fetchDocuments = useCallback(async () => {
+    const generation = ++fetchGenerationRef.current;
     try {
       setLoading(true);
       setError(null);
@@ -76,20 +92,26 @@ export function InsightsList() {
       }
       const response = await insightsApi.list(params);
       const docs = response.documents || [];
-      setDocuments(docs);
-      setTotalCount(response.totalCount || 0);
+      if (generation === fetchGenerationRef.current) {
+        setDocuments(docs);
+        setTotalCount(response.totalCount || 0);
+      }
       return docs;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load documents');
-      setDocuments([]);
-      setTotalCount(0);
+      if (generation === fetchGenerationRef.current) {
+        setError(err instanceof Error ? err.message : 'Failed to load documents');
+        setDocuments([]);
+        setTotalCount(0);
+      }
       // null (not []) -- a genuinely empty page and a failed fetch must stay
       // distinguishable to callers like handleDelete's page-back logic,
       // which should only step back on a confirmed-empty result, not on a
       // network/500 error that has nothing to do with pagination.
       return null;
     } finally {
-      setLoading(false);
+      if (generation === fetchGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }, [activeTab, page, crawlerFilter, serviceFilter, selectedTags, sortBy, limit]);
 
@@ -190,13 +212,13 @@ export function InsightsList() {
       // the ACTUAL result, not a pre-delete guess.
       const remaining = await fetchDocuments();
       // null means the refetch itself failed (network/500) -- that's not
-      // "the page is empty", so don't step back on it. And clamp the
-      // decrement (never go below 1) via the functional-update form: if two
-      // concurrent deletes both resolve "empty, step back", React applies
-      // both updates in order against the latest state, so the second one's
-      // `p > 1` check sees the first's result -- one call can't halve into
-      // an invalid page, and two calls together can't skip past page 1.
-      if (remaining !== null && remaining.length === 0) {
+      // "the page is empty", so don't step back on it. `emptiedPageRef`
+      // dedups concurrent deletes that both observe the SAME page (`page`,
+      // captured from this render) going empty -- without it, two such
+      // events each decrement once and skip an intermediate page (e.g.
+      // 3 -> 1 instead of 3 -> 2).
+      if (remaining !== null && remaining.length === 0 && emptiedPageRef.current !== page) {
+        emptiedPageRef.current = page;
         setPage((p) => (p > 1 ? p - 1 : p));
       }
     } catch (err) {
