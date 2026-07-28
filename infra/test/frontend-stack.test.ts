@@ -50,18 +50,22 @@ describe('FrontendStack', () => {
     });
   });
 
-  test('/media/* behavior actually carries the sandbox CSP header (not just "some policy exists")', () => {
-    // A prior version of this test asserted CustomHeadersConfig: absent()
-    // on "some" ResponseHeadersPolicy, which passes even if the sandbox
-    // header were deleted from /media/*'s policy entirely, as long as
-    // docs-pdf's still had none. Assert the actual CSP value directly.
+  test('/media/* behavior actually carries the sandbox CSP header, via the dedicated security-headers field', () => {
+    // CloudFront's real API rejects Content-Security-Policy under
+    // CustomHeadersConfig ("...is a security header and cannot be set as
+    // custom header", HandlerErrorCode: InvalidRequest) -- CDK's type
+    // system doesn't catch this, and cdk synth happily produces a template
+    // that looks valid; the failure only surfaces from the real API at
+    // deploy time. This asserts the field CloudFront actually accepts
+    // (SecurityHeadersConfig.ContentSecurityPolicy), not the one that gets
+    // rejected.
     template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
       ResponseHeadersPolicyConfig: Match.objectLike({
-        CustomHeadersConfig: {
-          Items: Match.arrayWith([
-            Match.objectLike({ Header: 'Content-Security-Policy', Value: 'sandbox' }),
-          ]),
-        },
+        SecurityHeadersConfig: Match.objectLike({
+          ContentSecurityPolicy: Match.objectLike({
+            ContentSecurityPolicy: 'sandbox',
+          }),
+        }),
       }),
     });
   });
@@ -83,7 +87,9 @@ describe('FrontendStack', () => {
     });
     template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
       ResponseHeadersPolicyConfig: Match.objectLike({
-        CustomHeadersConfig: Match.absent(),
+        SecurityHeadersConfig: Match.objectLike({
+          ContentSecurityPolicy: Match.absent(),
+        }),
       }),
     });
   });

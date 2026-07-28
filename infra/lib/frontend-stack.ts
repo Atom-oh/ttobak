@@ -195,15 +195,14 @@ function handler(event) {
         responseHeadersPolicyName: `ttobak-media-headers-${cdk.Aws.REGION}`,
         securityHeadersBehavior: {
           contentTypeOptions: { override: true },
-        },
-        customHeadersBehavior: {
-          customHeaders: [
-            {
-              header: 'Content-Security-Policy',
-              value: 'sandbox',
-              override: true,
-            },
-          ],
+          // CloudFront rejects Content-Security-Policy under
+          // customHeadersBehavior -- it's one of a fixed set of "security
+          // headers" the API only accepts through this dedicated field
+          // ("The parameter CustomHeaders contains Content-Security-Policy
+          // that is a security header and cannot be set as custom header").
+          // CDK's type system doesn't catch this; it only surfaces as a 400
+          // from the real API at deploy time.
+          contentSecurityPolicy: { contentSecurityPolicy: 'sandbox', override: true },
         },
       }
     );

@@ -342,12 +342,24 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
 
         {isSlide ? (
           <div className="space-y-4">
-            {isPdf && doc.downloadUrl ? (
-              <iframe
-                src={doc.downloadUrl}
-                title={doc.title}
-                className="w-full h-[70vh] rounded-xl border border-slate-200 dark:border-slate-700"
-              />
+            {isPdf && !doc.previewUrl ? (
+              // A directly-uploaded PDF has no previewUrl sidecar (that's
+              // convert-doc's PPTX->PDF output only, ADR-022) -- its
+              // downloadUrl is its own file, under docs/*, which gets
+              // ADR-027's `/media/*` `CSP: sandbox` header (mitigating
+              // stored-XSS from arbitrary client-supplied Content-Type on
+              // that prefix). Framing that URL in an iframe is documented
+              // browser behavior to disable the built-in PDF viewer, so
+              // skip the preview and point at the Download button below
+              // instead of an iframe that may silently render blank.
+              // `!doc.previewUrl` is defensive, not load-bearing (the
+              // backend never sets both on the same doc) -- it just means
+              // this branch can't ever shadow a real sidecar if that
+              // invariant ever changes.
+              <div className="flex items-center gap-2 glass-panel rounded-xl p-4 text-sm text-slate-500 dark:text-text-muted">
+                <span className="material-symbols-outlined" aria-hidden="true">description</span>
+                <span>이 PDF는 미리보기를 지원하지 않습니다 — 아래 다운로드 버튼으로 확인해주세요.</span>
+              </div>
             ) : doc.previewUrl ? (
               <iframe
                 src={doc.previewUrl}
