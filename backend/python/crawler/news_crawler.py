@@ -469,6 +469,16 @@ def _summarize_and_tag(title: str, text: str, source_name: str = '',
     """
     content = text[:4000] if len(text) > 4000 else text
     anchor = source_name or (', '.join(keywords) if keywords else '')
+    # anchor is spliced into the instruction-level region of the prompt
+    # (outside the <article> data block), but it comes from AddSource's
+    # user-supplied source_name/newsQueries -- a source is shared across
+    # subscribers, so any one of them could plant an injection payload as a
+    # "keyword" that would otherwise run with instruction-level trust for
+    # every article processed under that source. Sanitize it exactly like
+    # untrusted article text, then strip newlines/control chars and cap
+    # length so it can't smuggle multi-line directives or blow up the prompt.
+    anchor = _sanitize_snippet(anchor)
+    anchor = re.sub(r'[\r\n\t\x00-\x1f]+', ' ', anchor).strip()[:200]
     anchor_hint = f'\n고객사/관심 주제: {anchor}' if anchor else ''
     # Both title and body are untrusted; strip the delimiter tokens from each
     # so a snippet containing "</article>" can't escape the data block and

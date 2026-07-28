@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -125,14 +126,16 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 }
 
 // DeleteDocument removes a single crawled document (DynamoDB metadata + S3
-// KB object). Authorization is scoped to the source's subscribers or an
-// admin -- unlike GetDocumentContent's open read (insights are shared
-// substrate by design), a mutating route must not inherit that open
-// posture. The KB vector store is NOT purged here: Bedrock Knowledge Base
-// only reconciles deletions on an ingestion job. The handler
-// (InsightsHandler.DeleteDocument) triggers one, best-effort, right after
-// this call succeeds -- a stale vector can still surface in Q&A until that
-// job completes, or if it fails, until the next daily crawl/manual sync.
+// KB object). Authorization is scoped to the source's owner (whoever
+// created/registered the source) or an admin -- NOT any subscriber, since
+// AddSource lets any authenticated user self-subscribe to an existing
+// source with no invite/approval step, which would otherwise make this
+// destructive route trivially self-grantable to anyone. The KB vector
+// store is NOT purged here: Bedrock Knowledge Base only reconciles
+// deletions on an ingestion job. The handler (InsightsHandler.DeleteDocument)
+// triggers one, best-effort, right after this call succeeds -- a stale
+// vector can still surface in Q&A until that job completes, or if it
+// fails, until the next daily crawl/manual sync.
 func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isAdmin bool, sourceID, docHash string) error {
 	source, err := s.repo.GetSource(ctx, sourceID)
 	if err != nil {
@@ -141,7 +144,7 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 	if source == nil {
 		return ErrNotFound
 	}
-	if !isAdmin && !contains(source.Subscribers, userID) {
+	if !isAdmin && source.OwnerID != userID {
 		return ErrForbidden
 	}
 
@@ -153,10 +156,29 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 		return ErrNotFound
 	}
 
+	// S3 key fallback mirrors GetDocumentDetail's read path: older documents
+	// without a stored S3Key can be shaped like either crawler type, so try
+	// both prefixes instead of assuming news. DeleteObject on a nonexistent
+	// key succeeds silently, so guessing wrong here previously left tech
+	// docs' S3 object (and KB vector) behind forever.
 	s3Key := doc.S3Key
 	if s3Key == "" {
 		s3Key = fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash)
+		if _, err := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: aws.String(s.kbBucketName),
+			Key:    aws.String(s3Key),
+		}); err != nil {
+			s3Key = fmt.Sprintf("shared/aws-docs/%s/%s.md", sourceID, docHash)
+		}
 	}
+	// DynamoDB delete first: if this fails, the S3 object is still intact
+	// and the doc is still fully servable/re-deletable. Doing S3 first would
+	// risk the opposite -- content gone but metadata (and the UI list entry)
+	// still there, pointing at nothing on a retry.
+	if err := s.repo.DeleteDocument(ctx, sourceID, docHash); err != nil {
+		return fmt.Errorf("failed to delete document: %w", err)
+	}
+
 	if _, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.kbBucketName),
 		Key:    aws.String(s3Key),
@@ -164,10 +186,7 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 		return fmt.Errorf("failed to delete KB object: %w", err)
 	}
 
-	if err := s.repo.DeleteDocument(ctx, sourceID, docHash); err != nil {
-		return fmt.Errorf("failed to delete document: %w", err)
-	}
-
+	log.Printf("insights: document deleted userID=%s sourceID=%s docHash=%s", userID, sourceID, docHash)
 	scanCache.clear()
 	return nil
 }

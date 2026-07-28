@@ -70,6 +70,7 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 		source = &model.CrawlerSource{
 			SourceID:    sourceID,
 			SourceName:  req.SourceName,
+			OwnerID:     userID,
 			Subscribers: []string{userID},
 			AWSServices: req.AWSServices,
 			NewsQueries: req.NewsQueries,

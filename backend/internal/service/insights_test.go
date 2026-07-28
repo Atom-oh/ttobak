@@ -144,9 +144,11 @@ func TestDeleteDocument_UnknownSourceNotFound(t *testing.T) {
 	}
 }
 
-func TestDeleteDocument_NonSubscriberForbidden(t *testing.T) {
+func TestDeleteDocument_NonOwnerSubscriberForbidden(t *testing.T) {
 	repo := newMockCrawlerRepo()
-	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", Subscribers: []string{"owner-1"}}
+	// someone-else has self-subscribed (AddSource allows this unconditionally)
+	// but is not the owner -- must still be forbidden from deleting.
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", OwnerID: "owner-1", Subscribers: []string{"owner-1", "someone-else"}}
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
 
@@ -156,13 +158,13 @@ func TestDeleteDocument_NonSubscriberForbidden(t *testing.T) {
 	}
 }
 
-func TestDeleteDocument_SubscriberButDocMissingNotFound(t *testing.T) {
+func TestDeleteDocument_OwnerButDocMissingNotFound(t *testing.T) {
 	repo := newMockCrawlerRepo()
-	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", Subscribers: []string{"user-1"}}
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", OwnerID: "user-1", Subscribers: []string{"user-1"}}
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
 
-	// user-1 IS a subscriber (passes the permission check) but the
+	// user-1 IS the owner (passes the permission check) but the
 	// requested doc doesn't exist -- must not fall through to S3.
 	err := svc.DeleteDocument(ctx, "user-1", false, "hanabank", "no-such-doc")
 	if err != ErrNotFound {
@@ -170,17 +172,17 @@ func TestDeleteDocument_SubscriberButDocMissingNotFound(t *testing.T) {
 	}
 }
 
-func TestDeleteDocument_AdminBypassesSubscriberCheck(t *testing.T) {
+func TestDeleteDocument_AdminBypassesOwnerCheck(t *testing.T) {
 	repo := newMockCrawlerRepo()
-	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", Subscribers: []string{"owner-1"}}
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", OwnerID: "owner-1", Subscribers: []string{"owner-1"}}
 	svc := &InsightsService{repo: repo}
 	ctx := context.Background()
 
-	// An admin who is NOT a subscriber must get past the permission check
+	// An admin who is NOT the owner must get past the permission check
 	// (proven by getting ErrNotFound for the missing doc, not ErrForbidden).
 	err := svc.DeleteDocument(ctx, "admin-1", true, "hanabank", "no-such-doc")
 	if err != ErrNotFound {
-		t.Errorf("expected ErrNotFound (admin bypasses subscriber check), got %v", err)
+		t.Errorf("expected ErrNotFound (admin bypasses owner check), got %v", err)
 	}
 }
 

@@ -127,6 +127,7 @@ type User struct {
 type CrawlerSource struct {
 	SourceID      string   `dynamodbav:"sourceId" json:"sourceId"`
 	SourceName    string   `dynamodbav:"sourceName" json:"sourceName"`
+	OwnerID       string   `dynamodbav:"ownerId,omitempty" json:"ownerId,omitempty"` // creator; subscribing later never changes this
 	Subscribers   []string `dynamodbav:"subscribers" json:"subscribers"`
 	AWSServices   []string `dynamodbav:"awsServices" json:"awsServices"`
 	NewsQueries   []string `dynamodbav:"newsQueries" json:"newsQueries"`
