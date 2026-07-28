@@ -177,6 +177,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'ttobak_update_project',
+      description: 'Update a project\'s metadata fields (name, description, SFDC fields, stage). Any field you omit keeps its current value -- links, members, and meetings are unaffected either way. `name` is still required by the backend, so resend it even when only changing e.g. stage.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          projectId: { type: 'string', description: 'Project ID' },
+          name: { type: 'string', description: 'Project name (required by the backend even when unchanged)' },
+          description: { type: 'string', description: 'Optional project description. Omit to keep current value; pass "" to clear it.' },
+          sfdcOpptyId: { type: 'string', description: 'Optional SFDC Oppty ID. Omit to keep current value; pass "" to clear it.' },
+          sfdcUrl: { type: 'string', description: 'Optional SFDC Oppty URL. Omit to keep current value; pass "" to clear it.' },
+          stage: { type: 'string', description: 'Optional project stage. Omit to keep current value; pass "" to clear it.' },
+        },
+        required: ['projectId', 'name'],
+      },
+    },
+    {
+      name: 'ttobak_link_project_account',
+      description: 'Link an Account to a project -- extends project access to that Account\'s entire team. Requires you to be the project owner AND a member of the Account being linked.',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          projectId: { type: 'string', description: 'Project ID' },
+          accountId: { type: 'string', description: 'Account ID to link' },
+        },
+        required: ['projectId', 'accountId'],
+      },
+    },
+    {
+      name: 'ttobak_unlink_project_account',
+      description: 'Unlink an Account from a project (project ownership required).',
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          projectId: { type: 'string', description: 'Project ID' },
+          accountId: { type: 'string', description: 'Account ID to unlink' },
+        },
+        required: ['projectId', 'accountId'],
+      },
+    },
+    {
       name: 'ttobak_export_vault',
       description: 'Export your meetings as Obsidian-ready markdown files [{path, markdown}], placed under Accounts/{name}/ (shared) or _Private/Meetings/. Write each to your local vault.',
       inputSchema: { type: 'object' as const, properties: {} },
@@ -450,6 +490,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!projectId) return error('projectId is required');
         const result = await api.getProjectInsights(projectId, { from, to, types });
         return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_update_project': {
+        const { projectId, name, description, sfdcOpptyId, sfdcUrl, stage } = args as {
+          projectId: string; name: string; description?: string; sfdcOpptyId?: string;
+          sfdcUrl?: string; stage?: string;
+        };
+        if (!projectId) return error('projectId is required');
+        if (!name) return error('name is required');
+        const result = await api.updateProject(projectId, { name, description, sfdcOpptyId, sfdcUrl, stage });
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_link_project_account': {
+        const { projectId, accountId } = args as { projectId: string; accountId: string };
+        if (!projectId) return error('projectId is required');
+        if (!accountId) return error('accountId is required');
+        const result = await api.linkProjectAccount(projectId, accountId);
+        return text(JSON.stringify(result, null, 2));
+      }
+
+      case 'ttobak_unlink_project_account': {
+        const { projectId, accountId } = args as { projectId: string; accountId: string };
+        if (!projectId) return error('projectId is required');
+        if (!accountId) return error('accountId is required');
+        await api.unlinkProjectAccount(projectId, accountId);
+        return text(`Unlinked account ${accountId} from project ${projectId}.`);
       }
 
       case 'ttobak_export_vault': {

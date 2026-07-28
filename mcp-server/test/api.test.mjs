@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
-import { guardUploadPath, resolveFileMeta, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES } from '../dist/api.js';
+import { guardUploadPath, resolveFileMeta, mergeProjectUpdate, MAX_UPLOAD_BYTES, MAX_KB_UPLOAD_BYTES } from '../dist/api.js';
 
 test('resolveFileMeta: extensionless name with explicit fileType survives intact', () => {
   const { name, type } = resolveFileMeta('/x/notes', undefined, 'text/markdown');
@@ -126,3 +126,27 @@ test('guardUploadPath: allows a normal file outside hidden dirs', () => {
 function mkTmpDir() {
   return mkdtempSync(join(tmpdir(), 'guard-'));
 }
+
+test('mergeProjectUpdate: omitted field inherits the current value', () => {
+  const current = { description: 'Renewal deal', sfdcOpptyId: 'OPP-1', sfdcUrl: 'https://x', stage: 'negotiation' };
+  const merged = mergeProjectUpdate(current, { name: 'Hana Renewal 2.0' });
+  assert.equal(merged.description, 'Renewal deal');
+  assert.equal(merged.sfdcOpptyId, 'OPP-1');
+  assert.equal(merged.sfdcUrl, 'https://x');
+  assert.equal(merged.stage, 'negotiation');
+});
+
+test('mergeProjectUpdate: an explicitly empty string clears the field, not re-filled from current', () => {
+  const current = { description: 'Renewal deal', stage: 'negotiation' };
+  const merged = mergeProjectUpdate(current, { name: 'x', description: '' });
+  assert.equal(merged.description, '');
+  assert.equal(merged.stage, 'negotiation'); // untouched field still inherited
+});
+
+test('mergeProjectUpdate: field absent from both current and patch ends up empty', () => {
+  const merged = mergeProjectUpdate({}, { name: 'x' });
+  assert.equal(merged.description, '');
+  assert.equal(merged.sfdcOpptyId, '');
+  assert.equal(merged.sfdcUrl, '');
+  assert.equal(merged.stage, '');
+});

@@ -21096,6 +21096,16 @@ function resolveFileMeta(filePath, fileName, fileType) {
   const normalizedName = !ext || ext === ext.toLowerCase() ? name : name.slice(0, -ext.length) + ext.toLowerCase();
   return { name: normalizedName, type };
 }
+var PROJECT_OPTIONAL_FIELDS = ["description", "sfdcOpptyId", "sfdcUrl", "stage"];
+function mergeProjectUpdate(current, patch) {
+  const merged = { ...patch };
+  for (const field of PROJECT_OPTIONAL_FIELDS) {
+    if (merged[field] === void 0) {
+      merged[field] = current[field] ?? "";
+    }
+  }
+  return merged;
+}
 var TtobakApi = class {
   constructor(auth2, baseUrl) {
     this.auth = auth2;
@@ -21172,6 +21182,24 @@ var TtobakApi = class {
     const qs = q.toString();
     return this.get(`/api/projects/${encodeURIComponent(projectId)}/insights${qs ? "?" + qs : ""}`);
   }
+  /** `name` is required even when only changing e.g. stage -- the backend's
+   * UpdateProjectRequest has no partial/omit-preserves semantics of its own
+   * (plain string fields, unlike Meeting's *string pointer fields), so an
+   * omitted optional field would decode to "" server-side and silently wipe
+   * the current value. mergeProjectUpdate fills any field the caller left
+   * undefined from the project's current value before we PUT. */
+  async updateProject(projectId, project) {
+    const needsMerge = PROJECT_OPTIONAL_FIELDS.some((f) => project[f] === void 0);
+    const current = needsMerge ? await this.getProject(projectId) : void 0;
+    const body = current ? mergeProjectUpdate(current, project) : project;
+    return this.put(`/api/projects/${encodeURIComponent(projectId)}`, body);
+  }
+  async linkProjectAccount(projectId, accountId) {
+    return this.post(`/api/projects/${encodeURIComponent(projectId)}/accounts`, { accountId });
+  }
+  async unlinkProjectAccount(projectId, accountId) {
+    return this.delete(`/api/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}`);
+  }
   async exportVault() {
     return this.get("/api/vault/export");
   }
@@ -21244,6 +21272,9 @@ var TtobakApi = class {
   }
   async delete(path) {
     return this.request("DELETE", path);
+  }
+  async put(path, body) {
+    return this.request("PUT", path, body);
   }
   /** PUT a local file's bytes directly to a presigned S3 URL -- no TTOBAK
    * bearer token here, the URL's own signature is the auth. */
@@ -21479,6 +21510,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       }
     },
     {
+      name: "ttobak_update_project",
+      description: "Update a project's metadata fields (name, description, SFDC fields, stage). Any field you omit keeps its current value -- links, members, and meetings are unaffected either way. `name` is still required by the backend, so resend it even when only changing e.g. stage.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string", description: "Project ID" },
+          name: { type: "string", description: "Project name (required by the backend even when unchanged)" },
+          description: { type: "string", description: 'Optional project description. Omit to keep current value; pass "" to clear it.' },
+          sfdcOpptyId: { type: "string", description: 'Optional SFDC Oppty ID. Omit to keep current value; pass "" to clear it.' },
+          sfdcUrl: { type: "string", description: 'Optional SFDC Oppty URL. Omit to keep current value; pass "" to clear it.' },
+          stage: { type: "string", description: 'Optional project stage. Omit to keep current value; pass "" to clear it.' }
+        },
+        required: ["projectId", "name"]
+      }
+    },
+    {
+      name: "ttobak_link_project_account",
+      description: "Link an Account to a project -- extends project access to that Account's entire team. Requires you to be the project owner AND a member of the Account being linked.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string", description: "Project ID" },
+          accountId: { type: "string", description: "Account ID to link" }
+        },
+        required: ["projectId", "accountId"]
+      }
+    },
+    {
+      name: "ttobak_unlink_project_account",
+      description: "Unlink an Account from a project (project ownership required).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string", description: "Project ID" },
+          accountId: { type: "string", description: "Account ID to unlink" }
+        },
+        required: ["projectId", "accountId"]
+      }
+    },
+    {
       name: "ttobak_export_vault",
       description: "Export your meetings as Obsidian-ready markdown files [{path, markdown}], placed under Accounts/{name}/ (shared) or _Private/Meetings/. Write each to your local vault.",
       inputSchema: { type: "object", properties: {} }
@@ -21700,6 +21771,27 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         if (!projectId) return error2("projectId is required");
         const result = await api.getProjectInsights(projectId, { from, to, types });
         return text(JSON.stringify(result, null, 2));
+      }
+      case "ttobak_update_project": {
+        const { projectId, name: name2, description, sfdcOpptyId, sfdcUrl, stage } = args;
+        if (!projectId) return error2("projectId is required");
+        if (!name2) return error2("name is required");
+        const result = await api.updateProject(projectId, { name: name2, description, sfdcOpptyId, sfdcUrl, stage });
+        return text(JSON.stringify(result, null, 2));
+      }
+      case "ttobak_link_project_account": {
+        const { projectId, accountId } = args;
+        if (!projectId) return error2("projectId is required");
+        if (!accountId) return error2("accountId is required");
+        const result = await api.linkProjectAccount(projectId, accountId);
+        return text(JSON.stringify(result, null, 2));
+      }
+      case "ttobak_unlink_project_account": {
+        const { projectId, accountId } = args;
+        if (!projectId) return error2("projectId is required");
+        if (!accountId) return error2("accountId is required");
+        await api.unlinkProjectAccount(projectId, accountId);
+        return text(`Unlinked account ${accountId} from project ${projectId}.`);
       }
       case "ttobak_export_vault": {
         const result = await api.exportVault();

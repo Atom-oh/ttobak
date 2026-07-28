@@ -121,7 +121,8 @@ ttobak
           ttobak_add_account_member, ttobak_create_project,
           ttobak_list_projects, ttobak_get_project,
           ttobak_get_project_brief, ttobak_get_project_insights,
-          ttobak_logout
+          ttobak_update_project, ttobak_link_project_account,
+          ttobak_unlink_project_account, ttobak_logout
 ```
 
 If the status shows "failed", check:
@@ -191,6 +192,9 @@ Use the ttobak_login tool to authenticate.
 | `ttobak_get_project` | Project detail: members, linked accounts | "Show the Hana renewal project" |
 | `ttobak_get_project_brief` | Bundled project raw material (meetings, research, insights) | "Give me the Hana renewal project brief" |
 | `ttobak_get_project_insights` | Typed insights aggregated from the project's linked meetings | "What risks came up in the Hana renewal project?" |
+| `ttobak_update_project` | Update a project's metadata (name, description, SFDC fields, stage); omitted fields keep their current value, links/members unaffected -- `name` must still be resent | "Rename that project to Hana Renewal 2.0" |
+| `ttobak_link_project_account` | Link an Account to a project (project owner + member of that Account) | "Link Hana Bank to the renewal project" |
+| `ttobak_unlink_project_account` | Unlink an Account from a project (project owner) | "Unlink Hana Bank from that project" |
 | `ttobak_logout` | Clear stored tokens | "Log out of TTOBAK" |
 
 ### Usage Examples
@@ -344,7 +348,8 @@ ttobak
           ttobak_add_account_member, ttobak_create_project,
           ttobak_list_projects, ttobak_get_project,
           ttobak_get_project_brief, ttobak_get_project_insights,
-          ttobak_logout
+          ttobak_update_project, ttobak_link_project_account,
+          ttobak_unlink_project_account, ttobak_logout
 ```
 
 "failed" 상태가 표시되면:
@@ -414,6 +419,9 @@ TTOBAK에 로그인해줘
 | `ttobak_get_project` | 프로젝트 상세: 멤버, 연결 Account | "하나은행 갱신 프로젝트 보여줘" |
 | `ttobak_get_project_brief` | 프로젝트 묶음 원재료(미팅, 리서치, 인사이트) | "하나은행 갱신 프로젝트 브리프 한 번에" |
 | `ttobak_get_project_insights` | 프로젝트에 연결된 미팅에서 집계한 유형별 인사이트 | "하나은행 갱신 프로젝트에서 어떤 리스크가 있었어?" |
+| `ttobak_update_project` | 프로젝트 메타데이터 수정(name/description/SFDC 필드/stage) — 생략한 필드는 현재 값 유지, 링크·멤버는 영향 없음. 백엔드 요구사항상 name은 항상 재전송 필요 | "그 프로젝트 이름을 하나은행 갱신 2.0으로 바꿔줘" |
+| `ttobak_link_project_account` | 프로젝트에 Account 연결(프로젝트 소유자 + 해당 Account 멤버여야 함) | "하나은행을 갱신 프로젝트에 연결해줘" |
+| `ttobak_unlink_project_account` | 프로젝트에서 Account 연결 해제(프로젝트 소유자) | "하나은행을 그 프로젝트에서 연결 해제해줘" |
 | `ttobak_logout` | 저장된 토큰 삭제 | "TTOBAK에서 로그아웃해줘" |
 
 ### 사용 예시

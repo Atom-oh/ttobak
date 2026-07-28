@@ -99,6 +99,32 @@ export function resolveFileMeta(filePath: string, fileName?: string, fileType?: 
   return { name: normalizedName, type };
 }
 
+export const PROJECT_OPTIONAL_FIELDS = ['description', 'sfdcOpptyId', 'sfdcUrl', 'stage'] as const;
+
+export type ProjectFields = {
+  description?: string;
+  sfdcOpptyId?: string;
+  sfdcUrl?: string;
+  stage?: string;
+};
+
+/** Fills any of `patch`'s optional fields left `undefined` with `current`'s
+ * value, so a caller updating only `name` (or `stage`, etc.) doesn't wipe
+ * the rest -- see updateProject's doc comment for why this is needed at all.
+ * A field explicitly passed as '' clears it; only `undefined` inherits. */
+export function mergeProjectUpdate(
+  current: ProjectFields,
+  patch: { name: string } & ProjectFields,
+): { name: string } & ProjectFields {
+  const merged: { name: string } & ProjectFields = { ...patch };
+  for (const field of PROJECT_OPTIONAL_FIELDS) {
+    if (merged[field] === undefined) {
+      merged[field] = current[field] ?? '';
+    }
+  }
+  return merged;
+}
+
 export class TtobakApi {
   constructor(
     private auth: CognitoAuth,
@@ -206,6 +232,33 @@ export class TtobakApi {
     return this.get(`/api/projects/${encodeURIComponent(projectId)}/insights${qs ? '?' + qs : ''}`);
   }
 
+  /** `name` is required even when only changing e.g. stage -- the backend's
+   * UpdateProjectRequest has no partial/omit-preserves semantics of its own
+   * (plain string fields, unlike Meeting's *string pointer fields), so an
+   * omitted optional field would decode to "" server-side and silently wipe
+   * the current value. mergeProjectUpdate fills any field the caller left
+   * undefined from the project's current value before we PUT. */
+  async updateProject(projectId: string, project: {
+    name: string;
+    description?: string;
+    sfdcOpptyId?: string;
+    sfdcUrl?: string;
+    stage?: string;
+  }) {
+    const needsMerge = PROJECT_OPTIONAL_FIELDS.some((f) => project[f] === undefined);
+    const current = needsMerge ? (await this.getProject(projectId)) as ProjectFields : undefined;
+    const body = current ? mergeProjectUpdate(current, project) : project;
+    return this.put(`/api/projects/${encodeURIComponent(projectId)}`, body);
+  }
+
+  async linkProjectAccount(projectId: string, accountId: string) {
+    return this.post(`/api/projects/${encodeURIComponent(projectId)}/accounts`, { accountId });
+  }
+
+  async unlinkProjectAccount(projectId: string, accountId: string) {
+    return this.delete(`/api/projects/${encodeURIComponent(projectId)}/accounts/${encodeURIComponent(accountId)}`);
+  }
+
   async exportVault() {
     return this.get('/api/vault/export');
   }
@@ -311,6 +364,10 @@ export class TtobakApi {
 
   private async delete(path: string) {
     return this.request('DELETE', path);
+  }
+
+  private async put(path: string, body: unknown) {
+    return this.request('PUT', path, body);
   }
 
   /** PUT a local file's bytes directly to a presigned S3 URL -- no TTOBAK
