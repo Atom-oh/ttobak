@@ -412,5 +412,151 @@ class TestKBCacheAccessSignature(unittest.TestCase):
         self.assertEqual(mock_bedrock.retrieve.call_count, 2, "revoked access must bypass the stale KB cache entry")
 
 
+class TestHandleAskStreamIdentityAndOwnership(unittest.TestCase):
+    """handle_ask_stream must never trust the WebSocket client for identity
+    or for meeting context -- userId comes only from the server-set field
+    (populated by the Go websocket Lambda from the $connect authorizer
+    context), and a meetingId must be resolved server-side (with ownership/
+    sharing verified) rather than trusting a client-supplied transcript."""
+
+    def _base_event(self, **overrides):
+        event = {
+            'streamMode': 'ask_live',
+            'connectionId': 'c1',
+            'endpoint': 'https://example.com/prod',
+            'question': 'what happened?',
+            'userId': 'verified-user',
+        }
+        event.update(overrides)
+        return event
+
+    def setUp(self):
+        self.apigw = mock.MagicMock()
+        self._apigw_patcher = mock.patch.object(handler, '_apigw_client', return_value=self.apigw)
+        self._apigw_patcher.start()
+        self.addCleanup(self._apigw_patcher.stop)
+
+    def _posted_types(self):
+        return [json.loads(c.kwargs['Data'])['type'] for c in self.apigw.post_to_connection.call_args_list]
+
+    def test_missing_user_id_is_rejected_without_calling_bedrock(self):
+        with mock.patch.object(handler, 'agentic_converse_stream') as mock_converse:
+            result = handler.handle_ask_stream(self._base_event(userId=None))
+
+        self.assertEqual(result['status'], 'unauthorized')
+        mock_converse.assert_not_called()
+        self.assertIn('answer_error', self._posted_types())
+
+    def test_missing_session_id_is_generated_server_side(self):
+        with mock.patch.object(handler, 'agentic_converse_stream', return_value=('ok', [], [])) as mock_converse, \
+             mock.patch.object(handler, 'load_session', return_value=[]):
+            handler.handle_ask_stream(self._base_event(sessionId=None))
+
+        # session_id passed into agentic_converse_stream must be a
+        # non-empty string, not None.
+        _, kwargs = mock_converse.call_args
+        self.assertTrue(kwargs['session_id'])
+        self.assertIsInstance(kwargs['session_id'], str)
+
+    def test_meeting_id_fetches_context_server_side_ignoring_client_context(self):
+        with mock.patch.object(handler, 'load_meeting_context', return_value=('real transcript', None)) as mock_load, \
+             mock.patch.object(handler, 'agentic_converse_stream', return_value=('ok', [], [])) as mock_converse, \
+             mock.patch.object(handler, 'load_session', return_value=[]):
+            handler.handle_ask_stream(self._base_event(
+                meetingId='m1',
+                context='attacker-supplied transcript claiming to be m1',
+            ))
+
+        mock_load.assert_called_once_with('verified-user', 'm1')
+        _, kwargs = mock_converse.call_args
+        self.assertEqual(kwargs['transcript'], 'real transcript')
+
+    def test_meeting_not_found_or_not_owned_surfaces_answer_error_without_calling_bedrock(self):
+        with mock.patch.object(handler, 'load_meeting_context',
+                                return_value=(None, {'code': 'NOT_FOUND', 'message': 'Meeting not found', 'status': 404})), \
+             mock.patch.object(handler, 'agentic_converse_stream') as mock_converse:
+            result = handler.handle_ask_stream(self._base_event(meetingId='not-mine'))
+
+        self.assertEqual(result['status'], 'error')
+        mock_converse.assert_not_called()
+        self.assertIn('answer_error', self._posted_types())
+
+
+class TestKBCacheTTLExpiry(unittest.TestCase):
+    """A cache entry past its TTL must be treated as a miss even though the
+    DynamoDB item itself is still physically present (TTL deletion lags)."""
+
+    def setUp(self):
+        handler._shared_meetings_cache.clear()
+        handler._shared_meetings_cache_expiry.clear()
+
+    def test_expired_ttl_is_a_cache_miss(self):
+        expired_item = {
+            'PK': handler._kb_cache_key('q', 5, None),
+            'SK': 'V1',
+            'results': json.dumps([{'text': 'stale', 'uri': '', 'score': 0.9}]),
+            'accessSignature': None,
+            'TTL': int(time.time()) - 10,  # already expired
+        }
+        with mock.patch.object(handler, 'table') as mock_table:
+            mock_table.get_item.return_value = {'Item': expired_item}
+            result = handler._kb_cache_get('q', 5, user_id=None, access_signature=None)
+        self.assertIsNone(result, "an expired TTL must not be served even if the item still exists")
+
+    def test_unexpired_ttl_is_a_cache_hit(self):
+        fresh_item = {
+            'PK': handler._kb_cache_key('q', 5, None),
+            'SK': 'V1',
+            'results': json.dumps([{'text': 'fresh', 'uri': '', 'score': 0.9}]),
+            'accessSignature': None,
+            'TTL': int(time.time()) + 600,
+        }
+        with mock.patch.object(handler, 'table') as mock_table:
+            mock_table.get_item.return_value = {'Item': fresh_item}
+            result = handler._kb_cache_get('q', 5, user_id=None, access_signature=None)
+        self.assertEqual(result, [{'text': 'fresh', 'uri': '', 'score': 0.9}])
+
+
+class TestAgenticConverseStreamMalformedToolInput(unittest.TestCase):
+    """A tool-use content block whose streamed `input` JSON fails to parse
+    must not crash the loop -- it should fall back to an empty dict input
+    (and, since it's fed straight to execute_tool, the tool itself decides
+    how to handle missing args) rather than propagating the exception."""
+
+    def _malformed_tool_use_stream(self):
+        return {'stream': [
+            {'contentBlockStart': {'start': {'toolUse': {'toolUseId': 't1', 'name': 'some_tool'}}}},
+            # Deliberately invalid JSON fragment (unterminated object).
+            {'contentBlockDelta': {'delta': {'toolUse': {'input': '{"a": '}}}},
+            {'contentBlockStop': {}},
+            {'messageStop': {'stopReason': 'end_turn'}},
+        ]}
+
+    @mock.patch.object(handler, 'execute_tool')
+    @mock.patch.object(handler, 'bedrock_runtime')
+    @mock.patch.object(handler, 'table')
+    def test_malformed_tool_input_json_falls_back_to_empty_dict(
+        self, mock_table, mock_bedrock, mock_execute_tool,
+    ):
+        mock_bedrock.converse_stream.return_value = self._malformed_tool_use_stream()
+        apigw = mock.MagicMock()
+
+        # stop_reason is end_turn here, so execute_tool is never actually
+        # invoked -- this test only asserts the loop doesn't raise on the
+        # bad JSON while assembling the message content.
+        handler.agentic_converse_stream(
+            messages=[{'role': 'user', 'content': [{'text': 'q'}]}],
+            transcript='',
+            session_id='s1',
+            user_id='u1',
+            apigw=apigw,
+            connection_id='c1',
+        )
+
+        saved = json.loads(mock_table.put_item.call_args.kwargs['Item']['messages'])
+        tool_use_block = saved[-1]['content'][0]
+        self.assertEqual(tool_use_block['toolUse']['input'], {})
+
+
 if __name__ == '__main__':
     unittest.main()

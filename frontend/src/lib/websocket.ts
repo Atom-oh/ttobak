@@ -124,8 +124,11 @@ export class RealtimeWebSocket {
     }
   }
 
-  askLive(question: string, ctx?: string, meetingId?: string, sessionId?: string) {
-    this.send({
+  /** Returns false (instead of silently dropping) if the socket isn't open,
+   * so callers can fall back to the HTTP path rather than waiting on a
+   * message that will never arrive. */
+  askLive(question: string, ctx?: string, meetingId?: string, sessionId?: string): boolean {
+    return this.send({
       action: 'ask_live',
       question,
       context: ctx,
@@ -134,9 +137,13 @@ export class RealtimeWebSocket {
     });
   }
 
-  private send(data: unknown) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+  private send(data: unknown): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    try {
       this.ws.send(JSON.stringify(data));
+      return true;
+    } catch {
+      return false;
     }
   }
 

@@ -5,6 +5,7 @@ import base64
 import logging
 import threading
 import time
+import uuid
 import boto3
 
 from aws_docs import search_aws_docs
@@ -1118,12 +1119,24 @@ def handle_ask_stream(event):
     endpoint = event.get('endpoint')
     question = (event.get('question') or '').strip()
     transcript = event.get('context')
+    meeting_id = event.get('meetingId')
     session_id = event.get('sessionId')
+    # userId is set server-side by the WebSocket Lambda from the $connect
+    # authorizer context (ttobak-ws-authorizer's verified Cognito `sub`) --
+    # never trust anything the client itself could have put in the message.
     user_id = event.get('userId')
 
     if not connection_id or not endpoint or not question:
         logger.warning("ask_live invocation missing required fields")
         return {'status': 'bad_request'}
+
+    # sessionId is client-chosen but always scoped by userId in load/save
+    # (SESSION#{userId}#{sessionId}), so a missing sessionId just means "no
+    # continuity for this question" -- generate one server-side rather than
+    # running the whole call with session_id=None (which silently skips
+    # save_session, so the conversation is never persisted at all).
+    if not session_id:
+        session_id = f"ws-{uuid.uuid4().hex}"
 
     apigw = _apigw_client(endpoint)
 
@@ -1132,6 +1145,38 @@ def handle_ask_stream(event):
         'sessionId': session_id,
     }):
         return {'status': 'gone'}
+
+    if not user_id:
+        # ws-authorizer should make this unreachable in practice (it denies
+        # the $connect handshake without a verified sub claim), but fail
+        # closed rather than proceeding as an anonymous/unscoped caller if
+        # it ever is.
+        logger.warning("ask_live invocation missing userId from authorizer context")
+        _post_ws(apigw, connection_id, {
+            'type': 'answer_error',
+            'sessionId': session_id,
+            'error': '인증 정보가 없어 답변을 생성할 수 없습니다.',
+        })
+        return {'status': 'unauthorized'}
+
+    if meeting_id:
+        # A meetingId means the client is asking "about this meeting" --
+        # fetch its transcript server-side (verifying ownership/sharing via
+        # load_meeting_context, the same helper handle_meeting_ask uses)
+        # instead of trusting whatever transcript text the client attached
+        # to `context`. This closes the IDOR gap (a client could otherwise
+        # claim any meetingId while supplying a transcript that has nothing
+        # to do with it, or vice versa) and also means we never need the
+        # full transcript to fit in a WebSocket frame in this case.
+        fetched_transcript, err = load_meeting_context(user_id, meeting_id)
+        if err:
+            _post_ws(apigw, connection_id, {
+                'type': 'answer_error',
+                'sessionId': session_id,
+                'error': err['message'],
+            })
+            return {'status': 'error'}
+        transcript = fetched_transcript
 
     try:
         messages = load_session(session_id, user_id=user_id)

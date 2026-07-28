@@ -16,8 +16,20 @@ import (
 	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
 
+// lambdaInvoker is the subset of *awslambda.Client used here — narrowed to
+// an interface so tests can inject a fake instead of hitting real AWS.
+type lambdaInvoker interface {
+	Invoke(ctx context.Context, params *awslambda.InvokeInput, optFns ...func(*awslambda.Options)) (*awslambda.InvokeOutput, error)
+}
+
+// apiGWPoster is the subset of *apigatewaymanagementapi.Client used here,
+// narrowed the same way as lambdaInvoker.
+type apiGWPoster interface {
+	PostToConnection(ctx context.Context, params *apigatewaymanagementapi.PostToConnectionInput, optFns ...func(*apigatewaymanagementapi.Options)) (*apigatewaymanagementapi.PostToConnectionOutput, error)
+}
+
 var (
-	lambdaClient   *awslambda.Client
+	lambdaClient   lambdaInvoker
 	qaFunctionName string
 )
 
@@ -85,26 +97,12 @@ func handleMessage(ctx context.Context, event events.APIGatewayWebsocketProxyReq
 		return events.APIGatewayProxyResponse{StatusCode: 400}, nil
 	}
 
-	// Extract userId from Lambda authorizer context
-	userID := ""
-	if auth, ok := event.RequestContext.Authorizer.(map[string]interface{}); ok {
-		if uid, ok := auth["userId"].(string); ok {
-			userID = uid
-		} else if uid, ok := auth["principalId"].(string); ok {
-			userID = uid
-		}
-	}
+	// Extract userId from Lambda authorizer context — this is the
+	// server-verified identity (set by ws-authorizer from the Cognito JWT),
+	// never trusted from the client-supplied message body.
+	userID := extractUserID(event.RequestContext.Authorizer)
 
-	payload := map[string]any{
-		"streamMode":   "ask_live",
-		"connectionId": connID,
-		"endpoint":     endpoint,
-		"question":     msg.Question,
-		"context":      msg.Context,
-		"meetingId":    msg.MeetingID,
-		"sessionId":    msg.SessionID,
-		"userId":       userID,
-	}
+	payload := buildAskLivePayload(&msg, userID, endpoint, connID)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		sendError(ctx, apigwClient, connID, "Failed to encode payload")
@@ -125,7 +123,40 @@ func handleMessage(ctx context.Context, event events.APIGatewayWebsocketProxyReq
 	return events.APIGatewayProxyResponse{StatusCode: 200}, nil
 }
 
-func sendError(ctx context.Context, client *apigatewaymanagementapi.Client, connID, message string) {
+// extractUserID reads the userId (or principalId) set by ws-authorizer on
+// the WebSocket $connect authorizer context. Returns "" if absent/malformed
+// — callers must not proceed as an authenticated user in that case.
+func extractUserID(authorizer interface{}) string {
+	auth, ok := authorizer.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if uid, ok := auth["userId"].(string); ok && uid != "" {
+		return uid
+	}
+	if uid, ok := auth["principalId"].(string); ok {
+		return uid
+	}
+	return ""
+}
+
+// buildAskLivePayload builds the async-invoke payload sent to the QA Lambda.
+// userID always comes from extractUserID (the authorizer context), never
+// from the client-supplied message, so the QA Lambda can trust it.
+func buildAskLivePayload(msg *wsMessage, userID, endpoint, connID string) map[string]any {
+	return map[string]any{
+		"streamMode":   "ask_live",
+		"connectionId": connID,
+		"endpoint":     endpoint,
+		"question":     msg.Question,
+		"context":      msg.Context,
+		"meetingId":    msg.MeetingID,
+		"sessionId":    msg.SessionID,
+		"userId":       userID,
+	}
+}
+
+func sendError(ctx context.Context, client apiGWPoster, connID, message string) {
 	resp := wsResponse{Type: "error", Error: message}
 	data, _ := json.Marshal(resp)
 	client.PostToConnection(ctx, &apigatewaymanagementapi.PostToConnectionInput{

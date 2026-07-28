@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { qaApi } from '@/lib/api';
+import { getRuntimeConfig } from '@/lib/runtimeConfig';
 import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
 import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
 
@@ -34,8 +35,6 @@ const suggestedQuestions = [
   '핵심 키워드 정리해줘',
 ];
 
-const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
-
 /** Tail-truncate to at most maxBytes of UTF-8, without splitting a multi-byte char. */
 function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): string | undefined {
   if (!text) return text;
@@ -62,6 +61,15 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   // entry within this window, surface an error and unlock the input instead of
   // spinning forever on a stalled stream.
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Loaded from /config.json at runtime (see CLAUDE.md's runtime-config
+  // convention) rather than baked in at build time — the static export must
+  // stay infra-agnostic. Only wss:// is ever accepted.
+  const [wsUrl, setWsUrl] = useState('');
+  useEffect(() => {
+    getRuntimeConfig().then(cfg => {
+      if (cfg.wsUrl && cfg.wsUrl.startsWith('wss://')) setWsUrl(cfg.wsUrl);
+    });
+  }, []);
 
   const [sessionId, setSessionId] = useState(() => `qa-${meetingId || 'live'}-${Date.now()}`);
   useEffect(() => {
@@ -239,10 +247,10 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   }, [armWatchdog, clearWatchdog, meetingId]);
 
   const ensureWebSocket = useCallback(async (): Promise<RealtimeWebSocket | null> => {
-    if (!WS_URL) return null;
+    if (!wsUrl) return null;
     if (wsRef.current?.isConnected) return wsRef.current;
 
-    const ws = new RealtimeWebSocket(WS_URL, handleStreamMessage, () => {
+    const ws = new RealtimeWebSocket(wsUrl, handleStreamMessage, () => {
       wsRef.current = null;
     });
     try {
@@ -252,7 +260,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     } catch {
       return null;
     }
-  }, [handleStreamMessage]);
+  }, [wsUrl, handleStreamMessage]);
 
   // Cleanup WebSocket + watchdog on unmount
   useEffect(() => {
@@ -319,9 +327,17 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         setError('질문이 너무 깁니다 — 내용을 줄여서 다시 시도해주세요.');
         return;
       }
-      ws.askLive(q.trim(), wsContext, meetingId, sessionId);
-      armWatchdog();
-      return;
+      const sent = ws.askLive(q.trim(), wsContext, meetingId, sessionId);
+      if (sent) {
+        armWatchdog();
+        return;
+      }
+      // Socket looked open but the send itself failed (e.g. it dropped
+      // between ensureWebSocket's check and this call) — drop it and fall
+      // through to the HTTP path below instead of waiting on a message that
+      // will never arrive.
+      wsRef.current?.disconnect();
+      wsRef.current = null;
     }
 
     // Fallback to HTTP sync

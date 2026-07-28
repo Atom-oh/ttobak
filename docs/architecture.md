@@ -83,6 +83,20 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
    │  S3 (ttobak-kb) ──▶ Bedrock KB ──▶ OpenSearch Serverless  │
    │  ttobak-qa Lambda (Python) ──▶ Bedrock Retrieve & Generate│
    └────────────────────────────────────────────────────────────┘
+
+   ┌──────────── Live Q&A Streaming (WebSocket) ───────────────┐
+   │  Browser ──(wss, ?token=JWT)──▶ API GW WebSocket           │
+   │            │                                               │
+   │      ttobak-ws-authorizer (Lambda authorizer, $connect)    │
+   │      verifies Cognito JWT (JWKS) → authorizer.userId        │
+   │            │                                               │
+   │      ttobak-websocket ($default route)                     │
+   │      reads userId from authorizer context (never from the  │
+   │      client message) → async-invokes (Event, retries=0)    │
+   │            ▼                                               │
+   │      ttobak-qa Lambda (streamMode=ask_live)                │
+   │      converse_stream → PostToConnection (answer_delta/...)  │
+   └────────────────────────────────────────────────────────────┘
 ```
 
 ### 데이터 흐름 요약

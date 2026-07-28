@@ -295,3 +295,32 @@ type AllowedDomainsConfig struct {
 	UpdatedBy  string    `dynamodbav:"updatedBy"`
 	EntityType string    `dynamodbav:"entityType"`
 }
+
+// ---------------------------------------------------------------------------
+// Python-owned item shapes (backend/python/qa/handler.py) — no Go struct
+// reads/writes these, but they live in the same ttobak-main table, so their
+// key schema is documented here alongside everything else per this file's
+// convention.
+//
+// PK: CACHE#KB#{sha256(userId|normalizedQuestion|numberOfResults)}, SK: V1
+//   Short-lived cache of a Bedrock Knowledge Base retrieve() response.
+//   Attributes: results (JSON string), accessSignature (hash of the live
+//   shared-meeting access list retrieve_from_kb computed for this caller at
+//   write time — re-derived and compared at read time so a cache hit whose
+//   access has since changed, e.g. revoked share, is treated as a miss
+//   rather than serving a stale answer), TTL (unix seconds, KB_CACHE_TTL_SECONDS
+//   after write; DynamoDB TTL deletion lags real time, so _kb_cache_get also
+//   double-checks TTL against wall-clock on read).
+//
+// PK: SESSION#{userId}#{sessionId}, SK: MESSAGES
+//   Bedrock Converse message history for one live-Q&A conversation, scoped
+//   by userId (from the WebSocket authorizer / JWT, never the client) so a
+//   guessed sessionId alone can't read or pollute another user's session.
+//   Attributes: messages (JSON string), TTL (7 days after last save).
+//
+// PK: USER#{userId}, SK: CHAT_SESSION#{sessionId}
+//   Metadata row for a "chat-"-prefixed session (the standalone chat page,
+//   as opposed to a per-meeting live-Q&A session) — title/message count for
+//   the session list UI. Attributes: title, createdAt, lastMessageAt,
+//   messageCount, TTL (30 days).
+// ---------------------------------------------------------------------------

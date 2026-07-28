@@ -3,10 +3,15 @@ info:
   title: Ttobak WebSocket API
   description: |
     Real-time WebSocket API for live QA streaming during meetings.
-    Uses API Gateway WebSocket with Cognito JWT authorizer on $connect.
+    Uses API Gateway WebSocket with a Lambda authorizer (ttobak-ws-authorizer)
+    on $connect that verifies the Cognito JWT (JWKS) and returns the verified
+    `sub` claim as `userId` in the authorizer context. The $default route
+    handler (ttobak-websocket) reads that context-provided userId — never a
+    client-supplied field — and forwards it to the QA Lambda so answers are
+    scoped to the authenticated caller.
 
     Connection URL: wss://{websocket-api-id}.execute-api.ap-northeast-2.amazonaws.com/production?token={jwt}
-  version: 1.0.0
+  version: 2.0.0
 
 servers:
   - url: wss://ttobak-realtime.execute-api.ap-northeast-2.amazonaws.com/production
@@ -22,62 +27,110 @@ components:
           type: string
           description: Cognito ID Token
 
-    AskMessage:
+    AskLiveMessage:
       type: object
       properties:
         action:
           type: string
-          enum: [ask]
+          enum: [ask_live]
         question:
           type: string
+        context:
+          type: string
+          description: |
+            Optional transcript excerpt. Budgeted client-side to fit under
+            API Gateway WebSocket's 32KB per-frame limit (LiveQAPanel.tsx
+            truncates and re-checks the actual serialized frame size, not
+            just a character count, since JSON escaping of Korean text can
+            push a raw-sized string over the wire limit).
         meetingId:
           type: string
+          description: |
+            If present, the QA Lambda ignores `context` and fetches the
+            meeting's transcript itself from DynamoDB/S3 (`load_meeting_context`),
+            verifying the caller owns the meeting or has it shared to them
+            first — the same check `/api/qa/meeting/{meetingId}` uses. This
+            closes the gap where a client could otherwise pair a meetingId
+            with an unrelated (or larger-than-cacheable) transcript in `context`.
         sessionId:
           type: string
+          description: |
+            Client-supplied conversation id. Session history is stored
+            server-side keyed by `SESSION#{userId}#{sessionId}` (userId from
+            the authorizer context, not the client), so a session id alone
+            can never be used to read or pollute another user's history.
 
-    StreamChunk:
+    StreamMessage:
       type: object
       properties:
         type:
           type: string
-          enum: [chunk, done, error, sources]
+          enum: [answer_start, answer_delta, answer_complete, answer_error, tool_progress, error]
+        sessionId:
+          type: string
         text:
           type: string
-          description: Partial answer text (type=chunk)
+          description: Partial answer token (type=answer_delta) or a transient status note.
         answer:
           type: string
-          description: Full answer (type=done)
+          description: Full assembled answer (type=answer_complete)
         sources:
           type: array
           items:
-            type: object
+            type: string
+        usedKB:
+          type: boolean
+        usedDocs:
+          type: boolean
+        toolsUsed:
+          type: array
+          items:
+            type: string
         error:
           type: string
-          description: Error message (type=error)
+          description: Error message (type=answer_error or type=error)
 
 paths:
   /$connect:
     description: |
       WebSocket connection with JWT authentication.
       Token passed as query parameter: ?token={cognito-id-token}
-      Cognito Authorizer validates the token before allowing connection.
+      The ttobak-ws-authorizer Lambda verifies the token against Cognito
+      JWKS and, on success, returns an IAM Allow policy whose context sets
+      `userId` (and `principalId`) to the verified `sub` claim. That context
+      is what the $default handler trusts for identity on every subsequent
+      message on this connection — there is no per-message re-auth.
 
   /$disconnect:
-    description: Connection cleanup. Removes connection record from DynamoDB.
+    description: Connection cleanup.
 
   /$default:
     description: |
-      Default route for unmatched actions.
-      Receives JSON messages with "action" field for routing.
+      Default route for unmatched actions. Only `ask_live` is currently
+      handled; any other `action` value gets an `{"type": "error"}` frame.
 
       ## Message Flow
 
-      1. Client sends: `{"action": "ask", "question": "...", "meetingId": "..."}`
-      2. WebSocket Lambda async-invokes QA Lambda with `streamMode: "ask_live"`
-      3. QA Lambda streams answer chunks back via API Gateway ManageConnections
-      4. Client receives: `{"type": "chunk", "text": "..."}` (multiple)
-      5. Client receives: `{"type": "sources", "sources": [...]}`
-      6. Client receives: `{"type": "done", "answer": "..."}`
+      1. Client sends: `{"action": "ask_live", "question": "...", "context": "...", "meetingId": "...", "sessionId": "..."}`
+      2. WebSocket Lambda reads `userId` from `event.requestContext.authorizer`
+         (set by ttobak-ws-authorizer at $connect) and async-invokes the QA
+         Lambda (`ttobak-qa`) with `{streamMode: "ask_live", ..., userId}` —
+         `userId` here is server-set, never taken from the client message.
+      3. QA Lambda streams the answer via `bedrock_runtime.converse_stream`,
+         posting each token back over the same connection with
+         `ApiGatewayManagementApi.PostToConnection`.
+      4. Client receives, in order:
+         - `{"type": "answer_start", "sessionId": "..."}`
+         - `{"type": "answer_delta", "sessionId": "...", "text": "..."}` (repeated; may
+           be interleaved with `{"type": "tool_progress"}` heartbeats during a
+           long-running tool call)
+         - `{"type": "answer_complete", "sessionId": "...", "answer": "...", "sources": [...], "usedKB": ..., "usedDocs": ..., "toolsUsed": [...]}`
+         - or `{"type": "answer_error", "sessionId": "...", "error": "..."}` on failure
+
+      The frontend (LiveQAPanel.tsx) arms a 60s stall watchdog on
+      `answer_start`/`answer_delta`/`tool_progress` and falls back to the
+      synchronous HTTP `/api/qa/ask` path if the WebSocket send itself fails
+      or never connects.
 
 tags:
   - name: WebSocket
