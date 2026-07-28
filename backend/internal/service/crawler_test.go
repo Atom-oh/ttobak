@@ -142,6 +142,17 @@ func (m *mockCrawlerRepo) NormalizeSourceID(name string) string {
 	return name // unused by service (service uses its own normalizeSourceID)
 }
 
+func (m *mockCrawlerRepo) DeleteDocument(_ context.Context, sourceID, docHash string) error {
+	docs := m.documents[sourceID]
+	for i, d := range docs {
+		if d.DocHash == docHash {
+			m.documents[sourceID] = append(docs[:i], docs[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
 // ---------- helpers ----------
 
 func strSliceEqual(a, b []string) bool {

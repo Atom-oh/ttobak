@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,15 +12,52 @@ import (
 	"github.com/ttobak/backend/internal/service"
 )
 
+// mockKBSyncer records whether DeleteDocument's post-delete best-effort
+// KB sync was triggered.
+type mockKBSyncer struct {
+	called int
+}
+
+func (m *mockKBSyncer) SyncKB(_ context.Context, _ string) (*model.KBSyncResponse, error) {
+	m.called++
+	return &model.KBSyncResponse{Status: "started"}, nil
+}
+
 // setupInsightsRouter creates a chi router wired to the given mock repo.
 func setupInsightsRouter(repo *mockCrawlerRepo) http.Handler {
+	return setupInsightsRouterWithSyncer(repo, &mockKBSyncer{})
+}
+
+func setupInsightsRouterWithSyncer(repo *mockCrawlerRepo, syncer kbSyncer) http.Handler {
 	insightsSvc := service.NewInsightsServiceWithRepo(repo)
-	h := NewInsightsHandler(insightsSvc)
+	h := NewInsightsHandler(insightsSvc, syncer)
 
 	r := chi.NewRouter()
 	r.Use(withUserContext)
 	r.Get("/api/insights", h.ListInsights)
+	r.Delete("/api/insights/{sourceId}/{docHash}", h.DeleteDocument)
 	return r
+}
+
+// TestDeleteDocument_Forbidden_NoKBSync checks that a delete which is
+// rejected before touching S3 (non-subscriber) never fires the best-effort
+// KB sync -- it must only follow a genuinely successful delete.
+func TestDeleteDocument_Forbidden_NoKBSync(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", Subscribers: []string{"owner-1"}}
+	syncer := &mockKBSyncer{}
+	router := setupInsightsRouterWithSyncer(repo, syncer)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/insights/hanabank/doc1", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if syncer.called != 0 {
+		t.Errorf("expected KB sync not to be triggered on a rejected delete, called %d times", syncer.called)
+	}
 }
 
 func TestListInsights_200_News(t *testing.T) {

@@ -127,6 +127,63 @@ func TestListInsights_CrossSource_DefaultType(t *testing.T) {
 	}
 }
 
+// DeleteDocument authorization -- these cases all return before touching S3
+// (source/doc-existence and permission checks run first), so they don't
+// need an s3.Client. The actual S3 DeleteObject + repo delete on the happy
+// path isn't covered here, matching this file's existing scope (S3 I/O
+// isn't unit-tested for GetDocumentDetail either).
+
+func TestDeleteDocument_UnknownSourceNotFound(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	svc := &InsightsService{repo: repo}
+	ctx := context.Background()
+
+	err := svc.DeleteDocument(ctx, "user-1", false, "no-such-source", "doc1")
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestDeleteDocument_NonSubscriberForbidden(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", Subscribers: []string{"owner-1"}}
+	svc := &InsightsService{repo: repo}
+	ctx := context.Background()
+
+	err := svc.DeleteDocument(ctx, "someone-else", false, "hanabank", "doc1")
+	if err != ErrForbidden {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestDeleteDocument_SubscriberButDocMissingNotFound(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", Subscribers: []string{"user-1"}}
+	svc := &InsightsService{repo: repo}
+	ctx := context.Background()
+
+	// user-1 IS a subscriber (passes the permission check) but the
+	// requested doc doesn't exist -- must not fall through to S3.
+	err := svc.DeleteDocument(ctx, "user-1", false, "hanabank", "no-such-doc")
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestDeleteDocument_AdminBypassesSubscriberCheck(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", Subscribers: []string{"owner-1"}}
+	svc := &InsightsService{repo: repo}
+	ctx := context.Background()
+
+	// An admin who is NOT a subscriber must get past the permission check
+	// (proven by getting ErrNotFound for the missing doc, not ErrForbidden).
+	err := svc.DeleteDocument(ctx, "admin-1", true, "hanabank", "no-such-doc")
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound (admin bypasses subscriber check), got %v", err)
+	}
+}
+
 func TestListInsights_PaginationDefaults(t *testing.T) {
 	scanCache.clear()
 	repo := newMockCrawlerRepo()

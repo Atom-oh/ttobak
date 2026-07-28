@@ -145,6 +145,17 @@ func (m *mockCrawlerRepo) GetDocument(_ context.Context, sourceID, docHash strin
 	return nil, nil
 }
 
+func (m *mockCrawlerRepo) DeleteDocument(_ context.Context, sourceID, docHash string) error {
+	docs := m.documents[sourceID]
+	for i, d := range docs {
+		if d.DocHash == docHash {
+			m.documents[sourceID] = append(docs[:i], docs[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
 func (m *mockCrawlerRepo) NormalizeSourceID(name string) string { return name }
 
 // ---------------------------------------------------------------------------

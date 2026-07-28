@@ -291,7 +291,7 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
 
   return (
     <AppLayout activePath={accountId ? '/accounts' : '/docs'}>
-      <div className="max-w-3xl mx-auto p-6">
+      <div className={`${isSlide ? 'max-w-none' : 'max-w-3xl'} mx-auto p-6`}>
         {error && (
           <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
             {error}

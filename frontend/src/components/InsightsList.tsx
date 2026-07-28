@@ -164,6 +164,18 @@ export function InsightsList() {
     }
   };
 
+  const handleDelete = async (doc: CrawledDocument) => {
+    if (!doc.sourceId || !doc.docHash) return;
+    if (!window.confirm('이 인사이트를 삭제할까요? 되돌릴 수 없습니다.')) return;
+    try {
+      await insightsApi.delete(doc.sourceId, doc.docHash);
+      setDocuments((prev) => prev.filter((d) => d.docHash !== doc.docHash));
+      setTotalCount((prev) => Math.max(0, prev - 1));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete document');
+    }
+  };
+
   const toggleTag = (tag: string) => {
     setSelectedTags((prev) =>
       prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
@@ -748,6 +760,13 @@ export function InsightsList() {
                       >
                         <span className="material-symbols-outlined text-lg">open_in_new</span>
                         Original
+                      </button>
+                      <button
+                        onClick={() => handleDelete(doc)}
+                        title="Delete this insight"
+                        className="flex items-center justify-center p-1.5 text-slate-400 dark:text-text-muted hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
+                      >
+                        <span className="material-symbols-outlined text-lg">delete</span>
                       </button>
                     </div>
                   </div>

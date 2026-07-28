@@ -99,7 +99,7 @@ func init() {
 	crawlerService := service.NewCrawlerService(crawlerRepo)
 	insightsService := service.NewInsightsService(crawlerRepo, s3Client, kbBucketName)
 	crawlerHandler := handler.NewCrawlerHandler(crawlerService)
-	insightsHandler := handler.NewInsightsHandler(insightsService)
+	insightsHandler := handler.NewInsightsHandler(insightsService, kbService)
 	researchRepo := repository.NewResearchRepository(dynamoClient, tableName)
 	sfnClient := sfn.NewFromConfig(cfg)
 	researchService := service.NewResearchService(researchRepo, repo, s3Client, sfnClient, kbBucketName, os.Getenv("RESEARCH_SFN_ARN"))
@@ -249,6 +249,7 @@ func init() {
 		// Insights
 		r.Get("/api/insights", insightsHandler.ListInsights)
 		r.Get("/api/insights/{sourceId}/{docHash}", insightsHandler.GetDocumentContent)
+		r.Delete("/api/insights/{sourceId}/{docHash}", insightsHandler.DeleteDocument)
 
 		// Research
 		r.Post("/api/research", researchHandler.CreateResearch)

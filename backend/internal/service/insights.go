@@ -124,6 +124,54 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 	return resp, nil
 }
 
+// DeleteDocument removes a single crawled document (DynamoDB metadata + S3
+// KB object). Authorization is scoped to the source's subscribers or an
+// admin -- unlike GetDocumentContent's open read (insights are shared
+// substrate by design), a mutating route must not inherit that open
+// posture. The KB vector store is NOT purged here: Bedrock Knowledge Base
+// only reconciles deletions on an ingestion job. The handler
+// (InsightsHandler.DeleteDocument) triggers one, best-effort, right after
+// this call succeeds -- a stale vector can still surface in Q&A until that
+// job completes, or if it fails, until the next daily crawl/manual sync.
+func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isAdmin bool, sourceID, docHash string) error {
+	source, err := s.repo.GetSource(ctx, sourceID)
+	if err != nil {
+		return fmt.Errorf("failed to get source: %w", err)
+	}
+	if source == nil {
+		return ErrNotFound
+	}
+	if !isAdmin && !contains(source.Subscribers, userID) {
+		return ErrForbidden
+	}
+
+	doc, err := s.repo.GetDocument(ctx, sourceID, docHash)
+	if err != nil {
+		return fmt.Errorf("failed to get document: %w", err)
+	}
+	if doc == nil {
+		return ErrNotFound
+	}
+
+	s3Key := doc.S3Key
+	if s3Key == "" {
+		s3Key = fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash)
+	}
+	if _, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.kbBucketName),
+		Key:    aws.String(s3Key),
+	}); err != nil {
+		return fmt.Errorf("failed to delete KB object: %w", err)
+	}
+
+	if err := s.repo.DeleteDocument(ctx, sourceID, docHash); err != nil {
+		return fmt.Errorf("failed to delete document: %w", err)
+	}
+
+	scanCache.clear()
+	return nil
+}
+
 // ListInsights retrieves crawled documents with optional filtering by type, source, service, tags, and sort.
 // sortBy: "newest" (default), "oldest", "title"
 func (s *InsightsService) ListInsights(ctx context.Context, docType, source, service string, tags []string, sortBy string, page, limit int) (*model.InsightsResponse, error) {

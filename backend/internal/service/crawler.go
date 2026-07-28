@@ -22,6 +22,7 @@ type crawlerRepo interface {
 	ListUserSubscriptions(ctx context.Context, userID string) ([]model.CrawlerSubscription, error)
 	ListHistory(ctx context.Context, sourceID string, limit int32) ([]model.CrawlHistory, error)
 	GetDocument(ctx context.Context, sourceID, docHash string) (*model.CrawledDocument, error)
+	DeleteDocument(ctx context.Context, sourceID, docHash string) error
 	ListDocuments(ctx context.Context, sourceID, docType string, limit int32, lastKey map[string]types.AttributeValue) ([]model.CrawledDocument, map[string]types.AttributeValue, int, error)
 	ListAllDocumentsByType(ctx context.Context, docType string, limit int32, page int) ([]model.CrawledDocument, int, error)
 	NormalizeSourceID(name string) string

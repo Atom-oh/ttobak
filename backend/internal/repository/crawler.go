@@ -180,6 +180,24 @@ func (r *CrawlerRepository) DeleteSubscription(ctx context.Context, userID, sour
 	return nil
 }
 
+// DeleteDocument removes a single crawled document's metadata item.
+// PK=CRAWLER#{sourceID}, SK=DOC#{docHash}
+// Only deletes the DynamoDB item -- the caller is responsible for also
+// deleting the S3 KB object (service layer, which owns the S3 client).
+func (r *CrawlerRepository) DeleteDocument(ctx context.Context, sourceID, docHash string) error {
+	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docHash},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete document: %w", err)
+	}
+	return nil
+}
+
 // ListUserSubscriptions lists all crawler subscriptions for a user
 // Query PK=USER#{userID}, SK begins_with CRAWL_SUB#
 func (r *CrawlerRepository) ListUserSubscriptions(ctx context.Context, userID string) ([]model.CrawlerSubscription, error) {

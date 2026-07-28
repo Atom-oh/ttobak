@@ -19,6 +19,19 @@ Local Dev:  http://localhost:8080/api
 - Backend Lambda는 요청 컨텍스트에서 `sub` (userId)를 추출하여 사용
 - 프론트엔드에서 직접 호출 시: `Authorization: Bearer {idToken}` 헤더 사용
 
+## Download URL 형태 (ADR-027)
+
+API가 반환하는 모든 다운로드 URL(`downloadUrl`, `previewUrl`, `audioUrl`/
+`audioUrls[]`, 첨부 `url`, 공개 공유 302 Location)은 CloudFront 서명 URL이다:
+
+```
+https://{domain}/media/{s3Key}?Expires=...&Signature=...&Key-Pair-Id=...
+```
+
+TTL 시맨틱은 이전 S3 presign과 동일(기본 1시간, 공개 공유 5분). 업로드
+(`uploadUrl`, PUT)는 여전히 raw S3 presigned URL이다. 백엔드가 CloudFront
+서명 키를 못 읽으면(로컬 개발 등) S3 presigned GET URL로 폴백한다.
+
 ## Endpoints
 
 ### Health Check
@@ -475,7 +488,7 @@ Response: 200 OK
 { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": ["하나은행"], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n\n[[하나은행]] 미팅 준비..." }
 
 슬라이드(`fileName` 있는 문서)는 `content`가 빈 문자열이고 `downloadUrl`(원본
-파일, 1시간 유효 presigned GET URL)이 채워진다. PPTX/PPT는 추가로 `previewUrl`
+파일, 1시간 유효 GET URL)이 채워진다. PPTX/PPT는 추가로 `previewUrl`
 (PDF 사이드카, 변환이 끝난 뒤에만 존재 — ADR-022)이 함께 채워질 수 있다;
 `downloadUrl`은 항상 원본을 가리키고 사이드카로 바뀌지 않는다. 둘 다 값이
 없으면 필드 자체가 응답에서 생략된다.
@@ -604,8 +617,9 @@ Error: 404 Not Found (문서 없음)
 건너뛴다 — `/api/*`의 다른 모든 라우트가 이 두 계층을 모두 통과해야 하는 것과
 다르다(자세한 내용은
 [ADR-022](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md)).
-핸들러는 문서 내용을 직접 반환하지 않고 항상 302로 presigned S3 GET URL(또는
-PDF 사이드카가 있으면 그쪽)로 리다이렉트한다. 발급은 동시 요청 간 원자적
+핸들러는 문서 내용을 직접 반환하지 않고 항상 302로 서명된 GET URL
+(`https://{domain}/media/...`, ADR-027 — 또는 PDF 사이드카가 있으면
+그쪽)로 리다이렉트한다. 발급은 동시 요청 간 원자적
 (`SetPublicShareTokenIfAbsent` 조건부 쓰기)이라 더블클릭으로 토큰 두 개가
 발급돼 한쪽이 깨지는 경우가 없다.
 
@@ -618,14 +632,14 @@ DELETE /api/documents/{docId}/public-share
 Response: 204 No Content
 
 GET /api/public/docs/{token}   (인증 헤더 없음)
-Response: 302 Found → Location: <5분 유효 presigned S3 GET URL>
+Response: 302 Found → Location: <5분 유효 서명 GET URL (https://{domain}/media/...)>
 
 Error: 400 Bad Request (대상 문서에 fileKey가 없음 — 마크다운 노트는 공개 공유 불가)
 Error: 403 Forbidden (문서 소유자가 아님 — public-share 발급/철회 시에만)
 Error: 404 Not Found (문서 없음, 또는 토큰이 철회/만료됨)
 ```
 
-이 라우트가 발급하는 presigned URL은 5분 TTL(`PublicShareURLTTL`)로, 다른
+이 라우트가 발급하는 서명 URL은 5분 TTL(`PublicShareURLTTL`)로, 다른
 모든 곳(1시간)보다 짧다 — 철회 후 이미 발급된 URL이 살아있는 창을 좁히기
 위한 의도적 단축(ADR-022). 5분도 0은 아니므로 철회 즉시 완전히 막히는 것은
 아니라는 점은 여전히 알려진 한계다.
@@ -1354,6 +1368,29 @@ Response: 201 Created
 - `409 BAD_REQUEST` — a user with this email already exists
 
 **Partial success:** if `admin: true` but adding the user to the `admins` group fails after the account was already created and invited, the response is still `201 Created` with `addedToAdmins: false` rather than an error — the invite itself succeeded.
+
+---
+
+## Insights (Crawler)
+
+Crawled news/tech documents (`CRAWLER#{sourceId}/DOC#{docHash}` items, distinct from the meeting-derived `ACCOUNT#{accountId}/INSIGHT#...` items under Accounts above). `GET /api/insights` lists/filters; `GET /api/insights/{sourceId}/{docHash}` returns full content.
+
+```
+DELETE /api/insights/{sourceId}/{docHash}
+
+Response: 204 No Content
+```
+
+Manually curates a single crawled document — e.g. a search result the relevance gate (`backend/python/crawler/news_crawler.py`) let through anyway, or one ingested before the gate existed. Deletes the DynamoDB metadata item and the S3 KB markdown object.
+
+**Authorization:** caller must be a subscriber of `sourceId` (`CrawlerSource.Subscribers`) or an admin (`cognito:groups` contains `admins`) — this route does NOT inherit `GetDocumentContent`'s open-read posture (insights are shared substrate by design for reads; a mutating route is not).
+
+**Errors:**
+- `400 BAD_REQUEST` — missing/invalid `sourceId` or `docHash`
+- `403 FORBIDDEN` — caller is not a subscriber of this source and not an admin
+- `404 NOT_FOUND` — source or document doesn't exist
+
+**KB vector caveat:** deleting the S3 object does not immediately evict it from the Bedrock Knowledge Base's vector index — that only reconciles on an ingestion job. `InsightsHandler.DeleteDocument` triggers one itself, best-effort, right after a successful delete (same `KBService.SyncKB` as `POST /api/kb/sync`) — a failure there is logged but does not turn the delete response into an error, so a deleted doc can still surface in Q&A RAG results until that job completes, or if it failed, until the next daily crawl/manual sync. `scripts/insights-rescore.py` (batch re-score + purge for existing docs ingested before the relevance gate) triggers one ingestion job itself after a purge run.
 
 ---
 
