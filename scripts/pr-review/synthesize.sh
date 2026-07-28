@@ -98,11 +98,18 @@ PROMPT_EOF
 # fallback 자체가 무력화된다. chair 전용 CHAIR_PRIMARY_MODEL 로 완전히 분리.
 PRIMARY_MODEL="${CHAIR_PRIMARY_MODEL:-us.anthropic.claude-fable-5}"
 FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-5}"
-# 300s(패널 PANEL_TIMEOUT) 보다 짧으면 정상 응답도 강제 종료된다 — 실측 근거:
-# oh-my-cloud-skills #105, 이 repo 의 러너에서 무타임아웃 chair가 357줄 diff
-# 종합에 286s를 정상 소요. 매트릭스(4→16 패널 출력)는 체어 입력이 더 커 286s
-# 실측조차 밑돎 — 600s로 그 여유를 반영.
-CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-600}"
+# 의장 소요는 입력 크기에 거의 선형이다 — 플릿 실측(2026-07-28):
+#   AWS-Demo-Platform 115줄 diff  -> 3분 02초  ✅
+#   ai-trader-web     294줄 diff  -> 5분 13초  ✅
+#   ttobak #133      1469줄 diff  -> 600s 캡에서 강제 종료 ❌ (primary·fallback 둘 다)
+#   oh-my-cloud-skills #138 5647줄 -> 동일 ❌
+# 대략 diff 1줄당 1초 수준이라 600s(10분)는 ~600줄 PR 까지만 커버한다. 그 이상에서는
+# 의장이 "고장난" 게 아니라 **캡이 부족한 것**인데, 결과는 canned VERDICT: FAIL 이라
+# diff 와 무관하게 큰 PR 이 항상 막힌다(이 repo PR#133 이 그 케이스).
+# 1500s(25분)로 올려 ~1500줄 PR 까지 커버한다. 그보다 큰 PR 은 캡을 더 올리는 대신
+# 입력(PANEL_CELL_CAP·diff truncation)을 줄이는 쪽이 맞다 — 아래 timing 로그가 그 판단
+# 근거를 매 실행마다 남긴다.
+CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-1500}"
 
 chair_label() { case "$1" in
   *fable-5*)  echo "Claude Fable 5" ;;
@@ -110,11 +117,20 @@ chair_label() { case "$1" in
   *)          echo "$1" ;;
 esac ; }
 
+# CHAIR_RC / CHAIR_ELAPSED 를 남긴다 — timeout(124)과 그 밖의 실패를 구분해야 fallback
+# 을 태울지 결정할 수 있고(아래), 소요/입력 크기가 로그에 없으면 "캡 부족"과 "의장 고장"이
+# 구분되지 않는다(이 repo PR#133 이 정확히 그 상태로 반복 실패했다).
+CHAIR_RC=0; CHAIR_ELAPSED=0
 run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해도 || true 로 계속.
   # argv(-p) 는 고정 지시문만(작고 상한 없음) — diff+패널(가변, 큼)은 stdin.
+  local t0 t1
+  t0="$(date +%s)"
   ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
     claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
     < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT" || true
+  CHAIR_RC="${PIPESTATUS[0]}"   # timeout 이 죽였으면 124
+  t1="$(date +%s)"; CHAIR_ELAPSED="$((t1 - t0))"
+  echo "chair $(chair_label "$1"): ${CHAIR_ELAPSED}s, rc=$CHAIR_RC, stdin=$(wc -c < "$WORK/synth-stdin.txt")B, out=$(wc -c < "$OUT")B"
 }
 
 # 요구사항: 마지막 non-empty 줄이 정확히 VERDICT: PASS 또는 VERDICT: FAIL.
@@ -134,10 +150,15 @@ chair_valid() {
 
 run_chair "$PRIMARY_MODEL"
 CHAIR_USED="$PRIMARY_MODEL"
-# PRIMARY_MODEL/FALLBACK_MODEL 이 같은 모델로 resolve 되면(예: job env 의
-# ANTHROPIC_MODEL 이 이미 fallback 기본값과 동일) 재시도는 동일 호출을 그대로
-# 반복할 뿐이라 CHAIR_TIMEOUT 을 두 번 태우고도 아무 이득이 없다 — skip.
-if ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
+# fallback 을 태울 가치가 있는 경우만 태운다:
+#   - PRIMARY==FALLBACK 이면 동일 호출 반복이라 무의미(기존 가드).
+#   - **primary 가 timeout(124)으로 죽었으면 fallback 도 같은 입력·같은 캡이라 거의 확실히
+#     같은 벽에 부딪힌다** — 실측(ttobak #133, omcs #138): 두 모델이 각각 정확히 600s 를
+#     태우고 둘 다 빈손, 총 20분 낭비 후 canned FAIL. 그 10분을 primary 캡에 주는 게 낫다.
+CHAIR_TIMED_OUT=0; [ "$CHAIR_RC" = 124 ] && CHAIR_TIMED_OUT=1
+if ! chair_valid && [ "$CHAIR_TIMED_OUT" = 1 ]; then
+  echo "::error::chair '$(chair_label "$PRIMARY_MODEL")' 가 ${CHAIR_TIMEOUT}s 캡에서 강제 종료됨 (입력 $(wc -c < "$WORK/synth-stdin.txt")B). fallback 은 같은 입력에서 같은 결과가 되므로 건너뜀 — CHAIR_TIMEOUT 을 올리거나 PANEL_CELL_CAP/diff truncation 으로 입력을 줄여야 한다."
+elif ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
   # panel/chair stdout 은 scrub_secrets 를 통과시키는데 이 fallback 경고의 stderr 발췌만
   # 빠져 있었다 — claude CLI 에러 메시지에 credential/env 정보가 섞이면 public Actions
   # 로그로 그대로 새는 경로였다(cc-on-bedrock PR#107 리뷰 M4). scrub 을 head -c 뒤에 걸면
@@ -159,7 +180,11 @@ if ! chair_valid && [ "$FALLBACK_MODEL" != "$PRIMARY_MODEL" ]; then
 fi
 
 if ! chair_valid; then
-  echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 유효한 응답(빈 응답 또는 VERDICT 없음)을 반환하지 않음." > "$OUT"
+  if [ "$CHAIR_TIMED_OUT" = 1 ]; then
+    echo "리뷰 생성 실패 — 의장($(chair_label "$PRIMARY_MODEL"))이 ${CHAIR_TIMEOUT}s 캡에서 강제 종료됨. 이 PR 의 diff/패널 출력이 현재 캡으로 종합하기엔 큼(입력 $(wc -c < "$WORK/synth-stdin.txt")B) — 코드 결함이 아니라 예산 부족이다. CHAIR_TIMEOUT 상향 또는 입력 축소 필요." > "$OUT"
+  else
+    echo "리뷰 생성 실패 — $(chair_label "$PRIMARY_MODEL")·$(chair_label "$FALLBACK_MODEL") 모두 유효한 응답(빈 응답 또는 VERDICT 없음)을 반환하지 않음." > "$OUT"
+  fi
   echo "VERDICT: FAIL" >> "$OUT"
 fi
 
