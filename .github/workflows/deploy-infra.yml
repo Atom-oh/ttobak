@@ -83,3 +83,12 @@ jobs:
           npx cdk deploy TtobakResearchAgentStack --exclusively --require-approval never
           npx cdk deploy TtobakWhisperStack --exclusively --require-approval never
           npx cdk deploy TtobakFrontendStack --exclusively --require-approval never
+          # ADR-027: TtobakStorageStack's OAC bucket policy is a same-account
+          # wildcard until it can resolve the real CloudFront distribution ID
+          # (published by TtobakFrontendStack just above, via SSM). Without a
+          # re-deploy after Frontend, that wildcard would stay open until
+          # whichever future push happens to redeploy Storage next -- not
+          # "a few minutes", but indefinitely on a quiet main branch. This
+          # closes the window every run, at no cost when nothing changed
+          # (--exclusively is a no-op with no diff).
+          npx cdk deploy TtobakStorageStack --exclusively --require-approval never

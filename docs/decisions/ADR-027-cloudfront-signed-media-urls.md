@@ -131,16 +131,22 @@ S3 presign 대신 **CloudFront 서명 URL**(trusted key group, canned policy)을
 (KeyGroup/behavior/key-pair-id 파라미터 + 신규 `media-distribution-id`
 파라미터 발행) → 6. api Lambda 빌드·배포.
 Lambda가 5보다 먼저 배포되어도 폴백 덕에 무해.
-7. **(자동, 수동 스텝 없음)** `TtobakStorageStack`을 아무 이유로든(다음
-   changed-stack 배포, `deploy-infra.yml`의 매 push `--exclusively` 재배포
-   등) 다시 배포하면, 이번엔 5에서 발행된 `media-distribution-id` 파라미터가
-   존재하므로 `MediaDistributionIdLookupFn`이 그 실제 distribution ID를
-   읽어와 버킷 정책의 `AWS:SourceArn`을 정확한 ID로 조인다 — `cdk.json` 편집도
-   `aws s3api put-bucket-policy` 수동 실행도 필요 없다. 이 커스텀 리소스는
-   `Timestamp` 프로퍼티를 매 synth마다 바꿔 CloudFormation이 매 배포마다
-   Lambda를 재호출하도록 강제하므로("no-op Update"로 건너뛰지 않음), 한 번
-   조여진 뒤에도 계속 최신 값을 유지한다. `TtobakStorageStack`이 딱 한 번만
-   배포되고 다시는 배포되지 않는 극단적 시나리오에서만 와일드카드가 영구
+7. **(자동, `deploy-infra.yml`의 마지막 스텝)** `TtobakStorageStack`을
+   `TtobakFrontendStack` 바로 다음에 **한 번 더** 배포한다. 이는 선택적
+   보완이 아니라 필수 마무리 단계다: `deploy-infra.yml`은 각 스택을
+   의존성 순서로 딱 한 번씩만 배포하므로, 이 재배포 스텝이 없으면
+   Storage가 Frontend보다 먼저(항목 2) 배포된 이후로 다시 배포될 계기가
+   전혀 없어 — "최초 배포 몇 분"이 아니라 **다음에 우연히 Storage를 건드는
+   push가 있을 때까지 무기한** — 와일드카드가 열려 있게 된다. 이 마지막
+   재배포에서는 5에서 발행된 `media-distribution-id` 파라미터가 같은 실행
+   안에 이미 존재하므로 `MediaDistributionIdLookupFn`이 그 실제
+   distribution ID를 즉시 읽어와 버킷 정책의 `AWS:SourceArn`을 정확한 ID로
+   조인다 — `cdk.json` 편집도 `aws s3api put-bucket-policy` 수동 실행도
+   필요 없다. 이 커스텀 리소스는 `Timestamp` 프로퍼티를 매 synth마다 바꿔
+   CloudFormation이 매 배포마다 Lambda를 재호출하도록 강제하므로("no-op
+   Update"로 건너뛰지 않음), 한 번 조여진 뒤에도 계속 최신 값을 유지한다.
+   `TtobakStorageStack`이 이 마지막 스텝조차 실행되지 않는 극단적
+   시나리오(워크플로우 실패로 중간에 멈춤 등)에서만 와일드카드가 영구
    유지되며, 이는 `infra/test/storage-stack.test.ts`가 SourceArn이 리터럴
    와일드카드가 아니라 이 커스텀 리소스의 `Fn::GetAtt` 참조임을 assert해
    회귀를 막는다.
