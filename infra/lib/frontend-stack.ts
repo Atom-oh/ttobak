@@ -174,6 +174,40 @@ function handler(event) {
       `),
     });
 
+    // Security headers for /media/* (ADR-027 follow-up): moving downloads to
+    // the site's own origin means an uploaded file with an attacker-chosen
+    // Content-Type (upload.go sets it from client-supplied req.FileType with
+    // no allowlist) is now same-origin with the app, not a separate S3
+    // domain -- a stored text/html "download" could otherwise execute as a
+    // page on this origin and read the Cognito tokens auth.ts keeps in
+    // localStorage. `X-Content-Type-Options: nosniff` stops the browser from
+    // reinterpreting a non-HTML response as HTML; `Content-Security-Policy:
+    // sandbox` neutralizes any script that *does* get served with an HTML/SVG
+    // type (no script execution, no same-origin access, no popups) while
+    // still letting audio/image/PDF responses render inline -- unlike
+    // `Content-Disposition: attachment`, this doesn't break the PDF
+    // `previewUrl` iframe or inline audio/image display used elsewhere in the
+    // app.
+    const mediaResponseHeadersPolicy = new cloudfront.ResponseHeadersPolicy(
+      this,
+      'MediaResponseHeadersPolicy',
+      {
+        responseHeadersPolicyName: `ttobak-media-headers-${cdk.Aws.REGION}`,
+        securityHeadersBehavior: {
+          contentTypeOptions: { override: true },
+        },
+        customHeadersBehavior: {
+          customHeaders: [
+            {
+              header: 'Content-Security-Policy',
+              value: 'sandbox',
+              override: true,
+            },
+          ],
+        },
+      }
+    );
+
     // ACM certificate for custom domain (must be in us-east-1 for CloudFront)
     const certificateArn = this.node.tryGetContext('ttobak:certificateArn');
     const certificate = acm.Certificate.fromCertificateArn(this, 'TtobakCert', certificateArn);
@@ -212,6 +246,7 @@ function handler(event) {
           allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
           trustedKeyGroups: [mediaKeyGroup],
+          responseHeadersPolicy: mediaResponseHeadersPolicy,
           functionAssociations: [
             {
               function: mediaPrefixStrip,

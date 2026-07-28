@@ -145,14 +145,20 @@ export class StorageStack extends cdk.Stack {
     // can't attach the OAC policy there — it must live with the bucket owner.
     // ponytail: distribution/* (own-account only) instead of the exact
     // distribution ID, breaking a Storage↔Frontend cycle; tighten to the ID
-    // post-deploy if desired.
+    // post-deploy if desired. Resources are scoped to the prefixes actually
+    // served through GeneratePresignedDownloadURLWithTTL (audio/images/files/
+    // docs/docs-pdf) -- transcripts/* is internal STT-pipeline data with no
+    // {userId} segment and is never handed out as a download URL, so it's
+    // deliberately excluded from what any same-account distribution can read.
     this.bucket.addToResourcePolicy(
       new iam.PolicyStatement({
         sid: 'AllowCloudFrontOACRead',
         effect: iam.Effect.ALLOW,
         actions: ['s3:GetObject'],
         principals: [new iam.ServicePrincipal('cloudfront.amazonaws.com')],
-        resources: [this.bucket.arnForObjects('*')],
+        resources: ['audio', 'images', 'files', 'docs', 'docs-pdf'].map((prefix) =>
+          this.bucket.arnForObjects(`${prefix}/*`)
+        ),
         conditions: {
           StringLike: {
             'AWS:SourceArn': `arn:aws:cloudfront::${cdk.Aws.ACCOUNT_ID}:distribution/*`,

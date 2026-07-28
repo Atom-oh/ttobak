@@ -58,7 +58,21 @@ S3 presign 대신 **CloudFront 서명 URL**(trusted key group, canned policy)을
   (`feature/cloudfront/sign` SDK), `cmd/api/main.go`에서 `MEDIA_BASE_URL`
   env가 있을 때만 SSM 2회 조회 후 주입.
 - **Fallback**: SSM 파라미터 부재/실패 시 경고 로그 후 S3 presign으로 폴백 —
-  로컬 개발과 FrontendStack보다 먼저 배포된 Lambda가 깨지지 않는다.
+  로컬 개발과 FrontendStack보다 먼저 배포된 Lambda가 깨지지 않는다. Cold
+  start 실패는 영구 고정이 아니다 — `UploadService`가 재시도 콜백을 들고
+  있어, 이후 요청에서 워밍된 인스턴스가 최대 5분(`cfSignerRetryInterval`)
+  간격으로 SSM을 다시 조회한다. FrontendStack 배포가 api Lambda 배포보다
+  늦게 끝나는 CI 순서에서도, 다음 key-pair-id 발행 이후 몇 분 내에 같은
+  워밍 인스턴스가 CloudFront 서명으로 자동 전환된다 (재기동 불필요).
+- **Origin 경계(동일 origin 위험)**: 다운로드가 앱과 같은 origin
+  (`https://{domain}/media/...`)이 되므로, 업로드 콘텐츠(사용자가 임의
+  `Content-Type`을 지정할 수 있는 `docs/`/`files/` 등)가 stored-XSS로
+  Cognito 토큰(`localStorage`)을 노릴 수 있는 경로가 이론상 열린다. `/media/*`
+  behavior에 `ResponseHeadersPolicy`(`X-Content-Type-Options: nosniff` +
+  `Content-Security-Policy: sandbox`)를 부착해 완화 — `sandbox`는 스크립트
+  실행/폼 제출/팝업을 막으면서도 오디오·이미지·PDF 미리보기(`previewUrl`
+  iframe)는 그대로 인라인 렌더링되게 해, `Content-Disposition: attachment`
+  강제보다 기존 기능을 덜 깨는 선택이다.
 - **프론트엔드 변경 없음**: URL은 불투명하게 소비되며, 같은 origin이 되면서
   다운로드 경로의 CORS 의존도 사라진다 (버킷 CORS는 업로드 PUT용으로 유지).
 
@@ -78,7 +92,11 @@ S3 presign 대신 **CloudFront 서명 URL**(trusted key group, canned policy)을
 - 데이터 버킷에 `cloudfront.amazonaws.com` service principal의 GetObject
   정책이 추가됨 — `AWS:SourceArn` 조건으로 자기 계정 CloudFront 한정이며,
   버킷 BLOCK_ALL public access는 변경 없음 (Security Policy 준수: 공개
-  트래픽은 여전히 CloudFront 경유만 가능).
+  트래픽은 여전히 CloudFront 경유만 가능). 리소스는 `/media/*`가 실제로
+  서빙하는 프리픽스(`audio/`, `images/`, `files/`, `docs/`, `docs-pdf/`)로
+  한정 — `transcripts/*`(내부 STT 파이프라인 산출물, `{userId}` 세그먼트
+  없음, 다운로드 URL로 노출된 적 없음)는 제외해 같은 계정의 다른
+  distribution이 읽을 수 있는 표면을 최소화한다.
 - 새 Go 의존성: `aws-sdk-go-v2/feature/cloudfront/sign`, `service/ssm`.
 
 ## 배포 순서 (per-stack `--exclusively`)

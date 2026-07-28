@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -26,14 +27,54 @@ type UploadService struct {
 	ebClient      *eventbridge.Client
 	repo          *repository.DynamoDBRepository
 	bucketName    string
-	cfSigner      *CloudFrontSigner
+
+	cfSignerMu      sync.Mutex
+	cfSigner        *CloudFrontSigner
+	cfSignerReload  func(ctx context.Context) (*CloudFrontSigner, error)
+	cfSignerRetryAt time.Time
 }
+
+// cfSignerRetryInterval bounds how often a warm Lambda instance re-attempts
+// SSM lookup once the initial cold-start attempt failed (ADR-027 gap: in the
+// documented deploy order the api Lambda's own deploy step can land before
+// TtobakFrontendStack publishes /ttobak/cloudfront/key-pair-id, e.g. mid-CI
+// or a partial manual rollout, which would otherwise pin that Lambda
+// instance to the S3-presign fallback for its entire warm lifetime).
+const cfSignerRetryInterval = 5 * time.Minute
 
 // SetCloudFrontSigner switches GET download URLs from raw S3 presigns to
 // CloudFront-signed /media/* URLs on the site domain (ADR-027). Left unset
 // (local dev, missing SSM params), downloads keep using S3 presigns.
 func (s *UploadService) SetCloudFrontSigner(signer *CloudFrontSigner) {
+	s.cfSignerMu.Lock()
+	defer s.cfSignerMu.Unlock()
 	s.cfSigner = signer
+}
+
+// SetCloudFrontSignerReload registers the retry callback used to lazily
+// re-attempt CloudFront signer setup on a later request when it wasn't ready
+// at cold start. See cfSignerRetryInterval for the retry cadence.
+func (s *UploadService) SetCloudFrontSignerReload(reload func(ctx context.Context) (*CloudFrontSigner, error)) {
+	s.cfSignerMu.Lock()
+	defer s.cfSignerMu.Unlock()
+	s.cfSignerReload = reload
+}
+
+// cloudFrontSigner returns the active signer, lazily retrying setup (at most
+// once per cfSignerRetryInterval) if it isn't configured yet.
+func (s *UploadService) cloudFrontSigner(ctx context.Context) *CloudFrontSigner {
+	s.cfSignerMu.Lock()
+	defer s.cfSignerMu.Unlock()
+	if s.cfSigner != nil || s.cfSignerReload == nil || time.Now().Before(s.cfSignerRetryAt) {
+		return s.cfSigner
+	}
+	s.cfSignerRetryAt = time.Now().Add(cfSignerRetryInterval)
+	if signer, err := s.cfSignerReload(ctx); err != nil {
+		log.Printf("warn: CloudFront signer retry failed, still falling back to S3 presign: %v", err)
+	} else {
+		s.cfSigner = signer
+	}
+	return s.cfSigner
 }
 
 // NewUploadService creates a new upload service
@@ -215,8 +256,8 @@ func (s *UploadService) GeneratePresignedDownloadURLWithTTL(
 	s3Key string,
 	ttl time.Duration,
 ) (string, error) {
-	if s.cfSigner != nil {
-		return s.cfSigner.SignedURL(s3Key, ttl)
+	if signer := s.cloudFrontSigner(ctx); signer != nil {
+		return signer.SignedURL(s3Key, ttl)
 	}
 
 	presignedURL, err := s.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{

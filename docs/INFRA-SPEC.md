@@ -423,6 +423,20 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
   - **CloudFront Function** (`MediaPrefixStripFunction`, `VIEWER_REQUEST`):
     origin으로 가기 전 URI에서 `/media` prefix를 제거 (버킷 키가 SPA 라우트
     `/docs/{id}` 등과 충돌하지 않도록 전용 prefix 사용)
+  - **ResponseHeadersPolicy** (`MediaResponseHeadersPolicy`) — 다운로드가
+    앱과 동일 origin이 되면서 생기는 stored-XSS 표면(사용자가 임의
+    `Content-Type`으로 업로드 가능)을 줄이기 위해 `X-Content-Type-Options:
+    nosniff` + `Content-Security-Policy: sandbox`를 부착. `sandbox`는 스크립트
+    실행/폼 제출/팝업을 막되 오디오·이미지·PDF(`previewUrl`) 인라인
+    렌더링은 그대로 허용.
+  - **버킷 정책 스코프** — StorageStack의 OAC read 정책 리소스는
+    `audio/*`, `images/*`, `files/*`, `docs/*`, `docs-pdf/*`로 한정(전체
+    버킷이 아님). `transcripts/*`(STT 파이프라인 내부 산출물)는 제외.
+  - **신뢰-실패 시 폴백/재시도**: api Lambda cold start에서 SSM 조회가
+    실패하면 S3 presign으로 폴백하되, 워밍 인스턴스는 요청마다 최대 5분
+    간격으로 CloudFront 서명기 생성을 재시도한다 (`UploadService`의
+    `cfSignerReload`) — FrontendStack 배포가 api Lambda 배포보다 늦게
+    끝나도 재기동 없이 자동 전환된다.
 
 - **Public API behavior** (`/api/public/*`, ADR-022) — registered *before*
   the general `/api/*` behavior below, since CloudFront matches path patterns

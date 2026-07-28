@@ -70,15 +70,23 @@ func init() {
 	projectService := service.NewProjectService(repo)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
-	// Same-domain CloudFront-signed download URLs (ADR-027). Cold-start-only
-	// SSM fetch; any failure falls back to raw S3 presigns so a deploy that
-	// races ahead of FrontendStack (or local dev) never breaks downloads.
+	// Same-domain CloudFront-signed download URLs (ADR-027). Tried once at
+	// cold start; any failure falls back to raw S3 presigns. The reload
+	// callback is registered unconditionally (not just on failure) so a warm
+	// instance also lazily retries -- a deploy that races ahead of
+	// FrontendStack publishing the key-pair-id SSM param would otherwise pin
+	// that instance to the S3 fallback until it's recycled.
 	if mediaBaseURL := os.Getenv("MEDIA_BASE_URL"); mediaBaseURL != "" {
-		if cfSigner, err := service.NewCloudFrontSigner(context.Background(), ssm.NewFromConfig(cfg), mediaBaseURL); err != nil {
-			log.Printf("warn: CloudFront signing unavailable, falling back to S3 presign: %v", err)
+		ssmClient := ssm.NewFromConfig(cfg)
+		reload := func(ctx context.Context) (*service.CloudFrontSigner, error) {
+			return service.NewCloudFrontSigner(ctx, ssmClient, mediaBaseURL)
+		}
+		if cfSigner, err := reload(context.Background()); err != nil {
+			log.Printf("warn: CloudFront signing unavailable, falling back to S3 presign (will retry lazily): %v", err)
 		} else {
 			uploadService.SetCloudFrontSigner(cfSigner)
 		}
+		uploadService.SetCloudFrontSignerReload(reload)
 	}
 	kbService := service.NewKBService(s3Client, bedrockAgentClient, kbBucketName, kbID, kbDataSourceID)
 	kbService.SetAssetsBucketName(bucketName)
