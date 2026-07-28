@@ -441,8 +441,11 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
   - **`AWS:SourceArn` 조건** — 배포 시점에 커스텀 리소스(`MediaDistributionIdLookupFn`)가
     FrontendStack이 발행한 SSM 파라미터 `/ttobak/cloudfront/media-distribution-id`를
     조회해 정확한 distribution ID로 스코프. 그 파라미터가 아직 없으면(첫
-    `TtobakStorageStack` 배포, FrontendStack 이전) Lambda가 직접
-    `ParameterNotFound`를 잡아 같은 계정 와일드카드로 폴백. 수동 개입 불필요 —
+    `TtobakStorageStack` 배포, FrontendStack 이전) **래칫** 상태
+    파라미터(`/ttobak/cloudfront/media-distribution-id-last-known-good`,
+    Lambda 자신이 소유·기록)를 먼저 확인하고, 그것도 없을 때만 같은 계정
+    와일드카드로 폴백 — 실 ID를 한 번이라도 본 적 있는 정책은 원본 파라미터가
+    나중에 삭제/개명돼도 다시 넓어지지 않는다. 수동 개입 불필요 —
     매 `TtobakStorageStack` 배포마다(CI의 매 push `--exclusively` 재배포
     포함) 자동으로 최신 값을 재조회한다 — ADR-027 배포 순서 7단계 참고.
   - **신뢰-실패 시 폴백/재시도**: api Lambda cold start에서 SSM 조회가

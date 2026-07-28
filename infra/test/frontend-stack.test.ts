@@ -34,15 +34,34 @@ describe('FrontendStack', () => {
     template = Template.fromStack(stack);
   });
 
-  test('/media/* behavior requires the trusted key group (ADR-027 viewer auth)', () => {
+  test('/media/* behavior requires a non-empty trusted key group (ADR-027 viewer auth)', () => {
+    // arrayWith([]) would trivially pass even if TrustedKeyGroups were
+    // empty -- assert an actual member (a Ref token) is present, not just
+    // that the key exists.
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
         CacheBehaviors: Match.arrayWith([
           Match.objectLike({
             PathPattern: '/media/*',
-            TrustedKeyGroups: Match.arrayWith([]),
+            TrustedKeyGroups: Match.arrayWith([Match.objectLike({ Ref: Match.anyValue() })]),
           }),
         ]),
+      }),
+    });
+  });
+
+  test('/media/* behavior actually carries the sandbox CSP header (not just "some policy exists")', () => {
+    // A prior version of this test asserted CustomHeadersConfig: absent()
+    // on "some" ResponseHeadersPolicy, which passes even if the sandbox
+    // header were deleted from /media/*'s policy entirely, as long as
+    // docs-pdf's still had none. Assert the actual CSP value directly.
+    template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+      ResponseHeadersPolicyConfig: Match.objectLike({
+        CustomHeadersConfig: {
+          Items: Match.arrayWith([
+            Match.objectLike({ Header: 'Content-Security-Policy', Value: 'sandbox' }),
+          ]),
+        },
       }),
     });
   });
@@ -57,7 +76,7 @@ describe('FrontendStack', () => {
         CacheBehaviors: Match.arrayWith([
           Match.objectLike({
             PathPattern: '/media/docs-pdf/*',
-            TrustedKeyGroups: Match.arrayWith([]),
+            TrustedKeyGroups: Match.arrayWith([Match.objectLike({ Ref: Match.anyValue() })]),
           }),
         ]),
       }),

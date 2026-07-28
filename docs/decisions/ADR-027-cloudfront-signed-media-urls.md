@@ -118,7 +118,14 @@ S3 presign 대신 **CloudFront 서명 URL**(trusted key group, canned policy)을
    `MediaDistributionIdLookupFn` 커스텀 리소스가 SSM 파라미터
    `/ttobak/cloudfront/media-distribution-id`를 조회해 결정. FrontendStack이
    아직 없어 그 파라미터가 존재하지 않는 이 시점에는 `ParameterNotFound`를
-   Lambda가 직접 잡아 같은 계정 와일드카드로 폴백) →
+   Lambda가 직접 잡아 같은 계정 와일드카드로 폴백 — **단, 이 폴백은 래칫이다**:
+   Lambda는 실 ID를 볼 때마다 그 값을 자신이 소유한 별도 상태 파라미터
+   `/ttobak/cloudfront/media-distribution-id-last-known-good`에도 함께
+   기록하고, 원본 파라미터가 없을 때는 와일드카드보다 먼저 이 상태
+   파라미터를 확인한다. 즉 정책이 한 번 정확한 ID로 조여진 뒤에는 원본
+   파라미터가 나중에 삭제/개명되더라도 마지막으로 확인된 실 ID를 계속
+   사용하며, 실제로 한 번도 실 ID를 본 적 없는 최초 배포에서만 와일드카드가
+   쓰인다 — "조여진 정책이 조용히 다시 열리는" 경로를 코드 레벨에서 막는다) →
 3. `TtobakAiStack` (apiRole SSM 권한) →
 4. `TtobakGatewayStack` (`MEDIA_BASE_URL` env) → 5. `TtobakFrontendStack`
 (KeyGroup/behavior/key-pair-id 파라미터 + 신규 `media-distribution-id`

@@ -71,16 +71,54 @@ describe('StorageStack', () => {
     expect(sourceArnJson).not.toMatch(/^"arn:aws:cloudfront::.*distribution\/\*"$/);
   });
 
-  test('the distribution-id lookup Lambda is granted only GetParameter on the exact SSM parameter', () => {
+  test('the distribution-id lookup Lambda is granted GetParameter on exactly the source + ratchet SSM parameters', () => {
+    // Two parameters now: the FrontendStack-published source value, and this
+    // stack's own ratchet ("last known good") that prevents the wildcard
+    // fallback from re-widening a previously-tightened policy.
     template.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
           Match.objectLike({
             Action: 'ssm:GetParameter',
+            Resource: Match.arrayWith([
+              Match.objectLike({
+                'Fn::Join': Match.arrayWith([
+                  Match.arrayWith([
+                    Match.stringLikeRegexp('parameter/ttobak/cloudfront/media-distribution-id$'),
+                  ]),
+                ]),
+              }),
+              Match.objectLike({
+                'Fn::Join': Match.arrayWith([
+                  Match.arrayWith([
+                    Match.stringLikeRegexp(
+                      'parameter/ttobak/cloudfront/media-distribution-id-last-known-good$'
+                    ),
+                  ]),
+                ]),
+              }),
+            ]),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  test('the lookup Lambda can only PutParameter on the ratchet parameter, not the source one', () => {
+    // The ratchet parameter is state this stack owns and writes; the source
+    // parameter is FrontendStack's -- this Lambda must never be able to
+    // write it, only read it.
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: 'ssm:PutParameter',
             Resource: Match.objectLike({
               'Fn::Join': Match.arrayWith([
                 Match.arrayWith([
-                  Match.stringLikeRegexp('parameter/ttobak/cloudfront/media-distribution-id$'),
+                  Match.stringLikeRegexp(
+                    'parameter/ttobak/cloudfront/media-distribution-id-last-known-good$'
+                  ),
                 ]),
               ]),
             }),
