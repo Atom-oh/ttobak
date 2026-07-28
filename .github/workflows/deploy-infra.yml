@@ -83,12 +83,23 @@ jobs:
           npx cdk deploy TtobakResearchAgentStack --exclusively --require-approval never
           npx cdk deploy TtobakWhisperStack --exclusively --require-approval never
           npx cdk deploy TtobakFrontendStack --exclusively --require-approval never
-          # ADR-027: TtobakStorageStack's OAC bucket policy is a same-account
+
+      - name: CDK deploy — re-tighten TtobakStorageStack's OAC policy (ADR-027)
+        # if: always() so this still runs even if an earlier stack in the
+        # step above failed -- otherwise the OAC bucket policy's
+        # same-account wildcard fallback would stay open for the rest of
+        # this run too, not just resolve on the next successful one.
+        if: always()
+        working-directory: infra
+        run: |
+          # TtobakStorageStack's OAC bucket policy is a same-account
           # wildcard until it can resolve the real CloudFront distribution ID
-          # (published by TtobakFrontendStack just above, via SSM). Without a
-          # redeploy after Frontend, that wildcard would stay open until
-          # whichever future push happens to redeploy Storage next -- not
-          # "a few minutes", but indefinitely on a quiet main branch. This
-          # closes the window every run, at no cost when nothing changed
-          # (--exclusively is a no-op with no diff).
+          # (published by TtobakFrontendStack in the step above, via SSM).
+          # Without a redeploy after Frontend, that wildcard would stay open
+          # until whichever future push happens to redeploy Storage next.
+          # Unlike the list above, this deploy is NOT a no-op even with zero
+          # source changes: the distribution-ID lookup custom resource bumps
+          # a Timestamp property on every synth specifically to force
+          # CloudFormation to re-run it on every deploy (see storage-stack.ts)
+          # -- that forced update is the whole mechanism this step relies on.
           npx cdk deploy TtobakStorageStack --exclusively --require-approval never

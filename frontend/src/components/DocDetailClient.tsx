@@ -342,7 +342,7 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
 
         {isSlide ? (
           <div className="space-y-4">
-            {isPdf ? (
+            {isPdf && !doc.previewUrl ? (
               // A directly-uploaded PDF has no previewUrl sidecar (that's
               // convert-doc's PPTX->PDF output only, ADR-022) -- its
               // downloadUrl is its own file, under docs/*, which gets
@@ -352,8 +352,12 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
               // browser behavior to disable the built-in PDF viewer, so
               // skip the preview and point at the Download button below
               // instead of an iframe that may silently render blank.
+              // `!doc.previewUrl` is defensive, not load-bearing (the
+              // backend never sets both on the same doc) -- it just means
+              // this branch can't ever shadow a real sidecar if that
+              // invariant ever changes.
               <div className="flex items-center gap-2 glass-panel rounded-xl p-4 text-sm text-slate-500 dark:text-text-muted">
-                <span className="material-symbols-outlined">description</span>
+                <span className="material-symbols-outlined" aria-hidden="true">description</span>
                 <span>이 PDF는 미리보기를 지원하지 않습니다 — 아래 다운로드 버튼으로 확인해주세요.</span>
               </div>
             ) : doc.previewUrl ? (
