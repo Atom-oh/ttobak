@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""One-time backfill for CrawlerSource.OwnerID (ADR-026).
+"""Report on CrawlerSource rows missing OwnerID (ADR-026).
 
 DELETE /api/insights/{sourceId}/{docHash} authorizes on source.OwnerID,
 which is only set by AddSource's new-source branch -- any CrawlerSource
-created before that field existed has OwnerID == "" and is admin-only-
-deletable until backfilled here. Best-effort choice: the first (oldest)
-subscriber becomes the owner, since Subscribers is append-only and index 0
-is whoever originally called AddSource for a brand-new sourceId.
+created before that field existed has OwnerID == "" and stays admin-only-
+deletable. This script does NOT write ownerId: Subscribers is not
+append-only (Unsubscribe removes entries -- see crawler.go's Unsubscribe),
+so subscribers[0] is not reliably the original creator, and there is no
+other recorded creation history to promote from. Auto-promoting the wrong
+person would grant them destructive delete rights over a shared source.
+
+This is intentionally report-only. If a source's real creator is known out
+of band (e.g. from deploy history or asking the team), set ownerId for that
+one source by hand; otherwise leave it admin-only-deletable indefinitely.
 
 Usage:
-  python3 scripts/insights-backfill-owner.py         # dry-run: list sources that would be updated
-  python3 scripts/insights-backfill-owner.py --run   # actually write ownerId
+  python3 scripts/insights-backfill-owner.py   # list sources with no ownerId (admin-only until known)
 """
-import argparse
 import os
 
 import boto3
@@ -41,36 +45,10 @@ def find_sources_without_owner():
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--run", action="store_true", help="Actually write ownerId")
-    args = parser.parse_args()
-
     sources = find_sources_without_owner()
-    print(f"Found {len(sources)} source(s) without ownerId")
-
+    print(f"Found {len(sources)} source(s) without ownerId (admin-only delete until an owner is set)")
     for src in sources:
-        owner = src["subscribers"][0] if src["subscribers"] else ""
-        print(f"  {src['sourceId']}: ownerId -> {owner!r} (from subscribers[0])")
-
-    if not args.run:
-        print("Dry-run only -- pass --run to actually write ownerId.")
-        return
-
-    written = 0
-    for src in sources:
-        owner = src["subscribers"][0] if src["subscribers"] else ""
-        if not owner:
-            print(f"  Skipping {src['sourceId']}: no subscribers to backfill from (stays admin-only)")
-            continue
-        ddb.update_item(
-            TableName=TABLE,
-            Key={"PK": {"S": f"CRAWLER#{src['sourceId']}"}, "SK": {"S": "CONFIG"}},
-            UpdateExpression="SET ownerId = :o",
-            ConditionExpression="attribute_not_exists(ownerId)",
-            ExpressionAttributeValues={":o": {"S": owner}},
-        )
-        written += 1
-    print(f"Backfilled ownerId on {written} source(s).")
+        print(f"  {src['sourceId']}: subscribers={src['subscribers']!r} -- no reliable owner to infer")
 
 
 if __name__ == "__main__":

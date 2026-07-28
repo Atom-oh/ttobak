@@ -13,8 +13,12 @@ Skips (never purges) two categories instead of treating them as "confirmed
 irrelevant": docs whose rescore call itself failed (Bedrock error/unparseable
 response -- an infra hiccup, not a verdict; this script's delete is
 irreversible, unlike crawl-time's skip/retry-next-crawl), and docs ingested
-via customUrls (`ingestSource: "custom"` on the metadata item), which bypass
-the relevance gate by design since they're explicit user-requested URLs.
+via customUrls, which bypass the relevance gate by design since they're
+explicit user-requested URLs. Docs written after this PR mark that directly
+(`ingestSource: "custom"`); older docs predate the field but the customUrls
+path itself is not new, so a missing field is resolved by matching the doc's
+stored URL against the source's current `customUrls` list (see
+`is_custom_ingest`), not assumed to be "search".
 
 Usage:
   python3 scripts/insights-rescore.py                          # dry-run: list docs that would be purged
@@ -66,22 +70,33 @@ def find_news_docs(source_filter=None):
             source_id = item.get("sourceId", {}).get("S", "")
             if source_filter and source_id != source_filter:
                 continue
-            # customUrls-ingested docs bypass the relevance gate by design
-            # (explicit user-requested URL) -- never candidates for purge.
-            # Legacy docs written before this field existed have no
-            # ingestSource attribute and default to "search" (reviewable),
-            # matching their actual origin (search results were the only
-            # ingest path before customUrls).
-            if item.get("ingestSource", {}).get("S", "search") == "custom":
-                continue
             docs.append({
                 "sourceId": source_id,
                 "docHash": item.get("docHash", {}).get("S", ""),
                 "title": item.get("title", {}).get("S", ""),
                 "summary": item.get("summary", {}).get("S", ""),
                 "s3Key": item.get("s3Key", {}).get("S", ""),
+                "url": item.get("url", {}).get("S", ""),
+                "ingestSource": item.get("ingestSource", {}).get("S", ""),
             })
     return docs
+
+
+def is_custom_ingest(doc, source_custom_urls):
+    """customUrls-ingested docs bypass the relevance gate by design (explicit
+    user-requested URL) -- never candidates for purge. Docs written after
+    this PR carry ingestSource == "custom" directly. Docs written before it
+    predate that field, but the customUrls ingest path itself already
+    existed in base news_crawler.py -- so a missing field does NOT mean
+    "search" (an earlier version of this script assumed that and would have
+    purged legacy custom docs). Fall back to matching the doc's stored URL
+    against the source's current customUrls list; only treat it as
+    "search-ingested, reviewable" if the URL isn't a known custom one."""
+    if doc["ingestSource"] == "custom":
+        return True
+    if doc["ingestSource"] == "":
+        return doc["url"] in source_custom_urls
+    return False
 
 
 def get_source_config(source_id):
@@ -94,6 +109,7 @@ def get_source_config(source_id):
         _source_cache[source_id] = {
             "sourceName": item.get("sourceName", {}).get("S", "") if item else "",
             "newsQueries": [v["S"] for v in item.get("newsQueries", {}).get("L", [])] if item else [],
+            "customUrls": {v["S"] for v in item.get("customUrls", {}).get("L", [])} if item else set(),
         }
     return _source_cache[source_id]
 
@@ -118,8 +134,12 @@ def main():
 
     to_purge = []
     unscorable = []
+    skipped_custom = 0
     for doc in docs:
         cfg = get_source_config(doc["sourceId"])
+        if is_custom_ingest(doc, cfg["customUrls"]):
+            skipped_custom += 1
+            continue
         summary, tags, relevant, confidence = news_crawler._summarize_and_tag(
             doc["title"], doc["summary"], cfg["sourceName"], cfg["newsQueries"])
         # _summarize_and_tag's fail-closed error path returns ('', [], False,
@@ -140,7 +160,7 @@ def main():
                   f"confidence={confidence:.2f} title={doc['title']!r}")
 
     print(f"\n{len(to_purge)}/{len(docs)} doc(s) below threshold {args.threshold} "
-          f"({len(unscorable)} skipped as unscorable)")
+          f"({len(unscorable)} skipped as unscorable, {skipped_custom} skipped as custom-ingested)")
 
     if not args.run:
         print("Dry-run only -- pass --run --yes to actually delete these and trigger KB re-ingestion.")
