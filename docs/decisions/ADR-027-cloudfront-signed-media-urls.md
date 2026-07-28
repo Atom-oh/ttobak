@@ -95,7 +95,9 @@ S3 presign 대신 **CloudFront 서명 URL**(trusted key group, canned policy)을
   "다운로드 버튼을 이용해주세요" 안내로 대체한 것은 이 CSP 완화책의 직접적인
   결과다 — ADR-022가 전제한 "PDF도 PPTX 변환본과 동등하게 미리보기된다"는
   가정이 더 이상 성립하지 않는다(변환 사이드카는 `docs-pdf/*`라 영향받지
-  않음). `docs-pdf/*`를 쓰지 않는 프론트엔드 코드에는 여전히 영향이 없다.
+  않음; 이 부분에 대해서는 ADR-022가 부분적으로 개정된 것으로 간주 — ADR-027
+  참조). `docs/*` 직접 업로드 PDF를 렌더링하지 않는 프론트엔드 코드에는
+  여전히 영향이 없다.
 
 ## Scope 제외 (의도적)
 
@@ -142,7 +144,8 @@ S3 presign 대신 **CloudFront 서명 URL**(trusted key group, canned policy)을
 Lambda가 5보다 먼저 배포되어도 폴백 덕에 무해.
 7. **(자동, `deploy-infra.yml`의 마지막 스텝)** `TtobakStorageStack`을
    `TtobakFrontendStack` 바로 다음, **같은 워크플로우 실행 안에서** 한 번 더
-   배포한다. `deploy-infra.yml`은 각 스택을 딱 한 번씩만 배포하므로, 이
+   배포한다. (이 재배포 스텝을 도입하기 전에는) `deploy-infra.yml`이 각
+   스택을 딱 한 번씩만 배포했으므로, 이
    재배포 스텝이 없으면 Storage가 Frontend보다 먼저(항목 2) 배포된 뒤로는
    다시 배포될 계기가 없어 와일드카드가 다음에 우연히 Storage를 건드리는
    push까지 무기한 열려 있게 된다. 이 마지막 재배포에서는 5에서 발행된
@@ -153,9 +156,16 @@ Lambda가 5보다 먼저 배포되어도 폴백 덕에 무해.
    `Timestamp` 프로퍼티를 매 synth마다 바꿔 CloudFormation이 매 배포마다
    실제 Update를 강제하므로("no-op"으로 건너뛰지 않음 — `--exclusively`가
    보통 diff 없으면 no-op이라는 일반 규칙의 예외), 한 번 조여진 뒤에도 계속
-   최신 값을 유지한다. 워크플로우 앞 단계(예: FrontendStack 배포)가 실패해
-   이 마지막 스텝까지 도달하지 못하는 경우에만 와일드카드가 그 실행 동안
-   유지되며 — 이 PR 이전에는 아예 닫히는 경로가 없었으므로 여전히 순개선이다
-   — 이는 `infra/test/storage-stack.test.ts`가 SourceArn이 리터럴
+   최신 값을 유지한다. 이 재배포 스텝 자체는 `if: always()`이므로 워크플로우
+   앞 단계(예: FrontendStack 배포)가 실패해도 스텝에는 항상 도달·실행된다 —
+   "앞 단계 실패 → 스텝 미도달"은 성립하지 않는다. 와일드카드가 실제로 그
+   실행 동안 유지되는 경우는 **genuinely-first 배포에서(원본 파라미터와
+   래칫 상태 파라미터가 둘 다 한 번도 존재한 적 없는 상태) FrontendStack이
+   실패해 `media-distribution-id`가 아직 발행되지 않은 경우뿐**이다: 스텝은
+   실행되지만 조일 실제 ID가 없다. 최초 배포가 아닌 실행에서는 앞 단계가
+   실패해도 래칫에 저장된 last-known-good 값이 있으므로 이 스텝이 정상적으로
+   정책을 조여준다 — 이것이 바로 이 스텝에 `if: always()`를 쓰는 이유다.
+   이 PR 이전에는 아예 닫히는 경로가 없었으므로 어느 경우든 여전히
+   순개선이며, `infra/test/storage-stack.test.ts`가 SourceArn이 리터럴
    와일드카드가 아니라 이 커스텀 리소스의 `Fn::GetAtt` 참조임을 assert해
    회귀를 막는다.
