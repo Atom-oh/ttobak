@@ -342,6 +342,7 @@ function MeetingDetailContent() {
         detail.actionItems = normalizeActionItems(detail.actionItems);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         detail.attachments = normalizeAttachments((data as any).attachments);
+        detail.sharedWith = detail.shares;
         setMeeting(detail);
         if (data.status === 'done' || data.status === 'error') {
           clearInterval(interval);
