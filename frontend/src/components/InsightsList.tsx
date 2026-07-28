@@ -75,12 +75,15 @@ export function InsightsList() {
         params.sort = sortBy;
       }
       const response = await insightsApi.list(params);
-      setDocuments(response.documents || []);
+      const docs = response.documents || [];
+      setDocuments(docs);
       setTotalCount(response.totalCount || 0);
+      return docs;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load documents');
       setDocuments([]);
       setTotalCount(0);
+      return [];
     } finally {
       setLoading(false);
     }
@@ -175,14 +178,16 @@ export function InsightsList() {
     setError(null);
     try {
       await insightsApi.delete(doc.sourceId, doc.docHash);
-      if (documents.length === 1 && page > 1) {
-        // Deleted the last item on a non-first page -- step back a page
-        // instead of re-fetching the current (now-empty) one, which would
-        // strand the view on a blank page. The page-change effect
-        // re-fetches automatically.
+      // `documents.length === 1` was a single stale snapshot -- with
+      // deletingKeys allowing concurrent deletes, two simultaneous deletes
+      // on a 2-item page both see length 2 and both refetch, landing on an
+      // empty page whose pagination controls then vanish entirely (they're
+      // gated on totalCount > limit). Refetch first and correct based on
+      // the ACTUAL result, not a pre-delete guess -- covers any number of
+      // concurrent deletes emptying the page, not just exactly one.
+      const remaining = await fetchDocuments();
+      if (remaining.length === 0 && page > 1) {
         setPage((p) => p - 1);
-      } else {
-        await fetchDocuments();
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete document');

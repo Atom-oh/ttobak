@@ -104,6 +104,10 @@ export default function InsightDetailPage() {
   const [exportOpen, setExportOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Separate from `error` (load failure) -- a delete 403 (e.g. a legacy
+  // source with no backfilled ownerId, admin-only) must not replace an
+  // already-loaded article with the full error screen and no way back.
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Extract sourceId and docHash from URL pathname (useParams returns '_' in static export)
   const { sourceId, docHash } = useMemo(() => {
@@ -117,6 +121,7 @@ export default function InsightDetailPage() {
   useEffect(() => {
     if (!sourceId || !docHash || sourceId === '_') return;
     setLoading(true);
+    setDeleteError(null);
     insightsApi.getDetail(sourceId, docHash)
       .then(setDoc)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load article'))
@@ -164,11 +169,12 @@ export default function InsightDetailPage() {
     if (!doc || !sourceId || !docHash) return;
     if (!window.confirm('이 인사이트를 삭제할까요? 되돌릴 수 없습니다.')) return;
     setDeleting(true);
+    setDeleteError(null);
     try {
       await insightsApi.delete(sourceId, docHash);
       router.push('/insights');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete document');
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete document');
       setDeleting(false);
     }
   };
@@ -326,6 +332,12 @@ export default function InsightDetailPage() {
                     </button>
                   )}
                 </div>
+
+                {deleteError && (
+                  <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg">
+                    {deleteError}
+                  </div>
+                )}
               </div>
 
               {/* Briefing Content — the raw scrape is a separate, collapsed
