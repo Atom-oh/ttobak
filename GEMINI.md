@@ -1,0 +1,50 @@
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 0205a5979c1c · generated-at: 2026-06-04 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+> You are Gemini, an external reviewer — project context below.
+
+# TTOBAK (또박) — Reviewer Context
+
+Korean AI meeting assistant for AWS Solutions Architects: record → real-time STT (AWS Transcribe Streaming in browser) → batch STT (Whisper ECS GPU Spot) → Bedrock Claude summary → Notion-style editor. Plus an Account-centric Insight Substrate (shared customer accounts + typed insights + bidirectional MCP back-data).
+
+## Stack / Runtime
+- **Frontend**: Next.js 16 static SPA (`output: 'export'` in prod), Tailwind v4 (class-based dark mode), TipTap, deployed to S3/CloudFront. TypeScript.
+- **Backend**: Go Lambda (ARM64), chi router + `aws-lambda-go-api-proxy` (API Gateway **payload v1.0** — v2.0 breaks routing). 5 entry points: `cmd/{api,transcribe,summarize,process-image,kb}`.
+- **Q&A**: separate Python Lambda (`backend/python/qa/`) for Bedrock RAG.
+- **Infra**: CDK TypeScript (10 stacks). DynamoDB single-table `ttobak-main`.
+- **Models**: Claude Opus for summarize/vision, Claude Haiku for fast translate/detect.
+
+## Build · Test · Lint (copy-paste)
+```bash
+# Go binary — MUST use full path /usr/local/go/bin/go (not `go`)
+cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/api/bootstrap ./cmd/api
+cd backend && /usr/local/go/bin/go test ./internal/...      # stdlib testing, no testify; mock repos
+cd backend && /usr/local/go/bin/go vet ./internal/...
+cd frontend && npm run build      # static export to out/
+cd frontend && npm run lint       # eslint (NO test framework — lint+build only)
+cd infra && npx cdk synth && npm test
+```
+
+## Architectural Boundaries (what may import what)
+- **Layering**: `handler/` → `service/` → `repository/` → DynamoDB. Handlers do HTTP only; business logic lives in `service/`; all DynamoDB access goes through `repository/` using the expression builder (never raw strings).
+- **Sentinel errors**: services return `service.ErrForbidden` / `service.ErrNotFound`; handlers branch with `errors.Is()` and map to HTTP status (403/404). Do NOT string-match error text for control flow.
+- **DynamoDB single-table**: key schemas in `backend/internal/model/`. `ACCOUNT#{id}` is a shared partition (outside `USER#`); meetings under `USER#{id}`; GSI1 (`GSI1PK`/`GSI1SK`) for reverse lookup. S3 keys: `{audio|images|files}/{userId}/{meetingId}/...`.
+- **Frontend**: API via `src/lib/api.ts` (Bearer token, auto-refresh on 401); auth via Cognito SDK in `src/lib/auth.ts`; runtime config from `/config.json` (NOT build-time env). Error shape `{ error: { code, message } }`.
+
+## Banned Patterns / Security Mandates (CRITICAL — flag any violation)
+- **No public AWS resources.** ALL public traffic through CloudFront only. No Lambda Function URL with `AuthType: NONE`; no public ALB/NLB; S3 Block Public Access always on (serve via OAC); API Gateway reached only via CloudFront origin.
+- **Security Groups**: never `0.0.0.0/0` inbound; SGs managed via CDK/Terraform only (no CLI mutation). Public ALB only behind CloudFront prefix list.
+- **IAM**: minimize `Resource: "*"` (require a `Condition` if used); no Lambda resource policy `Principal: "*"`.
+- **Secrets**: never in env vars or code — use Secrets Manager / SSM. PII in DynamoDB requires KMS encryption + TTL.
+- **Trust boundary is the API, not the client.** Validate client-supplied identifiers server-side (e.g. an S3 `sourceKey` must be proven to belong to the caller before use — ownership is encoded in the key's `{prefix}/{userID}/` segment). Reject path traversal (`..`).
+- **Route53** must not point directly at ALB/EC2 — always via CloudFront.
+
+## Review Expectations
+- **Tests**: Go changes need stdlib-`testing` coverage (table-driven, mock repos). Extract security-critical logic into pure functions so it's unit-testable without AWS mocks. Frontend has no test framework — verify via lint + build only.
+- **Error handling**: no silent failures; use sentinel errors + `errors.Is`. Best-effort side effects (e.g. KB promotion) must be visibly surfaced, not swallowed.
+- **Pagination**: DynamoDB `Query`/`Scan` over user-owned collections must paginate (`LastEvaluatedKey` loop) — unbounded single-page reads are a MAJOR finding.
+- Keep functions/files focused; follow existing patterns in the touched package.
+
+## Known False-Positives (do NOT report)
+- **JWT signature not verified in `middleware/auth.go`**: intentional — Lambda@Edge (us-east-1) pre-validates JWT on `/api/*`; backend only decodes the payload. (Defense-in-depth gap is acknowledged, not a bug to re-raise.)
+- **Hardcoded ACM ARN / domain / CORS origin / KB id in CDK**: known tech-debt, tracked; not a new-PR blocker unless the diff worsens it.
+- **`cdk deploy --all` is intentionally avoided**: `TtobakKnowledgeStack` stages a deliberate (undeployed) Bedrock KB teardown; deploys use `TtobakGatewayStack --exclusively`. Don't flag the KnowledgeStack drift as a regression.
+- Default table/bucket names in Go differing from CDK defaults — no runtime impact (CDK injects env vars).

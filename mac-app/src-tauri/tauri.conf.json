@@ -1,0 +1,57 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "TTOBAK",
+  "version": "0.1.0",
+  "identifier": "click.atomai.ttobak.mac",
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "devUrl": "https://ttobak.atomai.click",
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "TTOBAK",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "url": "https://ttobak.atomai.click",
+        "fullscreen": false,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "center": true,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' https://ttobak.atomai.click https://*.cloudfront.net; script-src 'self' 'unsafe-inline' https://ttobak.atomai.click; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://ttobak.atomai.click https://*.amazonaws.com https://*.cloudfront.net wss://*.amazonaws.com; img-src 'self' data: blob: https:; media-src 'self' blob: asset:",
+      "dangerousDisableAssetCspModification": false
+    },
+    "macOSPrivateApi": false
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png"
+    ],
+    "category": "Productivity",
+    "shortDescription": "TTOBAK — record desktop meetings with system audio",
+    "longDescription": "TTOBAK Mac App captures system audio from desktop meetings (Zoom, Teams) using macOS ScreenCaptureKit and uploads recordings to the TTOBAK meeting workspace.",
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "entitlements": "Entitlements.plist",
+      "exceptionDomain": "ttobak.atomai.click",
+      "providerShortName": null,
+      "signingIdentity": null
+    }
+  },
+  "plugins": {}
+}

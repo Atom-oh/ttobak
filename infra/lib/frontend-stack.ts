@@ -1,14 +1,20 @@
 import * as cdk from 'aws-cdk-lib';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { Construct } from 'constructs';
 
 export interface FrontendStackProps extends cdk.StackProps {
   httpApiUrl: string;
-  websocketApiUrl: string;
   edgeFunctionVersion: lambda.IVersion;
+  originVerifySecret?: string;
+  cognitoRegion: string;
+  userPoolId: string;
+  userPoolClientId: string;
+  identityPoolId: string;
 }
 
 export class FrontendStack extends cdk.Stack {
@@ -37,9 +43,12 @@ export class FrontendStack extends cdk.Stack {
     // Split by '/' → ['https:', '', 'domain'] → select index 2
     const httpApiDomain = cdk.Fn.select(2, cdk.Fn.split('/', props.httpApiUrl));
 
-    // API Gateway HTTP API Origin
+    // API Gateway HTTP API Origin — custom header prevents direct access (bypassing CloudFront)
     const apiOrigin = new origins.HttpOrigin(httpApiDomain, {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+      customHeaders: props.originVerifySecret
+        ? { 'x-origin-verify': props.originVerifySecret }
+        : undefined,
     });
 
     // CloudFront Function to rewrite dynamic routes for Next.js static export
@@ -64,8 +73,47 @@ function handler(event) {
     request.uri = uri;
   }
 
+  // Dynamic route: /insights/research/{researchId} → /insights/research/_
+  if (uri.match(/^\\/insights\\/research\\/[^\\/]+/) && !uri.match(/^\\/insights\\/research\\/_/)) {
+    uri = uri.replace(/^\\/insights\\/research\\/[^\\/\\.]+/, '/insights/research/_');
+    request.uri = uri;
+  }
+
+  // Dynamic route: /insights/{sourceId}/{docHash} → rewrite to /insights/_/_
+  // Skip /insights/research/* (handled above)
+  if (uri.match(/^\\/insights\\/[^\\/]+\\/[^\\/]+/) && !uri.match(/^\\/insights\\/_\\/_/) && !uri.match(/^\\/insights\\/research\\//)) {
+    uri = uri.replace(/^\\/insights\\/[^\\/]+\\/[^\\/\\.]+/, '/insights/_/_');
+    request.uri = uri;
+  }
+
+  // Dynamic route: /accounts/{id}/docs/{docId} → /accounts/_/docs/_ (check
+  // before the single-segment /accounts/{id} rule below -- same "nested
+  // route first" order as /insights/research/* above).
+  if (uri.match(/^\\/accounts\\/[^\\/]+\\/docs\\/[^\\/]+/) && !uri.match(/^\\/accounts\\/_\\/docs\\/_/)) {
+    uri = uri.replace(/^\\/accounts\\/[^\\/\\.]+\\/docs\\/[^\\/\\.]+/, '/accounts/_/docs/_');
+    request.uri = uri;
+  }
+
+  // Dynamic route: /accounts/{id} → rewrite to /accounts/_
+  if (uri.match(/^\\/accounts\\/[^\\/]+/) && !uri.match(/^\\/accounts\\/_([\\/.])/) && uri !== '/accounts/_') {
+    uri = uri.replace(/^\\/accounts\\/[^\\/\\.]+/, '/accounts/_');
+    request.uri = uri;
+  }
+
+  // Dynamic route: /projects/{id} → rewrite to /projects/_
+  if (uri.match(/^\\/projects\\/[^\\/]+/) && !uri.match(/^\\/projects\\/_([\\/.])/) && uri !== '/projects/_') {
+    uri = uri.replace(/^\\/projects\\/[^\\/\\.]+/, '/projects/_');
+    request.uri = uri;
+  }
+
+  // Dynamic route: /docs/{docId} → rewrite to /docs/_ (skip the plain /docs list page)
+  if (uri.match(/^\\/docs\\/[^\\/]+/) && !uri.match(/^\\/docs\\/_/)) {
+    uri = uri.replace(/^\\/docs\\/[^\\/\\.]+/, '/docs/_');
+    request.uri = uri;
+  }
+
   // Known static pages → append .html; unknown paths → SPA fallback
-  var knownPages = ['/files', '/kb', '/settings', '/record', '/profile', '/meeting/_'];
+  var knownPages = ['/files', '/kb', '/settings', '/record', '/profile', '/insights', '/accounts', '/projects', '/docs', '/meeting/_', '/insights/_/_', '/insights/research/_', '/accounts/_', '/projects/_', '/accounts/_/docs/_', '/docs/_'];
   if (uri !== '/' && !uri.includes('.') && !uri.endsWith('/')) {
     if (knownPages.indexOf(uri) >= 0) {
       request.uri = uri + '.html';
@@ -79,9 +127,15 @@ function handler(event) {
       `),
     });
 
+    // ACM certificate for custom domain (must be in us-east-1 for CloudFront)
+    const certificateArn = this.node.tryGetContext('ttobak:certificateArn');
+    const certificate = acm.Certificate.fromCertificateArn(this, 'TtobakCert', certificateArn);
+
     // CloudFront distribution
     this.distribution = new cloudfront.Distribution(this, 'TtobakDistribution', {
-      comment: 'Ttobak AI Meeting Assistant',
+      domainNames: [this.node.tryGetContext('ttobak:domainName')],
+      certificate,
+      comment: 'TTOBAK AI Meeting Assistant',
       defaultRootObject: 'index.html',
       defaultBehavior: {
         origin: s3Origin,
@@ -98,6 +152,22 @@ function handler(event) {
         ],
       },
       additionalBehaviors: {
+        // Public slide-share redirects — MUST be defined before '/api/*'
+        // below: CloudFront evaluates additionalBehaviors path patterns in
+        // insertion order (first match wins), so this more-specific pattern
+        // has to come first or every request would already match '/api/*'
+        // and pick up its Lambda@Edge JWT check. No edgeLambdas here by
+        // design — the Go handler (DocumentHandler.PublicGetDoc) is the only
+        // gate, and it checks a share token, not a caller identity. Same
+        // apiOrigin as '/api/*' below, so x-origin-verify is still injected
+        // and the Go OriginVerify middleware still passes.
+        '/api/public/*': {
+          origin: apiOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        },
         '/api/*': {
           origin: apiOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
@@ -136,9 +206,25 @@ function handler(event) {
       exportName: 'TtobakCloudFrontUrl',
     });
 
-    new cdk.CfnOutput(this, 'WebsocketUrl', {
-      value: props.websocketApiUrl,
-      exportName: 'TtobakWebsocketUrl',
+    // Runtime config.json — Cognito/API IDs resolved at deploy time, fetched by the
+    // browser at startup. Decouples the static build bundle from infrastructure IDs
+    // so `npm run build` no longer needs NEXT_PUBLIC_COGNITO_* env vars.
+    new s3deploy.BucketDeployment(this, 'ConfigDeployment', {
+      destinationBucket: this.siteBucket,
+      sources: [
+        s3deploy.Source.jsonData('config.json', {
+          cognito: {
+            region: props.cognitoRegion,
+            userPoolId: props.userPoolId,
+            userPoolClientId: props.userPoolClientId,
+            identityPoolId: props.identityPoolId,
+          },
+        }),
+      ],
+      prune: false,
+      distribution: this.distribution,
+      distributionPaths: ['/config.json'],
+      cacheControl: [s3deploy.CacheControl.noCache()],
     });
   }
 }

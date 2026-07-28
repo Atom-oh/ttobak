@@ -27,6 +27,8 @@ const (
 	UserEmailKey ContextKey = "userEmail"
 	// UserNameKey is the context key for user name
 	UserNameKey ContextKey = "userName"
+	// UserGroupsKey is the context key for Cognito groups (cognito:groups claim)
+	UserGroupsKey ContextKey = "userGroups"
 )
 
 // JWKS types for Cognito public key fetching
@@ -51,8 +53,9 @@ var jwksCache struct {
 }
 
 var (
-	cognitoRegion     = getEnvOrDefault("COGNITO_REGION", "ap-northeast-2")
-	cognitoUserPoolID = os.Getenv("COGNITO_USER_POOL_ID")
+	cognitoRegion      = getEnvOrDefault("COGNITO_REGION", "ap-northeast-2")
+	cognitoUserPoolID  = os.Getenv("COGNITO_USER_POOL_ID")
+	originVerifySecret = os.Getenv("ORIGIN_VERIFY_SECRET")
 )
 
 func getEnvOrDefault(key, defaultVal string) string {
@@ -64,14 +67,29 @@ func getEnvOrDefault(key, defaultVal string) string {
 
 // ALBOIDCClaims represents the claims in the ALB OIDC JWT
 type ALBOIDCClaims struct {
-	Sub           string `json:"sub"`
-	Email         string `json:"email"`
-	EmailVerified bool   `json:"email_verified"`
-	Name          string `json:"name"`
-	GivenName     string `json:"given_name"`
-	FamilyName    string `json:"family_name"`
-	Exp           int64  `json:"exp"`
-	Iss           string `json:"iss"`
+	Sub           string   `json:"sub"`
+	Email         string   `json:"email"`
+	EmailVerified bool     `json:"email_verified"`
+	Name          string   `json:"name"`
+	GivenName     string   `json:"given_name"`
+	FamilyName    string   `json:"family_name"`
+	Groups        []string `json:"cognito:groups"`
+	Exp           int64    `json:"exp"`
+	Iss           string   `json:"iss"`
+	TokenUse      string   `json:"token_use"`
+}
+
+// OriginVerify rejects requests that did not come through CloudFront.
+// CloudFront injects a secret x-origin-verify header; direct API Gateway
+// callers won't have it. Skipped when ORIGIN_VERIFY_SECRET is empty (local dev).
+func OriginVerify(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if originVerifySecret != "" && r.Header.Get("x-origin-verify") != originVerifySecret {
+			http.Error(w, `{"error":{"code":"FORBIDDEN","message":"direct access not allowed"}}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Auth is middleware that extracts user information from JWT
@@ -116,6 +134,7 @@ func Auth(next http.Handler) http.Handler {
 		ctx := r.Context()
 		ctx = context.WithValue(ctx, UserIDKey, claims.Sub)
 		ctx = context.WithValue(ctx, UserEmailKey, claims.Email)
+		ctx = context.WithValue(ctx, UserGroupsKey, claims.Groups)
 
 		// Build user name from available fields
 		name := claims.Name
@@ -135,17 +154,17 @@ func parseALBJWT(token string) (*ALBOIDCClaims, error) {
 }
 
 // parseJWT parses and verifies a JWT token.
-// If COGNITO_USER_POOL_ID is set, performs full signature verification.
-// Otherwise falls back to unverified decode (backward compatibility).
+// COGNITO_USER_POOL_ID must be set; otherwise token is rejected.
 func parseJWT(token string) (*ALBOIDCClaims, error) {
-	if cognitoUserPoolID != "" {
-		return parseVerifiedJWT(token)
+	if cognitoUserPoolID == "" {
+		return nil, &AuthError{Message: "server misconfiguration: COGNITO_USER_POOL_ID is not set"}
 	}
-	return parseUnverifiedJWT(token)
+	return ParseVerifiedJWT(token)
 }
 
-// parseVerifiedJWT verifies JWT signature using Cognito JWKS
-func parseVerifiedJWT(tokenStr string) (*ALBOIDCClaims, error) {
+// ParseVerifiedJWT verifies JWT signature using Cognito JWKS.
+// Exported so the WebSocket authorizer Lambda can reuse the same verification logic.
+func ParseVerifiedJWT(tokenStr string) (*ALBOIDCClaims, error) {
 	expectedIssuer := fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", cognitoRegion, cognitoUserPoolID)
 
 	parsed, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
@@ -190,6 +209,7 @@ func parseVerifiedJWT(tokenStr string) (*ALBOIDCClaims, error) {
 		GivenName:  getStringClaim(mapClaims, "given_name"),
 		FamilyName: getStringClaim(mapClaims, "family_name"),
 		Iss:        getStringClaim(mapClaims, "iss"),
+		Groups:     getStringSliceClaim(mapClaims, "cognito:groups"),
 	}
 	if v, ok := mapClaims["email_verified"].(bool); ok {
 		claims.EmailVerified = v
@@ -208,7 +228,28 @@ func getStringClaim(claims jwt.MapClaims, key string) string {
 	return ""
 }
 
-// parseUnverifiedJWT decodes JWT payload without signature verification (fallback)
+// getStringSliceClaim extracts a []string claim. Cognito encodes
+// "cognito:groups" as a JSON array of strings.
+func getStringSliceClaim(claims jwt.MapClaims, key string) []string {
+	raw, ok := claims[key].([]interface{})
+	if !ok {
+		return nil
+	}
+	groups := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			groups = append(groups, s)
+		}
+	}
+	return groups
+}
+
+// parseUnverifiedJWT decodes JWT payload with lightweight validation (fallback)
+// Provides defense-in-depth when JWKS verification is not available:
+// - Validates token has 3 parts (header.payload.signature)
+// - Validates issuer matches expected Cognito URL (if pool ID known)
+// - Validates token is not expired
+// - Validates token_use is "id" (not "access")
 func parseUnverifiedJWT(token string) (*ALBOIDCClaims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -225,7 +266,42 @@ func parseUnverifiedJWT(token string) (*ALBOIDCClaims, error) {
 		return nil, err
 	}
 
+	// Defense-in-depth: lightweight validation even without signature verification
+	if err := validateClaimsLightweight(&claims); err != nil {
+		return nil, err
+	}
+
 	return &claims, nil
+}
+
+// validateClaimsLightweight performs lightweight JWT claim validation
+// for defense-in-depth when full signature verification is not available
+func validateClaimsLightweight(claims *ALBOIDCClaims) error {
+	// Validate token is not expired
+	if claims.Exp > 0 && time.Now().Unix() > claims.Exp {
+		return &AuthError{Message: "token expired"}
+	}
+
+	// Validate issuer if we know the expected pool
+	if cognitoUserPoolID != "" && claims.Iss != "" {
+		// Extract region from pool ID (format: {region}_{poolId})
+		region := cognitoRegion
+		if idx := strings.Index(cognitoUserPoolID, "_"); idx > 0 {
+			region = cognitoUserPoolID[:idx]
+		}
+		expectedIssuer := fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", region, cognitoUserPoolID)
+		if claims.Iss != expectedIssuer {
+			return &AuthError{Message: "invalid token issuer"}
+		}
+	}
+
+	// Validate token_use is "id" (not "access") for ID tokens
+	// Allow empty token_use for backward compatibility with ALB OIDC tokens
+	if claims.TokenUse != "" && claims.TokenUse != "id" {
+		return &AuthError{Message: "invalid token_use: expected id token"}
+	}
+
+	return nil
 }
 
 // getJWKSKeys fetches and caches JWKS keys from Cognito
@@ -350,13 +426,55 @@ func GetUserName(ctx context.Context) string {
 	return ""
 }
 
+// GetUserGroups extracts the Cognito groups (cognito:groups claim) from the request context
+func GetUserGroups(ctx context.Context) []string {
+	if groups, ok := ctx.Value(UserGroupsKey).([]string); ok {
+		return groups
+	}
+	return nil
+}
+
+// IsAdmin reports whether the authenticated user belongs to the "admins" Cognito group
+func IsAdmin(ctx context.Context) bool {
+	for _, g := range GetUserGroups(ctx) {
+		if g == "admins" {
+			return true
+		}
+	}
+	return false
+}
+
+// RequireAdmin is middleware that rejects requests from non-admin users with 403.
+// Must run after Auth so cognito:groups has already been populated in the context.
+func RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !IsAdmin(r.Context()) {
+			http.Error(w, `{"error":{"code":"FORBIDDEN","message":"admin access required"}}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// allowedOrigins for CORS validation
+var allowedOrigins = map[string]bool{
+	"https://d115v97ubjhb06.cloudfront.net": true,
+	"http://localhost:3000":                 true,
+}
+
 // CORS middleware adds CORS headers to responses
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-amzn-oidc-data")
-		w.Header().Set("Access-Control-Max-Age", "86400")
+		origin := r.Header.Get("Origin")
+
+		// Only set CORS headers for allowed origins
+		if allowedOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-amzn-oidc-data")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			w.Header().Set("Vary", "Origin")
+		}
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)

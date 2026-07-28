@@ -1,25 +1,32 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
+	"github.com/ttobak/backend/internal/service"
 )
 
 // SettingsHandler handles settings-related requests
 type SettingsHandler struct {
-	repo *repository.DynamoDBRepository
+	repo           *repository.DynamoDBRepository
+	crypto         *service.CryptoService
+	notion         *service.NotionService
+	meetingService *service.MeetingService
 }
 
 // NewSettingsHandler creates a new settings handler
-func NewSettingsHandler(repo *repository.DynamoDBRepository) *SettingsHandler {
-	return &SettingsHandler{
-		repo: repo,
-	}
+func NewSettingsHandler(repo *repository.DynamoDBRepository, crypto *service.CryptoService, notion *service.NotionService, meetingService *service.MeetingService) *SettingsHandler {
+	return &SettingsHandler{repo: repo, crypto: crypto, notion: notion, meetingService: meetingService}
 }
 
 // GetIntegrations handles GET /api/settings/integrations
@@ -37,10 +44,14 @@ func (h *SettingsHandler) GetIntegrations(w http.ResponseWriter, r *http.Request
 	}
 
 	if notionIntegration != nil {
-		maskedKey := maskAPIKey(notionIntegration.APIKey)
+		maskedKey := "****"
+		if key, err := decryptStoredAPIKey(ctx, h.crypto, notionIntegration.APIKey); err == nil {
+			maskedKey = maskAPIKey(key)
+		}
 		response.Notion = &model.IntegrationStatusResponse{
-			Configured: true,
-			MaskedKey:  maskedKey,
+			Configured:   true,
+			MaskedKey:    maskedKey,
+			ParentPageID: notionIntegration.NotionParentID,
 		}
 	} else {
 		response.Notion = &model.IntegrationStatusResponse{
@@ -73,14 +84,56 @@ func (h *SettingsHandler) SaveNotionKey(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if req.ParentPage == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "parentPage is required")
+		return
+	}
+
+	// Notion internal integrations can only create pages under a page/database
+	// the user has shared with the integration — never at the workspace root —
+	// so a parent must be resolved and verified before we store anything.
+	parentID, err := service.ParseNotionPageID(req.ParentPage)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid Notion page URL or ID")
+		return
+	}
+	parentType, titleProperty, err := h.notion.VerifyParent(ctx, req.APIKey, parentID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrNotionInvalidAPIKey):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion API key is invalid or has been revoked.")
+		case errors.Is(err, service.ErrNotionParentInaccessible):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion rejected access to that page or database. Check the integration's capabilities in Notion (··· → Connections) and try again.")
+		case errors.Is(err, service.ErrNotionUnavailable):
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to verify the Notion page — Notion may be temporarily unavailable. Try again in a moment.")
+		default:
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion page not found or not shared with the integration. Share the page with your integration (··· → Connections) and try again.")
+		}
+		return
+	}
+
+	// Encrypt API key if crypto service is available
+	apiKeyToStore := req.APIKey
+	if h.crypto != nil {
+		encrypted, err := h.crypto.Encrypt(ctx, req.APIKey)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to encrypt API key")
+			return
+		}
+		apiKeyToStore = encrypted
+	}
+
 	integration := &model.Integration{
-		PK:           model.PrefixUser + userID,
-		SK:           model.PrefixIntegration + "notion",
-		UserID:       userID,
-		Service:      "notion",
-		APIKey:       req.APIKey, // In production, this should be encrypted
-		ConfiguredAt: time.Now().UTC(),
-		EntityType:   "INTEGRATION",
+		PK:                  model.PrefixUser + userID,
+		SK:                  model.PrefixIntegration + "notion",
+		UserID:              userID,
+		Service:             "notion",
+		APIKey:              apiKeyToStore,
+		NotionParentID:      parentID,
+		NotionParentType:    parentType,
+		NotionTitleProperty: titleProperty,
+		ConfiguredAt:        time.Now().UTC(),
+		EntityType:          "INTEGRATION",
 	}
 
 	if err := h.repo.SaveIntegration(ctx, integration); err != nil {
@@ -90,8 +143,9 @@ func (h *SettingsHandler) SaveNotionKey(w http.ResponseWriter, r *http.Request) 
 
 	maskedKey := maskAPIKey(req.APIKey)
 	writeJSON(w, http.StatusOK, model.IntegrationStatusResponse{
-		Configured: true,
-		MaskedKey:  maskedKey,
+		Configured:   true,
+		MaskedKey:    maskedKey,
+		ParentPageID: parentID,
 	})
 }
 
@@ -108,6 +162,27 @@ func (h *SettingsHandler) DeleteNotionKey(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// decryptStoredAPIKey returns the plaintext API key for a value stored via SaveNotionKey.
+// With no crypto service configured, the stored value is assumed to already be plaintext.
+// With a crypto service configured, a decrypt failure only falls back to the raw stored value
+// when it already looks like a plaintext Notion key (covers records saved before KMS_KEY_ID
+// was set) — any other decrypt failure is a real error (bad KMS config, revoked key, etc.) and
+// must not be silently sent to Notion as if it were the API key.
+func decryptStoredAPIKey(ctx context.Context, crypto *service.CryptoService, stored string) (string, error) {
+	if crypto == nil {
+		return stored, nil
+	}
+	decrypted, err := crypto.Decrypt(ctx, stored)
+	if err == nil {
+		return decrypted, nil
+	}
+	if isValidNotionKey(stored) {
+		return stored, nil
+	}
+	log.Printf("decryptStoredAPIKey: KMS decrypt failed: %v", err)
+	return "", fmt.Errorf("decrypt Notion API key: %w", err)
+}
+
 // maskAPIKey masks an API key for display
 func maskAPIKey(key string) string {
 	if len(key) <= 8 {
@@ -117,6 +192,57 @@ func maskAPIKey(key string) string {
 	return key[:4] + "****" + key[len(key)-4:]
 }
 
+// GetAllowedDomains handles GET /api/auth/allowed-domains (public, no auth required)
+func (h *SettingsHandler) GetAllowedDomains(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	domains, err := h.repo.GetAllowedDomains(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		return
+	}
+	if domains == nil {
+		domains = []string{}
+	}
+	writeJSON(w, http.StatusOK, model.AllowedDomainsResponse{
+		Domains:  domains,
+		Enforced: len(domains) > 0,
+	})
+}
+
+// SaveAllowedDomains handles PUT /api/settings/allowed-domains (auth required)
+func (h *SettingsHandler) SaveAllowedDomains(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+
+	var req model.UpdateAllowedDomainsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	// Normalize domains: lowercase, trim whitespace
+	for i, d := range req.Domains {
+		req.Domains[i] = strings.ToLower(strings.TrimSpace(d))
+	}
+	// Remove empty entries
+	var cleaned []string
+	for _, d := range req.Domains {
+		if d != "" {
+			cleaned = append(cleaned, d)
+		}
+	}
+
+	if err := h.repo.SaveAllowedDomains(ctx, cleaned, userID); err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, model.AllowedDomainsResponse{
+		Domains:  cleaned,
+		Enforced: len(cleaned) > 0,
+	})
+}
+
 // isValidNotionKey validates Notion API key format
 func isValidNotionKey(key string) bool {
 	// Notion keys start with "ntn_" (new format) or "secret_" (old format)
@@ -124,4 +250,59 @@ func isValidNotionKey(key string) bool {
 		return false
 	}
 	return len(key) >= 4 && (key[:4] == "ntn_" || (len(key) >= 7 && key[:7] == "secret_"))
+}
+
+// isValidEmail performs a minimal sanity check — Cognito itself is the
+// source of truth for validity and rejects malformed addresses.
+func isValidEmail(email string) bool {
+	at := strings.IndexByte(email, '@')
+	return at > 0 && at < len(email)-1 && !strings.ContainsAny(email, " \t\n")
+}
+
+// InviteUser handles POST /api/settings/invite-user (admin-only, enforced by
+// middleware.RequireAdmin in the router). Creates a Cognito user with a
+// system-generated temporary password; Cognito emails the invite (username +
+// temp password, no login link since no userInvitation template is
+// configured) directly — no SES/templating on our side.
+func (h *SettingsHandler) InviteUser(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var req model.InviteUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	if req.Email == "" || !isValidEmail(req.Email) {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "A valid email is required")
+		return
+	}
+
+	if err := h.meetingService.InviteUser(ctx, req.Email, strings.TrimSpace(req.Name), req.Admin); err != nil {
+		switch {
+		case errors.Is(err, service.ErrUserAlreadyExists):
+			writeError(w, http.StatusConflict, model.ErrCodeBadRequest, "A user with this email already exists")
+			return
+		case errors.Is(err, service.ErrAdminGroupAddFailed):
+			// User was created and invited; only the admins-group add failed.
+			log.Printf("InviteUser: %s created but not added to admins group: %v", req.Email, err)
+			writeJSON(w, http.StatusCreated, model.InviteUserResponse{
+				Email:         req.Email,
+				Invited:       true,
+				AddedToAdmins: false,
+			})
+			return
+		default:
+			log.Printf("InviteUser failed for %s: %v", req.Email, err)
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to invite user")
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusCreated, model.InviteUserResponse{
+		Email:         req.Email,
+		Invited:       true,
+		AddedToAdmins: req.Admin,
+	})
 }

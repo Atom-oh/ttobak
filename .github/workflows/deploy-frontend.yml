@@ -1,0 +1,43 @@
+name: Deploy Frontend
+
+on:
+  push:
+    branches: [main]
+    paths: ['frontend/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-frontend
+  cancel-in-progress: true
+
+env:
+  S3_BUCKET: ${{ vars.S3_BUCKET }}
+  CF_DISTRIBUTION: ${{ vars.CF_DISTRIBUTION }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ttobak-x86
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install AWS CLI
+        run: |
+          curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscli.zip
+          unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin --update
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: Sync to S3
+        run: aws s3 sync frontend/out/ "s3://${S3_BUCKET}/" --delete --exclude "config.json"
+
+      - name: Invalidate CloudFront
+        run: aws cloudfront create-invalidation --distribution-id "${CF_DISTRIBUTION}" --paths "/*"

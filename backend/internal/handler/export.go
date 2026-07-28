@@ -3,11 +3,16 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
+	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
@@ -15,23 +20,53 @@ import (
 	"github.com/ttobak/backend/internal/service"
 )
 
-// ExportHandler handles export-related requests
-type ExportHandler struct {
-	meetingService *service.MeetingService
-	notionService  *service.NotionService
-	repo           *repository.DynamoDBRepository
+// contentAsMarkdown returns content unchanged when it is already markdown,
+// converting from HTML when it isn't. Meetings whose summary was edited in the
+// TipTap editor before the frontend started saving markdown have raw HTML
+// stored in content; exporting that as-is renders literal <h1>/<p> tags in
+// Notion/Obsidian. On conversion failure, fall back to the raw string rather
+// than dropping the summary entirely.
+//
+// HTML is detected by a leading "<" plus a closing tag ("</"): TipTap block
+// output always opens with a tag and has closing tags, while markdown that
+// merely starts with an autolink ("<https://…>") has no "</" and is left alone.
+func contentAsMarkdown(content string) string {
+	if !strings.HasPrefix(strings.TrimSpace(content), "<") || !strings.Contains(content, "</") {
+		return content
+	}
+	md, err := htmltomarkdown.ConvertString(content)
+	if err != nil {
+		return content
+	}
+	return md
 }
 
-// NewExportHandler creates a new export handler
+// ExportHandler handles export-related requests
+type ExportHandler struct {
+	meetingService  *service.MeetingService
+	notionService   *service.NotionService
+	repo            *repository.DynamoDBRepository
+	crypto          *service.CryptoService
+	frontendBaseURL string
+}
+
+// NewExportHandler creates a new export handler. frontendBaseURL is the
+// deployed frontend origin (FRONTEND_BASE_URL env var, e.g.
+// "https://ttobak.atomai.click") used to rewrite transcript:// deep links
+// into absolute URLs for export — see resolveTranscriptLinksForExport.
 func NewExportHandler(
 	meetingService *service.MeetingService,
 	notionService *service.NotionService,
 	repo *repository.DynamoDBRepository,
+	crypto *service.CryptoService,
+	frontendBaseURL string,
 ) *ExportHandler {
 	return &ExportHandler{
-		meetingService: meetingService,
-		notionService:  notionService,
-		repo:           repo,
+		meetingService:  meetingService,
+		notionService:   notionService,
+		repo:            repo,
+		crypto:          crypto,
+		frontendBaseURL: frontendBaseURL,
 	}
 }
 
@@ -55,11 +90,11 @@ func (h *ExportHandler) ExportMeeting(w http.ResponseWriter, r *http.Request) {
 	// Get meeting details
 	meetingDetail, err := h.meetingService.GetMeetingDetail(ctx, userID, meetingID)
 	if err != nil {
-		if err.Error() == "not found" {
+		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
 		}
-		if err.Error() == "forbidden" {
+		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 			return
 		}
@@ -89,12 +124,44 @@ func (h *ExportHandler) ExportMeeting(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion integration not configured")
 			return
 		}
+		if integration.NotionParentID == "" {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion integration needs a parent page. Re-connect Notion in Settings with a shared page URL.")
+			return
+		}
 
 		content := h.generateMarkdownContent(meetingDetail)
-		_, pageURL, err := h.notionService.CreatePage(ctx, integration.APIKey, meetingDetail.Title, content)
+		apiKey, err := decryptStoredAPIKey(ctx, h.crypto, integration.APIKey)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to create Notion page: "+err.Error())
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to decrypt Notion API key")
 			return
+		}
+
+		// notionDetailID is meetingDetail.NotionPageID only for the owner: a
+		// shared user's export uses their own Notion integration/API key, so
+		// reusing the owner's page ID here would patch/clear a page in a
+		// workspace the caller doesn't own. Shared exports always create a
+		// fresh page and never persist notionPageId (that field belongs to
+		// the owner's copy of the meeting, keyed on the owner's userID).
+		isOwner := meetingDetail.Permission == "owner"
+		notionDetailID := ""
+		if isOwner {
+			notionDetailID = meetingDetail.NotionPageID
+		}
+		pageID, pageURL, err := h.notionService.UpsertPage(ctx, apiKey, integration.NotionParentType, integration.NotionParentID, integration.NotionTitleProperty, meetingDetail.Title, content, notionDetailID)
+		if err != nil {
+			errMsg := "Failed to create Notion page: " + err.Error()
+			if notionDetailID != "" {
+				errMsg = "Failed to update Notion page: " + err.Error()
+			}
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, errMsg)
+			return
+		}
+		if isOwner && pageID != notionDetailID {
+			if updateErr := h.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+				"notionPageId": pageID,
+			}); updateErr != nil {
+				log.Printf("export: failed to save notionPageId for meeting %s: %v", meetingID, updateErr)
+			}
 		}
 
 		writeJSON(w, http.StatusOK, model.ExportResponse{
@@ -130,11 +197,11 @@ func (h *ExportHandler) ExportObsidian(w http.ResponseWriter, r *http.Request) {
 	// Get meeting details
 	meetingDetail, err := h.meetingService.GetMeetingDetail(ctx, userID, meetingID)
 	if err != nil {
-		if err.Error() == "not found" {
+		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
 		}
-		if err.Error() == "forbidden" {
+		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 			return
 		}
@@ -182,6 +249,35 @@ func (h *ExportHandler) generatePDFContent(meeting *model.MeetingDetailResponse)
 	return sb.String()
 }
 
+// transcriptLinkPattern matches the markdown link syntax around an ADR-013
+// transcript deep link, capturing the segment id. It matches two forms: the
+// raw "transcript://{id}" scheme the summarize Lambda emits, AND the
+// "#ts-{id}" in-page anchor form that the frontend rewrites it to before
+// rendering (frontend/.../MeetingDetailClient.tsx's resolveTranscriptLinks) —
+// once a meeting's summary is edited and saved through the TipTap editor,
+// the *stored* content has already been converted to "#ts-{id}" by the time
+// it reaches this handler, so matching only "transcript://" silently misses
+// every edited meeting.
+var transcriptLinkPattern = regexp.MustCompile(`\((?:transcript://|#ts-)([^)]+)\)`)
+
+// resolveTranscriptLinksForExport rewrites ADR-013 transcript deep links —
+// both the raw "transcript://{segmentId}" scheme and the "#ts-{segmentId}"
+// in-page anchor form left behind by an editor save — into an absolute URL
+// to the meeting page with a #ts-{segmentId} fragment — the same anchor
+// MarkdownRenderer's `a` component scrolls to in-app — so the link is both
+// valid for Notion's API (which rejects non-http(s) link schemes and bare
+// fragment-only hrefs outright with "Invalid URL for link") and still useful
+// (opens the meeting at that moment) when clicked from an export. segmentId
+// and meetingID are path/fragment-escaped since neither is guaranteed to be
+// URL-safe.
+func resolveTranscriptLinksForExport(content, meetingID, frontendBaseURL string) string {
+	meetingPath := frontendBaseURL + "/meeting/" + url.PathEscape(meetingID)
+	return transcriptLinkPattern.ReplaceAllStringFunc(content, func(m string) string {
+		segmentID := transcriptLinkPattern.FindStringSubmatch(m)[1]
+		return "(" + meetingPath + "#ts-" + url.PathEscape(segmentID) + ")"
+	})
+}
+
 // generateMarkdownContent generates markdown content for Notion
 func (h *ExportHandler) generateMarkdownContent(meeting *model.MeetingDetailResponse) string {
 	var sb strings.Builder
@@ -196,7 +292,7 @@ func (h *ExportHandler) generateMarkdownContent(meeting *model.MeetingDetailResp
 
 	if meeting.Content != "" {
 		sb.WriteString("## Summary\n\n")
-		sb.WriteString(meeting.Content)
+		sb.WriteString(resolveTranscriptLinksForExport(contentAsMarkdown(meeting.Content), meeting.MeetingID, h.frontendBaseURL))
 		sb.WriteString("\n\n")
 	}
 
@@ -214,6 +310,35 @@ func (h *ExportHandler) generateMarkdownContent(meeting *model.MeetingDetailResp
 	return sb.String()
 }
 
+// obsidianActionItem mirrors the ActionItem struct from bedrock.go for JSON parsing
+type obsidianActionItem struct {
+	Text     string `json:"text"`
+	Assignee string `json:"assignee,omitempty"`
+	DueDate  string `json:"dueDate,omitempty"`
+	Priority string `json:"priority,omitempty"`
+	Done     bool   `json:"done"`
+}
+
+// obsidianSegment mirrors TranscriptSegmentOut for JSON parsing
+type obsidianSegment struct {
+	Speaker   string  `json:"speaker"`
+	Text      string  `json:"text"`
+	StartTime float64 `json:"startTime"`
+	EndTime   float64 `json:"endTime"`
+}
+
+// formatTimestamp formats seconds into HH:MM:SS
+func formatTimestamp(seconds float64) string {
+	total := int(seconds)
+	h := total / 3600
+	m := (total % 3600) / 60
+	s := total % 60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%02d:%02d", m, s)
+}
+
 // generateObsidianContent generates Obsidian-compatible markdown with YAML frontmatter
 func (h *ExportHandler) generateObsidianContent(ctx context.Context, userID string, meeting *model.MeetingDetailResponse) (string, string) {
 	var sb strings.Builder
@@ -225,69 +350,167 @@ func (h *ExportHandler) generateObsidianContent(ctx context.Context, userID stri
 		dateStr = parsedDate.Format("2006-01-02")
 	}
 
-	// YAML frontmatter
+	// Generate filename first (used for aliases)
+	filename := fmt.Sprintf("%s - %s.md", dateStr, sanitizeFilename(meeting.Title))
+
+	// ── YAML Frontmatter ──
 	sb.WriteString("---\n")
 	sb.WriteString(fmt.Sprintf("title: \"%s\"\n", escapeYAMLString(meeting.Title)))
 	sb.WriteString(fmt.Sprintf("date: %s\n", dateStr))
+	sb.WriteString("type: meeting\n")
+	sb.WriteString(fmt.Sprintf("status: %s\n", meeting.Status))
+
+	if meeting.SttProvider != "" {
+		sb.WriteString(fmt.Sprintf("stt-provider: %s\n", meeting.SttProvider))
+	}
 
 	if len(meeting.Participants) > 0 {
 		sb.WriteString("participants:\n")
 		for _, p := range meeting.Participants {
-			sb.WriteString(fmt.Sprintf("  - %s\n", p))
+			sb.WriteString(fmt.Sprintf("  - \"%s\"\n", escapeYAMLString(p)))
 		}
 	}
 
-	sb.WriteString(fmt.Sprintf("status: %s\n", meeting.Status))
+	if len(meeting.Tags) > 0 {
+		sb.WriteString("tags:\n")
+		for _, t := range meeting.Tags {
+			sb.WriteString(fmt.Sprintf("  - %s\n", t))
+		}
+	} else {
+		sb.WriteString("tags:\n  - meeting\n")
+	}
+
+	// Aliases for natural linking
+	if parsedDate, err := time.Parse(time.RFC3339, meeting.Date); err == nil {
+		alias := parsedDate.Format("1월 2일") + " 미팅"
+		sb.WriteString("aliases:\n")
+		sb.WriteString(fmt.Sprintf("  - \"%s\"\n", alias))
+	}
+
 	sb.WriteString("---\n\n")
 
-	// Title
+	// ── Title ──
 	sb.WriteString(fmt.Sprintf("# %s\n\n", meeting.Title))
 
-	// Summary
-	if meeting.Content != "" {
-		sb.WriteString("## Summary\n\n")
-		sb.WriteString(meeting.Content)
+	// ── Summary ──
+	content := contentAsMarkdown(meeting.Content)
+	if content != "" {
+		sb.WriteString("## 요약\n\n")
+		sb.WriteString(content)
 		sb.WriteString("\n\n")
 	}
 
-	// Action Items (extracted from content if present)
-	actionItems := extractActionItems(meeting.Content)
-	if len(actionItems) > 0 {
-		sb.WriteString("## Action Items\n\n")
-		for _, item := range actionItems {
-			sb.WriteString(fmt.Sprintf("- [ ] %s\n", item))
+	// ── Action Items (structured JSON if available, fallback to text extraction) ──
+	var structuredItems []obsidianActionItem
+	hasStructured := false
+	if len(meeting.ActionItems) > 0 {
+		if err := json.Unmarshal(meeting.ActionItems, &structuredItems); err == nil && len(structuredItems) > 0 {
+			hasStructured = true
+		}
+	}
+
+	if hasStructured {
+		sb.WriteString("## 액션 아이템\n\n")
+		for _, item := range structuredItems {
+			checkbox := "- [ ] "
+			text := item.Text
+			if item.Done {
+				checkbox = "- [x] "
+				text = "~~" + text + "~~"
+			}
+			sb.WriteString(checkbox + text)
+			if item.Assignee != "" {
+				sb.WriteString(" @" + item.Assignee)
+			}
+			if item.Priority != "" {
+				sb.WriteString(" #" + item.Priority)
+			}
+			if item.DueDate != "" {
+				sb.WriteString(" 📅 " + item.DueDate)
+			}
+			sb.WriteString("\n")
 		}
 		sb.WriteString("\n")
+	} else {
+		// Fallback: extract from content text
+		actionItems := extractActionItems(content)
+		if len(actionItems) > 0 {
+			sb.WriteString("## 액션 아이템\n\n")
+			for _, item := range actionItems {
+				sb.WriteString(fmt.Sprintf("- [ ] %s\n", item))
+			}
+			sb.WriteString("\n")
+		}
 	}
 
-	// Transcription
-	transcript := meeting.TranscriptA
-	if meeting.SelectedTranscript != nil && *meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-	}
-	if transcript != "" {
-		sb.WriteString("## Transcription\n\n")
-		sb.WriteString(transcript)
-		sb.WriteString("\n\n")
+	// ── Speaker-labeled Transcription (structured segments if available) ──
+	var segments []obsidianSegment
+	hasSegments := false
+	if meeting.Transcription != nil && len(meeting.Transcription) > 2 {
+		if err := json.Unmarshal(meeting.Transcription, &segments); err == nil && len(segments) > 0 {
+			hasSegments = true
+		}
 	}
 
-	// Related Meetings (find by participants or date proximity)
+	if hasSegments {
+		sb.WriteString("## 전사록\n\n")
+		for _, seg := range segments {
+			timeRange := fmt.Sprintf("%s ~ %s", formatTimestamp(seg.StartTime), formatTimestamp(seg.EndTime))
+			sb.WriteString(fmt.Sprintf("> **%s** (%s)\n", seg.Speaker, timeRange))
+			sb.WriteString(fmt.Sprintf("> %s\n\n", seg.Text))
+		}
+	} else {
+		// Fallback: plain transcript
+		transcript := meeting.TranscriptA
+		if meeting.SelectedTranscript != nil && *meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
+			transcript = meeting.TranscriptB
+		}
+		if transcript != "" {
+			sb.WriteString("## 전사록\n\n")
+			sb.WriteString(transcript)
+			sb.WriteString("\n\n")
+		}
+	}
+
+	// ── Attachments with ProcessedContent ──
+	if len(meeting.Attachments) > 0 {
+		hasContent := false
+		for _, att := range meeting.Attachments {
+			if att.ProcessedContent != "" || att.Description != "" {
+				hasContent = true
+				break
+			}
+		}
+		if hasContent {
+			sb.WriteString("## 첨부 자료\n\n")
+			for _, att := range meeting.Attachments {
+				if att.Description != "" {
+					sb.WriteString(fmt.Sprintf("### %s\n\n", att.Description))
+				} else if att.Type != "" {
+					sb.WriteString(fmt.Sprintf("### %s\n\n", att.Type))
+				}
+				if att.ProcessedContent != "" {
+					sb.WriteString(att.ProcessedContent)
+					sb.WriteString("\n\n")
+				}
+			}
+		}
+	}
+
+	// ── Related Meetings (wiki-links matching filename format) ──
 	relatedMeetings := h.findRelatedMeetings(ctx, userID, meeting)
 	if len(relatedMeetings) > 0 {
-		sb.WriteString("## Related Meetings\n\n")
+		sb.WriteString("## 관련 회의\n\n")
 		for _, related := range relatedMeetings {
 			sb.WriteString(fmt.Sprintf("- [[%s]]\n", related))
 		}
 		sb.WriteString("\n")
 	}
 
-	// Generate filename
-	filename := fmt.Sprintf("%s - %s.md", dateStr, sanitizeFilename(meeting.Title))
-
 	return sb.String(), filename
 }
 
-// findRelatedMeetings finds related meetings by participants
+// findRelatedMeetings finds related meetings by participants, returning Obsidian-compatible filenames
 func (h *ExportHandler) findRelatedMeetings(ctx context.Context, userID string, meeting *model.MeetingDetailResponse) []string {
 	var related []string
 
@@ -315,7 +538,9 @@ func (h *ExportHandler) findRelatedMeetings(ctx context.Context, userID string, 
 		// Check for overlapping participants
 		for _, p := range m.Participants {
 			if participantSet[p] {
-				related = append(related, m.Title)
+				// Format as filename to match Obsidian wiki-link resolution
+				dateStr := m.Date.Format("2006-01-02")
+				related = append(related, fmt.Sprintf("%s - %s", dateStr, sanitizeFilename(m.Title)))
 				break
 			}
 		}
@@ -335,7 +560,7 @@ func extractActionItems(content string) []string {
 	lines := strings.Split(content, "\n")
 
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
+		line = service.NormalizeMarkdownListItem(strings.TrimSpace(line))
 		// Look for lines that start with action-like prefixes
 		if strings.HasPrefix(line, "- [ ]") || strings.HasPrefix(line, "* [ ]") {
 			item := strings.TrimPrefix(line, "- [ ]")
@@ -377,6 +602,9 @@ func sanitizeFilename(name string) string {
 
 // escapeYAMLString escapes special characters in YAML strings
 func escapeYAMLString(s string) string {
-	// Escape double quotes
-	return strings.ReplaceAll(s, "\"", "\\\"")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, "\"", "\\\"")
+	return s
 }

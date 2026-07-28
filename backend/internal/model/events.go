@@ -26,3 +26,24 @@ type EventBridgeS3Object struct {
 	Size int64  `json:"size"`
 	ETag string `json:"etag"`
 }
+
+// EventEnvelope is used for first-pass unmarshal to detect event source/type
+type EventEnvelope struct {
+	Source     string `json:"source"`
+	DetailType string `json:"detail-type"`
+}
+
+// AllPartsTranscribedDetail is the detail payload of the AllPartsTranscribed custom event
+type AllPartsTranscribedDetail struct {
+	MeetingID string `json:"meetingId"`
+	UserID    string `json:"userId"`
+	PartCount int    `json:"partCount"`
+	Bucket    string `json:"bucket"`
+}
+
+// AllPartsTranscribedEvent represents the full custom EventBridge event
+type AllPartsTranscribedEvent struct {
+	Source     string                    `json:"source"`
+	DetailType string                    `json:"detail-type"`
+	Detail     AllPartsTranscribedDetail `json:"detail"`
+}

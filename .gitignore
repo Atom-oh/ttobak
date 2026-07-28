@@ -28,9 +28,46 @@ Thumbs.db
 infra/cdk.out/
 infra/cdk.out.deploy/
 
+# Python packaging / AgentCore deploy
+backend/python/research-agent/package/
+backend/python/research-agent/deploy.zip
+backend/python/research-agent/deploy.zip.bak
+backend/python/research-agent/.venv/
+backend/python/research-agent/agentcore/.cli/
+backend/python/research-agent/agentcore/aws-targets.json
+backend/python/research-agent/Dockerfile.diag
+backend/python/research-agent/diag.py
+*.egg-info/
+dist/
+build/
+uv.lock
+
+# Claude Code
+.claude/scheduled_tasks.lock
+
+# co-agent local session/config state
+.claude/co-agent-consensus/
+.claude/co-agent-panel.local.json
+.claude/co-agent.local.json
+
 # OMC / Playwright
 .omc/
 .playwright-mcp/
 
 # Review screenshots
 review/*.png
+*.png
+*.jpg
+*.jpeg
+*.mov
+*.mp4
+!frontend/public/**
+!frontend/src/app/**
+!docs/**
+.playwright-mcp/
+
+# Codex CLI session state
+.codex
+
+# Graphify analysis output
+graphify-out/

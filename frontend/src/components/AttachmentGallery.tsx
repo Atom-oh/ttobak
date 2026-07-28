@@ -98,16 +98,16 @@ function AttachmentCard({
   return (
     <div
       onClick={onClick}
-      className="group relative aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800 cursor-pointer bg-white dark:bg-slate-900"
+      className="group relative aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-white/10 cursor-pointer bg-white dark:bg-surface-lowest transition-all duration-300 hover:shadow-lg"
     >
       {isImage ? (
         <>
           <img
             src={thumbnailUrl}
             alt={attachment.name}
-            className="w-full h-full object-cover transition-transform group-hover:scale-105"
+            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
+          <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end p-3">
             <span className="text-white text-xs font-medium truncate">
               {attachment.name}
             </span>
@@ -154,6 +154,9 @@ export function AttachmentGallery({
     if (attachment.type === 'image') {
       setSelectedAttachment(attachment);
       setShowOriginal(false);
+    } else if (attachment.url) {
+      // Documents/audio/video: open the file in a new tab (presigned S3 URL).
+      window.open(attachment.url, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -174,7 +177,7 @@ export function AttachmentGallery({
       </div>
 
       {/* Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {attachments.map((attachment) => (
           <AttachmentCard
             key={attachment.id}

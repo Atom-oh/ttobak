@@ -1,0 +1,59 @@
+name: Test Backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/cmd/**'
+      - 'backend/internal/**'
+      - 'backend/go.*'
+      - 'backend/whisper/**'
+      - 'backend/python/**'
+  pull_request:
+    paths:
+      - 'backend/cmd/**'
+      - 'backend/internal/**'
+      - 'backend/go.*'
+      - 'backend/whisper/**'
+      - 'backend/python/**'
+      # Re-run on workflow changes so PRs that only touch CI still trigger
+      # the required `test` check (branch protection blocks otherwise).
+      - '.github/workflows/test-backend.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ttobak-arm
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          # Match backend/go.mod's `go 1.25.0`. With '1.24' the build fails
+          # with `go.mod requires go >= 1.25.0 (running go 1.24.13)`.
+          go-version: '1.25'
+
+      - name: Build all Lambda binaries
+        working-directory: backend
+        run: |
+          for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker; do
+            GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
+          done
+
+      - name: Run tests
+        working-directory: backend
+        run: go test ./internal/... -count=1
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Run Python crawler + research-agent + qa tests
+        run: |
+          # Capped at <2: these tests exercise botocore.auth.SigV4Auth, a
+          # quasi-internal API that a boto3 major bump could change shape.
+          pip install 'boto3<2'
+          cd backend/python/crawler && python3 -m unittest test_crawlers -v
+          cd ../research-agent && python3 -m unittest test_tools -v
+          cd ../qa && python3 -m unittest test_handler -v

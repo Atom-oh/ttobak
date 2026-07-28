@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,14 +17,21 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 )
 
+// transcriptSizeThreshold is the size above which transcripts are stored in S3
+// DynamoDB has a 400KB item limit; we use 300KB to leave room for other attributes
+const transcriptSizeThreshold = 300 * 1024
+
 // DynamoDBRepository provides DynamoDB operations for the meeting assistant
 type DynamoDBRepository struct {
-	client    *dynamodb.Client
-	tableName string
+	client     *dynamodb.Client
+	tableName  string
+	s3Client   *s3.Client
+	bucketName string
 }
 
 // NewDynamoDBRepository creates a new DynamoDB repository
@@ -31,8 +42,116 @@ func NewDynamoDBRepository(client *dynamodb.Client, tableName string) *DynamoDBR
 	}
 }
 
+// NewDynamoDBRepositoryWithS3 creates a new DynamoDB repository with S3 support for large transcripts
+func NewDynamoDBRepositoryWithS3(client *dynamodb.Client, tableName string, s3Client *s3.Client, bucketName string) *DynamoDBRepository {
+	return &DynamoDBRepository{
+		client:     client,
+		tableName:  tableName,
+		s3Client:   s3Client,
+		bucketName: bucketName,
+	}
+}
+
+// SetS3Client sets the S3 client for transcript overflow storage
+func (r *DynamoDBRepository) SetS3Client(s3Client *s3.Client, bucketName string) {
+	r.s3Client = s3Client
+	r.bucketName = bucketName
+}
+
+// storeTranscript stores a transcript, using S3 if it exceeds the size threshold
+// Returns the value to store in DynamoDB (either the text or an s3:// reference)
+func (r *DynamoDBRepository) storeTranscript(ctx context.Context, meetingID, field, text string) (string, error) {
+	if text == "" {
+		return "", nil
+	}
+
+	// If small enough or no S3 client, store inline
+	if len(text) < transcriptSizeThreshold || r.s3Client == nil {
+		return text, nil
+	}
+
+	// Store in S3
+	key := fmt.Sprintf("transcripts/%s/%s.txt", meetingID, field)
+	_, err := r.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(r.bucketName),
+		Key:         aws.String(key),
+		Body:        strings.NewReader(text),
+		ContentType: aws.String("text/plain; charset=utf-8"),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to store transcript in S3: %w", err)
+	}
+
+	return fmt.Sprintf("s3://%s/%s", r.bucketName, key), nil
+}
+
+// loadTranscript loads a transcript, fetching from S3 if it's an S3 reference
+func (r *DynamoDBRepository) loadTranscript(ctx context.Context, ref string) (string, error) {
+	if ref == "" {
+		return "", nil
+	}
+
+	// If not an S3 reference, return as-is
+	if !strings.HasPrefix(ref, "s3://") {
+		return ref, nil
+	}
+
+	// Parse S3 URL: s3://bucket/key
+	if r.s3Client == nil {
+		return ref, nil // Return reference as-is if no S3 client
+	}
+
+	trimmed := strings.TrimPrefix(ref, "s3://")
+	parts := strings.SplitN(trimmed, "/", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid S3 reference: %s", ref)
+	}
+	bucket := parts[0]
+	key := parts[1]
+
+	result, err := r.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to load transcript from S3: %w", err)
+	}
+	defer result.Body.Close()
+
+	data, err := io.ReadAll(result.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read transcript from S3: %w", err)
+	}
+
+	return string(data), nil
+}
+
+// resolveTranscripts loads transcripts from S3 if they are S3 references
+func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meeting *model.Meeting) error {
+	if meeting == nil {
+		return nil
+	}
+
+	var err error
+	if strings.HasPrefix(meeting.TranscriptA, "s3://") {
+		meeting.TranscriptA, err = r.loadTranscript(ctx, meeting.TranscriptA)
+		if err != nil {
+			return fmt.Errorf("failed to load transcriptA: %w", err)
+		}
+	}
+
+	if strings.HasPrefix(meeting.TranscriptB, "s3://") {
+		meeting.TranscriptB, err = r.loadTranscript(ctx, meeting.TranscriptB)
+		if err != nil {
+			return fmt.Errorf("failed to load transcriptB: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // CreateMeeting creates a new meeting record
-func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string) (*model.Meeting, error) {
+func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error) {
 	meetingID := uuid.New().String()
 	now := time.Now().UTC()
 
@@ -44,6 +163,7 @@ func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title st
 		Title:        title,
 		Date:         date,
 		Participants: participants,
+		SttProvider:  sttProvider,
 		Status:       model.StatusRecording,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -71,7 +191,8 @@ func (r *DynamoDBRepository) CreateMeeting(ctx context.Context, userID, title st
 // GetMeeting retrieves a meeting by userID and meetingID
 func (r *DynamoDBRepository) GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error) {
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(r.tableName),
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
@@ -90,31 +211,34 @@ func (r *DynamoDBRepository) GetMeeting(ctx context.Context, userID, meetingID s
 		return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
 	}
 
+	// Resolve S3 transcript references
+	if err := r.resolveTranscripts(ctx, &meeting); err != nil {
+		return nil, err
+	}
+
 	return &meeting, nil
 }
 
-// GetMeetingByID retrieves a meeting by meetingID by scanning all users
+// GetMeetingByID retrieves a meeting by meetingID using GSI3 (PK=meetingId, SK=entityType)
 // This is used for internal operations where we know the meetingID but not the owner
 func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error) {
-	// Use GSI1 to find the meeting - GSI1PK is USER#{userId}, GSI1SK is timestamp
-	// We need to scan or use a different approach since meetingID is in SK
-	// Let's query by SK pattern using a scan with filter
-	filterEx := expression.Name("meetingId").Equal(expression.Value(meetingID)).
-		And(expression.Name("entityType").Equal(expression.Value("MEETING")))
-	expr, err := expression.NewBuilder().WithFilter(filterEx).Build()
+	keyEx := expression.Key("meetingId").Equal(expression.Value(meetingID)).
+		And(expression.Key("entityType").Equal(expression.Value("MEETING")))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
 
-	result, err := r.client.Scan(ctx, &dynamodb.ScanInput{
+	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
-		FilterExpression:          expr.Filter(),
+		IndexName:                 aws.String("GSI3"),
+		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
 		Limit:                     aws.Int32(1),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to scan for meeting: %w", err)
+		return nil, fmt.Errorf("failed to query for meeting: %w", err)
 	}
 
 	if len(result.Items) == 0 {
@@ -126,117 +250,629 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 		return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
 	}
 
+	// Resolve S3 transcript references
+	if err := r.resolveTranscripts(ctx, &meeting); err != nil {
+		return nil, err
+	}
+
 	return &meeting, nil
 }
 
-// BatchGetMeetings retrieves multiple meetings by their meetingIDs using a single scan.
-// This avoids N+1 queries when loading shared meetings.
-func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, meetingIDs []string) ([]*model.Meeting, error) {
-	if len(meetingIDs) == 0 {
+// MeetingKey identifies a meeting by its owner and meeting ID (primary key).
+type MeetingKey struct {
+	OwnerID   string
+	MeetingID string
+}
+
+// BatchGetMeetings retrieves multiple meetings in a single DynamoDB BatchGetItem call.
+// Requires owner IDs to construct primary keys (PK=USER#{ownerID}, SK=MEETING#{meetingID}).
+func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, keys []MeetingKey) ([]*model.Meeting, error) {
+	if len(keys) == 0 {
 		return nil, nil
-	}
-
-	// For a single meetingID, use the existing method
-	if len(meetingIDs) == 1 {
-		meeting, err := r.GetMeetingByID(ctx, meetingIDs[0])
-		if err != nil {
-			return nil, err
-		}
-		if meeting != nil {
-			return []*model.Meeting{meeting}, nil
-		}
-		return nil, nil
-	}
-
-	// Build filter: entityType = MEETING AND meetingId IN (id1, id2, ...)
-	values := make([]expression.OperandBuilder, len(meetingIDs))
-	for i, id := range meetingIDs {
-		values[i] = expression.Value(id)
-	}
-
-	filterEx := expression.Name("entityType").Equal(expression.Value("MEETING")).
-		And(expression.Name("meetingId").In(values[0], values[1:]...))
-	expr, err := expression.NewBuilder().WithFilter(filterEx).Build()
-	if err != nil {
-		return nil, fmt.Errorf("failed to build expression: %w", err)
-	}
-
-	result, err := r.client.Scan(ctx, &dynamodb.ScanInput{
-		TableName:                 aws.String(r.tableName),
-		FilterExpression:          expr.Filter(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to scan for meetings: %w", err)
 	}
 
 	var meetings []*model.Meeting
-	for _, item := range result.Items {
-		var meeting model.Meeting
-		if err := attributevalue.UnmarshalMap(item, &meeting); err != nil {
-			continue
+
+	// Process in chunks of 100 (BatchGetItem limit)
+	for i := 0; i < len(keys); i += 100 {
+		end := i + 100
+		if end > len(keys) {
+			end = len(keys)
 		}
-		meetings = append(meetings, &meeting)
+		chunk := keys[i:end]
+
+		ddbKeys := make([]map[string]types.AttributeValue, len(chunk))
+		for j, k := range chunk {
+			ddbKeys[j] = map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + k.OwnerID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + k.MeetingID},
+			}
+		}
+
+		requestItems := map[string]types.KeysAndAttributes{
+			r.tableName: {Keys: ddbKeys},
+		}
+
+		for len(requestItems) > 0 {
+			result, err := r.client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
+				RequestItems: requestItems,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to batch get meetings: %w", err)
+			}
+
+			for _, item := range result.Responses[r.tableName] {
+				var meeting model.Meeting
+				if err := attributevalue.UnmarshalMap(item, &meeting); err != nil {
+					return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
+				}
+				meetings = append(meetings, &meeting)
+			}
+
+			// Retry unprocessed keys
+			if len(result.UnprocessedKeys) > 0 {
+				requestItems = result.UnprocessedKeys
+			} else {
+				break
+			}
+		}
 	}
 
 	return meetings, nil
 }
 
 // UpdateMeeting updates a meeting record
+// Large transcripts are automatically stored in S3 to avoid DynamoDB's 400KB limit
 func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.Meeting) error {
 	meeting.UpdatedAt = time.Now().UTC()
 
-	item, err := attributevalue.MarshalMap(meeting)
-	if err != nil {
-		return fmt.Errorf("failed to marshal meeting: %w", err)
+	// Store large transcripts in S3 if S3 client is available
+	if r.s3Client != nil && r.bucketName != "" {
+		// Store transcriptA if needed
+		if meeting.TranscriptA != "" && !strings.HasPrefix(meeting.TranscriptA, "s3://") {
+			ref, err := r.storeTranscript(ctx, meeting.MeetingID, "transcriptA", meeting.TranscriptA)
+			if err != nil {
+				return fmt.Errorf("failed to store transcriptA: %w", err)
+			}
+			meeting.TranscriptA = ref
+		}
+
+		// Store transcriptB if needed
+		if meeting.TranscriptB != "" && !strings.HasPrefix(meeting.TranscriptB, "s3://") {
+			ref, err := r.storeTranscript(ctx, meeting.MeetingID, "transcriptB", meeting.TranscriptB)
+			if err != nil {
+				return fmt.Errorf("failed to store transcriptB: %w", err)
+			}
+			meeting.TranscriptB = ref
+		}
 	}
 
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      item,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to update meeting: %w", err)
-	}
+	// UpdateMeeting is a whole-item PutItem, not a partial UpdateItem -- every
+	// field on the in-memory *model.Meeting the caller passes in overwrites
+	// whatever is currently stored, including ProjectIDs. ProjectIDs is a
+	// String Set precisely so LinkMeeting/UnlinkMeeting can mutate it with
+	// atomic ADD/DELETE and never race each other -- but that guarantee means
+	// nothing if this call reads a Meeting BEFORE a concurrent (Un)LinkMeeting
+	// commits and then overwrites the whole item AFTER, silently reverting or
+	// (since the tag is `omitempty`) deleting the link.
+	//
+	// A plain re-read-then-write (read projectIds, then PutItem) only
+	// NARROWS that window to ordinary read-then-write latency -- it doesn't
+	// close it: a Link/Unlink can still land in the gap between this read
+	// and the PutItem below. Narrowing isn't enough for a field this
+	// codebase's own conventions single out (AGENTS.md: "a field another
+	// code path can mutate concurrently ... needs a conditional UpdateItem,
+	// not a whole-item PutItem carrying a stale read-time snapshot").
+	// Closing it for real means detecting the race, not just shrinking it:
+	// the PutItem below carries a ConditionExpression asserting projectIds
+	// still equals what was just read, and a ConditionalCheckFailedException
+	// (someone changed it in between) triggers a bounded retry -- re-read,
+	// re-attempt -- instead of either silently overwriting the change or
+	// giving up. A failed *read* (not a lost race) still aborts the whole
+	// update rather than proceeding with whatever ProjectIDs the caller's
+	// in-memory Meeting happened to carry (typically nil for STT pipeline
+	// callers, which never populate it) -- proceeding on a read failure
+	// risks wiping every project link on one transient GetItem error, which
+	// is worse than the race this exists to close.
+	const maxProjectIDsAttempts = 3
+	for attempt := 1; ; attempt++ {
+		current, err := r.getMeetingProjectIDs(ctx, meeting.UserID, meeting.MeetingID)
+		if err != nil {
+			return fmt.Errorf("failed to preserve projectIds on meeting update: %w", err)
+		}
+		meeting.ProjectIDs = current
 
-	return nil
+		item, err := attributevalue.MarshalMap(meeting)
+		if err != nil {
+			return fmt.Errorf("failed to marshal meeting: %w", err)
+		}
+
+		condExpr, err := projectIDsUnchangedCondition(current)
+		if err != nil {
+			return fmt.Errorf("build projectIds-unchanged condition: %w", err)
+		}
+
+		_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+			TableName:                 aws.String(r.tableName),
+			Item:                      item,
+			ConditionExpression:       condExpr.Condition(),
+			ExpressionAttributeNames:  condExpr.Names(),
+			ExpressionAttributeValues: condExpr.Values(),
+		})
+		action, terminalErr := classifyProjectIDsPutItemErr(err, attempt, maxProjectIDsAttempts)
+		if action == putItemRetryActionRetry {
+			continue
+		}
+		return terminalErr
+	}
 }
 
-// DeleteMeeting deletes a meeting and all related items
-func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingID string) error {
-	// Delete the meeting
-	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+// putItemRetryAction is the outcome classifyProjectIDsPutItemErr decides for
+// one PutItem attempt in UpdateMeeting's projectIds-preserving retry loop.
+type putItemRetryAction int
+
+const (
+	putItemRetryActionDone putItemRetryAction = iota
+	putItemRetryActionRetry
+)
+
+// classifyProjectIDsPutItemErr decides UpdateMeeting's retry loop outcome for
+// one PutItem attempt: retry on ConditionalCheckFailedException while
+// attempts remain, a distinct terminal error once exhausted (so a caller
+// can tell "gave up after retrying" apart from any other DynamoDB failure),
+// nil error on success, or the wrapped original error for anything else.
+// Extracted as a pure function -- per AGENTS.md's rule that
+// security/correctness-critical branching be unit-testable -- so this
+// decision logic can be tested without a live DynamoDB client.
+func classifyProjectIDsPutItemErr(err error, attempt, maxAttempts int) (action putItemRetryAction, terminalErr error) {
+	if err == nil {
+		return putItemRetryActionDone, nil
+	}
+	var ccfe *types.ConditionalCheckFailedException
+	if errors.As(err, &ccfe) {
+		if attempt < maxAttempts {
+			return putItemRetryActionRetry, nil
+		}
+		return putItemRetryActionDone, fmt.Errorf("failed to update meeting: projectIds changed concurrently %d times, giving up", maxAttempts)
+	}
+	return putItemRetryActionDone, fmt.Errorf("failed to update meeting: %w", err)
+}
+
+// projectIDsUnchangedCondition builds the PutItem ConditionExpression
+// UpdateMeeting uses to detect (not just narrow) a concurrent
+// LinkMeeting/UnlinkMeeting -- see UpdateMeeting's comment. DynamoDB
+// compares Set-typed attributes by their contents, not insertion order, so
+// this correctly matches a projectIds set re-read in a different element
+// order than when it was written.
+func projectIDsUnchangedCondition(current []string) (expression.Expression, error) {
+	var cond expression.ConditionBuilder
+	if len(current) == 0 {
+		cond = expression.AttributeNotExists(expression.Name("projectIds"))
+	} else {
+		cond = expression.Name("projectIds").Equal(expression.Value(&types.AttributeValueMemberSS{Value: current}))
+	}
+	return expression.NewBuilder().WithCondition(cond).Build()
+}
+
+// getMeetingProjectIDs reads only the projectIds attribute of a meeting,
+// via ProjectionExpression -- see UpdateMeeting's comment for why this
+// read-before-write matters. A missing item or missing attribute both
+// resolve to a nil slice (not an error): the caller is mid-write on a
+// meeting that either doesn't exist yet or has no project links, and in
+// both cases overwriting with nil is correct, not a failure to report.
+func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUserID, meetingID string) ([]string, error) {
+	expr, err := expression.NewBuilder().
+		WithProjection(expression.NamesList(expression.Name("projectIds"))).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("build projectIds projection: %w", err)
+	}
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:                aws.String(r.tableName),
+		ConsistentRead:           aws.Bool(true),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + ownerUserID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		ProjectionExpression:     expr.Projection(),
+		ExpressionAttributeNames: expr.Names(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get meeting projectIds: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+	var projected struct {
+		ProjectIDs []string `dynamodbav:"projectIds,omitempty,stringset"`
+	}
+	if err := attributevalue.UnmarshalMap(result.Item, &projected); err != nil {
+		return nil, fmt.Errorf("unmarshal meeting projectIds: %w", err)
+	}
+	return projected.ProjectIDs, nil
+}
+
+// UpdateMeetingFields atomically updates only the specified fields on a meeting item
+// using DynamoDB UpdateItem (SET expression). This avoids the read-modify-write race
+// condition inherent in the PutItem-based UpdateMeeting method.
+// Fields map keys must be DynamoDB attribute names (e.g., "status", "audioKey", "content").
+func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error {
+	// Handle S3 transcript overflow for large transcript fields
+	if r.s3Client != nil && r.bucketName != "" {
+		for _, field := range []string{"transcriptA", "transcriptB"} {
+			if val, ok := fields[field]; ok {
+				if text, isStr := val.(string); isStr && text != "" && !strings.HasPrefix(text, "s3://") {
+					ref, err := r.storeTranscript(ctx, meetingID, field, text)
+					if err != nil {
+						return fmt.Errorf("failed to store %s: %w", field, err)
+					}
+					fields[field] = ref
+				}
+			}
+		}
+	}
+
+	// Always include updatedAt
+	fields["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+
+	// Build SET expression
+	var update expression.UpdateBuilder
+	first := true
+	for k, v := range fields {
+		if first {
+			update = expression.Set(expression.Name(k), expression.Value(v))
+			first = false
+		} else {
+			update = update.Set(expression.Name(k), expression.Value(v))
+		}
+	}
+
+	// Condition: item must already exist
+	condition := expression.AttributeExists(expression.Name("PK"))
+
+	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build update expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(r.tableName),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 		},
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to delete meeting: %w", err)
+		return fmt.Errorf("failed to update meeting fields: %w", err)
 	}
 
-	// Delete attachments
+	return nil
+}
+
+// PreAllocateAudioKeys initializes audioKeys as a list of empty strings for multi-file upload.
+// Called lazily on first CompleteUpload with totalParts > 1.
+// Uses ConditionExpression to be safe against concurrent calls.
+func (r *DynamoDBRepository) PreAllocateAudioKeys(ctx context.Context, userID, meetingID string, totalParts int) error {
+	emptyKeys := make([]string, totalParts)
+	for i := range emptyKeys {
+		emptyKeys[i] = ""
+	}
+
+	// (Re)initialize multi-part tracking AND reset status to transcribing so a NEW
+	// multi-file batch on an already-finished meeting reprocesses cleanly. The prior
+	// batch's readiness set and all-parts marker are cleared so counting restarts and
+	// the merge can re-emit; audioPartCount becomes authoritative for this batch.
+	update := expression.Set(expression.Name("audioKeys"), expression.Value(emptyKeys)).
+		Set(expression.Name("audioPartCount"), expression.Value(totalParts)).
+		Set(expression.Name("audioPartsReady"), expression.Value(0)).
+		Set(expression.Name("status"), expression.Value(model.StatusTranscribing)).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC().Format(time.RFC3339Nano))).
+		Remove(expression.Name("audioPartsReadySet")).
+		Remove(expression.Name("allPartsEmittedAt"))
+
+	// Init when this is the first part of a batch (no audioKeys yet) OR when
+	// re-transcribing a finished meeting (status done/error). Subsequent parts of the
+	// SAME batch see audioKeys present + status=transcribing → condition fails → no-op
+	// below (the front-end uploads parts sequentially, so no race). This is also the
+	// gate that stops a stray late part from resetting a finished meeting: only an
+	// intentional re-upload (done/error) re-inits.
+	condition := expression.And(
+		expression.AttributeExists(expression.Name("PK")),
+		expression.Or(
+			expression.AttributeNotExists(expression.Name("audioKeys")),
+			expression.Name("status").Equal(expression.Value(model.StatusDone)),
+			expression.Name("status").Equal(expression.Value(model.StatusError)),
+		),
+	)
+
+	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build pre-allocate expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var condErr *types.ConditionalCheckFailedException
+		if ok := errors.As(err, &condErr); ok {
+			return nil // already pre-allocated by concurrent call
+		}
+		return fmt.Errorf("failed to pre-allocate audio keys: %w", err)
+	}
+	return nil
+}
+
+// SetAudioKeyAtIndex sets a specific index in the audioKeys list. Idempotent — re-uploading
+// the same part overwrites the same slot. Validates index is within pre-allocated range.
+//
+// Status transitions are gated: only `recording` or `transcribing` meetings
+// flip to `transcribing`. Without this guard, a late part-upload (S3 retry,
+// client clock skew) could regress a `summarizing`/`done`/`error` meeting back
+// to `transcribing`, which the summarize Lambda's whitelist guard would then
+// happily accept — replaying refine + Bedrock + KB export on top of finished
+// content. ConditionalCheckFailedException on stale status is surfaced to the
+// caller as a typed error so transcribe.go can log+skip rather than retry.
+func (r *DynamoDBRepository) SetAudioKeyAtIndex(ctx context.Context, userID, meetingID, key string, partIndex int) error {
+	indexPath := fmt.Sprintf("audioKeys[%d]", partIndex)
+
+	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String(fmt.Sprintf("SET %s = :key, #st = :transcribing, updatedAt = :now", indexPath)),
+		ExpressionAttributeNames: map[string]string{
+			"#st": "status",
+		},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":key":          &types.AttributeValueMemberS{Value: key},
+			":transcribing": &types.AttributeValueMemberS{Value: model.StatusTranscribing},
+			":recording":    &types.AttributeValueMemberS{Value: model.StatusRecording},
+			":now":          &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339Nano)},
+			":idx":          &types.AttributeValueMemberN{Value: strconv.Itoa(partIndex)},
+		},
+		ConditionExpression: aws.String(
+			"attribute_exists(PK) AND attribute_exists(audioKeys) AND size(audioKeys) > :idx " +
+				"AND (#st = :recording OR #st = :transcribing)",
+		),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("set audio key at index %d rejected (meeting not in recording/transcribing state or index out of range): %w", partIndex, err)
+		}
+		return fmt.Errorf("failed to set audio key at index %d: %w", partIndex, err)
+	}
+	return nil
+}
+
+// IncrementAudioPartsReady atomically adds partIndex to a Number Set (audioPartsReadySet),
+// making it idempotent on re-upload of the same part. Returns the set size as partsReady.
+func (r *DynamoDBRepository) IncrementAudioPartsReady(ctx context.Context, userID, meetingID string, partIndex int) (partsReady, partCount int, err error) {
+	result, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String("ADD audioPartsReadySet :partSet SET updatedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":partSet": &types.AttributeValueMemberNS{Value: []string{strconv.Itoa(partIndex)}},
+			":now":     &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339Nano)},
+		},
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+		ReturnValues:        types.ReturnValueAllNew,
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to increment audio parts ready: %w", err)
+	}
+
+	attrs := result.Attributes
+	// Count ready parts from the returned Number Set
+	if ns, ok := attrs["audioPartsReadySet"].(*types.AttributeValueMemberNS); ok {
+		partsReady = len(ns.Value)
+	}
+	// Read audioPartCount from the item
+	var meeting model.Meeting
+	if unmarshalErr := attributevalue.UnmarshalMap(attrs, &meeting); unmarshalErr != nil {
+		return 0, 0, fmt.Errorf("failed to unmarshal updated meeting: %w", unmarshalErr)
+	}
+
+	// Mirror the set size onto the `audioPartsReady` int field so the API
+	// response and any list-view projection see the current count without
+	// having to read the set themselves. Best-effort second write; the
+	// caller has already learned `partsReady` from the set above and the
+	// emit-all-parts-transcribed decision uses that, so a failure here is
+	// observability-only — log and continue.
+	if _, mirrorErr := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String("SET audioPartsReady = :n"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":n": &types.AttributeValueMemberN{Value: strconv.Itoa(partsReady)},
+		},
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+	}); mirrorErr != nil {
+		// Stale audioPartsReady is preferable to retrying — the set is
+		// the source of truth and the emit-all-parts decision already
+		// happened above. Log so CloudWatch surfaces the drift instead
+		// of silently leaving the frontend progress bar stuck.
+		log.Printf("Failed to mirror audioPartsReady for meeting %s (partIndex=%d): %v",
+			meetingID, partIndex, mirrorErr)
+	}
+
+	return partsReady, meeting.AudioPartCount, nil
+}
+
+// ReleaseAllPartsEmit clears the `allPartsEmittedAt` lock. Use this as the
+// compensation path when the caller successfully claimed the emit lock but
+// then the downstream `PutEvents` call failed — without the release, a
+// throttle/network failure on PutEvents would leave the meeting permanently
+// `transcribing` because every retry would see `claim=false` and skip.
+//
+// Safe to call when the field doesn't exist (idempotent REMOVE).
+func (r *DynamoDBRepository) ReleaseAllPartsEmit(ctx context.Context, userID, meetingID string) error {
+	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression:    aws.String("REMOVE allPartsEmittedAt"),
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to release all-parts emit lock: %w", err)
+	}
+	return nil
+}
+
+// AllPartsEmitClaimTTL is the maximum age of a stale `allPartsEmittedAt`
+// claim before it can be reclaimed by another invocation. This bounds the
+// failure mode where `PutEvents` succeeded after a claim but the Lambda
+// crashed before any downstream side-effect (or where `ReleaseAllPartsEmit`
+// itself failed, leaving the lock orphaned). After this window, the next
+// retry can re-emit. Chosen > P99 emit latency and < the 30-minute
+// meeting auto-expiry so recovery happens before the meeting is errored.
+const AllPartsEmitClaimTTL = 5 * time.Minute
+
+// ClaimAllPartsEmit attempts to atomically claim the right to emit the
+// `AllPartsTranscribed` EventBridge event for this meeting. Returns
+// (true, nil) for the first caller that wins the conditional write;
+// returns (false, nil) for every subsequent caller (lost race or
+// EventBridge redelivery). Returns (false, err) on real DynamoDB errors.
+//
+// Used to make `emitAllPartsTranscribedEvent` once-only despite S3
+// at-least-once redelivery of part transcripts.
+//
+// The claim is TTL-bound (`AllPartsEmitClaimTTL`): if an existing claim
+// is older than the TTL, this call reclaims it. This is the self-healing
+// path for the case where the previous holder claimed the lock and then
+// failed to either emit or release it (e.g., Lambda OOM between claim
+// and PutEvents). Callers still SHOULD invoke `ReleaseAllPartsEmit` on
+// emit failure for fast recovery; the TTL is the backstop.
+func (r *DynamoDBRepository) ClaimAllPartsEmit(ctx context.Context, userID, meetingID string) (bool, error) {
+	now := time.Now().UTC()
+	staleBefore := now.Add(-AllPartsEmitClaimTTL).Format(time.RFC3339Nano)
+	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String("SET allPartsEmittedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":now":         &types.AttributeValueMemberS{Value: now.Format(time.RFC3339Nano)},
+			":staleBefore": &types.AttributeValueMemberS{Value: staleBefore},
+		},
+		// Succeed when EITHER the field has never been written, OR the
+		// existing claim is older than the TTL. The string compare is
+		// well-defined because RFC3339Nano is lexicographically sortable.
+		ConditionExpression: aws.String(
+			"attribute_exists(PK) AND (attribute_not_exists(allPartsEmittedAt) OR allPartsEmittedAt < :staleBefore)",
+		),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			// Lost the race — another invocation holds a fresh claim.
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to claim all-parts emit lock: %w", err)
+	}
+	return true, nil
+}
+
+// DeleteMeeting deletes a meeting and all related items atomically using TransactWriteItems.
+// DynamoDB TransactWriteItems supports up to 100 items per transaction.
+func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingID string) error {
+	// Collect all items to delete
+	var transactItems []types.TransactWriteItem
+
+	// 1. The meeting itself
+	transactItems = append(transactItems, types.TransactWriteItem{
+		Delete: &types.Delete{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+			},
+		},
+	})
+
+	// 2. Attachments
 	attachments, err := r.ListAttachments(ctx, meetingID)
 	if err != nil {
 		return fmt.Errorf("failed to list attachments: %w", err)
 	}
 	for _, att := range attachments {
-		if err := r.DeleteAttachment(ctx, meetingID, att.AttachmentID); err != nil {
-			return fmt.Errorf("failed to delete attachment: %w", err)
-		}
+		transactItems = append(transactItems, types.TransactWriteItem{
+			Delete: &types.Delete{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixAttachment + att.AttachmentID},
+				},
+			},
+		})
 	}
 
-	// Delete shares for meeting (MEETING#{meetingId}, SHARE_TO#)
+	// 3. Shares (both recipient and meeting records)
 	shares, err := r.ListSharesForMeeting(ctx, meetingID)
 	if err != nil {
 		return fmt.Errorf("failed to list shares: %w", err)
 	}
 	for _, share := range shares {
-		// Delete both share records (recipient's and meeting's)
-		if err := r.DeleteShare(ctx, share.SharedToID, meetingID); err != nil {
-			return fmt.Errorf("failed to delete share: %w", err)
+		// Recipient record: PK=USER#{sharedToId}, SK=SHARED#{meetingId}
+		transactItems = append(transactItems, types.TransactWriteItem{
+			Delete: &types.Delete{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + share.SharedToID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixShare + meetingID},
+				},
+			},
+		})
+		// Meeting record: PK=MEETING#{meetingId}, SK=SHARE_TO#{userId}
+		transactItems = append(transactItems, types.TransactWriteItem{
+			Delete: &types.Delete{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixShareTo + share.SharedToID},
+				},
+			},
+		})
+	}
+
+	// Execute in batches of 100 (TransactWriteItems limit)
+	for i := 0; i < len(transactItems); i += 100 {
+		end := i + 100
+		if end > len(transactItems) {
+			end = len(transactItems)
+		}
+		_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+			TransactItems: transactItems[i:end],
+		})
+		if err != nil {
+			return fmt.Errorf("failed to delete meeting batch: %w", err)
 		}
 	}
 
@@ -258,7 +894,42 @@ type ListMeetingsResult struct {
 	NextCursor *string
 }
 
-// ListMeetings lists meetings for a user with pagination
+// paginateMeetingsPage decides ListMeetings' final page and resume cursor
+// for its GSI1 filter-loop. DynamoDB's FilterExpression runs after Limit is
+// applied server-side, so that loop can overshoot Limit (concatenating
+// multiple Query pages) before its own stop condition fires.
+//   - Overshot: truncate to exactly limit and resume from the key of the
+//     last KEPT item -- not wherever the underlying query's
+//     LastEvaluatedKey landed, which may be well past the cutoff. Every
+//     Meeting here already carries PK/SK/GSI1PK/GSI1SK (see the
+//     projection), so this is a real, resumable DynamoDB key.
+//   - Otherwise (filled exactly, or under-filled because the loop's own
+//     maxPages bound was hit first): resume from lastEvaluatedKey as-is.
+//     nil means the GSI1 partition is genuinely exhausted (the loop's own
+//     break condition); non-nil means more items exist further down
+//     regardless of how many landed on this page. Forcing it to nil here
+//     was a real bug -- a page that happened to fill exactly Limit lost
+//     its cursor and could never see anything beyond it again, which is
+//     the common case for a user with few/no account-membership rows to
+//     filter out (i.e. most users' very first page).
+func paginateMeetingsPage(meetings []model.Meeting, limit int32, lastEvaluatedKey map[string]types.AttributeValue) ([]model.Meeting, map[string]types.AttributeValue) {
+	if len(meetings) > int(limit) {
+		last := meetings[limit-1]
+		resumeKey := map[string]types.AttributeValue{
+			"PK":     &types.AttributeValueMemberS{Value: last.PK},
+			"SK":     &types.AttributeValueMemberS{Value: last.SK},
+			"GSI1PK": &types.AttributeValueMemberS{Value: last.GSI1PK},
+			"GSI1SK": &types.AttributeValueMemberS{Value: last.GSI1SK},
+		}
+		return meetings[:limit], resumeKey
+	}
+	return meetings, lastEvaluatedKey
+}
+
+// ListMeetings lists meetings for a user with pagination.
+// Uses ProjectionExpression to exclude transcript fields (transcriptA/B, transcriptSegments)
+// and other large fields (actionItems, notes) to stay within DynamoDB's 1MB per-query limit.
+// content IS included because ToMeetingListItem uses it for the 200-char summary preview.
 func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetingsParams) (*ListMeetingsResult, error) {
 	if params.Limit == 0 {
 		params.Limit = 20
@@ -266,17 +937,9 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 
 	result := &ListMeetingsResult{}
 
-	// Decode cursor if provided
-	var exclusiveStartKey map[string]types.AttributeValue
-	if params.Cursor != "" {
-		decoded, err := base64.StdEncoding.DecodeString(params.Cursor)
-		if err == nil {
-			json.Unmarshal(decoded, &exclusiveStartKey)
-		}
-	}
+	exclusiveStartKey := decodeCursor(params.Cursor)
 
 	if params.Tab == "shared" {
-		// Query only shared meetings
 		shares, nextCursor, err := r.listSharesForUserPaginated(ctx, params.UserID, params.Limit, exclusiveStartKey)
 		if err != nil {
 			return nil, err
@@ -284,39 +947,83 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 		result.Shares = shares
 		result.NextCursor = nextCursor
 	} else {
-		// Query owned meetings
-		keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixUser + params.UserID)).
-			And(expression.Key("SK").BeginsWith(model.PrefixMeeting))
-		expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+		// Query GSI1 (GSI1PK=USER#{userId}, GSI1SK=date) instead of the base
+		// table's PK/SK -- SK is MEETING#{meetingId} (a UUID), so sorting by
+		// it has no relationship to recency at all. Querying the base table
+		// here was the actual cause of "my just-finished meeting doesn't
+		// show up": a user's Nth-most-recent meeting could land outside
+		// page 1 purely because its UUID happened to sort late, while
+		// genuinely older meetings with "smaller" UUIDs filled the page.
+		//
+		// AccountMember rows share this same GSI1PK (USER#{userId}) on GSI1
+		// (see account.go's ListAccountsForUser), disambiguated only by
+		// GSI1SK format (date string vs "ACCOUNT#{id}") -- entityType=MEETING
+		// filters them out. FilterExpression runs AFTER Limit is applied
+		// server-side, so a page can come back with fewer than Limit
+		// matching items even when more meetings exist further down the
+		// index; loop (bounded) until enough are collected or the
+		// partition is exhausted in this scan direction.
+		keyEx := expression.Key("GSI1PK").Equal(expression.Value(model.PrefixUser + params.UserID))
+		filterEx := expression.Name("entityType").Equal(expression.Value("MEETING"))
+		proj := expression.NamesList(
+			expression.Name("PK"), expression.Name("SK"),
+			expression.Name("meetingId"), expression.Name("userId"),
+			expression.Name("title"), expression.Name("date"),
+			expression.Name("status"), expression.Name("participants"),
+			expression.Name("tags"), expression.Name("createdAt"),
+			expression.Name("updatedAt"), expression.Name("content"),
+			expression.Name("sttProvider"), expression.Name("speakerMap"),
+			expression.Name("entityType"), expression.Name("GSI1PK"),
+			expression.Name("GSI1SK"), expression.Name("audioKey"),
+			expression.Name("selectedTranscript"), expression.Name("duration"),
+		)
+		expr, err := expression.NewBuilder().
+			WithKeyCondition(keyEx).
+			WithFilter(filterEx).
+			WithProjection(proj).
+			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to build expression: %w", err)
 		}
 
-		queryResult, err := r.client.Query(ctx, &dynamodb.QueryInput{
-			TableName:                 aws.String(r.tableName),
-			KeyConditionExpression:    expr.KeyCondition(),
-			ExpressionAttributeNames:  expr.Names(),
-			ExpressionAttributeValues: expr.Values(),
-			Limit:                     aws.Int32(params.Limit),
-			ExclusiveStartKey:         exclusiveStartKey,
-			ScanIndexForward:          aws.Bool(false), // newest first
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to query meetings: %w", err)
+		var meetings []model.Meeting
+		const maxPages = 25 // defensive bound -- this GSI1PK partition only ever mixes in a user's own (typically few) account memberships
+		for i := 0; i < maxPages; i++ {
+			queryResult, err := r.client.Query(ctx, &dynamodb.QueryInput{
+				TableName:                 aws.String(r.tableName),
+				IndexName:                 aws.String("GSI1"),
+				KeyConditionExpression:    expr.KeyCondition(),
+				FilterExpression:          expr.Filter(),
+				ProjectionExpression:      expr.Projection(),
+				ExpressionAttributeNames:  expr.Names(),
+				ExpressionAttributeValues: expr.Values(),
+				Limit:                     aws.Int32(params.Limit),
+				ExclusiveStartKey:         exclusiveStartKey,
+				ScanIndexForward:          aws.Bool(false),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to query meetings: %w", err)
+			}
+
+			var page []model.Meeting
+			if err := attributevalue.UnmarshalListOfMaps(queryResult.Items, &page); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal meetings: %w", err)
+			}
+			meetings = append(meetings, page...)
+			exclusiveStartKey = queryResult.LastEvaluatedKey
+
+			if len(meetings) >= int(params.Limit) || exclusiveStartKey == nil {
+				break
+			}
 		}
 
-		if err := attributevalue.UnmarshalListOfMaps(queryResult.Items, &result.Meetings); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal meetings: %w", err)
-		}
+		result.Meetings, exclusiveStartKey = paginateMeetingsPage(meetings, params.Limit, exclusiveStartKey)
 
-		// Encode next cursor
-		if queryResult.LastEvaluatedKey != nil {
-			cursorBytes, _ := json.Marshal(queryResult.LastEvaluatedKey)
-			cursor := base64.StdEncoding.EncodeToString(cursorBytes)
+		if exclusiveStartKey != nil {
+			cursor := encodeCursor(exclusiveStartKey)
 			result.NextCursor = &cursor
 		}
 
-		// Also get shared meetings if tab is "all"
 		if params.Tab != "shared" {
 			shares, err := r.ListSharesForUser(ctx, params.UserID)
 			if err != nil {
@@ -327,6 +1034,48 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 	}
 
 	return result, nil
+}
+
+// encodeCursor serializes a DynamoDB ExclusiveStartKey to a base64 cursor string.
+// Only string-typed attributes (PK/SK) are supported; non-string types are logged and skipped.
+func encodeCursor(key map[string]types.AttributeValue) string {
+	simple := make(map[string]string, len(key))
+	for k, v := range key {
+		if s, ok := v.(*types.AttributeValueMemberS); ok {
+			simple[k] = s.Value
+		} else {
+			log.Printf("encodeCursor: unsupported attribute type for key %q: %T", k, v)
+		}
+	}
+	b, err := json.Marshal(simple)
+	if err != nil {
+		log.Printf("encodeCursor: json.Marshal failed: %v", err)
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// decodeCursor deserializes a base64 cursor string back to a DynamoDB ExclusiveStartKey.
+// All keys are assumed to be string-typed (PK/SK).
+func decodeCursor(cursor string) map[string]types.AttributeValue {
+	if cursor == "" {
+		return nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		log.Printf("decodeCursor: invalid base64: %v", err)
+		return nil
+	}
+	var simple map[string]string
+	if err := json.Unmarshal(decoded, &simple); err != nil {
+		log.Printf("decodeCursor: invalid JSON: %v", err)
+		return nil
+	}
+	result := make(map[string]types.AttributeValue, len(simple))
+	for k, v := range simple {
+		result[k] = &types.AttributeValueMemberS{Value: v}
+	}
+	return result
 }
 
 func (r *DynamoDBRepository) listSharesForUserPaginated(ctx context.Context, userID string, limit int32, exclusiveStartKey map[string]types.AttributeValue) ([]model.Share, *string, error) {
@@ -356,8 +1105,7 @@ func (r *DynamoDBRepository) listSharesForUserPaginated(ctx context.Context, use
 
 	var nextCursor *string
 	if result.LastEvaluatedKey != nil {
-		cursorBytes, _ := json.Marshal(result.LastEvaluatedKey)
-		cursor := base64.StdEncoding.EncodeToString(cursorBytes)
+		cursor := encodeCursor(result.LastEvaluatedKey)
 		nextCursor = &cursor
 	}
 
@@ -484,7 +1232,17 @@ func (r *DynamoDBRepository) GetAttachment(ctx context.Context, meetingID, attac
 }
 
 // CreateShare creates share records (both recipient and meeting lookup)
-func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission string) (*model.Share, error) {
+func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, origin string) (*model.Share, error) {
+	if origin == model.ShareOriginAccount {
+		existing, err := r.GetShare(ctx, sharedToID, meetingID)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil && existing.Origin != model.ShareOriginAccount {
+			return existing, nil
+		}
+	}
+
 	now := time.Now().UTC()
 
 	// Share record for recipient lookup: PK=USER#{sharedToId}, SK=SHARED#{meetingId}
@@ -497,6 +1255,7 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 		SharedToID: sharedToID,
 		Email:      email,
 		Permission: permission,
+		Origin:     origin,
 		CreatedAt:  now,
 		EntityType: "SHARE",
 	}
@@ -516,6 +1275,7 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 		SharedToID: sharedToID,
 		Email:      email,
 		Permission: permission,
+		Origin:     origin,
 		CreatedAt:  now,
 		EntityType: "SHARE",
 	}
@@ -537,6 +1297,299 @@ func (r *DynamoDBRepository) CreateShare(ctx context.Context, meetingID, ownerID
 	}
 
 	return shareForRecipient, nil
+}
+
+// ErrMemberRemoved is returned by CreateShareIfMember when the target user is
+// no longer an account member at write time -- the caller should treat this
+// as a silent skip (matching ShareMeetingToAccount's pre-existing
+// member==nil skip), not an error.
+var ErrMemberRemoved = errors.New("member no longer present")
+
+// isConditionalCheckFailedTransaction reports whether every failed item in a
+// TransactWriteItems cancellation was ConditionalCheckFailed specifically --
+// i.e. the transaction was cancelled purely because a precondition wasn't
+// met, not because of an unrelated transient failure (throttling,
+// TransactionConflict, item size limits, etc.) that happened to hit while
+// OTHER items in the same transaction also failed their conditions.
+// TransactWriteItems cancels every item together, so a single condition
+// miss and a single throttle both surface as one TransactionCanceledException
+// -- inspecting err.Error() or just checking errors.As without walking
+// CancellationReasons can't tell them apart, and treating a transient
+// failure as a benign "precondition not met" skip (as an earlier version of
+// DeleteShareIfAccountOrigin and BackfillShareOrigin did) silently drops
+// real failures that should have been retried or reported.
+func isConditionalCheckFailedTransaction(err error) bool {
+	var tce *types.TransactionCanceledException
+	if !errors.As(err, &tce) || len(tce.CancellationReasons) == 0 {
+		return false
+	}
+	sawConditionFailure := false
+	for _, reason := range tce.CancellationReasons {
+		if reason.Code == nil || *reason.Code == "None" {
+			continue // this item wasn't the one that caused the cancellation
+		}
+		if *reason.Code != "ConditionalCheckFailed" {
+			return false // a non-condition failure (throttling, conflict, etc.) is in the mix
+		}
+		sawConditionFailure = true
+	}
+	return sawConditionFailure
+}
+
+// CreateShareIfMember atomically verifies account membership and creates an
+// account-origin Share in a single DynamoDB transaction, closing the TOCTOU
+// window between a plain GetMember check and a later CreateShare call (the
+// gap where a concurrent RemoveMember could complete after the check but
+// before the write, permanently orphaning the Share -- nothing re-triggers
+// cleanup for an already-fully-removed member). Every Share write here is
+// origin="account".
+//
+// Two independent conditions are enforced by the SAME transaction:
+//  1. ConditionCheck on the AccountMember item (attribute_exists(PK)) --
+//     fails with ErrMemberRemoved if the member was removed.
+//  2. ConditionExpression on each Share Put (attribute_not_exists(PK) OR
+//     (origin = :accountOrigin AND accountId = :accountID)) -- ports
+//     CreateShare's existing clobber-guard (dynamodb.go's plain CreateShare,
+//     added in a prior fix) into the transaction so this path can NEVER
+//     overwrite a pre-existing direct share, NOR a pre-existing account-origin
+//     share belonging to a DIFFERENT account (a meeting re-shared from
+//     account A to account B: without the accountId half of this condition,
+//     a stale/delayed A-origin write landing after B's grant was created
+//     could silently clobber B's row, since both rows satisfy plain
+//     origin==:accountOrigin). Conditioning on PK (not on the `origin`
+//     attribute itself) matters: Origin has `dynamodbav:"origin,omitempty"`,
+//     so a direct share (Origin=="") never writes the origin attribute at
+//     all -- attribute_not_exists(origin) would be true for a direct share
+//     too, wrongly permitting the clobber that attribute_not_exists(PK)
+//     correctly excludes. The caller sees either failure mode (a genuine
+//     direct share, or another account's grant) as an existing share
+//     returned unchanged, matching the plain CreateShare's behavior --
+//     it does not need to distinguish which case blocked the write.
+func (r *DynamoDBRepository) CreateShareIfMember(ctx context.Context, meetingID, ownerID, ownerEmail, accountID, sharedToID, email, permission string) (*model.Share, error) {
+	now := time.Now().UTC()
+
+	shareForRecipient := &model.Share{
+		PK:         model.PrefixUser + sharedToID,
+		SK:         model.PrefixShare + meetingID,
+		MeetingID:  meetingID,
+		OwnerID:    ownerID,
+		OwnerEmail: ownerEmail,
+		SharedToID: sharedToID,
+		Email:      email,
+		Permission: permission,
+		Origin:     model.ShareOriginAccount,
+		AccountID:  accountID,
+		CreatedAt:  now,
+		EntityType: "SHARE",
+	}
+	item1, err := attributevalue.MarshalMap(shareForRecipient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal share: %w", err)
+	}
+
+	shareForMeeting := &model.Share{
+		PK:         model.PrefixMeeting + meetingID,
+		SK:         model.PrefixShareTo + sharedToID,
+		MeetingID:  meetingID,
+		OwnerID:    ownerID,
+		OwnerEmail: ownerEmail,
+		SharedToID: sharedToID,
+		Email:      email,
+		Permission: permission,
+		Origin:     model.ShareOriginAccount,
+		AccountID:  accountID,
+		CreatedAt:  now,
+		EntityType: "SHARE",
+	}
+	item2, err := attributevalue.MarshalMap(shareForMeeting)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal share: %w", err)
+	}
+
+	shareExpr, err := expression.NewBuilder().WithCondition(
+		expression.AttributeNotExists(expression.Name("PK")).Or(
+			expression.Name("origin").Equal(expression.Value(model.ShareOriginAccount)).And(
+				expression.Name("accountId").Equal(expression.Value(accountID)),
+			),
+		),
+	).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build share clobber-guard condition: %w", err)
+	}
+
+	memberExpr, err := expression.NewBuilder().WithCondition(
+		expression.AttributeExists(expression.Name("PK")),
+	).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build member condition: %w", err)
+	}
+
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + accountID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixMember + sharedToID},
+					},
+					ConditionExpression:       memberExpr.Condition(),
+					ExpressionAttributeNames:  memberExpr.Names(),
+					ExpressionAttributeValues: memberExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:                 aws.String(r.tableName),
+					Item:                      item1,
+					ConditionExpression:       shareExpr.Condition(),
+					ExpressionAttributeNames:  shareExpr.Names(),
+					ExpressionAttributeValues: shareExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:                 aws.String(r.tableName),
+					Item:                      item2,
+					ConditionExpression:       shareExpr.Condition(),
+					ExpressionAttributeNames:  shareExpr.Names(),
+					ExpressionAttributeValues: shareExpr.Values(),
+				},
+			},
+		},
+	})
+	if err != nil {
+		// Gate the item-by-item classification below on
+		// isConditionalCheckFailedTransaction (same helper
+		// BackfillShareOrigin/DeleteShareIfAccountOrigin use) rather than a
+		// bare errors.As + non-empty-reasons check: that bare check alone
+		// can't tell "every failed item failed its condition" apart from "a
+		// transient error (throttling, TransactionConflict) landed on one
+		// item while a condition also failed on another" -- the latter
+		// would otherwise get silently classified as ErrMemberRemoved or a
+		// clobber-guard hit instead of propagating as a real error.
+		if isConditionalCheckFailedTransaction(err) {
+			var tce *types.TransactionCanceledException
+			errors.As(err, &tce)
+			// Item 0 is the member ConditionCheck; items 1-2 are the Share Puts.
+			if code := tce.CancellationReasons[0].Code; code != nil && *code == "ConditionalCheckFailed" {
+				return nil, ErrMemberRemoved
+			}
+			for _, reason := range tce.CancellationReasons[1:] {
+				if reason.Code != nil && *reason.Code == "ConditionalCheckFailed" {
+					// A pre-existing direct share blocked the write -- same
+					// outcome as the plain CreateShare's clobber-guard:
+					// return the existing share, not an error.
+					existing, getErr := r.GetShare(ctx, sharedToID, meetingID)
+					if getErr != nil {
+						return nil, getErr
+					}
+					return existing, nil
+				}
+			}
+		}
+		return nil, fmt.Errorf("failed to create share if member: %w", err)
+	}
+
+	return shareForRecipient, nil
+}
+
+// BackfillShareOrigin conditionally tags BOTH copies of a legacy Share
+// (recipient-lookup PK=USER#{sharedToID}/SK=SHARED#{meetingID}, and
+// meeting-lookup PK=MEETING#{meetingID}/SK=SHARE_TO#{sharedToID} --
+// CreateShare/CreateShareIfMember always write both) as account-origin AND
+// stamps accountId, in a single TransactWriteItems call. Used only by the
+// one-time backfill CLI (cmd/backfill-share-origin) for Share records
+// written by ShareMeetingToAccount before the Origin/AccountID fields
+// existed. Stamping accountId here (not just origin) matters: without it, a
+// backfilled row would have origin=="account" but accountId=="", which
+// DeleteShareIfAccountOrigin's accountId-scoped condition would then refuse
+// to ever delete -- reintroducing the exact un-revocable state this backfill
+// exists to fix. Each item's ConditionCheck requires origin to still be
+// absent/empty at write time, so a concurrent RemoveMember cleanup (which
+// deletes the item) can't race this into a resurrected/half-updated state --
+// and because both updates are in one transaction, either both rows end up
+// tagged or neither does: there is no partially-tagged pair for a re-run to
+// miss (a re-run's CLI-level candidate detection, GetShare on the recipient
+// row, would otherwise see Origin=="account" already and skip
+// re-attempting a still-stale meeting-lookup row).
+//
+// A third ConditionCheck item verifies the meeting row still has
+// sharedToAccount=true and accountId==accountID at commit time -- the CLI's
+// own eligibility check (GetMeetingByID) happens BEFORE this transaction,
+// non-atomically, so without this the meeting could be un-shared or
+// re-shared to a different account in that gap, and this call would tag the
+// share for an accountID that the meeting no longer has anything to do
+// with (sharebackfill.Classify would have called it VerdictOrphaned had the
+// CLI re-checked at this instant). This closes that race at the actual
+// write, not just at the read the CLI already does.
+//
+// On TransactionCanceledException this returns ErrConditionFailed and the
+// caller treats that meeting/member pair as a no-op skip, not an error.
+func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, accountID, meetingOwnerUserID, sharedToID, meetingID string) error {
+	condition := expression.AttributeExists(expression.Name("PK")).And(
+		expression.Or(
+			expression.AttributeNotExists(expression.Name("origin")),
+			expression.Name("origin").Equal(expression.Value("")),
+		),
+	)
+	update := expression.Set(expression.Name("origin"), expression.Value(model.ShareOriginAccount)).
+		Set(expression.Name("accountId"), expression.Value(accountID))
+	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
+	if err != nil {
+		return fmt.Errorf("build backfill origin condition: %w", err)
+	}
+	keys := []map[string]types.AttributeValue{
+		{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixShare + meetingID},
+		},
+		{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixShareTo + sharedToID},
+		},
+	}
+	items := make([]types.TransactWriteItem, 0, len(keys)+1)
+	for _, key := range keys {
+		items = append(items, types.TransactWriteItem{
+			Update: &types.Update{
+				TableName:                 aws.String(r.tableName),
+				Key:                       key,
+				ConditionExpression:       expr.Condition(),
+				UpdateExpression:          expr.Update(),
+				ExpressionAttributeNames:  expr.Names(),
+				ExpressionAttributeValues: expr.Values(),
+			},
+		})
+	}
+	meetingExpr, err := expression.NewBuilder().WithCondition(
+		expression.Name("sharedToAccount").Equal(expression.Value(true)).And(
+			expression.Name("accountId").Equal(expression.Value(accountID)),
+		),
+	).Build()
+	if err != nil {
+		return fmt.Errorf("build backfill meeting-state condition: %w", err)
+	}
+	items = append(items, types.TransactWriteItem{
+		ConditionCheck: &types.ConditionCheck{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + meetingOwnerUserID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+			},
+			ConditionExpression:       meetingExpr.Condition(),
+			ExpressionAttributeNames:  meetingExpr.Names(),
+			ExpressionAttributeValues: meetingExpr.Values(),
+		},
+	})
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items})
+	if err != nil {
+		if isConditionalCheckFailedTransaction(err) {
+			return fmt.Errorf("%w: share %s/%s not eligible (missing, origin already set, or meeting no longer shared to this account)", ErrConditionFailed, sharedToID, meetingID)
+		}
+		return fmt.Errorf("backfill share origin: %w", err)
+	}
+	return nil
 }
 
 // GetShare retrieves a share record
@@ -564,7 +1617,10 @@ func (r *DynamoDBRepository) GetShare(ctx context.Context, sharedToID, meetingID
 	return &share, nil
 }
 
-// DeleteShare deletes both share records
+// DeleteShare deletes both share records unconditionally. Used by the
+// owner-initiated RevokeShare path, where the caller has already decided
+// (with fresh authorization) to revoke whatever share currently exists --
+// direct or account-origin.
 func (r *DynamoDBRepository) DeleteShare(ctx context.Context, sharedToID, meetingID string) error {
 	// Delete both records atomically
 	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
@@ -591,6 +1647,69 @@ func (r *DynamoDBRepository) DeleteShare(ctx context.Context, sharedToID, meetin
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete share: %w", err)
+	}
+	return nil
+}
+
+// DeleteShareIfAccountOrigin deletes both share records ONLY if the
+// recipient-lookup row still has origin=="account" AND accountId==accountID
+// at delete time, in a single transaction. Used by RemoveMember's cleanup
+// loop, which decides what to delete from an earlier, separate GetShare +
+// GetMeetingByID read -- the accountID condition (not just origin) is what
+// actually closes the cross-account race: without it, a meeting re-shared
+// from THIS account to a DIFFERENT account in the gap between that read and
+// this delete would have the new account's fresh CreateShareIfMember grant
+// silently deleted by the old account's RemoveMember, because both rows
+// carry origin=="account" and the cleanup loop's meeting.AccountID re-check
+// is a separate, non-atomic read that can't itself prevent the race -- only
+// a condition on the row being deleted can. Also protects an owner's fresh
+// direct share the same way the origin-only condition always did (a direct
+// share has accountId=="" too, so it fails this condition either way). On
+// ConditionalCheckFailedException (origin/accountId changed, or the row no
+// longer exists) this returns ErrConditionFailed and the caller treats it as
+// a no-op skip, matching BackfillShareOrigin's convention for the same kind
+// of condition failure.
+func (r *DynamoDBRepository) DeleteShareIfAccountOrigin(ctx context.Context, accountID, sharedToID, meetingID string) error {
+	condition := expression.Name("origin").Equal(expression.Value(model.ShareOriginAccount)).And(
+		expression.Name("accountId").Equal(expression.Value(accountID)),
+	)
+	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+	if err != nil {
+		return fmt.Errorf("build delete-if-account-origin condition: %w", err)
+	}
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixShare + meetingID},
+					},
+					ConditionExpression:       expr.Condition(),
+					ExpressionAttributeNames:  expr.Names(),
+					ExpressionAttributeValues: expr.Values(),
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixShareTo + sharedToID},
+					},
+					ConditionExpression:       expr.Condition(),
+					ExpressionAttributeNames:  expr.Names(),
+					ExpressionAttributeValues: expr.Values(),
+				},
+			},
+		},
+	})
+	if err != nil {
+		if isConditionalCheckFailedTransaction(err) {
+			return fmt.Errorf("%w: share %s/%s no longer account-origin", ErrConditionFailed, sharedToID, meetingID)
+		}
+		return fmt.Errorf("failed to delete share if account origin: %w", err)
 	}
 	return nil
 }
@@ -622,8 +1741,31 @@ func (r *DynamoDBRepository) ListSharesForUser(ctx context.Context, userID strin
 	return shares, nil
 }
 
-// ListSharesForMeeting lists all shares for a meeting
+// ListSharesForMeeting lists all shares for a meeting. Drains every page
+// (queryAllPages) rather than returning only DynamoDB's first ~1MB page --
+// a caller deciding whether ANY share exists (e.g. service.AnyNonOwnerShare,
+// gating cross-meeting prompt injection) must see the complete set, not a
+// possibly-truncated prefix, or a share past the first page silently
+// defeats the check. Eventually-consistent (DynamoDB's table default) --
+// fine for the common UI-display callers, but the exfiltration gate itself
+// must NOT use this: see ListSharesForMeetingConsistent.
 func (r *DynamoDBRepository) ListSharesForMeeting(ctx context.Context, meetingID string) ([]model.Share, error) {
+	return r.listSharesForMeeting(ctx, meetingID, false)
+}
+
+// ListSharesForMeetingConsistent is ListSharesForMeeting with
+// ConsistentRead:true -- use this, not the eventually-consistent version,
+// anywhere the result gates whether untrusted content may be folded into a
+// prompt (service.HasNonOwnerCollaborator). Without strong consistency, a
+// share or account-membership grant made an instant before summarize runs
+// could be invisible to this read (TOCTOU), letting a just-added
+// collaborator's injected liveSummary smuggle a linked meeting's content
+// they have no read access to into a summary they DO get to read.
+func (r *DynamoDBRepository) ListSharesForMeetingConsistent(ctx context.Context, meetingID string) ([]model.Share, error) {
+	return r.listSharesForMeeting(ctx, meetingID, true)
+}
+
+func (r *DynamoDBRepository) listSharesForMeeting(ctx context.Context, meetingID string, consistent bool) ([]model.Share, error) {
 	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixMeeting + meetingID)).
 		And(expression.Key("SK").BeginsWith(model.PrefixShareTo))
 	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
@@ -631,18 +1773,19 @@ func (r *DynamoDBRepository) ListSharesForMeeting(ctx context.Context, meetingID
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
 
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ConsistentRead:            aws.Bool(consistent),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to query shares: %w", err)
 	}
 
 	var shares []model.Share
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &shares); err != nil {
+	if err := attributevalue.UnmarshalListOfMaps(items, &shares); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal shares: %w", err)
 	}
 
@@ -841,6 +1984,119 @@ func (r *DynamoDBRepository) DeleteIntegration(ctx context.Context, userID, serv
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete integration: %w", err)
+	}
+	return nil
+}
+
+// ChatSession represents a chat session metadata item in DynamoDB
+type ChatSession struct {
+	SessionID     string `dynamodbav:"sessionId" json:"sessionId"`
+	Title         string `dynamodbav:"title" json:"title"`
+	CreatedAt     string `dynamodbav:"createdAt" json:"createdAt"`
+	LastMessageAt string `dynamodbav:"lastMessageAt" json:"lastMessageAt"`
+	MessageCount  int    `dynamodbav:"messageCount" json:"messageCount"`
+}
+
+// ListChatSessions returns all chat sessions for a user, newest first
+func (r *DynamoDBRepository) ListChatSessions(ctx context.Context, userID string) ([]ChatSession, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixUser + userID)).
+		And(expression.Key("SK").BeginsWith("CHAT_SESSION#"))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build expression: %w", err)
+	}
+
+	queryResult, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(false),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to query chat sessions: %w", err)
+	}
+
+	var sessions []ChatSession
+	if err := attributevalue.UnmarshalListOfMaps(queryResult.Items, &sessions); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal chat sessions: %w", err)
+	}
+
+	return sessions, nil
+}
+
+// DeleteChatSession deletes both session metadata and session messages
+func (r *DynamoDBRepository) DeleteChatSession(ctx context.Context, userID, sessionID string) error {
+	// Delete session metadata: PK=USER#{userID}, SK=CHAT_SESSION#{sessionID}
+	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: "CHAT_SESSION#" + sessionID},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete chat session metadata: %w", err)
+	}
+
+	// Delete session messages: PK=SESSION#{userID}#{sessionID}, SK=MESSAGES
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "SESSION#" + userID + "#" + sessionID},
+			"SK": &types.AttributeValueMemberS{Value: "MESSAGES"},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete chat session messages: %w", err)
+	}
+
+	return nil
+}
+
+// GetAllowedDomains retrieves the allowed email domains configuration
+func (r *DynamoDBRepository) GetAllowedDomains(ctx context.Context) ([]string, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+			"SK": &types.AttributeValueMemberS{Value: model.ConfigSKAllowedDomains},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed domains: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+
+	var config model.AllowedDomainsConfig
+	if err := attributevalue.UnmarshalMap(result.Item, &config); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal allowed domains: %w", err)
+	}
+	return config.Domains, nil
+}
+
+// SaveAllowedDomains saves the allowed email domains configuration
+func (r *DynamoDBRepository) SaveAllowedDomains(ctx context.Context, domains []string, updatedBy string) error {
+	config := &model.AllowedDomainsConfig{
+		PK:         model.PrefixConfig,
+		SK:         model.ConfigSKAllowedDomains,
+		Domains:    domains,
+		UpdatedAt:  time.Now().UTC(),
+		UpdatedBy:  updatedBy,
+		EntityType: "CONFIG",
+	}
+	item, err := attributevalue.MarshalMap(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal allowed domains: %w", err)
+	}
+	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(r.tableName),
+		Item:      item,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to save allowed domains: %w", err)
 	}
 	return nil
 }

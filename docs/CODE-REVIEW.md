@@ -1,4 +1,4 @@
-# Ttobak - Code Review Report
+# TTOBAK - Code Review Report
 
 > 2026-03-05 전체 코드 리뷰 결과
 

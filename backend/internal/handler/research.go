@@ -1,0 +1,318 @@
+package handler
+
+import (
+	"encoding/json"
+	"errors"
+	"log"
+	"net/http"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/ttobak/backend/internal/middleware"
+	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
+	"github.com/ttobak/backend/internal/service"
+)
+
+// ResearchHandler handles research task HTTP requests.
+type ResearchHandler struct {
+	researchService *service.ResearchService
+	notionService   *service.NotionService
+	repo            *repository.DynamoDBRepository
+	crypto          *service.CryptoService
+}
+
+// NewResearchHandler creates a new ResearchHandler.
+func NewResearchHandler(researchService *service.ResearchService, notionService *service.NotionService, repo *repository.DynamoDBRepository, crypto *service.CryptoService) *ResearchHandler {
+	return &ResearchHandler{
+		researchService: researchService,
+		notionService:   notionService,
+		repo:            repo,
+		crypto:          crypto,
+	}
+}
+
+// CreateResearch handles POST /api/research
+func (h *ResearchHandler) CreateResearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+
+	var req model.CreateResearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	if strings.TrimSpace(req.Topic) == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "topic is required")
+		return
+	}
+
+	research, err := h.researchService.CreateResearch(ctx, userID, &req)
+	if err != nil {
+		// Mode validation errors surface as non-sentinel errors
+		if strings.Contains(err.Error(), "invalid mode") {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "mode must be quick, standard, or deep")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, research)
+}
+
+// ListResearch handles GET /api/research
+func (h *ResearchHandler) ListResearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	includeTrashed := r.URL.Query().Get("trashed") == "true"
+
+	result, err := h.researchService.ListResearch(ctx, userID, includeTrashed)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// GetResearchDetail handles GET /api/research/{researchId}
+func (h *ResearchHandler) GetResearchDetail(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	researchID := chi.URLParam(r, "researchId")
+
+	if strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
+		return
+	}
+
+	result, err := h.researchService.GetResearchDetail(ctx, researchID, userID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// LinkAccount handles POST /api/research/{researchId}/accounts
+func (h *ResearchHandler) LinkAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	researchID := chi.URLParam(r, "researchId")
+
+	if researchID == "" || strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
+		return
+	}
+
+	var req model.LinkAccountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AccountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "accountId is required")
+		return
+	}
+
+	accountIDs, err := h.researchService.LinkAccount(ctx, userID, researchID, req.AccountID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		log.Printf("failed to link research %s to account %s: %v", researchID, req.AccountID, err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"accountIds": accountIDs})
+}
+
+// UnlinkAccount handles DELETE /api/research/{researchId}/accounts/{accountId}
+func (h *ResearchHandler) UnlinkAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	researchID := chi.URLParam(r, "researchId")
+	accountID := chi.URLParam(r, "accountId")
+
+	if researchID == "" || strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
+		return
+	}
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "accountId is required")
+		return
+	}
+
+	_, err := h.researchService.UnlinkAccount(ctx, userID, researchID, accountID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		log.Printf("failed to unlink research %s from account %s: %v", researchID, accountID, err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListAccountResearch handles GET /api/accounts/{accountId}/research
+func (h *ResearchHandler) ListAccountResearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid accountId")
+		return
+	}
+
+	items, err := h.researchService.ListAccountResearch(ctx, userID, accountID)
+	if err != nil {
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		log.Printf("failed to list research for account %s: %v", accountID, err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{"research": items})
+}
+
+// DeleteResearch handles DELETE /api/research/{researchId} — soft delete (moves to trash)
+func (h *ResearchHandler) DeleteResearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	researchID := chi.URLParam(r, "researchId")
+
+	if strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
+		return
+	}
+
+	err := h.researchService.TrashResearch(ctx, researchID, userID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// RestoreResearch handles POST /api/research/{researchId}/restore
+func (h *ResearchHandler) RestoreResearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	researchID := chi.URLParam(r, "researchId")
+
+	if strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
+		return
+	}
+
+	err := h.researchService.RestoreResearch(ctx, researchID, userID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ExportResearch handles POST /api/research/{researchId}/export
+func (h *ResearchHandler) ExportResearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	researchID := chi.URLParam(r, "researchId")
+
+	if strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
+		return
+	}
+
+	detail, err := h.researchService.GetResearchDetail(ctx, researchID, userID)
+	if err != nil {
+		if errors.Is(err, service.ErrNotFound) {
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+			return
+		}
+		if errors.Is(err, service.ErrForbidden) {
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		return
+	}
+
+	if detail.Content == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Research has no content")
+		return
+	}
+
+	integration, err := h.repo.GetIntegration(ctx, userID, "notion")
+	if err != nil || integration == nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion not configured")
+		return
+	}
+	if integration.NotionParentID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Notion integration needs a parent page. Re-connect Notion in Settings with a shared page URL.")
+		return
+	}
+
+	title := detail.Topic
+	if len(title) > 80 {
+		title = title[:80]
+	}
+
+	apiKey, err := decryptStoredAPIKey(ctx, h.crypto, integration.APIKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to decrypt Notion API key")
+		return
+	}
+	_, notionURL, err := h.notionService.CreatePage(ctx, apiKey, integration.NotionParentType, integration.NotionParentID, integration.NotionTitleProperty, title, detail.Content)
+	if err != nil {
+		log.Printf("ExportResearch: notion CreatePage failed: %v", err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Notion export failed. Check your Notion connection in Settings and try again.")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"notionUrl": notionURL,
+	})
+}

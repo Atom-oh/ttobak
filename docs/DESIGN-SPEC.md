@@ -1,4 +1,4 @@
-# Ttobak - Design Specification
+# TTOBAK - Design Specification
 
 > design_sample/ HTML 파일에서 추출한 정확한 디자인 시스템
 
@@ -6,20 +6,45 @@
 
 ### 1.1 Colors
 
+단일 브랜드(indigo/violet)를 라이트/다크에 공유한다 — neon cyan/purple, glow, glass blur는 폐기(`frontend/src/app/globals.css`). `primary`/`accent`/`secondary`/`surface-*`/`text-*`/`border-subtle`/`error`는 `:root`에서 라이트 값을 정의하고 `.dark`가 같은 CSS 변수명을 override 하므로, `text-primary` 같은 유틸리티는 `dark:` 접두어 없이도 다크모드에서 자동으로 violet 값을 픽업한다(Tailwind v4 `@theme inline`의 lazy `var()` 해석). `background-light`/`background-dark`만 예외로 별도 토큰 두 개를 두고 `dark:bg-background-dark`처럼 명시적 `dark:` 유틸리티로 전환한다.
+
 ```css
-/* Primary */
+/* :root (라이트) */
 --primary: #3211d4;
---primary-10: rgba(50, 17, 212, 0.1);   /* bg-primary/10 */
---primary-20: rgba(50, 17, 212, 0.2);   /* bg-primary/20 */
---primary-40: rgba(50, 17, 212, 0.4);   /* bg-primary/40 */
+--primary-hover: #2a0eb3;
+--accent: #7c3aed;
+--secondary: #a78bfa;
+--background-light: #f6f6f8;
+--background-dark: #0b0b0f;
+--surface-lowest: #ffffff;
+--surface: #f8fafc;
+--surface-container: #f1f5f9;
+--surface-high: #e2e8f0;
+--text-main: #0f172a;
+--text-muted: #94a3b8;
+--text-secondary: #64748b;
+--border-subtle: #e2e8f0;
+--error: #dc2626;
 
-/* Background */
---bg-light: #f6f6f8;
---bg-dark: #131022;
+/* .dark — 같은 변수명을 override (primary · accent · secondary · surface-* · text-* · border-subtle · error) */
+--primary: #8b85f7;
+--primary-hover: #a5a0f9;
+--accent: #a78bfa;
+--secondary: #c4b5fd;
+--surface-lowest: #101014;
+--surface: #131318;
+--surface-container: #1c1c22;
+--surface-high: #2a2a32;
+--text-main: #e7e7ec;
+--text-muted: #8a8f98;
+--text-secondary: #b3b8c2;
+--border-subtle: rgba(255, 255, 255, 0.08);
+--error: #f87171;
+```
 
-/* Accent (meeting-note에서 사용) */
---accent: #3211d4;
+레거시 클래스(`glass-panel`, `glow-*`, `neon-text-*`, `active-pill`)는 삭제 대신 `box-shadow:none`/`text-shadow:none` 등 no-op으로 유지 — 기존 사용처를 깨지 않으면서 시각 효과만 제거.
 
+```css
 /* Semantic Colors */
 --tag-internal: bg-primary/10 text-primary
 --tag-design: bg-amber-100 text-amber-700
@@ -258,6 +283,38 @@ Layout:
         - Speaker entries with avatar initials + timestamp
         - Export button
 ```
+
+### 2.6a Post-Recording Banner & System Audio Mode (current implementation, ADR-024)
+
+`components/record/PostRecordingBanner.tsx` — fixed top toast shown while
+`usePostRecording`'s `step` is non-null (`creating` → `notes` → `saving` →
+`uploading` → `redirecting`, or `error`; `notes` pauses the flow for the
+notes-input dialog before the save/upload resumes).
+
+```
+Uploading step:
+  spinner + "업로드 중... N% (X MB / Y MB)" when `uploadProgress` is set
+  (both browser blob uploads and Tauri native file uploads report this now)
+  else: plain "Uploading audio..." label
+  thin progress bar (bg-primary, width = percentage) underneath the label
+
+Error step:
+  red banner, error icon, message truncated to one line
+  [Try Again] — re-runs the upload from the retained pending payload
+  [Home] — clears state and navigates away (does NOT retry)
+```
+
+Tauri desktop app, System Audio mode (`audioSource === 'system'`,
+`isTauri()`): the pre-recording setup notice and the during-recording
+banner (purple, `speaker` icon) both state that live captions are
+best-effort in this mode (fed by Rust-downsampled PCM over
+`native-pcm-chunk` into the same Transcribe Streaming pipeline mic/tab
+modes use — no Web Speech fallback exists here) and that transcription
+happens automatically after the meeting ends regardless. `isNativeRecording`
+(`app/record/page.tsx`) drives the during-recording banner/title/nav-lock
+independent of `session.isRecording`, since it needs to be true from the
+moment native capture starts — before the async STT session start
+resolves, and even if Transcribe Streaming never successfully connects.
 
 ### 2.7 Meeting Detail (Mobile)
 
@@ -788,6 +845,7 @@ Knowledge Base 파일 업로드 및 목록 관리 컴포넌트.
 | 비교 | compare | 이미지 비교 |
 | 업로드 | upload_file | 파일 업로드 |
 | 팀 | group | 사이드바 |
+| 프로젝트 (SFDC Oppty) | work | 사이드바 (모바일 하단 네비는 4-5 items 제약으로 제외 — §2.1) |
 | 인사이트 | analytics / insights | 사이드바 |
 | 번역 | translate | 실시간 번역 |
 | Q&A | question_answer | 미팅 Q&A |

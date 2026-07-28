@@ -55,10 +55,23 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
     return translations.filter((t) => t.timestamp === timestamp);
   };
 
+  const speakerColors = ['bg-indigo-500', 'bg-teal-500', 'bg-orange-500', 'bg-pink-500', 'bg-emerald-500'];
+  const speakerTextColors = ['text-indigo-500 dark:text-indigo-400', 'text-teal-600 dark:text-teal-400', 'text-orange-600 dark:text-orange-400', 'text-pink-600 dark:text-pink-400', 'text-emerald-600 dark:text-emerald-400'];
+
+  // Assign stable speaker color by index (simple hash based on entry position in final transcripts)
+  const getSpeakerColor = (index: number) => speakerColors[index % speakerColors.length];
+  const getSpeakerTextColor = (index: number) => speakerTextColors[index % speakerTextColors.length];
+  const getSpeakerInitial = (index: number) => String.fromCharCode(65 + (index % 26)); // A, B, C...
+
+  // Extract hashtags from all transcript text for tag pills
+  const allText = transcripts.map((t) => t.text).join(' ');
+  const hashtagSet = new Set(allText.match(/#\w+/g) || []);
+  const hashtags = Array.from(hashtagSet).slice(0, 6);
+
   if (transcripts.length === 0) {
     return (
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4">
-        <div className="flex flex-col items-center justify-center py-8 text-slate-400">
+      <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-4">
+        <div className="flex flex-col items-center justify-center py-8 text-slate-400 dark:text-text-muted">
           <span className="material-symbols-outlined text-4xl mb-2">mic</span>
           <p className="text-sm">Waiting for speech...</p>
         </div>
@@ -67,49 +80,68 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-4 max-h-96 overflow-y-auto"
-    >
-      <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-100 dark:border-slate-800">
-        <span className="material-symbols-outlined text-primary">subtitles</span>
-        <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Live Transcript</h3>
+    <div className="flex flex-col bg-white dark:bg-surface-lowest glass-panel rounded-xl max-h-96 lg:max-h-none lg:h-full">
+      {/* Header */}
+      <div className="flex items-center gap-2 p-4 pb-3 border-b border-slate-100 dark:border-white/5">
+        <span className="material-symbols-outlined text-primary">graphic_eq</span>
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-white dark:font-headline">Live Transcript</h3>
         <div className="ml-auto flex items-center gap-3">
           {wordCount !== undefined && wordCount > 0 && (
-            <span className="text-xs font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full">
+            <span className="text-xs font-medium text-slate-500 dark:text-text-muted bg-slate-100 dark:bg-white/5 px-2 py-0.5 rounded-full">
               {wordCount.toLocaleString()} words
             </span>
           )}
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs text-slate-500">Live</span>
+            <span className="text-xs text-slate-500 dark:text-text-muted">Live</span>
           </div>
         </div>
       </div>
 
-      <div className="space-y-1">
+      {/* Transcript entries */}
+      <div ref={containerRef} className="flex-1 overflow-y-auto p-4 space-y-1">
         {transcripts.map((entry, index) => {
           const relatedTranslations = getTranslationForTimestamp(entry.timestamp);
           const isLastInterim = !entry.isFinal && index === transcripts.length - 1;
+          const finalIndex = transcripts.slice(0, index + 1).filter(e => e.isFinal).length;
 
           return (
             <div
               key={index}
               className={`group ${
                 entry.isFinal
-                  ? 'pb-2 mb-1 border-b border-slate-100 dark:border-slate-800/50 last:border-b-0'
+                  ? 'pb-2 mb-1 border-b border-slate-100 dark:border-white/5 last:border-b-0'
                   : ''
-              }`}
+              } ${isLastInterim ? 'dark:border-l-2 dark:border-l-primary/50 dark:pl-2' : ''}`}
             >
               <div className="flex items-start gap-3">
-                <span className="text-[10px] text-slate-400 font-mono mt-0.5 shrink-0 tabular-nums">
-                  {formatTime(entry.timestamp)}
-                </span>
-                <div className="flex-1">
+                {/* Speaker avatar */}
+                {entry.isFinal ? (
+                  <div className={`w-7 h-7 rounded-full ${getSpeakerColor(finalIndex)} flex items-center justify-center text-white text-[10px] font-bold shrink-0 mt-0.5`}>
+                    {getSpeakerInitial(finalIndex)}
+                  </div>
+                ) : (
+                  <div className="w-7 h-7 shrink-0" />
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    {entry.isFinal ? (
+                      <span className={`text-[10px] font-bold uppercase tracking-wider ${getSpeakerTextColor(finalIndex)}`}>
+                        Speaker {getSpeakerInitial(finalIndex)}
+                      </span>
+                    ) : isLastInterim ? (
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-500">
+                        Speaking Now
+                      </span>
+                    ) : null}
+                    <span className="text-[10px] text-slate-400 dark:text-text-muted font-mono tabular-nums">
+                      {formatTime(entry.timestamp)}
+                    </span>
+                  </div>
                   <p
                     className={`text-sm leading-relaxed ${
                       entry.isFinal
-                        ? 'text-slate-900 dark:text-slate-100'
+                        ? 'text-slate-900 dark:text-gray-100'
                         : 'text-slate-400 dark:text-slate-500 italic'
                     }`}
                   >
@@ -141,6 +173,27 @@ export function LiveTranscript({ transcripts, translations = [], wordCount }: Li
             </div>
           );
         })}
+      </div>
+
+      {/* Hashtag pills */}
+      {hashtags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 px-4 py-3 border-t border-slate-100 dark:border-white/5">
+          {hashtags.map((tag) => (
+            <span
+              key={tag}
+              className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary/80 bg-primary/5 border border-primary/15 rounded-full"
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Export button — desktop only */}
+      <div className="hidden lg:block p-4 border-t border-slate-100 dark:border-white/5">
+        <button className="w-full py-2 text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-text-muted hover:text-primary transition-colors">
+          Export Transcript
+        </button>
       </div>
     </div>
   );

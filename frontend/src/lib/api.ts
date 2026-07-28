@@ -1,6 +1,8 @@
 'use client';
 
 import { getIdToken, refreshSession } from './auth';
+import { triggerAuthFailure } from '@/components/auth/AuthProvider';
+import type { CrawlerSourceResponse, CrawledDocument, CrawlHistory, Research, ResearchDetail, DictionaryTerm, ChatMessage, Account, AccountSummary, AccountMember, AccountMeetingRef, AccountInsight, AccountDocument, PutDocumentRequest, AccountResearchRef, Project, ProjectSummary, ProjectMember, ProjectMeetingRef, ProjectResearchRef, ProjectInsight, ProjectBrief } from '@/types/meeting';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -18,17 +20,23 @@ function isTokenExpired(token: string): boolean {
   }
 }
 
-function redirectToLogin(): void {
-  if (typeof window !== 'undefined' && window.location.pathname !== '/') {
-    window.location.href = '/';
-  }
+// No hard redirect — let callers handle auth errors gracefully
+// (hard redirect during recording would lose in-progress work)
+
+// Mutex for token refresh — prevents concurrent refreshSession() race conditions
+let refreshPromise: Promise<string | null> | null = null;
+
+function refreshTokenOnce(): Promise<string | null> {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = refreshSession().finally(() => { refreshPromise = null; });
+  return refreshPromise;
 }
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   let token = getIdToken();
 
   if (!token || isTokenExpired(token)) {
-    token = await refreshSession();
+    token = await refreshTokenOnce();
   }
 
   if (!token) {
@@ -57,20 +65,19 @@ export async function apiFetch<T>(
 
   let response = await fetch(url, { ...rest, headers: mergedHeaders });
 
-  // On 401, refresh token once and retry
+  // On 401, refresh token once and retry (mutex prevents concurrent refresh races)
   if (response.status === 401 && !skipAuth) {
-    const freshToken = await refreshSession();
+    const freshToken = await refreshTokenOnce();
     if (!freshToken) {
-      redirectToLogin();
+      triggerAuthFailure();
       throw new Error('Authentication required');
     }
     response = await fetch(url, {
       ...rest,
       headers: { ...mergedHeaders, Authorization: `Bearer ${freshToken}` },
     });
-    // If still 401 after retry, redirect to login
     if (response.status === 401) {
-      redirectToLogin();
+      triggerAuthFailure();
       throw new Error('Authentication required');
     }
   }
@@ -136,11 +143,14 @@ export const meetingsApi = {
 
   get: (id: string) => api.get<import('@/types/meeting').Meeting>(`/api/meetings/${id}`),
 
-  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic' }) =>
+  create: (data: { title: string; date?: string; participants?: string[]; sttProvider?: 'transcribe' | 'nova-sonic'; status?: string }) =>
     api.post<import('@/types/meeting').Meeting>('/api/meetings', data),
 
-  update: (id: string, data: { title?: string; content?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }) =>
-    api.put<{ meetingId: string; updatedAt: string }>(`/api/meetings/${id}`, data),
+  recover: (meetingId: string) =>
+    api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/recover`, {}),
+
+  update: (id: string, data: { title?: string; content?: string; notes?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }, options?: { signal?: AbortSignal }) =>
+    api.put<{ meetingId: string; updatedAt: string }>(`/api/meetings/${id}`, data, options),
 
   delete: (id: string) => api.delete(`/api/meetings/${id}`),
 
@@ -152,14 +162,31 @@ export const meetingsApi = {
 
   selectTranscript: (id: string, selected: 'A' | 'B') =>
     api.put(`/api/meetings/${id}/transcript`, { selected }),
+
+  updateSpeakers: (id: string, speakerMap: Record<string, string>) =>
+    api.put<{ meetingId: string; updatedAt: string }>(`/api/meetings/${id}/speakers`, { speakerMap }),
+
+  audioUrl: (id: string) =>
+    api.get<{ audioUrl?: string; audioUrls?: string[] }>(`/api/meetings/${id}/audio`),
+
+  /**
+   * Per ADR-014 Phase 6: link this meeting to one or more chronologically prior meetings.
+   * The summarize Lambda will prepend the linked meetings' summaries to the prompt,
+   * giving the LLM cross-meeting context for follow-up discussions.
+   */
+  link: (id: string, linkedMeetingIds: string[]) =>
+    api.post<{ meetingId: string; linkedMeetingIds: string[]; updatedAt: string }>(
+      `/api/meetings/${id}/link`,
+      { linkedMeetingIds },
+    ),
 };
 
 // Presigned URL for uploads
 export const uploadsApi = {
-  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image' }) =>
+  getPresignedUrl: (data: { fileName: string; fileType: string; category: 'audio' | 'image' | 'file' | 'doc'; meetingId?: string; partIndex?: number; totalParts?: number }) =>
     api.post<{ uploadUrl: string; key: string; expiresIn: number }>('/api/upload/presigned', data),
 
-  notifyComplete: (data: { meetingId: string; key: string; category: 'audio' | 'image' }) =>
+  notifyComplete: (data: { meetingId: string; key: string; category: 'audio' | 'image' | 'file'; fileName?: string; fileSize?: number; mimeType?: string; partIndex?: number; totalParts?: number }) =>
     api.post<{ status: string }>('/api/upload/complete', data),
 };
 
@@ -180,6 +207,9 @@ export const kbApi = {
     api.get<{ files: import('@/types/meeting').KBFile[] }>('/api/kb/files'),
 
   deleteFile: (fileId: string) => api.delete(`/api/kb/files/${fileId}`),
+
+  copyAttachment: (sourceKey: string) =>
+    api.post<{ status: string; ingestion: string }>('/api/kb/copy-attachment', { sourceKey }),
 };
 
 // Q&A API
@@ -204,10 +234,10 @@ export const qaApi = {
       { question, sessionId }
     ),
 
-  detectQuestions: (transcript: string, previousQuestions?: string[]) =>
+  detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string) =>
     api.post<{ questions: string[] }>(
       '/api/qa/detect-questions',
-      { transcript, previousQuestions }
+      { transcript, previousQuestions, summary }
     ),
 };
 
@@ -223,6 +253,12 @@ export const exportApi = {
     api.get<{ filename: string; content: string }>(
       `/api/meetings/${meetingId}/export/obsidian`
     ),
+
+  researchToNotion: (researchId: string) =>
+    api.post<import('@/types/meeting').ExportResponse>(
+      `/api/research/${encodeURIComponent(researchId)}/export`,
+      { format: 'notion' }
+    ),
 };
 
 // Settings API
@@ -230,11 +266,22 @@ export const settingsApi = {
   getIntegrations: () =>
     api.get<import('@/types/meeting').IntegrationsResponse>('/api/settings/integrations'),
 
-  saveNotionKey: (apiKey: string) =>
-    api.put<{ status: string }>('/api/settings/integrations/notion', { apiKey }),
+  saveNotionKey: (apiKey: string, parentPage: string) =>
+    api.put<import('@/types/meeting').IntegrationConfig>('/api/settings/integrations/notion', { apiKey, parentPage }),
 
   deleteNotionKey: () => api.delete('/api/settings/integrations/notion'),
+
+  // Invite a new user — backend calls Cognito AdminCreateUser, which emails the
+  // invitee a sign-in link + temporary password. Admin-only (403 otherwise).
+  inviteUser: (data: { email: string; name?: string; admin?: boolean }) =>
+    api.post<InviteUserResponse>('/api/settings/invite-user', data),
 };
+
+export interface InviteUserResponse {
+  email: string;
+  invited: boolean;
+  addedToAdmins: boolean;
+}
 
 // Translation API
 export const translateApi = {
@@ -245,6 +292,15 @@ export const translateApi = {
     ),
 };
 
+// Chat Session API
+export const chatApi = {
+  listSessions: () =>
+    api.get<{ sessions: import('@/types/meeting').ChatSession[] }>('/api/chat/sessions'),
+
+  deleteSession: (sessionId: string) =>
+    api.delete(`/api/chat/sessions/${sessionId}`),
+};
+
 // Live Summary API
 export const summaryApi = {
   summarizeLive: (meetingId: string, transcript: string, previousSummary?: string) =>
@@ -252,4 +308,208 @@ export const summaryApi = {
       `/api/meetings/${meetingId}/summarize`,
       { transcript, previousSummary }
     ),
+};
+
+// Crawler API
+export const crawlerApi = {
+  listSources: () =>
+    api.get<{ sources: CrawlerSourceResponse[] }>('/api/crawler/sources'),
+  addSource: (data: {
+    sourceName: string;
+    awsServices: string[];
+    newsSources: string[];
+    customUrls?: string[];
+    newsQueries?: string[];
+  }) => api.post<CrawlerSourceResponse>('/api/crawler/sources', data),
+  updateSource: (sourceId: string, data: {
+    awsServices: string[];
+    newsSources: string[];
+    customUrls?: string[];
+    newsQueries?: string[];
+  }) => api.put<{ status: string }>(`/api/crawler/sources/${sourceId}`, data),
+  unsubscribe: (sourceId: string) =>
+    api.delete(`/api/crawler/sources/${sourceId}`),
+  getHistory: (sourceId: string) =>
+    api.get<{ history: CrawlHistory[] }>(`/api/crawler/sources/${sourceId}/history`),
+};
+
+// Insights API
+export const insightsApi = {
+  list: (params: { type: string; source?: string; service?: string; tags?: string[]; sort?: string; page?: number; limit?: number }) => {
+    const q = new URLSearchParams();
+    q.set('type', params.type);
+    if (params.source) q.set('source', params.source);
+    if (params.service) q.set('service', params.service);
+    if (params.tags && params.tags.length > 0) q.set('tags', params.tags.join(','));
+    if (params.sort) q.set('sort', params.sort);
+    q.set('page', String(params.page || 1));
+    q.set('limit', String(params.limit || 20));
+    return api.get<{
+      documents: CrawledDocument[];
+      totalCount: number;
+      page: number;
+      limit: number;
+    }>(`/api/insights?${q.toString()}`);
+  },
+  getDetail: (sourceId: string, docHash: string) =>
+    api.get<CrawledDocument & { content: string }>(`/api/insights/${encodeURIComponent(sourceId)}/${encodeURIComponent(docHash)}`),
+};
+
+// Dictionary API
+export const dictionaryApi = {
+  get: () => api.get<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>('/api/settings/dictionary'),
+  update: (terms: DictionaryTerm[]) => api.put<{ terms: DictionaryTerm[]; status: string; vocabularyName?: string }>('/api/settings/dictionary', { terms }),
+};
+
+// Research API
+export const researchApi = {
+  create: (data: { topic: string; mode: string }) =>
+    api.post<Research>('/api/research', data),
+  list: () =>
+    api.get<{ research: Research[] }>('/api/research'),
+  getDetail: (researchId: string) =>
+    api.get<ResearchDetail>(`/api/research/${encodeURIComponent(researchId)}`),
+  trash: (researchId: string) =>
+    api.delete(`/api/research/${encodeURIComponent(researchId)}`),
+  restore: (researchId: string) =>
+    api.post(`/api/research/${encodeURIComponent(researchId)}/restore`, {}),
+  share: (researchId: string, data: { email: string; permission: 'read' | 'edit' }) =>
+    api.post<{ sharedWith: { userId: string; email: string; permission: string } }>(`/api/research/${encodeURIComponent(researchId)}/share`, data),
+  unshare: (researchId: string, userId: string) =>
+    api.delete(`/api/research/${encodeURIComponent(researchId)}/share/${userId}`),
+  linkAccount: (researchId: string, accountId: string) =>
+    api.post<{ accountIds: string[] }>(`/api/research/${encodeURIComponent(researchId)}/accounts`, { accountId }),
+  unlinkAccount: (researchId: string, accountId: string) =>
+    api.delete<void>(`/api/research/${encodeURIComponent(researchId)}/accounts/${encodeURIComponent(accountId)}`),
+};
+
+export const researchChatApi = {
+  listMessages: (researchId: string) =>
+    api.get<{ messages: ChatMessage[] }>(`/api/research/${encodeURIComponent(researchId)}/chat`),
+  sendMessage: (researchId: string, data: { content: string; action?: string }) =>
+    api.post<{ messageId: string }>(`/api/research/${encodeURIComponent(researchId)}/chat`, data),
+  listSubPages: (researchId: string) =>
+    api.get<{ subpages: Research[] }>(`/api/research/${encodeURIComponent(researchId)}/subpages`),
+};
+
+// Account API
+export const accountApi = {
+  list: () => api.get<{ accounts: AccountSummary[] }>('/api/accounts'),
+  get: (id: string) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`),
+  create: (data: { name: string; aliases?: string[]; domains?: string[]; industry?: string }) =>
+    api.post<Account>('/api/accounts', data),
+  addMember: (id: string, data: { email: string; role: string }) =>
+    api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/members`, data),
+  updateMember: (id: string, userId: string, data: { role: string }) =>
+    api.put<AccountMember>(
+      `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, data),
+  // Returns undefined on a fully-clean removal (204 No Content). A defined result means
+  // the membership was removed but Share cleanup didn't complete for every meeting, and/or
+  // an ambiguous untagged share was left untouched (only possible when force=true, since
+  // without it the request throws instead -- see API-SPEC.md's "Remove Member" note).
+  removeMember: (id: string, userId: string, force?: boolean) =>
+    api.delete<{ removed: boolean; cleanupFailedForMeetings: string[]; ambiguousUntaggedMeetingIDs: string[] } | undefined>(
+      `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}${force ? '?force=true' : ''}`),
+  meetings: (id: string) =>
+    api.get<{ meetings: AccountMeetingRef[] }>(`/api/accounts/${encodeURIComponent(id)}/meetings`),
+  insights: (id: string, params?: { from?: string; to?: string; types?: string[] }) => {
+    const q = new URLSearchParams();
+    if (params?.from) q.set('from', params.from);
+    if (params?.to) q.set('to', params.to);
+    if (params?.types?.length) q.set('types', params.types.join(','));
+    const qs = q.toString();
+    return api.get<{ insights: AccountInsight[] }>(
+      `/api/accounts/${encodeURIComponent(id)}/insights${qs ? `?${qs}` : ''}`);
+  },
+  listDocuments: (id: string, docType?: string) => {
+    const q = new URLSearchParams();
+    if (docType) q.set('docType', docType);
+    const qs = q.toString();
+    return api.get<{ documents: AccountDocument[] }>(
+      `/api/accounts/${encodeURIComponent(id)}/documents${qs ? `?${qs}` : ''}`);
+  },
+  getDocument: (id: string, docId: string) =>
+    api.get<AccountDocument>(
+      `/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
+  putDocument: (id: string, data: PutDocumentRequest) =>
+    api.post<AccountDocument>(`/api/accounts/${encodeURIComponent(id)}/documents`, data),
+  updateDocument: (id: string, docId: string, data: PutDocumentRequest) =>
+    api.put<AccountDocument>(
+      `/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`, data),
+  deleteDocument: (id: string, docId: string) =>
+    api.delete<void>(`/api/accounts/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
+  research: (id: string) =>
+    api.get<{ research: AccountResearchRef[] }>(`/api/accounts/${encodeURIComponent(id)}/research`),
+};
+
+export const projectApi = {
+  list: () => api.get<{ projects: ProjectSummary[] }>('/api/projects'),
+  get: (id: string) => api.get<Project>(`/api/projects/${encodeURIComponent(id)}`),
+  create: (data: { name: string; description?: string; sfdcOpptyId?: string; sfdcUrl?: string; stage?: string }) =>
+    api.post<Project>('/api/projects', data),
+  update: (id: string, data: { name: string; description?: string; sfdcOpptyId?: string; sfdcUrl?: string; stage?: string }) =>
+    api.put<Project>(`/api/projects/${encodeURIComponent(id)}`, data),
+  delete: (id: string) => api.delete<void>(`/api/projects/${encodeURIComponent(id)}`),
+  addMember: (id: string, data: { email: string }) =>
+    api.post<ProjectMember>(`/api/projects/${encodeURIComponent(id)}/members`, data),
+  removeMember: (id: string, userId: string) =>
+    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`),
+  linkAccount: (id: string, accountId: string) =>
+    api.post<{ accountIds: string[] }>(`/api/projects/${encodeURIComponent(id)}/accounts`, { accountId }),
+  unlinkAccount: (id: string, accountId: string) =>
+    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/accounts/${encodeURIComponent(accountId)}`),
+  linkMeeting: (id: string, meetingId: string) =>
+    api.post<void>(`/api/projects/${encodeURIComponent(id)}/meetings`, { meetingId }),
+  unlinkMeeting: (id: string, meetingId: string) =>
+    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/meetings/${encodeURIComponent(meetingId)}`),
+  linkResearch: (id: string, researchId: string) =>
+    api.post<void>(`/api/projects/${encodeURIComponent(id)}/research`, { researchId }),
+  unlinkResearch: (id: string, researchId: string) =>
+    api.delete<void>(`/api/projects/${encodeURIComponent(id)}/research/${encodeURIComponent(researchId)}`),
+  meetings: (id: string) =>
+    api.get<{ meetings: ProjectMeetingRef[] }>(`/api/projects/${encodeURIComponent(id)}/meetings`),
+  research: (id: string) =>
+    api.get<{ research: ProjectResearchRef[] }>(`/api/projects/${encodeURIComponent(id)}/research`),
+  insights: (id: string, params?: { from?: string; to?: string; types?: string[] }) => {
+    const q = new URLSearchParams();
+    if (params?.from) q.set('from', params.from);
+    if (params?.to) q.set('to', params.to);
+    if (params?.types?.length) q.set('types', params.types.join(','));
+    const qs = q.toString();
+    return api.get<{ insights: ProjectInsight[] }>(
+      `/api/projects/${encodeURIComponent(id)}/insights${qs ? `?${qs}` : ''}`);
+  },
+  brief: (id: string) =>
+    api.get<ProjectBrief>(`/api/projects/${encodeURIComponent(id)}/brief`),
+  accountProjects: (accountId: string) =>
+    api.get<{ projects: ProjectSummary[] }>(`/api/accounts/${encodeURIComponent(accountId)}/projects`),
+};
+
+// Personal (account-less) document API endpoints
+export const docApi = {
+  list: (docType?: string) => {
+    const q = new URLSearchParams();
+    if (docType) q.set('docType', docType);
+    const qs = q.toString();
+    return api.get<{ documents: AccountDocument[] }>(`/api/documents${qs ? `?${qs}` : ''}`);
+  },
+  get: (docId: string) => api.get<AccountDocument>(`/api/documents/${encodeURIComponent(docId)}`),
+  put: (data: PutDocumentRequest) => api.post<AccountDocument>('/api/documents', data),
+  update: (docId: string, data: PutDocumentRequest) =>
+    api.put<AccountDocument>(`/api/documents/${encodeURIComponent(docId)}`, data),
+  delete: (docId: string) => api.delete<void>(`/api/documents/${encodeURIComponent(docId)}`),
+  shareToAccount: (docId: string, accountId: string) =>
+    api.post<AccountDocument>(`/api/documents/${encodeURIComponent(docId)}/share-account`, { accountId }),
+  createPublicShare: (docId: string) =>
+    api.post<{ token: string }>(`/api/documents/${encodeURIComponent(docId)}/public-share`, {}),
+  revokePublicShare: (docId: string) =>
+    api.delete<void>(`/api/documents/${encodeURIComponent(docId)}/public-share`),
+};
+
+export const meetingAccountApi = {
+  link: (meetingId: string, accountId: string) =>
+    api.post<{ accountId: string }>(`/api/meetings/${encodeURIComponent(meetingId)}/account`, { accountId }),
+  shareToAccount: (meetingId: string, accountId: string) =>
+    api.post<{ accountId: string; sharedWith: number }>(
+      `/api/meetings/${encodeURIComponent(meetingId)}/share-account`, { accountId }),
 };

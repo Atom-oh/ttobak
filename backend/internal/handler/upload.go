@@ -14,6 +14,15 @@ type UploadHandler struct {
 	uploadService *service.UploadService
 }
 
+// docUploadMimeTypes restricts category "doc" uploads (slides) to PDF/PPTX --
+// no slide authoring, upload+viewer+download only (see docs/superpowers/specs
+// roadmap SP2).
+var docUploadMimeTypes = map[string]bool{
+	"application/pdf":                                                            true,
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": true,
+	"application/vnd.ms-powerpoint":                                              true,
+}
+
 // NewUploadHandler creates a new upload handler
 func NewUploadHandler(uploadService *service.UploadService) *UploadHandler {
 	return &UploadHandler{
@@ -47,8 +56,13 @@ func (h *UploadHandler) GetPresignedURL(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if req.Category != "audio" && req.Category != "image" {
-		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "category must be 'audio' or 'image'")
+	if req.Category != "audio" && req.Category != "image" && req.Category != "file" && req.Category != "doc" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "category must be 'audio', 'image', 'file', or 'doc'")
+		return
+	}
+
+	if req.Category == "doc" && !docUploadMimeTypes[req.FileType] {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "doc uploads must be application/pdf or a PowerPoint MIME type")
 		return
 	}
 

@@ -1,0 +1,71 @@
+name: Deploy Research Agent
+
+on:
+  push:
+    branches: [main]
+    paths: ['backend/python/research-agent/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-research-agent
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  RESEARCH_ECR_REPO: ${{ vars.RESEARCH_ECR_REPO }}
+  AGENTCORE_RUNTIME_ID: ${{ vars.AGENTCORE_RUNTIME_ID }}
+  WEB_SEARCH_GATEWAY_URL: ${{ vars.WEB_SEARCH_GATEWAY_URL }}
+  # Fixed, not a repo variable: the Web Search Gateway (TtobakWebSearchGatewayStack)
+  # only ever deploys to us-east-1 -- a repo variable here could drift/typo
+  # with no CFN output to catch it, unlike the URL above.
+  WEB_SEARCH_GATEWAY_REGION: us-east-1
+
+jobs:
+  build-and-deploy:
+    runs-on: ttobak-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install AWS CLI
+        run: |
+          curl -s "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscli.zip
+          unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin --update
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+      - name: Build and push container
+        working-directory: backend/python/research-agent
+        env:
+          ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.RESEARCH_ECR_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t "${ECR_URI}:latest" -t "${ECR_URI}:${IMAGE_TAG::8}" .
+          docker push "${ECR_URI}:latest"
+          docker push "${ECR_URI}:${IMAGE_TAG::8}"
+
+      - name: Update AgentCore Runtime
+        env:
+          ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/${{ vars.RESEARCH_ECR_REPO }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          if [ -z "${WEB_SEARCH_GATEWAY_URL}" ]; then
+            echo "::error::WEB_SEARCH_GATEWAY_URL repo variable is unset. Set it from TtobakWebSearchGatewayStack's GatewayUrl output, or web_search will report itself misconfigured."
+            exit 1
+          fi
+          ARTIFACT=$(jq -n --arg uri "${ECR_URI}:${IMAGE_TAG::8}" '{containerConfiguration:{containerUri:$uri}}')
+          ENV_VARS=$(jq -n --arg url "${WEB_SEARCH_GATEWAY_URL}" --arg region "${WEB_SEARCH_GATEWAY_REGION}" \
+            '{WEB_SEARCH_GATEWAY_URL:$url, WEB_SEARCH_GATEWAY_REGION:$region}')
+          aws bedrock-agentcore-control update-agent-runtime \
+            --agent-runtime-id "${AGENTCORE_RUNTIME_ID}" \
+            --role-arn "arn:aws:iam::${AWS_ACCOUNT_ID}:role/ttobak-agentcore-research-role" \
+            --network-configuration '{"networkMode":"PUBLIC"}' \
+            --agent-runtime-artifact "${ARTIFACT}" \
+            --environment-variables "${ENV_VARS}"

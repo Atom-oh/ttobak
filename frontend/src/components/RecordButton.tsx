@@ -1,22 +1,46 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { isIOS, getPreferredMimeType, supportsMediaRecorder } from '@/lib/device';
+import { isIOS, getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
+import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk } from '@/lib/tauri';
+import { CameraCapture } from '@/components/CameraCapture';
 
 interface RecordButtonProps {
   meetingId: string;
   meetingTitle?: string;
   deviceId?: string;
   onRecordingComplete?: (audioUrl: string) => void;
+  onBlobReady?: (blob: Blob, mimeType: string) => void;
+  /** Called instead of `onBlobReady` when a Tauri System Audio recording
+   * has been stopped and finalized on disk — the file's bytes never enter
+   * the WebView; `path` is streamed straight to S3 from Rust. See
+   * `lib/tauri.ts`'s `uploadRecording` and `usePostRecording`'s
+   * `handleNativeFileReady`. */
+  onNativeFileReady?: (path: string, byteSize: number) => void;
+  /** Called for each 16kHz mono 16-bit PCM chunk emitted from Rust during a
+   * System Audio recording — feeds `useRecordingSession`'s
+   * `pushNativePcmChunk` for live captions via Amazon Transcribe
+   * Streaming. Not called in mic/tab modes (those feed Transcribe via an
+   * AudioWorklet on the MediaStream instead). */
+  onNativePcmChunk?: (chunk: Uint8Array) => void;
   onError?: (error: string) => void;
-  onRecordingStart?: () => void;
+  onRecordingStart?: (stream: MediaStream | null) => void | Promise<void>;
   onRecordingPause?: () => void;
   onRecordingResume?: () => void;
   onRecordingStop?: () => void;
   onPermissionGranted?: () => void;
   onCaptureImage?: (file: File) => void;
   onAnalyserReady?: (analyser: AnalyserNode | null) => void;
+  onCheckpoint?: (blob: Blob, mimeType: string) => void;
+  audioSource?: 'mic' | 'tab' | 'system';
+  /** Disables starting a NEW recording — used while a previous recording's
+   * post-processing (notes/upload/notify, or its error banner) is still
+   * unresolved. Without this, RecordButton's idle mic button stayed
+   * clickable throughout that window, and starting a second recording
+   * could clobber `usePostRecording`'s shared pending-upload state
+   * (there's exactly one in-flight "pending recording" slot per page). */
+  disabled?: boolean;
 }
 
 type RecordingState = 'idle' | 'recording' | 'paused' | 'uploading';
@@ -32,6 +56,9 @@ export function RecordButton({
   meetingTitle = 'Meeting',
   deviceId,
   onRecordingComplete,
+  onBlobReady,
+  onNativeFileReady,
+  onNativePcmChunk,
   onError,
   onRecordingStart,
   onRecordingPause,
@@ -40,10 +67,15 @@ export function RecordButton({
   onPermissionGranted,
   onCaptureImage,
   onAnalyserReady,
+  onCheckpoint,
+  audioSource = 'mic',
+  disabled = false,
 }: RecordButtonProps) {
   const [state, setState] = useState<RecordingState>('idle');
   const [elapsedTime, setElapsedTime] = useState(0);
   const recordingStateRef = useRef<RecordingState>('idle');
+  const checkpointTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const isRecordingRef = useRef(false);
 
   const setRecordingState = (newState: RecordingState) => {
     recordingStateRef.current = newState;
@@ -59,10 +91,20 @@ export function RecordButton({
   const animationRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const barsContainerRef = useRef<HTMLDivElement>(null);
+  const [showCamera, setShowCamera] = useState(false);
+  const nativeTempPathRef = useRef<string | null>(null);
+  // Blocks double-starts during startRecording's async window (see the
+  // guard at its entry) — must be a ref: state wouldn't flip synchronously.
+  const startInFlightRef = useRef(false);
+  const nativeLevelRef = useRef(0);
+  const nativeUnlistenRef = useRef<(() => void) | null>(null);
+  const nativePcmUnlistenRef = useRef<(() => void) | null>(null);
 
   const useNativeCapture = isIOS() || !supportsMediaRecorder();
 
   const cleanupAudioResources = useCallback(() => {
+    isRecordingRef.current = false;
     if (animationRef.current) {
       cancelAnimationFrame(animationRef.current);
       animationRef.current = null;
@@ -79,30 +121,212 @@ export function RecordButton({
     }
   }, [onAnalyserReady]);
 
+  // Save checkpoint immediately when tab becomes hidden (lid close, tab switch)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden && isRecordingRef.current && onCheckpoint) {
+        const allChunks = chunksRef.current.slice(0);
+        if (allChunks.length > 0) {
+          const mimeType = mediaRecorderRef.current?.mimeType || getPreferredMimeType();
+          const blob = new Blob(allChunks, { type: mimeType });
+          onCheckpoint(blob, mimeType);
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [onCheckpoint]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (checkpointTimerRef.current) clearInterval(checkpointTimerRef.current);
       cleanupAudioResources();
+      nativeUnlistenRef.current?.();
+      nativeUnlistenRef.current = null;
+      nativePcmUnlistenRef.current?.();
+      nativePcmUnlistenRef.current = null;
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
     };
   }, [cleanupAudioResources]);
 
+  // Drive PC waveform bars from real AnalyserNode frequency data (browser modes)
+  useEffect(() => {
+    if (state !== 'recording' || !analyserRef.current || !barsContainerRef.current) return;
+    const analyser = analyserRef.current;
+    const container = barsContainerRef.current;
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    let frameId: number;
+    const draw = () => {
+      const bars = container.children;
+      if (!bars.length) { frameId = requestAnimationFrame(draw); return; }
+      analyser.getByteFrequencyData(dataArray);
+      const barCount = bars.length;
+      for (let i = 0; i < barCount; i++) {
+        // Sample lower 60% of spectrum (voice-dominant frequencies)
+        const dataIndex = Math.floor((i / barCount) * dataArray.length * 0.6);
+        const value = dataArray[dataIndex];
+        const height = Math.max(3, (value / 255) * 32);
+        (bars[i] as HTMLElement).style.height = `${height}px`;
+      }
+      frameId = requestAnimationFrame(draw);
+    };
+    frameId = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frameId);
+  }, [state]);
+
+  // Drive PC waveform bars from native ScreenCaptureKit RMS levels (System mode).
+  // The Rust side has no FFT, only a single 0–1 RMS value per ~33 ms tick.
+  // Render that as a moving "scope" — shift bars left and push the latest
+  // level on the right, so any captured audio shows visible motion. Lights up
+  // ONLY when there's no AnalyserNode (native mode) and we're recording.
+  useEffect(() => {
+    if (state !== 'recording' || analyserRef.current || !barsContainerRef.current) return;
+    if (!isTauri() || audioSource !== 'system') return;
+    const container = barsContainerRef.current;
+    let frameId: number;
+    // Internal history buffer of recent levels — one slot per bar
+    const history: number[] = [];
+    const draw = () => {
+      const bars = container.children;
+      const barCount = bars.length;
+      if (!barCount) { frameId = requestAnimationFrame(draw); return; }
+      // Push latest, trim to barCount
+      history.push(nativeLevelRef.current);
+      while (history.length > barCount) history.shift();
+      // Render: oldest sample on the left, newest on the right
+      const offset = barCount - history.length;
+      for (let i = 0; i < barCount; i++) {
+        const idx = i - offset;
+        const value = idx >= 0 ? history[idx] : 0;
+        const height = Math.max(3, value * 32);
+        (bars[i] as HTMLElement).style.height = `${height}px`;
+      }
+      frameId = requestAnimationFrame(draw);
+    };
+    frameId = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frameId);
+  }, [state, audioSource]);
+
   const startRecording = async () => {
+    // A previous recording's post-processing (notes/upload/notify, or its
+    // unresolved error banner) is still in flight — refuse to start a new
+    // one. usePostRecording has exactly one pending-upload slot per page;
+    // starting a second recording into it could clobber the first
+    // recording's retry state before it finishes.
+    if (disabled) return;
+    // Synchronous re-entry guard: during the native path's
+    // `await onRecordingStart` window the button still reads idle (no state
+    // has flipped yet), so a second click would create a second draft and
+    // race a second native start into Rust's AlreadyRunning rejection —
+    // whose onError teardown then demolishes the FIRST, healthy recording's
+    // UI/STT while capture keeps running.
+    if (startInFlightRef.current) return;
+    startInFlightRef.current = true;
+    try {
+      await startRecordingInner();
+    } finally {
+      startInFlightRef.current = false;
+    }
+  };
+
+  const startRecordingInner = async () => {
+
     // Clean up any leftover resources from a previous recording
     cleanupAudioResources();
 
+    // Tauri native system-audio capture — no MediaStream. Trigger
+    // onRecordingStart(null) so the parent can createDraftMeeting (and, for
+    // live captions, start a native STT session fed by onNativePcmChunk
+    // below — see useRecordingSession's startNativeSession), then start
+    // native capture. On stop we route the finalized file through
+    // onNativeFileReady so the normal post-recording flow updates status ->
+    // 'transcribing' and uploads under the server meetingId (not the client
+    // temp ID).
+    if (audioSource === 'system' && isTauri()) {
+      try {
+        // AWAIT onRecordingStart before starting native capture: the parent
+        // creates the draft meeting and starts the STT session in it. Firing
+        // native capture concurrently invites a zombie state — native start
+        // fails fast, onError tears everything down, and the still-running
+        // handler then re-latches isNativeRecording/STT with no capture
+        // behind it. Sequential ordering also means the STT session exists
+        // before the first PCM chunks arrive. Note: no MediaStream — null.
+        await onRecordingStart?.(null);
+
+        // Subscribe to the native audio level + PCM chunk events before
+        // starting capture so we don't miss the first samples. The Rust
+        // side emits ~30 Hz RMS values in [0, 1] for the waveform, and
+        // ~64ms 16kHz mono PCM chunks for live captions.
+        nativeLevelRef.current = 0;
+        nativeUnlistenRef.current?.();
+        nativeUnlistenRef.current = onNativeAudioLevel((level) => {
+          nativeLevelRef.current = level;
+        });
+        nativePcmUnlistenRef.current?.();
+        nativePcmUnlistenRef.current = onNativePcmChunk
+          ? subscribeNativePcmChunk((chunk) => onNativePcmChunk(chunk))
+          : null;
+
+        const resp = await startNativeRecording(meetingId);
+        nativeTempPathRef.current = resp.temp_path;
+        isRecordingRef.current = true;
+        setRecordingState('recording');
+        setElapsedTime(0);
+        onPermissionGranted?.();
+        timerRef.current = setInterval(() => {
+          setElapsedTime((prev) => prev + 1);
+        }, 1000);
+      } catch (err) {
+        nativeUnlistenRef.current?.();
+        nativeUnlistenRef.current = null;
+        nativePcmUnlistenRef.current?.();
+        nativePcmUnlistenRef.current = null;
+        onError?.(err instanceof Error ? err.message : 'Native recording failed');
+      }
+      return;
+    }
+
     let stream: MediaStream | null = null;
     try {
-      const audioConstraints: MediaTrackConstraints | boolean = deviceId
-        ? { deviceId: { ideal: deviceId } }
-        : true;
-      stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      if (audioSource === 'tab') {
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { width: 1, height: 1 },
+            audio: true,
+          });
+          stream.getVideoTracks().forEach(t => t.stop());
+          if (stream.getAudioTracks().length === 0) {
+            onError?.('선택한 탭에서 오디오를 캡처할 수 없습니다');
+            return;
+          }
+        } catch (err: unknown) {
+          if (err instanceof DOMException && err.name === 'NotAllowedError') {
+            return;
+          }
+          throw err;
+        }
+      } else {
+        const audioConstraints: MediaTrackConstraints | boolean = deviceId
+          ? { deviceId: { exact: deviceId } }
+          : true;
+        stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      }
 
       onPermissionGranted?.();
       streamRef.current = stream;
+      isRecordingRef.current = true;
+
+      if (audioSource === 'tab') {
+        stream.getAudioTracks()[0].onended = () => {
+          if (isRecordingRef.current) {
+            stopRecording();
+          }
+        };
+      }
 
       const mimeType = getPreferredMimeType();
       const mediaRecorder = new MediaRecorder(stream, { mimeType });
@@ -128,7 +352,13 @@ export function RecordButton({
       mediaRecorder.onstop = async () => {
         cleanupAudioResources();
         const blob = new Blob(chunksRef.current, { type: mimeType });
-        await handleUpload(blob);
+        if (onBlobReady) {
+          setRecordingState('idle');
+          setElapsedTime(0);
+          onBlobReady(blob, mimeType);
+        } else {
+          await handleUpload(blob);
+        }
       };
 
       mediaRecorder.start(1000);
@@ -136,11 +366,26 @@ export function RecordButton({
 
       setRecordingState('recording');
       setElapsedTime(0);
-      onRecordingStart?.();
+      onRecordingStart?.(stream);
 
       timerRef.current = setInterval(() => {
         setElapsedTime((prev) => prev + 1);
       }, 1000);
+
+      // Audio checkpoint: first at 10s, then every 60s — crash recovery
+      if (onCheckpoint) {
+        const doCheckpoint = () => {
+          const allChunks = chunksRef.current.slice(0);
+          if (allChunks.length > 0) {
+            onCheckpoint(new Blob(allChunks, { type: mimeType }), mimeType);
+          }
+        };
+        const firstTimer = setTimeout(() => {
+          doCheckpoint();
+          checkpointTimerRef.current = setInterval(doCheckpoint, 60000);
+        }, 10000);
+        checkpointTimerRef.current = firstTimer as unknown as NodeJS.Timeout;
+      }
     } catch (err) {
       // Clean up partially acquired resources on failure
       if (stream) {
@@ -157,6 +402,7 @@ export function RecordButton({
       mediaRecorderRef.current.pause();
       setRecordingState('paused');
       if (timerRef.current) clearInterval(timerRef.current);
+      if (checkpointTimerRef.current) { clearInterval(checkpointTimerRef.current); checkpointTimerRef.current = null; }
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
       onRecordingPause?.();
     }
@@ -169,17 +415,107 @@ export function RecordButton({
       timerRef.current = setInterval(() => {
         setElapsedTime((prev) => prev + 1);
       }, 1000);
+      // Restart checkpoint timer (cleared on pause) — cumulative for crash recovery
+      if (onCheckpoint && !checkpointTimerRef.current) {
+        const mimeType = getPreferredMimeType();
+        checkpointTimerRef.current = setInterval(() => {
+          const allChunks = chunksRef.current.slice(0);
+          if (allChunks.length > 0) {
+            const checkpointBlob = new Blob(allChunks, { type: mimeType });
+            onCheckpoint(checkpointBlob, mimeType);
+          }
+        }, 60000);
+      }
       onRecordingResume?.();
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = async () => {
+    isRecordingRef.current = false;
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    if (checkpointTimerRef.current) {
+      clearInterval(checkpointTimerRef.current);
+      checkpointTimerRef.current = null;
+    }
+
+    // Native system-audio stop → hand the finalized WAV's file PATH to the
+    // standard post-recording flow (onNativeFileReady → notes →
+    // resumeUploadFlow), which streams it to S3 directly from Rust
+    // (lib/tauri.ts's uploadRecording) instead of reading it into the
+    // WebView. Reading the whole file through Tauri's IPC bridge used to
+    // crash JavaScriptCore on a real ~35-minute recording — see
+    // mac-app/CLAUDE.md and ADR-024.
+    //
+    // The path is only cleared on success. Either way the WAV file itself
+    // is untouched here — cleanup only ever happens after the SPA's own
+    // upload-complete notification succeeds (see usePostRecording's
+    // resumeUploadFlow), never in this component. It lives at
+    // $TMPDIR/ttobak-mac/ (std::env::temp_dir()), recoverable via
+    // /record?mode=upload if something goes wrong before that.
+    if (nativeTempPathRef.current) {
+      const tempPath = nativeTempPathRef.current;
+      // Stop receiving level/PCM events; the Rust side won't emit any more
+      // after stop_capture, but unsubscribe defensively.
+      nativeUnlistenRef.current?.();
+      nativeUnlistenRef.current = null;
+      nativePcmUnlistenRef.current?.();
+      nativePcmUnlistenRef.current = null;
+      nativeLevelRef.current = 0;
+      try {
+        const resp = await stopNativeRecording();
+        nativeTempPathRef.current = null;
+        if (resp.stop_timed_out) {
+          // The Rust stop task still owns the writer and keeps appending in
+          // the background. Handing the file to upload now would freeze
+          // Content-Length at its current size (upload.rs measures at open)
+          // and silently drop everything appended after — so wait (bounded)
+          // for the background finalize to actually finish first. That is
+          // signalled by `finalizing` going false: `recording` is ALREADY
+          // false here (the stop command emptied the recorder before the
+          // timeout fired), so polling it would pass instantly and
+          // guarantee nothing. Once finalize completes, upload.rs's
+          // open-time measurement sees the complete file; the byte_size
+          // passed below may slightly undercount but is display-only.
+          console.warn('Native stop timed out — waiting for background finalize to complete.');
+          let finalized = false;
+          for (let i = 0; i < 30; i++) {
+            await new Promise((r) => setTimeout(r, 1000));
+            try {
+              const status = await getNativeRecordingStatus();
+              if (!status.recording && !status.finalizing) {
+                finalized = true;
+                break;
+              }
+            } catch {
+              break; // status unavailable — fall through to the error path
+            }
+          }
+          if (!finalized) {
+            throw new Error('녹음 종료가 완료되지 않았습니다 (finalize 대기 시간 초과)');
+          }
+        }
+        onRecordingStop?.();
+        setRecordingState('idle');
+        setElapsedTime(0);
+        onNativeFileReady?.(tempPath, resp.byte_size);
+      } catch (err) {
+        // Clear the ref: the file is preserved on disk (message below), but
+        // keeping the ref would let a re-record silently overwrite it.
+        nativeTempPathRef.current = null;
+        const message = err instanceof Error ? err.message : 'Native recording stop failed';
+        onError?.(
+          `${message} — 녹음 파일은 보존되어 있습니다: ${tempPath}. /record?mode=upload 에서 직접 업로드할 수 있습니다.`,
+        );
+        setRecordingState('idle');
+        setElapsedTime(0);
+      }
+      return;
+    }
+
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      // onstop handler will call cleanupAudioResources
       mediaRecorderRef.current.stop();
     } else {
       cleanupAudioResources();
@@ -190,7 +526,11 @@ export function RecordButton({
   const handleUpload = async (blob: Blob) => {
     setRecordingState('uploading');
     try {
-      const fileName = `recording_${Date.now()}.webm`;
+      const mimeType = mediaRecorderRef.current?.mimeType || blob.type || 'audio/webm';
+      const ext = mimeType.includes('mp4') ? 'm4a'
+                : mimeType.includes('ogg') ? 'ogg'
+                : 'webm';
+      const fileName = `recording_${Date.now()}.${ext}`;
       const result = await uploadAudioBlob(blob, fileName);
       onRecordingComplete?.(result.url);
       setRecordingState('idle');
@@ -230,7 +570,7 @@ export function RecordButton({
         />
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={state === 'uploading'}
+          disabled={state === 'uploading' || disabled}
           className="w-20 h-20 rounded-full bg-primary flex items-center justify-center shadow-lg shadow-primary/40 hover:scale-105 transition-transform disabled:opacity-50"
         >
           {state === 'uploading' ? (
@@ -246,47 +586,109 @@ export function RecordButton({
 
   // Desktop: Full recording UI
   return (
-    <div className="flex flex-col items-center">
-      {/* Timer Display */}
-      {state !== 'idle' && (
-        <div className="relative flex items-center justify-center mb-8">
-          <div className="absolute w-48 h-48 bg-primary/10 rounded-full animate-pulse" />
-          <div className="absolute w-40 h-40 rounded-full" style={{ background: 'conic-gradient(from 0deg, #3211d4, #7c3aed, #a78bfa, #3211d4)' }} />
-          <div className="z-10 bg-white dark:bg-slate-800 shadow-xl rounded-full w-32 h-32 flex items-center justify-center border-4 border-white dark:border-slate-800">
-            <span className="text-3xl font-bold text-primary">{formatTime(elapsedTime)}</span>
+    <div className="flex flex-col items-center w-full">
+      {/* Idle state: just the mic button */}
+      {state === 'idle' && (
+        <div className="flex flex-col items-center">
+          <div className="relative flex items-center justify-center">
+            <div className="absolute w-28 h-28 bg-primary/10 rounded-full animate-pulse-ring" />
+            <div className="absolute w-24 h-24 bg-primary/20 rounded-full" />
+            <button
+              onClick={startRecording}
+              disabled={disabled}
+              className="relative w-20 h-20 rounded-full bg-primary flex items-center justify-center shadow-lg shadow-primary/40 hover:scale-105 active:scale-[0.97] transition-transform z-10 disabled:opacity-50 disabled:hover:scale-100"
+            >
+              <span className="material-symbols-outlined text-white text-3xl">mic</span>
+            </button>
           </div>
+          <p className="text-slate-400 dark:text-slate-500 text-sm mt-4">Tap to start recording</p>
         </div>
       )}
 
-      {/* Status Text */}
-      {state === 'recording' && (
-        <p className="text-slate-500 dark:text-slate-400 font-medium mb-8">Recording in progress...</p>
-      )}
-      {state === 'paused' && (
-        <p className="text-slate-500 dark:text-slate-400 font-medium mb-8">Recording paused</p>
-      )}
-      {state === 'uploading' && (
-        <p className="text-slate-500 dark:text-slate-400 font-medium mb-8">Uploading...</p>
-      )}
+      {/* Recording/Paused/Uploading state: Status card on PC, simple UI on mobile */}
+      {state !== 'idle' && (
+        <>
+          {/* Mobile: Simple timer and controls */}
+          <div className="lg:hidden flex flex-col items-center">
+            <div className="relative flex items-center justify-center mb-8">
+              <div className="absolute w-48 h-48 bg-primary/10 rounded-full animate-pulse" />
+              <div className="absolute w-40 h-40 bg-primary/20 rounded-full" />
+              <div className="z-10 bg-white dark:bg-surface-lowest shadow-xl rounded-full w-32 h-32 flex items-center justify-center border-4 border-primary">
+                <span className="text-3xl font-bold text-primary tabular-nums tracking-tighter">{formatTime(elapsedTime)}</span>
+              </div>
+            </div>
 
-      {/* Control Buttons */}
-      <div className="flex items-center justify-center gap-6">
-        {state === 'idle' ? (
-          <div className="flex flex-col items-center">
-            <div className="relative">
-              <div className="absolute inset-0 rounded-full bg-primary/20 animate-ping" style={{ animationDuration: '2s' }} />
+            {state === 'recording' && (
+              <p className="text-slate-500 dark:text-slate-400 font-medium mb-8">Recording in progress...</p>
+            )}
+            {state === 'paused' && (
+              <p className="text-slate-500 dark:text-slate-400 font-medium mb-8">Recording paused</p>
+            )}
+            {state === 'uploading' && (
+              <p className="text-slate-500 dark:text-slate-400 font-medium mb-8">Uploading...</p>
+            )}
+          </div>
+
+          {/* PC: LIVE status bar */}
+          <div className="hidden lg:flex w-full items-center gap-6 bg-white dark:bg-surface-lowest glass-panel rounded-2xl shadow-sm border border-slate-200 dark:border-white/10 px-6 py-4 mb-8">
+            {/* LIVE badge */}
+            <div className="flex items-center gap-2 bg-red-50 dark:bg-red-500/10 px-3 py-1.5 rounded-full border border-red-200 dark:border-red-500/30 shrink-0">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+              <span className="text-xs font-bold text-red-600 dark:text-red-400 uppercase tracking-wider">
+                {state === 'paused' ? 'Paused' : state === 'uploading' ? 'Uploading' : 'Live'}
+              </span>
+            </div>
+
+            {/* Timer */}
+            <span className="text-2xl font-bold text-slate-900 dark:text-white font-headline tabular-nums tracking-tight shrink-0">
+              {formatTime(elapsedTime)}
+            </span>
+
+            {/* Waveform bars — driven by real audio data via AnalyserNode */}
+            <div ref={barsContainerRef} className="flex-1 flex items-center justify-center gap-[3px] h-10 min-w-0">
+              {state === 'recording' ? (
+                Array.from({ length: 40 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="waveform-bar w-1 rounded-full shrink-0"
+                    style={{ height: '3px', transition: 'height 60ms ease-out' }}
+                  />
+                ))
+              ) : (
+                Array.from({ length: 40 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="w-1 h-1 rounded-full bg-slate-300 dark:bg-white/10 shrink-0"
+                  />
+                ))
+              )}
+            </div>
+
+            {/* Controls */}
+            <div className="flex items-center gap-3 shrink-0">
               <button
-                onClick={startRecording}
-                className="relative w-20 h-20 rounded-full bg-primary flex items-center justify-center shadow-lg shadow-primary/40 hover:scale-105 active:scale-[0.97] transition-transform"
+                onClick={state === 'paused' ? resumeRecording : pauseRecording}
+                disabled={state === 'uploading'}
+                className="w-10 h-10 flex items-center justify-center bg-slate-50 dark:bg-white/5 text-slate-600 dark:text-slate-300 rounded-full border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/10 transition-colors disabled:opacity-50"
               >
-                <span className="material-symbols-outlined text-white text-3xl">mic</span>
+                <span className="material-symbols-outlined text-xl">{state === 'paused' ? 'play_arrow' : 'pause'}</span>
+              </button>
+              <button
+                onClick={stopRecording}
+                disabled={state === 'uploading'}
+                className="w-10 h-10 flex items-center justify-center bg-red-600 text-white rounded-full hover:bg-red-700 transition-colors disabled:opacity-50"
+              >
+                {state === 'uploading' ? (
+                  <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" />
+                ) : (
+                  <span className="material-symbols-outlined text-xl">stop</span>
+                )}
               </button>
             </div>
-            <p className="text-slate-400 dark:text-slate-500 text-sm mt-4">Tap to start recording</p>
           </div>
-        ) : (
-          <>
-            {/* Pause/Resume Button */}
+
+          {/* Mobile controls */}
+          <div className="flex items-center justify-center gap-6 lg:hidden">
             <button
               onClick={state === 'paused' ? resumeRecording : pauseRecording}
               disabled={state === 'uploading'}
@@ -297,7 +699,6 @@ export function RecordButton({
               </span>
             </button>
 
-            {/* Stop Button */}
             <button
               onClick={stopRecording}
               disabled={state === 'uploading'}
@@ -330,9 +731,29 @@ export function RecordButton({
             >
               <span className="material-symbols-outlined">add_a_photo</span>
             </button>
-          </>
-        )}
-      </div>
+          </div>
+
+          {/* PC: Camera button below card */}
+          <div className="hidden lg:flex items-center justify-center gap-4">
+            <button
+              onClick={() => setShowCamera(true)}
+              disabled={state === 'uploading'}
+              className="flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-lg hover:bg-primary/20 transition-colors text-primary font-semibold text-sm disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined">add_a_photo</span>
+              Capture Image
+            </button>
+          </div>
+
+          {/* PC Camera Modal */}
+          {showCamera && (
+            <CameraCapture
+              onCapture={(file) => onCaptureImage?.(file)}
+              onClose={() => setShowCamera(false)}
+            />
+          )}
+        </>
+      )}
     </div>
   );
 }

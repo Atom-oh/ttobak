@@ -1,0 +1,1693 @@
+<!-- Advanced Dashboard -->
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-width=1.0" name="viewport"/>
+<title>Neon Aether - Summary Workspace</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400&amp;family=Space+Grotesk:wght@500;600;700&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          "primary": "#00E5FF",
+          "accent": "#B026FF",
+          "background-dark": "#09090E",
+          "surface": "rgba(255, 255, 255, 0.05)",
+          "border-glass": "rgba(255, 255, 255, 0.1)",
+          "text-main": "#F3F4F6",
+          "text-muted": "#8B8D98",
+        },
+        fontFamily: {
+          "display": ["Space Grotesk", "sans-serif"],
+          "body": ["Outfit", "sans-serif"]
+        },
+        borderRadius: {"DEFAULT": "0.5rem", "lg": "16px", "md": "8px", "xl": "1.5rem", "full": "9999px"},
+        boxShadow: {
+            'glow-primary': '0 0 24px rgba(0, 229, 255, 0.4)',
+            'glow-accent': '0 0 32px rgba(176, 38, 255, 0.3)',
+        }
+      },
+    },
+  }
+</script>
+<style>
+  body {
+    background-color: #09090E;
+    color: #F3F4F6;
+    font-family: 'Outfit', sans-serif;
+    background-image: 
+      radial-gradient(circle at 15% 50%, rgba(0, 229, 255, 0.08), transparent 35%),
+      radial-gradient(circle at 85% 30%, rgba(176, 38, 255, 0.08), transparent 35%);
+    background-attachment: fixed;
+  }
+  
+  .glass-panel {
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(40px);
+    -webkit-backdrop-filter: blur(40px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .block-container {
+    position: relative;
+    padding-left: 2rem;
+    margin-left: -2rem;
+    transition: all 0.2s ease;
+  }
+
+  .drag-handle {
+    position: absolute;
+    left: 0;
+    top: 0.25rem;
+    opacity: 0;
+    color: #8B8D98;
+    cursor: grab;
+    transition: all 0.2s ease;
+  }
+
+  .block-container:hover .drag-handle {
+    opacity: 1;
+  }
+
+  .drag-handle:hover {
+    color: #00E5FF;
+    text-shadow: 0 0 8px #00E5FF;
+  }
+
+  .custom-checkbox {
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    position: relative;
+    transition: all 0.2s ease;
+  }
+
+  .custom-checkbox:checked {
+    background: #00E5FF;
+    border-color: #00E5FF;
+    box-shadow: 0 0 12px rgba(0, 229, 255, 0.5);
+  }
+
+  .custom-checkbox:checked::after {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: 1px;
+    width: 5px;
+    height: 10px;
+    border: solid #09090E;
+    border-width: 0 2.5px 2.5px 0;
+    transform: rotate(45deg);
+  }
+
+  .strike-checked:has(.custom-checkbox:checked) span {
+    text-decoration: line-through;
+    color: #8B8D98;
+    opacity: 0.6;
+  }
+
+  .transcript-word {
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  
+  .transcript-word:hover {
+    color: #00E5FF;
+    text-shadow: 0 0 8px rgba(0, 229, 255, 0.6);
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .heading-glow {
+    text-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
+  }
+
+  /* Node Connection Styles */
+  .node-connection {
+    position: absolute;
+    background: linear-gradient(90deg, #00E5FF, #B026FF);
+    height: 2px;
+    box-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
+    z-index: 0;
+  }
+</style>
+</head>
+<body class="min-h-[1024px] flex flex-col overflow-x-hidden">
+<!-- Header -->
+<header class="flex items-center gap-4 px-6 py-4 glass-panel border-b border-t-0 border-l-0 border-r-0 sticky top-0 z-50">
+<button class="text-text-muted hover:text-primary transition-colors flex items-center justify-center rounded-full p-1 hover:bg-surface">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">arrow_back</span>
+</button>
+<div class="flex items-center gap-2">
+<div class="size-6 rounded-md bg-primary flex items-center justify-center shadow-glow-primary">
+<svg class="w-4 h-4 text-background-dark" fill="none" stroke="currentColor" viewbox="0 0 24 24">
+<path d="M13 10V3L4 14h7v7l9-11h-7z" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path>
+</svg>
+</div>
+<span class="font-display font-bold text-lg text-text-main tracking-wide">TTOBAK</span>
+</div>
+<div class="ml-auto text-sm text-text-muted font-body">
+        Saved to cloud • Just now
+    </div>
+</header>
+<main class="flex-1 w-full max-w-[1200px] mx-auto grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-12 px-8 py-12 pb-32">
+<!-- Left Column: Main Editor -->
+<div class="space-y-12">
+<!-- Document Title -->
+<div class="block-container">
+<span class="material-symbols-outlined drag-handle" style="font-variation-settings: 'FILL' 0;">drag_indicator</span>
+<input class="w-full bg-transparent border-none outline-none font-display font-bold text-4xl md:text-[48px] text-text-main placeholder-text-muted focus:ring-0 p-0 leading-tight heading-glow" placeholder="Untitled Document" type="text" value="Product Sync: Q3 Roadmap &amp; Architecture Review"/>
+<div class="flex items-center gap-4 mt-4 text-text-muted text-sm font-body">
+<span class="flex items-center gap-1.5"><span class="material-symbols-outlined text-[18px]">calendar_today</span> Oct 24, 2023</span>
+<span class="flex items-center gap-1.5"><span class="material-symbols-outlined text-[18px]">schedule</span> 45:20</span>
+<span class="flex items-center gap-1.5 bg-primary/10 px-2.5 py-1 rounded-md border border-primary/20 text-primary"><span class="material-symbols-outlined text-[16px]">sell</span> Roadmap</span>
+<span class="flex items-center gap-1.5 bg-accent/10 px-2.5 py-1 rounded-md border border-accent/20 text-accent"><span class="material-symbols-outlined text-[16px]">account_tree</span> Architecture</span>
+</div>
+</div>
+<!-- AI Highlights Block -->
+<div class="block-container">
+<span class="material-symbols-outlined drag-handle" style="font-variation-settings: 'FILL' 0;">drag_indicator</span>
+<div class="glass-panel rounded-xl p-8 border-l-4 border-l-accent shadow-glow-accent relative overflow-hidden group">
+<div class="absolute top-0 right-0 p-6 opacity-5">
+<span class="material-symbols-outlined text-8xl text-accent" style="font-variation-settings: 'FILL' 1;">auto_awesome</span>
+</div>
+<h3 class="font-display font-bold text-xl mb-6 flex items-center gap-2.5 text-text-main">
+<span class="material-symbols-outlined text-accent" style="font-variation-settings: 'FILL' 1;">bolt</span>
+                    AI Highlights
+                </h3>
+<ul class="space-y-4 text-text-main/90 font-body leading-relaxed">
+<li class="flex gap-4">
+<span class="text-accent mt-1.5 text-xs">●</span>
+<span class="text-[17px]">The core objective for Q3 is to stabilize the new rendering engine before pushing feature updates.</span>
+</li>
+<li class="flex gap-4">
+<span class="text-accent mt-1.5 text-xs">●</span>
+<span class="text-[17px]">Marketing budget will be reallocated to target Gen-Z creators on TikTok and Discord.</span>
+</li>
+<li class="flex gap-4">
+<span class="text-accent mt-1.5 text-xs">●</span>
+<span class="text-[17px]">Beta testing for the offline mobile app is delayed by 2 weeks due to sync conflicts.</span>
+</li>
+</ul>
+</div>
+</div>
+<!-- Detailed Summary -->
+<div class="block-container">
+<span class="material-symbols-outlined drag-handle" style="font-variation-settings: 'FILL' 0;">drag_indicator</span>
+<div class="space-y-8">
+<h3 class="font-display font-bold text-2xl text-text-main">Detailed Summary</h3>
+<div class="space-y-4">
+<h4 class="font-display font-bold text-primary uppercase tracking-widest text-sm">I. Infrastructure &amp; Stability</h4>
+<p class="font-body text-text-main/80 leading-relaxed">
+                        The meeting opened with Alex Chen emphasizing a "stability first" approach for the upcoming quarter. The <strong>rendering engine</strong> (Project Aether) has been showing signs of degradation under high-concurrency stress tests. The team reached a consensus that all feature development for the core editor will be paused for a 3-week "Hardening Sprint" starting next Monday.
+                    </p>
+</div>
+<div class="space-y-4">
+<h4 class="font-display font-bold text-primary uppercase tracking-widest text-sm">II. Mobile Synchronization Strategy</h4>
+<p class="font-body text-text-main/80 leading-relaxed">
+                        Sarah Jenkins presented the current state of the offline mobile app. The primary bottleneck is the <strong>Conflict-free Replicated Data Type (CRDT)</strong> implementation, which is currently failing to merge complex nested JSON structures during offline reconnections. Alex suggested moving to a simpler version-based locking system for the MVP to meet the new November 15th deadline.
+                    </p>
+</div>
+<div class="space-y-4">
+<h4 class="font-display font-bold text-primary uppercase tracking-widest text-sm">III. Marketing &amp; User Acquisition</h4>
+<p class="font-body text-text-main/80 leading-relaxed">
+                        The roadmap shift includes a strategic pivot towards <strong>creator-led growth</strong>. Instead of traditional Google Ads, the budget is being diverted into direct sponsorships with Discord community leads and TikTok tech-lifestyle influencers. This shift is expected to lower CAC by approximately 18% based on the Q2 pilot program results.
+                    </p>
+</div>
+</div>
+</div>
+<!-- System Architecture Diagram -->
+<div class="block-container">
+<span class="material-symbols-outlined drag-handle" style="font-variation-settings: 'FILL' 0;">drag_indicator</span>
+<div class="glass-panel rounded-xl p-8 border border-white/10">
+<h3 class="font-display font-bold text-xl mb-8 flex items-center gap-2.5 text-text-main">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 0;">schema</span>
+                    Conceptual Architecture: Project Aether
+                </h3>
+<div class="relative h-[300px] flex items-center justify-center">
+<!-- Nodes -->
+<div class="absolute top-1/2 left-0 -translate-y-1/2 flex flex-col items-center gap-2 z-10">
+<div class="w-24 h-24 rounded-xl glass-panel border-primary/40 flex flex-col items-center justify-center text-center p-2 shadow-glow-primary">
+<span class="material-symbols-outlined text-primary mb-1">devices</span>
+<span class="text-[10px] font-bold uppercase tracking-tighter">Client Apps</span>
+</div>
+</div>
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-2 z-10">
+<div class="w-32 h-32 rounded-full glass-panel border-accent/40 flex flex-col items-center justify-center text-center p-2 shadow-glow-accent">
+<span class="material-symbols-outlined text-accent mb-1">sync_alt</span>
+<span class="text-[10px] font-bold uppercase tracking-tighter">Sync Gateway<br/>(CRDT Engine)</span>
+</div>
+</div>
+<div class="absolute top-1/2 right-0 -translate-y-1/2 flex flex-col items-center gap-2 z-10">
+<div class="w-24 h-24 rounded-xl glass-panel border-primary/40 flex flex-col items-center justify-center text-center p-2 shadow-glow-primary">
+<span class="material-symbols-outlined text-primary mb-1">database</span>
+<span class="text-[10px] font-bold uppercase tracking-tighter">Distributed DB</span>
+</div>
+</div>
+<!-- Connections -->
+<div class="node-connection w-[40%] left-[10%] top-1/2"></div>
+<div class="node-connection w-[40%] left-[50%] top-1/2"></div>
+</div>
+<p class="text-xs text-text-muted mt-6 text-center italic font-body">Current bottleneck identified at Sync Gateway node during offline re-sync.</p>
+</div>
+</div>
+<!-- Action Items -->
+<div class="block-container">
+<span class="material-symbols-outlined drag-handle" style="font-variation-settings: 'FILL' 0;">drag_indicator</span>
+<h3 class="font-display font-bold text-2xl mb-6 text-text-main">Action Items</h3>
+<div class="space-y-3">
+<label class="flex items-start gap-4 p-3 rounded-lg hover:bg-white/5 transition-all strike-checked group cursor-pointer border border-transparent hover:border-white/5">
+<input class="custom-checkbox mt-1" type="checkbox"/>
+<span class="font-body text-text-main text-[17px] leading-relaxed">Draft the revised beta testing schedule and share with the QA team.</span>
+</label>
+<label class="flex items-start gap-4 p-3 rounded-lg hover:bg-white/5 transition-all strike-checked group cursor-pointer border border-transparent hover:border-white/5">
+<input checked="" class="custom-checkbox mt-1" type="checkbox"/>
+<span class="font-body text-text-main text-[17px] leading-relaxed">Finalize the marketing asset brief for Discord ad campaigns.</span>
+</label>
+<label class="flex items-start gap-4 p-3 rounded-lg hover:bg-white/5 transition-all strike-checked group cursor-pointer border border-transparent hover:border-white/5">
+<input class="custom-checkbox mt-1" type="checkbox"/>
+<span class="font-body text-text-main text-[17px] leading-relaxed">Schedule follow-up sync with engineering leads regarding rendering engine stability.</span>
+</label>
+</div>
+</div>
+<!-- Transcript Preview -->
+<div class="space-y-8 relative">
+<div class="absolute -left-6 top-0 bottom-0 w-px bg-white/10"></div>
+<!-- Transcript Block -->
+<div class="block-container relative before:content-[''] before:absolute before:-left-[25px] before:top-3 before:w-2 before:h-2 before:rounded-full before:bg-primary before:shadow-glow-primary">
+<span class="material-symbols-outlined drag-handle" style="font-variation-settings: 'FILL' 0;">drag_indicator</span>
+<div class="flex gap-6 glass-panel p-4 -mx-4 rounded-xl">
+<div class="w-14 flex-shrink-0 pt-1.5 text-right">
+<span class="text-xs font-body text-primary cursor-pointer font-bold">12:22</span>
+</div>
+<div class="flex-1">
+<div class="font-display font-bold text-primary mb-2 text-sm tracking-widest uppercase">Alex Chen</div>
+<p class="font-body text-text-main/90 leading-relaxed text-[17px]">
+<span class="transcript-word">That's</span> <span class="transcript-word">delayed.</span> <span class="transcript-word bg-primary/20 text-primary rounded px-1.5 py-0.5 -ml-1">We're</span> <span class="transcript-word">hitting</span> <span class="transcript-word">sync</span> <span class="transcript-word">conflicts</span> <span class="transcript-word">with</span> <span class="transcript-word">offline</span> <span class="transcript-word">files.</span> <span class="transcript-word">Probably</span> <span class="transcript-word">need</span> <span class="transcript-word">another</span> <span class="transcript-word">two</span> <span class="transcript-word">weeks.</span>
+</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Column: Sidebar / Glossary -->
+<aside class="space-y-8">
+<div class="sticky top-24">
+<div class="glass-panel rounded-xl p-6 border border-white/10">
+<h3 class="font-display font-bold text-sm uppercase tracking-widest text-primary mb-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-sm">menu_book</span>
+                    Meeting Glossary
+                </h3>
+<div class="space-y-6">
+<div>
+<dt class="font-display font-bold text-text-main text-[15px] mb-1">CRDT</dt>
+<dd class="font-body text-text-muted text-sm leading-relaxed">Conflict-free Replicated Data Type. A data structure that simplifies multi-user synchronization.</dd>
+</div>
+<div>
+<dt class="font-display font-bold text-text-main text-[15px] mb-1">Aether Engine</dt>
+<dd class="font-body text-text-muted text-sm leading-relaxed">The internal code name for our next-generation WebGL-based rendering system.</dd>
+</div>
+<div>
+<dt class="font-display font-bold text-text-main text-[15px] mb-1">Hardening Sprint</dt>
+<dd class="font-body text-text-muted text-sm leading-relaxed">A development cycle focused exclusively on bug fixes, performance, and stability.</dd>
+</div>
+<div>
+<dt class="font-display font-bold text-text-main text-[15px] mb-1">CAC</dt>
+<dd class="font-body text-text-muted text-sm leading-relaxed">Customer Acquisition Cost. The total cost of sales and marketing efforts to gain a new user.</dd>
+</div>
+</div>
+<button class="w-full mt-8 py-2 px-4 rounded-lg bg-white/5 border border-white/10 text-xs font-bold uppercase tracking-widest text-text-main hover:bg-white/10 transition-colors">
+                    Add Definition
+                </button>
+</div>
+<!-- Participation Summary -->
+<div class="mt-8 glass-panel rounded-xl p-6 border border-white/10">
+<h3 class="font-display font-bold text-sm uppercase tracking-widest text-text-muted mb-4">Attendees</h3>
+<div class="space-y-3">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-[10px] font-bold text-primary border border-primary/20">AC</div>
+<span class="text-sm font-body text-text-main">Alex Chen</span>
+<span class="ml-auto text-[10px] text-text-muted">65% talk time</span>
+</div>
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-accent/20 flex items-center justify-center text-[10px] font-bold text-accent border border-accent/20">SJ</div>
+<span class="text-sm font-body text-text-main">Sarah Jenkins</span>
+<span class="ml-auto text-[10px] text-text-muted">25% talk time</span>
+</div>
+</div>
+</div>
+</div>
+</aside>
+</main>
+<!-- Audio Mini-Player Widget -->
+<div class="fixed bottom-8 right-8 z-50">
+<div class="glass-panel w-[320px] rounded-xl p-5 shadow-glow-primary/10 border-white/10">
+<div class="flex items-center justify-between mb-4">
+<div class="flex items-center gap-4">
+<button class="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-background-dark shadow-glow-primary hover:scale-105 transition-transform active:scale-95">
+<span class="material-symbols-outlined text-[24px]" style="font-variation-settings: 'FILL' 1;">pause</span>
+</button>
+<div class="flex flex-col">
+<span class="text-[13px] font-display font-bold text-text-main truncate w-36">Product Sync: Q3...</span>
+<span class="text-[11px] font-body text-primary/80">12:22 / 45:20</span>
+</div>
+</div>
+<div class="flex items-center gap-2">
+<button class="text-[11px] font-display font-bold text-text-muted hover:text-text-main bg-white/5 px-2.5 py-1 rounded-md border border-white/10 transition-colors">1.5x</button>
+</div>
+</div>
+<!-- Scrubber -->
+<div class="group px-0.5">
+<div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden relative cursor-pointer">
+<div class="absolute top-0 left-0 h-full bg-primary shadow-[0_0_10px_rgba(0,229,255,0.8)]" style="width: 27%;"></div>
+</div>
+</div>
+</div>
+</div>
+<div id="fortidlp-input-element-parent"></div></body></html>
+
+<!-- TTOBAK Assist Advanced Summary -->
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;900&amp;family=Outfit:wght@300;400;500;600&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "error": "#ffb4ab",
+                        "surface-container-high": "#2a292f",
+                        "primary-fixed": "#9cf0ff",
+                        "on-tertiary": "#2e009c",
+                        "on-secondary": "#4e0078",
+                        "primary": "#c3f5ff",
+                        "tertiary-container": "#d3caff",
+                        "secondary-fixed": "#f4d9ff",
+                        "tertiary": "#f0eaff",
+                        "surface-container-lowest": "#0e0e13",
+                        "secondary": "#e5b5ff",
+                        "outline-variant": "#3b494c",
+                        "inverse-primary": "#006875",
+                        "on-tertiary-fixed-variant": "#4300d9",
+                        "surface-bright": "#39383e",
+                        "on-error": "#690005",
+                        "surface-container-highest": "#35343a",
+                        "on-secondary-fixed": "#30004b",
+                        "on-primary": "#00363d",
+                        "tertiary-fixed-dim": "#c8bfff",
+                        "secondary-fixed-dim": "#e5b5ff",
+                        "surface-container": "#1f1f25",
+                        "inverse-surface": "#e4e1e9",
+                        "on-error-container": "#ffdad6",
+                        "surface-variant": "#35343a",
+                        "surface-dim": "#131318",
+                        "surface-tint": "#00daf3",
+                        "on-secondary-container": "#f7e1ff",
+                        "tertiary-fixed": "#e5deff",
+                        "on-background": "#e4e1e9",
+                        "on-tertiary-container": "#562ded",
+                        "background": "#131318",
+                        "on-primary-fixed": "#001f24",
+                        "primary-container": "#00e5ff",
+                        "error-container": "#93000a",
+                        "on-secondary-fixed-variant": "#7000a8",
+                        "on-tertiary-fixed": "#1a0063",
+                        "surface-container-low": "#1b1b20",
+                        "surface": "#131318",
+                        "primary-fixed-dim": "#00daf3",
+                        "inverse-on-surface": "#303036",
+                        "on-surface-variant": "#bac9cc",
+                        "on-primary-fixed-variant": "#004f58",
+                        "on-primary-container": "#00626e",
+                        "secondary-container": "#a100f0",
+                        "outline": "#849396",
+                        "on-surface": "#e4e1e9"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk"],
+                        "body": ["Outfit"],
+                        "label": ["Inter"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0));
+        }
+        .neon-glow-primary {
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+        }
+        .neon-glow-accent {
+            box-shadow: 0 0 15px rgba(176, 38, 255, 0.3);
+        }
+        .ghost-border {
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+    </style>
+</head>
+<body class="bg-[#09090E] text-on-surface font-body min-h-screen overflow-x-hidden selection:bg-primary-container/30">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-16 bg-slate-950/40 backdrop-blur-3xl border-b border-white/10">
+<div class="flex items-center gap-8">
+<h1 class="text-2xl font-black tracking-tighter text-cyan-400 drop-shadow-[0_0_8px_rgba(0,229,255,0.4)] font-['Space_Grotesk']">
+                TTOBAK Assist
+            </h1>
+<nav class="hidden md:flex gap-6 font-['Space_Grotesk'] text-sm font-medium">
+<a class="text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition-all px-3 py-1 rounded-lg" href="#">Meetings</a>
+<a class="text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition-all px-3 py-1 rounded-lg" href="#">Files</a>
+<a class="text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition-all px-3 py-1 rounded-lg" href="#">Knowledge Base</a>
+<a class="text-cyan-400 font-bold" href="#">Setup</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<button class="material-symbols-outlined text-slate-400 hover:text-cyan-400 transition-all">notifications</button>
+<button class="material-symbols-outlined text-slate-400 hover:text-cyan-400 transition-all">settings</button>
+<div class="w-8 h-8 rounded-full overflow-hidden border border-white/10">
+<img alt="User Profile" data-alt="close up portrait of a professional man with clean lighting and neutral expression against a soft dark background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDiy7MQ0erZj63OAhOwG7cKgRyJVmDMG7bt_ab5EmuNMpPBgYygw8nBAbJxE9vEYon9wfiVf57bXs-xQXHUhjSjtxzzvhiMRGtr4IG48cMRizgzpnWKFiHCSL5SLz5yFnD26vrXxQ4WkDTQadfpf-MkD5lQ7kwIdwqnc6ODBLq9ZwJFH0wx-4qE6NFG3abmM8BYi5zXcSKX74HEvPcFKeBIwnaiKxEmXXv20c8eLLnXmiIEMVSBEnSMFu6ic9s6808B_rBTiGbFffQi"/>
+</div>
+</div>
+</header>
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-0 h-screen w-64 bg-slate-950/40 backdrop-blur-3xl border-r border-white/5 z-40 hidden lg:flex flex-col pt-24 shadow-[20px_0_40px_rgba(0,229,255,0.05)]">
+<div class="px-6 mb-10">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-fuchsia-600 p-0.5">
+<div class="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
+<span class="material-symbols-outlined text-cyan-400 text-xl" style="font-variation-settings: 'FILL' 1;">auto_awesome</span>
+</div>
+</div>
+<div>
+<h2 class="text-xl font-bold text-cyan-400 font-headline leading-tight">Obsidian</h2>
+<p class="text-[10px] text-slate-500 uppercase tracking-widest font-label">Observatory</p>
+</div>
+</div>
+</div>
+<nav class="flex-1 space-y-2 px-3">
+<a class="flex items-center gap-4 text-slate-400 hover:text-white hover:bg-white/5 px-4 py-3 rounded-xl transition-all duration-300 group" href="#">
+<span class="material-symbols-outlined group-hover:text-cyan-400 group-hover:translate-x-1 duration-300">calendar_today</span>
+<span class="font-headline text-sm font-medium">Meetings</span>
+</a>
+<a class="flex items-center gap-4 text-slate-400 hover:text-white hover:bg-white/5 px-4 py-3 rounded-xl transition-all duration-300 group" href="#">
+<span class="material-symbols-outlined group-hover:text-cyan-400 group-hover:translate-x-1 duration-300">folder_open</span>
+<span class="font-headline text-sm font-medium">Files</span>
+</a>
+<a class="flex items-center gap-4 text-slate-400 hover:text-white hover:bg-white/5 px-4 py-3 rounded-xl transition-all duration-300 group" href="#">
+<span class="material-symbols-outlined group-hover:text-cyan-400 group-hover:translate-x-1 duration-300">database</span>
+<span class="font-headline text-sm font-medium">Knowledge Base</span>
+</a>
+<a class="flex items-center gap-4 text-cyan-400 border-l-4 border-fuchsia-600 bg-gradient-to-r from-fuchsia-600/10 to-transparent px-4 py-3 rounded-r-xl transition-all duration-300" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">tune</span>
+<span class="font-headline text-sm font-medium">Setup</span>
+</a>
+</nav>
+<div class="p-6 space-y-4 border-t border-white/5">
+<a class="flex items-center gap-4 text-slate-400 hover:text-cyan-400 transition-all font-headline text-sm" href="#">
+<span class="material-symbols-outlined text-lg">help</span>
+                Support
+            </a>
+<a class="flex items-center gap-4 text-slate-400 hover:text-error transition-all font-headline text-sm" href="#">
+<span class="material-symbols-outlined text-lg">logout</span>
+                Logout
+            </a>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="lg:pl-64 pt-24 pb-12 min-h-screen relative flex items-center justify-center">
+<!-- Background Atmospheric Element -->
+<div class="absolute top-1/4 right-1/4 w-[500px] h-[500px] bg-primary-container/5 blur-[120px] rounded-full pointer-events-none"></div>
+<div class="absolute bottom-1/4 left-1/4 w-[400px] h-[400px] bg-secondary-container/5 blur-[120px] rounded-full pointer-events-none"></div>
+<!-- Pre-Meeting Modal -->
+<div class="relative w-full max-w-2xl mx-4 glass-panel rounded-3xl p-8 shadow-2xl z-10">
+<div class="mb-10">
+<h2 class="text-4xl font-black font-headline tracking-tight text-white mb-2">Initialize Session</h2>
+<p class="text-on-surface-variant font-body text-lg">Configure your environment before launching TTOBAK Assist.</p>
+</div>
+<div class="space-y-8">
+<!-- Section 1: Microphone Selection -->
+<section>
+<label class="block text-sm font-label font-medium text-cyan-400 uppercase tracking-widest mb-4">Audio Source</label>
+<div class="relative group">
+<select class="w-full bg-surface-container-lowest ghost-border rounded-xl px-4 py-4 text-on-surface font-body appearance-none focus:outline-none focus:ring-2 focus:ring-primary-container/40 focus:border-primary-container transition-all cursor-pointer neon-glow-primary/0 group-hover:neon-glow-primary/20">
+<option>HyperX QuadCast S - Studio Microphone</option>
+<option>MacBook Pro Microphone (Built-in)</option>
+<option>AirPods Pro - Wireless Audio</option>
+<option>External Audio Interface (Focusrite)</option>
+</select>
+<div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
+<span class="material-symbols-outlined text-slate-500">keyboard_arrow_down</span>
+</div>
+</div>
+</section>
+<!-- Section 2: File Upload Dropzone -->
+<section>
+<label class="block text-sm font-label font-medium text-cyan-400 uppercase tracking-widest mb-4">Reference Context</label>
+<div class="w-full h-40 border-2 border-dashed border-cyan-400/20 bg-surface-container-low rounded-2xl flex flex-col items-center justify-center gap-3 group hover:border-cyan-400/50 hover:bg-surface-container-high transition-all cursor-pointer">
+<div class="w-12 h-12 rounded-full bg-primary-container/10 flex items-center justify-center text-primary-container group-hover:scale-110 duration-300">
+<span class="material-symbols-outlined text-3xl">upload_file</span>
+</div>
+<div class="text-center">
+<p class="text-white font-medium">Drop meeting brief or previous notes</p>
+<p class="text-xs text-on-surface-variant mt-1 font-label">PDF, TXT, or DOCX up to 25MB</p>
+</div>
+</div>
+</section>
+<!-- Section 3: Integration Selection -->
+<section>
+<label class="block text-sm font-label font-medium text-cyan-400 uppercase tracking-widest mb-4">Sync Destinations</label>
+<div class="grid grid-cols-2 gap-4">
+<!-- Notion -->
+<div class="glass-panel p-4 rounded-2xl flex items-center justify-between border-transparent hover:border-fuchsia-600/30 transition-all cursor-pointer group">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center">
+<img alt="Notion Icon" class="w-6 h-6 grayscale group-hover:grayscale-0 transition-all" data-alt="minimalist black and white logo of the notion software icon on a clean surface" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDDKQ4nkJS28LOhcrJ2TXDKDimArCOj5jR1KvVGuvr0KD56RtsiWRNtjthQmr_vYzrou9oKwkekbZebdk4NKsxaofmzbaeMPR50lpVp7GPrjfbMLvyvti_3XMxQK9MOp3x23PD5wMm1Dolk26MZY7VuE1ttspKVATc5wvRrJI2SI2YWzFTcpc-jge2aQ9XS5OLkH8Wwp20QrQT1TUHVg9OU5LGJyGVmknTetNO__xiOYA314IOQkkjmOAHFFyCQSKQlwxSWyCRRt_Pf"/>
+</div>
+<div>
+<h4 class="font-headline font-bold text-white text-sm">Notion</h4>
+<p class="text-[10px] text-on-surface-variant font-label">Product Wiki</p>
+</div>
+</div>
+<div class="w-10 h-5 bg-fuchsia-600 rounded-full relative p-1 shadow-[0_0_10px_rgba(176,38,255,0.4)]">
+<div class="w-3 h-3 bg-white rounded-full absolute right-1"></div>
+</div>
+</div>
+<!-- Obsidian -->
+<div class="glass-panel p-4 rounded-2xl flex items-center justify-between border-fuchsia-600/50 bg-fuchsia-600/5 transition-all cursor-pointer group">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center">
+<span class="material-symbols-outlined text-fuchsia-500" style="font-variation-settings: 'FILL' 1;">hexagon</span>
+</div>
+<div>
+<h4 class="font-headline font-bold text-white text-sm">Obsidian</h4>
+<p class="text-[10px] text-on-surface-variant font-label">Local Vault</p>
+</div>
+</div>
+<div class="w-10 h-5 bg-fuchsia-600 rounded-full relative p-1 shadow-[0_0_10px_rgba(176,38,255,0.4)]">
+<div class="w-3 h-3 bg-white rounded-full absolute right-1"></div>
+</div>
+</div>
+</div>
+</section>
+</div>
+<!-- CTA -->
+<div class="mt-12 flex items-center justify-between gap-6">
+<button class="flex-1 h-14 rounded-xl font-headline font-bold text-on-primary-fixed bg-primary-container neon-glow-primary hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 group">
+                    Start Meeting
+                    <span class="material-symbols-outlined text-xl group-hover:translate-x-1 duration-200">arrow_forward</span>
+</button>
+<button class="h-14 px-6 rounded-xl font-headline font-bold text-white bg-white/5 ghost-border hover:bg-white/10 transition-all flex items-center justify-center">
+                    Cancel
+                </button>
+</div>
+</div>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="fixed bottom-0 w-full h-16 bg-slate-950/80 backdrop-blur-3xl border-t border-white/10 md:hidden flex justify-around items-center px-4 z-50">
+<button class="flex flex-col items-center gap-1 text-slate-400">
+<span class="material-symbols-outlined">calendar_today</span>
+<span class="text-[10px] font-label">Meetings</span>
+</button>
+<button class="flex flex-col items-center gap-1 text-cyan-400 font-bold">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">tune</span>
+<span class="text-[10px] font-label">Setup</span>
+</button>
+<div class="relative -top-6">
+<button class="w-12 h-12 rounded-full bg-primary-container text-on-primary-fixed shadow-[0_0_15px_rgba(0,229,255,0.4)] flex items-center justify-center">
+<span class="material-symbols-outlined text-2xl">add</span>
+</button>
+</div>
+<button class="flex flex-col items-center gap-1 text-slate-400">
+<span class="material-symbols-outlined">folder_open</span>
+<span class="text-[10px] font-label">Files</span>
+</button>
+<button class="flex flex-col items-center gap-1 text-slate-400">
+<span class="material-symbols-outlined">settings</span>
+<span class="text-[10px] font-label">Settings</span>
+</button>
+</nav>
+</body></html>
+
+<!-- Pre-Meeting Setup -->
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;900&amp;family=Outfit:wght@300;400;500;600&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "error": "#ffb4ab",
+                        "surface-container-high": "#2a292f",
+                        "primary-fixed": "#9cf0ff",
+                        "on-tertiary": "#2e009c",
+                        "on-secondary": "#4e0078",
+                        "primary": "#c3f5ff",
+                        "tertiary-container": "#d3caff",
+                        "secondary-fixed": "#f4d9ff",
+                        "tertiary": "#f0eaff",
+                        "surface-container-lowest": "#0e0e13",
+                        "secondary": "#e5b5ff",
+                        "outline-variant": "#3b494c",
+                        "inverse-primary": "#006875",
+                        "on-tertiary-fixed-variant": "#4300d9",
+                        "surface-bright": "#39383e",
+                        "on-error": "#690005",
+                        "surface-container-highest": "#35343a",
+                        "on-secondary-fixed": "#30004b",
+                        "on-primary": "#00363d",
+                        "tertiary-fixed-dim": "#c8bfff",
+                        "secondary-fixed-dim": "#e5b5ff",
+                        "surface-container": "#1f1f25",
+                        "inverse-surface": "#e4e1e9",
+                        "on-error-container": "#ffdad6",
+                        "surface-variant": "#35343a",
+                        "surface-dim": "#131318",
+                        "surface-tint": "#00daf3",
+                        "on-secondary-container": "#f7e1ff",
+                        "tertiary-fixed": "#e5deff",
+                        "on-background": "#e4e1e9",
+                        "on-tertiary-container": "#562ded",
+                        "background": "#131318",
+                        "on-primary-fixed": "#001f24",
+                        "primary-container": "#00e5ff",
+                        "error-container": "#93000a",
+                        "on-secondary-fixed-variant": "#7000a8",
+                        "on-tertiary-fixed": "#1a0063",
+                        "surface-container-low": "#1b1b20",
+                        "surface": "#131318",
+                        "primary-fixed-dim": "#00daf3",
+                        "inverse-on-surface": "#303036",
+                        "on-surface-variant": "#bac9cc",
+                        "on-primary-fixed-variant": "#004f58",
+                        "on-primary-container": "#00626e",
+                        "secondary-container": "#a100f0",
+                        "outline": "#849396",
+                        "on-surface": "#e4e1e9"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk"],
+                        "body": ["Outfit"],
+                        "label": ["Inter"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0));
+        }
+        .neon-glow-primary {
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+        }
+        .neon-glow-accent {
+            box-shadow: 0 0 15px rgba(176, 38, 255, 0.3);
+        }
+        .ghost-border {
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+    </style>
+</head>
+<body class="bg-[#09090E] text-on-surface font-body min-h-screen overflow-x-hidden selection:bg-primary-container/30">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 flex justify-between items-center px-6 h-16 bg-slate-950/40 backdrop-blur-3xl border-b border-white/10">
+<div class="flex items-center gap-8">
+<h1 class="text-2xl font-black tracking-tighter text-cyan-400 drop-shadow-[0_0_8px_rgba(0,229,255,0.4)] font-['Space_Grotesk']">
+                TTOBAK Assist
+            </h1>
+<nav class="hidden md:flex gap-6 font-['Space_Grotesk'] text-sm font-medium">
+<a class="text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition-all px-3 py-1 rounded-lg" href="#">Meetings</a>
+<a class="text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition-all px-3 py-1 rounded-lg" href="#">Files</a>
+<a class="text-slate-400 hover:text-cyan-300 hover:bg-white/5 transition-all px-3 py-1 rounded-lg" href="#">Knowledge Base</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<button class="material-symbols-outlined text-slate-400 hover:text-cyan-400 transition-all">notifications</button>
+<button class="material-symbols-outlined text-slate-400 hover:text-cyan-400 transition-all">settings</button>
+<div class="w-8 h-8 rounded-full overflow-hidden border border-white/10">
+<img alt="User Profile" data-alt="close up portrait of a professional man with clean lighting and neutral expression against a soft dark background" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDiy7MQ0erZj63OAhOwG7cKgRyJVmDMG7bt_ab5EmuNMpPBgYygw8nBAbJxE9vEYon9wfiVf57bXs-xQXHUhjSjtxzzvhiMRGtr4IG48cMRizgzpnWKFiHCSL5SLz5yFnD26vrXxQ4WkDTQadfpf-MkD5lQ7kwIdwqnc6ODBLq9ZwJFH0wx-4qE6NFG3abmM8BYi5zXcSKX74HEvPcFKeBIwnaiKxEmXXv20c8eLLnXmiIEMVSBEnSMFu6ic9s6808B_rBTiGbFffQi"/>
+</div>
+</div>
+</header>
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-0 h-screen w-64 bg-slate-950/40 backdrop-blur-3xl border-r border-white/5 z-40 hidden lg:flex flex-col pt-24 shadow-[20px_0_40px_rgba(0,229,255,0.05)]">
+<div class="px-6 mb-8">
+<div class="flex items-center gap-3 mb-8">
+<div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-400 to-fuchsia-600 p-0.5">
+<div class="w-full h-full bg-slate-950 rounded-[10px] flex items-center justify-center">
+<span class="material-symbols-outlined text-cyan-400 text-xl" style="font-variation-settings: 'FILL' 1;">auto_awesome</span>
+</div>
+</div>
+<div>
+<h2 class="text-xl font-bold text-cyan-400 font-headline leading-tight">Obsidian</h2>
+<p class="text-[10px] text-slate-500 uppercase tracking-widest font-label">Observatory</p>
+</div>
+</div>
+<!-- New Meeting CTA -->
+<button class="w-full h-12 rounded-xl font-headline font-bold text-on-primary-fixed bg-primary-container neon-glow-primary hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 group mb-2 shadow-[0_0_20px_rgba(0,229,255,0.2)]">
+<span class="material-symbols-outlined text-xl">add_circle</span>
+                New Meeting
+            </button>
+</div>
+<nav class="flex-1 space-y-2 px-3">
+<a class="flex items-center gap-4 text-slate-400 hover:text-white hover:bg-white/5 px-4 py-3 rounded-xl transition-all duration-300 group" href="#">
+<span class="material-symbols-outlined group-hover:text-cyan-400 group-hover:translate-x-1 duration-300">calendar_today</span>
+<span class="font-headline text-sm font-medium">Meetings</span>
+</a>
+<a class="flex items-center gap-4 text-slate-400 hover:text-white hover:bg-white/5 px-4 py-3 rounded-xl transition-all duration-300 group" href="#">
+<span class="material-symbols-outlined group-hover:text-cyan-400 group-hover:translate-x-1 duration-300">folder_open</span>
+<span class="font-headline text-sm font-medium">Files</span>
+</a>
+<a class="flex items-center gap-4 text-slate-400 hover:text-white hover:bg-white/5 px-4 py-3 rounded-xl transition-all duration-300 group" href="#">
+<span class="material-symbols-outlined group-hover:text-cyan-400 group-hover:translate-x-1 duration-300">database</span>
+<span class="font-headline text-sm font-medium">Knowledge Base</span>
+</a>
+</nav>
+<div class="p-6 space-y-4 border-t border-white/5">
+<a class="flex items-center gap-4 text-slate-400 hover:text-cyan-400 transition-all font-headline text-sm" href="#">
+<span class="material-symbols-outlined text-lg">help</span>
+                Support
+            </a>
+<a class="flex items-center gap-4 text-slate-400 hover:text-error transition-all font-headline text-sm" href="#">
+<span class="material-symbols-outlined text-lg">logout</span>
+                Logout
+            </a>
+</div>
+</aside>
+<!-- Main Content Area -->
+<main class="lg:pl-64 pt-24 pb-12 min-h-screen relative flex items-center justify-center">
+<!-- Background Atmospheric Element -->
+<div class="absolute top-1/4 right-1/4 w-[500px] h-[500px] bg-primary-container/5 blur-[120px] rounded-full pointer-events-none"></div>
+<div class="absolute bottom-1/4 left-1/4 w-[400px] h-[400px] bg-secondary-container/5 blur-[120px] rounded-full pointer-events-none"></div>
+<!-- Pre-Meeting Modal -->
+<div class="relative w-full max-w-2xl mx-4 glass-panel rounded-3xl p-8 shadow-2xl z-10 border border-cyan-400/20">
+<div class="mb-10">
+<div class="flex items-center gap-2 mb-2">
+<span class="w-8 h-[2px] bg-cyan-400 rounded-full"></span>
+<span class="text-xs font-label uppercase tracking-widest text-cyan-400 font-bold">Session Setup</span>
+</div>
+<h2 class="text-4xl font-black font-headline tracking-tight text-white mb-2">Initialize Session</h2>
+<p class="text-on-surface-variant font-body text-lg">Configure your environment before launching TTOBAK Assist.</p>
+</div>
+<div class="space-y-8">
+<!-- Section 1: Microphone Selection -->
+<section>
+<label class="block text-sm font-label font-medium text-cyan-400 uppercase tracking-widest mb-4">Audio Source</label>
+<div class="relative group">
+<select class="w-full bg-surface-container-lowest ghost-border rounded-xl px-4 py-4 text-on-surface font-body appearance-none focus:outline-none focus:ring-2 focus:ring-primary-container/40 focus:border-primary-container transition-all cursor-pointer neon-glow-primary/0 group-hover:neon-glow-primary/20">
+<option>HyperX QuadCast S - Studio Microphone</option>
+<option>MacBook Pro Microphone (Built-in)</option>
+<option>AirPods Pro - Wireless Audio</option>
+<option>External Audio Interface (Focusrite)</option>
+</select>
+<div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
+<span class="material-symbols-outlined text-slate-500">keyboard_arrow_down</span>
+</div>
+</div>
+</section>
+<!-- Section 2: File Upload Dropzone -->
+<section>
+<label class="block text-sm font-label font-medium text-cyan-400 uppercase tracking-widest mb-4">Reference Context</label>
+<div class="w-full h-40 border-2 border-dashed border-cyan-400/20 bg-surface-container-low rounded-2xl flex flex-col items-center justify-center gap-3 group hover:border-cyan-400/50 hover:bg-surface-container-high transition-all cursor-pointer">
+<div class="w-12 h-12 rounded-full bg-primary-container/10 flex items-center justify-center text-primary-container group-hover:scale-110 duration-300">
+<span class="material-symbols-outlined text-3xl">upload_file</span>
+</div>
+<div class="text-center">
+<p class="text-white font-medium">Drop meeting brief or previous notes</p>
+<p class="text-xs text-on-surface-variant mt-1 font-label">PDF, TXT, or DOCX up to 25MB</p>
+</div>
+</div>
+</section>
+<!-- Section 3: Integration Selection -->
+<section>
+<label class="block text-sm font-label font-medium text-cyan-400 uppercase tracking-widest mb-4">Sync Destinations</label>
+<div class="grid grid-cols-2 gap-4">
+<!-- Notion -->
+<div class="glass-panel p-4 rounded-2xl flex items-center justify-between border-transparent hover:border-fuchsia-600/30 transition-all cursor-pointer group">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center">
+<img alt="Notion Icon" class="w-6 h-6 grayscale group-hover:grayscale-0 transition-all" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDDKQ4nkJS28LOhcrJ2TXDKDimArCOj5jR1KvVGuvr0KD56RtsiWRNtjthQmr_vYzrou9oKwkekbZebdk4NKsxaofmzbaeMPR50lpVp7GPrjfbMLvyvti_3XMxQK9MOp3x23PD5wMm1Dolk26MZY7VuE1ttspKVATc5wvRrJI2SI2YWzFTcpc-jge2aQ9XS5OLkH8Wwp20QrQT1TUHVg9OU5LGJyGVmknTetNO__xiOYA314IOQkkjmOAHFFyCQSKQlwxSWyCRRt_Pf"/>
+</div>
+<div>
+<h4 class="font-headline font-bold text-white text-sm">Notion</h4>
+<p class="text-[10px] text-on-surface-variant font-label">Product Wiki</p>
+</div>
+</div>
+<div class="w-10 h-5 bg-fuchsia-600 rounded-full relative p-1 shadow-[0_0_10px_rgba(176,38,255,0.4)]">
+<div class="w-3 h-3 bg-white rounded-full absolute right-1"></div>
+</div>
+</div>
+<!-- Obsidian -->
+<div class="glass-panel p-4 rounded-2xl flex items-center justify-between border-fuchsia-600/50 bg-fuchsia-600/5 transition-all cursor-pointer group">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center">
+<span class="material-symbols-outlined text-fuchsia-500" style="font-variation-settings: 'FILL' 1;">hexagon</span>
+</div>
+<div>
+<h4 class="font-headline font-bold text-white text-sm">Obsidian</h4>
+<p class="text-[10px] text-on-surface-variant font-label">Local Vault</p>
+</div>
+</div>
+<div class="w-10 h-5 bg-fuchsia-600 rounded-full relative p-1 shadow-[0_0_10px_rgba(176,38,255,0.4)]">
+<div class="w-3 h-3 bg-white rounded-full absolute right-1"></div>
+</div>
+</div>
+</div>
+</section>
+</div>
+<!-- CTA -->
+<div class="mt-12 flex items-center justify-between gap-6">
+<button class="flex-1 h-14 rounded-xl font-headline font-bold text-on-primary-fixed bg-primary-container neon-glow-primary hover:scale-[1.02] active:scale-95 transition-all flex items-center justify-center gap-2 group">
+                    Start Meeting
+                    <span class="material-symbols-outlined text-xl group-hover:translate-x-1 duration-200">arrow_forward</span>
+</button>
+<button class="h-14 px-6 rounded-xl font-headline font-bold text-white bg-white/5 ghost-border hover:bg-white/10 transition-all flex items-center justify-center">
+                    Cancel
+                </button>
+</div>
+</div>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="fixed bottom-0 w-full h-16 bg-slate-950/80 backdrop-blur-3xl border-t border-white/10 md:hidden flex justify-around items-center px-4 z-50">
+<button class="flex flex-col items-center gap-1 text-slate-400">
+<span class="material-symbols-outlined">calendar_today</span>
+<span class="text-[10px] font-label">Meetings</span>
+</button>
+<button class="flex flex-col items-center gap-1 text-slate-400">
+<span class="material-symbols-outlined">database</span>
+<span class="text-[10px] font-label">Vault</span>
+</button>
+<div class="relative -top-6">
+<button class="w-12 h-12 rounded-full bg-primary-container text-on-primary-fixed shadow-[0_0_15px_rgba(0,229,255,0.4)] flex items-center justify-center">
+<span class="material-symbols-outlined text-2xl">add</span>
+</button>
+</div>
+<button class="flex flex-col items-center gap-1 text-slate-400">
+<span class="material-symbols-outlined">folder_open</span>
+<span class="text-[10px] font-label">Files</span>
+</button>
+<button class="flex flex-col items-center gap-1 text-slate-400">
+<span class="material-symbols-outlined">settings</span>
+<span class="text-[10px] font-label">Settings</span>
+</button>
+</nav>
+</body></html>
+
+<!-- Initialize Meeting Session -->
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>The Obsidian Observatory | Live Recording Studio</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Outfit:wght@300;400;500;600&amp;family=Inter:wght@400;500;600&amp;family=Be+Vietnam+Pro:wght@300;400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "background": "#09090E",
+                        "surface-tint": "#00daf3",
+                        "inverse-on-surface": "#303036",
+                        "surface-container": "#1f1f25",
+                        "tertiary": "#f0eaff",
+                        "on-error": "#690005",
+                        "on-primary": "#00363d",
+                        "tertiary-fixed": "#e5deff",
+                        "surface": "#131318",
+                        "secondary": "#e5b5ff",
+                        "on-secondary-fixed": "#30004b",
+                        "primary": "#c3f5ff",
+                        "surface-container-low": "rgba(19, 19, 24, 0.4)",
+                        "on-surface-variant": "#bac9cc",
+                        "on-tertiary": "#2e009c",
+                        "inverse-primary": "#006875",
+                        "surface-container-highest": "#35343a",
+                        "surface-container-lowest": "#0e0e13",
+                        "on-surface": "#e4e1e9",
+                        "surface-variant": "#35343a",
+                        "tertiary-container": "#d3caff",
+                        "tertiary-fixed-dim": "#c8bfff",
+                        "on-primary-fixed-variant": "#004f58",
+                        "on-tertiary-fixed": "#1a0063",
+                        "on-tertiary-container": "#562ded",
+                        "primary-fixed": "#9cf0ff",
+                        "secondary-fixed-dim": "#e5b5ff",
+                        "primary-fixed-dim": "#00daf3",
+                        "on-secondary": "#4e0078",
+                        "on-background": "#e4e1e9",
+                        "outline": "#849396",
+                        "error": "#ffb4ab",
+                        "secondary-fixed": "#f4d9ff",
+                        "on-secondary-container": "#f7e1ff",
+                        "on-tertiary-fixed-variant": "#4300d9",
+                        "error-container": "#93000a",
+                        "surface-bright": "#39383e",
+                        "surface-dim": "#131318",
+                        "surface-container-high": "rgba(31, 31, 37, 0.6)",
+                        "inverse-surface": "#e4e1e9",
+                        "on-error-container": "#ffdad6",
+                        "primary-container": "#00e5ff",
+                        "on-primary-container": "#00626e",
+                        "secondary-container": "#a100f0",
+                        "on-secondary-fixed-variant": "#7000a8",
+                        "on-primary-fixed": "#001f24",
+                        "outline-variant": "#3b494c"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk"],
+                        "body": ["Be Vietnam Pro"],
+                        "label": ["Inter"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            background-color: #09090E;
+            color: #E4E1E9;
+            font-family: 'Be Vietnam Pro', sans-serif;
+            overflow-x: hidden;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.08);
+        }
+        .waveform-bar {
+            animation: waveform-pulse 1.2s ease-in-out infinite alternate;
+        }
+        @keyframes waveform-pulse {
+            from { height: 4px; opacity: 0.5; }
+            to { height: 100%; opacity: 1; }
+        }
+        .neon-glow-blue {
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+        }
+        .neon-text-blue {
+            text-shadow: 0 0 8px rgba(0, 229, 255, 0.4);
+        }
+        .neon-glow-purple {
+            box-shadow: 0 0 15px rgba(176, 38, 255, 0.4);
+        }
+        .active-pill {
+            box-shadow: -4px 0 12px rgba(176, 38, 255, 0.6);
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(181, 191, 194, 0.2);
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body class="flex min-h-screen">
+<!-- SideNavBar Shell -->
+<aside class="fixed left-0 top-0 h-full w-64 bg-white/5 dark:bg-slate-950/40 backdrop-blur-3xl border-r border-white/10 flex flex-col z-50">
+<div class="p-8">
+<h1 class="text-2xl font-black tracking-tighter text-[#00E5FF] drop-shadow-[0_0_8px_rgba(0,229,255,0.4)] font-['Space_Grotesk']">TTOBAK Assist</h1>
+<p class="font-['Outfit'] text-[10px] uppercase tracking-[0.2em] text-[#BAC9CC] opacity-50 mt-1">Premium Engine</p>
+</div>
+<nav class="flex-1 px-4 space-y-2">
+<a class="flex items-center gap-4 px-4 py-3 rounded-lg text-[#B026FF] border-l-4 border-[#B026FF] bg-[#B026FF]/10 transition-all duration-300" href="#">
+<span class="material-symbols-outlined">event_note</span>
+<span class="font-['Inter'] font-medium">Meetings</span>
+</a>
+<a class="flex items-center gap-4 px-4 py-3 rounded-lg text-[#BAC9CC] opacity-70 hover:bg-white/10 hover:text-[#00E5FF] transition-all duration-300" href="#">
+<span class="material-symbols-outlined">folder</span>
+<span class="font-['Inter'] font-medium">Files</span>
+</a>
+<a class="flex items-center gap-4 px-4 py-3 rounded-lg text-[#BAC9CC] opacity-70 hover:bg-white/10 hover:text-[#00E5FF] transition-all duration-300" href="#">
+<span class="material-symbols-outlined">database</span>
+<span class="font-['Inter'] font-medium">Knowledge Base</span>
+</a>
+<a class="flex items-center gap-4 px-4 py-3 rounded-lg text-[#BAC9CC] opacity-70 hover:bg-white/10 hover:text-[#00E5FF] transition-all duration-300" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-['Inter'] font-medium">Settings</span>
+</a>
+</nav>
+<div class="p-6">
+<button class="w-full py-4 bg-[#00E5FF] text-[#001F24] font-bold rounded-xl flex items-center justify-center gap-2 hover:scale-[0.98] transition-transform shadow-[0_0_15px_rgba(0,229,255,0.4)]">
+<span class="material-symbols-outlined">add</span>
+                New Meeting
+            </button>
+</div>
+<div class="p-6 border-t border-white/5 flex items-center gap-3">
+<img alt="User Workspace Avatar" class="w-10 h-10 rounded-full border border-white/10" data-alt="Cyberpunk style profile avatar of a tech executive with neon accents and clean digital aesthetic" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCd1b0--y5DgMiUrfVw7z8P_oCFthMUmM-rBuaYCmyqwvSqXTlJx8cjzhS6eIQhhPD5UDt02ZKs0M5oYuBrsW9a7NmVchScvwrTtBCY0DmOEK4cOBRakkiOxdFdxYq_yViJoaQxaudCjPZWONhQGUGTSmvhJGv94CADhVY2hYoUgyUEmCv5jFMvZJxa827n2gIHlXg5wK2p28yqyqdK6fuvTO5S6x-67CsD2yG0BdUYY_vAX0gm4okzgPIgM6lzeahcuxmfhK0GnTRU"/>
+<div>
+<p class="text-sm font-semibold text-white">Alex Volkov</p>
+<p class="text-[10px] text-[#BAC9CC]">Pro Tier Access</p>
+</div>
+</div>
+</aside>
+<!-- Main Content Canvas -->
+<main class="flex-1 ml-64 flex flex-col min-h-screen relative overflow-hidden">
+<!-- TopNavBar Shell -->
+<header class="flex justify-between items-center px-8 w-full h-16 border-b border-white/5 bg-transparent backdrop-blur-xl z-40">
+<div class="flex items-center gap-6">
+<span class="text-xl font-bold text-white font-['Space_Grotesk']">Studio</span>
+<div class="relative group">
+<span class="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-[#BAC9CC] text-sm">search</span>
+<input class="bg-white/5 border border-white/10 rounded-full pl-10 pr-4 py-1.5 text-sm focus:ring-2 focus:ring-[#00E5FF]/50 outline-none w-64 transition-all" placeholder="Search insights..." type="text"/>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button class="text-[#BAC9CC] hover:text-[#00E5FF] transition-colors">
+<span class="material-symbols-outlined">notifications</span>
+</button>
+<button class="text-[#BAC9CC] hover:text-[#00E5FF] transition-colors">
+<span class="material-symbols-outlined">help</span>
+</button>
+<div class="w-8 h-8 rounded-full border border-[#00E5FF]/30 overflow-hidden">
+<img alt="User Profile" class="w-full h-full object-cover" data-alt="Close up portrait of professional user with futuristic blue lighting backdrop" src="https://lh3.googleusercontent.com/aida-public/AB6AXuC-dirJVpgIHVaAdKo3HTgxJcw9YmhIr3UCA1ks065KSEUKJltTa3ym66qLlnVH6XvoJLTNQdJDpIzLNE0o-dDC38jNzVsWLuw445h0Tw3-f31RnbC6MLrcoKbFxFBaQUxIecIjIUSkWyjVkH6gfZaSL6xTVAzzCzPDuOir9Y7nD9cJCQ1zF_5R8-qHTiCjXbeYdm3sOP2B5E2wW5NgjELI3Rm4uy9OdJEeSs-KsVHtTFSvogpWYkGA6grrbLwm-VRQawjQXOxeAiJl"/>
+</div>
+</div>
+</header>
+<!-- Dynamic Studio Layout -->
+<div class="flex-1 p-8 flex flex-col gap-6 relative">
+<!-- Combined Header Area (Title & Session Control) -->
+<div class="grid grid-cols-12 gap-6">
+<div class="col-span-8 flex flex-col gap-4">
+<!-- Meeting Title & Suggestions Aligned with Left Column -->
+<div class="flex flex-col gap-3">
+<div class="flex items-center justify-between gap-4">
+<input class="flex-1 bg-transparent border-none text-4xl font-bold font-['Space_Grotesk'] text-white focus:ring-0 placeholder:opacity-30 p-0" placeholder="Unnamed Meeting..." type="text" value="Q3 Roadmap &amp; Architecture Review"/>
+<div class="flex items-center gap-2 flex-shrink-0">
+<span class="text-[10px] font-bold text-[#B026FF] uppercase tracking-widest opacity-60">AI:</span>
+<button class="px-2 py-1 bg-[#B026FF]/10 hover:bg-[#B026FF]/20 border border-[#B026FF]/30 rounded-lg text-[10px] text-[#B026FF] transition-colors">Project Alpha Sync</button>
+<button class="px-2 py-1 bg-[#B026FF]/10 hover:bg-[#B026FF]/20 border border-[#B026FF]/30 rounded-lg text-[10px] text-[#B026FF] transition-colors">Architecture Deep-Dive</button>
+</div>
+</div>
+</div>
+<!-- Compact Status & Waveform Bar - Matches Column Width -->
+<div class="glass rounded-2xl p-4 flex items-center justify-between gap-6 border-l-4 border-[#00E5FF]">
+<div class="flex items-center gap-4">
+<div class="flex items-center gap-2 px-3 py-1 bg-red-500/10 border border-red-500/30 rounded-full">
+<div class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></div>
+<span class="text-[10px] font-bold text-red-500 tracking-widest uppercase">Live</span>
+</div>
+<h2 class="font-bold font-['Space_Grotesk'] text-2xl text-white">01:42:08</h2>
+</div>
+<!-- Minimized Waveform -->
+<div class="flex-1 flex items-center justify-center gap-1 h-8 px-8 opacity-60">
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 0.8s; height: 40%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF]/60 rounded-full" style="animation-duration: 1.1s; height: 60%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 0.6s; height: 80%;"></div>
+<div class="waveform-bar w-1 bg-[#B026FF] rounded-full" style="animation-duration: 1.4s; height: 45%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 0.9s; height: 95%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 1.2s; height: 70%;"></div>
+<div class="waveform-bar w-1 bg-[#B026FF] rounded-full" style="animation-duration: 0.7s; height: 50%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 1s; height: 85%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 0.5s; height: 40%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 1.3s; height: 90%;"></div>
+<div class="waveform-bar w-1 bg-[#B026FF] rounded-full" style="animation-duration: 0.8s; height: 40%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 1.1s; height: 60%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 0.6s; height: 80%;"></div>
+<div class="waveform-bar w-1 bg-[#B026FF] rounded-full" style="animation-duration: 1.4s; height: 45%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 0.9s; height: 95%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 1.2s; height: 70%;"></div>
+<div class="waveform-bar w-1 bg-[#B026FF] rounded-full" style="animation-duration: 0.7s; height: 50%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 1s; height: 85%;"></div>
+<div class="waveform-bar w-1 bg-[#00E5FF] rounded-full" style="animation-duration: 0.5s; height: 40%;"></div>
+<div class="waveform-bar w-1 bg-[#B026FF] rounded-full" style="animation-duration: 1.3s; height: 60%;"></div>
+</div>
+<div class="flex items-center gap-2">
+<button class="w-10 h-10 rounded-full glass border-[#00E5FF]/30 flex items-center justify-center text-[#00E5FF] hover:neon-glow-blue transition-all">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">pause</span>
+</button>
+<button class="w-10 h-10 rounded-full glass border-red-500/30 flex items-center justify-center text-red-500 hover:shadow-[0_0_15px_rgba(239,68,68,0.4)] transition-all">
+<span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">stop</span>
+</button>
+</div>
+</div>
+</div>
+<!-- Spacer for right column balance -->
+<div class="col-span-4 self-end pb-2">
+<div class="flex items-center gap-2 text-[#BAC9CC] text-[10px] font-bold uppercase tracking-widest opacity-50">
+<span class="material-symbols-outlined text-xs">analytics</span> Session Analytics Running
+                    </div>
+</div>
+</div>
+<!-- Content Grid -->
+<div class="grid grid-cols-12 gap-6 flex-1">
+<!-- Left: Transcription -->
+<div class="col-span-8 flex flex-col">
+<div class="glass rounded-3xl p-6 flex flex-col h-full min-h-[500px]">
+<div class="flex justify-between items-center mb-6">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-[#B026FF]">graphic_eq</span>
+<h3 class="text-xl font-bold font-['Space_Grotesk'] text-white">Live Transcript</h3>
+</div>
+<div class="flex glass p-1 rounded-full">
+<button class="px-4 py-1 text-xs font-bold text-white bg-white/10 rounded-full">Original</button>
+<button class="px-4 py-1 text-xs font-medium text-[#BAC9CC] hover:text-white transition-colors">Translated (KR/EN)</button>
+</div>
+</div>
+<div class="flex-1 space-y-6 overflow-y-auto pr-2 custom-scrollbar">
+<div class="flex gap-4">
+<div class="w-8 h-8 rounded-full flex-shrink-0 border border-white/10 flex items-center justify-center bg-[#00E5FF]/20 text-[10px] font-bold text-[#00E5FF]">JD</div>
+<div class="space-y-1">
+<p class="text-[10px] font-bold text-[#BAC9CC] opacity-50 uppercase tracking-widest">James Doe • 10:41:02</p>
+<p class="text-sm font-['Outfit'] text-[#E4E1E9] leading-relaxed">The primary bottleneck we're seeing in the v2 engine is the obsidian-layer processing latency. We need to optimize the shard distribution.</p>
+</div>
+</div>
+<div class="flex gap-4">
+<div class="w-8 h-8 rounded-full flex-shrink-0 border border-white/10 flex items-center justify-center bg-[#B026FF]/20 text-[10px] font-bold text-[#B026FF]">SL</div>
+<div class="space-y-1">
+<p class="text-[10px] font-bold text-[#BAC9CC] opacity-50 uppercase tracking-widest">Sarah Lee • 10:41:25</p>
+<p class="text-sm font-['Outfit'] text-[#E4E1E9] leading-relaxed">Agreed. If we move to a distributed cache on the edge, we can likely reduce the roundtrip by 40ms. Is the budget approved for that scaling?</p>
+</div>
+</div>
+<div class="flex gap-4 border-l-2 border-[#00E5FF] pl-4 animate-pulse">
+<div class="w-8 h-8 rounded-full flex-shrink-0 border border-white/10 flex items-center justify-center bg-[#00E5FF]/20 text-[10px] font-bold text-[#00E5FF]">JD</div>
+<div class="space-y-1">
+<p class="text-[10px] font-bold text-[#00E5FF] uppercase tracking-widest">James Doe • Speaking Now</p>
+<p class="text-sm font-['Outfit'] text-[#E4E1E9] leading-relaxed">That's exactly what I was thinking. Let's look at the AWS costs for the new region nodes...</p>
+</div>
+</div>
+</div>
+<div class="mt-6 pt-4 border-t border-white/5 flex flex-wrap gap-2">
+<span class="px-3 py-1 bg-[#00E5FF]/10 text-[#00E5FF] text-[10px] font-bold rounded-full border border-[#00E5FF]/20 uppercase tracking-wider">#Q3_Roadmap</span>
+<span class="px-3 py-1 bg-[#B026FF]/10 text-[#B026FF] text-[10px] font-bold rounded-full border border-[#B026FF]/20 uppercase tracking-wider">#Budget_Planning</span>
+<span class="px-3 py-1 bg-white/5 text-[#BAC9CC] text-[10px] font-bold rounded-full border border-white/10 uppercase tracking-wider">#Latency_Optimization</span>
+</div>
+</div>
+</div>
+<!-- Right: AI & Summary -->
+<div class="col-span-4 flex flex-col gap-6">
+<!-- Instant AI Summary -->
+<div class="glass rounded-3xl p-6 relative overflow-hidden">
+<div class="absolute top-0 right-0 p-4">
+<div class="flex items-center gap-1.5 text-[10px] font-bold text-[#00E5FF]">
+<span class="material-symbols-outlined text-xs animate-spin" style="font-variation-settings: 'wght' 700;">sync</span>
+                                Updating
+                            </div>
+</div>
+<h3 class="text-lg font-bold font-['Space_Grotesk'] text-white mb-4">Live Summary</h3>
+<ul class="space-y-4">
+<li class="flex gap-3">
+<span class="material-symbols-outlined text-[#00E5FF] text-sm mt-1">check_circle</span>
+<p class="text-sm font-['Outfit'] text-[#BAC9CC]">Identifying obsidian-layer processing bottleneck.</p>
+</li>
+<li class="flex gap-3">
+<span class="material-symbols-outlined text-[#00E5FF] text-sm mt-1">check_circle</span>
+<p class="text-sm font-['Outfit'] text-[#BAC9CC]">Proposed solution: Distributed edge cache.</p>
+</li>
+<li class="flex gap-3">
+<span class="material-symbols-outlined text-[#00E5FF] text-sm mt-1">check_circle</span>
+<p class="text-sm font-['Outfit'] text-[#BAC9CC]">Target: 40ms roundtrip reduction.</p>
+</li>
+</ul>
+</div>
+<!-- AI Assistant Panel -->
+<div class="glass rounded-3xl p-6 flex-1 flex flex-col border-l-2 border-[#B026FF]/30">
+<div class="flex items-center gap-3 mb-6">
+<div class="w-10 h-10 rounded-xl bg-gradient-to-br from-[#B026FF] to-[#00E5FF] flex items-center justify-center neon-glow-purple">
+<span class="material-symbols-outlined text-white" style="font-variation-settings: 'FILL' 1;">bolt</span>
+</div>
+<div>
+<h3 class="text-lg font-bold font-['Space_Grotesk'] text-white leading-tight">AI Assistant</h3>
+<p class="text-[10px] font-bold text-[#B026FF] uppercase tracking-widest">Real-time Insights</p>
+</div>
+</div>
+<div class="mb-6 flex-1 overflow-y-auto custom-scrollbar">
+<p class="text-xs font-bold text-[#BAC9CC] opacity-60 mb-4 uppercase tracking-[0.1em]">Predicted Questions</p>
+<div class="space-y-3">
+<button class="w-full text-left p-3 rounded-xl bg-white/5 border border-white/10 hover:border-[#B026FF]/50 hover:bg-[#B026FF]/5 transition-all group">
+<p class="text-xs font-['Outfit'] text-[#E4E1E9] group-hover:text-white">"What are the specific projected costs for the new edge nodes?"</p>
+</button>
+<button class="w-full text-left p-3 rounded-xl bg-white/5 border border-white/10 hover:border-[#B026FF]/50 hover:bg-[#B026FF]/5 transition-all group">
+<p class="text-xs font-['Outfit'] text-[#E4E1E9] group-hover:text-white">"How will this affect SOC2 compliance?"</p>
+</button>
+</div>
+</div>
+<div class="mt-auto">
+<div class="relative">
+<input class="w-full bg-slate-900/50 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white focus:ring-2 focus:ring-[#B026FF]/50 outline-none pr-12 transition-all" placeholder="Ask AI anything..." type="text"/>
+<button class="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-lg bg-[#B026FF] text-white flex items-center justify-center hover:scale-105 active:scale-95 transition-transform">
+<span class="material-symbols-outlined text-sm">send</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Decorative Elements -->
+<div class="fixed top-1/4 -right-24 w-96 h-96 bg-[#00E5FF]/5 blur-[150px] rounded-full pointer-events-none"></div>
+<div class="fixed bottom-1/4 -left-24 w-96 h-96 bg-[#B026FF]/5 blur-[150px] rounded-full pointer-events-none"></div>
+</main>
+</body></html>
+
+<!-- TTOBAK Assist Studio (Refined Layout) -->
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Outfit:wght@300;400;500;600&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-surface-variant": "#bac9cc",
+                        "tertiary-fixed-dim": "#c8bfff",
+                        "surface-variant": "#35343a",
+                        "on-primary-container": "#00626e",
+                        "outline": "#849396",
+                        "inverse-primary": "#006875",
+                        "surface-tint": "#00daf3",
+                        "on-secondary-container": "#f7e1ff",
+                        "on-error-container": "#ffdad6",
+                        "background": "#09090E",
+                        "inverse-surface": "#e4e1e9",
+                        "surface-container-low": "rgba(19, 19, 24, 0.4)",
+                        "surface": "#09090E",
+                        "secondary-fixed-dim": "#e5b5ff",
+                        "primary-fixed": "#9cf0ff",
+                        "secondary-container": "#a100f0",
+                        "error": "#ffb4ab",
+                        "error-container": "#93000a",
+                        "on-primary-fixed": "#001f24",
+                        "on-tertiary-fixed-variant": "#4300d9",
+                        "inverse-on-surface": "#303036",
+                        "on-secondary-fixed": "#30004b",
+                        "on-error": "#690005",
+                        "surface-dim": "#131318",
+                        "surface-bright": "#39383e",
+                        "on-surface": "#e4e1e9",
+                        "on-background": "#e4e1e9",
+                        "tertiary-fixed": "#e5deff",
+                        "secondary": "#B026FF",
+                        "primary-container": "#00E5FF",
+                        "primary-fixed-dim": "#00daf3",
+                        "secondary-fixed": "#f4d9ff",
+                        "outline-variant": "rgba(255, 255, 255, 0.08)",
+                        "on-primary-fixed-variant": "#004f58",
+                        "surface-container-lowest": "#0e0e13",
+                        "on-tertiary-fixed": "#1a0063",
+                        "tertiary": "#f0eaff",
+                        "primary": "#00E5FF",
+                        "on-secondary-fixed-variant": "#7000a8",
+                        "surface-container-highest": "#35343a",
+                        "on-primary": "#00363d",
+                        "surface-container": "rgba(31, 31, 37, 0.6)",
+                        "on-secondary": "#ffffff",
+                        "on-tertiary": "#2e009c",
+                        "tertiary-container": "#d3caff",
+                        "on-tertiary-container": "#562ded",
+                        "surface-container-high": "rgba(31, 31, 37, 0.6)"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "fontFamily": {
+                        "headline": ["Space Grotesk"],
+                        "body": ["Outfit"],
+                        "label": ["Inter"]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-panel {
+            backdrop-filter: blur(24px);
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0));
+        }
+        .neon-glow-primary {
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+        }
+        .neon-glow-secondary {
+            box-shadow: 0 0 15px rgba(176, 38, 255, 0.4);
+        }
+        body {
+            background-color: #09090E;
+            color: #e4e1e9;
+        }
+    </style>
+</head>
+<body class="font-body selection:bg-primary/30">
+<!-- TopAppBar -->
+<header class="fixed top-0 left-0 w-full z-50 flex justify-between items-center px-6 h-16 bg-transparent backdrop-blur-3xl bg-white/5 border-b border-white/10 shadow-[0_0_15px_rgba(0,229,255,0.1)]">
+<div class="flex items-center gap-4">
+<span class="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-500 font-headline tracking-tight">TTOBAK Assist</span>
+<span class="hidden md:block px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium border border-primary/20">Preparation Mode</span>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-4 text-slate-400">
+<button class="hover:bg-white/10 transition-all duration-300 p-2 rounded-lg active:scale-95">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+</button>
+<button class="hover:bg-white/10 transition-all duration-300 p-2 rounded-lg active:scale-95">
+<span class="material-symbols-outlined" data-icon="help">help</span>
+</button>
+</div>
+<div class="h-8 w-8 rounded-full overflow-hidden border border-white/20">
+<img alt="User profile" class="w-full h-full object-cover" data-alt="professional headshot of a user with a neutral background, soft studio lighting, high resolution" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCtNE94Tb2PS4a8pRdV0BFDqOA76-hRFCrSGDZhyanmu5LmNoV1C4xbm61p_A2O3wNQg4MpZLPMTgrW3vlOR6sj_TJ8l0kqBWt7LP0yM9JYE2-P6118Q1FKWYHSiBD0__LOYV8snGF45DcqT0_B13Va2e5aCWJ1atc209U0nGj-yIOA0l-1eUNJzoLxUVBE1qwn4Sv_7tR8FUgS1dNkzE1UHZrWbqrw4c5jMtTUjkivaQPUG0q2uIdZZ1lvlgEKiclbL7QhQpeswre9"/>
+</div>
+</div>
+</header>
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-0 h-screen w-64 z-40 flex flex-col pt-20 pb-6 bg-[#09090E]/40 backdrop-blur-3xl border-r border-white/10 shadow-2xl shadow-cyan-900/20 font-headline">
+<nav class="flex-1 px-4 space-y-2">
+<a class="flex items-center gap-3 text-cyan-400 bg-white/5 border-l-4 border-purple-600 px-4 py-3 shadow-[0_0_10px_rgba(176,38,255,0.3)] transition-all duration-300" href="#">
+<span class="material-symbols-outlined" data-icon="calendar_today">calendar_today</span>
+<span class="font-medium">Meetings</span>
+</a>
+<a class="flex items-center gap-3 text-slate-400 px-4 py-3 hover:text-cyan-300 hover:bg-white/5 transition-all hover:translate-x-1 duration-300" href="#">
+<span class="material-symbols-outlined" data-icon="folder_open">folder_open</span>
+<span>Files</span>
+</a>
+<a class="flex items-center gap-3 text-slate-400 px-4 py-3 hover:text-cyan-300 hover:bg-white/5 transition-all hover:translate-x-1 duration-300" href="#">
+<span class="material-symbols-outlined" data-icon="database">database</span>
+<span>Knowledge Base</span>
+</a>
+<a class="flex items-center gap-3 text-slate-400 px-4 py-3 hover:text-cyan-300 hover:bg-white/5 transition-all hover:translate-x-1 duration-300" href="#">
+<span class="material-symbols-outlined" data-icon="settings">settings</span>
+<span>Settings</span>
+</a>
+</nav>
+<div class="px-4 mt-auto space-y-2">
+<a class="flex items-center gap-3 text-slate-400 px-4 py-3 hover:text-cyan-300 hover:bg-white/5 transition-all duration-300" href="#">
+<span class="material-symbols-outlined" data-icon="help">help</span>
+<span>Help Center</span>
+</a>
+<a class="flex items-center gap-3 text-slate-400 px-4 py-3 hover:text-red-400 hover:bg-white/5 transition-all duration-300" href="#">
+<span class="material-symbols-outlined" data-icon="logout">logout</span>
+<span>Log Out</span>
+</a>
+</div>
+</aside>
+<!-- Main Content Canvas -->
+<main class="pl-64 pt-20 min-h-screen">
+<div class="max-w-7xl mx-auto p-8 grid grid-cols-12 gap-8">
+<!-- Hero / Meeting Details Section -->
+<div class="col-span-12 glass-panel rounded-xl p-8 mb-4 relative overflow-hidden">
+<div class="absolute top-0 right-0 p-8 opacity-10">
+<span class="material-symbols-outlined text-9xl text-primary" data-icon="hub">hub</span>
+</div>
+<div class="relative z-10">
+<div class="flex items-center gap-2 text-primary mb-2">
+<span class="material-symbols-outlined text-sm" data-icon="emergency_recording" style="font-variation-settings: 'FILL' 1;">emergency_recording</span>
+<span class="text-xs font-bold tracking-widest font-label uppercase">PREPARATION PHASE</span>
+</div>
+<h1 class="text-5xl font-bold font-headline text-on-surface mb-6 leading-tight">Q4 Strategic Architecture Review</h1>
+<div class="flex flex-wrap gap-8">
+<div class="flex items-center gap-3">
+<div class="h-10 w-10 rounded-lg bg-white/5 flex items-center justify-center border border-white/10">
+<span class="material-symbols-outlined text-primary" data-icon="calendar_month">calendar_month</span>
+</div>
+<div>
+<p class="text-xs text-slate-500 font-label">DATE</p>
+<p class="text-sm font-medium">October 24, 2024</p>
+</div>
+</div>
+<div class="flex items-center gap-3">
+<div class="h-10 w-10 rounded-lg bg-white/5 flex items-center justify-center border border-white/10">
+<span class="material-symbols-outlined text-primary" data-icon="schedule">schedule</span>
+</div>
+<div>
+<p class="text-xs text-slate-500 font-label">TIME</p>
+<p class="text-sm font-medium">14:00 - 15:30 (GMT+2)</p>
+</div>
+</div>
+<div class="flex items-center gap-3">
+<div class="flex -space-x-2">
+<img alt="Participant" class="h-8 w-8 rounded-full border-2 border-[#09090E]" data-alt="close-up of a diverse professional person in modern business attire, high quality portrait" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB2P8cWe9YJylafB7z-K6xch8VTXejROI94oAEUKaU5k5JQu1D9Y_cDzJ9AAPwRkSotq-ebcaZ8Ewmxj-tBQo8kPUX9eSMqn_jc_HXl0clxef2AstQ-iLMR6lzPaQjhtogY8Cv3xBoBbBH_dykaoy8vcOmHrc2hWuJjGuQI6t7lHoz24n4yKvPaZT70apfFLNXzEn-VbT6faSXUwST0StCfFVmyHiNu_hEef_aAfxm4y4pfJdTmPmfSmvQ2Sv8HAFfb95aXCUYnpeA7"/>
+<img alt="Participant" class="h-8 w-8 rounded-full border-2 border-[#09090E]" data-alt="professional person smiling with natural office background, soft lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuAD6JT8stfRHokZj_doUXvAHo04hjUhPujiGv59d_57Z9nR2-_npjzbGMqZBHFPdY1Grnqv419Ai-TmZCco6MTAVWhxpuIJDOMBUUD8bm3FOx__kvGu80TV6VpOgS865tzOzs2e9uzmsfbgqC2UpUyb4b-9UdR9Y2ecDKQWo-NaJhUygSvZ4pQE5ufh_9HjuEcGH5042-UEKztVAecBfiEnhPPl65S8a7qw9OpAnRIQtauzdDpk9Ryvv4zJ1cWJ5IkDxZKkcrUfiQ7X"/>
+<img alt="Participant" class="h-8 w-8 rounded-full border-2 border-[#09090E]" data-alt="modern corporate headshot of a business woman, clean background, cinematic lighting" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCzXBIIehxS0kYF0bMwcUsmZPTMPPsNWiJ7gK3rWa1QcTN-ir5V2FSFx2oqan-MgTtL4uLiWhS700KM4O5dP74BHmFXx_3MkoPU2S_ZgbQtKNwyox3NzBojDph-jW18s3OL3pM-Xei7zcaCBnh4oA_55cj1FJuW5GKT3VQaEfYyaT-uwkHTPpVJt_CpYa0EKRT_rFSRXOtE7QJdX4g9taOrZXKERwLOXa_xHIewARiK3lfMNWsKzaQ5h6o-dGf-VXk9DkrPgitq_ey1"/>
+<div class="h-8 w-8 rounded-full border-2 border-[#09090E] bg-surface-container-highest flex items-center justify-center text-[10px] font-bold">+5</div>
+</div>
+<div class="ml-2">
+<p class="text-xs text-slate-500 font-label">PARTICIPANTS</p>
+<p class="text-sm font-medium">8 Members Invited</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Left Column: Meeting Agenda (Bento Style) -->
+<div class="col-span-12 lg:col-span-7 flex flex-col gap-6">
+<section class="glass-panel rounded-xl p-6 flex-1">
+<div class="flex items-center justify-between mb-8">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-secondary" data-icon="format_list_bulleted">format_list_bulleted</span>
+<h2 class="text-2xl font-bold font-headline">Meeting Agenda</h2>
+</div>
+<button class="text-xs text-secondary-fixed hover:underline transition-all">Templates</button>
+</div>
+<div class="space-y-6">
+<!-- Agenda Item 1 -->
+<div class="group flex items-start gap-4 p-4 rounded-xl hover:bg-white/5 transition-all">
+<div class="mt-1">
+<input checked="" class="w-5 h-5 rounded border-white/20 bg-transparent text-secondary focus:ring-secondary ring-offset-0" type="checkbox"/>
+</div>
+<div class="flex-1">
+<h4 class="text-on-surface font-medium mb-1">Infrastructure Scalability Recap</h4>
+<p class="text-sm text-slate-400">Review current server loads and projected growth for the holiday season peak.</p>
+</div>
+<button class="opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-slate-500" data-icon="drag_indicator">drag_indicator</span>
+</button>
+</div>
+<!-- Agenda Item 2 -->
+<div class="group flex items-start gap-4 p-4 rounded-xl hover:bg-white/5 transition-all">
+<div class="mt-1">
+<input class="w-5 h-5 rounded border-white/20 bg-transparent text-secondary focus:ring-secondary ring-offset-0" type="checkbox"/>
+</div>
+<div class="flex-1">
+<h4 class="text-on-surface font-medium mb-1">Cost-Optimization Proposal</h4>
+<p class="text-sm text-slate-400">Analyze the shift from AWS EC2 to managed Lambda services for background processing.</p>
+</div>
+<button class="opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-slate-500" data-icon="drag_indicator">drag_indicator</span>
+</button>
+</div>
+<!-- Agenda Item 3 -->
+<div class="group flex items-start gap-4 p-4 rounded-xl hover:bg-white/5 transition-all">
+<div class="mt-1">
+<input class="w-5 h-5 rounded border-white/20 bg-transparent text-secondary focus:ring-secondary ring-offset-0" type="checkbox"/>
+</div>
+<div class="flex-1">
+<h4 class="text-on-surface font-medium mb-1">Security Audit Results</h4>
+<p class="text-sm text-slate-400">Discussion on the recent penetration test findings and remediation timeline.</p>
+<div class="mt-3 flex gap-2">
+<span class="px-2 py-0.5 rounded bg-red-500/10 text-red-400 text-[10px] border border-red-500/20 font-bold tracking-wider">HIGH PRIORITY</span>
+</div>
+</div>
+<button class="opacity-0 group-hover:opacity-100 transition-opacity">
+<span class="material-symbols-outlined text-slate-500" data-icon="drag_indicator">drag_indicator</span>
+</button>
+</div>
+<!-- Notion-style Input -->
+<div class="flex items-center gap-4 p-4 mt-4 border border-dashed border-white/10 rounded-xl">
+<span class="material-symbols-outlined text-slate-600" data-icon="add">add</span>
+<input class="bg-transparent border-none focus:ring-0 text-sm text-slate-400 w-full placeholder:text-slate-600" placeholder="Type '/' for commands or click to add agenda item..." type="text"/>
+</div>
+</div>
+</section>
+</div>
+<!-- Right Column: Files & CTA -->
+<div class="col-span-12 lg:col-span-5 flex flex-col gap-6">
+<!-- Files Section -->
+<section class="glass-panel rounded-xl p-6">
+<div class="flex items-center justify-between mb-8">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary" data-icon="folder_zip">folder_zip</span>
+<h2 class="text-2xl font-bold font-headline">Attached Files</h2>
+</div>
+<span class="text-xs text-slate-500 font-label">3 Total</span>
+</div>
+<div class="space-y-4">
+<!-- File Card -->
+<div class="group glass-panel border-none bg-white/5 p-4 rounded-xl flex items-center justify-between hover:bg-white/10 transition-all duration-300 hover:shadow-[0_0_15px_rgba(0,229,255,0.1)]">
+<div class="flex items-center gap-4">
+<div class="h-12 w-12 rounded-lg bg-red-500/10 flex items-center justify-center text-red-500">
+<span class="material-symbols-outlined" data-icon="picture_as_pdf" style="font-variation-settings: 'FILL' 1;">picture_as_pdf</span>
+</div>
+<div>
+<h5 class="text-sm font-medium text-on-surface">Architect_Design_v4.pdf</h5>
+<p class="text-xs text-slate-500">2.4 MB • Uploaded 2h ago</p>
+</div>
+</div>
+<button class="text-slate-500 hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined" data-icon="more_vert">more_vert</span>
+</button>
+</div>
+<!-- File Card -->
+<div class="group glass-panel border-none bg-white/5 p-4 rounded-xl flex items-center justify-between hover:bg-white/10 transition-all duration-300 hover:shadow-[0_0_15px_rgba(0,229,255,0.1)]">
+<div class="flex items-center gap-4">
+<div class="h-12 w-12 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-500">
+<span class="material-symbols-outlined" data-icon="slideshow" style="font-variation-settings: 'FILL' 1;">slideshow</span>
+</div>
+<div>
+<h5 class="text-sm font-medium text-on-surface">Q4_Roadmap_Slides.pptx</h5>
+<p class="text-xs text-slate-500">12.1 MB • Uploaded yesterday</p>
+</div>
+</div>
+<button class="text-slate-500 hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined" data-icon="more_vert">more_vert</span>
+</button>
+</div>
+<!-- File Card -->
+<div class="group glass-panel border-none bg-white/5 p-4 rounded-xl flex items-center justify-between hover:bg-white/10 transition-all duration-300 hover:shadow-[0_0_15px_rgba(0,229,255,0.1)]">
+<div class="flex items-center gap-4">
+<div class="h-12 w-12 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-500">
+<span class="material-symbols-outlined" data-icon="table_chart" style="font-variation-settings: 'FILL' 1;">table_chart</span>
+</div>
+<div>
+<h5 class="text-sm font-medium text-on-surface">Cloud_Budget_Estimates.csv</h5>
+<p class="text-xs text-slate-500">84 KB • Uploaded yesterday</p>
+</div>
+</div>
+<button class="text-slate-500 hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined" data-icon="more_vert">more_vert</span>
+</button>
+</div>
+<!-- Upload Button -->
+<button class="w-full mt-4 flex flex-col items-center justify-center gap-2 p-8 border-2 border-dashed border-white/10 rounded-xl hover:border-primary/40 transition-all group active:scale-[0.99]">
+<div class="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-primary group-hover:neon-glow-primary transition-all">
+<span class="material-symbols-outlined" data-icon="cloud_upload">cloud_upload</span>
+</div>
+<p class="text-sm font-medium text-on-surface">Upload New Document</p>
+<p class="text-xs text-slate-500">Max size: 50MB</p>
+</button>
+</div>
+</section>
+<!-- Actions / Start Meeting -->
+<section class="glass-panel rounded-xl p-8 bg-gradient-to-br from-secondary/5 to-transparent">
+<div class="text-center">
+<div class="mb-6 inline-flex h-16 w-16 items-center justify-center rounded-full bg-secondary/10 text-secondary border border-secondary/20">
+<span class="material-symbols-outlined text-3xl" data-icon="rocket_launch">rocket_launch</span>
+</div>
+<h3 class="text-xl font-bold font-headline mb-2">Ready to broadcast?</h3>
+<p class="text-sm text-slate-400 mb-8">All participants have been notified. Start the session to begin live transcription and meeting insights.</p>
+<button class="w-full py-4 rounded-xl bg-secondary text-white font-bold font-headline flex items-center justify-center gap-3 transition-all hover:neon-glow-secondary active:scale-[0.98]">
+<span class="material-symbols-outlined" data-icon="play_circle" style="font-variation-settings: 'FILL' 1;">play_circle</span>
+                            START MEETING
+                        </button>
+<div class="mt-6 flex items-center justify-center gap-4">
+<button class="text-xs font-label text-slate-500 hover:text-on-surface transition-colors flex items-center gap-1">
+<span class="material-symbols-outlined text-sm" data-icon="settings">settings</span> Configure Recording
+                            </button>
+<div class="w-1 h-1 rounded-full bg-slate-700"></div>
+<button class="text-xs font-label text-slate-500 hover:text-on-surface transition-colors flex items-center gap-1">
+<span class="material-symbols-outlined text-sm" data-icon="history">history</span> View Past
+                            </button>
+</div>
+</div>
+</section>
+</div>
+<!-- Asymmetric Bottom Section: Meeting Intelligence Insights (Contextual) -->
+<div class="col-span-12">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+<div class="glass-panel p-6 rounded-xl border-l-2 border-cyan-500">
+<h6 class="text-xs font-bold text-cyan-500 font-label tracking-widest mb-3">AI PREDICTION</h6>
+<p class="text-sm leading-relaxed text-on-surface-variant">Based on your agenda, this meeting is likely to focus heavily on <span class="text-on-surface font-medium">resource allocation</span>. I've pre-loaded relevant cost reports from September.</p>
+</div>
+<div class="glass-panel p-6 rounded-xl border-l-2 border-purple-500">
+<h6 class="text-xs font-bold text-purple-500 font-label tracking-widest mb-3">SMART SUMMARY</h6>
+<p class="text-sm leading-relaxed text-on-surface-variant">Last time you discussed <span class="text-on-surface font-medium">security protocols</span>, the group agreed to follow up by Oct 25th. I've highlighted this in your notes.</p>
+</div>
+<div class="glass-panel p-6 rounded-xl border-l-2 border-slate-500">
+<h6 class="text-xs font-bold text-slate-500 font-label tracking-widest mb-3">PARTICIPANT AVAILABILITY</h6>
+<p class="text-sm leading-relaxed text-on-surface-variant">6 out of 8 participants have confirmed. Sarah and James are currently in other sessions but expected to join by 14:15.</p>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>

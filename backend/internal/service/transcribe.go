@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -36,8 +37,10 @@ func NewTranscribeService(
 	}
 }
 
-// StartTranscriptionJob starts an AWS Transcribe job for the given audio file
-func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID, bucket, key string) (string, error) {
+// StartTranscriptionJob starts an AWS Transcribe job for the given audio file.
+// outputKey overrides the default transcript output path when non-empty (used for multi-part audio).
+// An optional vocabularyName can be passed to use a custom vocabulary (pass "" for default).
+func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID, bucket, key, outputKey string, vocabularyName ...string) (string, error) {
 	// Determine media format from key
 	mediaFormat := s.getMediaFormat(key)
 	if mediaFormat == "" {
@@ -45,22 +48,35 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 	}
 
 	// Create unique job name
-	jobName := fmt.Sprintf("ttobak-%s", meetingID)
+	jobName := fmt.Sprintf("ttobak-%s-%d", meetingID, time.Now().Unix())
 	mediaURI := fmt.Sprintf("s3://%s/%s", bucket, key)
 
+	resolvedVocab := s.resolveVocabularyName(vocabularyName...)
+
+	if outputKey == "" {
+		outputKey = fmt.Sprintf("transcripts/%s.json", meetingID)
+	}
+
 	input := &transcribe.StartTranscriptionJobInput{
-		TranscriptionJobName: aws.String(jobName),
-		LanguageCode:         types.LanguageCodeKoKr, // Korean default
+		TranscriptionJobName:      aws.String(jobName),
+		IdentifyMultipleLanguages: aws.Bool(true),
+		LanguageOptions:           []types.LanguageCode{types.LanguageCodeKoKr, types.LanguageCodeEnUs},
 		Media: &types.Media{
 			MediaFileUri: aws.String(mediaURI),
 		},
 		MediaFormat:      types.MediaFormat(mediaFormat),
 		OutputBucketName: aws.String(s.outputBucket),
-		OutputKey:        aws.String(fmt.Sprintf("transcripts/%s.json", meetingID)),
+		OutputKey:        aws.String(outputKey),
 		Settings: &types.Settings{
 			ShowSpeakerLabels: aws.Bool(true),
 			MaxSpeakerLabels:  aws.Int32(10),
 		},
+	}
+
+	if resolvedVocab != "" {
+		input.LanguageIdSettings = map[string]types.LanguageIdSettings{
+			"ko-KR": {VocabularyName: aws.String(resolvedVocab)},
+		}
 	}
 
 	_, err := s.transcribeClient.StartTranscriptionJob(ctx, input)
@@ -78,13 +94,9 @@ func (s *TranscribeService) StartTranscriptionJob(ctx context.Context, meetingID
 }
 
 // StartNovaSonicTranscription starts Nova Sonic transcription (placeholder - falls back to standard Transcribe)
-// Nova Sonic would use Amazon Transcribe Streaming with the nova-sonic model
-func (s *TranscribeService) StartNovaSonicTranscription(ctx context.Context, meetingID, bucket, key string) (string, error) {
-	// Nova Sonic transcription would use streaming API
-	// For now, this is a placeholder that uses standard Transcribe as fallback
-	// In production, this would use Amazon Transcribe Streaming API with WebSocket
-
-	jobName := fmt.Sprintf("ttobak-nova-%s", meetingID)
+// outputKey overrides the default transcript output path when non-empty (used for multi-part audio).
+func (s *TranscribeService) StartNovaSonicTranscription(ctx context.Context, meetingID, bucket, key, outputKey string) (string, error) {
+	jobName := fmt.Sprintf("ttobak-nova-%s-%d", meetingID, time.Now().Unix())
 	mediaFormat := s.getMediaFormat(key)
 	if mediaFormat == "" {
 		return "", fmt.Errorf("unsupported audio format")
@@ -92,15 +104,20 @@ func (s *TranscribeService) StartNovaSonicTranscription(ctx context.Context, mee
 
 	mediaURI := fmt.Sprintf("s3://%s/%s", bucket, key)
 
+	if outputKey == "" {
+		outputKey = fmt.Sprintf("transcripts/%s-nova.json", meetingID)
+	}
+
 	input := &transcribe.StartTranscriptionJobInput{
-		TranscriptionJobName: aws.String(jobName),
-		LanguageCode:         types.LanguageCodeKoKr,
+		TranscriptionJobName:      aws.String(jobName),
+		IdentifyMultipleLanguages: aws.Bool(true),
+		LanguageOptions:           []types.LanguageCode{types.LanguageCodeKoKr, types.LanguageCodeEnUs},
 		Media: &types.Media{
 			MediaFileUri: aws.String(mediaURI),
 		},
 		MediaFormat:      types.MediaFormat(mediaFormat),
 		OutputBucketName: aws.String(s.outputBucket),
-		OutputKey:        aws.String(fmt.Sprintf("transcripts/%s-nova.json", meetingID)),
+		OutputKey:        aws.String(outputKey),
 		Settings: &types.Settings{
 			ShowSpeakerLabels: aws.Bool(true),
 			MaxSpeakerLabels:  aws.Int32(10),
@@ -146,18 +163,25 @@ func (s *TranscribeService) ProcessTranscriptionComplete(ctx context.Context, me
 		return fmt.Errorf("meeting not found: %s", meetingID)
 	}
 
+	fields := map[string]interface{}{}
 	if isNova {
 		meeting.TranscriptB = transcriptText
+		fields["transcriptB"] = transcriptText
 	} else {
 		meeting.TranscriptA = transcriptText
+		fields["transcriptA"] = transcriptText
 	}
 
 	// Check if both transcripts are complete
 	if meeting.TranscriptA != "" && meeting.TranscriptB != "" {
-		meeting.Status = model.StatusSummarizing
+		fields["status"] = model.StatusSummarizing
 	}
 
-	return s.repo.UpdateMeeting(ctx, meeting)
+	// A partial UpdateItem, not the whole-item UpdateMeeting -- this call site
+	// never populates ProjectIDs, so a whole-item PutItem would race a
+	// concurrent LinkMeeting/UnlinkMeeting (see UpdateMeeting's comment) for
+	// no reason: it only ever needs to touch these two-or-three attributes.
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, fields)
 }
 
 // getMediaFormat determines the media format from the file key
@@ -193,8 +217,16 @@ func (s *TranscribeService) updateMeetingStatus(ctx context.Context, meetingID, 
 		return fmt.Errorf("meeting not found: %s", meetingID)
 	}
 
-	meeting.Status = status
-	return s.repo.UpdateMeeting(ctx, meeting)
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{"status": status})
+}
+
+// resolveVocabularyName returns the vocabulary name to use for transcription.
+// If a custom name is provided, it is used; otherwise the default base vocabulary is used.
+func (s *TranscribeService) resolveVocabularyName(vocabularyName ...string) string {
+	if len(vocabularyName) > 0 && vocabularyName[0] != "" {
+		return vocabularyName[0]
+	}
+	return "ttobak-aws-tech-terms"
 }
 
 // ExtractMeetingIDFromAudioKey extracts the meeting ID from an S3 key

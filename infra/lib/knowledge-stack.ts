@@ -4,7 +4,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 
 export interface KnowledgeStackProps extends cdk.StackProps {
-  // No dependencies required
+  // No dependencies required - role names are deterministic
 }
 
 export class KnowledgeStack extends cdk.Stack {
@@ -77,13 +77,14 @@ export class KnowledgeStack extends cdk.Stack {
                 Resource: [`collection/${collectionName}`],
               },
             ],
-            AllowFromPublic: true,
+            AllowFromPublic: true, // AOSS requires true or SourceVPCEs — VPC endpoint needed to restrict
           },
         ]),
       },
     });
 
     // Data Access Policy for OpenSearch Serverless
+    // Note: Role names are deterministic (ttobak-kb-role, ttobak-api-role) and created by AiStack
     const dataAccessPolicy = new cdk.CfnResource(this, 'OSSDataAccessPolicy', {
       type: 'AWS::OpenSearchServerless::AccessPolicy',
       properties: {
@@ -114,7 +115,7 @@ export class KnowledgeStack extends cdk.Stack {
               },
             ],
             Principal: [
-              'arn:aws:iam::${AWS::AccountId}:role/ttobak-lambda-role',
+              'arn:aws:iam::${AWS::AccountId}:role/ttobak-kb-role',
               'arn:aws:iam::${AWS::AccountId}:role/ttobak-bedrock-kb-role',
               'arn:aws:iam::${AWS::AccountId}:role/mgmt-vpc-VSCode-Role',
             ],
@@ -129,7 +130,7 @@ export class KnowledgeStack extends cdk.Stack {
       properties: {
         Name: collectionName,
         Type: 'VECTORSEARCH',
-        Description: 'Ttobak Knowledge Base vector store',
+        Description: 'TTOBAK Knowledge Base vector store',
       },
     });
 
@@ -174,12 +175,29 @@ export class KnowledgeStack extends cdk.Stack {
       })
     );
 
-    // Bedrock Knowledge Base
+    // Phase 1: AOSS collection + index must exist before KB can be created.
+    // The actual KnowledgeBase/DataSource were created out-of-band (not by
+    // the commented-out Phase 2 CFN resources below) -- these are their real
+    // IDs, not placeholders. Do not redeploy TtobakKnowledgeStack; it stages
+    // a teardown of this out-of-band KB (see root CLAUDE.md Known Issues).
+    //
+    // Read from context (cdk.json's ttobak:knowledgeBaseId/dataSourceId) per
+    // CLAUDE.md's "extract hardcoded infra values to CDK context" known
+    // issue, but fall back to the real values -- not 'PENDING' -- if that
+    // context key is ever missing. Falling back to the placeholder is
+    // exactly the regression ADR-021 exists to prevent: it silently breaks
+    // RAG for every stack that reads these props (QAFunction,
+    // SummarizeFunction, the crawler's ingest trigger) for 7 weeks with no
+    // visible error.
+    this.knowledgeBaseId = this.node.tryGetContext('ttobak:knowledgeBaseId') || 'BJJLVLFTOR';
+    this.dataSourceId = this.node.tryGetContext('ttobak:dataSourceId') || '3AVMMT3RF3';
+
+    /* Phase 2: Uncomment after AOSS index is created
     const knowledgeBase = new cdk.CfnResource(this, 'BedrockKnowledgeBase', {
       type: 'AWS::Bedrock::KnowledgeBase',
       properties: {
         Name: 'ttobak-knowledge-base',
-        Description: 'Ttobak meeting knowledge base with RAG',
+        Description: 'TTOBAK meeting knowledge base with RAG',
         RoleArn: bedrockKbRole.roleArn,
         KnowledgeBaseConfiguration: {
           Type: 'VECTOR',
@@ -204,19 +222,17 @@ export class KnowledgeStack extends cdk.Stack {
       },
     });
 
-    // KB depends on collection and role
     knowledgeBase.addDependency(collection);
+    knowledgeBase.node.addDependency(bedrockKbRole);
 
-    // Get Knowledge Base ID
     this.knowledgeBaseId = cdk.Token.asString(knowledgeBase.getAtt('KnowledgeBaseId'));
 
-    // Bedrock DataSource (S3)
     const dataSource = new cdk.CfnResource(this, 'BedrockDataSource', {
       type: 'AWS::Bedrock::DataSource',
       properties: {
         KnowledgeBaseId: this.knowledgeBaseId,
         Name: 'ttobak-kb-s3-source',
-        Description: 'S3 data source for Ttobak KB documents',
+        Description: 'S3 data source for TTOBAK KB documents',
         DataSourceConfiguration: {
           Type: 'S3',
           S3Configuration: {
@@ -228,8 +244,8 @@ export class KnowledgeStack extends cdk.Stack {
 
     dataSource.addDependency(knowledgeBase);
 
-    // Get DataSource ID
     this.dataSourceId = cdk.Token.asString(dataSource.getAtt('DataSourceId'));
+    */
 
     // Outputs
     new cdk.CfnOutput(this, 'KbBucketName', {

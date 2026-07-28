@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -84,6 +85,36 @@ func (h *ShareHandler) ShareMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+// ShareToAccount handles POST /api/meetings/{meetingId}/share-account.
+func (h *ShareHandler) ShareToAccount(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	userEmail := middleware.GetUserEmail(ctx)
+	meetingID := chi.URLParam(r, "meetingId")
+	if meetingID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Meeting ID is required")
+		return
+	}
+	var req model.ShareToAccountRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.AccountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "accountId is required")
+		return
+	}
+	res, err := h.meetingService.ShareMeetingToAccount(ctx, userID, userEmail, meetingID, req.AccountID)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // RevokeShare handles DELETE /api/meetings/{meetingId}/share/{userId}

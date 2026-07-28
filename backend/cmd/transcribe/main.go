@@ -7,13 +7,20 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/ecs"
+	ecsTypes "github.com/aws/aws-sdk-go-v2/service/ecs/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/transcribe"
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
@@ -21,7 +28,12 @@ import (
 
 var (
 	transcribeService *service.TranscribeService
+	dictService       *service.DictionaryService
 	repo              *repository.DynamoDBRepository
+	ecsClient         *ecs.Client
+	whisperCluster    string
+	whisperTaskDef    string
+	whisperContainer  string
 )
 
 func init() {
@@ -43,8 +55,19 @@ func init() {
 		outputBucket = "ttobak-assets"
 	}
 
-	repo = repository.NewDynamoDBRepository(dynamoClient, tableName)
+	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, outputBucket)
 	transcribeService = service.NewTranscribeService(transcribeClient, s3Client, repo, outputBucket)
+
+	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
+	dictService = service.NewDictionaryService(dictRepo, transcribeClient)
+
+	ecsClient = ecs.NewFromConfig(cfg)
+	whisperCluster = os.Getenv("WHISPER_CLUSTER")
+	whisperTaskDef = os.Getenv("WHISPER_TASK_DEF")
+	whisperContainer = os.Getenv("WHISPER_CONTAINER")
+	if whisperContainer == "" {
+		whisperContainer = "whisper"
+	}
 }
 
 // Handler processes EventBridge S3 events for new audio uploads
@@ -61,12 +84,32 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	if decoded, err := url.QueryUnescape(key); err == nil {
 		key = decoded
 	}
+	// macOS stores filenames in NFD (decomposed jamo); ECS RunTask rejects non-NFC env vars
+	key = norm.NFC.String(key)
 
 	log.Printf("Processing S3 event: bucket=%s, key=%s", bucket, key)
 
 	// Only process audio files
 	if !strings.HasPrefix(key, "audio/") {
 		log.Printf("Skipping non-audio file: %s", key)
+		return nil
+	}
+
+	// Skip checkpoint files (periodic saves during recording, not final audio)
+	if strings.Contains(key, "checkpoint_") {
+		log.Printf("Skipping checkpoint file: %s", key)
+		return nil
+	}
+
+	// Skip progress files (cumulative checkpoint for crash recovery, not final audio)
+	if strings.Contains(key, "recording_progress") {
+		log.Printf("Skipping progress file: %s", key)
+		return nil
+	}
+
+	// Skip realtime-aggregated audio (already transcribed in realtime by ECS whisper)
+	if strings.Contains(key, "realtime_") {
+		log.Printf("Skipping realtime audio file (already transcribed): %s", key)
 		return nil
 	}
 
@@ -78,27 +121,176 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return nil
 	}
 
+	// Detect multi-part upload from S3 key pattern (e.g. part_000_, part_001_)
+	partIndex, isMultiPart := extractPartIndex(key)
+	var outputKey string
+	if isMultiPart {
+		outputKey = fmt.Sprintf("transcripts/%s_part_%03d.json", meetingID, partIndex)
+		log.Printf("Multi-part audio detected: part %d, output key: %s", partIndex, outputKey)
+	}
+
 	log.Printf("Starting transcription for meeting: %s", meetingID)
 
-	// Start AWS Transcribe job
-	jobName, err := transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key)
+	// Read meeting record to check sttProvider selection
+	meeting, err := repo.GetMeetingByID(ctx, meetingID)
+	if err != nil {
+		log.Printf("Failed to get meeting record: %v", err)
+	}
+
+	sttProvider := "whisper"
+	if meeting != nil && meeting.SttProvider != "" {
+		sttProvider = meeting.SttProvider
+	}
+
+	// Extract userID from key: audio/{userID}/{meetingID}/{filename}
+	parts := strings.Split(key, "/")
+	userID := ""
+	if len(parts) >= 3 {
+		userID = parts[1]
+	}
+
+	// Look up user's custom vocabulary for Transcribe
+	var customVocab string
+	if userID != "" {
+		if vocab, vocabErr := dictService.GetVocabularyForTranscription(ctx, userID); vocabErr == nil && vocab != "" {
+			customVocab = vocab
+			log.Printf("Using custom vocabulary %s for user %s", vocab, userID)
+		}
+	}
+
+	var jobName string
+	switch sttProvider {
+	case "whisper":
+		if whisperCluster == "" || whisperTaskDef == "" {
+			log.Printf("Whisper not configured, falling back to Transcribe")
+			jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key, outputKey, customVocab)
+		} else {
+			log.Printf("Using Whisper GPU for meeting: %s", meetingID)
+			// Build initial_prompt from user's custom dictionary for Whisper
+			var initialPrompt string
+			if userID != "" {
+				if dict, dictErr := dictService.GetDictionary(ctx, userID); dictErr == nil && dict != nil && len(dict.Terms) > 0 {
+					var phrases []string
+					for _, t := range dict.Terms {
+						display := t.DisplayAs
+						if display == "" {
+							display = t.Phrase
+						}
+						phrases = append(phrases, display)
+					}
+					initialPrompt = strings.Join(phrases, ", ")
+					log.Printf("Whisper initial_prompt: %d terms for user %s", len(phrases), userID)
+				}
+			}
+			// Participant count is passed through as pyannote's max_speakers
+			// upper bound (pyannote still auto-detects the actual count
+			// within it -- registered headcount can exceed actual speakers,
+			// e.g. invited-but-silent attendees); 0 (Participants
+			// empty/unset) means "no bound, fully auto-detect" -- see
+			// startWhisperTask.
+			numSpeakers := 0
+			if meeting != nil {
+				numSpeakers = len(meeting.Participants)
+			}
+			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt, outputKey, numSpeakers)
+			jobName = "whisper-ecs-" + meetingID
+		}
+	case "nova-sonic":
+		log.Printf("Using Nova Sonic transcription for meeting: %s", meetingID)
+		jobName, err = transcribeService.StartNovaSonicTranscription(ctx, meetingID, bucket, key, outputKey)
+	default:
+		jobName, err = transcribeService.StartTranscriptionJob(ctx, meetingID, bucket, key, outputKey, customVocab)
+	}
 	if err != nil {
 		log.Printf("Failed to start transcription job: %v", err)
-		meeting, _ := repo.GetMeetingByID(ctx, meetingID)
 		if meeting != nil {
-			meeting.Status = model.StatusError
-			repo.UpdateMeeting(ctx, meeting)
+			if statusErr := repo.UpdateMeetingFields(ctx, meeting.UserID, meeting.MeetingID, map[string]interface{}{"status": model.StatusError}); statusErr != nil {
+				log.Printf("failed to mark meeting %s as error: %v", meeting.MeetingID, statusErr)
+			}
 		}
 		return fmt.Errorf("failed to start transcription job: %w", err)
 	}
 
-	log.Printf("Started transcription job: %s for meeting: %s", jobName, meetingID)
-
-	// NOTE: Nova Sonic provider selection is stored in DynamoDB meeting record.
-	// Currently all transcriptions use standard AWS Transcribe.
-	// Nova Sonic integration will be added when the service supports it.
+	log.Printf("Started transcription job: %s (provider=%s) for meeting: %s", jobName, sttProvider, meetingID)
 
 	return nil
+}
+
+func startWhisperTask(ctx context.Context, meetingID, userID, audioKey, initialPrompt, outputKey string, numSpeakers int) error {
+	envOverrides := []ecsTypes.KeyValuePair{
+		{Name: aws.String("AUDIO_KEY"), Value: aws.String(audioKey)},
+		{Name: aws.String("MEETING_ID"), Value: aws.String(meetingID)},
+		{Name: aws.String("USER_ID"), Value: aws.String(userID)},
+	}
+	if initialPrompt != "" {
+		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{
+			Name: aws.String("INITIAL_PROMPT"), Value: aws.String(initialPrompt),
+		})
+	}
+	if outputKey != "" {
+		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{
+			Name: aws.String("OUTPUT_KEY"), Value: aws.String(outputKey),
+		})
+	}
+	if numSpeakers > 0 {
+		// Passed to the container as max_speakers -- an upper bound
+		// pyannote still auto-detects within, not an exact count (see
+		// transcribe.py:_diarize). Omitted (0) means no bound at all.
+		envOverrides = append(envOverrides, ecsTypes.KeyValuePair{
+			Name: aws.String("NUM_SPEAKERS"), Value: aws.String(strconv.Itoa(numSpeakers)),
+		})
+	}
+
+	result, err := ecsClient.RunTask(ctx, &ecs.RunTaskInput{
+		Cluster:        aws.String(whisperCluster),
+		TaskDefinition: aws.String(whisperTaskDef),
+		Count:          aws.Int32(1),
+		CapacityProviderStrategy: []ecsTypes.CapacityProviderStrategyItem{
+			{
+				CapacityProvider: aws.String("ttobak-whisper-spot"),
+				Weight:           1,
+			},
+		},
+		Overrides: &ecsTypes.TaskOverride{
+			ContainerOverrides: []ecsTypes.ContainerOverride{
+				{
+					Name:        aws.String(whisperContainer),
+					Environment: envOverrides,
+				},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if len(result.Tasks) > 0 && result.Tasks[0].TaskArn != nil {
+		log.Printf("ECS task started: %s", *result.Tasks[0].TaskArn)
+	}
+	if len(result.Failures) > 0 {
+		log.Printf("ECS task placement failures: %v", result.Failures)
+		return fmt.Errorf("ECS task placement failed: %s", *result.Failures[0].Reason)
+	}
+	return nil
+}
+
+// partIndexPattern matches the multi-part audio prefix only when it appears
+// at the START of the S3 object's basename (e.g. `audio/{user}/{meeting}/part_001_xxx.wav`).
+// Without the path-anchor a legitimate user-named single upload like
+// `part_002_song.wav` would be misclassified as a multi-part chunk,
+// routing it to the merge pipeline that would then block forever on
+// missing sibling parts.
+var partIndexPattern = regexp.MustCompile(`(?:^|/)part_(\d{3})_`)
+
+func extractPartIndex(key string) (int, bool) {
+	matches := partIndexPattern.FindStringSubmatch(key)
+	if len(matches) < 2 {
+		return 0, false
+	}
+	idx, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, false
+	}
+	return idx, true
 }
 
 func main() {

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TTOBAK</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #131022;
+        color: #f6f6f8;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .card {
+        max-width: 480px;
+        text-align: center;
+        padding: 48px 32px;
+      }
+      h1 { color: #8b7cff; margin: 0 0 12px; font-size: 28px; }
+      p  { color: #c8c5e0; margin: 8px 0; line-height: 1.5; }
+      a  { color: #8b7cff; }
+      .spinner {
+        width: 28px; height: 28px; margin: 24px auto 0;
+        border: 3px solid #3211d4; border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>TTOBAK</h1>
+      <p>Loading desktop workspace…</p>
+      <p>If the app stays on this screen, open
+        <a href="https://ttobak.atomai.click">ttobak.atomai.click</a>
+        in your browser to verify connectivity.</p>
+      <div class="spinner" aria-hidden="true"></div>
+    </div>
+    <script>
+      // Fallback only — Tauri normally loads ttobak.atomai.click directly via
+      // the `windows[].url` config. This file is the offline fallback that
+      // Tauri ships in the bundle so the app can still launch when the build
+      // pipeline points `frontendDist` at this directory.
+      setTimeout(() => {
+        location.href = "https://ttobak.atomai.click";
+      }, 1500);
+    </script>
+  </body>
+</html>

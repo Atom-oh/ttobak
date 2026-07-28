@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ttobak": {
+      "command": "node",
+      "args": ["mcp-server/dist/index.js"],
+      "env": {
+        "TTOBAK_COGNITO_DOMAIN": "https://ttobak-auth-180294183052.auth.ap-northeast-2.amazoncognito.com",
+        "TTOBAK_CLIENT_ID": "33rh85mv6l9n7tn3s5h16prfdr",
+        "TTOBAK_API_URL": "https://ttobak.atomai.click",
+        "TTOBAK_REGION": "ap-northeast-2"
+      }
+    }
+  }
+}

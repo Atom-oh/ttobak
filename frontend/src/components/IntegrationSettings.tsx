@@ -10,6 +10,7 @@ export function IntegrationSettings() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [notionKey, setNotionKey] = useState('');
+  const [notionParentPage, setNotionParentPage] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -32,15 +33,16 @@ export function IntegrationSettings() {
 
   const handleSaveNotion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!notionKey.trim()) return;
+    if (!notionKey.trim() || !notionParentPage.trim()) return;
 
     setSaving(true);
     setError(null);
     setSuccess(null);
 
     try {
-      await settingsApi.saveNotionKey(notionKey.trim());
+      await settingsApi.saveNotionKey(notionKey.trim(), notionParentPage.trim());
       setNotionKey('');
+      setNotionParentPage('');
       setSuccess('Notion connected successfully');
       await fetchIntegrations();
     } catch (err) {
@@ -68,6 +70,8 @@ export function IntegrationSettings() {
     }
   };
 
+  const needsParent = integrations?.notion?.configured && !integrations.notion.parentPageId;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -75,6 +79,97 @@ export function IntegrationSettings() {
       </div>
     );
   }
+
+  const notionForm = (
+    <form onSubmit={handleSaveNotion} className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-slate-700 dark:text-text-secondary mb-1">
+          Notion Integration Token
+        </label>
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={notionKey}
+              onChange={(e) => setNotionKey(e.target.value)}
+              placeholder="secret_..."
+              className="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400 font-mono"
+            />
+            <button
+              type="button"
+              onClick={() => setShowKey(!showKey)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:text-text-muted dark:hover:text-text-secondary"
+            >
+              <span className="material-symbols-outlined text-lg">
+                {showKey ? 'visibility_off' : 'visibility'}
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-slate-700 dark:text-text-secondary mb-1">
+          공유한 Notion 페이지 URL 또는 ID
+        </label>
+        <input
+          type="text"
+          value={notionParentPage}
+          onChange={(e) => setNotionParentPage(e.target.value)}
+          placeholder="https://www.notion.so/..."
+          className="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-surface-lowest dark:border dark:border-white/10 dark:text-text-main border-none rounded-lg focus:ring-2 focus:ring-primary/20 dark:placeholder:text-text-muted placeholder:text-slate-400 font-mono"
+        />
+        <details className="mt-3 group">
+          <summary className="flex items-center gap-1.5 text-xs font-semibold text-primary cursor-pointer hover:underline">
+            <span className="material-symbols-outlined text-sm transition-transform group-open:rotate-90">chevron_right</span>
+            API Key 발급 및 페이지 연동 방법
+          </summary>
+          <div className="mt-3 space-y-3 text-xs text-slate-600 dark:text-text-secondary bg-slate-50 dark:bg-surface-lowest border border-slate-200 dark:border-white/10 rounded-lg p-4">
+            <div className="flex items-start gap-2">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">1</span>
+              <span><a href="https://www.notion.so/my-integrations" target="_blank" rel="noopener noreferrer" className="text-primary font-semibold hover:underline">notion.so/my-integrations</a> 접속</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">2</span>
+              <span><strong>&quot;New integration&quot;</strong> 클릭 → 이름 입력 (예: TTOBAK) → 워크스페이스 선택</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">3</span>
+              <span><strong>&quot;Internal Integration Token&quot;</strong> 복사 (<code className="bg-slate-200 dark:bg-white/10 px-1 py-0.5 rounded text-[10px]">secret_...</code> 또는 <code className="bg-slate-200 dark:bg-white/10 px-1 py-0.5 rounded text-[10px]">ntn_...</code>)</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">4</span>
+              <span>위 토큰 입력 필드에 붙여넣기</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-amber-500/10 dark:bg-amber-400/10 flex items-center justify-center text-[10px] font-bold text-amber-500 dark:text-amber-400">5</span>
+              <span>Notion에서 내보낼 페이지를 열고 우측 상단 <strong>···</strong> → Connections → 생성한 Integration 추가로 <strong>공유(Share)</strong></span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-amber-500/10 dark:bg-amber-400/10 flex items-center justify-center text-[10px] font-bold text-amber-500 dark:text-amber-400">6</span>
+              <span>그 페이지의 주소창 URL을 복사해 위 필드에 붙여넣고 <strong>Connect</strong> 클릭</span>
+            </div>
+          </div>
+        </details>
+      </div>
+      <button
+        type="submit"
+        disabled={!notionKey.trim() || !notionParentPage.trim() || saving}
+        className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
+      >
+        {saving ? (
+          <>
+            <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+            Connecting...
+          </>
+        ) : (
+          <>
+            <span className="material-symbols-outlined text-lg">link</span>
+            Connect
+          </>
+        )}
+      </button>
+    </form>
+  );
 
   return (
     <div className="space-y-6">
@@ -91,10 +186,10 @@ export function IntegrationSettings() {
       )}
 
       {/* Notion Integration */}
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-6">
+      <div className="glass-panel rounded-xl p-6">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-slate-100 dark:bg-slate-800 rounded-lg flex items-center justify-center">
+            <div className="w-10 h-10 bg-slate-100 dark:bg-white/5 rounded-lg flex items-center justify-center">
               <svg className="w-6 h-6" viewBox="0 0 100 100" fill="none">
                 <path
                   d="M6.017 4.313l55.333-4.087c6.797-.583 8.543-.19 12.817 2.917l17.663 12.443c2.913 2.14 3.883 2.723 3.883 5.053v68.243c0 4.277-1.553 6.807-6.99 7.193L24.467 99.967c-4.08.193-6.023-.39-8.16-3.113L3.3 79.94c-2.333-3.113-3.3-5.443-3.3-8.167V11.113c0-3.497 1.553-6.413 6.017-6.8z"
@@ -109,29 +204,40 @@ export function IntegrationSettings() {
               </svg>
             </div>
             <div>
-              <h3 className="text-base font-semibold text-slate-900 dark:text-white">Notion</h3>
-              <p className="text-sm text-slate-500">Export meeting notes to Notion</p>
+              <h3 className="text-base font-semibold text-slate-900 dark:text-text-main">Notion</h3>
+              <p className="text-sm text-slate-500 dark:text-text-muted">Export meeting notes to Notion</p>
             </div>
           </div>
           <span
             className={`text-xs font-semibold px-2 py-1 rounded-full ${
-              integrations?.notion?.configured
-                ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+              needsParent
+                ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
+                : integrations?.notion?.configured
+                  ? 'bg-green-100 text-green-700 dark:bg-primary/10 dark:text-primary'
+                  : 'bg-slate-100 text-slate-600 dark:bg-white/5 dark:text-text-muted'
             }`}
           >
-            {integrations?.notion?.configured ? 'Connected' : 'Not connected'}
+            {needsParent ? '재연결 필요' : integrations?.notion?.configured ? 'Connected' : 'Not connected'}
           </span>
         </div>
 
         {integrations?.notion?.configured ? (
           <div className="space-y-4">
-            <div className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800 rounded-lg">
-              <span className="material-symbols-outlined text-slate-400">key</span>
-              <span className="text-sm text-slate-600 dark:text-slate-400 font-mono">
+            {needsParent && (
+              <div className="flex items-start gap-2 p-4 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 text-sm rounded-lg">
+                <span className="material-symbols-outlined text-amber-500 dark:text-amber-400 text-lg shrink-0">warning</span>
+                <span>Notion 정책 변경으로 내보낼 페이지 지정이 필요합니다. API 키와 공유한 페이지 URL을 입력해 재연결해주세요.</span>
+              </div>
+            )}
+            <div className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-surface-lowest dark:border dark:border-white/10 rounded-lg">
+              <span className="material-symbols-outlined text-slate-400 dark:text-text-muted">key</span>
+              <span className="text-sm text-slate-600 dark:text-text-secondary font-mono">
                 {integrations.notion.maskedKey || '••••••••••••'}
               </span>
             </div>
+            {!needsParent && integrations.notion.parentPageId && (
+              <p className="text-xs text-slate-400 dark:text-text-muted">Parent page: {integrations.notion.parentPageId}</p>
+            )}
             <button
               onClick={handleDisconnectNotion}
               disabled={deleting}
@@ -149,63 +255,10 @@ export function IntegrationSettings() {
                 </>
               )}
             </button>
+            {needsParent && notionForm}
           </div>
         ) : (
-          <form onSubmit={handleSaveNotion} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
-                Notion Integration Token
-              </label>
-              <div className="flex items-center gap-2">
-                <div className="relative flex-1">
-                  <input
-                    type={showKey ? 'text' : 'password'}
-                    value={notionKey}
-                    onChange={(e) => setNotionKey(e.target.value)}
-                    placeholder="secret_..."
-                    className="w-full px-4 py-2.5 text-sm bg-slate-100 dark:bg-slate-800 border-none rounded-lg focus:ring-2 focus:ring-primary/20 placeholder:text-slate-400 font-mono"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowKey(!showKey)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  >
-                    <span className="material-symbols-outlined text-lg">
-                      {showKey ? 'visibility_off' : 'visibility'}
-                    </span>
-                  </button>
-                </div>
-              </div>
-              <p className="mt-2 text-xs text-slate-500">
-                Create an integration at{' '}
-                <a
-                  href="https://www.notion.so/my-integrations"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  notion.so/my-integrations
-                </a>
-              </p>
-            </div>
-            <button
-              type="submit"
-              disabled={!notionKey.trim() || saving}
-              className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg font-semibold text-sm hover:bg-primary/90 disabled:opacity-50 transition-colors"
-            >
-              {saving ? (
-                <>
-                  <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
-                  Connecting...
-                </>
-              ) : (
-                <>
-                  <span className="material-symbols-outlined text-lg">link</span>
-                  Connect
-                </>
-              )}
-            </button>
-          </form>
+          notionForm
         )}
       </div>
     </div>

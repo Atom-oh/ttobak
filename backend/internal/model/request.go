@@ -1,19 +1,52 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // CreateMeetingRequest represents the request body for creating a meeting
 type CreateMeetingRequest struct {
-	Title        string   `json:"title"`
-	Date         string   `json:"date"`                   // ISO 8601 format
-	Participants []string `json:"participants,omitempty"`
-	SttProvider  string   `json:"sttProvider,omitempty"`  // "transcribe" or "nova-sonic"
+	Title            string   `json:"title"`
+	Date             string   `json:"date"` // ISO 8601 format
+	Participants     []string `json:"participants,omitempty"`
+	SttProvider      string   `json:"sttProvider,omitempty"` // "transcribe" or "nova-sonic"
+	LinkedMeetingIDs []string `json:"linkedMeetingIds,omitempty"`
 }
+
+// MaxLiveSummaryRunes caps the client-settable liveSummary field, both at
+// write time (service.UpdateMeeting) and when folded into the summarize
+// prompt (cmd/summarize) -- one shared limit so the two can't drift.
+const MaxLiveSummaryRunes = 32000
 
 // UpdateMeetingRequest represents the request body for updating a meeting
 type UpdateMeetingRequest struct {
-	Title              string   `json:"title,omitempty"`
-	Content            string   `json:"content,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Content string `json:"content,omitempty"`
+	// Notes is a pointer so "key omitted" (nil, preserve existing notes) is
+	// distinguishable from "explicitly set to empty string" (non-nil
+	// pointer to "", clears notes) -- a plain string can't represent
+	// "clear the notes" since Go's zero value for string is already "".
+	Notes *string `json:"notes,omitempty"`
+	// LiveSummary is a pointer for the same omit-vs-explicit-empty semantics
+	// as Notes: nil preserves the stored value, non-nil "" clears it.
+	// Capped at MaxLiveSummaryRunes on write (service.UpdateMeeting) and
+	// again when folded into the summarize prompt (cmd/summarize).
+	//
+	// Known residual risk (narrow window, not closed by this field): it's
+	// written via a partial UpdateItem (UpdateMeetingFields), but other
+	// mutations (UpdateSpeakers, SelectTranscript, account linking) still go
+	// through UpdateMeeting's whole-item PutItem. A concurrent PutItem
+	// carrying a read-time snapshot from before this field's write would
+	// silently revert it -- the exact class of pre-existing, cross-cutting
+	// issue ADR-025's Consequences section already tracks for AccountID/
+	// SharedToAccount (fixed there only for ProjectIDs, via a
+	// ConditionExpression + retry). Real-world exposure here is small: the
+	// writers above run at points in a meeting's lifecycle that rarely
+	// overlap with active live-summary writes (during/just after
+	// recording).
+	LiveSummary        *string  `json:"liveSummary,omitempty"`
+	TranscriptA        string   `json:"transcriptA,omitempty"`
 	SelectedTranscript string   `json:"selectedTranscript,omitempty"` // "A" or "B"
 	Participants       []string `json:"participants,omitempty"`
 	Status             string   `json:"status,omitempty"`
@@ -24,6 +57,11 @@ type SelectTranscriptRequest struct {
 	Selected string `json:"selected"` // "A" or "B"
 }
 
+// UpdateSpeakersRequest represents the request body for mapping speaker labels to names
+type UpdateSpeakersRequest struct {
+	SpeakerMap map[string]string `json:"speakerMap"` // e.g. {"spk_0": "김팀장", "spk_1": "이매니저"}
+}
+
 // ShareMeetingRequest represents the request body for sharing a meeting
 type ShareMeetingRequest struct {
 	Email      string `json:"email"`
@@ -32,10 +70,12 @@ type ShareMeetingRequest struct {
 
 // PresignedURLRequest represents the request body for generating a presigned URL
 type PresignedURLRequest struct {
-	FileName  string `json:"fileName"`
-	FileType  string `json:"fileType"`            // audio/webm, audio/mp4, image/jpeg, image/png
-	Category  string `json:"category"`            // "audio" or "image"
-	MeetingID string `json:"meetingId,omitempty"` // required for image uploads
+	FileName   string `json:"fileName"`
+	FileType   string `json:"fileType"`            // audio/webm, audio/mp4, audio/x-m4a, image/jpeg, image/png
+	Category   string `json:"category"`            // "audio" or "image"
+	MeetingID  string `json:"meetingId,omitempty"` // required for image uploads
+	PartIndex  int    `json:"partIndex,omitempty"` // 0-based index for multi-file audio
+	TotalParts int    `json:"totalParts,omitempty"`
 }
 
 // PresignedURLResponse represents the response for presigned URL generation
@@ -47,9 +87,14 @@ type PresignedURLResponse struct {
 
 // UploadCompleteRequest represents the request body for upload completion notification
 type UploadCompleteRequest struct {
-	MeetingID string `json:"meetingId"`
-	Key       string `json:"key"`
-	Category  string `json:"category"` // "audio" or "image"
+	MeetingID  string `json:"meetingId"`
+	Key        string `json:"key"`
+	Category   string `json:"category"` // "audio", "image", or "file"
+	FileName   string `json:"fileName,omitempty"`
+	FileSize   int64  `json:"fileSize,omitempty"`
+	MimeType   string `json:"mimeType,omitempty"`
+	PartIndex  int    `json:"partIndex,omitempty"`  // 0-based index for multi-file audio
+	TotalParts int    `json:"totalParts,omitempty"` // total number of audio parts
 }
 
 // UploadCompleteResponse represents the response for upload completion
@@ -73,7 +118,7 @@ type MeetingListItem struct {
 	Participants []string `json:"participants,omitempty"`
 	Tags         []string `json:"tags,omitempty"`
 	IsShared     bool     `json:"isShared"`
-	SharedBy     *string  `json:"sharedBy,omitempty"`  // owner email if shared
+	SharedBy     *string  `json:"sharedBy,omitempty"`   // owner email if shared
 	Permission   *string  `json:"permission,omitempty"` // "read" | "edit" if shared
 	CreatedAt    string   `json:"createdAt"`
 	UpdatedAt    string   `json:"updatedAt"`
@@ -88,10 +133,23 @@ type MeetingDetailResponse struct {
 	Status             string               `json:"status"`
 	Participants       []string             `json:"participants,omitempty"`
 	Content            string               `json:"content,omitempty"`
+	Notes              string               `json:"notes,omitempty"`
+	LiveSummary        string               `json:"liveSummary,omitempty"`
 	TranscriptA        string               `json:"transcriptA,omitempty"`
 	TranscriptB        string               `json:"transcriptB,omitempty"`
 	SelectedTranscript *string              `json:"selectedTranscript,omitempty"` // "A" | "B" | null
 	AudioKey           string               `json:"audioKey,omitempty"`
+	AudioKeys          []string             `json:"audioKeys,omitempty"`
+	AudioPartCount     int                  `json:"audioPartCount,omitempty"`
+	AudioPartsReady    int                  `json:"audioPartsReady,omitempty"`
+	Transcription      json.RawMessage      `json:"transcription,omitempty"`
+	Tags               []string             `json:"tags,omitempty"`
+	ActionItems        json.RawMessage      `json:"actionItems,omitempty"`
+	SpeakerMap         map[string]string    `json:"speakerMap,omitempty"`
+	SttProvider        string               `json:"sttProvider,omitempty"`
+	LinkedMeetingIDs   []string             `json:"linkedMeetingIds,omitempty"`
+	NotionPageID       string               `json:"notionPageId,omitempty"`
+	Permission         string               `json:"permission"` // "owner", "read", or "edit"
 	Attachments        []AttachmentResponse `json:"attachments,omitempty"`
 	Shares             []ShareResponse      `json:"shares,omitempty"` // Only visible to owner
 	CreatedAt          string               `json:"createdAt"`
@@ -103,10 +161,14 @@ type AttachmentResponse struct {
 	AttachmentID     string `json:"attachmentId"`
 	OriginalKey      string `json:"originalKey"`
 	ProcessedKey     string `json:"processedKey,omitempty"`
-	Type             string `json:"type"` // photo, screenshot, diagram, whiteboard
+	URL              string `json:"url,omitempty"`
+	Type             string `json:"type"` // photo, screenshot, diagram, whiteboard, document, video, audio_file
 	Status           string `json:"status"`
 	Description      string `json:"description,omitempty"`
 	ProcessedContent string `json:"processedContent,omitempty"`
+	FileName         string `json:"fileName,omitempty"`
+	FileSize         int64  `json:"fileSize,omitempty"`
+	MimeType         string `json:"mimeType,omitempty"`
 }
 
 // UserSearchResponse represents a user in search results
@@ -154,6 +216,31 @@ type HealthResponse struct {
 type MeetingUpdateResponse struct {
 	MeetingID string `json:"meetingId"`
 	UpdatedAt string `json:"updatedAt"`
+}
+
+// LinkMeetingsRequest represents the request body for linking follow-up meetings
+type LinkMeetingsRequest struct {
+	LinkedMeetingIDs []string `json:"linkedMeetingIds"`
+}
+
+// AudioURLResponse represents the response for audio URL(s)
+type AudioURLResponse struct {
+	AudioUrl  string   `json:"audioUrl,omitempty"`
+	AudioUrls []string `json:"audioUrls,omitempty"`
+}
+
+// InviteUserRequest represents the request body for inviting a new user (admin-only)
+type InviteUserRequest struct {
+	Email string `json:"email"`
+	Name  string `json:"name,omitempty"`
+	Admin bool   `json:"admin,omitempty"`
+}
+
+// InviteUserResponse represents the response after successfully inviting a user
+type InviteUserResponse struct {
+	Email         string `json:"email"`
+	Invited       bool   `json:"invited"`
+	AddedToAdmins bool   `json:"addedToAdmins"`
 }
 
 // NewErrorResponse creates a new error response
@@ -207,18 +294,31 @@ type ExportResponse struct {
 
 // IntegrationRequest represents the request body for saving an integration
 type IntegrationRequest struct {
-	APIKey string `json:"apiKey"`
+	APIKey     string `json:"apiKey"`
+	ParentPage string `json:"parentPage"` // Notion page/database URL or ID to create exports under
 }
 
 // IntegrationStatusResponse represents the status of a single integration
 type IntegrationStatusResponse struct {
-	Configured bool   `json:"configured"`
-	MaskedKey  string `json:"maskedKey,omitempty"`
+	Configured   bool   `json:"configured"`
+	MaskedKey    string `json:"maskedKey,omitempty"`
+	ParentPageID string `json:"parentPageId,omitempty"` // empty means a legacy record needing re-connect
 }
 
 // IntegrationsResponse represents the response for listing integrations
 type IntegrationsResponse struct {
 	Notion *IntegrationStatusResponse `json:"notion,omitempty"`
+}
+
+// AllowedDomainsResponse represents the response for allowed domains
+type AllowedDomainsResponse struct {
+	Domains  []string `json:"domains"`
+	Enforced bool     `json:"enforced"`
+}
+
+// UpdateAllowedDomainsRequest represents the request body for updating allowed domains
+type UpdateAllowedDomainsRequest struct {
+	Domains []string `json:"domains"`
 }
 
 // KBUploadRequest represents the request body for KB file upload
@@ -250,9 +350,74 @@ type KBFilesResponse struct {
 
 // KBSyncResponse represents the response for KB sync
 type KBSyncResponse struct {
-	Status    string `json:"status"`
-	JobID     string `json:"jobId,omitempty"`
-	Message   string `json:"message,omitempty"`
+	Status  string `json:"status"`
+	JobID   string `json:"jobId,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// AddCrawlerSourceRequest represents the request body for adding a crawler source
+type AddCrawlerSourceRequest struct {
+	SourceName  string   `json:"sourceName"`
+	AWSServices []string `json:"awsServices"`
+	NewsSources []string `json:"newsSources"`
+	CustomUrls  []string `json:"customUrls,omitempty"`
+	NewsQueries []string `json:"newsQueries,omitempty"`
+}
+
+// UpdateCrawlerSourceRequest represents the request body for updating a crawler source
+type UpdateCrawlerSourceRequest struct {
+	AWSServices []string `json:"awsServices"`
+	NewsSources []string `json:"newsSources"`
+	NewsQueries []string `json:"newsQueries,omitempty"`
+	CustomUrls  []string `json:"customUrls,omitempty"`
+}
+
+// CrawlerSourceResponse represents a single crawler source with its subscription
+type CrawlerSourceResponse struct {
+	Source       CrawlerSource       `json:"source"`
+	Subscription CrawlerSubscription `json:"subscription"`
+}
+
+// CrawlerSourcesResponse represents the response for listing crawler sources
+type CrawlerSourcesResponse struct {
+	Sources []CrawlerSourceResponse `json:"sources"`
+}
+
+// CrawlHistoryResponse represents the response for crawl history
+type CrawlHistoryResponse struct {
+	History []CrawlHistory `json:"history"`
+}
+
+// InsightsResponse represents the response for insights/documents listing
+type InsightsResponse struct {
+	Documents  []CrawledDocument `json:"documents"`
+	TotalCount int               `json:"totalCount"`
+	Page       int               `json:"page"`
+	Limit      int               `json:"limit"`
+}
+
+// InsightDetailResponse represents the full content of a crawled document
+type InsightDetailResponse struct {
+	CrawledDocument
+	Content string `json:"content"`
+}
+
+// CreateResearchRequest represents the request body for creating a research task
+type CreateResearchRequest struct {
+	Topic string `json:"topic"`
+	Mode  string `json:"mode"`
+}
+
+// ResearchResponse represents a single research task in API responses
+type ResearchResponse struct {
+	Research
+	Content string          `json:"content,omitempty"`
+	Shares  []ShareResponse `json:"shares,omitempty"`
+}
+
+// ResearchListResponse represents the response for listing research tasks
+type ResearchListResponse struct {
+	Research []Research `json:"research"`
 }
 
 // ToMeetingListItem converts a Meeting to MeetingListItem
@@ -293,6 +458,8 @@ func ToMeetingDetailResponse(m *Meeting, attachments []AttachmentResponse, share
 		Status:             m.Status,
 		Participants:       m.Participants,
 		Content:            m.Content,
+		Notes:              m.Notes,
+		LiveSummary:        m.LiveSummary,
 		TranscriptA:        m.TranscriptA,
 		TranscriptB:        m.TranscriptB,
 		SelectedTranscript: selectedTranscript,

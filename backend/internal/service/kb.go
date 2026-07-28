@@ -19,6 +19,7 @@ type KBService struct {
 	presignClient      *s3.PresignClient
 	bedrockAgentClient *bedrockagent.Client
 	kbBucketName       string
+	assetsBucketName   string // Source bucket for cross-bucket copy
 	kbID               string // Bedrock Knowledge Base ID
 	dataSourceID       string // Bedrock Data Source ID
 }
@@ -40,6 +41,11 @@ func NewKBService(
 		kbID:               kbID,
 		dataSourceID:       dataSourceID,
 	}
+}
+
+// SetAssetsBucketName sets the source bucket name for cross-bucket copy operations.
+func (s *KBService) SetAssetsBucketName(name string) {
+	s.assetsBucketName = name
 }
 
 // GetPresignedURL generates a presigned URL for KB file upload
@@ -196,6 +202,62 @@ func (s *KBService) DeleteFile(ctx context.Context, userID, fileID string) error
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete KB file: %w", err)
+	}
+
+	return nil
+}
+
+// validateAssetOwnership ensures sourceKey is an asset owned by userID. Every
+// asset key produced by the upload service is
+// "{audio|images|files}/{userID}/{meetingID}/{filename}", so the owner segment
+// (second path component) MUST equal the caller's userID. Path traversal is
+// rejected outright. Returns ErrForbidden on any mismatch.
+func validateAssetOwnership(sourceKey, userID string) error {
+	if userID == "" || strings.Contains(sourceKey, "..") {
+		return fmt.Errorf("%w: invalid source key", ErrForbidden)
+	}
+	for _, prefix := range []string{"files/", "audio/", "images/"} {
+		if strings.HasPrefix(sourceKey, prefix+userID+"/") {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: source key does not belong to caller", ErrForbidden)
+}
+
+// CopyAttachmentToKB copies a file from the assets bucket to the KB bucket.
+// sourceKey is the S3 key in the assets bucket (e.g. "files/{userId}/{meetingId}/{filename}").
+// The file is placed under "kb/{userID}/{filename}" in the KB bucket.
+func (s *KBService) CopyAttachmentToKB(ctx context.Context, userID, sourceKey string) error {
+	if s.assetsBucketName == "" {
+		return fmt.Errorf("assets bucket not configured")
+	}
+	if s.kbBucketName == "" {
+		return fmt.Errorf("KB bucket not configured")
+	}
+
+	// Ownership gate (trust boundary): the API must not let an authenticated
+	// user copy another user's asset into their own KB.
+	if err := validateAssetOwnership(sourceKey, userID); err != nil {
+		return err
+	}
+
+	// Extract filename from source key
+	parts := strings.Split(sourceKey, "/")
+	fileName := parts[len(parts)-1]
+	if fileName == "" {
+		return fmt.Errorf("invalid source key: %s", sourceKey)
+	}
+
+	destKey := fmt.Sprintf("kb/%s/%s", userID, fileName)
+	copySource := fmt.Sprintf("%s/%s", s.assetsBucketName, sourceKey)
+
+	_, err := s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(s.kbBucketName),
+		Key:        aws.String(destKey),
+		CopySource: aws.String(copySource),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to copy attachment to KB: %w", err)
 	}
 
 	return nil

@@ -1,0 +1,313 @@
+'use client';
+
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { SttManager, type LiveSttProvider } from '@/lib/sttManager';
+import { countWords } from '@/lib/speechRecognition';
+import { getRuntimeConfig } from '@/lib/runtimeConfig';
+
+export interface TranscriptEntry {
+  text: string;
+  isFinal: boolean;
+  timestamp: string;
+}
+
+interface TranslationEntry {
+  original: string;
+  translated: string;
+  targetLang: string;
+  timestamp: string;
+}
+
+interface InterimTranslation {
+  original: string;
+  translated: string;
+  targetLang: string;
+}
+
+const speechErrorMessages: Record<string, string> = {
+  'not-allowed': 'Microphone permission denied for speech recognition.',
+  'network': 'Network error — speech recognition requires internet.',
+  'service-not-allowed': 'Speech recognition service is not available.',
+  'language-not-supported': 'Korean speech recognition is not supported in this browser.',
+  'recognition-stalled': '음성 인식이 일시 중단되었습니다. 재시작 중...',
+  'recognition-failed': '음성 인식이 중단되었습니다. 아래 버튼을 눌러 재시작해주세요.',
+  'transcribe-auth-failed': 'AWS 인증 실패. Browser Speech로 전환합니다.',
+  'transcribe-stream-error': 'Transcribe Streaming 오류. Browser Speech로 전환합니다.',
+  'transcribe-no-stream': 'Transcribe Streaming 연결 실패. Browser Speech로 전환합니다.',
+  // System Audio mode has no microphone, so there is no Web Speech fallback
+  // here — unlike the other transcribe-* errors above, this one can't
+  // "switch to" anything.
+  'transcribe-native-unavailable': '실시간 자막을 사용할 수 없습니다 (AWS 인증/연결 필요). 녹음은 계속되며 종료 후 자동으로 전사됩니다.',
+};
+
+interface UseRecordingSessionOptions {
+  targetLang: string;
+  translationEnabled: boolean;
+  /** Preferred live STT provider */
+  liveSttProvider: LiveSttProvider;
+  /** Called each time a final transcript arrives with updated word count and full text */
+  onTranscriptUpdate?: (totalWordCount: number, allText: string) => void;
+  /** Called when STT provider changes (e.g., fallback) */
+  onProviderChange?: (provider: LiveSttProvider) => void;
+}
+
+interface TranscribeConfig {
+  region: string;
+  identityPoolId: string;
+  userPoolId: string;
+  vocabularyName?: string;
+}
+
+export function useRecordingSession({
+  targetLang,
+  translationEnabled,
+  liveSttProvider,
+  onTranscriptUpdate,
+  onProviderChange,
+}: UseRecordingSessionOptions) {
+  const [isRecording, setIsRecording] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
+  const [currentInterim, setCurrentInterim] = useState('');
+  const [totalWordCount, setTotalWordCount] = useState(0);
+  const [speechError, setSpeechError] = useState<string | null>(null);
+  const [activeProvider, setActiveProvider] = useState<LiveSttProvider>('web-speech');
+
+  // Translation state
+  const [translations, setTranslations] = useState<TranslationEntry[]>([]);
+  const [currentInterimTranslation, setCurrentInterimTranslation] = useState<InterimTranslation | null>(null);
+
+  const sttManagerRef = useRef<SttManager | null>(null);
+  const targetLangRef = useRef(targetLang);
+  const transcriptsRef = useRef(transcripts);
+  const onTranscriptUpdateRef = useRef(onTranscriptUpdate);
+  const transcribeConfigRef = useRef<TranscribeConfig | null>(null);
+
+  // Load runtime Cognito config once (fetched from /config.json at startup)
+  useEffect(() => {
+    let cancelled = false;
+    getRuntimeConfig().then(async (cfg) => {
+      if (cancelled) return;
+      if (cfg.cognito.identityPoolId && cfg.cognito.userPoolId) {
+        let vocabularyName: string | undefined;
+        try {
+          const { dictionaryApi } = await import('@/lib/api');
+          const dict = await dictionaryApi.get();
+          if (dict.status === 'READY' && dict.vocabularyName) {
+            vocabularyName = dict.vocabularyName;
+          }
+        } catch {
+          // Dictionary not available — proceed without custom vocabulary
+        }
+        transcribeConfigRef.current = {
+          region: cfg.cognito.region,
+          identityPoolId: cfg.cognito.identityPoolId,
+          userPoolId: cfg.cognito.userPoolId,
+          vocabularyName,
+        };
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Keep refs in sync
+  useEffect(() => { targetLangRef.current = targetLang; }, [targetLang]);
+  useEffect(() => { transcriptsRef.current = transcripts; }, [transcripts]);
+  useEffect(() => { onTranscriptUpdateRef.current = onTranscriptUpdate; }, [onTranscriptUpdate]);
+
+  // Propagate target language changes to STT manager
+  useEffect(() => {
+    sttManagerRef.current?.updateTargetLang(targetLang);
+  }, [targetLang]);
+
+  // Propagate translation toggle to STT manager
+  useEffect(() => {
+    sttManagerRef.current?.updateTranslationEnabled(translationEnabled);
+  }, [translationEnabled]);
+
+  const isSttPermanentlyFailed = speechError === speechErrorMessages['recognition-failed'];
+
+  const handleRestartStt = useCallback(() => {
+    setSpeechError(null);
+    // Stop and restart the manager
+    if (sttManagerRef.current) {
+      sttManagerRef.current.stop();
+      sttManagerRef.current = null;
+    }
+  }, []);
+
+  /** Shared setup for both `startSession` (browser mic/tab, has a
+   * MediaStream) and `startNativeSession` (Tauri System Audio, no
+   * MediaStream — see below): resets transcript/translation state and
+   * constructs the SttManager with the same callbacks either way. Callers
+   * are responsible for calling `manager.start(stream, ...)` or
+   * `manager.startNative(...)` themselves. */
+  const createManager = useCallback(() => {
+    setIsRecording(true);
+    setIsPaused(false);
+    setTranscripts([]);
+    setCurrentInterim('');
+    setTotalWordCount(0);
+    setTranslations([]);
+    setSpeechError(null);
+    transcriptsRef.current = [];
+
+    const handleTranscriptResult = (text: string, isFinal: boolean) => {
+      if (isFinal) {
+        const entry: TranscriptEntry = { text, isFinal: true, timestamp: new Date().toISOString() };
+        setTranscripts((prev) => {
+          const updated = [...prev, entry];
+          transcriptsRef.current = updated;
+          return updated;
+        });
+        setCurrentInterim('');
+
+        const words = countWords(text);
+        setTotalWordCount((prev) => {
+          const newTotal = prev + words;
+          const allText = [...transcriptsRef.current].map(t => t.text).join('\n');
+          onTranscriptUpdateRef.current?.(newTotal, allText);
+          return newTotal;
+        });
+      } else {
+        setCurrentInterim(text);
+      }
+    };
+
+    const transcribeConfig = transcribeConfigRef.current;
+    const hasTranscribeConfig = !!transcribeConfig;
+
+    const manager = new SttManager({
+      callbacks: {
+        onTranscript: handleTranscriptResult,
+        onTranslation: (original, translated, lang, isFinal) => {
+          if (isFinal) {
+            setTranslations((prev) => [...prev, {
+              original,
+              translated,
+              targetLang: lang,
+              timestamp: new Date().toISOString(),
+            }]);
+            setCurrentInterimTranslation(null);
+          } else {
+            setCurrentInterimTranslation({ original, translated, targetLang: lang });
+          }
+        },
+        onError: (error) => {
+          setSpeechError(speechErrorMessages[error] || error);
+        },
+      },
+      targetLang: targetLangRef.current,
+      translationEnabled,
+      transcribeStreamingConfig: transcribeConfig ?? undefined,
+      onProviderChange: (provider) => {
+        setActiveProvider(provider);
+        onProviderChange?.(provider);
+      },
+    });
+
+    // Stop any previous manager before overwriting the ref — a restart
+    // after a failed native start would otherwise leak its Transcribe
+    // WebSocket (nothing else holds a reference to stop it).
+    sttManagerRef.current?.stop();
+    sttManagerRef.current = manager;
+
+    // Choose provider: use transcribe-streaming only if configured
+    const preferredProvider: LiveSttProvider = liveSttProvider === 'transcribe-streaming' && hasTranscribeConfig
+      ? 'transcribe-streaming'
+      : 'web-speech';
+
+    setActiveProvider(preferredProvider);
+    return { manager, preferredProvider };
+  }, [translationEnabled, liveSttProvider, onProviderChange]);
+
+  const startSession = useCallback((previewCleanup: () => void, stream: MediaStream) => {
+    previewCleanup();
+    const { manager, preferredProvider } = createManager();
+    manager.start(stream, preferredProvider);
+  }, [createManager]);
+
+  /**
+   * Start live captions with no MediaStream — Tauri System Audio mode.
+   * Capture happens in Rust via ScreenCaptureKit; audio arrives via
+   * `pushNativePcmChunk` instead of an AudioWorklet. There is no Web
+   * Speech fallback in this mode (it requires a microphone that doesn't
+   * exist here) — see `SttManager.startNative`.
+   */
+  const startNativeSession = useCallback(() => {
+    const { manager } = createManager();
+    // Ignore createManager's preferredProvider here: it respects the
+    // browser-mode provider toggle, which defaults to 'web-speech' -- but
+    // native mode has no Web Speech fallback (no microphone MediaStream),
+    // so gating on the toggle means default users NEVER get System Audio
+    // captions. Use Transcribe Streaming whenever it's configured; only an
+    // actually-missing config surfaces `transcribe-native-unavailable`.
+    const nativeProvider: LiveSttProvider = transcribeConfigRef.current
+      ? 'transcribe-streaming'
+      : 'web-speech';
+    setActiveProvider(nativeProvider);
+    manager.startNative(nativeProvider);
+  }, [createManager]);
+
+  /** Feed one PCM chunk (from `lib/tauri.ts`'s `onNativePcmChunk`) into the
+   * active native session. No-op if `startNativeSession` wasn't called. */
+  const pushNativePcmChunk = useCallback((chunk: Uint8Array) => {
+    sttManagerRef.current?.pushNativeChunk(chunk);
+  }, []);
+
+  const pauseSession = useCallback(() => {
+    setIsPaused(true);
+    sttManagerRef.current?.pause();
+  }, []);
+
+  const resumeSession = useCallback(() => {
+    setIsPaused(false);
+    sttManagerRef.current?.resume();
+  }, []);
+
+  const stopSession = useCallback(() => {
+    setIsRecording(false);
+    setIsPaused(false);
+    sttManagerRef.current?.stop();
+    sttManagerRef.current = null;
+  }, []);
+
+  /** Combined transcripts + current interim for display */
+  const displayTranscripts: TranscriptEntry[] = [
+    ...transcripts,
+    ...(currentInterim
+      ? [{ text: currentInterim, isFinal: false, timestamp: new Date().toISOString() }]
+      : []),
+  ];
+
+  /** Full transcript text including interim */
+  const transcriptContext = [
+    ...transcripts.map(t => t.text),
+    ...(currentInterim ? [currentInterim] : []),
+  ].join('\n');
+
+  return {
+    isRecording,
+    isPaused,
+    transcripts,
+    transcriptsRef,
+    currentInterim,
+    totalWordCount,
+    speechError,
+    setSpeechError,
+    isSttPermanentlyFailed,
+    translations,
+    currentInterimTranslation,
+    displayTranscripts,
+    transcriptContext,
+    activeProvider,
+    startSession,
+    startNativeSession,
+    pushNativePcmChunk,
+    pauseSession,
+    resumeSession,
+    stopSession,
+    handleRestartStt,
+    speechErrorMessages,
+  };
+}

@@ -1,61 +1,91 @@
 @import "tailwindcss";
 
+/* Tell Tailwind v4 to use .dark class (not media query) for dark: utilities */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ═══════════════════════════════════════════════
+   Ttobak Design Tokens — Unified Brand
+   One brand (indigo/violet) across light & dark.
+   Dark mode = same brand hue family, adjusted for
+   dark surfaces (light #3211d4 / dark #8b85f7).
+   No neon, no glow — calm premium (Linear/Vercel-like).
+   ═══════════════════════════════════════════════ */
+
 :root {
   --primary: #3211d4;
+  --primary-hover: #2a0eb3;
+  --accent: #7c3aed;
+  --secondary: #a78bfa;
   --background-light: #f6f6f8;
-  --background-dark: #131022;
-  --background: #ffffff;
-  --foreground: #0f172a;
-  /* Surface */
-  --surface: #ffffff;
-  --surface-secondary: #f1f5f9;
-  --surface-elevated: #ffffff;
-  /* Text */
-  --text-primary: #0f172a;
-  --text-secondary: #64748b;
+  --background-dark: #0b0b0f;
+  --surface-lowest: #ffffff;
+  --surface: #f8fafc;
+  --surface-container: #f1f5f9;
+  --surface-high: #e2e8f0;
+  --text-main: #0f172a;
   --text-muted: #94a3b8;
-  /* Border */
-  --border-default: #e2e8f0;
-  --border-light: #f1f5f9;
+  --text-secondary: #64748b;
+  --border-subtle: #e2e8f0;
+  --error: #dc2626;
 }
 
+/* Register Tailwind v4 theme tokens — generates utilities like text-primary, bg-surface-lowest */
 @theme inline {
   --color-primary: var(--primary);
-  --color-background: var(--background);
+  --color-primary-hover: var(--primary-hover);
+  --color-accent: var(--accent);
+  --color-secondary: var(--secondary);
   --color-background-light: var(--background-light);
   --color-background-dark: var(--background-dark);
-  --color-foreground: var(--foreground);
+  --color-surface-lowest: var(--surface-lowest);
   --color-surface: var(--surface);
-  --color-surface-secondary: var(--surface-secondary);
-  --color-surface-elevated: var(--surface-elevated);
-  --color-text-primary: var(--text-primary);
-  --color-text-secondary: var(--text-secondary);
+  --color-surface-container: var(--surface-container);
+  --color-surface-high: var(--surface-high);
+  --color-text-main: var(--text-main);
   --color-text-muted: var(--text-muted);
-  --color-border-default: var(--border-default);
-  --color-border-light: var(--border-light);
+  --color-text-secondary: var(--text-secondary);
+  --color-border-subtle: var(--border-subtle);
+  --color-error: var(--error);
+
+  /* next/font CSS vars are already font stacks; @theme inline just re-exposes them
+     as font-headline / font-body utilities instead of the manual font-[var(--font-headline)] arbitrary value. */
+  --font-headline: var(--font-headline);
+  --font-body: var(--font-body);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0f172a;
-    --foreground: #f1f5f9;
-    --surface: #1e293b;
-    --surface-secondary: #334155;
-    --surface-elevated: #1e293b;
-    --text-primary: #f1f5f9;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
-    --border-default: #334155;
-    --border-light: #1e293b;
-  }
+/* ═══════════════════════════════════════════════
+   Dark Mode — same brand, calm surfaces
+   ═══════════════════════════════════════════════ */
+.dark {
+  --primary: #8b85f7;
+  --primary-hover: #a5a0f9;
+  --accent: #a78bfa;
+  --secondary: #c4b5fd;
+  --surface-lowest: #101014;
+  --surface: #131318;
+  --surface-container: #1c1c22;
+  --surface-high: #2a2a32;
+  --text-main: #e7e7ec;
+  --text-muted: #8a8f98;
+  --text-secondary: #b3b8c2;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --error: #f87171;
 }
 
+/* ═══════════════════════════════════════════════
+   Base Styles
+   ═══════════════════════════════════════════════ */
 body {
   background: var(--background-light);
-  color: var(--foreground);
-  font-family: 'Inter', system-ui, sans-serif;
+  color: var(--text-main);
+  font-family: var(--font-inter), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.dark body {
+  background: var(--background-dark);
+  color: var(--text-main);
 }
 
 /* Material Symbols */
@@ -67,7 +97,40 @@ body {
   font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
-/* Custom scrollbar */
+/* ═══════════════════════════════════════════════
+   Card / Panel — legacy class names kept for compat,
+   redefined as calm flat surfaces (no blur, no glow)
+   ═══════════════════════════════════════════════ */
+.glass-panel {
+  background: var(--surface-lowest);
+  border: 1px solid var(--border-subtle);
+}
+
+/* Legacy glow utilities — intentionally no-op (neon removed) */
+.glow-primary,
+.glow-accent,
+.glow-primary-subtle,
+.glow-secondary {
+  box-shadow: none;
+}
+
+.active-pill {
+  box-shadow: none;
+}
+
+.ghost-border {
+  border: 1px solid var(--border-subtle);
+}
+
+/* Legacy neon text utilities — intentionally no-op */
+.neon-text-cyan,
+.neon-text-purple {
+  text-shadow: none;
+}
+
+/* ═══════════════════════════════════════════════
+   Scrollbar
+   ═══════════════════════════════════════════════ */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
@@ -77,11 +140,30 @@ body {
   scrollbar-width: none;
 }
 
-/* Prose overrides for editor */
+.dark ::-webkit-scrollbar {
+  width: 4px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* ═══════════════════════════════════════════════
+   Prose — Editor content
+   ═══════════════════════════════════════════════ */
 .prose {
   --tw-prose-body: #334155;
   --tw-prose-headings: #0f172a;
-  --tw-prose-links: #3211d4;
+  --tw-prose-links: var(--primary);
   --tw-prose-bold: #0f172a;
   --tw-prose-quotes: #475569;
   --tw-prose-code: #0f172a;
@@ -89,16 +171,27 @@ body {
 }
 
 .dark .prose {
-  --tw-prose-body: #cbd5e1;
-  --tw-prose-headings: #f1f5f9;
-  --tw-prose-links: #818cf8;
-  --tw-prose-bold: #f1f5f9;
-  --tw-prose-quotes: #94a3b8;
-  --tw-prose-code: #f1f5f9;
-  --tw-prose-pre-bg: #1e293b;
+  --tw-prose-body: var(--text-secondary);
+  --tw-prose-headings: var(--text-main);
+  --tw-prose-links: var(--primary);
+  --tw-prose-bold: var(--text-main);
+  --tw-prose-quotes: var(--text-muted);
+  --tw-prose-code: var(--text-main);
+  --tw-prose-pre-bg: rgba(255, 255, 255, 0.05);
 }
 
-/* Line clamp utility */
+/* AI Summary card headings — subtle accent left rule (consistent in both modes) */
+.ai-summary-prose h1,
+.ai-summary-prose h2,
+.ai-summary-prose h3 {
+  color: var(--text-main);
+  border-left: 2px solid var(--accent);
+  padding-left: 0.6em;
+}
+
+/* ═══════════════════════════════════════════════
+   Utility Classes
+   ═══════════════════════════════════════════════ */
 .line-clamp-2 {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -113,52 +206,92 @@ body {
   overflow: hidden;
 }
 
-/* Waveform animation */
+/* Section header */
+.section-header {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+/* ═══════════════════════════════════════════════
+   Waveform — Recording visualization (brand gradient, no glow)
+   ═══════════════════════════════════════════════ */
 @keyframes waveform {
   0%, 100% { height: 4px; }
   50% { height: 24px; }
 }
 
 .waveform-bar {
-  background: linear-gradient(to top, #3211d4 0%, #5b21b6 33%, #7c3aed 66%, #a78bfa 100%);
-  box-shadow: 0 0 6px rgba(50, 17, 212, 0.3);
+  background: linear-gradient(to top, var(--primary) 0%, var(--accent) 60%, var(--secondary) 100%);
   border-radius: 9999px;
 }
 
-.dark .waveform-bar {
-  background: linear-gradient(to top, #6366f1 0%, #818cf8 40%, #a78bfa 75%, #c4b5fd 100%);
-  box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
+/* ═══════════════════════════════════════════════
+   Live Summary — check_circle list items (dark)
+   ═══════════════════════════════════════════════ */
+.dark li.dark-summary-item {
+  list-style: none;
+  margin-left: 0;
+  padding-left: 1.5rem;
+  position: relative;
 }
+.dark li.dark-summary-item::before {
+  content: '\e86c'; /* check_circle */
+  font-family: 'Material Symbols Outlined';
+  font-size: 14px;
+  position: absolute;
+  left: 0;
+  top: 0.1em;
+  color: var(--primary);
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+}
+
+/* ═══════════════════════════════════════════════
+   Animations
+   ═══════════════════════════════════════════════ */
 
 /* Focus styles */
 input:focus, button:focus, textarea:focus, select:focus {
   outline: none;
 }
 
-/* Card hover lift */
-.card-interactive {
-  transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+/* Pulse animation for recording */
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.5; }
+  50% { transform: scale(1); opacity: 0.3; }
+  100% { transform: scale(0.9); opacity: 0.5; }
 }
-.card-interactive:hover {
-  transform: translateY(-1px);
+.animate-pulse-ring {
+  animation: pulse-ring 2s ease-in-out infinite;
 }
 
 /* Page content fade-in */
 @keyframes animate-in {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 .animate-in {
   animation: animate-in 0.2s ease-out;
 }
 
+/* Fade-in */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
 /* Bottom sheet slide-up */
 @keyframes slide-up {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 .animate-slide-up {
-  animation: slide-up 0.25s ease-out;
+  animation: slide-up 0.3s ease-out;
 }
 
 /* Safe area for mobile */

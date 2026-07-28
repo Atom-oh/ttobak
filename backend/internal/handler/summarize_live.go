@@ -68,8 +68,9 @@ Be concise — this is a live summary updated every ~1000 words.`
 		return
 	}
 
+	// Use Haiku for live summary (fast, low-cost incremental updates)
 	output, err := h.bedrockClient.InvokeModel(r.Context(), &bedrockruntime.InvokeModelInput{
-		ModelId:     aws.String(service.ClaudeOpusModelID),
+		ModelId:     aws.String(service.ClaudeHaikuModelID),
 		ContentType: aws.String("application/json"),
 		Accept:      aws.String("application/json"),
 		Body:        requestBody,

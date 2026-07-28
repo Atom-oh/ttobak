@@ -53,15 +53,27 @@ func init() {
 	bedrockService = service.NewBedrockService(bedrockClient, s3Client, repo)
 }
 
-// Handler processes EventBridge S3 events for new image uploads
+// imageUploadEvent represents the custom EventBridge event from upload/complete
+type imageUploadEvent struct {
+	Detail struct {
+		Bucket    string `json:"bucket"`
+		Key       string `json:"key"`
+		MeetingID string `json:"meetingId"`
+		UserID    string `json:"userId"`
+	} `json:"detail"`
+}
+
+// Handler processes custom EventBridge events for completed image uploads
 func Handler(ctx context.Context, raw json.RawMessage) error {
-	var event model.EventBridgeS3Event
+	var event imageUploadEvent
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return fmt.Errorf("failed to unmarshal EventBridge event: %w", err)
 	}
 
-	bucket := event.Detail.Bucket.Name
-	key := event.Detail.Object.Key
+	bucket := event.Detail.Bucket
+	key := event.Detail.Key
+	userID := event.Detail.UserID
+	meetingID := event.Detail.MeetingID
 
 	// URL decode the key (handles both + and %XX encoding)
 	if decoded, err := url.QueryUnescape(key); err == nil {
@@ -76,9 +88,10 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 		return nil
 	}
 
-	// Extract user ID and meeting ID from key
-	// Expected format: images/{userID}/{meetingID}/{filename}
-	userID, meetingID := service.ExtractInfoFromImageKey(key)
+	if userID == "" || meetingID == "" {
+		// Fallback: extract from key path
+		userID, meetingID = service.ExtractInfoFromImageKey(key)
+	}
 	if userID == "" || meetingID == "" {
 		log.Printf("Could not extract user/meeting ID from key: %s", key)
 		return nil

@@ -1,0 +1,84 @@
+openapi: 3.0.3
+info:
+  title: Ttobak WebSocket API
+  description: |
+    Real-time WebSocket API for live QA streaming during meetings.
+    Uses API Gateway WebSocket with Cognito JWT authorizer on $connect.
+
+    Connection URL: wss://{websocket-api-id}.execute-api.ap-northeast-2.amazonaws.com/production?token={jwt}
+  version: 1.0.0
+
+servers:
+  - url: wss://ttobak-realtime.execute-api.ap-northeast-2.amazonaws.com/production
+    description: Production WebSocket
+
+components:
+  schemas:
+    ConnectAuth:
+      type: object
+      description: JWT passed as query parameter on $connect
+      properties:
+        token:
+          type: string
+          description: Cognito ID Token
+
+    AskMessage:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [ask]
+        question:
+          type: string
+        meetingId:
+          type: string
+        sessionId:
+          type: string
+
+    StreamChunk:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [chunk, done, error, sources]
+        text:
+          type: string
+          description: Partial answer text (type=chunk)
+        answer:
+          type: string
+          description: Full answer (type=done)
+        sources:
+          type: array
+          items:
+            type: object
+        error:
+          type: string
+          description: Error message (type=error)
+
+paths:
+  /$connect:
+    description: |
+      WebSocket connection with JWT authentication.
+      Token passed as query parameter: ?token={cognito-id-token}
+      Cognito Authorizer validates the token before allowing connection.
+
+  /$disconnect:
+    description: Connection cleanup. Removes connection record from DynamoDB.
+
+  /$default:
+    description: |
+      Default route for unmatched actions.
+      Receives JSON messages with "action" field for routing.
+
+      ## Message Flow
+
+      1. Client sends: `{"action": "ask", "question": "...", "meetingId": "..."}`
+      2. WebSocket Lambda async-invokes QA Lambda with `streamMode: "ask_live"`
+      3. QA Lambda streams answer chunks back via API Gateway ManageConnections
+      4. Client receives: `{"type": "chunk", "text": "..."}` (multiple)
+      5. Client receives: `{"type": "sources", "sources": [...]}`
+      6. Client receives: `{"type": "done", "answer": "..."}`
+
+tags:
+  - name: WebSocket
+    description: Real-time QA streaming

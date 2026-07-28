@@ -1,0 +1,7 @@
+# False positive samples - these should NOT trigger secret detection
+password_hash = bcrypt.hash(password)
+const API_KEY_HEADER = "X-API-Key"
+token := r.Header.Get("Authorization")
+secretName := os.Getenv("SECRET_NAME")
+AKIA_PREFIX = "AKIA"
+key = "short"

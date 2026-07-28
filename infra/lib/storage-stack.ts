@@ -58,6 +58,34 @@ export class StorageStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
+    // GSI3 for direct meeting lookup by meetingId + entityType
+    this.table.addGlobalSecondaryIndex({
+      indexName: 'GSI3',
+      partitionKey: {
+        name: 'meetingId',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'entityType',
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // GSI4 for crawled document queries by type + date (avoids full table scan)
+    this.table.addGlobalSecondaryIndex({
+      indexName: 'GSI4',
+      partitionKey: {
+        name: 'GSI4PK',
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: 'GSI4SK',
+        type: dynamodb.AttributeType.NUMBER,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
     // S3 bucket for audio, images, and processed files
     this.bucket = new s3.Bucket(this, 'TtobakBucket', {
       bucketName: `ttobak-assets-${cdk.Aws.ACCOUNT_ID}`,
@@ -74,9 +102,11 @@ export class StorageStack extends cdk.Stack {
             s3.HttpMethods.PUT,
             s3.HttpMethods.POST,
           ],
-          // TODO: Replace ['*'] with specific CloudFront domain after deployment
-          // e.g., ['https://d123abc.cloudfront.net', 'http://localhost:3000']
-          allowedOrigins: ['*'],
+          allowedOrigins: [
+            'https://ttobak.atomai.click',
+            'https://d115v97ubjhb06.cloudfront.net',
+            'http://localhost:3000',
+          ],
           allowedHeaders: ['*'],
           exposedHeaders: ['ETag'],
           maxAge: 3600,

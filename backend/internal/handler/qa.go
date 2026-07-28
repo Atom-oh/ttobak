@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -46,7 +47,13 @@ func (h *QAHandler) AskQuestion(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.knowledgeService.Ask(ctx, userID, meetingID, req.Question)
 	if err != nil {
-		if err.Error() == "meeting not found" {
+		// Ask returns service.ErrNotFound (via resolveSharedAccessOrNotFound)
+		// on no access, not the string "meeting not found" this used to
+		// match on -- that comparison was already stale before this route
+		// existed. Currently unused (no cmd/api route wires to AskQuestion;
+		// Q&A is served by the Python Lambda), but fixed now so a future
+		// reconnection doesn't turn every not-found into a 500.
+		if errors.Is(err, service.ErrNotFound) {
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
 		}

@@ -14,6 +14,7 @@ interface TranslationViewProps {
   targetLang: string;
   onTargetLangChange: (lang: string) => void;
   isActive: boolean;
+  interimTranslation?: { original: string; translated: string; targetLang: string } | null;
 }
 
 const SUPPORTED_LANGUAGES = [
@@ -34,14 +35,14 @@ function formatTime(timestamp: string): string {
   });
 }
 
-export function TranslationView({ translations, targetLang, onTargetLangChange, isActive }: TranslationViewProps) {
+export function TranslationView({ translations, targetLang, onTargetLangChange, isActive, interimTranslation }: TranslationViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (containerRef.current && isActive) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [translations, isActive]);
+  }, [translations, interimTranslation, isActive]);
 
   return (
     <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
@@ -93,6 +94,26 @@ export function TranslationView({ translations, targetLang, onTargetLangChange, 
                 </div>
               </div>
             ))}
+            {interimTranslation && (
+              <div className="group opacity-60 italic">
+                <div className="flex items-start gap-3">
+                  <span className="text-[10px] text-slate-400 font-mono mt-0.5 shrink-0">
+                    {formatTime(new Date().toISOString())}
+                  </span>
+                  <div className="flex-1 space-y-1.5">
+                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                      {interimTranslation.original}
+                    </p>
+                    <div className="flex items-start gap-2 pl-3 border-l-2 border-primary/30">
+                      <p className="text-sm text-slate-900 dark:text-slate-100 font-medium">
+                        {interimTranslation.translated}
+                        <span className="inline-block w-0.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-middle" />
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

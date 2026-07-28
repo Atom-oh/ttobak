@@ -1,0 +1,36 @@
+# Rust / Cargo
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# Tauri build artifacts
+src-tauri/gen/
+dist/
+
+# Node (root scripts only)
+node_modules/
+package-lock.json
+yarn.lock
+
+# macOS
+.DS_Store
+*.icloud
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Local env
+.env
+.env.local
+
+# Recorded audio (test artifacts)
+recordings/
+*.wav
+*.m4a
+
+# Notarization artifacts
+*.dmg
+*.app.zip
+*.p12
+notarize.json

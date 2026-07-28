@@ -15,14 +15,20 @@ export interface UploadResult {
 
 export async function uploadToS3(
   file: File,
-  category: 'audio' | 'image',
-  onProgress?: (progress: UploadProgress) => void
+  category: 'audio' | 'image' | 'file' | 'doc',
+  onProgress?: (progress: UploadProgress) => void,
+  meetingId?: string,
+  partIndex?: number,
+  totalParts?: number,
 ): Promise<UploadResult> {
   // Get presigned URL from backend
   const { uploadUrl, key } = await uploadsApi.getPresignedUrl({
     fileName: file.name,
     fileType: file.type,
     category,
+    meetingId,
+    partIndex,
+    totalParts,
   });
 
   // Upload directly to S3
@@ -79,12 +85,122 @@ export async function uploadImage(
   return uploadToS3(file, 'image', onProgress);
 }
 
+/** Upload a slide (PDF/PPTX) for a note/blog document. No meetingId, no
+ * /api/upload/complete step -- the docApi/accountApi put call with the
+ * returned key IS the completion record. */
+export async function uploadDocFile(
+  file: File,
+  onProgress?: (progress: UploadProgress) => void
+): Promise<UploadResult> {
+  return uploadToS3(file, 'doc', onProgress);
+}
+
+function getCategoryFromMime(mimeType: string): 'image' | 'file' {
+  if (mimeType.startsWith('image/')) return 'image';
+  return 'file';
+}
+
+export async function uploadFile(
+  file: File,
+  onProgress?: (progress: UploadProgress) => void,
+  meetingId?: string,
+): Promise<UploadResult> {
+  const category = getCategoryFromMime(file.type);
+  return uploadToS3(file, category, onProgress, meetingId);
+}
+
+/** Abort a PUT attempt if no upload progress has been made for this long.
+ * Deliberately not a fixed total-request timeout — a 382MB recording on a
+ * healthy-but-slow connection needs more than 30s and must be allowed to
+ * keep going; only a truly stalled transfer should be aborted. */
+const STALL_TIMEOUT_MS = 60_000;
+
+function putOnce(
+  uploadUrl: string,
+  blob: Blob,
+  mimeType: string,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let stallTimer: ReturnType<typeof setTimeout>;
+
+    const armStallTimer = () => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => xhr.abort(), STALL_TIMEOUT_MS);
+    };
+
+    xhr.upload.addEventListener('progress', (event) => {
+      armStallTimer();
+      if (event.lengthComputable && onProgress) {
+        onProgress({
+          loaded: event.loaded,
+          total: event.total,
+          percentage: Math.round((event.loaded / event.total) * 100),
+        });
+      }
+    });
+
+    xhr.addEventListener('load', () => {
+      clearTimeout(stallTimer);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error(`Upload failed with status ${xhr.status}`));
+      }
+    });
+
+    xhr.addEventListener('error', () => {
+      clearTimeout(stallTimer);
+      reject(new Error('Upload failed'));
+    });
+
+    xhr.addEventListener('abort', () => {
+      clearTimeout(stallTimer);
+      reject(new Error(`Upload stalled — no progress for ${STALL_TIMEOUT_MS / 1000}s`));
+    });
+
+    xhr.open('PUT', uploadUrl);
+    xhr.setRequestHeader('Content-Type', mimeType || 'audio/webm');
+    armStallTimer();
+    xhr.send(blob);
+  });
+}
+
+/**
+ * PUT a blob to an existing presigned URL, with progress reporting and a
+ * progress-stall watchdog instead of a fixed total-request timeout, retried
+ * up to `maxRetries` times with backoff. Replaces `uploadAudioWithRetry`,
+ * which used to abort every attempt at a flat 30 seconds regardless of file
+ * size — impossible for anything much larger than a few MB.
+ */
+export async function putWithProgress(
+  uploadUrl: string,
+  blob: Blob,
+  mimeType: string,
+  onProgress?: (progress: UploadProgress) => void,
+  maxRetries = 2,
+): Promise<void> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await putOnce(uploadUrl, blob, mimeType, onProgress);
+      return;
+    } catch (err) {
+      if (attempt === maxRetries) {
+        throw err instanceof Error ? err : new Error('Upload failed');
+      }
+      await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+    }
+  }
+}
+
 export async function notifyUploadComplete(
   meetingId: string,
   key: string,
-  category: 'audio' | 'image'
+  category: 'audio' | 'image' | 'file',
+  metadata?: { fileName?: string; fileSize?: number; mimeType?: string; partIndex?: number; totalParts?: number },
 ): Promise<void> {
-  await uploadsApi.notifyComplete({ meetingId, key, category });
+  await uploadsApi.notifyComplete({ meetingId, key, category, ...metadata });
 }
 
 export function formatFileSize(bytes: number): string {
