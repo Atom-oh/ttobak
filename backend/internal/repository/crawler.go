@@ -87,32 +87,6 @@ func (r *CrawlerRepository) GetSource(ctx context.Context, sourceID string) (*mo
 	return &item.CrawlerSource, nil
 }
 
-// PutSource creates or updates a crawler source
-// PK: CRAWLER#{sourceID}, SK: CONFIG
-func (r *CrawlerRepository) PutSource(ctx context.Context, source *model.CrawlerSource) error {
-	item := crawlerItem{
-		PK:            model.PrefixCrawler + source.SourceID,
-		SK:            model.PrefixConfig,
-		EntityType:    "CRAWLER_SOURCE",
-		CrawlerSource: *source,
-	}
-
-	av, err := attributevalue.MarshalMap(item)
-	if err != nil {
-		return fmt.Errorf("failed to marshal crawler source: %w", err)
-	}
-
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      av,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to put crawler source: %w", err)
-	}
-
-	return nil
-}
-
 // PutSourceIfAbsent creates a brand-new crawler source, conditioned on the
 // PK not already existing -- AddSource's new-source branch uses this
 // instead of PutSource's unconditional overwrite, since a concurrent
@@ -159,32 +133,68 @@ func (r *CrawlerRepository) PutSourceIfAbsent(ctx context.Context, source *model
 	return nil
 }
 
-// UpdateSourceSubscription performs a partial UpdateItem for AddSource's
-// existing-source merge path -- SETting only subscribers/awsServices/
-// newsQueries/newsSources/customUrls, never ownerId or any other field, so
-// this call can NEVER overwrite ownerId (this feature's destructive-delete
-// gate) regardless of races, unlike the whole-item PutSource this replaces.
-// The ConditionExpression asserts all five fields still equal `expected`'s
-// snapshot; a concurrent AddSource (or admin ownerId backfill landing via a
-// different write path) that changed any of them in between fails the
-// condition (ErrConditionFailed) instead of one caller's stale in-memory
-// merge silently overwriting the other's.
-func (r *CrawlerRepository) UpdateSourceSubscription(ctx context.Context, sourceID string, expected *model.CrawlerSource, subscribers, awsServices, newsQueries, newsSources, customUrls []string) error {
-	update := expression.Set(expression.Name("subscribers"), expression.Value(subscribers)).
-		Set(expression.Name("awsServices"), expression.Value(awsServices)).
-		Set(expression.Name("newsQueries"), expression.Value(newsQueries)).
-		Set(expression.Name("newsSources"), expression.Value(newsSources)).
-		Set(expression.Name("customUrls"), expression.Value(customUrls))
+// SourcePartialFields lists which CrawlerSource fields UpdateSourcePartial
+// should SET -- a fixed struct (not a field-name map) so OwnerID structurally
+// CANNOT be included by any caller: there is no field for it. Every caller
+// that used to do a whole-item PutSource keyed off a stale read now goes
+// through this instead (AddSource's existing-source merge, Unsubscribe,
+// rebuildSourceUnion), so none of them can silently erase an admin's manual
+// ownerId backfill (this feature's destructive-delete gate) via a lost-update
+// race.
+type SourcePartialFields struct {
+	Subscribers *[]string
+	AWSServices *[]string
+	NewsQueries *[]string
+	NewsSources *[]string
+	CustomUrls  *[]string
+	Status      *string
+}
 
-	cond := expression.Name("subscribers").Equal(expression.Value(expected.Subscribers)).
-		And(expression.Name("awsServices").Equal(expression.Value(expected.AWSServices))).
-		And(expression.Name("newsQueries").Equal(expression.Value(expected.NewsQueries))).
-		And(expression.Name("newsSources").Equal(expression.Value(expected.NewsSources))).
-		And(expression.Name("customUrls").Equal(expression.Value(expected.CustomUrls)))
+// UpdateSourcePartial performs a partial UpdateItem for the crawler source at
+// sourceID, SETting exactly the non-nil fields in `fields`. Guarded by a
+// ConditionExpression asserting each of those same fields still equals its
+// value in `expected` (a snapshot read immediately before this call) --
+// callers get ErrConditionFailed on a lost race and are expected to re-read,
+// re-derive `fields`, and retry.
+func (r *CrawlerRepository) UpdateSourcePartial(ctx context.Context, sourceID string, expected *model.CrawlerSource, fields SourcePartialFields) error {
+	type entry struct {
+		name    string
+		value   interface{}
+		current interface{}
+	}
+	var entries []entry
+	if fields.Subscribers != nil {
+		entries = append(entries, entry{"subscribers", *fields.Subscribers, expected.Subscribers})
+	}
+	if fields.AWSServices != nil {
+		entries = append(entries, entry{"awsServices", *fields.AWSServices, expected.AWSServices})
+	}
+	if fields.NewsQueries != nil {
+		entries = append(entries, entry{"newsQueries", *fields.NewsQueries, expected.NewsQueries})
+	}
+	if fields.NewsSources != nil {
+		entries = append(entries, entry{"newsSources", *fields.NewsSources, expected.NewsSources})
+	}
+	if fields.CustomUrls != nil {
+		entries = append(entries, entry{"customUrls", *fields.CustomUrls, expected.CustomUrls})
+	}
+	if fields.Status != nil {
+		entries = append(entries, entry{"status", *fields.Status, expected.Status})
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("UpdateSourcePartial: no fields given for source %s", sourceID)
+	}
+
+	update := expression.Set(expression.Name(entries[0].name), expression.Value(entries[0].value))
+	cond := sourceFieldUnchangedCondition(entries[0].name, entries[0].current)
+	for _, e := range entries[1:] {
+		update = update.Set(expression.Name(e.name), expression.Value(e.value))
+		cond = cond.And(sourceFieldUnchangedCondition(e.name, e.current))
+	}
 
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build()
 	if err != nil {
-		return fmt.Errorf("build update-source-subscription expression: %w", err)
+		return fmt.Errorf("build update-source-partial expression: %w", err)
 	}
 
 	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
@@ -201,12 +211,42 @@ func (r *CrawlerRepository) UpdateSourceSubscription(ctx context.Context, source
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException
 		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: source %s subscription fields changed concurrently", ErrConditionFailed, sourceID)
+			return fmt.Errorf("%w: source %s fields changed concurrently", ErrConditionFailed, sourceID)
 		}
-		return fmt.Errorf("failed to update crawler source subscription: %w", err)
+		return fmt.Errorf("failed to update crawler source: %w", err)
 	}
 
 	return nil
+}
+
+// sourceFieldUnchangedCondition builds the per-field half of
+// UpdateSourcePartial's ConditionExpression. A nil/empty list is treated as
+// "attribute doesn't exist" rather than compared against an empty List
+// value: a legacy source written before a given field existed has the
+// attribute genuinely ABSENT in DynamoDB, not present-and-empty -- comparing
+// Equal against an empty-list Value would then never match a real GetItem
+// result for that item, so every UpdateSourcePartial attempt on it would
+// fail its condition deterministically (not a real race, just a modeling
+// mismatch), exhausting the caller's bounded retry and permanently 500ing
+// legacy sources. A field this call itself previously cleared to nil (e.g.
+// Unsubscribe's last-subscriber branch SETting AWSServices to a nil slice)
+// is a THIRD case -- present, but marshaled to NULL rather than an empty
+// List -- so the empty-value branch below ORs attribute_not_exists with an
+// Equal against whatever the SDK marshals a nil/empty []string to, covering
+// both "never written" and "explicitly cleared" without needing to know
+// which. `status` is always non-empty (never omitempty), so it always takes
+// the plain Equal path.
+func sourceFieldUnchangedCondition(name string, current interface{}) expression.ConditionBuilder {
+	if list, ok := current.([]string); ok {
+		if len(list) == 0 {
+			return expression.Or(
+				expression.AttributeNotExists(expression.Name(name)),
+				expression.Name(name).Equal(expression.Value(list)),
+			)
+		}
+		return expression.Name(name).Equal(expression.Value(list))
+	}
+	return expression.Name(name).Equal(expression.Value(current))
 }
 
 // GetSubscription retrieves a user's subscription to a crawler source

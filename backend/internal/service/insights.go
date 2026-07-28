@@ -53,16 +53,29 @@ func (c *docCache) clear() {
 	c.entries = make(map[string]cacheEntry)
 }
 
+// s3GetDeleter is the S3 capability InsightsService needs: reading a
+// document's full content (GetDocumentDetail) and cleaning up its object on
+// destructive delete (DeleteDocument). Matches *s3.Client's methods directly
+// (same convention as AccountService's s3ObjectDeleter) so the real client
+// satisfies it without wrapping, and a test can inject a mock implementing
+// just these two methods to exercise DeleteDocument's S3-then-DynamoDB happy
+// path -- which a concrete *s3.Client field could not do without a live AWS
+// connection.
+type s3GetDeleter interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	DeleteObject(ctx context.Context, params *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+}
+
 // InsightsService handles document listing and insights for crawled content.
 type InsightsService struct {
 	repo         crawlerRepo
-	s3Client     *s3.Client
+	s3           s3GetDeleter
 	kbBucketName string
 }
 
 // NewInsightsService creates a new InsightsService.
 func NewInsightsService(repo *repository.CrawlerRepository, s3Client *s3.Client, kbBucketName string) *InsightsService {
-	return &InsightsService{repo: repo, s3Client: s3Client, kbBucketName: kbBucketName}
+	return &InsightsService{repo: repo, s3: s3Client, kbBucketName: kbBucketName}
 }
 
 // GetDocumentDetail reads metadata from DynamoDB and full content from S3.
@@ -80,7 +93,7 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 		s3Key = fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash)
 	}
 
-	result, err := s.s3Client.GetObject(ctx, &s3.GetObjectInput{
+	result, err := s.s3.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.kbBucketName),
 		Key:    aws.String(s3Key),
 	})
@@ -94,7 +107,7 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 			if fb == s3Key {
 				continue
 			}
-			result, err = s.s3Client.GetObject(ctx, &s3.GetObjectInput{
+			result, err = s.s3.GetObject(ctx, &s3.GetObjectInput{
 				Bucket: aws.String(s.kbBucketName),
 				Key:    aws.String(fb),
 			})
@@ -178,7 +191,7 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 	// permanently orphaning the S3 object + KB vector with no API path left
 	// to remove them.
 	if doc.S3Key != "" {
-		if _, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		if _, err := s.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
 			Bucket: aws.String(s.kbBucketName),
 			Key:    aws.String(doc.S3Key),
 		}); err != nil {
@@ -196,7 +209,7 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 			fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash),
 			fmt.Sprintf("shared/aws-docs/%s/%s.md", sourceID, docHash),
 		} {
-			if _, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			if _, err := s.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
 				Bucket: aws.String(s.kbBucketName),
 				Key:    aws.String(key),
 			}); err != nil {

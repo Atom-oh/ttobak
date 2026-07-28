@@ -54,17 +54,6 @@ func (m *mockCrawlerRepo) GetSource(_ context.Context, sourceID string) (*model.
 	return &cp, nil
 }
 
-func (m *mockCrawlerRepo) PutSource(_ context.Context, source *model.CrawlerSource) error {
-	cp := *source
-	cp.Subscribers = append([]string(nil), source.Subscribers...)
-	cp.AWSServices = append([]string(nil), source.AWSServices...)
-	cp.NewsQueries = append([]string(nil), source.NewsQueries...)
-	cp.NewsSources = append([]string(nil), source.NewsSources...)
-	cp.CustomUrls = append([]string(nil), source.CustomUrls...)
-	m.sources[source.SourceID] = &cp
-	return nil
-}
-
 func (m *mockCrawlerRepo) PutSourceIfAbsent(_ context.Context, source *model.CrawlerSource) error {
 	if _, exists := m.sources[source.SourceID]; exists {
 		return fmt.Errorf("%w: source %s already exists", repository.ErrConditionFailed, source.SourceID)
@@ -79,23 +68,76 @@ func (m *mockCrawlerRepo) PutSourceIfAbsent(_ context.Context, source *model.Cra
 	return nil
 }
 
-func (m *mockCrawlerRepo) UpdateSourceSubscription(_ context.Context, sourceID string, expected *model.CrawlerSource, subscribers, awsServices, newsQueries, newsSources, customUrls []string) error {
+// UpdateSourcePartial mirrors CrawlerRepository's real semantics closely
+// enough to exercise the races/retries it exists to test: a nil/empty
+// expected value for a field satisfies the condition against EITHER a
+// genuinely-absent field (legacy source) or a present-but-empty one
+// (explicitly cleared), matching sourceFieldUnchangedCondition's
+// attribute_not_exists-OR-Equal construction.
+func (m *mockCrawlerRepo) UpdateSourcePartial(_ context.Context, sourceID string, expected *model.CrawlerSource, fields repository.SourcePartialFields) error {
 	current, ok := m.sources[sourceID]
 	if !ok {
 		return fmt.Errorf("%w: source %s not found", repository.ErrConditionFailed, sourceID)
 	}
-	if !stringSlicesEqual(current.Subscribers, expected.Subscribers) ||
-		!stringSlicesEqual(current.AWSServices, expected.AWSServices) ||
-		!stringSlicesEqual(current.NewsQueries, expected.NewsQueries) ||
-		!stringSlicesEqual(current.NewsSources, expected.NewsSources) ||
-		!stringSlicesEqual(current.CustomUrls, expected.CustomUrls) {
-		return fmt.Errorf("%w: source %s subscription fields changed concurrently", repository.ErrConditionFailed, sourceID)
+	checkList := func(name string, currentVal, expectedVal []string) error {
+		if len(expectedVal) == 0 {
+			if len(currentVal) != 0 {
+				return fmt.Errorf("%w: source %s field %s changed concurrently", repository.ErrConditionFailed, sourceID, name)
+			}
+			return nil
+		}
+		if !stringSlicesEqual(currentVal, expectedVal) {
+			return fmt.Errorf("%w: source %s field %s changed concurrently", repository.ErrConditionFailed, sourceID, name)
+		}
+		return nil
 	}
-	current.Subscribers = append([]string(nil), subscribers...)
-	current.AWSServices = append([]string(nil), awsServices...)
-	current.NewsQueries = append([]string(nil), newsQueries...)
-	current.NewsSources = append([]string(nil), newsSources...)
-	current.CustomUrls = append([]string(nil), customUrls...)
+	if fields.Subscribers != nil {
+		if err := checkList("subscribers", current.Subscribers, expected.Subscribers); err != nil {
+			return err
+		}
+	}
+	if fields.AWSServices != nil {
+		if err := checkList("awsServices", current.AWSServices, expected.AWSServices); err != nil {
+			return err
+		}
+	}
+	if fields.NewsQueries != nil {
+		if err := checkList("newsQueries", current.NewsQueries, expected.NewsQueries); err != nil {
+			return err
+		}
+	}
+	if fields.NewsSources != nil {
+		if err := checkList("newsSources", current.NewsSources, expected.NewsSources); err != nil {
+			return err
+		}
+	}
+	if fields.CustomUrls != nil {
+		if err := checkList("customUrls", current.CustomUrls, expected.CustomUrls); err != nil {
+			return err
+		}
+	}
+	if fields.Status != nil && current.Status != expected.Status {
+		return fmt.Errorf("%w: source %s field status changed concurrently", repository.ErrConditionFailed, sourceID)
+	}
+
+	if fields.Subscribers != nil {
+		current.Subscribers = append([]string(nil), (*fields.Subscribers)...)
+	}
+	if fields.AWSServices != nil {
+		current.AWSServices = append([]string(nil), (*fields.AWSServices)...)
+	}
+	if fields.NewsQueries != nil {
+		current.NewsQueries = append([]string(nil), (*fields.NewsQueries)...)
+	}
+	if fields.NewsSources != nil {
+		current.NewsSources = append([]string(nil), (*fields.NewsSources)...)
+	}
+	if fields.CustomUrls != nil {
+		current.CustomUrls = append([]string(nil), (*fields.CustomUrls)...)
+	}
+	if fields.Status != nil {
+		current.Status = *fields.Status
+	}
 	return nil
 }
 

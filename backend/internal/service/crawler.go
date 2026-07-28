@@ -16,9 +16,8 @@ import (
 // crawlerRepo defines the repository methods used by CrawlerService and InsightsService.
 type crawlerRepo interface {
 	GetSource(ctx context.Context, sourceID string) (*model.CrawlerSource, error)
-	PutSource(ctx context.Context, source *model.CrawlerSource) error
 	PutSourceIfAbsent(ctx context.Context, source *model.CrawlerSource) error
-	UpdateSourceSubscription(ctx context.Context, sourceID string, expected *model.CrawlerSource, subscribers, awsServices, newsQueries, newsSources, customUrls []string) error
+	UpdateSourcePartial(ctx context.Context, sourceID string, expected *model.CrawlerSource, fields repository.SourcePartialFields) error
 	GetSubscription(ctx context.Context, userID, sourceID string) (*model.CrawlerSubscription, error)
 	PutSubscription(ctx context.Context, userID string, sub *model.CrawlerSubscription) error
 	DeleteSubscription(ctx context.Context, userID, sourceID string) error
@@ -105,9 +104,9 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 	// other write entirely (and since OwnerID is this feature's
 	// destructive-delete gate, silently erasing an admin's manual backfill
 	// is the same class of bug, not just a lost subscriber). Replaced with
-	// a partial UpdateItem (UpdateSourceSubscription) that only ever
-	// touches the five subscription-merge fields -- structurally incapable
-	// of overwriting ownerId -- guarded by a condition asserting those five
+	// a partial UpdateItem (UpdateSourcePartial) that only ever touches the
+	// five subscription-merge fields -- structurally incapable of
+	// overwriting ownerId -- guarded by a condition asserting those five
 	// fields are still what this call read, with a bounded retry (re-read,
 	// re-merge, re-attempt) on a concurrent change instead of overwriting it.
 	if !justCreated {
@@ -122,7 +121,13 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 			newsSources := union(source.NewsSources, req.NewsSources)
 			customUrls := union(source.CustomUrls, req.CustomUrls)
 
-			err := s.repo.UpdateSourceSubscription(ctx, sourceID, source, subscribers, awsServices, newsQueries, newsSources, customUrls)
+			err := s.repo.UpdateSourcePartial(ctx, sourceID, source, repository.SourcePartialFields{
+				Subscribers: &subscribers,
+				AWSServices: &awsServices,
+				NewsQueries: &newsQueries,
+				NewsSources: &newsSources,
+				CustomUrls:  &customUrls,
+			})
 			if err == nil {
 				source.Subscribers = subscribers
 				source.AWSServices = awsServices
@@ -224,32 +229,58 @@ func (s *CrawlerService) Unsubscribe(ctx context.Context, userID, sourceID strin
 		return fmt.Errorf("failed to delete subscription: %w", err)
 	}
 
-	// Update the source
-	source, err := s.repo.GetSource(ctx, sourceID)
-	if err != nil {
-		return fmt.Errorf("failed to get source: %w", err)
-	}
-	if source == nil {
-		return nil // Source already gone
-	}
-
-	source.Subscribers = remove(source.Subscribers, userID)
-
-	if len(source.Subscribers) == 0 {
-		source.Status = "disabled"
-		source.AWSServices = nil
-		source.NewsSources = nil
-		source.NewsQueries = nil
-		source.CustomUrls = nil
-		if err := s.repo.PutSource(ctx, source); err != nil {
-			return fmt.Errorf("failed to update source: %w", err)
+	// Update the source. Like AddSource's merge path, this used to be a
+	// whole-item PutSource -- a concurrent write (another user's AddSource/
+	// Unsubscribe, or an admin's ownerId backfill) landing in the window
+	// between the read and this write would be silently reverted, including
+	// ownerId itself. UpdateSourcePartial below only ever SETs
+	// subscribers/status/(the four union fields on the last-subscriber
+	// branch), never ownerId, with the same condition+bounded-retry pattern
+	// as AddSource.
+	const maxUnsubAttempts = 3
+	emptied := false
+	for attempt := 1; ; attempt++ {
+		source, err := s.repo.GetSource(ctx, sourceID)
+		if err != nil {
+			return fmt.Errorf("failed to get source: %w", err)
 		}
-		return nil
+		if source == nil {
+			return nil // Source already gone
+		}
+
+		subscribers := remove(source.Subscribers, userID)
+		emptied = len(subscribers) == 0
+
+		var updateErr error
+		if emptied {
+			status := "disabled"
+			var empty []string
+			updateErr = s.repo.UpdateSourcePartial(ctx, sourceID, source, repository.SourcePartialFields{
+				Subscribers: &subscribers,
+				Status:      &status,
+				AWSServices: &empty,
+				NewsSources: &empty,
+				NewsQueries: &empty,
+				CustomUrls:  &empty,
+			})
+		} else {
+			updateErr = s.repo.UpdateSourcePartial(ctx, sourceID, source, repository.SourcePartialFields{
+				Subscribers: &subscribers,
+			})
+		}
+		if updateErr == nil {
+			break
+		}
+		if !errors.Is(updateErr, repository.ErrConditionFailed) {
+			return fmt.Errorf("failed to update source: %w", updateErr)
+		}
+		if attempt >= maxUnsubAttempts {
+			return fmt.Errorf("failed to update source: fields changed concurrently %d times, giving up", maxUnsubAttempts)
+		}
 	}
 
-	// Save updated subscribers list, then rebuild union from remaining
-	if err := s.repo.PutSource(ctx, source); err != nil {
-		return fmt.Errorf("failed to update source: %w", err)
+	if emptied {
+		return nil
 	}
 	return s.rebuildSourceUnion(ctx, sourceID)
 }
@@ -264,40 +295,54 @@ func (s *CrawlerService) GetHistory(ctx context.Context, sourceID string) (*mode
 }
 
 // rebuildSourceUnion fetches all subscriptions for a source and rebuilds
-// the source's awsServices, newsQueries, and customUrls as unions.
+// the source's awsServices, newsQueries, newsSources, and customUrls as
+// unions. Like AddSource/Unsubscribe, this is a partial UpdateItem (never
+// touching ownerId or subscribers) with the same condition+bounded-retry
+// pattern -- a whole-item PutSource here could otherwise revert a concurrent
+// AddSource/Unsubscribe/ownerId-backfill landing in the read-then-write
+// window.
 func (s *CrawlerService) rebuildSourceUnion(ctx context.Context, sourceID string) error {
-	source, err := s.repo.GetSource(ctx, sourceID)
-	if err != nil {
-		return fmt.Errorf("failed to get source: %w", err)
-	}
-	if source == nil {
-		return nil
-	}
-
-	var allAWS, allNewsSources, allNewsQueries, allURLs []string
-	for _, uid := range source.Subscribers {
-		sub, err := s.repo.GetSubscription(ctx, uid, sourceID)
+	const maxRebuildAttempts = 3
+	for attempt := 1; ; attempt++ {
+		source, err := s.repo.GetSource(ctx, sourceID)
 		if err != nil {
-			return fmt.Errorf("failed to get subscription for %s: %w", uid, err)
+			return fmt.Errorf("failed to get source: %w", err)
 		}
-		if sub == nil {
-			continue
+		if source == nil {
+			return nil
 		}
-		allAWS = union(allAWS, sub.AWSServices)
-		allNewsSources = union(allNewsSources, sub.NewsSources)
-		allNewsQueries = union(allNewsQueries, sub.NewsQueries)
-		allURLs = union(allURLs, sub.CustomUrls)
-	}
 
-	source.AWSServices = allAWS
-	source.NewsSources = allNewsSources
-	source.NewsQueries = allNewsQueries
-	source.CustomUrls = allURLs
+		var allAWS, allNewsSources, allNewsQueries, allURLs []string
+		for _, uid := range source.Subscribers {
+			sub, err := s.repo.GetSubscription(ctx, uid, sourceID)
+			if err != nil {
+				return fmt.Errorf("failed to get subscription for %s: %w", uid, err)
+			}
+			if sub == nil {
+				continue
+			}
+			allAWS = union(allAWS, sub.AWSServices)
+			allNewsSources = union(allNewsSources, sub.NewsSources)
+			allNewsQueries = union(allNewsQueries, sub.NewsQueries)
+			allURLs = union(allURLs, sub.CustomUrls)
+		}
 
-	if err := s.repo.PutSource(ctx, source); err != nil {
-		return fmt.Errorf("failed to update source union: %w", err)
+		err = s.repo.UpdateSourcePartial(ctx, sourceID, source, repository.SourcePartialFields{
+			AWSServices: &allAWS,
+			NewsSources: &allNewsSources,
+			NewsQueries: &allNewsQueries,
+			CustomUrls:  &allURLs,
+		})
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, repository.ErrConditionFailed) {
+			return fmt.Errorf("failed to update source union: %w", err)
+		}
+		if attempt >= maxRebuildAttempts {
+			return fmt.Errorf("failed to update source union: fields changed concurrently %d times, giving up", maxRebuildAttempts)
+		}
 	}
-	return nil
 }
 
 // normalizeSourceID converts a human-readable source name to a stable ID.

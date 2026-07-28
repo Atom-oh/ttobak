@@ -5,8 +5,32 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 )
+
+// mockS3GetDeleter is a minimal s3GetDeleter for DeleteDocument happy-path
+// tests -- *s3.Client is a concrete type with no test double, so exercising
+// the S3-then-DynamoDB ordering, the 2-key fallback, and metadata
+// preservation on S3 failure was previously impossible without a live AWS
+// connection (see s3GetDeleter's doc comment in insights.go).
+type mockS3GetDeleter struct {
+	deletedKeys []string
+	deleteErr   error
+}
+
+func (m *mockS3GetDeleter) GetObject(_ context.Context, _ *s3.GetObjectInput, _ ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	return nil, errors.New("mockS3GetDeleter.GetObject not implemented")
+}
+
+func (m *mockS3GetDeleter) DeleteObject(_ context.Context, params *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+	if m.deleteErr != nil {
+		return nil, m.deleteErr
+	}
+	m.deletedKeys = append(m.deletedKeys, aws.ToString(params.Key))
+	return &s3.DeleteObjectOutput{}, nil
+}
 
 func TestListInsights_WithSourceFilter(t *testing.T) {
 	scanCache.clear()
@@ -225,6 +249,82 @@ func TestDeleteDocument_AdminAllowedOnLegacySourceWithoutOwnerID(t *testing.T) {
 	err := svc.DeleteDocument(ctx, "admin-1", true, "hanabank", "no-such-doc")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound (admin allowed even on legacy source), got %v", err)
+	}
+}
+
+// TestDeleteDocument_HappyPath_DeletesS3ThenRepo covers the destructive
+// delete happy path that every other DeleteDocument test above deliberately
+// stops short of (they all return before touching S3): S3Key present ->
+// exactly that key is deleted, then the DynamoDB metadata is removed.
+func TestDeleteDocument_HappyPath_DeletesS3ThenRepo(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", OwnerID: "user-1", Subscribers: []string{"user-1"}}
+	repo.documents["hanabank"] = []model.CrawledDocument{
+		{DocHash: "doc1", SourceID: "hanabank", S3Key: "shared/news/hanabank/doc1.md"},
+	}
+	mockS3 := &mockS3GetDeleter{}
+	svc := &InsightsService{repo: repo, s3: mockS3, kbBucketName: "kb-bucket"}
+	ctx := context.Background()
+
+	if err := svc.DeleteDocument(ctx, "user-1", false, "hanabank", "doc1"); err != nil {
+		t.Fatalf("DeleteDocument returned error: %v", err)
+	}
+	if len(mockS3.deletedKeys) != 1 || mockS3.deletedKeys[0] != "shared/news/hanabank/doc1.md" {
+		t.Errorf("expected exactly the stored S3Key to be deleted, got %v", mockS3.deletedKeys)
+	}
+	remaining, err := repo.GetDocument(ctx, "hanabank", "doc1")
+	if err != nil {
+		t.Fatalf("GetDocument after delete returned error: %v", err)
+	}
+	if remaining != nil {
+		t.Error("expected document metadata to be removed from repo")
+	}
+}
+
+// TestDeleteDocument_HappyPath_NoS3KeyDeletesBothFallbackKeys covers older
+// documents without a stored S3Key: both candidate keys must be deleted
+// unconditionally (idempotent, per the code comment) rather than probed.
+func TestDeleteDocument_HappyPath_NoS3KeyDeletesBothFallbackKeys(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", OwnerID: "user-1", Subscribers: []string{"user-1"}}
+	repo.documents["hanabank"] = []model.CrawledDocument{
+		{DocHash: "doc1", SourceID: "hanabank"}, // no S3Key
+	}
+	mockS3 := &mockS3GetDeleter{}
+	svc := &InsightsService{repo: repo, s3: mockS3, kbBucketName: "kb-bucket"}
+	ctx := context.Background()
+
+	if err := svc.DeleteDocument(ctx, "user-1", false, "hanabank", "doc1"); err != nil {
+		t.Fatalf("DeleteDocument returned error: %v", err)
+	}
+	if len(mockS3.deletedKeys) != 2 {
+		t.Errorf("expected both fallback keys deleted, got %v", mockS3.deletedKeys)
+	}
+}
+
+// TestDeleteDocument_S3FailurePreservesMetadata covers the S3-before-
+// DynamoDB ordering's whole point: if the S3 delete fails, the DynamoDB
+// metadata must survive so the delete is safely retryable, not orphan the
+// object with no metadata left pointing at it.
+func TestDeleteDocument_S3FailurePreservesMetadata(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", OwnerID: "user-1", Subscribers: []string{"user-1"}}
+	repo.documents["hanabank"] = []model.CrawledDocument{
+		{DocHash: "doc1", SourceID: "hanabank", S3Key: "shared/news/hanabank/doc1.md"},
+	}
+	mockS3 := &mockS3GetDeleter{deleteErr: errors.New("s3 unavailable")}
+	svc := &InsightsService{repo: repo, s3: mockS3, kbBucketName: "kb-bucket"}
+	ctx := context.Background()
+
+	if err := svc.DeleteDocument(ctx, "user-1", false, "hanabank", "doc1"); err == nil {
+		t.Fatal("expected an error when the S3 delete fails")
+	}
+	remaining, err := repo.GetDocument(ctx, "hanabank", "doc1")
+	if err != nil {
+		t.Fatalf("GetDocument returned error: %v", err)
+	}
+	if remaining == nil {
+		t.Error("expected document metadata to survive an S3 delete failure")
 	}
 }
 
