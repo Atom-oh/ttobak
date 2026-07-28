@@ -18,6 +18,7 @@ type crawlerRepo interface {
 	GetSource(ctx context.Context, sourceID string) (*model.CrawlerSource, error)
 	PutSource(ctx context.Context, source *model.CrawlerSource) error
 	PutSourceIfAbsent(ctx context.Context, source *model.CrawlerSource) error
+	UpdateSourceSubscription(ctx context.Context, sourceID string, expected *model.CrawlerSource, subscribers, awsServices, newsQueries, newsSources, customUrls []string) error
 	GetSubscription(ctx context.Context, userID, sourceID string) (*model.CrawlerSubscription, error)
 	PutSubscription(ctx context.Context, userID string, sub *model.CrawlerSubscription) error
 	DeleteSubscription(ctx context.Context, userID, sourceID string) error
@@ -93,25 +94,56 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 		}
 	}
 
-	// Skip the merge+PutSource below when we just created the source: its
-	// fields already match req exactly, and PutSource here would be an
-	// unconditional whole-item overwrite using this request's local
-	// `source` value -- if a concurrent AddSource for a DIFFERENT user
-	// updated the item in the (however brief) window between
-	// PutSourceIfAbsent returning and this write, that write would be lost,
-	// recreating the exact lost-update race PutSourceIfAbsent exists to
-	// close (and, since OwnerID is this feature's destructive-delete gate,
-	// losing that field for a fresher write is the same class of bug too).
+	// Skip the merge below when we just created the source: its fields
+	// already match req exactly.
+	//
+	// The merge itself used to be a whole-item PutSource using this
+	// request's local `source` value -- if a concurrent AddSource for a
+	// DIFFERENT user (or an admin's ownerId backfill) updated the item in
+	// the window between the read above and that write, the whole item
+	// would be overwritten with this call's stale snapshot, losing the
+	// other write entirely (and since OwnerID is this feature's
+	// destructive-delete gate, silently erasing an admin's manual backfill
+	// is the same class of bug, not just a lost subscriber). Replaced with
+	// a partial UpdateItem (UpdateSourceSubscription) that only ever
+	// touches the five subscription-merge fields -- structurally incapable
+	// of overwriting ownerId -- guarded by a condition asserting those five
+	// fields are still what this call read, with a bounded retry (re-read,
+	// re-merge, re-attempt) on a concurrent change instead of overwriting it.
 	if !justCreated {
-		if !contains(source.Subscribers, userID) {
-			source.Subscribers = append(source.Subscribers, userID)
-		}
-		source.AWSServices = union(source.AWSServices, req.AWSServices)
-		source.NewsQueries = union(source.NewsQueries, req.NewsQueries)
-		source.NewsSources = union(source.NewsSources, req.NewsSources)
-		source.CustomUrls = union(source.CustomUrls, req.CustomUrls)
-		if err := s.repo.PutSource(ctx, source); err != nil {
-			return nil, fmt.Errorf("failed to update source: %w", err)
+		const maxMergeAttempts = 3
+		for attempt := 1; ; attempt++ {
+			subscribers := source.Subscribers
+			if !contains(subscribers, userID) {
+				subscribers = append(append([]string{}, subscribers...), userID)
+			}
+			awsServices := union(source.AWSServices, req.AWSServices)
+			newsQueries := union(source.NewsQueries, req.NewsQueries)
+			newsSources := union(source.NewsSources, req.NewsSources)
+			customUrls := union(source.CustomUrls, req.CustomUrls)
+
+			err := s.repo.UpdateSourceSubscription(ctx, sourceID, source, subscribers, awsServices, newsQueries, newsSources, customUrls)
+			if err == nil {
+				source.Subscribers = subscribers
+				source.AWSServices = awsServices
+				source.NewsQueries = newsQueries
+				source.NewsSources = newsSources
+				source.CustomUrls = customUrls
+				break
+			}
+			if !errors.Is(err, repository.ErrConditionFailed) {
+				return nil, fmt.Errorf("failed to update source: %w", err)
+			}
+			if attempt >= maxMergeAttempts {
+				return nil, fmt.Errorf("failed to update source: subscription fields changed concurrently %d times, giving up", maxMergeAttempts)
+			}
+			source, err = s.repo.GetSource(ctx, sourceID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to re-read source after merge race: %w", err)
+			}
+			if source == nil {
+				return nil, fmt.Errorf("source %s vanished during merge retry", sourceID)
+			}
 		}
 	}
 

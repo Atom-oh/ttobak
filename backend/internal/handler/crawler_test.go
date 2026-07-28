@@ -49,6 +49,7 @@ func (m *mockCrawlerRepo) GetSource(_ context.Context, sourceID string) (*model.
 	cp.Subscribers = append([]string(nil), src.Subscribers...)
 	cp.AWSServices = append([]string(nil), src.AWSServices...)
 	cp.NewsQueries = append([]string(nil), src.NewsQueries...)
+	cp.NewsSources = append([]string(nil), src.NewsSources...)
 	cp.CustomUrls = append([]string(nil), src.CustomUrls...)
 	return &cp, nil
 }
@@ -58,6 +59,7 @@ func (m *mockCrawlerRepo) PutSource(_ context.Context, source *model.CrawlerSour
 	cp.Subscribers = append([]string(nil), source.Subscribers...)
 	cp.AWSServices = append([]string(nil), source.AWSServices...)
 	cp.NewsQueries = append([]string(nil), source.NewsQueries...)
+	cp.NewsSources = append([]string(nil), source.NewsSources...)
 	cp.CustomUrls = append([]string(nil), source.CustomUrls...)
 	m.sources[source.SourceID] = &cp
 	return nil
@@ -71,9 +73,42 @@ func (m *mockCrawlerRepo) PutSourceIfAbsent(_ context.Context, source *model.Cra
 	cp.Subscribers = append([]string(nil), source.Subscribers...)
 	cp.AWSServices = append([]string(nil), source.AWSServices...)
 	cp.NewsQueries = append([]string(nil), source.NewsQueries...)
+	cp.NewsSources = append([]string(nil), source.NewsSources...)
 	cp.CustomUrls = append([]string(nil), source.CustomUrls...)
 	m.sources[source.SourceID] = &cp
 	return nil
+}
+
+func (m *mockCrawlerRepo) UpdateSourceSubscription(_ context.Context, sourceID string, expected *model.CrawlerSource, subscribers, awsServices, newsQueries, newsSources, customUrls []string) error {
+	current, ok := m.sources[sourceID]
+	if !ok {
+		return fmt.Errorf("%w: source %s not found", repository.ErrConditionFailed, sourceID)
+	}
+	if !stringSlicesEqual(current.Subscribers, expected.Subscribers) ||
+		!stringSlicesEqual(current.AWSServices, expected.AWSServices) ||
+		!stringSlicesEqual(current.NewsQueries, expected.NewsQueries) ||
+		!stringSlicesEqual(current.NewsSources, expected.NewsSources) ||
+		!stringSlicesEqual(current.CustomUrls, expected.CustomUrls) {
+		return fmt.Errorf("%w: source %s subscription fields changed concurrently", repository.ErrConditionFailed, sourceID)
+	}
+	current.Subscribers = append([]string(nil), subscribers...)
+	current.AWSServices = append([]string(nil), awsServices...)
+	current.NewsQueries = append([]string(nil), newsQueries...)
+	current.NewsSources = append([]string(nil), newsSources...)
+	current.CustomUrls = append([]string(nil), customUrls...)
+	return nil
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *mockCrawlerRepo) GetSubscription(_ context.Context, userID, sourceID string) (*model.CrawlerSubscription, error) {

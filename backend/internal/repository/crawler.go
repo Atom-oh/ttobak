@@ -134,10 +134,19 @@ func (r *CrawlerRepository) PutSourceIfAbsent(ctx context.Context, source *model
 		return fmt.Errorf("failed to marshal crawler source: %w", err)
 	}
 
+	condExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeNotExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("build create-source condition: %w", err)
+	}
+
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName:           aws.String(r.tableName),
-		Item:                av,
-		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+		TableName:                 aws.String(r.tableName),
+		Item:                      av,
+		ConditionExpression:       condExpr.Condition(),
+		ExpressionAttributeNames:  condExpr.Names(),
+		ExpressionAttributeValues: condExpr.Values(),
 	})
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException
@@ -145,6 +154,56 @@ func (r *CrawlerRepository) PutSourceIfAbsent(ctx context.Context, source *model
 			return fmt.Errorf("%w: source %s already exists", ErrConditionFailed, source.SourceID)
 		}
 		return fmt.Errorf("failed to create crawler source: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateSourceSubscription performs a partial UpdateItem for AddSource's
+// existing-source merge path -- SETting only subscribers/awsServices/
+// newsQueries/newsSources/customUrls, never ownerId or any other field, so
+// this call can NEVER overwrite ownerId (this feature's destructive-delete
+// gate) regardless of races, unlike the whole-item PutSource this replaces.
+// The ConditionExpression asserts all five fields still equal `expected`'s
+// snapshot; a concurrent AddSource (or admin ownerId backfill landing via a
+// different write path) that changed any of them in between fails the
+// condition (ErrConditionFailed) instead of one caller's stale in-memory
+// merge silently overwriting the other's.
+func (r *CrawlerRepository) UpdateSourceSubscription(ctx context.Context, sourceID string, expected *model.CrawlerSource, subscribers, awsServices, newsQueries, newsSources, customUrls []string) error {
+	update := expression.Set(expression.Name("subscribers"), expression.Value(subscribers)).
+		Set(expression.Name("awsServices"), expression.Value(awsServices)).
+		Set(expression.Name("newsQueries"), expression.Value(newsQueries)).
+		Set(expression.Name("newsSources"), expression.Value(newsSources)).
+		Set(expression.Name("customUrls"), expression.Value(customUrls))
+
+	cond := expression.Name("subscribers").Equal(expression.Value(expected.Subscribers)).
+		And(expression.Name("awsServices").Equal(expression.Value(expected.AWSServices))).
+		And(expression.Name("newsQueries").Equal(expression.Value(expected.NewsQueries))).
+		And(expression.Name("newsSources").Equal(expression.Value(expected.NewsSources))).
+		And(expression.Name("customUrls").Equal(expression.Value(expected.CustomUrls)))
+
+	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build()
+	if err != nil {
+		return fmt.Errorf("build update-source-subscription expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		},
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: source %s subscription fields changed concurrently", ErrConditionFailed, sourceID)
+		}
+		return fmt.Errorf("failed to update crawler source subscription: %w", err)
 	}
 
 	return nil
