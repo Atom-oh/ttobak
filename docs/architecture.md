@@ -149,6 +149,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-023: 공유 출처 증명 및 레거시 마이그레이션](decisions/ADR-023-share-origin-provenance-and-legacy-migration.md) (승인됨)
 - [ADR-024: Mac 앱 네이티브 스트리밍 업로드 및 System Audio 라이브 자막](decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md) (승인됨)
 - [ADR-025: Project(SFDC Opportunity) 엔티티 — 그래프 레퍼런스 연동, 하이브리드 멤버십, 읽기 시점 인사이트 집계](decisions/ADR-025-project-entity-sfdc-oppty.md) (승인됨)
+- [ADR-026: 인사이트 관련성 게이트 및 수동 큐레이션](decisions/ADR-026-insights-relevance-gate-and-curation.md) (승인됨)
 
 ### 운영
 
@@ -247,6 +248,7 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-023: Share Origin Provenance and Legacy Migration](decisions/ADR-023-share-origin-provenance-and-legacy-migration.md) (Accepted)
 - [ADR-024: Mac App Native Streaming Upload and System Audio Live Captions](decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md) (Accepted)
 - [ADR-025: Project (SFDC Opportunity) Entity — Graph-Reference Linking, Hybrid Membership, Read-Time Insight Aggregation](decisions/ADR-025-project-entity-sfdc-oppty.md) (Accepted)
+- [ADR-026: Insights Relevance Gate and Manual Curation](decisions/ADR-026-insights-relevance-gate-and-curation.md) (Accepted)
 
 ### Operations
 

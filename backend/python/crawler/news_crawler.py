@@ -730,7 +730,7 @@ def _is_blocked_url(url: str) -> bool:
 def _process_article(source_id: str, title: str, url: str,
                      pub_date: str, snippet: str = '',
                      crawler_source_name: str = '', keywords: list = None,
-                     require_relevance: bool = True) -> bool:
+                     require_relevance: bool = True, seen_urls: set = None) -> bool:
     if not url or not title:
         logger.info(f'Skipping result with missing url/title: url={url!r} title={title!r}')
         return False
@@ -756,16 +756,29 @@ def _process_article(source_id: str, title: str, url: str,
         logger.debug(f'Skipping duplicate: {url}')
         return False
 
+    # From here on we're about to spend a Bedrock round-trip -- mark the url
+    # seen regardless of the verdict below, so a same-run duplicate query
+    # (same article via `{sourceName}`, `{sourceName} {kw}`, and bare
+    # keyword searches all returning it) doesn't re-score it. Earlier
+    # rejections above (missing title/snippet, blocked url, dup) are cheap
+    # and NOT marked -- a later query might supply a usable snippet for the
+    # same url, so those still get another chance.
+    if seen_urls is not None:
+        seen_urls.add(url)
+
     summary, tags, relevant, confidence = _summarize_and_tag(
         title, snippet, crawler_source_name, keywords)
 
     # require_relevance=False for customUrls -- a user-supplied URL is an
     # explicit ingest request, not a search result to be judged for
-    # relevance. For search results (the actual noise source, e.g. every
-    # article that merely mentions "하나은행" in passing), enforce the
-    # threshold. A failed/unparseable Bedrock call already returns
-    # relevant=False (fail closed), so an empty summary is skipped here too
-    # instead of being written with blank content.
+    # relevance, so the relevance threshold itself doesn't apply. But a
+    # failed/unparseable Bedrock call (_summarize_and_tag's fail-closed
+    # path) returns an empty summary regardless of require_relevance --
+    # skip that unconditionally so customUrls never writes a blank-summary
+    # doc, not just the search path.
+    if not summary.strip():
+        logger.warning(f'Skipping result with unscorable/empty summary: {title!r} {url}')
+        return False
     if require_relevance and (not relevant or confidence < RELEVANCE_THRESHOLD):
         logger.info(f'Skipping irrelevant result (relevant={relevant}, '
                     f'confidence={confidence}): {title!r} {url}')
@@ -826,14 +839,14 @@ def handler(event, context):
             return
         try:
             if _process_article(source_id, title, url, pub_date, snippet, source_name,
-                                keywords, require_relevance):
+                                keywords, require_relevance, seen_urls):
                 docs_added += 1
-                seen_urls.add(url)
-            # A rejected result (missing title/snippet, blocked URL,
-            # already-ingested doc) is NOT marked seen — if the same URL
+            # _process_article itself marks seen_urls once it's past the
+            # cheap pre-checks (about to spend a Bedrock call) -- a rejected
+            # result before that point (missing title/snippet, blocked URL,
+            # already-ingested doc) is NOT marked seen, so if the same URL
             # reappears from a later query with a usable snippet, it still
-            # gets a chance to process. Re-checking a genuine duplicate via
-            # _doc_exists again is cheap and correct either way.
+            # gets a chance to process.
         except Exception as e:
             error_msg = f'{url}: {e}'
             logger.error(f'Article error: {error_msg}', exc_info=True)

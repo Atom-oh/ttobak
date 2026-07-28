@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -107,6 +108,43 @@ func (r *CrawlerRepository) PutSource(ctx context.Context, source *model.Crawler
 	})
 	if err != nil {
 		return fmt.Errorf("failed to put crawler source: %w", err)
+	}
+
+	return nil
+}
+
+// PutSourceIfAbsent creates a brand-new crawler source, conditioned on the
+// PK not already existing -- AddSource's new-source branch uses this
+// instead of PutSource's unconditional overwrite, since a concurrent
+// AddSource for the same not-yet-existing sourceId would otherwise let the
+// last writer win as OwnerID (this PR's destructive-delete gate) on a
+// source the other caller believes they created. Returns ErrConditionFailed
+// (mapped by the caller back into the existing-source update path) if the
+// item was created by a concurrent request in the meantime.
+func (r *CrawlerRepository) PutSourceIfAbsent(ctx context.Context, source *model.CrawlerSource) error {
+	item := crawlerItem{
+		PK:            model.PrefixCrawler + source.SourceID,
+		SK:            model.PrefixConfig,
+		EntityType:    "CRAWLER_SOURCE",
+		CrawlerSource: *source,
+	}
+
+	av, err := attributevalue.MarshalMap(item)
+	if err != nil {
+		return fmt.Errorf("failed to marshal crawler source: %w", err)
+	}
+
+	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           aws.String(r.tableName),
+		Item:                av,
+		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: source %s already exists", ErrConditionFailed, source.SourceID)
+		}
+		return fmt.Errorf("failed to create crawler source: %w", err)
 	}
 
 	return nil

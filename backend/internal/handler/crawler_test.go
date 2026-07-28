@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -52,6 +54,19 @@ func (m *mockCrawlerRepo) GetSource(_ context.Context, sourceID string) (*model.
 }
 
 func (m *mockCrawlerRepo) PutSource(_ context.Context, source *model.CrawlerSource) error {
+	cp := *source
+	cp.Subscribers = append([]string(nil), source.Subscribers...)
+	cp.AWSServices = append([]string(nil), source.AWSServices...)
+	cp.NewsQueries = append([]string(nil), source.NewsQueries...)
+	cp.CustomUrls = append([]string(nil), source.CustomUrls...)
+	m.sources[source.SourceID] = &cp
+	return nil
+}
+
+func (m *mockCrawlerRepo) PutSourceIfAbsent(_ context.Context, source *model.CrawlerSource) error {
+	if _, exists := m.sources[source.SourceID]; exists {
+		return fmt.Errorf("%w: source %s already exists", repository.ErrConditionFailed, source.SourceID)
+	}
 	cp := *source
 	cp.Subscribers = append([]string(nil), source.Subscribers...)
 	cp.AWSServices = append([]string(nil), source.AWSServices...)

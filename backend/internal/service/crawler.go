@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 type crawlerRepo interface {
 	GetSource(ctx context.Context, sourceID string) (*model.CrawlerSource, error)
 	PutSource(ctx context.Context, source *model.CrawlerSource) error
+	PutSourceIfAbsent(ctx context.Context, source *model.CrawlerSource) error
 	GetSubscription(ctx context.Context, userID, sourceID string) (*model.CrawlerSubscription, error)
 	PutSubscription(ctx context.Context, userID string, sub *model.CrawlerSubscription) error
 	DeleteSubscription(ctx context.Context, userID, sourceID string) error
@@ -44,7 +46,13 @@ func NewCrawlerService(repo *repository.CrawlerRepository) *CrawlerService {
 func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *model.AddCrawlerSourceRequest) (*model.CrawlerSourceResponse, error) {
 	sourceID := normalizeSourceID(req.SourceName)
 
-	// Check if source already exists
+	// Retry once: a concurrent AddSource for the same not-yet-existing
+	// sourceId could otherwise let PutSource's unconditional overwrite make
+	// the later writer OwnerID (this PR's destructive-delete gate) on a
+	// source the earlier caller believes they created. GetSource + a
+	// conditional create closes that -- on ConditionalCheckFailedException
+	// (someone else created it in between), re-fetch and fall into the
+	// existing-source update path instead of retrying the create.
 	source, err := s.repo.GetSource(ctx, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get source: %w", err)
@@ -52,22 +60,8 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	if source != nil {
-		// Source exists — add user to subscribers if not already present
-		if !contains(source.Subscribers, userID) {
-			source.Subscribers = append(source.Subscribers, userID)
-		}
-		source.AWSServices = union(source.AWSServices, req.AWSServices)
-		source.NewsQueries = union(source.NewsQueries, req.NewsQueries)
-		source.NewsSources = union(source.NewsSources, req.NewsSources)
-		source.CustomUrls = union(source.CustomUrls, req.CustomUrls)
-
-		if err := s.repo.PutSource(ctx, source); err != nil {
-			return nil, fmt.Errorf("failed to update source: %w", err)
-		}
-	} else {
-		// Create new source
-		source = &model.CrawlerSource{
+	if source == nil {
+		newSource := &model.CrawlerSource{
 			SourceID:    sourceID,
 			SourceName:  req.SourceName,
 			OwnerID:     userID,
@@ -79,9 +73,33 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 			Schedule:    "daily",
 			Status:      "idle",
 		}
-		if err := s.repo.PutSource(ctx, source); err != nil {
+		if err := s.repo.PutSourceIfAbsent(ctx, newSource); err == nil {
+			source = newSource
+		} else if errors.Is(err, repository.ErrConditionFailed) {
+			// Someone else created it between our GetSource and PutSourceIfAbsent
+			// -- fall into the existing-source update path below instead of
+			// treating their create as ours.
+			source, err = s.repo.GetSource(ctx, sourceID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get source after create race: %w", err)
+			}
+			if source == nil {
+				return nil, fmt.Errorf("source %s vanished after concurrent create", sourceID)
+			}
+		} else {
 			return nil, fmt.Errorf("failed to create source: %w", err)
 		}
+	}
+
+	if !contains(source.Subscribers, userID) {
+		source.Subscribers = append(source.Subscribers, userID)
+	}
+	source.AWSServices = union(source.AWSServices, req.AWSServices)
+	source.NewsQueries = union(source.NewsQueries, req.NewsQueries)
+	source.NewsSources = union(source.NewsSources, req.NewsSources)
+	source.CustomUrls = union(source.CustomUrls, req.CustomUrls)
+	if err := s.repo.PutSource(ctx, source); err != nil {
+		return nil, fmt.Errorf("failed to update source: %w", err)
 	}
 
 	// Create or update user subscription

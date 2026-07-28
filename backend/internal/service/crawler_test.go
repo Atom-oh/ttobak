@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 // mockCrawlerRepo is an in-memory implementation of crawlerRepo for testing.
@@ -45,6 +47,19 @@ func (m *mockCrawlerRepo) GetSource(_ context.Context, sourceID string) (*model.
 }
 
 func (m *mockCrawlerRepo) PutSource(_ context.Context, source *model.CrawlerSource) error {
+	cp := *source
+	cp.Subscribers = append([]string(nil), source.Subscribers...)
+	cp.AWSServices = append([]string(nil), source.AWSServices...)
+	cp.NewsQueries = append([]string(nil), source.NewsQueries...)
+	cp.CustomUrls = append([]string(nil), source.CustomUrls...)
+	m.sources[source.SourceID] = &cp
+	return nil
+}
+
+func (m *mockCrawlerRepo) PutSourceIfAbsent(_ context.Context, source *model.CrawlerSource) error {
+	if _, exists := m.sources[source.SourceID]; exists {
+		return fmt.Errorf("%w: source %s already exists", repository.ErrConditionFailed, source.SourceID)
+	}
 	cp := *source
 	cp.Subscribers = append([]string(nil), source.Subscribers...)
 	cp.AWSServices = append([]string(nil), source.AWSServices...)
