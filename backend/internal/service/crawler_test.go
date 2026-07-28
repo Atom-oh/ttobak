@@ -17,6 +17,7 @@ type mockCrawlerRepo struct {
 	history       map[string][]model.CrawlHistory        // sourceID -> history entries
 	documents     map[string][]model.CrawledDocument      // sourceID -> documents
 	allDocuments  []model.CrawledDocument                 // all documents for scan
+	putSourceCalls int                                     // unconditional PutSource call count
 }
 
 func newMockCrawlerRepo() *mockCrawlerRepo {
@@ -47,6 +48,7 @@ func (m *mockCrawlerRepo) GetSource(_ context.Context, sourceID string) (*model.
 }
 
 func (m *mockCrawlerRepo) PutSource(_ context.Context, source *model.CrawlerSource) error {
+	m.putSourceCalls++
 	cp := *source
 	cp.Subscribers = append([]string(nil), source.Subscribers...)
 	cp.AWSServices = append([]string(nil), source.AWSServices...)
@@ -250,6 +252,28 @@ func TestAddSource_NewSource(t *testing.T) {
 	stored := repo.sources["aws-blog"]
 	if stored == nil {
 		t.Fatal("source not stored in repo")
+	}
+}
+
+// TestAddSource_NewSource_NoTrailingOverwrite is a regression test for a
+// lost-update race: creating a source must not follow up with an
+// unconditional PutSource after PutSourceIfAbsent already wrote it -- doing
+// so would silently revert a concurrent AddSource (a different user
+// subscribing to the same brand-new source) that landed in the window
+// between the two writes, and since OwnerID lives on this same item, that
+// concurrent write losing isn't just a missed subscriber but a lost
+// destructive-delete authorization grant.
+func TestAddSource_NewSource_NoTrailingOverwrite(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	svc := &CrawlerService{repo: repo}
+	ctx := context.Background()
+
+	_, err := svc.AddSource(ctx, "user1", &model.AddCrawlerSourceRequest{SourceName: "AWS Blog"})
+	if err != nil {
+		t.Fatalf("AddSource returned error: %v", err)
+	}
+	if repo.putSourceCalls != 0 {
+		t.Errorf("expected 0 unconditional PutSource calls on a fresh create, got %d", repo.putSourceCalls)
 	}
 }
 

@@ -59,6 +59,7 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
+	justCreated := false
 
 	if source == nil {
 		newSource := &model.CrawlerSource{
@@ -75,6 +76,7 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 		}
 		if err := s.repo.PutSourceIfAbsent(ctx, newSource); err == nil {
 			source = newSource
+			justCreated = true
 		} else if errors.Is(err, repository.ErrConditionFailed) {
 			// Someone else created it between our GetSource and PutSourceIfAbsent
 			// -- fall into the existing-source update path below instead of
@@ -91,15 +93,26 @@ func (s *CrawlerService) AddSource(ctx context.Context, userID string, req *mode
 		}
 	}
 
-	if !contains(source.Subscribers, userID) {
-		source.Subscribers = append(source.Subscribers, userID)
-	}
-	source.AWSServices = union(source.AWSServices, req.AWSServices)
-	source.NewsQueries = union(source.NewsQueries, req.NewsQueries)
-	source.NewsSources = union(source.NewsSources, req.NewsSources)
-	source.CustomUrls = union(source.CustomUrls, req.CustomUrls)
-	if err := s.repo.PutSource(ctx, source); err != nil {
-		return nil, fmt.Errorf("failed to update source: %w", err)
+	// Skip the merge+PutSource below when we just created the source: its
+	// fields already match req exactly, and PutSource here would be an
+	// unconditional whole-item overwrite using this request's local
+	// `source` value -- if a concurrent AddSource for a DIFFERENT user
+	// updated the item in the (however brief) window between
+	// PutSourceIfAbsent returning and this write, that write would be lost,
+	// recreating the exact lost-update race PutSourceIfAbsent exists to
+	// close (and, since OwnerID is this feature's destructive-delete gate,
+	// losing that field for a fresher write is the same class of bug too).
+	if !justCreated {
+		if !contains(source.Subscribers, userID) {
+			source.Subscribers = append(source.Subscribers, userID)
+		}
+		source.AWSServices = union(source.AWSServices, req.AWSServices)
+		source.NewsQueries = union(source.NewsQueries, req.NewsQueries)
+		source.NewsSources = union(source.NewsSources, req.NewsSources)
+		source.CustomUrls = union(source.CustomUrls, req.CustomUrls)
+		if err := s.repo.PutSource(ctx, source); err != nil {
+			return nil, fmt.Errorf("failed to update source: %w", err)
+		}
 	}
 
 	// Create or update user subscription

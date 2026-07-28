@@ -46,6 +46,7 @@ Docs ingested before this gate existed aren't retroactively filtered. The script
 - `scripts/insights-rescore.py` re-scores from the stored summary, not the original snippet (not persisted) — a marginal loss of signal versus re-scoring the original search result, accepted as good enough for a one-time backfill.
 - Every pre-existing `CrawlerSource` (no reliable creator to infer) stays admin-only-deletable indefinitely, unless an admin manually sets `ownerId` from out-of-band knowledge of who actually created it.
 - Tech docs (synthetic `__tech__` source, no `CONFIG`/owner row) aren't deletable through this route at all — `GetSource` 404s for them. The frontend hides the delete button for `type === 'tech'` docs accordingly; a synthetic-source ownership/admin model is future work if tech-doc curation is needed.
+- **A manually-deleted doc can be re-collected by the next daily crawl.** `DeleteDocument` removes the `DOC#{docHash}` item, which is also this pipeline's *only* dedup marker (`_doc_exists` checks for it). If the article's URL is still returned by a future search (common for evergreen or slow-to-drop-off-search-results articles), the next crawl sees no existing doc, re-scores it, and re-ingests it if the gate passes again — silently undoing the curation decision. Accepted for now since the false-positive rate this feature targets is expected to be low-volume/one-off, not recurring; if recurring re-collection of a manually-rejected article becomes a real problem, the fix is a suppression/tombstone marker (e.g. a `SUPPRESSED#` item or an `inKB=false` soft-delete) that `_doc_exists`-equivalent dedup logic also checks, not a change to the delete route itself.
 
 ## Alternatives Considered
 | Option | Pros | Cons |
@@ -98,6 +99,7 @@ Docs ingested before this gate existed aren't retroactively filtered. The script
 - `scripts/insights-rescore.py`는 저장된 summary 기준으로 재평가하며 원본 snippet(저장되지 않음) 기준이 아님 — 원본 검색 결과 재평가보다 신호가 약간 떨어지지만 일회성 백필로는 충분하다고 판단.
 - 기존에 생성된 모든 `CrawlerSource`(신뢰할 수 있는 생성자를 추론할 수 없음)는, admin이 out-of-band로 알고 있는 실제 생성자 정보로 `ownerId`를 수동 설정하지 않는 한 영구히 admin-only 삭제 상태로 남는다.
 - Tech 문서(합성 `__tech__` 소스, `CONFIG`/소유자 행 없음)는 이 라우트로 전혀 삭제할 수 없다 — `GetSource`가 404를 반환한다. 프론트엔드는 `type === 'tech'` 문서의 삭제 버튼을 그에 맞춰 숨긴다 — tech 문서 큐레이션이 필요해지면 합성 소스용 소유권/admin 모델이 후속 작업이다.
+- **수동 삭제한 문서가 다음 일일 크롤에서 재수집될 수 있다.** `DeleteDocument`는 `DOC#{docHash}` 항목을 삭제하는데, 이 항목이 이 파이프라인의 유일한 dedup 마커다(`_doc_exists`가 이 항목의 존재로 판단). 해당 기사의 URL이 이후에도 검색 결과에 계속 나오면(에버그린 기사, 검색 결과에서 늦게 빠지는 기사 등) 다음 크롤은 기존 문서가 없다고 보고 재평가하며, 게이트를 다시 통과하면 재수집되어 큐레이션 결정을 조용히 되돌린다. 이 기능이 대상으로 하는 오탐 비율은 반복적이지 않고 저빈도/일회성일 것으로 예상되므로 현재는 수용한다 — 만약 수동으로 거부한 기사의 반복 재수집이 실제 문제가 되면, 해결책은 dedup 로직도 함께 확인하는 suppression/tombstone 마커(예: `SUPPRESSED#` 항목 또는 `inKB=false` soft-delete)이며, delete 라우트 자체의 변경은 아니다.
 
 ## 검토한 대안
 | 옵션 | 장점 | 단점 |
