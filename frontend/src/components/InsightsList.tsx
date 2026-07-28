@@ -115,6 +115,19 @@ export function InsightsList() {
     }
   }, [activeTab, page, crawlerFilter, serviceFilter, selectedTags, sortBy, limit]);
 
+  // handleDelete awaits a delete API call before refetching -- by the time
+  // it resolves, the user may have changed tab/page/filters, making
+  // `fetchDocuments` (captured in handleDelete's own closure at call time)
+  // stale: invoking it directly would query with abandoned params and its
+  // generation bump would make the generation guard above treat that
+  // stale-param result as "latest" and apply it anyway. Always route
+  // through this ref so handleDelete calls whichever fetchDocuments is
+  // current at resolve time, not the one from when the delete started.
+  const fetchDocumentsRef = useRef(fetchDocuments);
+  useEffect(() => {
+    fetchDocumentsRef.current = fetchDocuments;
+  }, [fetchDocuments]);
+
   const fetchResearchJobs = useCallback(async () => {
     try {
       setResearchLoading(true);
@@ -210,7 +223,7 @@ export function InsightsList() {
       // empty page whose pagination controls then vanish entirely (they're
       // gated on totalCount > limit). Refetch first and correct based on
       // the ACTUAL result, not a pre-delete guess.
-      const remaining = await fetchDocuments();
+      const remaining = await fetchDocumentsRef.current();
       // null means the refetch itself failed (network/500) -- that's not
       // "the page is empty", so don't step back on it. `emptiedPageRef`
       // dedups concurrent deletes that both observe the SAME page (`page`,
