@@ -137,6 +137,15 @@ func (s *InsightsService) GetDocumentDetail(ctx context.Context, sourceID, docHa
 // vector can still surface in Q&A until that job completes, or if it
 // fails, until the next daily crawl/manual sync.
 func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isAdmin bool, sourceID, docHash string) error {
+	// Defense-in-depth: an empty userID must never satisfy the owner check
+	// below via an accidental "" == "" match against a legacy source that
+	// hasn't been backfilled with an OwnerID yet (see OwnerID note below).
+	// The normal auth path (Lambda@Edge + verified JWT) never hands us an
+	// empty sub, but this destructive route shouldn't rely on that alone.
+	if userID == "" {
+		return ErrForbidden
+	}
+
 	source, err := s.repo.GetSource(ctx, sourceID)
 	if err != nil {
 		return fmt.Errorf("failed to get source: %w", err)
@@ -144,7 +153,14 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 	if source == nil {
 		return ErrNotFound
 	}
-	if !isAdmin && source.OwnerID != userID {
+	// source.OwnerID is only populated for sources created after this field
+	// was added (AddSource's new-source branch). A source created before
+	// that rollout has OwnerID == "" -- explicitly deny non-admins rather
+	// than let it fall through to an OwnerID != userID comparison, so a
+	// legacy source is admin-only-deletable until backfilled (see
+	// scripts/insights-backfill-owner.py), not silently unowned-by-anyone
+	// or (worse) matchable by an empty caller ID.
+	if !isAdmin && (source.OwnerID == "" || source.OwnerID != userID) {
 		return ErrForbidden
 	}
 
@@ -156,34 +172,41 @@ func (s *InsightsService) DeleteDocument(ctx context.Context, userID string, isA
 		return ErrNotFound
 	}
 
-	// S3 key fallback mirrors GetDocumentDetail's read path: older documents
-	// without a stored S3Key can be shaped like either crawler type, so try
-	// both prefixes instead of assuming news. DeleteObject on a nonexistent
-	// key succeeds silently, so guessing wrong here previously left tech
-	// docs' S3 object (and KB vector) behind forever.
-	s3Key := doc.S3Key
-	if s3Key == "" {
-		s3Key = fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash)
-		if _, err := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+	// S3 delete FIRST: if this fails, the DynamoDB metadata is still intact
+	// and the delete is safely retryable. Deleting DynamoDB first would risk
+	// the opposite -- metadata gone, so GetDocument returns nil on retry,
+	// permanently orphaning the S3 object + KB vector with no API path left
+	// to remove them.
+	if doc.S3Key != "" {
+		if _, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
 			Bucket: aws.String(s.kbBucketName),
-			Key:    aws.String(s3Key),
+			Key:    aws.String(doc.S3Key),
 		}); err != nil {
-			s3Key = fmt.Sprintf("shared/aws-docs/%s/%s.md", sourceID, docHash)
+			return fmt.Errorf("failed to delete KB object: %w", err)
+		}
+	} else {
+		// Older documents without a stored S3Key can be shaped like either
+		// crawler type (mirrors GetDocumentDetail's read-path fallback).
+		// DeleteObject succeeds (no error) on a key that doesn't already
+		// exist, so deleting both candidate keys unconditionally is
+		// idempotent and correct -- unlike probing with HeadObject first,
+		// which can't tell "not found" apart from throttling/403/network
+		// errors and would silently skip the real object on any of those.
+		for _, key := range []string{
+			fmt.Sprintf("shared/news/%s/%s.md", sourceID, docHash),
+			fmt.Sprintf("shared/aws-docs/%s/%s.md", sourceID, docHash),
+		} {
+			if _, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+				Bucket: aws.String(s.kbBucketName),
+				Key:    aws.String(key),
+			}); err != nil {
+				return fmt.Errorf("failed to delete KB object %s: %w", key, err)
+			}
 		}
 	}
-	// DynamoDB delete first: if this fails, the S3 object is still intact
-	// and the doc is still fully servable/re-deletable. Doing S3 first would
-	// risk the opposite -- content gone but metadata (and the UI list entry)
-	// still there, pointing at nothing on a retry.
+
 	if err := s.repo.DeleteDocument(ctx, sourceID, docHash); err != nil {
 		return fmt.Errorf("failed to delete document: %w", err)
-	}
-
-	if _, err := s.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(s.kbBucketName),
-		Key:    aws.String(s3Key),
-	}); err != nil {
-		return fmt.Errorf("failed to delete KB object: %w", err)
 	}
 
 	log.Printf("insights: document deleted userID=%s sourceID=%s docHash=%s", userID, sourceID, docHash)

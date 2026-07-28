@@ -315,19 +315,21 @@ export default function InsightDetailPage() {
                       </div>
                     )}
                   </div>
-                  <button
-                    onClick={handleDelete}
-                    disabled={deleting}
-                    className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 dark:text-text-muted hover:text-red-500 dark:hover:text-red-400 transition-colors disabled:opacity-40 ml-auto"
-                  >
-                    <span className="material-symbols-outlined text-base">delete</span>
-                    {deleting ? 'Deleting...' : 'Delete'}
-                  </button>
+                  {doc.type !== 'tech' && (
+                    <button
+                      onClick={handleDelete}
+                      disabled={deleting}
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 dark:text-text-muted hover:text-red-500 dark:hover:text-red-400 transition-colors disabled:opacity-40 ml-auto"
+                    >
+                      <span className="material-symbols-outlined text-base">delete</span>
+                      {deleting ? 'Deleting...' : 'Delete'}
+                    </button>
+                  )}
                 </div>
               </div>
 
-              {/* Briefing Content — capped to a comfortable reading measure;
-                  the raw scrape is a separate, collapsed block below */}
+              {/* Briefing Content — the raw scrape is a separate, collapsed
+                  block below */}
               <div className="flex gap-0">
                 <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 flex-1 min-w-0">
                   <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-text-main uppercase tracking-wide mb-4">

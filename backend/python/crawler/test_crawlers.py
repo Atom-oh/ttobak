@@ -694,6 +694,22 @@ class TestSummarizeAndTagDelimiterEscape(unittest.TestCase):
 
         self.assertIsInstance(summary, str)
 
+    def test_stringified_relevant_false_does_not_pass_gate(self):
+        # Bedrock is instructed to return a JSON boolean, but a stringified
+        # "false" is truthy under bool(...) in Python -- must not silently
+        # pass the relevance gate.
+        def fake_converse(modelId, messages, inferenceConfig):
+            return {'output': {'message': {'content': [
+                {'text': '{"relevant": "false", "relevanceConfidence": 0.9, "summary": "s", "tags": []}'}
+            ]}}}
+
+        with mock.patch.object(news_crawler.bedrock, 'converse', side_effect=fake_converse):
+            _, _, relevant, _ = news_crawler._summarize_and_tag(
+                'Title', 'normal body text that is long enough to pass the length check here',
+            )
+
+        self.assertFalse(relevant)
+
 
 class TestWriteToS3TitleSanitized(unittest.TestCase):
     """_write_to_s3 must sanitize title the same way it sanitizes snippet,
@@ -826,6 +842,34 @@ class TestWriteMetadataSanitized(unittest.TestCase):
             )
 
         self.assertNotIn('\n', captured['item']['title'])
+
+    def test_ingest_source_defaults_to_search(self):
+        # scripts/insights-rescore.py relies on this field to skip
+        # customUrls-ingested docs (which bypass the relevance gate by
+        # design) instead of re-scoring and purging them.
+        captured = {}
+
+        def fake_put_item(**kwargs):
+            captured['item'] = kwargs['Item']
+
+        with mock.patch.object(news_crawler.table, 'put_item', side_effect=fake_put_item):
+            news_crawler._write_metadata(
+                'tech-news', 'hash8', 'Title', 'https://example.com/x', '2026-07-01',
+            )
+        self.assertEqual(captured['item']['ingestSource'], 'search')
+
+    def test_ingest_source_custom_when_passed(self):
+        captured = {}
+
+        def fake_put_item(**kwargs):
+            captured['item'] = kwargs['Item']
+
+        with mock.patch.object(news_crawler.table, 'put_item', side_effect=fake_put_item):
+            news_crawler._write_metadata(
+                'tech-news', 'hash9', 'Title', 'https://example.com/x', '2026-07-01',
+                ingest_source='custom',
+            )
+        self.assertEqual(captured['item']['ingestSource'], 'custom')
 
 
 # ---------------------------------------------------------------------------

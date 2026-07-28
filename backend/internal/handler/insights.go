@@ -117,11 +117,18 @@ func (h *InsightsHandler) DeleteDocument(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid sourceId or docHash")
 		return
 	}
+	// Defense-in-depth alongside the service-layer check: never let an empty
+	// userID reach the owner comparison, which would otherwise match "" ==
+	// "" against a legacy (pre-OwnerID) source.
+	if userID == "" {
+		writeError(w, http.StatusUnauthorized, model.ErrCodeUnauthorized, "authentication required")
+		return
+	}
 
 	err := h.insightsService.DeleteDocument(ctx, userID, middleware.IsAdmin(ctx), sourceID, docHash)
 	if err != nil {
 		if errors.Is(err, service.ErrForbidden) {
-			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "not a subscriber of this source")
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "only the source owner or an admin can delete this document")
 			return
 		}
 		if errors.Is(err, service.ErrNotFound) {

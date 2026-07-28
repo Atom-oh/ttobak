@@ -530,7 +530,10 @@ def _summarize_and_tag(title: str, text: str, source_name: str = '',
             tags = [str(t).strip() for t in tags if t][:10]
         else:
             tags = []
-        relevant = bool(parsed.get('relevant', False))
+        # Explicit `is True` rather than bool(...) -- Bedrock is instructed to
+        # return a JSON boolean, but bool("false") is truthy in Python, so a
+        # stringified "false" would otherwise silently pass the gate.
+        relevant = parsed.get('relevant', False) is True
         try:
             confidence = float(parsed.get('relevanceConfidence', 0.0))
         except (TypeError, ValueError):
@@ -607,7 +610,8 @@ def _write_to_s3(source_id: str, doc_hash: str, title: str, url: str,
 
 def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
                     pub_date: str, summary: str = '', source_name: str = '',
-                    tags: list = None, relevance: float = None) -> None:
+                    tags: list = None, relevance: float = None,
+                    ingest_source: str = 'search') -> None:
     # title/url/pub_date/summary/tags are untrusted (open web search
     # result); this metadata is read by the Go API and shown in the
     # frontend insights UI, so sanitize it the same way as the S3 KB doc in
@@ -626,6 +630,11 @@ def _write_metadata(source_id: str, doc_hash: str, title: str, url: str,
         'inKB': True,
         'GSI4PK': 'DOC#news',
         'GSI4SK': crawled_at,
+        # 'search' (relevance-gate evaluated) vs 'custom' (customUrls,
+        # gate bypassed by design) -- scripts/insights-rescore.py uses this
+        # to skip re-scoring+purging explicit user-requested ingests, which
+        # would otherwise contradict the reason they bypassed the gate.
+        'ingestSource': ingest_source,
     }
     item['sourceId'] = source_id
     if summary:
@@ -765,7 +774,8 @@ def _process_article(source_id: str, title: str, url: str,
     source_name = _extract_source_name(title)
     _write_to_s3(source_id, doc_hash, title, url, snippet, summary, pub_date, tags)
     _write_metadata(source_id, doc_hash, title, url, pub_date, summary, source_name,
-                    tags, relevance=confidence)
+                    tags, relevance=confidence,
+                    ingest_source='search' if require_relevance else 'custom')
     return True
 
 

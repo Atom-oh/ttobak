@@ -299,7 +299,7 @@ TtobakApp (bin/ttobak.ts)
 ### Lambda Functions
 - `ttobak-crawler-orchestrator` (256MB, 30s) — DynamoDB에서 `PK begins_with CRAWLER#, SK=CONFIG, status≠disabled` 스캔. `sourceId`가 `__`로 시작하는 합성 소스(예: `__auto__`)는 `awsServices`만 techConfig에 병합하고 뉴스 팬아웃에서는 제외.
 - `ttobak-crawler-tech` (512MB, 14min) — AWS What's New/Blog RSS + AgentCore Gateway Web Search로 신규 서비스 발표를 추가 검색. 실행마다 별도 웹서치 1회로 미등록 AWS 서비스를 발견해 Bedrock으로 slug를 추출, `CRAWLER#__auto__/CONFIG`에 등록(최대 30개, 회당 최대 5개 신규).
-- `ttobak-crawler-news` (512MB, 14min) — 고객사별 뉴스 검색(AgentCore Gateway Web Search) + customUrls 직접 fetch.
+- `ttobak-crawler-news` (512MB, 14min) — 고객사별 뉴스 검색(AgentCore Gateway Web Search) + customUrls 직접 fetch. `RELEVANCE_THRESHOLD`(기본 `'0.7'`, `crawler-stack.ts`의 `commonEnv`에 CDK로 배선 — Python 쪽 fallback도 동일 기본값 `0.7`로 이중 정의) env var로 relevance gate 임계값 조정(ADR-026) — 콘솔에서 수동으로 바꿔도 다음 `cdk deploy TtobakCrawlerStack`에 덮어써지므로, 실제 조정 인터페이스는 CDK 소스 수정+재배포다.
 - `ttobak-crawler-ingest` (256MB, 30s) — Bedrock KB `StartIngestionJob`. `KB_ID`/`DATA_SOURCE_ID` 검증이 SKIPPED 판정보다 먼저 실행되므로(신규 문서 0건인 조용한 밤에도 설정 회귀를 놓치지 않음) — 미설정(`'PENDING'` sentinel 포함)이거나 이후 API 호출이 실패하면 **예외를 raise**해 Step Functions 실행이 FAILED로 표면화됨(과거엔 `{"status":"ERROR"}`를 리턴해 7주간 무증상으로 인제스천이 멈췄던 원인). 검증을 통과했는데 신규 문서가 0건이면 SKIPPED.
 
 ### Step Functions 페이로드

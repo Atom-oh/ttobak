@@ -10,7 +10,7 @@
 # English
 
 ## Status
-Accepted — implemented. Reviewed by the co-agent panel (Kiro CLI running claude-opus-4.8 and glm-5; both independently returned verdict FAIL on the pre-fix structure).
+Accepted — implemented.
 
 ## Context
 Customer-facing insights under `/insights/{sourceId}/{docHash}` were showing articles unrelated to the customer (e.g. an unrelated article surfaced under the `hanabank` crawler source). Tracing the pipeline (`backend/python/crawler/news_crawler.py`) found the cause: `_process_article`'s only filters were missing url/title, non-http(s) scheme, empty snippet, a paywall URL blocklist, and URL-hash dedup — no check anywhere that a search result was actually about the customer. `_generate_search_queries` runs bare `{sourceName}` and `{sourceName} {keyword}` web searches (and, for keyword-only sources, bare topic keywords like "AI" as global searches), which routinely return results that merely mention the name in passing, are about a same-named unrelated entity (Korean company names like "하나"/"우리" are also common words), or are competitor-focused. There was also no way to remove an already-ingested bad doc — `/api/insights` only exposed `GET` routes, and `DELETE /api/crawler/sources/{sourceId}` disables a source's subscription without touching its `DOC#` items or S3 KB objects.
@@ -28,7 +28,10 @@ Customer-facing insights under `/insights/{sourceId}/{docHash}` were showing art
 `InsightsService.DeleteDocument` deletes the DynamoDB metadata item and the S3 KB object (trying both the `shared/news/` and `shared/aws-docs/` key shapes when no `S3Key` is stored, mirroring `GetDocumentDetail`'s read-path fallback, so a tech doc's object isn't silently left behind). Authorization is scoped to the source's **owner** (`CrawlerSource.OwnerID`, set to the creator at `AddSource` time) or an admin — NOT any subscriber: `AddSource` lets any authenticated user self-subscribe to an existing source with no invite/approval step, so gating on subscription alone would make this destructive route trivially self-grantable. This mutating route deliberately does not inherit `GetDocumentContent`'s open-read posture (reads are shared substrate by design; a delete is not). A successful delete is logged (`userID`/`sourceID`/`docHash`) as an audit trail for an irreversible action. The Bedrock Knowledge Base's vector index is not purged synchronously — it only reconciles on the next ingestion job (existing `POST /api/kb/sync`, or the daily crawl pipeline's own trigger), so a deleted doc can still surface in Q&A briefly.
 
 ### 3. Batch re-score of existing docs: `scripts/insights-rescore.py`
-Docs ingested before this gate existed aren't retroactively filtered. The script queries `GSI4PK='DOC#news'`, re-scores each doc's stored title+summary against the same relevance prompt, and (with `--run`) purges below-threshold docs from DynamoDB + S3, then triggers one KB ingestion job to reconcile the deleted vectors. Dry-run by default.
+Docs ingested before this gate existed aren't retroactively filtered. The script queries `GSI4PK='DOC#news'`, re-scores each doc's stored title+summary against the same relevance prompt, and (with `--run`) purges below-threshold docs from DynamoDB + S3, then triggers one KB ingestion job to reconcile the deleted vectors. Dry-run by default. It skips (rather than purges) a doc it can't score — a Bedrock error during rescore is an infra hiccup, not a relevance verdict, and this script's action is a one-shot irreversible delete rather than crawl-time's skip/retry-next-crawl, so treating "unscorable" the same as "confirmed irrelevant" would be destructive. It also skips docs written by `customUrls` ingestion (`ingestSource: "custom"` on the metadata item, written since this PR): those bypass the relevance gate by design (`require_relevance=False` — an explicit user-supplied URL), so re-scoring and purging them would contradict the reason they were let in.
+
+### 4. `CrawlerSource.OwnerID` — legacy sources are admin-only-deletable until backfilled
+`OwnerID` is only set by `AddSource`'s new-source branch, so a source created before this PR's deploy has `OwnerID == ""`. `DeleteDocument` treats an empty `OwnerID` as "no owner yet" and denies every non-admin caller (not just non-subscribers) rather than let it fall through to an accidental match. `scripts/insights-backfill-owner.py` is the one-time backfill: it sets `ownerId` to `subscribers[0]` (the oldest subscriber, since `Subscribers` is append-only and index 0 is whoever first called `AddSource` for a brand-new sourceId) for every `CrawlerSource` missing the field. Until that script runs (or a source has zero subscribers to backfill from), only an admin can delete that source's documents.
 
 ## Consequences
 
@@ -39,8 +42,10 @@ Docs ingested before this gate existed aren't retroactively filtered. The script
 
 ### Negative
 - A borderline-relevant article near the threshold may be dropped (false negative) — the LLM's judgment on relevance can be wrong in either direction, same as its judgment on the summary itself.
-- Deleting a doc doesn't immediately clear it from Bedrock KB / RAG Q&A results — callers relying on immediate consistency need to know about the ingestion-job lag.
+- Deleting a doc doesn't immediately clear it from Bedrock KB / RAG Q&A results — callers relying on immediate consistency need to know about the ingestion-job lag; the handler triggers one KB sync job best-effort right after a successful delete to shrink that window, but it isn't guaranteed to succeed or to run before the next Q&A query.
 - `scripts/insights-rescore.py` re-scores from the stored summary, not the original snippet (not persisted) — a marginal loss of signal versus re-scoring the original search result, accepted as good enough for a one-time backfill.
+- Every pre-existing `CrawlerSource` needs the one-time `insights-backfill-owner.py` run before its actual creator can delete anything through this route; until then (or for a source whose subscriber list happens to be empty) only an admin can.
+- Tech docs (synthetic `__tech__` source, no `CONFIG`/owner row) aren't deletable through this route at all — `GetSource` 404s for them. The frontend hides the delete button for `type === 'tech'` docs accordingly; a synthetic-source ownership/admin model is future work if tech-doc curation is needed.
 
 ## Alternatives Considered
 | Option | Pros | Cons |
@@ -57,7 +62,7 @@ Docs ingested before this gate existed aren't retroactively filtered. The script
 # 한국어
 
 ## 상태
-승인됨 — 구현 완료. co-agent 패널(Kiro CLI, claude-opus-4.8 및 glm-5 각각 독립 실행) 리뷰 완료 — 두 모델 모두 수정 전 구조에 대해 독립적으로 FAIL 판정.
+승인됨 — 구현 완료.
 
 ## 맥락
 `/insights/{sourceId}/{docHash}`의 고객사 인사이트에 무관한 기사가 노출되는 문제가 있었다(예: `hanabank` 크롤러 소스 아래 무관한 기사). 파이프라인(`backend/python/crawler/news_crawler.py`)을 추적한 결과, `_process_article`의 필터는 url/title 누락, non-http(s) 스킴, 빈 snippet, paywall URL 블록리스트, URL 해시 dedup뿐이었고, 검색 결과가 실제로 고객사와 관련 있는지 확인하는 로직이 전혀 없었다. `_generate_search_queries`는 `{고객사명}` 또는 `{고객사명} {키워드}` 단독 검색(키워드만 있는 소스는 "AI" 같은 전역 주제 검색)을 수행하는데, 이는 이름이 우연히 언급되었을 뿐인 기사, 동명이인/동명 기업(한국 기업명 "하나"/"우리"는 흔한 단어이기도 함) 기사, 경쟁사 위주 기사를 자주 반환한다. 또한 이미 수집된 잘못된 문서를 제거할 방법도 없었다 — `/api/insights`는 GET 라우트만 노출했고, `DELETE /api/crawler/sources/{sourceId}`는 구독만 해지할 뿐 `DOC#` 항목이나 S3 KB 객체는 건드리지 않았다.
@@ -75,7 +80,10 @@ Docs ingested before this gate existed aren't retroactively filtered. The script
 `InsightsService.DeleteDocument`는 DynamoDB 메타데이터 항목과 S3 KB 객체를 삭제한다(`S3Key`가 저장되어 있지 않으면 `GetDocumentDetail`의 읽기 경로와 동일하게 `shared/news/`와 `shared/aws-docs/` 두 키 형태를 모두 시도해, tech 문서의 객체가 조용히 남는 것을 방지한다). 권한은 해당 소스의 **owner**(`CrawlerSource.OwnerID`, `AddSource` 시점에 생성자로 설정)나 admin으로 한정된다 — 단순 구독자는 안 된다: `AddSource`는 승인 절차 없이 누구나 기존 소스를 자가 구독할 수 있게 하므로, 구독 여부만으로 권한을 주면 이 파괴적인 라우트를 누구나 스스로 획득할 수 있게 된다. 이 mutating 라우트는 `GetDocumentContent`의 열려있는 읽기 권한 정책을 의도적으로 물려받지 않는다(읽기는 설계상 공유 substrate이지만 삭제는 아님). 삭제 성공 시 `userID`/`sourceID`/`docHash`를 로그로 남겨 되돌릴 수 없는 작업의 감사 추적을 남긴다. Bedrock Knowledge Base의 벡터 인덱스는 즉시 정리되지 않으며 다음 ingestion job(기존 `POST /api/kb/sync` 또는 일일 크롤 파이프라인의 자체 트리거)에서만 반영된다 — 삭제된 문서가 잠시 Q&A에 남을 수 있다.
 
 ### 3. 기존 데이터 배치 재스코어링: `scripts/insights-rescore.py`
-이 게이트가 존재하기 전에 수집된 문서는 소급 필터링되지 않는다. 스크립트는 `GSI4PK='DOC#news'`를 조회해 각 문서의 저장된 title+summary를 동일한 관련성 프롬프트로 재평가하고, `--run` 시 임계값 미달 문서를 DynamoDB+S3에서 삭제한 뒤 삭제된 벡터를 정리하기 위해 KB ingestion job을 1회 트리거한다. 기본은 dry-run.
+이 게이트가 존재하기 전에 수집된 문서는 소급 필터링되지 않는다. 스크립트는 `GSI4PK='DOC#news'`를 조회해 각 문서의 저장된 title+summary를 동일한 관련성 프롬프트로 재평가하고, `--run` 시 임계값 미달 문서를 DynamoDB+S3에서 삭제한 뒤 삭제된 벡터를 정리하기 위해 KB ingestion job을 1회 트리거한다. 기본은 dry-run. 판정 자체가 불가능한 문서(Bedrock 오류)는 삭제하지 않고 건너뛴다 — 크롤 시점의 fail-closed는 스킵/다음 크롤 재시도이지만 이 스크립트는 되돌릴 수 없는 1회성 삭제이므로, "판정 불가"를 "관련 없음 확정"과 동일하게 취급하면 파괴적이다. `customUrls`로 수집된 문서(메타데이터의 `ingestSource: "custom"`, 이 PR부터 기록)도 건너뛴다 — 이들은 설계상 게이트를 우회(`require_relevance=False`, 사용자가 명시적으로 요청한 URL)하므로 재평가 후 삭제하면 애초에 우회를 허용한 이유와 모순된다.
+
+### 4. `CrawlerSource.OwnerID` — 백필 전까지 레거시 소스는 admin만 삭제 가능
+`OwnerID`는 `AddSource`의 신규 생성 분기에서만 설정되므로, 이 PR 배포 이전에 생성된 소스는 `OwnerID == ""`이다. `DeleteDocument`는 빈 `OwnerID`를 "아직 소유자 없음"으로 취급해 admin이 아닌 모든 호출자를 거부한다(단순 비구독자만이 아니라). `scripts/insights-backfill-owner.py`가 일회성 백필이다: `Subscribers`가 append-only이고 인덱스 0이 해당 sourceId에 대해 최초로 `AddSource`를 호출한 사람이므로, `ownerId`가 없는 모든 `CrawlerSource`에 대해 `subscribers[0]`(최초 구독자)을 소유자로 설정한다. 이 스크립트를 실행하기 전(또는 백필할 구독자가 전혀 없는 소스)에는 admin만 해당 소스의 문서를 삭제할 수 있다.
 
 ## 결과
 
@@ -86,8 +94,10 @@ Docs ingested before this gate existed aren't retroactively filtered. The script
 
 ### 부정적 영향
 - 임계값 근처의 경계선 관련 기사가 거짓 음성으로 누락될 수 있음 — LLM의 관련성 판단은 요약 판단과 마찬가지로 양방향으로 틀릴 수 있음.
-- 문서 삭제가 Bedrock KB/RAG Q&A 결과에서 즉시 반영되지 않음 — 즉시 일관성이 필요한 호출자는 ingestion job 지연을 인지해야 함.
+- 문서 삭제가 Bedrock KB/RAG Q&A 결과에서 즉시 반영되지 않음 — 즉시 일관성이 필요한 호출자는 ingestion job 지연을 인지해야 함. 핸들러가 삭제 성공 직후 KB sync job을 best-effort로 1회 트리거해 그 창을 줄이지만, 성공이나 다음 Q&A 조회 이전 완료를 보장하지는 않는다.
 - `scripts/insights-rescore.py`는 저장된 summary 기준으로 재평가하며 원본 snippet(저장되지 않음) 기준이 아님 — 원본 검색 결과 재평가보다 신호가 약간 떨어지지만 일회성 백필로는 충분하다고 판단.
+- 기존에 생성된 모든 `CrawlerSource`는 실제 생성자가 이 라우트로 삭제하기 전에 `insights-backfill-owner.py`를 한 번 실행해야 한다 — 그 전(또는 구독자 목록이 우연히 비어있는 소스)에는 admin만 가능하다.
+- Tech 문서(합성 `__tech__` 소스, `CONFIG`/소유자 행 없음)는 이 라우트로 전혀 삭제할 수 없다 — `GetSource`가 404를 반환한다. 프론트엔드는 `type === 'tech'` 문서의 삭제 버튼을 그에 맞춰 숨긴다 — tech 문서 큐레이션이 필요해지면 합성 소스용 소유권/admin 모델이 후속 작업이다.
 
 ## 검토한 대안
 | 옵션 | 장점 | 단점 |

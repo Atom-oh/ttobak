@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
@@ -139,7 +140,7 @@ func TestDeleteDocument_UnknownSourceNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	err := svc.DeleteDocument(ctx, "user-1", false, "no-such-source", "doc1")
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -153,7 +154,7 @@ func TestDeleteDocument_NonOwnerSubscriberForbidden(t *testing.T) {
 	ctx := context.Background()
 
 	err := svc.DeleteDocument(ctx, "someone-else", false, "hanabank", "doc1")
-	if err != ErrForbidden {
+	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
 	}
 }
@@ -167,7 +168,7 @@ func TestDeleteDocument_OwnerButDocMissingNotFound(t *testing.T) {
 	// user-1 IS the owner (passes the permission check) but the
 	// requested doc doesn't exist -- must not fall through to S3.
 	err := svc.DeleteDocument(ctx, "user-1", false, "hanabank", "no-such-doc")
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -181,8 +182,49 @@ func TestDeleteDocument_AdminBypassesOwnerCheck(t *testing.T) {
 	// An admin who is NOT the owner must get past the permission check
 	// (proven by getting ErrNotFound for the missing doc, not ErrForbidden).
 	err := svc.DeleteDocument(ctx, "admin-1", true, "hanabank", "no-such-doc")
-	if err != ErrNotFound {
+	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound (admin bypasses owner check), got %v", err)
+	}
+}
+
+func TestDeleteDocument_EmptyUserIDForbidden(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	// Legacy source with no backfilled OwnerID -- if an empty userID were
+	// allowed to reach the OwnerID comparison, "" == "" would wrongly pass.
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", Subscribers: []string{"someone"}}
+	svc := &InsightsService{repo: repo}
+	ctx := context.Background()
+
+	err := svc.DeleteDocument(ctx, "", false, "hanabank", "doc1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden for empty userID, got %v", err)
+	}
+}
+
+func TestDeleteDocument_LegacySourceWithoutOwnerIDDeniesNonAdmin(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	// A source created before OwnerID existed -- OwnerID == "". Even its
+	// own subscriber must not be able to delete; only admin can, until
+	// scripts/insights-backfill-owner.py backfills OwnerID.
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", Subscribers: []string{"subscriber-1"}}
+	svc := &InsightsService{repo: repo}
+	ctx := context.Background()
+
+	err := svc.DeleteDocument(ctx, "subscriber-1", false, "hanabank", "doc1")
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden for legacy source without OwnerID, got %v", err)
+	}
+}
+
+func TestDeleteDocument_AdminAllowedOnLegacySourceWithoutOwnerID(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["hanabank"] = &model.CrawlerSource{SourceID: "hanabank", Subscribers: []string{"subscriber-1"}}
+	svc := &InsightsService{repo: repo}
+	ctx := context.Background()
+
+	err := svc.DeleteDocument(ctx, "admin-1", true, "hanabank", "no-such-doc")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound (admin allowed even on legacy source), got %v", err)
 	}
 }
 

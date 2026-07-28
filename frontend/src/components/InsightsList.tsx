@@ -33,7 +33,9 @@ export function InsightsList() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
-  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  // Set, not a single key -- a single value would let two concurrent
+  // deletes clear each other's pending state in `finally`.
+  const [deletingKeys, setDeletingKeys] = useState<Set<string>>(new Set());
   const [crawlerFilter, setCrawlerFilter] = useState('');
   const [serviceFilter, setServiceFilter] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -169,17 +171,27 @@ export function InsightsList() {
     if (!doc.sourceId || !doc.docHash) return;
     if (!window.confirm('이 인사이트를 삭제할까요? 되돌릴 수 없습니다.')) return;
     const key = `${doc.sourceId}#${doc.docHash}`;
-    setDeletingKey(key);
+    setDeletingKeys((prev) => new Set(prev).add(key));
+    setError(null);
     try {
       await insightsApi.delete(doc.sourceId, doc.docHash);
-      // Re-fetch the current page rather than splicing locally -- removing
-      // one row locally without adjusting `page` can strand the view on a
-      // now-empty last page.
-      await fetchDocuments();
+      if (documents.length === 1 && page > 1) {
+        // Deleted the last item on a non-first page -- step back a page
+        // instead of re-fetching the current (now-empty) one, which would
+        // strand the view on a blank page. The page-change effect
+        // re-fetches automatically.
+        setPage((p) => p - 1);
+      } else {
+        await fetchDocuments();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete document');
     } finally {
-      setDeletingKey(null);
+      setDeletingKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
     }
   };
 
@@ -768,16 +780,18 @@ export function InsightsList() {
                         <span className="material-symbols-outlined text-lg">open_in_new</span>
                         Original
                       </button>
-                      <button
-                        onClick={() => handleDelete(doc)}
-                        disabled={deletingKey === `${doc.sourceId}#${doc.docHash}`}
-                        title="Delete this insight"
-                        className="flex items-center justify-center p-1.5 text-slate-400 dark:text-text-muted hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        <span className="material-symbols-outlined text-lg">
-                          {deletingKey === `${doc.sourceId}#${doc.docHash}` ? 'hourglass_empty' : 'delete'}
-                        </span>
-                      </button>
+                      {doc.type !== 'tech' && (
+                        <button
+                          onClick={() => handleDelete(doc)}
+                          disabled={deletingKeys.has(`${doc.sourceId}#${doc.docHash}`)}
+                          title="Delete this insight"
+                          className="flex items-center justify-center p-1.5 text-slate-400 dark:text-text-muted hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <span className="material-symbols-outlined text-lg">
+                            {deletingKeys.has(`${doc.sourceId}#${doc.docHash}`) ? 'hourglass_empty' : 'delete'}
+                          </span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
