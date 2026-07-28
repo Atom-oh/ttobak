@@ -71,10 +71,10 @@ def _parse_relevance_threshold(raw: str) -> float:
         value = float(raw)
         if 0.0 <= value <= 1.0:
             return value
-        logging.getLogger().warning(
+        logger.warning(
             f'RELEVANCE_THRESHOLD={raw!r} out of range [0.0, 1.0], using 0.7')
     except (TypeError, ValueError):
-        logging.getLogger().warning(
+        logger.warning(
             f'RELEVANCE_THRESHOLD={raw!r} is not a number, using 0.7')
     return 0.7
 

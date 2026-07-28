@@ -83,7 +83,11 @@ export function InsightsList() {
       setError(err instanceof Error ? err.message : 'Failed to load documents');
       setDocuments([]);
       setTotalCount(0);
-      return [];
+      // null (not []) -- a genuinely empty page and a failed fetch must stay
+      // distinguishable to callers like handleDelete's page-back logic,
+      // which should only step back on a confirmed-empty result, not on a
+      // network/500 error that has nothing to do with pagination.
+      return null;
     } finally {
       setLoading(false);
     }
@@ -183,11 +187,17 @@ export function InsightsList() {
       // on a 2-item page both see length 2 and both refetch, landing on an
       // empty page whose pagination controls then vanish entirely (they're
       // gated on totalCount > limit). Refetch first and correct based on
-      // the ACTUAL result, not a pre-delete guess -- covers any number of
-      // concurrent deletes emptying the page, not just exactly one.
+      // the ACTUAL result, not a pre-delete guess.
       const remaining = await fetchDocuments();
-      if (remaining.length === 0 && page > 1) {
-        setPage((p) => p - 1);
+      // null means the refetch itself failed (network/500) -- that's not
+      // "the page is empty", so don't step back on it. And clamp the
+      // decrement (never go below 1) via the functional-update form: if two
+      // concurrent deletes both resolve "empty, step back", React applies
+      // both updates in order against the latest state, so the second one's
+      // `p > 1` check sees the first's result -- one call can't halve into
+      // an invalid page, and two calls together can't skip past page 1.
+      if (remaining !== null && remaining.length === 0) {
+        setPage((p) => (p > 1 ? p - 1 : p));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete document');

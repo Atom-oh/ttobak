@@ -12,12 +12,12 @@ import (
 
 // mockCrawlerRepo is an in-memory implementation of crawlerRepo for testing.
 type mockCrawlerRepo struct {
-	sources       map[string]*model.CrawlerSource       // sourceID -> source
-	subscriptions map[string]*model.CrawlerSubscription  // "userID|sourceID" -> sub
-	history       map[string][]model.CrawlHistory        // sourceID -> history entries
-	documents     map[string][]model.CrawledDocument      // sourceID -> documents
-	allDocuments  []model.CrawledDocument                 // all documents for scan
-	putSourceCalls int                                     // unconditional PutSource call count
+	sources        map[string]*model.CrawlerSource       // sourceID -> source
+	subscriptions  map[string]*model.CrawlerSubscription // "userID|sourceID" -> sub
+	history        map[string][]model.CrawlHistory       // sourceID -> history entries
+	documents      map[string][]model.CrawledDocument    // sourceID -> documents
+	allDocuments   []model.CrawledDocument               // all documents for scan
+	putSourceCalls int                                   // unconditional PutSource call count
 }
 
 func newMockCrawlerRepo() *mockCrawlerRepo {
