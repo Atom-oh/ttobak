@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
 )
 
@@ -47,18 +49,108 @@ func (m *mockCrawlerRepo) GetSource(_ context.Context, sourceID string) (*model.
 	cp.Subscribers = append([]string(nil), src.Subscribers...)
 	cp.AWSServices = append([]string(nil), src.AWSServices...)
 	cp.NewsQueries = append([]string(nil), src.NewsQueries...)
+	cp.NewsSources = append([]string(nil), src.NewsSources...)
 	cp.CustomUrls = append([]string(nil), src.CustomUrls...)
 	return &cp, nil
 }
 
-func (m *mockCrawlerRepo) PutSource(_ context.Context, source *model.CrawlerSource) error {
+func (m *mockCrawlerRepo) PutSourceIfAbsent(_ context.Context, source *model.CrawlerSource) error {
+	if _, exists := m.sources[source.SourceID]; exists {
+		return fmt.Errorf("%w: source %s already exists", repository.ErrConditionFailed, source.SourceID)
+	}
 	cp := *source
 	cp.Subscribers = append([]string(nil), source.Subscribers...)
 	cp.AWSServices = append([]string(nil), source.AWSServices...)
 	cp.NewsQueries = append([]string(nil), source.NewsQueries...)
+	cp.NewsSources = append([]string(nil), source.NewsSources...)
 	cp.CustomUrls = append([]string(nil), source.CustomUrls...)
 	m.sources[source.SourceID] = &cp
 	return nil
+}
+
+// UpdateSourcePartial mirrors CrawlerRepository's real semantics closely
+// enough to exercise the races/retries it exists to test: a nil/empty
+// expected value for a field satisfies the condition against EITHER a
+// genuinely-absent field (legacy source) or a present-but-empty one
+// (explicitly cleared), matching sourceFieldUnchangedCondition's
+// attribute_not_exists-OR-Equal construction.
+func (m *mockCrawlerRepo) UpdateSourcePartial(_ context.Context, sourceID string, expected *model.CrawlerSource, fields repository.SourcePartialFields) error {
+	current, ok := m.sources[sourceID]
+	if !ok {
+		return fmt.Errorf("%w: source %s not found", repository.ErrConditionFailed, sourceID)
+	}
+	checkList := func(name string, currentVal, expectedVal []string) error {
+		if len(expectedVal) == 0 {
+			if len(currentVal) != 0 {
+				return fmt.Errorf("%w: source %s field %s changed concurrently", repository.ErrConditionFailed, sourceID, name)
+			}
+			return nil
+		}
+		if !stringSlicesEqual(currentVal, expectedVal) {
+			return fmt.Errorf("%w: source %s field %s changed concurrently", repository.ErrConditionFailed, sourceID, name)
+		}
+		return nil
+	}
+	if fields.Subscribers != nil {
+		if err := checkList("subscribers", current.Subscribers, expected.Subscribers); err != nil {
+			return err
+		}
+	}
+	if fields.AWSServices != nil {
+		if err := checkList("awsServices", current.AWSServices, expected.AWSServices); err != nil {
+			return err
+		}
+	}
+	if fields.NewsQueries != nil {
+		if err := checkList("newsQueries", current.NewsQueries, expected.NewsQueries); err != nil {
+			return err
+		}
+	}
+	if fields.NewsSources != nil {
+		if err := checkList("newsSources", current.NewsSources, expected.NewsSources); err != nil {
+			return err
+		}
+	}
+	if fields.CustomUrls != nil {
+		if err := checkList("customUrls", current.CustomUrls, expected.CustomUrls); err != nil {
+			return err
+		}
+	}
+	if fields.Status != nil && current.Status != expected.Status {
+		return fmt.Errorf("%w: source %s field status changed concurrently", repository.ErrConditionFailed, sourceID)
+	}
+
+	if fields.Subscribers != nil {
+		current.Subscribers = append([]string(nil), (*fields.Subscribers)...)
+	}
+	if fields.AWSServices != nil {
+		current.AWSServices = append([]string(nil), (*fields.AWSServices)...)
+	}
+	if fields.NewsQueries != nil {
+		current.NewsQueries = append([]string(nil), (*fields.NewsQueries)...)
+	}
+	if fields.NewsSources != nil {
+		current.NewsSources = append([]string(nil), (*fields.NewsSources)...)
+	}
+	if fields.CustomUrls != nil {
+		current.CustomUrls = append([]string(nil), (*fields.CustomUrls)...)
+	}
+	if fields.Status != nil {
+		current.Status = *fields.Status
+	}
+	return nil
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *mockCrawlerRepo) GetSubscription(_ context.Context, userID, sourceID string) (*model.CrawlerSubscription, error) {
@@ -143,6 +235,17 @@ func (m *mockCrawlerRepo) GetDocument(_ context.Context, sourceID, docHash strin
 		}
 	}
 	return nil, nil
+}
+
+func (m *mockCrawlerRepo) DeleteDocument(_ context.Context, sourceID, docHash string) error {
+	docs := m.documents[sourceID]
+	for i, d := range docs {
+		if d.DocHash == docHash {
+			m.documents[sourceID] = append(docs[:i], docs[i+1:]...)
+			return nil
+		}
+	}
+	return nil
 }
 
 func (m *mockCrawlerRepo) NormalizeSourceID(name string) string { return name }

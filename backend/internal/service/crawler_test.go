@@ -2,19 +2,21 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
 )
 
 // mockCrawlerRepo is an in-memory implementation of crawlerRepo for testing.
 type mockCrawlerRepo struct {
 	sources       map[string]*model.CrawlerSource       // sourceID -> source
-	subscriptions map[string]*model.CrawlerSubscription  // "userID|sourceID" -> sub
-	history       map[string][]model.CrawlHistory        // sourceID -> history entries
-	documents     map[string][]model.CrawledDocument      // sourceID -> documents
-	allDocuments  []model.CrawledDocument                 // all documents for scan
+	subscriptions map[string]*model.CrawlerSubscription // "userID|sourceID" -> sub
+	history       map[string][]model.CrawlHistory       // sourceID -> history entries
+	documents     map[string][]model.CrawledDocument    // sourceID -> documents
+	allDocuments  []model.CrawledDocument               // all documents for scan
 }
 
 func newMockCrawlerRepo() *mockCrawlerRepo {
@@ -40,17 +42,95 @@ func (m *mockCrawlerRepo) GetSource(_ context.Context, sourceID string) (*model.
 	cp.Subscribers = append([]string(nil), src.Subscribers...)
 	cp.AWSServices = append([]string(nil), src.AWSServices...)
 	cp.NewsQueries = append([]string(nil), src.NewsQueries...)
+	cp.NewsSources = append([]string(nil), src.NewsSources...)
 	cp.CustomUrls = append([]string(nil), src.CustomUrls...)
 	return &cp, nil
 }
 
-func (m *mockCrawlerRepo) PutSource(_ context.Context, source *model.CrawlerSource) error {
+func (m *mockCrawlerRepo) PutSourceIfAbsent(_ context.Context, source *model.CrawlerSource) error {
+	if _, exists := m.sources[source.SourceID]; exists {
+		return fmt.Errorf("%w: source %s already exists", repository.ErrConditionFailed, source.SourceID)
+	}
 	cp := *source
 	cp.Subscribers = append([]string(nil), source.Subscribers...)
 	cp.AWSServices = append([]string(nil), source.AWSServices...)
 	cp.NewsQueries = append([]string(nil), source.NewsQueries...)
+	cp.NewsSources = append([]string(nil), source.NewsSources...)
 	cp.CustomUrls = append([]string(nil), source.CustomUrls...)
 	m.sources[source.SourceID] = &cp
+	return nil
+}
+
+// UpdateSourcePartial mirrors CrawlerRepository's real semantics closely
+// enough to exercise the races/retries it exists to test: a nil/empty
+// expected value for a field satisfies the condition against EITHER a
+// genuinely-absent field (legacy source) or a present-but-empty one
+// (explicitly cleared), matching sourceFieldUnchangedCondition's
+// attribute_not_exists-OR-Equal construction.
+func (m *mockCrawlerRepo) UpdateSourcePartial(_ context.Context, sourceID string, expected *model.CrawlerSource, fields repository.SourcePartialFields) error {
+	current, ok := m.sources[sourceID]
+	if !ok {
+		return fmt.Errorf("%w: source %s not found", repository.ErrConditionFailed, sourceID)
+	}
+	checkList := func(name string, currentVal, expectedVal []string) error {
+		if len(expectedVal) == 0 {
+			if len(currentVal) != 0 {
+				return fmt.Errorf("%w: source %s field %s changed concurrently", repository.ErrConditionFailed, sourceID, name)
+			}
+			return nil
+		}
+		if !strSliceEqual(currentVal, expectedVal) {
+			return fmt.Errorf("%w: source %s field %s changed concurrently", repository.ErrConditionFailed, sourceID, name)
+		}
+		return nil
+	}
+	if fields.Subscribers != nil {
+		if err := checkList("subscribers", current.Subscribers, expected.Subscribers); err != nil {
+			return err
+		}
+	}
+	if fields.AWSServices != nil {
+		if err := checkList("awsServices", current.AWSServices, expected.AWSServices); err != nil {
+			return err
+		}
+	}
+	if fields.NewsQueries != nil {
+		if err := checkList("newsQueries", current.NewsQueries, expected.NewsQueries); err != nil {
+			return err
+		}
+	}
+	if fields.NewsSources != nil {
+		if err := checkList("newsSources", current.NewsSources, expected.NewsSources); err != nil {
+			return err
+		}
+	}
+	if fields.CustomUrls != nil {
+		if err := checkList("customUrls", current.CustomUrls, expected.CustomUrls); err != nil {
+			return err
+		}
+	}
+	if fields.Status != nil && current.Status != expected.Status {
+		return fmt.Errorf("%w: source %s field status changed concurrently", repository.ErrConditionFailed, sourceID)
+	}
+
+	if fields.Subscribers != nil {
+		current.Subscribers = append([]string(nil), (*fields.Subscribers)...)
+	}
+	if fields.AWSServices != nil {
+		current.AWSServices = append([]string(nil), (*fields.AWSServices)...)
+	}
+	if fields.NewsQueries != nil {
+		current.NewsQueries = append([]string(nil), (*fields.NewsQueries)...)
+	}
+	if fields.NewsSources != nil {
+		current.NewsSources = append([]string(nil), (*fields.NewsSources)...)
+	}
+	if fields.CustomUrls != nil {
+		current.CustomUrls = append([]string(nil), (*fields.CustomUrls)...)
+	}
+	if fields.Status != nil {
+		current.Status = *fields.Status
+	}
 	return nil
 }
 
@@ -142,6 +222,17 @@ func (m *mockCrawlerRepo) NormalizeSourceID(name string) string {
 	return name // unused by service (service uses its own normalizeSourceID)
 }
 
+func (m *mockCrawlerRepo) DeleteDocument(_ context.Context, sourceID, docHash string) error {
+	docs := m.documents[sourceID]
+	for i, d := range docs {
+		if d.DocHash == docHash {
+			m.documents[sourceID] = append(docs[:i], docs[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
 // ---------- helpers ----------
 
 func strSliceEqual(a, b []string) bool {
@@ -225,6 +316,175 @@ func TestAddSource_NewSource(t *testing.T) {
 	if stored == nil {
 		t.Fatal("source not stored in repo")
 	}
+}
+
+// TestAddSource_NewSource_CreatesViaConditionalPut is a regression test for
+// a lost-update race: creating a source must go through PutSourceIfAbsent
+// only -- there is no unconditional whole-item write left in this codebase
+// that a concurrent AddSource (a different user subscribing to the same
+// brand-new source) could have its write reverted by, and since OwnerID
+// lives on this same item, that would have been a lost destructive-delete
+// authorization grant, not just a missed subscriber.
+func TestAddSource_NewSource_CreatesViaConditionalPut(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	svc := &CrawlerService{repo: repo}
+	ctx := context.Background()
+
+	_, err := svc.AddSource(ctx, "user1", &model.AddCrawlerSourceRequest{SourceName: "AWS Blog"})
+	if err != nil {
+		t.Fatalf("AddSource returned error: %v", err)
+	}
+	stored := repo.sources["aws-blog"]
+	if stored == nil {
+		t.Fatal("source not stored in repo")
+	}
+	if stored.OwnerID != "user1" {
+		t.Errorf("expected ownerId 'user1', got %q", stored.OwnerID)
+	}
+}
+
+// TestAddSource_ExistingSource_MergeRetriesOnConcurrentChange exercises the
+// UpdateSourcePartial condition+retry path directly: AddSource's merge must
+// re-read and re-derive its update after a concurrent write changes the
+// fields it's merging, not fail outright or overwrite the concurrent change.
+func TestAddSource_ExistingSource_MergeRetriesOnConcurrentChange(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	ctx := context.Background()
+
+	repo.sources["aws-blog"] = &model.CrawlerSource{
+		SourceID:    "aws-blog",
+		SourceName:  "AWS Blog",
+		OwnerID:     "owner1",
+		Subscribers: []string{"owner1"},
+		AWSServices: []string{"lambda"},
+		Status:      "idle",
+	}
+
+	// Simulate a concurrent AddSource landing between AddSource's read and
+	// its write, by wrapping UpdateSourcePartial to mutate the stored source
+	// out from under the first call exactly once.
+	wrapped := &raceInjectingCrawlerRepo{mockCrawlerRepo: repo}
+	svc := &CrawlerService{repo: wrapped}
+
+	resp, err := svc.AddSource(ctx, "user2", &model.AddCrawlerSourceRequest{SourceName: "AWS Blog", AWSServices: []string{"s3"}})
+	if err != nil {
+		t.Fatalf("AddSource returned error: %v", err)
+	}
+	if !wrapped.injected {
+		t.Fatal("test setup bug: race was never injected")
+	}
+	if !contains(resp.Source.Subscribers, "user2") || !contains(resp.Source.Subscribers, "owner1") || !contains(resp.Source.Subscribers, "concurrent-user") {
+		t.Errorf("expected merge to retry and include the concurrently-added subscriber, got %v", resp.Source.Subscribers)
+	}
+	if resp.Source.OwnerID != "owner1" {
+		t.Errorf("expected ownerId to survive the merge unchanged, got %q", resp.Source.OwnerID)
+	}
+}
+
+// raceInjectingCrawlerRepo wraps mockCrawlerRepo to fail the FIRST
+// UpdateSourcePartial call with ErrConditionFailed after mutating the
+// underlying source (simulating a concurrent writer landing in between),
+// so the caller's retry loop is exercised against a genuinely-changed item.
+type raceInjectingCrawlerRepo struct {
+	*mockCrawlerRepo
+	injected bool
+}
+
+func (r *raceInjectingCrawlerRepo) UpdateSourcePartial(ctx context.Context, sourceID string, expected *model.CrawlerSource, fields repository.SourcePartialFields) error {
+	if !r.injected {
+		r.injected = true
+		current := r.sources[sourceID]
+		current.Subscribers = append(current.Subscribers, "concurrent-user")
+		return fmt.Errorf("%w: injected race", repository.ErrConditionFailed)
+	}
+	return r.mockCrawlerRepo.UpdateSourcePartial(ctx, sourceID, expected, fields)
+}
+
+// createRaceCrawlerRepo wraps mockCrawlerRepo to fail the FIRST
+// PutSourceIfAbsent call with ErrConditionFailed after inserting the source
+// itself (simulating a concurrent AddSource creating it first), exercising
+// AddSource's create-race fallback: it must re-read and fall into the
+// existing-source merge path, not treat the race as a hard failure.
+type createRaceCrawlerRepo struct {
+	*mockCrawlerRepo
+	injected bool
+}
+
+func (r *createRaceCrawlerRepo) PutSourceIfAbsent(ctx context.Context, source *model.CrawlerSource) error {
+	if !r.injected {
+		r.injected = true
+		// A DIFFERENT user's concurrent AddSource wins the race and creates
+		// the source first -- this call's own PutSourceIfAbsent must fail,
+		// not silently treat this call's userID as the owner.
+		r.sources[source.SourceID] = &model.CrawlerSource{
+			SourceID:    source.SourceID,
+			SourceName:  source.SourceName,
+			OwnerID:     "concurrent-winner",
+			Subscribers: []string{"concurrent-winner"},
+			Status:      "idle",
+		}
+		return fmt.Errorf("%w: injected create race", repository.ErrConditionFailed)
+	}
+	return r.mockCrawlerRepo.PutSourceIfAbsent(ctx, source)
+}
+
+func TestAddSource_NewSource_CreateRaceFallsIntoMergePath(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	wrapped := &createRaceCrawlerRepo{mockCrawlerRepo: repo}
+	svc := &CrawlerService{repo: wrapped}
+	ctx := context.Background()
+
+	resp, err := svc.AddSource(ctx, "user2", &model.AddCrawlerSourceRequest{SourceName: "AWS Blog", AWSServices: []string{"s3"}})
+	if err != nil {
+		t.Fatalf("AddSource returned error: %v", err)
+	}
+	if !wrapped.injected {
+		t.Fatal("test setup bug: create race was never injected")
+	}
+	// Must have fallen into the existing-source merge path: the race
+	// winner's ownerId survives, and this call's own userID lands as an
+	// added SUBSCRIBER, not a second owner.
+	if resp.Source.OwnerID != "concurrent-winner" {
+		t.Errorf("expected ownerId 'concurrent-winner' from the race winner to survive, got %q", resp.Source.OwnerID)
+	}
+	if !contains(resp.Source.Subscribers, "user2") || !contains(resp.Source.Subscribers, "concurrent-winner") {
+		t.Errorf("expected both subscribers present after merge, got %v", resp.Source.Subscribers)
+	}
+}
+
+func TestAddSource_ExistingSource_MergeExhaustsRetriesAndErrors(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	repo.sources["aws-blog"] = &model.CrawlerSource{
+		SourceID:    "aws-blog",
+		SourceName:  "AWS Blog",
+		OwnerID:     "owner1",
+		Subscribers: []string{"owner1"},
+		Status:      "idle",
+	}
+	// Always-racing repo: every UpdateSourcePartial call fails the
+	// condition, so AddSource's bounded retry must give up with an error
+	// instead of looping forever or silently overwriting.
+	always := &alwaysRacingCrawlerRepo{mockCrawlerRepo: repo}
+	svc := &CrawlerService{repo: always}
+	ctx := context.Background()
+
+	_, err := svc.AddSource(ctx, "user2", &model.AddCrawlerSourceRequest{SourceName: "AWS Blog"})
+	if err == nil {
+		t.Fatal("expected AddSource to error after exhausting merge retries")
+	}
+	if always.calls < 3 {
+		t.Errorf("expected at least 3 UpdateSourcePartial attempts, got %d", always.calls)
+	}
+}
+
+type alwaysRacingCrawlerRepo struct {
+	*mockCrawlerRepo
+	calls int
+}
+
+func (r *alwaysRacingCrawlerRepo) UpdateSourcePartial(_ context.Context, sourceID string, _ *model.CrawlerSource, _ repository.SourcePartialFields) error {
+	r.calls++
+	return fmt.Errorf("%w: always racing", repository.ErrConditionFailed)
 }
 
 func TestAddSource_ExistingSource_NewSubscriber(t *testing.T) {
@@ -315,6 +575,41 @@ func TestAddSource_ExistingSource_AlreadySubscribed(t *testing.T) {
 	// AWSServices should still be union: lambda, s3
 	if !strSliceEqual(resp.Source.AWSServices, []string{"lambda", "s3"}) {
 		t.Errorf("expected awsServices union [lambda, s3], got %v", resp.Source.AWSServices)
+	}
+}
+
+// TestAddSource_ExistingSource_LegacySourceMissingFieldsSubscribeSucceeds is
+// a regression test for MAJOR-2: a source created before newsSources/
+// customUrls existed has those attributes genuinely ABSENT (nil, not an
+// empty list) in the mock, same as a real GetItem result would be.
+// UpdateSourcePartial's condition must treat "expected nil" as satisfied by
+// a still-absent current value (attribute_not_exists), not compare Equal
+// against an empty list -- otherwise this subscribe would fail its
+// condition deterministically on every attempt and never succeed.
+func TestAddSource_ExistingSource_LegacySourceMissingFieldsSubscribeSucceeds(t *testing.T) {
+	repo := newMockCrawlerRepo()
+	svc := &CrawlerService{repo: repo}
+	ctx := context.Background()
+
+	repo.sources["hana-bank"] = &model.CrawlerSource{
+		SourceID:    "hana-bank",
+		SourceName:  "Hana Bank",
+		OwnerID:     "owner1",
+		Subscribers: []string{"owner1"},
+		Status:      "idle",
+		// AWSServices/NewsQueries/NewsSources/CustomUrls left nil --
+		// genuinely absent, as on a source predating these fields.
+	}
+
+	resp, err := svc.AddSource(ctx, "user2", &model.AddCrawlerSourceRequest{SourceName: "Hana Bank"})
+	if err != nil {
+		t.Fatalf("AddSource on a legacy source with missing fields returned error: %v", err)
+	}
+	if !contains(resp.Source.Subscribers, "user2") || !contains(resp.Source.Subscribers, "owner1") {
+		t.Errorf("expected both subscribers present, got %v", resp.Source.Subscribers)
+	}
+	if resp.Source.OwnerID != "owner1" {
+		t.Errorf("expected ownerId to survive unchanged, got %q", resp.Source.OwnerID)
 	}
 }
 

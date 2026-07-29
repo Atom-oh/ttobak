@@ -353,6 +353,8 @@ export const insightsApi = {
   },
   getDetail: (sourceId: string, docHash: string) =>
     api.get<CrawledDocument & { content: string }>(`/api/insights/${encodeURIComponent(sourceId)}/${encodeURIComponent(docHash)}`),
+  delete: (sourceId: string, docHash: string) =>
+    api.delete<void>(`/api/insights/${encodeURIComponent(sourceId)}/${encodeURIComponent(docHash)}`),
 };
 
 // Dictionary API

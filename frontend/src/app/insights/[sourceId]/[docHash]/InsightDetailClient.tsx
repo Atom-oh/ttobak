@@ -103,6 +103,11 @@ export default function InsightDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  // Separate from `error` (load failure) -- a delete 403 (e.g. a legacy
+  // source with no backfilled ownerId, admin-only) must not replace an
+  // already-loaded article with the full error screen and no way back.
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Extract sourceId and docHash from URL pathname (useParams returns '_' in static export)
   const { sourceId, docHash } = useMemo(() => {
@@ -116,6 +121,7 @@ export default function InsightDetailPage() {
   useEffect(() => {
     if (!sourceId || !docHash || sourceId === '_') return;
     setLoading(true);
+    setDeleteError(null);
     insightsApi.getDetail(sourceId, docHash)
       .then(setDoc)
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load article'))
@@ -159,6 +165,20 @@ export default function InsightDetailPage() {
     setExportOpen(false);
   };
 
+  const handleDelete = async () => {
+    if (!doc || !sourceId || !docHash) return;
+    if (!window.confirm('이 인사이트를 삭제할까요? 되돌릴 수 없습니다.')) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await insightsApi.delete(sourceId, docHash);
+      router.push('/insights');
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete document');
+      setDeleting(false);
+    }
+  };
+
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -185,7 +205,7 @@ export default function InsightDetailPage() {
       </header>
 
       <div className="flex-1 overflow-y-auto pb-24 lg:pb-8">
-        <div className="p-4 lg:px-16 lg:pt-10 lg:pb-8 max-w-4xl w-full">
+        <div className="p-4 lg:px-16 lg:pt-10 lg:pb-8 w-full">
 
           {/* Back button (desktop) */}
           <button
@@ -301,13 +321,29 @@ export default function InsightDetailPage() {
                       </div>
                     )}
                   </div>
+                  {doc.type !== 'tech' && (
+                    <button
+                      onClick={handleDelete}
+                      disabled={deleting}
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 dark:text-text-muted hover:text-red-500 dark:hover:text-red-400 transition-colors disabled:opacity-40 ml-auto"
+                    >
+                      <span className="material-symbols-outlined text-base">delete</span>
+                      {deleting ? 'Deleting...' : 'Delete'}
+                    </button>
+                  )}
                 </div>
+
+                {deleteError && (
+                  <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg">
+                    {deleteError}
+                  </div>
+                )}
               </div>
 
-              {/* Briefing Content — capped to a comfortable reading measure;
-                  the raw scrape is a separate, collapsed block below */}
+              {/* Briefing Content — the raw scrape is a separate, collapsed
+                  block below */}
               <div className="flex gap-0">
-                <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 max-w-[70ch] w-full min-w-0">
+                <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 flex-1 min-w-0">
                   <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-text-main uppercase tracking-wide mb-4">
                     <span className="material-symbols-outlined text-primary text-lg">auto_awesome</span>
                     AI Briefing

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -86,9 +87,15 @@ func (r *CrawlerRepository) GetSource(ctx context.Context, sourceID string) (*mo
 	return &item.CrawlerSource, nil
 }
 
-// PutSource creates or updates a crawler source
-// PK: CRAWLER#{sourceID}, SK: CONFIG
-func (r *CrawlerRepository) PutSource(ctx context.Context, source *model.CrawlerSource) error {
+// PutSourceIfAbsent creates a brand-new crawler source, conditioned on the
+// PK not already existing -- AddSource's new-source branch uses this
+// instead of PutSource's unconditional overwrite, since a concurrent
+// AddSource for the same not-yet-existing sourceId would otherwise let the
+// last writer win as OwnerID (this PR's destructive-delete gate) on a
+// source the other caller believes they created. Returns ErrConditionFailed
+// (mapped by the caller back into the existing-source update path) if the
+// item was created by a concurrent request in the meantime.
+func (r *CrawlerRepository) PutSourceIfAbsent(ctx context.Context, source *model.CrawlerSource) error {
 	item := crawlerItem{
 		PK:            model.PrefixCrawler + source.SourceID,
 		SK:            model.PrefixConfig,
@@ -101,15 +108,145 @@ func (r *CrawlerRepository) PutSource(ctx context.Context, source *model.Crawler
 		return fmt.Errorf("failed to marshal crawler source: %w", err)
 	}
 
+	condExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeNotExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("build create-source condition: %w", err)
+	}
+
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      av,
+		TableName:                 aws.String(r.tableName),
+		Item:                      av,
+		ConditionExpression:       condExpr.Condition(),
+		ExpressionAttributeNames:  condExpr.Names(),
+		ExpressionAttributeValues: condExpr.Values(),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to put crawler source: %w", err)
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: source %s already exists", ErrConditionFailed, source.SourceID)
+		}
+		return fmt.Errorf("failed to create crawler source: %w", err)
 	}
 
 	return nil
+}
+
+// SourcePartialFields lists which CrawlerSource fields UpdateSourcePartial
+// should SET -- a fixed struct (not a field-name map) so OwnerID structurally
+// CANNOT be included by any caller: there is no field for it. Every caller
+// that used to do a whole-item PutSource keyed off a stale read now goes
+// through this instead (AddSource's existing-source merge, Unsubscribe,
+// rebuildSourceUnion), so none of them can silently erase an admin's manual
+// ownerId backfill (this feature's destructive-delete gate) via a lost-update
+// race.
+type SourcePartialFields struct {
+	Subscribers *[]string
+	AWSServices *[]string
+	NewsQueries *[]string
+	NewsSources *[]string
+	CustomUrls  *[]string
+	Status      *string
+}
+
+// UpdateSourcePartial performs a partial UpdateItem for the crawler source at
+// sourceID, SETting exactly the non-nil fields in `fields`. Guarded by a
+// ConditionExpression asserting each of those same fields still equals its
+// value in `expected` (a snapshot read immediately before this call) --
+// callers get ErrConditionFailed on a lost race and are expected to re-read,
+// re-derive `fields`, and retry.
+func (r *CrawlerRepository) UpdateSourcePartial(ctx context.Context, sourceID string, expected *model.CrawlerSource, fields SourcePartialFields) error {
+	type entry struct {
+		name    string
+		value   interface{}
+		current interface{}
+	}
+	var entries []entry
+	if fields.Subscribers != nil {
+		entries = append(entries, entry{"subscribers", *fields.Subscribers, expected.Subscribers})
+	}
+	if fields.AWSServices != nil {
+		entries = append(entries, entry{"awsServices", *fields.AWSServices, expected.AWSServices})
+	}
+	if fields.NewsQueries != nil {
+		entries = append(entries, entry{"newsQueries", *fields.NewsQueries, expected.NewsQueries})
+	}
+	if fields.NewsSources != nil {
+		entries = append(entries, entry{"newsSources", *fields.NewsSources, expected.NewsSources})
+	}
+	if fields.CustomUrls != nil {
+		entries = append(entries, entry{"customUrls", *fields.CustomUrls, expected.CustomUrls})
+	}
+	if fields.Status != nil {
+		entries = append(entries, entry{"status", *fields.Status, expected.Status})
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("UpdateSourcePartial: no fields given for source %s", sourceID)
+	}
+
+	update := expression.Set(expression.Name(entries[0].name), expression.Value(entries[0].value))
+	cond := sourceFieldUnchangedCondition(entries[0].name, entries[0].current)
+	for _, e := range entries[1:] {
+		update = update.Set(expression.Name(e.name), expression.Value(e.value))
+		cond = cond.And(sourceFieldUnchangedCondition(e.name, e.current))
+	}
+
+	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(cond).Build()
+	if err != nil {
+		return fmt.Errorf("build update-source-partial expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixConfig},
+		},
+		UpdateExpression:          expr.Update(),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: source %s fields changed concurrently", ErrConditionFailed, sourceID)
+		}
+		return fmt.Errorf("failed to update crawler source: %w", err)
+	}
+
+	return nil
+}
+
+// sourceFieldUnchangedCondition builds the per-field half of
+// UpdateSourcePartial's ConditionExpression. A nil/empty list is treated as
+// "attribute doesn't exist" rather than compared against an empty List
+// value: a legacy source written before a given field existed has the
+// attribute genuinely ABSENT in DynamoDB, not present-and-empty -- comparing
+// Equal against an empty-list Value would then never match a real GetItem
+// result for that item, so every UpdateSourcePartial attempt on it would
+// fail its condition deterministically (not a real race, just a modeling
+// mismatch), exhausting the caller's bounded retry and permanently 500ing
+// legacy sources. A field this call itself previously cleared to nil (e.g.
+// Unsubscribe's last-subscriber branch SETting AWSServices to a nil slice)
+// is a THIRD case -- present, but marshaled to NULL rather than an empty
+// List -- so the empty-value branch below ORs attribute_not_exists with an
+// Equal against whatever the SDK marshals a nil/empty []string to, covering
+// both "never written" and "explicitly cleared" without needing to know
+// which. `status` is always non-empty (never omitempty), so it always takes
+// the plain Equal path.
+func sourceFieldUnchangedCondition(name string, current interface{}) expression.ConditionBuilder {
+	if list, ok := current.([]string); ok {
+		if len(list) == 0 {
+			return expression.Or(
+				expression.AttributeNotExists(expression.Name(name)),
+				expression.Name(name).Equal(expression.Value(list)),
+			)
+		}
+		return expression.Name(name).Equal(expression.Value(list))
+	}
+	return expression.Name(name).Equal(expression.Value(current))
 }
 
 // GetSubscription retrieves a user's subscription to a crawler source
@@ -176,6 +313,24 @@ func (r *CrawlerRepository) DeleteSubscription(ctx context.Context, userID, sour
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete subscription: %w", err)
+	}
+	return nil
+}
+
+// DeleteDocument removes a single crawled document's metadata item.
+// PK=CRAWLER#{sourceID}, SK=DOC#{docHash}
+// Only deletes the DynamoDB item -- the caller is responsible for also
+// deleting the S3 KB object (service layer, which owns the S3 client).
+func (r *CrawlerRepository) DeleteDocument(ctx context.Context, sourceID, docHash string) error {
+	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixCrawler + sourceID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDoc + docHash},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete document: %w", err)
 	}
 	return nil
 }

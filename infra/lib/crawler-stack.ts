@@ -30,6 +30,7 @@ export class CrawlerStack extends cdk.Stack {
       SUMMARIZE_MODEL_ID: 'global.anthropic.claude-sonnet-5',
       WEB_SEARCH_GATEWAY_URL: props.webSearchGatewayUrl,
       WEB_SEARCH_GATEWAY_REGION: 'us-east-1',
+      RELEVANCE_THRESHOLD: '0.7',
     };
 
     const orchestrator = new lambda.Function(this, 'OrchestratorFunction', {

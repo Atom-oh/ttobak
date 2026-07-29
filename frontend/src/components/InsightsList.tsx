@@ -33,6 +33,9 @@ export function InsightsList() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  // Set, not a single key -- a single value would let two concurrent
+  // deletes clear each other's pending state in `finally`.
+  const [deletingKeys, setDeletingKeys] = useState<Set<string>>(new Set());
   const [crawlerFilter, setCrawlerFilter] = useState('');
   const [serviceFilter, setServiceFilter] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -49,8 +52,24 @@ export function InsightsList() {
   const [researchLoading, setResearchLoading] = useState(false);
   const [researchError, setResearchError] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Discards out-of-order responses: two overlapping fetchDocuments calls
+  // (e.g. two concurrent deletes' refetches) can resolve in either order:
+  // only the one matching the latest generation at resolve time is applied,
+  // so a slower, now-stale response can't overwrite fresher state and
+  // "resurrect" an already-deleted document in the list.
+  const fetchGenerationRef = useRef(0);
+  // Dedups the page-back correction across concurrent deletes that both
+  // observe the SAME page going empty -- without this, two such events
+  // each decrement once and skip over an intermediate page. Cleared
+  // whenever `page` itself changes so a later, unrelated emptying of the
+  // same page number isn't blocked by a stale entry.
+  const emptiedPageRef = useRef<number | null>(null);
+  useEffect(() => {
+    emptiedPageRef.current = null;
+  }, [page]);
 
   const fetchDocuments = useCallback(async () => {
+    const generation = ++fetchGenerationRef.current;
     try {
       setLoading(true);
       setError(null);
@@ -72,16 +91,42 @@ export function InsightsList() {
         params.sort = sortBy;
       }
       const response = await insightsApi.list(params);
-      setDocuments(response.documents || []);
-      setTotalCount(response.totalCount || 0);
+      const docs = response.documents || [];
+      if (generation === fetchGenerationRef.current) {
+        setDocuments(docs);
+        setTotalCount(response.totalCount || 0);
+      }
+      return docs;
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load documents');
-      setDocuments([]);
-      setTotalCount(0);
+      if (generation === fetchGenerationRef.current) {
+        setError(err instanceof Error ? err.message : 'Failed to load documents');
+        setDocuments([]);
+        setTotalCount(0);
+      }
+      // null (not []) -- a genuinely empty page and a failed fetch must stay
+      // distinguishable to callers like handleDelete's page-back logic,
+      // which should only step back on a confirmed-empty result, not on a
+      // network/500 error that has nothing to do with pagination.
+      return null;
     } finally {
-      setLoading(false);
+      if (generation === fetchGenerationRef.current) {
+        setLoading(false);
+      }
     }
   }, [activeTab, page, crawlerFilter, serviceFilter, selectedTags, sortBy, limit]);
+
+  // handleDelete awaits a delete API call before refetching -- by the time
+  // it resolves, the user may have changed tab/page/filters, making
+  // `fetchDocuments` (captured in handleDelete's own closure at call time)
+  // stale: invoking it directly would query with abandoned params and its
+  // generation bump would make the generation guard above treat that
+  // stale-param result as "latest" and apply it anyway. Always route
+  // through this ref so handleDelete calls whichever fetchDocuments is
+  // current at resolve time, not the one from when the delete started.
+  const fetchDocumentsRef = useRef(fetchDocuments);
+  useEffect(() => {
+    fetchDocumentsRef.current = fetchDocuments;
+  }, [fetchDocuments]);
 
   const fetchResearchJobs = useCallback(async () => {
     try {
@@ -161,6 +206,42 @@ export function InsightsList() {
       setResearchError(err instanceof Error ? err.message : 'Failed to create research');
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleDelete = async (doc: CrawledDocument) => {
+    if (!doc.sourceId || !doc.docHash) return;
+    if (!window.confirm('이 인사이트를 삭제할까요? 되돌릴 수 없습니다.')) return;
+    const key = `${doc.sourceId}#${doc.docHash}`;
+    setDeletingKeys((prev) => new Set(prev).add(key));
+    setError(null);
+    try {
+      await insightsApi.delete(doc.sourceId, doc.docHash);
+      // `documents.length === 1` was a single stale snapshot -- with
+      // deletingKeys allowing concurrent deletes, two simultaneous deletes
+      // on a 2-item page both see length 2 and both refetch, landing on an
+      // empty page whose pagination controls then vanish entirely (they're
+      // gated on totalCount > limit). Refetch first and correct based on
+      // the ACTUAL result, not a pre-delete guess.
+      const remaining = await fetchDocumentsRef.current();
+      // null means the refetch itself failed (network/500) -- that's not
+      // "the page is empty", so don't step back on it. `emptiedPageRef`
+      // dedups concurrent deletes that both observe the SAME page (`page`,
+      // captured from this render) going empty -- without it, two such
+      // events each decrement once and skip an intermediate page (e.g.
+      // 3 -> 1 instead of 3 -> 2).
+      if (remaining !== null && remaining.length === 0 && emptiedPageRef.current !== page) {
+        emptiedPageRef.current = page;
+        setPage((p) => (p > 1 ? p - 1 : p));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete document');
+    } finally {
+      setDeletingKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
     }
   };
 
@@ -749,6 +830,18 @@ export function InsightsList() {
                         <span className="material-symbols-outlined text-lg">open_in_new</span>
                         Original
                       </button>
+                      {doc.type !== 'tech' && (
+                        <button
+                          onClick={() => handleDelete(doc)}
+                          disabled={deletingKeys.has(`${doc.sourceId}#${doc.docHash}`)}
+                          title="Delete this insight"
+                          className="flex items-center justify-center p-1.5 text-slate-400 dark:text-text-muted hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <span className="material-symbols-outlined text-lg">
+                            {deletingKeys.has(`${doc.sourceId}#${doc.docHash}`) ? 'hourglass_empty' : 'delete'}
+                          </span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

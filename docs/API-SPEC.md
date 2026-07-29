@@ -1371,6 +1371,33 @@ Response: 201 Created
 
 ---
 
+## Insights (Crawler)
+
+Crawled news/tech documents (`CRAWLER#{sourceId}/DOC#{docHash}` items, distinct from the meeting-derived `ACCOUNT#{accountId}/INSIGHT#...` items under Accounts above). `GET /api/insights` lists/filters; `GET /api/insights/{sourceId}/{docHash}` returns full content.
+
+```
+DELETE /api/insights/{sourceId}/{docHash}
+
+Response: 204 No Content
+```
+
+Manually curates a single crawled **news** document — e.g. a search result the relevance gate (`backend/python/crawler/news_crawler.py`) let through anyway, or one ingested before the gate existed. Deletes the S3 KB markdown object first, then the DynamoDB metadata item (order matters — see below), trying both the `shared/news/` and `shared/aws-docs/` key shapes when no `S3Key` is stored, mirroring the read path in `GetDocumentDetail`. Tech docs (`type === 'tech'`, stored under the synthetic `__tech__` source, which has no `CONFIG`/owner row) are NOT deletable through this route — `GetSource` 404s for them, and the frontend hides the delete button accordingly for now.
+
+**Authorization:** caller must be the source's owner (`CrawlerSource.OwnerID`, the user who first created the source via `AddSource`) or an admin (`cognito:groups` contains `admins`) — NOT merely a subscriber. `AddSource` lets any authenticated user self-subscribe to an existing source with no invite/approval step, so gating on subscription alone would make this destructive route trivially self-grantable by anyone. A source created before this field existed has `OwnerID == ""` and stays denied to every non-admin explicitly (not merely by an accidental string mismatch), indefinitely — there is no automated backfill (see `scripts/insights-backfill-owner.py`, report-only, and ADR-026 for why); an admin can set `ownerId` by hand if the real creator is known out of band. An empty caller ID is also explicitly rejected (401) so it can never accidentally match an unbackfilled `OwnerID == ""`. This route does NOT inherit `GetDocumentContent`'s open-read posture (insights are shared substrate by design for reads; a mutating route is not). A successful delete is logged with `userID`/`sourceID`/`docHash` as an audit trail.
+
+**Delete order:** S3 object(s) are deleted before the DynamoDB row. If S3 delete fails, metadata is untouched and the request is safely retryable; deleting DynamoDB first would risk the opposite outcome — metadata gone, `GetDocument` returns nil on retry, and the S3 object + KB vector become permanently unreachable via any API path.
+
+**Errors:**
+- `400 BAD_REQUEST` — missing/invalid `sourceId` or `docHash`
+- `401 UNAUTHORIZED` — no authenticated caller
+- `403 FORBIDDEN` — caller is not the source's owner and not an admin
+- `404 NOT_FOUND` — source or document doesn't exist (includes every tech doc, and any source without a `CONFIG` row)
+- `500 INTERNAL_ERROR` — S3 or DynamoDB delete failed; per the ordering above, a failure here always means DynamoDB metadata is still intact and the request can be retried
+
+**KB vector caveat:** deleting the S3 object does not immediately evict it from the Bedrock Knowledge Base's vector index — that only reconciles on an ingestion job. `InsightsHandler.DeleteDocument` triggers one itself, best-effort, right after a successful delete (same `KBService.SyncKB` as `POST /api/kb/sync`) — a failure there is logged but does not turn the delete response into an error, so a deleted doc can still surface in Q&A RAG results until that job completes, or if it failed, until the next daily crawl/manual sync. `scripts/insights-rescore.py` (batch re-score + purge for existing docs ingested before the relevance gate) triggers one ingestion job itself after a purge run.
+
+---
+
 ## Error Response Format
 
 ```json
