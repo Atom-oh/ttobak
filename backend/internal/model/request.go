@@ -117,6 +117,8 @@ type MeetingListItem struct {
 	Summary      string   `json:"summary,omitempty"` // First 200 chars
 	Participants []string `json:"participants,omitempty"`
 	Tags         []string `json:"tags,omitempty"`
+	Sentiment    string   `json:"sentiment,omitempty"`
+	Duration     int      `json:"duration,omitempty"`
 	IsShared     bool     `json:"isShared"`
 	SharedBy     *string  `json:"sharedBy,omitempty"`   // owner email if shared
 	Permission   *string  `json:"permission,omitempty"` // "read" | "edit" if shared
@@ -435,6 +437,8 @@ func ToMeetingListItem(m *Meeting, isShared bool, sharedBy *string, permission *
 		Summary:      summary,
 		Participants: m.Participants,
 		Tags:         m.Tags,
+		Sentiment:    m.Sentiment,
+		Duration:     m.Duration,
 		IsShared:     isShared,
 		SharedBy:     sharedBy,
 		Permission:   permission,

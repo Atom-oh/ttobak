@@ -11,13 +11,15 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/ttobak/backend/internal/duration"
 	"github.com/ttobak/backend/internal/speaker"
 )
 
 var partKeyPattern = regexp.MustCompile(`_part_(\d{3})\.json$`)
 
-// mergePartTranscripts downloads all part transcripts, refines each, offsets timestamps, and concatenates them
-func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCount int) (string, []TranscriptSegmentOut, error) {
+// mergePartTranscripts downloads all part transcripts, refines each, offsets timestamps, and concatenates them.
+// It also returns the total merged duration in seconds (the cumulative timestamp offset across all parts).
+func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCount int) (string, []TranscriptSegmentOut, float64, error) {
 	prefix := fmt.Sprintf("transcripts/%s_part_", meetingID)
 
 	result, err := s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
@@ -25,11 +27,11 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		Prefix: aws.String(prefix),
 	})
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to list part transcripts: %w", err)
+		return "", nil, 0, fmt.Errorf("failed to list part transcripts: %w", err)
 	}
 
 	if len(result.Contents) == 0 {
-		return "", nil, fmt.Errorf("no part transcripts found for meeting %s", meetingID)
+		return "", nil, 0, fmt.Errorf("no part transcripts found for meeting %s", meetingID)
 	}
 
 	type partFile struct {
@@ -59,7 +61,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	// are claimed once-only via `allPartsEmittedAt`, so a transient lag
 	// resolves on the next invocation.
 	if len(parts) != partCount {
-		return "", nil, fmt.Errorf(
+		return "", nil, 0, fmt.Errorf(
 			"part count mismatch for meeting %s: expected %d, got %d (S3 list lag or missing parts)",
 			meetingID, partCount, len(parts),
 		)
@@ -69,7 +71,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	// expected pattern.
 	for i, p := range parts {
 		if p.index != i {
-			return "", nil, fmt.Errorf(
+			return "", nil, 0, fmt.Errorf(
 				"part index gap for meeting %s: expected index %d, got %d",
 				meetingID, i, p.index,
 			)
@@ -86,7 +88,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 			// Fail fast: continuing would download/refine the rest of the
 			// parts only to abort at the end (the prior loop drained S3 +
 			// Bedrock budget on a doomed merge). The merge is all-or-nothing.
-			return "", nil, fmt.Errorf("part %d parse failed for meeting %s: %w", part.index, meetingID, parseErr)
+			return "", nil, 0, fmt.Errorf("part %d parse failed for meeting %s: %w", part.index, meetingID, parseErr)
 		}
 
 		if len(whisperSegments) > 0 && len(segments) == 0 {
@@ -132,23 +134,28 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		//      parts drift earlier)
 		//   3. last raw Whisper segment's End (covers RefineTranscript failure
 		//      AND missing duration metadata)
-		//   4. 0 (only when all sources are empty — part is effectively silent)
-		var partDuration float64
-		switch {
-		case audioDuration > 0:
-			partDuration = audioDuration
-		case len(segments) > 0:
-			partDuration = segments[len(segments)-1].EndTime
+		//   4. 0 (only when all sources are unusable — part is effectively silent)
+		var segmentsLastEnd, whisperSegmentsLastEnd float64
+		if len(segments) > 0 {
+			segmentsLastEnd = segments[len(segments)-1].EndTime
+		}
+		if len(whisperSegments) > 0 {
+			whisperSegmentsLastEnd = whisperSegments[len(whisperSegments)-1].End
+		}
+		partDuration, durationSource := duration.Resolve(audioDuration, segmentsLastEnd, whisperSegmentsLastEnd)
+		switch durationSource {
+		case duration.SourceSegmentEnd:
 			log.Printf(
 				"Part %d: whisper_metadata.duration_seconds missing; falling back to last segment EndTime=%.2fs (may drift)",
 				part.index, partDuration,
 			)
-		case len(whisperSegments) > 0:
-			partDuration = whisperSegments[len(whisperSegments)-1].End
+		case duration.SourceWhisperEnd:
 			log.Printf(
 				"Part %d had no refined segments and no duration; using raw Whisper end=%.2fs as duration",
 				part.index, partDuration,
 			)
+		case duration.SourceUnknown:
+			log.Printf("Part %d: no usable duration source; using 0 (may cause timestamp drift)", part.index)
 		}
 
 		// Offset segment timestamps and append to merged list
@@ -165,7 +172,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	}
 
 	if len(allTexts) == 0 {
-		return "", nil, fmt.Errorf("no valid transcripts found for meeting %s", meetingID)
+		return "", nil, 0, fmt.Errorf("no valid transcripts found for meeting %s", meetingID)
 	}
 
 	mergedText := strings.Join(allTexts, "\n\n")
@@ -173,7 +180,7 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 	log.Printf("Merged %d parts for meeting %s: %d chars, %d segments, total duration %.0fs",
 		len(parts), meetingID, len(mergedText), len(allSegments), cumulativeOffset)
 
-	return mergedText, allSegments, nil
+	return mergedText, allSegments, cumulativeOffset, nil
 }
 
 // buildTranscriptText reassembles transcript body text from segments, using

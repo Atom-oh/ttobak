@@ -35,6 +35,7 @@ type Meeting struct {
 	Participants       []string          `dynamodbav:"participants,omitempty"`
 	Tags               []string          `dynamodbav:"tags,omitempty"`
 	Sentiment          string            `dynamodbav:"sentiment,omitempty"`        // "positive", "neutral", "negative" — extracted by summarize Lambda
+	Duration           int               `dynamodbav:"duration,omitempty"`         // Total audio length in seconds, written by the summarize Lambda
 	Insights           string            `dynamodbav:"insights,omitempty"`         // JSON []MeetingInsight
 	LinkedMeetingIDs   []string          `dynamodbav:"linkedMeetingIds,omitempty"` // Chronologically ordered predecessor IDs
 	AccountID          string            `dynamodbav:"accountId,omitempty"`        // linked Account

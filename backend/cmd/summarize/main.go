@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/ttobak/backend/internal/duration"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
@@ -228,7 +230,7 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 
 	isNova := strings.Contains(key, "-nova.json")
 
-	transcript, segments, whisperSegments, _, err := downloadAndParseTranscript(ctx, bucket, key)
+	transcript, segments, whisperSegments, audioDuration, err := downloadAndParseTranscript(ctx, bucket, key)
 	if err != nil {
 		log.Printf("Failed to parse transcript: %v", err)
 		setMeetingError(ctx, meetingID)
@@ -256,7 +258,36 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 		}
 	}
 
-	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, isNova)
+	// Same fallback chain as the multi-part merge path (merge.go): the raw
+	// audioDuration comes only from whisper_metadata.duration_seconds, which is
+	// absent for AWS-Transcribe-fallback, Nova Sonic and pre-ADR-019
+	// transcripts -- passing it straight through silently persisted 0 for all
+	// of those (updateMeetingTranscript drops durationSeconds <= 0).
+	// Computed AFTER the refinement block so it sees the reassigned `segments`.
+	var segmentsLastEnd, whisperSegmentsLastEnd float64
+	if len(segments) > 0 {
+		segmentsLastEnd = segments[len(segments)-1].EndTime
+	}
+	if len(whisperSegments) > 0 {
+		whisperSegmentsLastEnd = whisperSegments[len(whisperSegments)-1].End
+	}
+	resolvedDuration, durationSource := duration.Resolve(audioDuration, segmentsLastEnd, whisperSegmentsLastEnd)
+	switch durationSource {
+	case duration.SourceSegmentEnd:
+		log.Printf(
+			"Meeting %s: whisper_metadata.duration_seconds missing; falling back to last segment EndTime=%.2fs (may drift)",
+			meetingID, resolvedDuration,
+		)
+	case duration.SourceWhisperEnd:
+		log.Printf(
+			"Meeting %s had no refined segments and no duration; using raw Whisper end=%.2fs as duration",
+			meetingID, resolvedDuration,
+		)
+	case duration.SourceUnknown:
+		log.Printf("Meeting %s: no usable duration source; using 0 (duration will not be persisted)", meetingID)
+	}
+
+	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, isNova, resolvedDuration)
 	if err != nil {
 		log.Printf("Failed to update meeting with transcript: %v", err)
 		setMeetingError(ctx, meetingID)
@@ -389,14 +420,14 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		return nil
 	}
 
-	transcript, segments, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)
+	transcript, segments, totalDuration, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)
 	if err != nil {
 		log.Printf("Failed to merge transcripts for meeting %s: %v", meetingID, err)
 		setMeetingError(ctx, meetingID)
 		return nil
 	}
 
-	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, false)
+	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, false, totalDuration)
 	if err != nil {
 		log.Printf("Failed to save merged transcript for meeting %s: %v", meetingID, err)
 		setMeetingError(ctx, meetingID)
@@ -887,7 +918,7 @@ func extractPartInfo(key string) (meetingID string, partIndex int, ok bool) {
 	return meetingID, partIndex, true
 }
 
-func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, segments []TranscriptSegmentOut, isNova bool) error {
+func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, segments []TranscriptSegmentOut, isNova bool, durationSeconds float64) error {
 	meeting, err := repo.GetMeetingByID(ctx, meetingID)
 	if err != nil {
 		return err
@@ -912,6 +943,13 @@ func updateMeetingTranscript(ctx context.Context, meetingID, transcript string, 
 			fields["transcriptSegments"] = string(segJSON)
 			log.Printf("Saved %d speaker segments for meeting %s", len(segments), meetingID)
 		}
+	}
+
+	// Single choke point both transcript paths (single + multi-part merge) pass
+	// through, which is why duration is persisted here rather than at call sites.
+	// The > 0 guard ensures a zero never overwrites a previously-stored good value.
+	if durationSeconds > 0 {
+		fields["duration"] = int(math.Round(durationSeconds))
 	}
 
 	return repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, fields)
