@@ -1156,6 +1156,35 @@ Response: 200 OK
 }
 ```
 
+#### Agentic Q&A (Python QA Lambda)
+
+`POST /api/qa/ask`, `POST /api/qa/meeting/{meetingId}`, WebSocket `ask_live` — Bedrock Converse 에이전틱 루프.
+사용 가능 도구: `search_knowledge_base`, `search_aws_docs`, `search_transcript`, `get_aws_recommendation`,
+`search_web`(us-east-1 AgentCore Web Search Gateway를 SigV4 크로스리전 호출 — `WEB_SEARCH_GATEWAY_URL` 미설정 시
+"web search not configured"로 우아하게 비활성), `list_meetings`, `get_meeting_detail`, `start_research`, account 도구들.
+스트리밍(`ask_live`) 경로도 비스트리밍과 동일하게 실시간 트랜스크립트 tail(2000자)을 시스템 프롬프트에 포함한다.
+대화 연속성: `sessionId`별 히스토리를 DynamoDB에 저장(7일 TTL), 같은 세션의 후속 질문은 이전 문답 맥락을 이어받는다.
+
+#### Detect Questions (실시간 질문 감지 + 선제 검색 플래그)
+
+```
+POST /api/qa/detect-questions
+Request:
+{
+  "transcript": "최근 대화 내용...",
+  "summary": "현재 미팅 요약 (선택)",
+  "previousQuestions": ["이미 제안된 질문"]
+}
+
+Response: 200 OK
+{
+  "questions": ["EKS 1.31 지원 종료일은?", "어느 팀이 마이그레이션을 맡을까요?"],
+  "proactive": ["EKS 1.31 지원 종료일은?"]   // questions의 부분집합 — 검색으로 즉시 사실 확인
+                                              // 가능한 질문. 프론트(LiveQAPanel)가 배치당 1건을
+                                              // 자동 발화해 답을 미리 띄운다 (선제 검색)
+}
+```
+
 ---
 
 ### Knowledge Base

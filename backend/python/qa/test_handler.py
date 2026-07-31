@@ -412,5 +412,82 @@ class TestKBCacheAccessSignature(unittest.TestCase):
         self.assertEqual(mock_bedrock.retrieve.call_count, 2, "revoked access must bypass the stale KB cache entry")
 
 
+class TestParseDetectedQuestions(unittest.TestCase):
+    """The detect-questions model output must parse in BOTH shapes: the
+    current [{"q", "search"}] object format and the legacy plain-string
+    array (older prompt, or a model that ignores the schema) — and the
+    proactive list must always be a subset of the returned questions."""
+
+    def test_object_format_splits_proactive(self):
+        raw = json.dumps([
+            {'q': 'EKS 1.31 지원 종료일은?', 'search': True},
+            {'q': '어느 팀이 마이그레이션을 맡을까요?', 'search': False},
+        ], ensure_ascii=False)
+        questions, proactive = handler.parse_detected_questions(raw)
+        self.assertEqual(len(questions), 2)
+        self.assertEqual(proactive, ['EKS 1.31 지원 종료일은?'])
+
+    def test_legacy_string_format_has_no_proactive(self):
+        questions, proactive = handler.parse_detected_questions('["질문1", "질문2"]')
+        self.assertEqual(questions, ['질문1', '질문2'])
+        self.assertEqual(proactive, [])
+
+    def test_mixed_and_malformed_items_are_filtered(self):
+        raw = json.dumps(['질문1', {'q': '질문2', 'search': True}, {'search': True}, 42, {'q': '   '}], ensure_ascii=False)
+        questions, proactive = handler.parse_detected_questions(raw)
+        self.assertEqual(questions, ['질문1', '질문2'])
+        self.assertEqual(proactive, ['질문2'])
+
+    def test_bad_json_and_non_list_return_empty(self):
+        self.assertEqual(handler.parse_detected_questions('not json'), ([], []))
+        self.assertEqual(handler.parse_detected_questions('{"q": "x"}'), ([], []))
+
+    def test_caps_at_five_and_proactive_stays_subset(self):
+        items = [{'q': f'질문{i}', 'search': True} for i in range(8)]
+        questions, proactive = handler.parse_detected_questions(json.dumps(items, ensure_ascii=False))
+        self.assertEqual(len(questions), 5)
+        self.assertEqual(proactive, questions)
+
+
+class TestWebSearchTool(unittest.TestCase):
+    """format_web_results must keep a transport/config failure distinguishable
+    from a genuine zero-hit search, and execute_tool must route search_web."""
+
+    def test_error_is_not_no_results(self):
+        import web_search
+        text, sources = web_search.format_web_results([], 'gateway error')
+        self.assertIn('웹 검색을 수행하지 못했습니다', text)
+        self.assertEqual(sources, [])
+        text_empty, _ = web_search.format_web_results([], None)
+        self.assertIn('관련 결과를 찾지 못했습니다', text_empty)
+        self.assertNotEqual(text, text_empty)
+
+    def test_results_format_and_sources(self):
+        import web_search
+        text, sources = web_search.format_web_results([
+            {'title': 'EKS 1.31 EOL', 'url': 'https://example.com/a', 'text': 'snippet', 'publishedDate': '2026-07-01T00:00:00Z'},
+        ], None)
+        self.assertIn('[EKS 1.31 EOL](https://example.com/a)', text)
+        self.assertIn('2026-07-01', text)
+        self.assertEqual(sources, ['https://example.com/a'])
+
+    def test_execute_tool_routes_search_web(self):
+        import tools
+        with mock.patch.object(tools, 'gateway_web_search', return_value=([
+            {'title': 'T', 'url': 'https://example.com/x', 'text': 's'},
+        ], None)) as mocked:
+            text, sources = tools.execute_tool('search_web', {'query': 'q', 'maxResults': 3}, {})
+        mocked.assert_called_once_with('q', 3)
+        self.assertIn('https://example.com/x', text)
+        self.assertEqual(sources, ['https://example.com/x'])
+
+    def test_unconfigured_gateway_returns_error_not_empty(self):
+        import web_search
+        with mock.patch.object(web_search, 'WEB_SEARCH_GATEWAY_URL', ''):
+            results, error = web_search.gateway_web_search('anything')
+        self.assertEqual(results, [])
+        self.assertEqual(error, 'web search not configured')
+
+
 if __name__ == '__main__':
     unittest.main()

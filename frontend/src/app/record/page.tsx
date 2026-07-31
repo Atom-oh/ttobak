@@ -1087,6 +1087,7 @@ function RecordPageInner() {
                 meetingId={postRecording.serverMeetingId || undefined}
                 onDetectedQuestionsChange={setDetectedCount}
                 serverDetectedQuestions={summary.detectedQuestions}
+                proactiveQuestions={summary.proactiveQuestions}
                 onAskedQuestion={summary.addAskedQuestion}
                 onSaveToNotes={handleSaveQAToNotes}
               />
@@ -1148,6 +1149,7 @@ function RecordPageInner() {
                     meetingId={postRecording.serverMeetingId || undefined}
                     onDetectedQuestionsChange={setDetectedCount}
                     serverDetectedQuestions={summary.detectedQuestions}
+                    proactiveQuestions={summary.proactiveQuestions}
                     onAskedQuestion={summary.addAskedQuestion}
                     onSaveToNotes={handleSaveQAToNotes}
                   />

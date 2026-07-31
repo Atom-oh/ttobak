@@ -10,6 +10,8 @@ interface LiveQAPanelProps {
   meetingId?: string;
   onDetectedQuestionsChange?: (count: number) => void;
   serverDetectedQuestions?: string[];
+  /** Detected questions flagged as search-answerable — the panel auto-fires the first new one */
+  proactiveQuestions?: string[];
   onAskedQuestion?: (question: string) => void;
   /** Save a Q&A entry into the meeting notes */
   onSaveToNotes?: (question: string, answer: string) => void;
@@ -26,6 +28,8 @@ interface QAEntry {
   isStreaming?: boolean;
   /** AI-suggested follow-up questions for this answer */
   followUps?: string[];
+  /** Auto-fired from a detected question (not typed by the user) */
+  isProactive?: boolean;
 }
 
 const suggestedQuestions = [
@@ -35,6 +39,14 @@ const suggestedQuestions = [
 ];
 
 const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
+
+// Proactive questions already auto-fired, shared across ALL LiveQAPanel
+// instances: the desktop aside and the mobile bottom sheet are both MOUNTED
+// during recording (the desktop one is only CSS-hidden on mobile), so
+// instance-local dedup alone would double-fire every proactive search.
+// Content-keyed and never cleared — a question that already got a proactive
+// answer once shouldn't burn a second Bedrock round in another panel.
+const claimedProactiveQuestions = new Set<string>();
 
 /** Tail-truncate to at most maxBytes of UTF-8, without splitting a multi-byte char. */
 function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): string | undefined {
@@ -46,7 +58,7 @@ function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): st
   return new TextDecoder().decode(bytes.slice(start));
 }
 
-export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, onAskedQuestion, onSaveToNotes }: LiveQAPanelProps) {
+export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, proactiveQuestions, onAskedQuestion, onSaveToNotes }: LiveQAPanelProps) {
   const [question, setQuestion] = useState('');
   const [qaHistory, setQaHistory] = useState<QAEntry[]>([]);
   const [isAsking, setIsAsking] = useState(false);
@@ -262,7 +274,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     };
   }, []);
 
-  const handleAsk = async (q: string) => {
+  const handleAsk = async (q: string, opts?: { proactive?: boolean }) => {
     if (!q.trim() || isAsking) return;
 
     setQuestion('');
@@ -282,6 +294,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       question: q.trim(),
       answer: '',
       isStreaming: true,
+      isProactive: opts?.proactive,
     };
     setQaHistory((prev) => [...prev, newEntry]);
     activeEntryIdRef.current = entryId;
@@ -363,6 +376,39 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     handleAsk(question);
   };
 
+  // Proactive search: when the question detector flags a question as
+  // search-answerable, fire it automatically so the answer is already on
+  // screen by the time someone would have typed it. Guards keep this from
+  // becoming spam: at most ONE auto-ask per detection batch (a batch is
+  // consumed the moment it fires — the rest stay as tappable suggestion
+  // chips), each question auto-fires at most once ever ACROSS panel
+  // instances (claimedProactiveQuestions, module-level — see its comment),
+  // only the VISIBLE panel fires (offsetParent is null under the `hidden`
+  // breakpoint class, so on mobile the CSS-hidden desktop aside skips and
+  // the bottom sheet claims the batch when it opens), and nothing fires
+  // while another answer is in flight or while the user is composing their
+  // own question (an auto-ask would steal the single active-entry streaming
+  // slot). A batch arriving mid-answer is held, not dropped: it stays
+  // unconsumed until an idle render fires it.
+  const consumedProactiveBatchRef = useRef<string[] | undefined>(undefined);
+  useEffect(() => {
+    if (!proactiveQuestions || proactiveQuestions.length === 0) return;
+    if (consumedProactiveBatchRef.current === proactiveQuestions) return;
+    if (isAsking || question.trim()) return;
+    if (!containerRef.current || containerRef.current.offsetParent === null) return;
+    const next = proactiveQuestions.find(
+      (q) => q.trim() && !claimedProactiveQuestions.has(q) && !askedQuestions.includes(q),
+    );
+    consumedProactiveBatchRef.current = proactiveQuestions;
+    if (!next) return;
+    claimedProactiveQuestions.add(next);
+    handleAsk(next, { proactive: true });
+    // handleAsk is recreated per render but behaviorally identical; listing
+    // it as a dep would add nothing (the consumed-batch ref already prevents
+    // refires) while making the effect run on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proactiveQuestions, isAsking, question, askedQuestions]);
+
   return (
     <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
       {/* Header */}
@@ -395,6 +441,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
               usedDocs={entry.usedDocs}
               toolsUsed={entry.toolsUsed}
               isStreaming={entry.isStreaming}
+              isProactive={entry.isProactive}
               onSaveToNotes={
                 onSaveToNotes
                   ? () => {

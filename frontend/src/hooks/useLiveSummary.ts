@@ -12,6 +12,9 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [lastSummaryWordCount, setLastSummaryWordCount] = useState(0);
   const [detectedQuestions, setDetectedQuestions] = useState<string[]>([]);
+  // Subset of detectedQuestions the detector flagged as immediately
+  // answerable via search — LiveQAPanel auto-fires the first new one.
+  const [proactiveQuestions, setProactiveQuestions] = useState<string[]>([]);
 
   const lastSummaryWordCountRef = useRef(0);
   const summaryIntervalRef = useRef(summaryInterval);
@@ -54,6 +57,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     setIsGenerating(false);
     setLastSummaryWordCount(0);
     setDetectedQuestions([]);
+    setProactiveQuestions([]);
     lastSummaryWordCountRef.current = 0;
     liveSummaryRef.current = '';
     askedQuestionsRef.current = [];
@@ -135,6 +139,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     )
       .then((res) => {
         if (res.questions.length > 0) setDetectedQuestions(res.questions);
+        if (res.proactive && res.proactive.length > 0) setProactiveQuestions(res.proactive);
       })
       .catch(() => {}); // silent fail
 
@@ -152,6 +157,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     isGenerating,
     lastSummaryWordCount,
     detectedQuestions,
+    proactiveQuestions,
     askedQuestionsRef,
     checkThreshold,
     addAskedQuestion,

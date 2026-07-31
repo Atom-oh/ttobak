@@ -8,6 +8,7 @@ const TOOL_LABELS: Record<string, { label: string; color: string }> = {
   search_aws_docs: { label: 'AWS Docs', color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
   search_transcript: { label: '회의록 검색', color: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400' },
   get_aws_recommendation: { label: 'AWS 추천', color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
+  search_web: { label: '웹 검색', color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400' },
 };
 
 interface QAChatMessageProps {
@@ -25,16 +26,24 @@ interface QAChatMessageProps {
   followUps?: string[];
   onAskFollowUp?: (question: string) => void;
   followUpsDisabled?: boolean;
+  /** Auto-fired proactive search (detected from the conversation, not typed by the user) */
+  isProactive?: boolean;
 }
 
-export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, toolsUsed, isStreaming, onSaveToNotes, isSavedToNotes, followUps, onAskFollowUp, followUpsDisabled }: QAChatMessageProps) {
+export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, toolsUsed, isStreaming, onSaveToNotes, isSavedToNotes, followUps, onAskFollowUp, followUpsDisabled, isProactive }: QAChatMessageProps) {
   const isLoading = !answer && !isStreaming;
 
   return (
     <div className="space-y-3 animate-fade-in">
       {/* Question bubble - right aligned */}
       <div className="flex justify-end">
-        <div className="bg-primary/10 rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%]">
+        <div className={`rounded-2xl rounded-tr-sm px-4 py-2.5 max-w-[85%] ${isProactive ? 'bg-sky-50 dark:bg-sky-900/20 border border-sky-200/60 dark:border-sky-800/60' : 'bg-primary/10'}`}>
+          {isProactive && (
+            <span className="flex items-center gap-1 text-[10px] font-semibold text-sky-600 dark:text-sky-400 uppercase mb-0.5">
+              <span className="material-symbols-outlined text-xs">travel_explore</span>
+              선제 검색 · 대화에서 감지된 질문
+            </span>
+          )}
           <p className="text-sm text-slate-900 dark:text-gray-100">{question}</p>
         </div>
       </div>

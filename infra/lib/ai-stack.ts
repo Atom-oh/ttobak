@@ -531,6 +531,17 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // QA Lambda's search_web tool invokes the us-east-1 Web Search Gateway
+    // (SigV4, cross-region) — same grant shape as the news crawler above.
+    this.qaRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'InvokeWebSearchGateway',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock-agentcore:InvokeGateway'],
+        resources: [props.webSearchGatewayArn],
+      })
+    );
+
     // QA role also needs ManageConnections for streaming answers back to WebSocket
     this.qaRole.addToPolicy(
       new iam.PolicyStatement({

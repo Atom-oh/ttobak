@@ -46,6 +46,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
   originVerifySecret?: string;
+  /** AgentCore Web Search Gateway MCP endpoint (us-east-1) for the QA Lambda's search_web tool */
+  webSearchGatewayUrl?: string;
 }
 
 export class GatewayStack extends cdk.Stack {
@@ -260,6 +262,11 @@ export class GatewayStack extends cdk.Stack {
         KB_CACHE_TTL_SECONDS: '600',
         SHARED_MEETINGS_CACHE_TTL_SECONDS: '300',
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
+        // search_web tool: us-east-1 AgentCore Web Search Gateway, called
+        // cross-region with SigV4. Empty URL → tool degrades gracefully
+        // ("web search not configured"), never throws at import.
+        WEB_SEARCH_GATEWAY_URL: props.webSearchGatewayUrl || '',
+        WEB_SEARCH_GATEWAY_REGION: 'us-east-1',
       },
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,
