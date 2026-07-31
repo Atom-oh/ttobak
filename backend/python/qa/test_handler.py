@@ -515,6 +515,7 @@ class TestWebSearchTool(unittest.TestCase):
                 'content': [{'type': 'text', 'text': json.dumps({'results': [
                     {'title': 'ok', 'url': 'https://example.com/a', 'text': 's'},
                     {'title': 'js', 'url': 'javascript:alert(1)', 'text': 's'},
+                    {'title': 'plain-http', 'url': 'http://example.com/b', 'text': 's'},
                     {'title': 'no-url', 'text': 's'},
                 ]})}],
             },
@@ -552,6 +553,10 @@ class TestWebSearchTool(unittest.TestCase):
         self.assertEqual(redacted['maxResults'], 3)
         untouched = web_search.redact_tool_input_for_log('list_meetings', {'keyword': '고객사'})
         self.assertEqual(untouched, {'keyword': '고객사'})
+        # A schema-defying non-string query must be fully masked, not passed
+        # through as-is (it could embed the conversation text in a list/dict).
+        weird = web_search.redact_tool_input_for_log('search_web', {'query': ['민감', '키워드']})
+        self.assertEqual(weird['query'], '<redacted non-string>')
 
     def test_sigv4_post_refuses_non_https_gateway(self):
         import web_search

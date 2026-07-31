@@ -87,26 +87,37 @@ def _sigv4_post(body_json):
         return _extract_sse_json(resp.read(2_000_000).decode('utf-8', errors='replace'))
 
 
+# Per-process random HMAC key: a bare unsalted sha256 of a low-entropy
+# natural-language query is dictionary-attackable by anyone with log access
+# ("does this log line match candidate query X?"). Correlation is only ever
+# needed within one debugging session anyway, so a key that rotates per cold
+# start costs nothing.
+_LOG_HMAC_KEY = os.urandom(16)
+
+
 def _query_ref(query):
     """Opaque log reference for a search query. Queries derive from meeting
     conversation (customer names, project codenames, pricing) — never log
-    them in plaintext to CloudWatch; a hash prefix + length is enough to
-    correlate a log line with a specific request during debugging."""
-    digest = hashlib.sha256(query.encode('utf-8')).hexdigest()[:12]
+    them in plaintext to CloudWatch; a keyed-hash prefix + length is enough
+    to correlate log lines of the same request during debugging."""
+    import hmac
+    digest = hmac.new(_LOG_HMAC_KEY, query.encode('utf-8'), hashlib.sha256).hexdigest()[:12]
     return f'q#{digest}/len={len(query)}'
 
 
 def redact_tool_input_for_log(tool_name, tool_input):
     """Return a log-safe copy of a tool input: search_web's query is replaced
     with its _query_ref (the agentic loop logs every tool call's input, and a
-    plaintext query there would defeat this module's own hashed logging).
-    Other tools' inputs pass through unchanged — they carry meeting/account
-    identifiers, not free conversation text."""
+    plaintext query there would defeat this module's own hashed logging). A
+    non-string query (model ignoring the schema) is fully masked rather than
+    passed through. Other tools' inputs pass through unchanged — they carry
+    meeting/account identifiers, not free conversation text."""
     if tool_name != 'search_web' or not isinstance(tool_input, dict):
         return tool_input
     redacted = dict(tool_input)
-    if isinstance(redacted.get('query'), str):
-        redacted['query'] = _query_ref(redacted['query'])
+    if 'query' in redacted:
+        q = redacted['query']
+        redacted['query'] = _query_ref(q) if isinstance(q, str) else '<redacted non-string>'
     return redacted
 
 
@@ -132,7 +143,10 @@ def gateway_web_search(query, max_results=5):
             'arguments': {'query': query[:200], 'maxResults': max_results},
         },
     })
-    qref = _query_ref(query)
+    # Reference the TRANSMITTED string (the [:200] truncation above), not the
+    # raw input — a >200-char query would otherwise log a ref that matches
+    # nothing that actually left the process.
+    qref = _query_ref(query[:200])
     try:
         raw_response = _sigv4_post(body)
         parsed = json.loads(raw_response)
@@ -157,12 +171,14 @@ def gateway_web_search(query, max_results=5):
             return [], 'malformed gateway response'
         inner = json.loads(text_block['text'])
         results = inner.get('results', [])
-        # http(s) scheme allowlist: search results are open-web data headed
-        # for markdown links — drop javascript:/data:/file: style URLs here
-        # rather than trusting every downstream renderer to.
+        # https-only allowlist: search results are open-web data headed for
+        # markdown links — drop javascript:/data:/file: style URLs here
+        # rather than trusting every downstream renderer to, and skip plain
+        # http too (the gateway itself is https-enforced; an http result is
+        # both rare and a downgrade for whoever clicks the source link).
         return [
             r for r in results
-            if isinstance(r.get('url'), str) and r['url'].startswith(('https://', 'http://'))
+            if isinstance(r.get('url'), str) and r['url'].startswith('https://')
         ][:max_results], None
     except Exception as e:
         # Full detail to CloudWatch only; the model-facing tool result gets a

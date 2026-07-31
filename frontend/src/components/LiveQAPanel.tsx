@@ -53,11 +53,22 @@ const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
 // consume a question that never got an answer.
 const claimedProactiveQuestions = new Set<string>();
 
-/** Clear proactive-claim state for a new recording session. Called from the
+// Batch-consumption marker and in-flight flag live at MODULE scope, next to
+// the claim set, for the same reason the claim set does: both panel
+// instances stay mounted, so instance-local refs would let instance B
+// re-consume a batch instance A already fired from (breaking the "one
+// auto-ask per batch" cap with a possibly stale question) or fire while A's
+// proactive answer is still streaming.
+let consumedProactiveBatch: string[] | undefined;
+let proactiveAskInFlight = false;
+
+/** Clear proactive state for a new recording session. Called from the
  * record page's recording-start handler (alongside useLiveSummary.reset())
  * so the previous recording's fired questions can't shadow this one's. */
 export function resetProactiveClaims() {
   claimedProactiveQuestions.clear();
+  consumedProactiveBatch = undefined;
+  proactiveAskInFlight = false;
 }
 
 // Proactive-search opt-in (default OFF — auto-firing sends conversation-
@@ -126,6 +137,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     if (claimed) {
       claimedProactiveQuestions.delete(claimed);
       proactiveClaimByEntryRef.current.delete(entryId);
+      proactiveAskInFlight = false;
     }
   }, []);
   // A proactive question is recorded as "asked" only on SUCCESS: recording
@@ -138,6 +150,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     const q = proactiveClaimByEntryRef.current.get(entryId);
     if (!q) return;
     proactiveClaimByEntryRef.current.delete(entryId);
+    proactiveAskInFlight = false;
     setAskedQuestions(prev => (prev.includes(q) ? prev : [...prev, q]));
     onAskedQuestion?.(q);
   }, [onAskedQuestion]);
@@ -343,15 +356,23 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     }
   }, [handleStreamMessage]);
 
-  // Cleanup WebSocket + watchdog on unmount
+  // Cleanup WebSocket + watchdog on unmount. Pending proactive claims are
+  // rolled back too: the mobile sheet unmounts on close (conditional
+  // render), and a claim whose answer will never arrive (its socket is
+  // being dropped right here) must not block the question — or the
+  // module-level in-flight flag — for the rest of the session.
   useEffect(() => {
+    const pendingClaims = proactiveClaimByEntryRef.current;
     return () => {
       wsRef.current?.disconnect();
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
+      pendingClaims.forEach((q) => claimedProactiveQuestions.delete(q));
+      if (pendingClaims.size > 0) proactiveAskInFlight = false;
+      pendingClaims.clear();
     };
   }, []);
 
-  const handleAsk = async (q: string, opts?: { proactive?: boolean }) => {
+  const handleAsk = useCallback(async (q: string, opts?: { proactive?: boolean }) => {
     if (!q.trim() || isAsking) return;
 
     setQuestion('');
@@ -390,6 +411,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     if (opts?.proactive) {
       claimedProactiveQuestions.add(q.trim());
       proactiveClaimByEntryRef.current.set(entryId, q.trim());
+      proactiveAskInFlight = true;
     }
 
     // Try WebSocket streaming first
@@ -465,7 +487,11 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       activeEntryIdRef.current = null;
       inputRef.current?.focus();
     }
-  };
+  }, [
+    isAsking, onAskedQuestion, onDetectedQuestionsChange, ensureWebSocket,
+    transcriptContext, meetingId, sessionId, armWatchdog,
+    rollbackProactiveClaim, recordProactiveAsked,
+  ]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -481,7 +507,14 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   const [isPanelVisible, setIsPanelVisible] = useState(false);
   useEffect(() => {
     const el = containerRef.current;
-    if (!el || typeof IntersectionObserver === 'undefined') return;
+    if (!el) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      // No observer support → fail OPEN (treat as visible): the alternative
+      // silently disables proactive search forever on such browsers, and
+      // the module-level claim/in-flight guards still bound double-firing.
+      setIsPanelVisible(true);
+      return;
+    }
     const observer = new IntersectionObserver((entries) => {
       setIsPanelVisible(entries[entries.length - 1]?.isIntersecting ?? false);
     });
@@ -505,27 +538,27 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   // while another answer is in flight or while the user is composing their
   // own question (an auto-ask would steal the single active-entry streaming
   // slot). A batch arriving while blocked is held, not dropped: it stays
-  // unconsumed until an eligible render fires it.
-  const consumedProactiveBatchRef = useRef<string[] | undefined>(undefined);
+  // unconsumed until an eligible render fires it. The consumed marker and
+  // the proactive in-flight flag are MODULE-level (see their declaration):
+  // an instance-local ref would let the OTHER mounted panel instance
+  // re-consume the same batch — a second, possibly stale auto-fire.
   useEffect(() => {
     if (!proactiveSearchEnabled) return;
     if (!proactiveQuestions || proactiveQuestions.length === 0) return;
-    if (consumedProactiveBatchRef.current === proactiveQuestions) return;
-    if (isAsking || question.trim() || !isPanelVisible) return;
+    if (consumedProactiveBatch === proactiveQuestions) return;
+    if (proactiveAskInFlight || isAsking || question.trim() || !isPanelVisible) return;
     const next = proactiveQuestions.find(
       (q) =>
         q.trim() &&
         !claimedProactiveQuestions.has(q.trim()) &&
-        !askedQuestions.includes(q),
+        !askedQuestions.includes(q.trim()),
     );
-    consumedProactiveBatchRef.current = proactiveQuestions;
+    consumedProactiveBatch = proactiveQuestions;
     if (!next) return;
     handleAsk(next, { proactive: true });
-    // handleAsk is recreated per render but behaviorally identical; listing
-    // it as a dep would add nothing (the consumed-batch ref already prevents
-    // refires) while making the effect run on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proactiveSearchEnabled, proactiveQuestions, isAsking, question, askedQuestions, isPanelVisible]);
+    // handleAsk identity changes are harmless as a dep: the module-level
+    // consumed-batch marker prevents a re-run from refiring the same batch.
+  }, [proactiveSearchEnabled, proactiveQuestions, isAsking, question, askedQuestions, isPanelVisible, handleAsk]);
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">

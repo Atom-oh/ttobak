@@ -393,14 +393,17 @@ func buildAttachmentContext(attachments []model.Attachment) string {
 		// Same done-gate for image analyses as for documents and the
 		// appended link section: process-image only writes ProcessedContent
 		// together with status=done, but an inconsistent row must not get
-		// cited in the note body while missing from the link list.
-		if att.ProcessedContent != "" && att.Status == model.AttachStatusDone {
+		// cited in the note body while missing from the link list. Document
+		// rows are excluded from this branch by Type: if document content
+		// extraction ever populates ProcessedContent, it must not be
+		// presented under an image label.
+		if att.ProcessedContent != "" && att.Status == model.AttachStatusDone && att.Type != model.AttachTypeDocument {
 			label := "첨부 이미지"
 			if att.Type == model.AttachTypeDiagram {
 				label = "첨부 다이어그램"
 				hasDiagram = true
 			}
-			analyses.WriteString(fmt.Sprintf("\n### %s: %s\n%s\n", label, att.FileName, att.ProcessedContent))
+			analyses.WriteString(fmt.Sprintf("\n### %s: %s\n%s\n", label, sanitizeMarkdownText(att.FileName), att.ProcessedContent))
 			continue
 		}
 		if att.Type == model.AttachTypeDocument && att.FileName != "" && att.Status == model.AttachStatusDone && !seenDocs[att.FileName] {
@@ -425,7 +428,7 @@ func buildAttachmentContext(attachments []model.Attachment) string {
 		out.WriteString("이 회의에는 다음 문서 파일이 첨부되어 있습니다 (본문 내용은 추출되지 않았으므로 내용을 추측하지 말 것). ")
 		out.WriteString("회의에서 이 자료가 언급된 맥락이 있으면 해당 파일명을 참고 자료로 자연스럽게 언급하세요:\n")
 		for _, name := range docNames {
-			out.WriteString(fmt.Sprintf("- %s\n", name))
+			out.WriteString(fmt.Sprintf("- %s\n", sanitizeMarkdownText(name)))
 		}
 	}
 	return out.String()
@@ -551,7 +554,10 @@ ADR-013 — 트랜스크립트 딥 링크:
 	const attachmentSentinel = "<!-- ttobak:attachments -->"
 	if len(attachments) > 0 && !strings.Contains(content, attachmentSentinel) {
 		var imgSection, docSection strings.Builder
-		seenDocLinks := make(map[string]bool) // mirror buildAttachmentContext's filename dedup
+		// Dedup by AttachmentID, not FileName: two DIFFERENT documents that
+		// happen to share a name must both keep their links (each resolves
+		// to its own object); genuinely duplicated rows share the ID.
+		seenDocLinks := make(map[string]bool)
 		for _, att := range attachments {
 			if att.Status != model.AttachStatusDone {
 				continue
@@ -562,8 +568,8 @@ ADR-013 — 트랜스크립트 딥 링크:
 					"\n### %s\n![%s](attachment://%s)\n",
 					safeName, safeName, att.AttachmentID,
 				))
-			} else if att.Type == model.AttachTypeDocument && att.FileName != "" && !seenDocLinks[att.FileName] {
-				seenDocLinks[att.FileName] = true
+			} else if att.Type == model.AttachTypeDocument && att.FileName != "" && !seenDocLinks[att.AttachmentID] {
+				seenDocLinks[att.AttachmentID] = true
 				docSection.WriteString(fmt.Sprintf(
 					"- [%s](attachment://%s)\n", safeName, att.AttachmentID,
 				))

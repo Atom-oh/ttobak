@@ -465,6 +465,17 @@ Layout:
 </div>
 ```
 
+**선제 검색 (proactive search, LiveQAPanel — 녹음 중 라이브 패널 전용)**
+
+- 헤더 우측에 "선제 검색 ON/OFF" 토글 칩: `travel_explore` 아이콘 + pill 형태.
+  ON은 sky 계열(`bg-sky-50 border-sky-300 text-sky-600`, 다크 `bg-sky-900/20 border-sky-700 text-sky-400`),
+  OFF는 slate 계열로 비활성 톤. **기본 OFF** — 대화 파생 검색어가 외부 웹 검색으로 전송되므로 명시적
+  opt-in(툴팁으로 고지). 상태는 localStorage `ttobak.proactiveSearchEnabled`에 저장.
+- 자동 발화된 질문 버블은 일반 질문과 구분: sky 배경(`bg-sky-50 dark:bg-sky-900/20` + sky 보더)에
+  버블 상단 `travel_explore` 아이콘 + "선제 검색 · 대화에서 감지된 질문" 캡션(`text-[10px]` uppercase).
+- 답변의 도구 배지에 `search_web` → "웹 검색"(sky 계열) 추가 — 기존 KB 검색(emerald)/AWS Docs(blue)/
+  회의록 검색(violet)/AWS 추천(amber)과 같은 배지 시스템.
+
 ### 2.11 KBFileList Component
 
 Knowledge Base 파일 업로드 및 목록 관리 컴포넌트.

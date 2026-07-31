@@ -105,7 +105,8 @@ def _extract_sse_json(text: str) -> str:
     leading notification frame doesn't get mistaken for the answer; falls
     back to the last frame.
 
-    Kept in sync with backend/python/crawler/news_crawler.py's copy."""
+    Kept in sync with the copies in backend/python/crawler/news_crawler.py
+    and backend/python/qa/web_search.py."""
     if text.lstrip().startswith("{"):
         return text
     frames = []
@@ -186,7 +187,11 @@ def _sigv4_post(body_json: str) -> str:
     response body as a JSON string, unwrapping an SSE ("data: ...") frame if
     the gateway responds that way instead of plain JSON. Raises on missing
     config or transport/HTTP failure — callers must not treat a config error
-    the same as a normal "no results" response."""
+    the same as a normal "no results" response.
+
+    Duplicated in backend/python/crawler/news_crawler.py and
+    backend/python/qa/web_search.py (separate deploy artifacts). Keep all
+    three copies in sync if this changes."""
     if not WEB_SEARCH_GATEWAY_URL:
         raise RuntimeError("WEB_SEARCH_GATEWAY_URL is not set")
     session = botocore.session.get_session()
