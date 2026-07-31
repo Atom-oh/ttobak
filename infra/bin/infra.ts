@@ -96,7 +96,7 @@ edgeAuthStack.addDependency(authStack);
 // This prevents direct API Gateway access, enforcing CloudFront-only traffic.
 const originVerifySecret = app.node.tryGetContext('ttobak:originVerifySecret') || '';
 
-// Stack 6: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge
+// Stack 6: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge, WebSearchGateway
 const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   env,
   // webSearchGatewayUrl is a cross-region reference (us-east-1 → ap-northeast-2),

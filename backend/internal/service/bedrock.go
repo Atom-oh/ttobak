@@ -365,40 +365,53 @@ func buildSummarizeUserPrompt(transcript, priorContext string, segments []speake
 }
 
 // buildAttachmentContext renders the attachment-derived block appended to
-// SummarizeTranscript's user prompt. Extracted as a pure function so the
-// three attachment shapes stay covered by table-driven tests:
+// SummarizeTranscript's user prompt. Extracted as a pure function so each of
+// the three attachment shapes stays covered by its own unit test:
 //   - diagram attachments (process-image classified them "diagram" and
 //     converted the picture to mermaid) are labeled as 첨부 다이어그램 so the
 //     system prompt's 아키텍처 다이어그램 section can treat their mermaid
-//     code as the trusted source rather than re-deriving structure from talk;
+//     code as the trusted source rather than re-deriving structure from talk
+//     (that trusted-source instruction is emitted only when at least one
+//     diagram is actually present — a screenshot-only meeting must not carry
+//     a dangling reference to nonexistent mermaid);
 //   - other processed images (screenshot/whiteboard/photo analysis) keep the
 //     pre-existing 첨부 이미지 framing;
 //   - document attachments (category "file": PPTX/PDF/DOCX/MD…) have no
 //     extracted content, so only their filenames are listed — enough for the
 //     note to reference them as 참고 자료 instead of ignoring them entirely.
+//     Gated on AttachStatusDone (like the link section appended after the
+//     LLM call) and deduplicated, so a failed/aborted upload row can't get
+//     cited in the note body while missing from the link list.
 //
 // Returns "" when there is nothing to add.
 func buildAttachmentContext(attachments []model.Attachment) string {
 	var analyses strings.Builder
+	hasDiagram := false
 	var docNames []string
+	seenDocs := make(map[string]bool)
 	for _, att := range attachments {
 		if att.ProcessedContent != "" {
 			label := "첨부 이미지"
 			if att.Type == model.AttachTypeDiagram {
 				label = "첨부 다이어그램"
+				hasDiagram = true
 			}
 			analyses.WriteString(fmt.Sprintf("\n### %s: %s\n%s\n", label, att.FileName, att.ProcessedContent))
 			continue
 		}
-		if att.Type == model.AttachTypeDocument && att.FileName != "" {
+		if att.Type == model.AttachTypeDocument && att.FileName != "" && att.Status == model.AttachStatusDone && !seenDocs[att.FileName] {
+			seenDocs[att.FileName] = true
 			docNames = append(docNames, att.FileName)
 		}
 	}
 
 	var out strings.Builder
 	if analyses.Len() > 0 {
-		out.WriteString("아래는 회의 중 첨부된 화면/슬라이드/다이어그램의 AI 분석 결과입니다. 이 내용도 회의록에 자연스럽게 통합해주세요. ")
-		out.WriteString("첨부 다이어그램의 mermaid 코드는 아키텍처 다이어그램 섹션의 신뢰 소스로 사용하세요:\n")
+		out.WriteString("아래는 회의 중 첨부된 화면/슬라이드/다이어그램의 AI 분석 결과입니다. 이 내용도 회의록에 자연스럽게 통합해주세요.")
+		if hasDiagram {
+			out.WriteString(" 첨부 다이어그램의 mermaid 코드는 아키텍처 다이어그램 섹션의 신뢰 소스로 사용하세요.")
+		}
+		out.WriteString("\n")
 		out.WriteString(analyses.String())
 	}
 	if len(docNames) > 0 {

@@ -102,7 +102,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 | `TtobakAiStack` | IAM Roles, KMS Key | Storage, Knowledge, Auth, WebSearchGateway |
 | `TtobakKnowledgeStack` | S3 (KB), OpenSearch, Bedrock KB | Storage |
 | `TtobakEdgeAuthStack` | Lambda@Edge (us-east-1) | Auth |
-| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 10 Lambdas (9 Go zip + 1 Python qa; convert-doc is a container image), EventBridge | Auth, Storage, AI, Knowledge |
+| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 10 Lambdas (9 Go zip + 1 Python qa; convert-doc is a container image), EventBridge | Auth, Storage, AI, Knowledge, WebSearchGateway |
 | `TtobakWhisperStack` | ECS Cluster, ECR, ASG (GPU Spot, min=0, max=10) | Storage |
 | `TtobakCrawlerStack` | Step Functions, 4 크롤러 Lambda, 일일 EventBridge | AI, Storage, Knowledge, WebSearchGateway |
 | `TtobakResearchAgentStack` | Bedrock Agent (Deep Research), 도구 Lambda | Storage, Knowledge |
@@ -201,7 +201,7 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 | `TtobakAiStack` | IAM Roles, KMS Key | Storage, Knowledge, Auth, WebSearchGateway |
 | `TtobakKnowledgeStack` | S3 (KB), OpenSearch, Bedrock KB | Storage |
 | `TtobakEdgeAuthStack` | Lambda@Edge (us-east-1) | Auth |
-| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 10 Lambdas (9 Go zip + 1 Python qa; convert-doc is a container image), EventBridge | Auth, Storage, AI, Knowledge |
+| `TtobakGatewayStack` | API Gateway HTTP/WebSocket, 10 Lambdas (9 Go zip + 1 Python qa; convert-doc is a container image), EventBridge | Auth, Storage, AI, Knowledge, WebSearchGateway |
 | `TtobakWhisperStack` | ECS Cluster, ECR, ASG (GPU Spot, min=0, max=10) | Storage |
 | `TtobakCrawlerStack` | Step Functions, 4 crawler Lambdas, daily EventBridge | AI, Storage, Knowledge, WebSearchGateway |
 | `TtobakResearchAgentStack` | Bedrock Agent (Deep Research), tool Lambdas | Storage, Knowledge |

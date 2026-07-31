@@ -448,6 +448,17 @@ class TestParseDetectedQuestions(unittest.TestCase):
         self.assertEqual(len(questions), 5)
         self.assertEqual(proactive, questions)
 
+    def test_duplicates_dropped_first_occurrence_wins(self):
+        raw = json.dumps([
+            {'q': '같은 질문', 'search': True},
+            {'q': '같은 질문', 'search': False},
+            '같은 질문',
+            {'q': '다른 질문', 'search': False},
+        ], ensure_ascii=False)
+        questions, proactive = handler.parse_detected_questions(raw)
+        self.assertEqual(questions, ['같은 질문', '다른 질문'])
+        self.assertEqual(proactive, ['같은 질문'])  # first occurrence's flag wins
+
 
 class TestWebSearchTool(unittest.TestCase):
     """format_web_results must keep a transport/config failure distinguishable
@@ -487,6 +498,40 @@ class TestWebSearchTool(unittest.TestCase):
             results, error = web_search.gateway_web_search('anything')
         self.assertEqual(results, [])
         self.assertEqual(error, 'web search not configured')
+
+    def test_max_results_clamped_to_at_least_one(self):
+        # A model-supplied 0 (or junk) must not slice to [] with error=None —
+        # that would masquerade as a genuine zero-hit search.
+        import tools
+        for bad in (0, -3, 'x'):
+            with mock.patch.object(tools, 'gateway_web_search', return_value=([], None)) as mocked:
+                tools.execute_tool('search_web', {'query': 'q', 'maxResults': bad}, {})
+            self.assertGreaterEqual(mocked.call_args[0][1], 1, f'maxResults={bad!r} not clamped')
+
+    def test_non_http_urls_filtered_from_results(self):
+        import web_search
+        gateway_payload = json.dumps({
+            'result': {
+                'content': [{'type': 'text', 'text': json.dumps({'results': [
+                    {'title': 'ok', 'url': 'https://example.com/a', 'text': 's'},
+                    {'title': 'js', 'url': 'javascript:alert(1)', 'text': 's'},
+                    {'title': 'no-url', 'text': 's'},
+                ]})}],
+            },
+        })
+        with mock.patch.object(web_search, 'WEB_SEARCH_GATEWAY_URL', 'https://gw.example/mcp'), \
+             mock.patch.object(web_search, '_sigv4_post', return_value=gateway_payload):
+            results, error = web_search.gateway_web_search('q')
+        self.assertIsNone(error)
+        self.assertEqual([r['url'] for r in results], ['https://example.com/a'])
+
+    def test_title_markdown_metachars_escaped(self):
+        import web_search
+        text, _ = web_search.format_web_results([
+            {'title': 'evil](https://phish.example) [x', 'url': 'https://example.com/a', 'text': 's'},
+        ], None)
+        self.assertNotIn('evil](https://phish.example)', text)
+        self.assertIn('\\]', text)
 
 
 if __name__ == '__main__':

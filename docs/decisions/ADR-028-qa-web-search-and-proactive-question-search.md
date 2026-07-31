@@ -1,0 +1,47 @@
+# ADR-028: QA 웹 검색 도구와 선제 질문 검색 (proactive search)
+
+- **Status**: Accepted
+- **Date**: 2026-07-31
+- **PR**: #143
+
+## Context
+
+라이브 Q&A(QA Lambda의 에이전틱 루프)는 KB 검색·AWS 문서 검색·트랜스크립트 검색만 가능해, 미팅 중 나오는
+최신 정보성 질문(출시 소식, 가격, 경쟁사 동향, AWS 외 일반 주제)에 답하지 못했다. 또한 `detect-questions`가
+대화에서 질문을 추출해 추천 칩으로 띄워주긴 하지만, 사용자가 칩을 눌러야만 답변이 시작됐다 — "질문의 맥락이
+감지되면 답이 이미 떠 있는" 경험이 목표였다.
+
+한편 크롤러(SP1)와 research-agent는 이미 us-east-1 AgentCore Gateway Web Search 커넥터를 SigV4 크로스리전으로
+호출하고 있었다.
+
+## Decision
+
+1. **`search_web` 도구를 QA Lambda에 추가** (`backend/python/qa/web_search.py`): 기존 크롤러와 동일한
+   SigV4+MCP 플러밍을 세 번째로 복제한다. 세 소비자(crawler Lambda zip, research-agent 컨테이너, qa Lambda
+   zip)는 배포 아티팩트가 전부 달라 공용 패키지의 배포 복잡도가 함수 하나의 중복 비용을 넘어선다고 판단 —
+   대신 세 파일 모두에 상호 동기화 주석을 명시한다.
+   - 실패(전송/IAM/게이트웨이 오류)와 무결과(genuine zero-hit)를 구분해 모델에 전달한다 — 장애가 "관련 결과
+     없음"으로 위장하면 모델이 그 위에서 지어낸다.
+   - IAM은 `bedrock-agentcore:InvokeGateway`를 Gateway ARN으로 스코프(`ai-stack.ts`), env는
+     `gateway-stack.ts`가 주입(크로스리전 참조 → GatewayStack이 WebSearchGatewayStack에 의존 추가).
+2. **`detect-questions`에 `search` 플래그 추가**: 감지된 질문 중 "검색으로 즉시 사실 확인 가능"한 것을
+   `proactive` 배열(questions의 부분집합)로 반환한다. 레거시 문자열 배열 응답도 계속 파싱한다.
+3. **선제 자동 발화는 기본 꺼짐(opt-in)**: 회의 대화에서 파생된 검색어가 사용자 조작 없이 외부 웹 검색
+   제공자로 나가는 것은 기존 `search_knowledge_base`(계정 내부)와 다른 신뢰 경계다. 따라서
+   - LiveQAPanel 헤더의 "선제 검색" 토글(localStorage, 기본 OFF)을 켠 사용자에게만 자동 발화하고,
+   - 검색 쿼리 원문은 CloudWatch에 로깅하지 않으며(해시 접두사+길이만),
+   - 외부 전송 사실을 API-SPEC에 명시한다.
+4. **자동 발화 가드**: 감지 배치당 1건, 질문당 미팅 네임스페이스로 전 패널 인스턴스에 걸쳐 1회
+   (모듈 레벨 claim set — 데스크톱 aside와 모바일 바텀시트가 동시에 마운트되므로 인스턴스 로컬 dedup은
+   이중 발화), 실패 시 claim 롤백(답 없이 질문이 영구 소진되는 것 방지), 답변 진행 중·사용자 입력 중·패널
+   비가시(IntersectionObserver로 반응형 추적) 상태에서는 보류. stale 응답 방지를 위해 detect 경로도
+   summary와 동일한 generation guard를 쓴다(`useLiveSummary`).
+
+## Consequences
+
+- 미팅 중 최신 정보 질문에 라이브 QA가 답할 수 있고, (opt-in 시) 감지된 사실형 질문은 답이 미리 떠 있다.
+- 토큰/호출량: 자동 발화는 배치당 1건 + Bedrock 라운드 제한(MAX_TOOL_ROUNDS)으로 상한이 있다. 서버측
+  per-user rate limit은 없다 — 남용 신호가 보이면 후속으로 추가한다(tracked).
+- SigV4+MCP 플러밍이 3중 복제로 늘었다. 변경 시 세 파일을 함께 고쳐야 한다(각 파일 docstring에 명시).
+- `WEB_SEARCH_GATEWAY_URL` 미설정 시 도구가 목록에서 빠지는 게 아니라 호출 시 실패 사유를 반환한다 —
+  도구 라운드 1회를 소비하므로 "완전 비활성"은 아니다. 미설정 배포는 초기 셋업 과도기뿐이라 수용.

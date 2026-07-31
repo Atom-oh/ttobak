@@ -1160,10 +1160,15 @@ Response: 200 OK
 
 `POST /api/qa/ask`, `POST /api/qa/meeting/{meetingId}`, WebSocket `ask_live` — Bedrock Converse 에이전틱 루프.
 사용 가능 도구: `search_knowledge_base`, `search_aws_docs`, `search_transcript`, `get_aws_recommendation`,
-`search_web`(us-east-1 AgentCore Web Search Gateway를 SigV4 크로스리전 호출 — `WEB_SEARCH_GATEWAY_URL` 미설정 시
-"web search not configured"로 우아하게 비활성), `list_meetings`, `get_meeting_detail`, `start_research`, account 도구들.
+`search_web`, `list_meetings`, `get_meeting_detail`, `start_research`, account 도구들.
 스트리밍(`ask_live`) 경로도 비스트리밍과 동일하게 실시간 트랜스크립트 tail(2000자)을 시스템 프롬프트에 포함한다.
 대화 연속성: `sessionId`별 히스토리를 DynamoDB에 저장(7일 TTL), 같은 세션의 후속 질문은 이전 문답 맥락을 이어받는다.
+
+**`search_web` 데이터 전송 고지**: 이 도구는 us-east-1 AgentCore Web Search Gateway를 SigV4 크로스리전으로
+호출하며, 모델이 만든 검색 쿼리(최대 200자 — 회의 대화에서 파생된 키워드가 포함될 수 있음)가 **외부 웹 검색
+제공자로 전송**된다. 쿼리 원문은 CloudWatch에 로깅하지 않는다(해시+길이만). `WEB_SEARCH_GATEWAY_URL` 미설정 시
+도구는 계속 노출되되 호출하면 "web search not configured" 실패 사유가 모델에 전달된다(도구 라운드 1회 소비 —
+완전 비활성이 아님).
 
 #### Detect Questions (실시간 질문 감지 + 선제 검색 플래그)
 
@@ -1184,6 +1189,10 @@ Response: 200 OK
                                               // 자동 발화해 답을 미리 띄운다 (선제 검색)
 }
 ```
+
+선제 검색 자동 발화는 **기본 꺼짐(opt-in)**: 회의 대화에서 파생된 질문이 사용자 조작 없이 외부 웹 검색까지
+이어질 수 있으므로, LiveQAPanel 헤더의 "선제 검색" 토글(localStorage `ttobak.proactiveSearchEnabled`)을 켠
+사용자에게만 동작한다. 꺼져 있으면 `proactive` 질문도 일반 추천 칩으로만 표시된다.
 
 ---
 

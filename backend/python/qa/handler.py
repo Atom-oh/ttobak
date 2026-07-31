@@ -1053,7 +1053,8 @@ def parse_detected_questions(raw):
     Accepts both the current object format [{"q": str, "search": bool}, ...]
     and the legacy plain-string format ["질문", ...] (older prompt, or a model
     that ignores the schema) — legacy items are questions with no proactive
-    flag. proactive is always a subset of questions.
+    flag. Duplicates are dropped (first occurrence wins, including its search
+    flag). proactive is always a subset of questions.
     """
     try:
         parsed = json.loads(raw.strip())
@@ -1062,14 +1063,20 @@ def parse_detected_questions(raw):
     if not isinstance(parsed, list):
         return [], []
     questions, proactive = [], []
+    seen = set()
     for item in parsed:
+        q, is_search = None, False
         if isinstance(item, str) and item.strip():
-            questions.append(item.strip())
+            q = item.strip()
         elif isinstance(item, dict) and isinstance(item.get('q'), str) and item['q'].strip():
             q = item['q'].strip()
-            questions.append(q)
-            if item.get('search') is True:
-                proactive.append(q)
+            is_search = item.get('search') is True
+        if q is None or q in seen:
+            continue
+        seen.add(q)
+        questions.append(q)
+        if is_search:
+            proactive.append(q)
     return questions[:5], [q for q in proactive if q in questions[:5]]
 
 

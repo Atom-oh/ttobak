@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 768eb9ea3182 · generated-at: 2026-07-28 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d7cba600c78d · generated-at: 2026-07-31 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -8,7 +8,7 @@ Korean AI meeting assistant for AWS Solutions Architects: record → real-time S
 ## Stack / Runtime
 - **Frontend**: Next.js 16 static SPA (`output: 'export'` in prod), Tailwind v4 (class-based dark mode), TipTap, deployed to S3/CloudFront. TypeScript.
 - **Backend**: Go Lambda (ARM64), chi router + `aws-lambda-go-api-proxy` (API Gateway **payload v1.0** — v2.0 breaks routing). 8 zip-deployed entry points: `cmd/{api,transcribe,summarize,process-image,kb,research-worker,websocket,ws-authorizer}`, plus `cmd/convert-doc` deployed as a **container image** (bundles headless LibreOffice for PPTX→PDF preview conversion — not a zip like the others).
-- **Q&A**: separate Python Lambda (`backend/python/qa/`) for Bedrock RAG.
+- **Q&A**: separate Python Lambda (`backend/python/qa/`) for Bedrock RAG. Its `search_web` tool calls the us-east-1 AgentCore Web Search Gateway cross-region with SigV4 (signing service `bedrock-agentcore`) — the SigV4+MCP plumbing is deliberately triplicated across `crawler/news_crawler.py`, `research-agent/tools.py`, and `qa/web_search.py` (three separate deploy artifacts; each file's docstring says to keep them in sync — don't flag the duplication itself as a defect). Proactive auto-fired searches are opt-in (default OFF) because queries derive from meeting conversation and go to an external search provider; query text is never logged in plaintext.
 - **Infra**: CDK TypeScript (11 stacks). DynamoDB single-table `ttobak-main`.
 - **Models**: Claude Opus for summarize/vision, Claude Haiku for fast translate/detect.
 
@@ -56,7 +56,7 @@ cd infra && npx cdk synth && npm test
 - Keep functions/files focused; follow existing patterns in the touched package.
 
 ## Known False-Positives (do NOT report)
-- **`updateAttachmentByKey` not implemented** (`process-image/main.go`, tracked HIGH): image-processing results aren't yet saved to DynamoDB (needs meetingId parsing from the S3 key path). Known gap, not a new bug to flag.
+- **`updateAttachmentByKey`** (`process-image/main.go`) is IMPLEMENTED — it matches the attachment by `originalKey` via `ListAttachments` and persists type/`processedContent`/status, with `service.ExtractInfoFromImageKey` as the S3-key-path fallback. Don't re-raise the old "results aren't saved to DynamoDB" finding. The *actual* tracked HIGH gap in this area: **meeting document attachments (PPTX/PDF/DOCX/MD, upload category `file`) are never content-extracted** — they reach neither the live summary nor the final-note prompt (filenames only), and reach the KB only via the manual `POST /api/kb/copy-attachment` copy + async ingestion (Bedrock KB's default parser doesn't index PPT/PPTX at all). Known, tracked — not a new finding to flag.
 - **JWT signature verification**: `middleware.ParseVerifiedJWT` verifies signatures against Cognito JWKS (RS256, issuer + exp checked) — this is not a gap; don't re-raise "unverified JWT" findings.
 - **"`FileKey` isn't validated to be owner-prefixed on write, so the unauthenticated public-share route could presign an arbitrary bucket object"**: checked directly against `service/account.go` — `validateFileKeyOwnership(userID, req.FileKey)` runs in both `putDoc` (create) and `updateDoc` (update, whenever `req.FileKey` differs from the doc's existing value) before any assignment; every write path funnels through one of these two functions. `ownsFileKey`'s separate use in the S3-cleanup-on-supersede path is about a *different* concern (a shared copy's underlying object lives under the sharer's prefix, not the current editor's) and does not imply write-time validation is missing. Covered by `TestPutDocument_SlideRejectsForeignFileKey`/`TestUpdateAccountDocument_RejectsForeignFileKey`. Don't re-raise without pointing at a concrete write path that skips `validateFileKeyOwnership`.
 - **Hardcoded ACM ARN / domain / CORS origin / KB id / `agentCoreRuntimeArn` / `researchAgentExecutionRoleArn` in CDK**: known tech-debt, tracked; not a new-PR blocker unless the diff worsens it.

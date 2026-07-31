@@ -77,7 +77,19 @@ def _sigv4_post(body_json):
     body = prepared.body.encode('utf-8') if isinstance(prepared.body, str) else prepared.body
     req = Request(prepared.url, data=body, headers=dict(prepared.headers), method='POST')
     with urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
-        return _extract_sse_json(resp.read().decode('utf-8'))
+        # Bounded read: a misbehaving upstream must not balloon Lambda memory.
+        # 2MB is far above any real search response (a handful of snippets).
+        return _extract_sse_json(resp.read(2_000_000).decode('utf-8', errors='replace'))
+
+
+def _query_ref(query):
+    """Opaque log reference for a search query. Queries derive from meeting
+    conversation (customer names, project codenames, pricing) — never log
+    them in plaintext to CloudWatch; a hash prefix + length is enough to
+    correlate a log line with a specific request during debugging."""
+    import hashlib
+    digest = hashlib.sha256(query.encode('utf-8')).hexdigest()[:12]
+    return f'q#{digest}/len={len(query)}'
 
 
 def gateway_web_search(query, max_results=5):
@@ -102,29 +114,39 @@ def gateway_web_search(query, max_results=5):
             'arguments': {'query': query[:200], 'maxResults': max_results},
         },
     })
+    qref = _query_ref(query)
     try:
         raw_response = _sigv4_post(body)
         parsed = json.loads(raw_response)
         if 'error' in parsed:
-            logger.warning(f'Web search gateway JSON-RPC error for "{query}": {parsed["error"]}')
+            logger.warning(f'Web search gateway JSON-RPC error for {qref}: {parsed["error"]}')
             return [], 'gateway error'
         result = parsed.get('result', parsed)
+        if not isinstance(result, dict):
+            logger.warning(f'Web search gateway returned non-object result for {qref}')
+            return [], 'malformed gateway response'
         if result.get('isError'):
-            logger.warning(f'Web search gateway returned isError for "{query}"')
+            logger.warning(f'Web search gateway returned isError for {qref}')
             return [], 'gateway error'
         content = result.get('content', [])
         text_block = next((b for b in content if b.get('type') == 'text' and 'text' in b), None)
         if text_block is None:
-            logger.warning(f'Web search gateway returned no text content block for "{query}"')
+            logger.warning(f'Web search gateway returned no text content block for {qref}')
             return [], 'malformed gateway response'
         inner = json.loads(text_block['text'])
         results = inner.get('results', [])
-        return [r for r in results if r.get('url')][:max_results], None
+        # http(s) scheme allowlist: search results are open-web data headed
+        # for markdown links — drop javascript:/data:/file: style URLs here
+        # rather than trusting every downstream renderer to.
+        return [
+            r for r in results
+            if isinstance(r.get('url'), str) and r['url'].startswith(('https://', 'http://'))
+        ][:max_results], None
     except Exception as e:
         # Full detail to CloudWatch only; the model-facing tool result gets a
         # generic reason (matching the crawler/research-agent policy of not
         # surfacing raw exception text).
-        logger.warning(f'Web search gateway call failed for "{query}": {e}')
+        logger.warning(f'Web search gateway call failed for {qref}: {e}')
         return [], 'web search transport failed'
 
 
@@ -143,6 +165,11 @@ def format_web_results(results, error):
     sources = []
     for r in results:
         title = (r.get('title') or '').strip() or '(제목 없음)'
+        # Escape markdown link metacharacters in the (untrusted) title so it
+        # can't break out of the [title](url) structure — mirrors the Go
+        # side's sanitizeMarkdownText for attachment names.
+        for ch in ('\\', '[', ']', '(', ')', '`'):
+            title = title.replace(ch, '\\' + ch)
         url = r.get('url', '')
         snippet = (r.get('text') or '').strip()[:500]
         published = (r.get('publishedDate') or '').strip()

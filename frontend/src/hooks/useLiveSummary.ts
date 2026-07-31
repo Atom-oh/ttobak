@@ -48,6 +48,15 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
   //     only summary that actually succeeded.
   const summaryGenerationRef = useRef(0);
   const appliedGenerationRef = useRef(0);
+  // Same guard for the detect-questions path: without it a straggling
+  // response from a PREVIOUS recording (or an older round of this one) could
+  // overwrite fresher suggestions — and, worse than the pre-proactive world
+  // where stale questions were only cosmetic chips, a stale proactive entry
+  // would AUTO-FIRE a Bedrock round + external web search in the new
+  // recording. Detect shares summaryGenerationRef's numbering (both are
+  // captured per checkThreshold round; reset() bumps it past every in-flight
+  // request), with its own applied cursor.
+  const detectAppliedGenerationRef = useRef(0);
 
   // Keep refs in sync
   useEffect(() => { summaryIntervalRef.current = summaryInterval; }, [summaryInterval]);
@@ -69,6 +78,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     // "generation > appliedGenerationRef.current" for the NEW one.
     summaryGenerationRef.current += 1;
     appliedGenerationRef.current = summaryGenerationRef.current;
+    detectAppliedGenerationRef.current = summaryGenerationRef.current;
   }, []);
 
   /**
@@ -138,8 +148,15 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
       liveSummaryRef.current || undefined,
     )
       .then((res) => {
-        if (res.questions.length > 0) setDetectedQuestions(res.questions);
-        if (res.proactive && res.proactive.length > 0) setProactiveQuestions(res.proactive);
+        // Generation-guarded (see detectAppliedGenerationRef) and REPLACE
+        // semantics for both arrays — keeping a previous round's non-empty
+        // proactive list when the fresh response is empty would let a
+        // minutes-old batch (held while an answer was in flight) auto-fire
+        // long after the conversation moved on.
+        if (generation <= detectAppliedGenerationRef.current) return;
+        detectAppliedGenerationRef.current = generation;
+        setDetectedQuestions(res.questions);
+        setProactiveQuestions(res.proactive ?? []);
       })
       .catch(() => {}); // silent fail
 

@@ -11,22 +11,6 @@ logger = logging.getLogger(__name__)
 TOOL_DEFINITIONS = [
     {
         "toolSpec": {
-            "name": "search_web",
-            "description": "웹에서 최신 정보를 검색합니다. 미팅에서 언급된 최신 뉴스, 제품/서비스 출시 소식, 시세·가격, 경쟁사 동향, AWS 외 일반 주제 등 KB나 AWS 문서에 없을 정보에 사용하세요.",
-            "inputSchema": {
-                "json": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "검색 쿼리 (구체적일수록 좋음)"},
-                        "maxResults": {"type": "integer", "description": "최대 결과 수 (1-10)", "default": 5}
-                    },
-                    "required": ["query"]
-                }
-            }
-        }
-    },
-    {
-        "toolSpec": {
             "name": "search_knowledge_base",
             "description": "Search the Ttobak knowledge base for relevant documents about meetings, AWS, or uploaded files.",
             "inputSchema": {
@@ -163,6 +147,22 @@ TOOL_DEFINITIONS = [
                 "account": {"type": "string", "description": "고객사 이름 또는 별칭 (예: 하나은행)"}
             }, "required": ["account"]}}
         }
+    },
+    {
+        "toolSpec": {
+            "name": "search_web",
+            "description": "웹에서 최신 정보를 검색합니다. 미팅에서 언급된 최신 뉴스, 제품/서비스 출시 소식, 시세·가격, 경쟁사 동향, AWS 외 일반 주제 등 KB나 AWS 문서에 없을 정보에 사용하세요.",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "검색 쿼리 (구체적일수록 좋음)"},
+                        "maxResults": {"type": "integer", "description": "최대 결과 수 (1-10)", "default": 5}
+                    },
+                    "required": ["query"]
+                }
+            }
+        }
     }
 ]
 
@@ -174,9 +174,17 @@ def execute_tool(tool_name, tool_input, context):
     """
     try:
         if tool_name == "search_web":
+            # Clamp to [1, 10]: a model-supplied 0/negative value would slice
+            # to [] with error=None, which reads as a genuine "no results" —
+            # exactly the failure/no-results ambiguity format_web_results
+            # exists to prevent.
+            try:
+                max_results = int(tool_input.get("maxResults", 5))
+            except (TypeError, ValueError):
+                max_results = 5
             results, error = gateway_web_search(
                 tool_input["query"],
-                min(tool_input.get("maxResults", 5), 10),
+                max(1, min(max_results, 10)),
             )
             return format_web_results(results, error)
         elif tool_name == "search_knowledge_base":

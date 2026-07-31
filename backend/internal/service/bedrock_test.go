@@ -60,18 +60,41 @@ func TestBuildAttachmentContext_NonDiagramImageKeepsImageLabel(t *testing.T) {
 	if !strings.Contains(got, "첨부 이미지: shot.png") {
 		t.Fatalf("screenshot attachment not labeled as 첨부 이미지: %q", got)
 	}
+	// The trusted-source instruction references diagram mermaid — with no
+	// diagram attachment present it must not appear at all.
+	if strings.Contains(got, "신뢰 소스") {
+		t.Fatalf("trusted-source instruction emitted without any diagram attachment: %q", got)
+	}
 }
 
 func TestBuildAttachmentContext_DocumentListedByNameOnly(t *testing.T) {
 	got := buildAttachmentContext([]model.Attachment{
-		{Type: model.AttachTypeDocument, FileName: "proposal.pptx"},
-		{Type: model.AttachTypeDocument, FileName: "spec.pdf"},
+		{Type: model.AttachTypeDocument, FileName: "proposal.pptx", Status: model.AttachStatusDone},
+		{Type: model.AttachTypeDocument, FileName: "spec.pdf", Status: model.AttachStatusDone},
+		// Duplicate row (e.g. double upload-complete) must list once.
+		{Type: model.AttachTypeDocument, FileName: "proposal.pptx", Status: model.AttachStatusDone},
 	})
 	if !strings.Contains(got, "- proposal.pptx") || !strings.Contains(got, "- spec.pdf") {
 		t.Fatalf("document filenames missing: %q", got)
 	}
+	if strings.Count(got, "- proposal.pptx") != 1 {
+		t.Fatalf("duplicate document filename not deduplicated: %q", got)
+	}
 	if !strings.Contains(got, "내용을 추측하지 말 것") {
 		t.Fatalf("no-content-guessing guard missing for unextracted documents: %q", got)
+	}
+}
+
+func TestBuildAttachmentContext_NonDoneDocumentExcluded(t *testing.T) {
+	// A failed/aborted upload row (status never reached done) must not be
+	// presented to the model as an existing attachment — the appended link
+	// section filters on done, so the prompt path must too or the note can
+	// cite a document that has no link.
+	got := buildAttachmentContext([]model.Attachment{
+		{Type: model.AttachTypeDocument, FileName: "half-uploaded.pptx", Status: model.AttachStatusUploaded},
+	})
+	if got != "" {
+		t.Fatalf("non-done document leaked into prompt context: %q", got)
 	}
 }
 
@@ -80,7 +103,7 @@ func TestBuildAttachmentContext_EmptyWhenNothingUsable(t *testing.T) {
 	// ProcessedContent) contribute nothing — the caller must get "" so no
 	// dangling "---" separator is appended to the prompt.
 	got := buildAttachmentContext([]model.Attachment{
-		{Type: model.AttachTypeDocument},
+		{Type: model.AttachTypeDocument, Status: model.AttachStatusDone},
 		{Type: model.AttachTypePhoto, FileName: "p.jpg"},
 	})
 	if got != "" {

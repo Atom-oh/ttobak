@@ -44,9 +44,16 @@ const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
 // instances: the desktop aside and the mobile bottom sheet are both MOUNTED
 // during recording (the desktop one is only CSS-hidden on mobile), so
 // instance-local dedup alone would double-fire every proactive search.
-// Content-keyed and never cleared — a question that already got a proactive
-// answer once shouldn't burn a second Bedrock round in another panel.
+// Keys are namespaced by meeting (`{meetingId}|{question}`) so the same
+// question wording in a LATER meeting isn't silently skipped, and a claim is
+// rolled back (deleted) when its ask fails — a WS stall/error must not
+// permanently consume a question that never got an answer.
 const claimedProactiveQuestions = new Set<string>();
+
+// localStorage key for the proactive-search opt-in. Auto-firing sends
+// conversation-derived queries to an external web search provider, so it is
+// OFF by default and requires an explicit user toggle (persisted).
+const PROACTIVE_SEARCH_STORAGE_KEY = 'ttobak.proactiveSearchEnabled';
 
 /** Tail-truncate to at most maxBytes of UTF-8, without splitting a multi-byte char. */
 function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): string | undefined {
@@ -70,6 +77,32 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   const [askedQuestions, setAskedQuestions] = useState<string[]>([]);
   const wsRef = useRef<RealtimeWebSocket | null>(null);
   const activeEntryIdRef = useRef<string | null>(null);
+  // Proactive-search opt-in (default OFF — see PROACTIVE_SEARCH_STORAGE_KEY).
+  const [proactiveSearchEnabled, setProactiveSearchEnabled] = useState(false);
+  useEffect(() => {
+    try {
+      setProactiveSearchEnabled(localStorage.getItem(PROACTIVE_SEARCH_STORAGE_KEY) === '1');
+    } catch { /* storage unavailable → stays off */ }
+  }, []);
+  const toggleProactiveSearch = useCallback(() => {
+    setProactiveSearchEnabled((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(PROACTIVE_SEARCH_STORAGE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+  // entryId → proactive claim key, so failure paths (watchdog timeout,
+  // answer_error, socket error, HTTP catch) can roll the claim back and let
+  // a later detection batch retry the question instead of losing it forever.
+  const proactiveClaimByEntryRef = useRef<Map<string, string>>(new Map());
+  const rollbackProactiveClaim = useCallback((entryId: string | null) => {
+    if (!entryId) return;
+    const key = proactiveClaimByEntryRef.current.get(entryId);
+    if (key) {
+      claimedProactiveQuestions.delete(key);
+      proactiveClaimByEntryRef.current.delete(entryId);
+    }
+  }, []);
   // Watchdog for the WS streaming path: if no message arrives for the active
   // entry within this window, surface an error and unlock the input instead of
   // spinning forever on a stalled stream.
@@ -108,6 +141,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
             : e
         )
       );
+      rollbackProactiveClaim(entryId);
       setIsAsking(false);
       activeEntryIdRef.current = null;
       inputRef.current?.focus();
@@ -126,7 +160,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       // sacrificed — correctness over context.
       setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
     }, 60_000);
-  }, [clearWatchdog, meetingId]);
+  }, [clearWatchdog, meetingId, rollbackProactiveClaim]);
 
   useEffect(() => {
     if (containerRef.current) {
@@ -195,6 +229,8 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         break;
       case 'answer_complete':
         clearWatchdog();
+        // Success — the claim sticks; just drop the rollback bookkeeping.
+        proactiveClaimByEntryRef.current.delete(entryId);
         setQaHistory(prev =>
           prev.map(e =>
             e.id === entryId
@@ -216,6 +252,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         break;
       case 'answer_error':
         clearWatchdog();
+        rollbackProactiveClaim(entryId);
         setQaHistory(prev =>
           prev.map(e =>
             e.id === entryId
@@ -232,6 +269,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         // user stares at a spinner for the full 60s before the timeout
         // banner appears on top of this error.
         clearWatchdog();
+        rollbackProactiveClaim(entryId);
         setError(msg.error || 'WebSocket error');
         setQaHistory(prev =>
           prev.map(e => (e.id === entryId ? { ...e, isStreaming: false } : e))
@@ -248,7 +286,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
         break;
     }
-  }, [armWatchdog, clearWatchdog, meetingId]);
+  }, [armWatchdog, clearWatchdog, meetingId, rollbackProactiveClaim]);
 
   const ensureWebSocket = useCallback(async (): Promise<RealtimeWebSocket | null> => {
     if (!WS_URL) return null;
@@ -299,6 +337,15 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     setQaHistory((prev) => [...prev, newEntry]);
     activeEntryIdRef.current = entryId;
 
+    // Claim the proactive question SYNCHRONOUSLY (before the first await) so
+    // a sibling panel instance's effect running in the same flush sees it as
+    // taken. Registered per-entry so every failure path can roll it back.
+    if (opts?.proactive) {
+      const claimKey = `${meetingId || 'live'}|${q.trim()}`;
+      claimedProactiveQuestions.add(claimKey);
+      proactiveClaimByEntryRef.current.set(entryId, claimKey);
+    }
+
     // Try WebSocket streaming first
     const ws = await ensureWebSocket();
     if (ws) {
@@ -326,6 +373,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         // the question itself is too large. Sending anyway would die
         // silently at the gateway's 32KB frame limit and burn a 60s
         // watchdog wait; reject up front instead.
+        rollbackProactiveClaim(entryId);
         setQaHistory(prev => prev.filter(e => e.id !== entryId));
         activeEntryIdRef.current = null;
         setIsAsking(false);
@@ -356,6 +404,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         )
       );
     } catch (err) {
+      rollbackProactiveClaim(entryId);
       setError(err instanceof Error ? err.message : 'Failed to get answer');
       setQaHistory((prev) =>
         prev.map((entry) =>
@@ -376,38 +425,58 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     handleAsk(question);
   };
 
+  // Panel visibility, kept REACTIVE via IntersectionObserver: both panel
+  // instances stay mounted while CSS-hidden (mobile ↔ desktop breakpoint,
+  // ReferenceTabs' qa ↔ ref tab), and a plain offsetParent check inside the
+  // effect wouldn't re-run when the user switches back to this tab — the
+  // observer flips state on every visibility change, so a held batch fires
+  // as soon as the panel is actually shown again.
+  const [isPanelVisible, setIsPanelVisible] = useState(false);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver((entries) => {
+      setIsPanelVisible(entries[entries.length - 1]?.isIntersecting ?? false);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   // Proactive search: when the question detector flags a question as
   // search-answerable, fire it automatically so the answer is already on
-  // screen by the time someone would have typed it. Guards keep this from
-  // becoming spam: at most ONE auto-ask per detection batch (a batch is
-  // consumed the moment it fires — the rest stay as tappable suggestion
-  // chips), each question auto-fires at most once ever ACROSS panel
-  // instances (claimedProactiveQuestions, module-level — see its comment),
-  // only the VISIBLE panel fires (offsetParent is null under the `hidden`
-  // breakpoint class, so on mobile the CSS-hidden desktop aside skips and
-  // the bottom sheet claims the batch when it opens), and nothing fires
+  // screen by the time someone would have typed it. OFF by default —
+  // auto-firing sends conversation-derived queries to an external web
+  // search provider, so it requires the explicit header toggle (persisted
+  // opt-in). Guards keep it from becoming spam: at most ONE auto-ask per
+  // detection batch (a batch is consumed the moment it fires — the rest
+  // stay as tappable suggestion chips), each question auto-fires at most
+  // once per meeting ACROSS panel instances (claimedProactiveQuestions,
+  // module-level, claimed inside handleAsk and rolled back on failure),
+  // only the visible panel fires (isPanelVisible above), and nothing fires
   // while another answer is in flight or while the user is composing their
   // own question (an auto-ask would steal the single active-entry streaming
-  // slot). A batch arriving mid-answer is held, not dropped: it stays
-  // unconsumed until an idle render fires it.
+  // slot). A batch arriving while blocked is held, not dropped: it stays
+  // unconsumed until an eligible render fires it.
   const consumedProactiveBatchRef = useRef<string[] | undefined>(undefined);
   useEffect(() => {
+    if (!proactiveSearchEnabled) return;
     if (!proactiveQuestions || proactiveQuestions.length === 0) return;
     if (consumedProactiveBatchRef.current === proactiveQuestions) return;
-    if (isAsking || question.trim()) return;
-    if (!containerRef.current || containerRef.current.offsetParent === null) return;
+    if (isAsking || question.trim() || !isPanelVisible) return;
     const next = proactiveQuestions.find(
-      (q) => q.trim() && !claimedProactiveQuestions.has(q) && !askedQuestions.includes(q),
+      (q) =>
+        q.trim() &&
+        !claimedProactiveQuestions.has(`${meetingId || 'live'}|${q.trim()}`) &&
+        !askedQuestions.includes(q),
     );
     consumedProactiveBatchRef.current = proactiveQuestions;
     if (!next) return;
-    claimedProactiveQuestions.add(next);
     handleAsk(next, { proactive: true });
     // handleAsk is recreated per render but behaviorally identical; listing
     // it as a dep would add nothing (the consumed-batch ref already prevents
     // refires) while making the effect run on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proactiveQuestions, isAsking, question, askedQuestions]);
+  }, [proactiveSearchEnabled, proactiveQuestions, isAsking, question, askedQuestions, isPanelVisible, meetingId]);
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
@@ -415,7 +484,22 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 dark:border-slate-800">
         <span className="material-symbols-outlined text-primary">auto_awesome</span>
         <h3 className="text-sm font-semibold text-slate-900 dark:text-white">AI 어시스턴트 · KB Q&A</h3>
-        <span className="ml-auto text-[10px] text-slate-400 dark:text-slate-500 font-mono">⌘K</span>
+        {/* Proactive-search opt-in: auto-fires detected questions, which sends
+            conversation-derived queries to an external web search — default off. */}
+        <button
+          type="button"
+          onClick={toggleProactiveSearch}
+          title="대화에서 감지된 질문을 자동으로 검색해 답을 미리 띄웁니다. 회의 내용에서 추출된 검색어가 외부 웹 검색으로 전송되므로 기본 꺼짐입니다."
+          className={`ml-auto flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-full border transition-colors ${
+            proactiveSearchEnabled
+              ? 'bg-sky-50 dark:bg-sky-900/20 border-sky-300 dark:border-sky-700 text-sky-600 dark:text-sky-400'
+              : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400 dark:text-slate-500'
+          }`}
+        >
+          <span className="material-symbols-outlined text-xs">travel_explore</span>
+          선제 검색 {proactiveSearchEnabled ? 'ON' : 'OFF'}
+        </button>
+        <span className="text-[10px] text-slate-400 dark:text-slate-500 font-mono">⌘K</span>
       </div>
 
       {/* Chat History */}

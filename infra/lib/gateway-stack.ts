@@ -263,8 +263,9 @@ export class GatewayStack extends cdk.Stack {
         SHARED_MEETINGS_CACHE_TTL_SECONDS: '300',
         ORIGIN_VERIFY_SECRET: props.originVerifySecret || '',
         // search_web tool: us-east-1 AgentCore Web Search Gateway, called
-        // cross-region with SigV4. Empty URL → tool degrades gracefully
-        // ("web search not configured"), never throws at import.
+        // cross-region with SigV4. Empty URL → the tool stays advertised but
+        // every call returns a "web search not configured" failure reason to
+        // the model (costs one tool round; import never throws).
         WEB_SEARCH_GATEWAY_URL: props.webSearchGatewayUrl || '',
         WEB_SEARCH_GATEWAY_REGION: 'us-east-1',
       },
