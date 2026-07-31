@@ -32,6 +32,24 @@ describe('AiStack', () => {
     template = Template.fromStack(stack);
   });
 
+  test('qa role InvokeGateway grant is scoped to the Web Search Gateway ARN', () => {
+    // search_web's SigV4 call needs exactly this permission; the resource
+    // must stay the specific gateway ARN, never a wildcard (AGENTS.md IAM
+    // mandate).
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'InvokeWebSearchGateway',
+            Action: 'bedrock-agentcore:InvokeGateway',
+            Resource: 'arn:aws:bedrock-agentcore:us-east-1:111111111111:gateway/test-gateway',
+          }),
+        ]),
+      },
+      Roles: Match.arrayWith([Match.objectLike({ Ref: Match.stringLikeRegexp('^TtobakQaRole') })]),
+    });
+  });
+
   test('api role StartIngestionJob grant is scoped to the KB ARN, not a wildcard', () => {
     // AGENTS.md IAM mandate: no new unconditioned Resource:"*" statements.
     template.hasResourceProperties('AWS::IAM::Policy', {

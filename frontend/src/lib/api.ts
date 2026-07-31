@@ -235,7 +235,7 @@ export const qaApi = {
     ),
 
   detectQuestions: (transcript: string, previousQuestions?: string[], summary?: string) =>
-    api.post<{ questions: string[] }>(
+    api.post<{ questions: string[]; proactive?: string[] }>(
       '/api/qa/detect-questions',
       { transcript, previousQuestions, summary }
     ),

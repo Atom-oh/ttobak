@@ -11,7 +11,7 @@ import { LiveTranscript } from '@/components/LiveTranscript';
 import { RecordingTabs } from '@/components/RecordingTabs';
 import { TranslationView } from '@/components/TranslationView';
 import { LiveSummary } from '@/components/LiveSummary';
-import { LiveQAPanel } from '@/components/LiveQAPanel';
+import { LiveQAPanel, resetProactiveClaims } from '@/components/LiveQAPanel';
 import ReferenceTabs from '@/components/ReferenceTabs';
 import ReferencePanel from '@/components/ReferencePanel';
 import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingConfig';
@@ -384,6 +384,9 @@ function RecordPageInner() {
       setTabSharingLabel(label);
     }
     summary.reset();
+    // New recording session — the previous recording's auto-fired proactive
+    // questions must not shadow identically-worded ones in this session.
+    resetProactiveClaims();
     setNotes('');
     liveNotesRef.current = '';
     lastSavedNotesRef.current = '';
@@ -1087,6 +1090,7 @@ function RecordPageInner() {
                 meetingId={postRecording.serverMeetingId || undefined}
                 onDetectedQuestionsChange={setDetectedCount}
                 serverDetectedQuestions={summary.detectedQuestions}
+                proactiveQuestions={summary.proactiveQuestions}
                 onAskedQuestion={summary.addAskedQuestion}
                 onSaveToNotes={handleSaveQAToNotes}
               />
@@ -1148,6 +1152,7 @@ function RecordPageInner() {
                     meetingId={postRecording.serverMeetingId || undefined}
                     onDetectedQuestionsChange={setDetectedCount}
                     serverDetectedQuestions={summary.detectedQuestions}
+                    proactiveQuestions={summary.proactiveQuestions}
                     onAskedQuestion={summary.addAskedQuestion}
                     onSaveToNotes={handleSaveQAToNotes}
                   />

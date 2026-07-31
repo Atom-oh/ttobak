@@ -1156,6 +1156,49 @@ Response: 200 OK
 }
 ```
 
+#### Agentic Q&A (Python QA Lambda)
+
+`POST /api/qa/ask`, `POST /api/qa/meeting/{meetingId}`, WebSocket `ask_live` — Bedrock Converse 에이전틱 루프.
+사용 가능 도구: `search_knowledge_base`, `search_aws_docs`, `search_transcript`, `get_aws_recommendation`,
+`search_web`, `list_meetings`, `get_meeting_detail`, `start_research`, account 도구들.
+스트리밍(`ask_live`) 경로도 비스트리밍과 동일하게 실시간 트랜스크립트 tail(2000자)을 시스템 프롬프트에 포함한다.
+대화 연속성: `sessionId`별 히스토리를 DynamoDB에 저장(7일 TTL), 같은 세션의 후속 질문은 이전 문답 맥락을 이어받는다.
+
+**`search_web` 데이터 전송 고지**: 이 도구는 us-east-1 AgentCore Web Search Gateway를 SigV4 크로스리전으로
+호출하며, 모델이 만든 검색 쿼리(최대 200자 — 회의 대화에서 파생된 키워드가 포함될 수 있음)가 **외부 웹 검색
+제공자로 전송**된다. 이 전송은 **사용자가 직접 입력한 질문 경로에서도 일어난다** — 아래 선제 검색 opt-in
+토글이 제어하는 것은 '자동 발화'뿐이다. 수동 경로의 완화책은 시스템 프롬프트/도구 설명의 쿼리 구성 제약
+(고객사·참석자 실명, 내부 코드명, 회의 수치 금지 — 일반화 키워드만)이며, 트랜스크립트 속 문장을 지시로
+취급하지 않는 인젝션 가드가 함께 적용된다. 쿼리 원문은 CloudWatch에 로깅하지 않는다 — `web_search.py` 자체
+로그와 에이전틱 루프의 tool-call 로그(`redact_tool_input_for_log`) 모두 해시+길이만 남긴다.
+`WEB_SEARCH_GATEWAY_URL` 미설정 시 도구는 계속 노출되되 호출하면 "web search not configured" 실패 사유가
+모델에 전달된다(도구 라운드 1회 소비 — 완전 비활성이 아님). 서버측 per-user rate limit은 아직 없다
+(CLAUDE.md Known Issues / ADR-028 follow-up).
+
+#### Detect Questions (실시간 질문 감지 + 선제 검색 플래그)
+
+```
+POST /api/qa/detect-questions
+Request:
+{
+  "transcript": "최근 대화 내용...",
+  "summary": "현재 미팅 요약 (선택)",
+  "previousQuestions": ["이미 제안된 질문"]
+}
+
+Response: 200 OK
+{
+  "questions": ["EKS 1.31 지원 종료일은?", "어느 팀이 마이그레이션을 맡을까요?"],
+  "proactive": ["EKS 1.31 지원 종료일은?"]   // questions의 부분집합 — 검색으로 즉시 사실 확인
+                                              // 가능한 질문. 프론트(LiveQAPanel)가 배치당 1건을
+                                              // 자동 발화해 답을 미리 띄운다 (선제 검색)
+}
+```
+
+선제 검색 자동 발화는 **기본 꺼짐(opt-in)**: 회의 대화에서 파생된 질문이 사용자 조작 없이 외부 웹 검색까지
+이어질 수 있으므로, LiveQAPanel 헤더의 "선제 검색" 토글(localStorage `ttobak.proactiveSearchEnabled`)을 켠
+사용자에게만 동작한다. 꺼져 있으면 `proactive` 질문도 일반 추천 칩으로만 표시된다.
+
 ---
 
 ### Knowledge Base
@@ -1443,10 +1486,11 @@ Manually curates a single crawled **news** document — e.g. a search result the
 - **역할**: Bedrock Claude로 회의록 요약
 - **처리**:
   1. 선택된 전사 텍스트 로드
-  2. Bedrock Claude Opus 4.8 호출
-  3. 구조화된 마크다운 회의록 생성
-  4. DynamoDB에 content 저장
-  5. 상태를 "done"으로 업데이트
+  2. 첨부 컨텍스트 구성: 이미지 분석 결과(다이어그램 첨부는 `첨부 다이어그램`으로 라벨링되어 mermaid 코드가 신뢰 소스로 전달) + 문서 첨부(PPTX/PDF 등, 본문 미추출) 파일명 목록
+  3. Bedrock Claude Opus 4.8 호출 — 회의록에 조건부 `## 아키텍처 다이어그램` 섹션 포함 (첨부 다이어그램 mermaid가 있거나 아키텍처 논의가 구체적일 때만; 아니면 섹션 생략)
+  4. 구조화된 마크다운 회의록 생성 (+ 하단에 `## 첨부 이미지`/`## 첨부 문서` — `attachment://{id}` 링크, 프론트엔드가 presigned URL로 해석)
+  5. DynamoDB에 content 저장
+  6. 상태를 "done"으로 업데이트
 - **환경변수**: TABLE_NAME, BEDROCK_MODEL_ID
 
 ### 4. Process Image Lambda (cmd/process-image)

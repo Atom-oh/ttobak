@@ -96,9 +96,12 @@ edgeAuthStack.addDependency(authStack);
 // This prevents direct API Gateway access, enforcing CloudFront-only traffic.
 const originVerifySecret = app.node.tryGetContext('ttobak:originVerifySecret') || '';
 
-// Stack 6: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge
+// Stack 6: Gateway (API Gateway + Lambda) - depends on Auth, Storage, AI, Knowledge, WebSearchGateway
 const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   env,
+  // webSearchGatewayUrl is a cross-region reference (us-east-1 → ap-northeast-2),
+  // same pattern as CrawlerStack's consumption of the same value.
+  crossRegionReferences: true,
   description: 'TTOBAK AI Meeting Assistant - Gateway (API Gateway + Lambda)',
   userPool: authStack.userPool,
   userPoolClient: authStack.userPoolClient,
@@ -126,11 +129,13 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   // convert-doc's PRIVATE_ISOLATED placement below is a GatewayStack
   // resource, not a WhisperStack dependency.
   vpcId: app.node.tryGetContext('ttobak:whisperVpcId') || 'vpc-04e77172c67f19814',
+  webSearchGatewayUrl: webSearchGatewayStack.gatewayUrl,
 });
 gatewayStack.addDependency(authStack);
 gatewayStack.addDependency(storageStack);
 gatewayStack.addDependency(aiStack);
 gatewayStack.addDependency(knowledgeStack);
+gatewayStack.addDependency(webSearchGatewayStack);
 
 // Stack 7.5: Crawler (Step Functions + Lambda) - depends on AI, Storage, Knowledge, WebSearchGateway
 const crawlerStack = new CrawlerStack(app, 'TtobakCrawlerStack', {

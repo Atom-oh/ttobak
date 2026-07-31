@@ -364,6 +364,76 @@ func buildSummarizeUserPrompt(transcript, priorContext string, segments []speake
 	return body
 }
 
+// buildAttachmentContext renders the attachment-derived block appended to
+// SummarizeTranscript's user prompt. Extracted as a pure function so each of
+// the three attachment shapes stays covered by its own unit test:
+//   - diagram attachments (process-image classified them "diagram" and
+//     converted the picture to mermaid) are labeled as 첨부 다이어그램 so the
+//     system prompt's 아키텍처 다이어그램 section can treat their mermaid
+//     code as the trusted source rather than re-deriving structure from talk
+//     (that trusted-source instruction is emitted only when at least one
+//     diagram is actually present — a screenshot-only meeting must not carry
+//     a dangling reference to nonexistent mermaid);
+//   - other processed images (screenshot/whiteboard/photo analysis) keep the
+//     pre-existing 첨부 이미지 framing;
+//   - document attachments (category "file": PPTX/PDF/DOCX/MD…) have no
+//     extracted content, so only their filenames are listed — enough for the
+//     note to reference them as 참고 자료 instead of ignoring them entirely.
+//     Gated on AttachStatusDone (like the link section appended after the
+//     LLM call) and deduplicated, so a failed/aborted upload row can't get
+//     cited in the note body while missing from the link list.
+//
+// Returns "" when there is nothing to add.
+func buildAttachmentContext(attachments []model.Attachment) string {
+	var analyses strings.Builder
+	hasDiagram := false
+	var docNames []string
+	seenDocs := make(map[string]bool)
+	for _, att := range attachments {
+		// Same done-gate for image analyses as for documents and the
+		// appended link section: process-image only writes ProcessedContent
+		// together with status=done, but an inconsistent row must not get
+		// cited in the note body while missing from the link list. Document
+		// rows are excluded from this branch by Type: if document content
+		// extraction ever populates ProcessedContent, it must not be
+		// presented under an image label.
+		if att.ProcessedContent != "" && att.Status == model.AttachStatusDone && att.Type != model.AttachTypeDocument {
+			label := "첨부 이미지"
+			if att.Type == model.AttachTypeDiagram {
+				label = "첨부 다이어그램"
+				hasDiagram = true
+			}
+			analyses.WriteString(fmt.Sprintf("\n### %s: %s\n%s\n", label, sanitizeMarkdownText(att.FileName), att.ProcessedContent))
+			continue
+		}
+		if att.Type == model.AttachTypeDocument && att.FileName != "" && att.Status == model.AttachStatusDone && !seenDocs[att.FileName] {
+			seenDocs[att.FileName] = true
+			docNames = append(docNames, att.FileName)
+		}
+	}
+
+	var out strings.Builder
+	if analyses.Len() > 0 {
+		out.WriteString("아래는 회의 중 첨부된 화면/슬라이드/다이어그램의 AI 분석 결과입니다. 이 내용도 회의록에 자연스럽게 통합해주세요.")
+		if hasDiagram {
+			out.WriteString(" 첨부 다이어그램의 mermaid 코드는 아키텍처 다이어그램 섹션의 신뢰 소스로 사용하세요.")
+		}
+		out.WriteString("\n")
+		out.WriteString(analyses.String())
+	}
+	if len(docNames) > 0 {
+		if out.Len() > 0 {
+			out.WriteString("\n")
+		}
+		out.WriteString("이 회의에는 다음 문서 파일이 첨부되어 있습니다 (본문 내용은 추출되지 않았으므로 내용을 추측하지 말 것). ")
+		out.WriteString("회의에서 이 자료가 언급된 맥락이 있으면 해당 파일명을 참고 자료로 자연스럽게 언급하세요:\n")
+		for _, name := range docNames {
+			out.WriteString(fmt.Sprintf("- %s\n", sanitizeMarkdownText(name)))
+		}
+	}
+	return out.String()
+}
+
 // SummarizeTranscript generates meeting notes (content) from the transcript using Claude.
 // userID enables strongly-consistent base table read instead of GSI.
 // priorContext is optional linked-meeting context prepended to the prompt.
@@ -412,6 +482,12 @@ Your output MUST follow this exact structure:
 ## 주요 논의 사항
 논의된 핵심 토픽별로 문단을 나눠 서술. 각 토픽은 무슨 내용이 논의되고 어떤 맥락이었는지 자연스러운 글로 설명 (불릿 사용 금지, 토픽이 명확히 나열식일 때만 예외 — 이 경우에도 번호(1. 2. 3.) 대신 항상 - 불릿을 사용할 것. 번호 매기기는 문단 사이에서 중간부터 다시 시작되면 마크다운 렌더링이 깨지므로 사용 금지)
 
+## 아키텍처 다이어그램
+(선택 섹션 — 아래 조건 중 하나에 해당할 때만 포함하고, 아니면 섹션 제목까지 통째로 생략할 것)
+- 첨부 다이어그램 분석 결과로 mermaid 코드가 제공된 경우: 그 코드를 신뢰 소스로 삼아 이 섹션에 포함. 회의 내용과 대조해 라벨/용어만 보정하고 구조는 임의로 바꾸지 말 것.
+- 첨부 다이어그램은 없지만 회의에서 시스템 아키텍처, 데이터 흐름, 컴포넌트 간 호출 관계가 구체적으로 논의된 경우: 논의된 내용만으로 mermaid 다이어그램(flowchart LR/TD 또는 sequenceDiagram)을 직접 작도해 포함.
+- mermaid 작성 규칙: 노드 라벨에 괄호·슬래시·특수문자가 들어가면 반드시 큰따옴표로 감쌀 것 (예: A["API Gateway (HTTP)"]). 회의에서 언급되지 않은 컴포넌트를 지어내지 말 것. 다이어그램은 섹션당 1개만.
+
 ## 결정 사항
 - 합의된 결정들
 
@@ -437,18 +513,11 @@ ADR-013 — 트랜스크립트 딥 링크:
 	}
 	userPrompt := buildSummarizeUserPrompt(transcript, priorContext, parsedSegments)
 
-	// Include screenshot analysis results if available
+	// Include attachment-derived context (image/diagram analysis results and
+	// document filenames) if available.
 	attachments, _ := s.repo.ListAttachments(ctx, meetingID)
-	if len(attachments) > 0 {
-		var sb strings.Builder
-		for _, att := range attachments {
-			if att.ProcessedContent != "" {
-				sb.WriteString(fmt.Sprintf("\n### 첨부 이미지: %s\n%s\n", att.FileName, att.ProcessedContent))
-			}
-		}
-		if sb.Len() > 0 {
-			userPrompt += "\n\n---\n\n아래는 회의 중 캡처된 화면/슬라이드의 AI 분석 결과입니다. 이 내용도 회의록에 자연스럽게 통합해주세요:\n" + sb.String()
-		}
+	if attCtx := buildAttachmentContext(attachments); attCtx != "" {
+		userPrompt += "\n\n---\n\n" + attCtx
 	}
 
 	request := ClaudeRequest{
@@ -478,23 +547,42 @@ ADR-013 — 트랜스크립트 딥 링크:
 	// Safe no-op when segments are missing or markers weren't emitted.
 	content = resolveTranscriptAnchors(content, parsedSegments)
 
-	// Append inline image references for processed attachments.
+	// Append inline image references for processed attachments, plus download
+	// links for document attachments (PPTX/PDF/DOCX/MD — never content-
+	// extracted, so this link list is the only way they surface in the note).
 	// Frontend resolves attachment:// URLs to presigned S3 URLs at render time.
 	const attachmentSentinel = "<!-- ttobak:attachments -->"
 	if len(attachments) > 0 && !strings.Contains(content, attachmentSentinel) {
-		var imgSection strings.Builder
+		var imgSection, docSection strings.Builder
+		// Dedup by AttachmentID, not FileName: two DIFFERENT documents that
+		// happen to share a name must both keep their links (each resolves
+		// to its own object); genuinely duplicated rows share the ID.
+		seenDocLinks := make(map[string]bool)
 		for _, att := range attachments {
-			if att.Status != model.AttachStatusDone || att.ProcessedContent == "" {
+			if att.Status != model.AttachStatusDone {
 				continue
 			}
 			safeName := sanitizeMarkdownText(att.FileName)
-			imgSection.WriteString(fmt.Sprintf(
-				"\n### %s\n![%s](attachment://%s)\n",
-				safeName, safeName, att.AttachmentID,
-			))
+			if att.ProcessedContent != "" {
+				imgSection.WriteString(fmt.Sprintf(
+					"\n### %s\n![%s](attachment://%s)\n",
+					safeName, safeName, att.AttachmentID,
+				))
+			} else if att.Type == model.AttachTypeDocument && att.FileName != "" && !seenDocLinks[att.AttachmentID] {
+				seenDocLinks[att.AttachmentID] = true
+				docSection.WriteString(fmt.Sprintf(
+					"- [%s](attachment://%s)\n", safeName, att.AttachmentID,
+				))
+			}
 		}
-		if imgSection.Len() > 0 {
-			content += "\n\n---\n\n" + attachmentSentinel + "\n## 첨부 이미지\n" + imgSection.String()
+		if imgSection.Len() > 0 || docSection.Len() > 0 {
+			content += "\n\n---\n\n" + attachmentSentinel
+			if imgSection.Len() > 0 {
+				content += "\n## 첨부 이미지\n" + imgSection.String()
+			}
+			if docSection.Len() > 0 {
+				content += "\n## 첨부 문서\n" + docSection.String()
+			}
 		}
 	}
 

@@ -19,6 +19,11 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
         const mermaid = (await import('mermaid')).default;
         mermaid.initialize({
           startOnLoad: false,
+          // Explicit, even though 'strict' is mermaid's default: diagram
+          // source here is LLM output over untrusted meeting content, so a
+          // future mermaid upgrade or config merge must never silently
+          // enable click handlers / script in rendered SVG.
+          securityLevel: 'strict',
           theme: 'dark',
           themeVariables: {
             primaryColor: '#8b85f7',

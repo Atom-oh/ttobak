@@ -10,6 +10,7 @@ import boto3
 from aws_docs import search_aws_docs
 from prompts import get_system_prompt, DETECT_QUESTIONS_PROMPT
 from tools import TOOL_DEFINITIONS, execute_tool
+from web_search import redact_tool_input_for_log
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -861,7 +862,11 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
             for block in output_message["content"]:
                 if "toolUse" in block:
                     tool = block["toolUse"]
-                    logger.info(f"Tool call: {tool['name']} input={json.dumps(tool['input'], ensure_ascii=False)}")
+                    # search_web input carries a conversation-derived query —
+                    # redact it (hash+length) before logging, same policy as
+                    # web_search.py's own logs. Other tools' inputs are
+                    # meeting/account identifiers and stay loggable.
+                    logger.info(f"Tool call: {tool['name']} input={json.dumps(redact_tool_input_for_log(tool['name'], tool['input']), ensure_ascii=False)}")
                     try:
                         result, result_sources = execute_tool(
                             tool["name"], tool["input"], context
@@ -1039,16 +1044,45 @@ def handle_detect_questions(body):
             if 'text' in block:
                 answer += block['text']
 
-        # Parse JSON array from response
-        questions = json.loads(answer.strip())
-        if not isinstance(questions, list):
-            questions = []
-        questions = [q for q in questions if isinstance(q, str)][:5]
+        questions, proactive = parse_detected_questions(answer)
     except Exception as e:
         logger.warning(f'Question detection failed: {e}')
-        questions = []
+        questions, proactive = [], []
 
-    return response(200, {'questions': questions})
+    return response(200, {'questions': questions, 'proactive': proactive})
+
+
+def parse_detected_questions(raw):
+    """Parse the detect-questions model output into (questions, proactive).
+
+    Accepts both the current object format [{"q": str, "search": bool}, ...]
+    and the legacy plain-string format ["질문", ...] (older prompt, or a model
+    that ignores the schema) — legacy items are questions with no proactive
+    flag. Duplicates are dropped (first occurrence wins, including its search
+    flag). proactive is always a subset of questions.
+    """
+    try:
+        parsed = json.loads(raw.strip())
+    except json.JSONDecodeError:
+        return [], []
+    if not isinstance(parsed, list):
+        return [], []
+    questions, proactive = [], []
+    seen = set()
+    for item in parsed:
+        q, is_search = None, False
+        if isinstance(item, str) and item.strip():
+            q = item.strip()
+        elif isinstance(item, dict) and isinstance(item.get('q'), str) and item['q'].strip():
+            q = item['q'].strip()
+            is_search = item.get('search') is True
+        if q is None or q in seen:
+            continue
+        seen.add(q)
+        questions.append(q)
+        if is_search:
+            proactive.append(q)
+    return questions[:5], [q for q in proactive if q in questions[:5]]
 
 
 def response(status_code, body):
@@ -1220,11 +1254,20 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
     sources = []
     final_answer_parts = []
 
+    # Mirror agentic_converse: fold the live transcript tail into the system
+    # prompt. Without this the streaming path (the one the recording UI
+    # actually uses) answered with NO meeting context at all beyond what
+    # search_transcript could fish out on explicit tool calls.
+    system_messages = [{"text": get_system_prompt()}]
+    if transcript:
+        truncated = transcript[-2000:] if len(transcript) > 2000 else transcript
+        system_messages.append({"text": f"\n\n## 현재 미팅 대화 내용 (실시간)\n{truncated}\n\n위 대화 맥락에 기반하여 답변하세요. 미팅 내용과 관련없는 질문이라도 가능한 한 대화 맥락을 참조하세요."})
+
     for _ in range(MAX_TOOL_ROUNDS):
         try:
             stream_resp = bedrock_runtime.converse_stream(
                 modelId=BEDROCK_MODEL_ID,
-                system=[{"text": get_system_prompt()}],
+                system=system_messages,
                 messages=messages,
                 toolConfig={"tools": TOOL_DEFINITIONS},
                 inferenceConfig={"maxTokens": 4096},

@@ -255,9 +255,10 @@ def _sigv4_post(body_json: str) -> str:
     config or transport/HTTP failure — callers must not treat a config error
     the same as a normal "no results" response.
 
-    Duplicated in backend/python/research-agent/tools.py (separate Lambda
-    vs. AgentCore Runtime container deploy artifacts — not worth a shared
-    package for one function). Keep both copies in sync if this changes.
+    Duplicated in backend/python/research-agent/tools.py and
+    backend/python/qa/web_search.py (separate Lambda-zip vs. AgentCore
+    Runtime container deploy artifacts — not worth a shared package for one
+    function). Keep all three copies in sync if this changes.
     """
     if not WEB_SEARCH_GATEWAY_URL:
         raise RuntimeError('WEB_SEARCH_GATEWAY_URL is not set')

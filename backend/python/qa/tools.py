@@ -4,6 +4,7 @@ import logging
 import re
 
 from aws_docs import search_aws_docs, get_aws_recommendation
+from web_search import gateway_web_search, format_web_results
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +147,22 @@ TOOL_DEFINITIONS = [
                 "account": {"type": "string", "description": "고객사 이름 또는 별칭 (예: 하나은행)"}
             }, "required": ["account"]}}
         }
+    },
+    {
+        "toolSpec": {
+            "name": "search_web",
+            "description": "웹에서 최신 정보를 검색합니다. 최신 뉴스, 제품/서비스 출시 소식, 시세·가격, 경쟁사 동향, AWS 외 일반 주제 등 KB나 AWS 문서에 없을 정보에 사용하세요. 쿼리는 외부 검색 제공자로 전송되므로 일반화된 기술 키워드로만 구성할 것 — 고객사/참석자 실명, 내부 프로젝트 코드명, 회의에서 나온 구체적 금액·수치를 쿼리에 넣지 마세요.",
+            "inputSchema": {
+                "json": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "검색 쿼리 (구체적일수록 좋음)"},
+                        "maxResults": {"type": "integer", "description": "최대 결과 수 (1-10)", "default": 5}
+                    },
+                    "required": ["query"]
+                }
+            }
+        }
     }
 ]
 
@@ -156,7 +173,21 @@ def execute_tool(tool_name, tool_input, context):
     Returns a tuple so the caller can collect sources without re-executing the search.
     """
     try:
-        if tool_name == "search_knowledge_base":
+        if tool_name == "search_web":
+            # Clamp to [1, 10]: a model-supplied 0/negative value would slice
+            # to [] with error=None, which reads as a genuine "no results" —
+            # exactly the failure/no-results ambiguity format_web_results
+            # exists to prevent.
+            try:
+                max_results = int(tool_input.get("maxResults", 5))
+            except (TypeError, ValueError):
+                max_results = 5
+            results, error = gateway_web_search(
+                tool_input["query"],
+                max(1, min(max_results, 10)),
+            )
+            return format_web_results(results, error)
+        elif tool_name == "search_knowledge_base":
             results = context["retrieve_from_kb"](
                 tool_input["query"],
                 tool_input.get("numberOfResults", 5),

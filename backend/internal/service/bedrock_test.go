@@ -38,6 +38,82 @@ func TestBuildSummarizeUserPrompt_NoPriorContextOmitsMarker(t *testing.T) {
 	}
 }
 
+func TestBuildAttachmentContext_DiagramLabeledAsTrustedMermaidSource(t *testing.T) {
+	got := buildAttachmentContext([]model.Attachment{
+		{Type: model.AttachTypeDiagram, FileName: "arch.png", ProcessedContent: "```mermaid\ngraph TD\nA-->B\n```", Status: model.AttachStatusDone},
+	})
+	if !strings.Contains(got, "첨부 다이어그램: arch.png") {
+		t.Fatalf("diagram attachment not labeled as 첨부 다이어그램: %q", got)
+	}
+	if !strings.Contains(got, "신뢰 소스") {
+		t.Fatalf("trusted-source instruction missing for diagram mermaid: %q", got)
+	}
+	if !strings.Contains(got, "graph TD") {
+		t.Fatalf("mermaid ProcessedContent missing: %q", got)
+	}
+}
+
+func TestBuildAttachmentContext_NonDiagramImageKeepsImageLabel(t *testing.T) {
+	got := buildAttachmentContext([]model.Attachment{
+		{Type: model.AttachTypeScreenshot, FileName: "shot.png", ProcessedContent: "화면 분석 결과", Status: model.AttachStatusDone},
+	})
+	if !strings.Contains(got, "첨부 이미지: shot.png") {
+		t.Fatalf("screenshot attachment not labeled as 첨부 이미지: %q", got)
+	}
+	// The trusted-source instruction references diagram mermaid — with no
+	// diagram attachment present it must not appear at all.
+	if strings.Contains(got, "신뢰 소스") {
+		t.Fatalf("trusted-source instruction emitted without any diagram attachment: %q", got)
+	}
+}
+
+func TestBuildAttachmentContext_DocumentListedByNameOnly(t *testing.T) {
+	got := buildAttachmentContext([]model.Attachment{
+		{Type: model.AttachTypeDocument, FileName: "proposal.pptx", Status: model.AttachStatusDone},
+		{Type: model.AttachTypeDocument, FileName: "spec.pdf", Status: model.AttachStatusDone},
+		// Duplicate row (e.g. double upload-complete) must list once.
+		{Type: model.AttachTypeDocument, FileName: "proposal.pptx", Status: model.AttachStatusDone},
+	})
+	if !strings.Contains(got, "- proposal.pptx") || !strings.Contains(got, "- spec.pdf") {
+		t.Fatalf("document filenames missing: %q", got)
+	}
+	if strings.Count(got, "- proposal.pptx") != 1 {
+		t.Fatalf("duplicate document filename not deduplicated: %q", got)
+	}
+	if !strings.Contains(got, "내용을 추측하지 말 것") {
+		t.Fatalf("no-content-guessing guard missing for unextracted documents: %q", got)
+	}
+}
+
+func TestBuildAttachmentContext_NonDoneDocumentExcluded(t *testing.T) {
+	// A failed/aborted upload row (status never reached done) must not be
+	// presented to the model as an existing attachment — the appended link
+	// section filters on done, so the prompt path must too or the note can
+	// cite a document that has no link.
+	got := buildAttachmentContext([]model.Attachment{
+		{Type: model.AttachTypeDocument, FileName: "half-uploaded.pptx", Status: model.AttachStatusUploaded},
+		// Image analyses are gated on done too — a processing-state row with
+		// (somehow) populated content must not be cited without a link.
+		{Type: model.AttachTypeScreenshot, FileName: "mid.png", ProcessedContent: "분석", Status: model.AttachStatusProcessing},
+	})
+	if got != "" {
+		t.Fatalf("non-done attachment leaked into prompt context: %q", got)
+	}
+}
+
+func TestBuildAttachmentContext_EmptyWhenNothingUsable(t *testing.T) {
+	// A document row without a filename and a still-processing image (no
+	// ProcessedContent) contribute nothing — the caller must get "" so no
+	// dangling "---" separator is appended to the prompt.
+	got := buildAttachmentContext([]model.Attachment{
+		{Type: model.AttachTypeDocument, Status: model.AttachStatusDone},
+		{Type: model.AttachTypePhoto, FileName: "p.jpg"},
+	})
+	if got != "" {
+		t.Fatalf("expected empty context, got: %q", got)
+	}
+}
+
 func TestHasNonOwnerCollaborator(t *testing.T) {
 	tests := []struct {
 		name    string

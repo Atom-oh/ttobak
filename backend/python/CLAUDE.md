@@ -3,7 +3,7 @@
 Python Lambda functions for specialized AI workloads.
 
 ## Structure
-- `qa/` — Bedrock RAG Q&A Lambda (Converse API + KB Retrieve, WebSocket streaming)
+- `qa/` — Bedrock RAG Q&A Lambda (Converse API + KB Retrieve, WebSocket streaming, `search_web` via the us-east-1 AgentCore Web Search Gateway — SigV4 plumbing in `web_search.py`, kept in sync with `crawler/news_crawler.py` and `research-agent/tools.py`)
 - `crawler/` — Step Functions pipeline: orchestrator, news-crawler, tech-crawler, ingest-trigger
 - `research-agent/` — AgentCore Runtime container (FastAPI + Strands Agents)
 - `research-tools/` — Tool Lambdas for Bedrock Agent (save-report, fetch-page)

@@ -31,8 +31,9 @@ cd frontend && npm run lint      # eslint
 # Python unit tests (stdlib unittest; needs boto3/botocore --
 # present in the Lambda/container runtime, but `pip install 'boto3<2'` locally if running by hand.
 # The <2 cap matters for crawler/research-agent, whose tests exercise botocore.auth.SigV4Auth, a
-# quasi-internal API a major bump could change; the qa suite mocks boto3 wholesale at import and
-# only needs it importable)
+# quasi-internal API a major bump could change; the qa suite mocks boto3 wholesale at import --
+# qa's web_search.py imports SigV4Auth too, but its tests mock the _sigv4_post transport, so
+# importable is still all the qa suite needs)
 cd backend/python/crawler && python3 -m unittest test_crawlers -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
 cd backend/python/qa && python3 -m unittest test_handler -v
@@ -77,7 +78,7 @@ Microphone → AWS Transcribe Streaming (via @aws-sdk/client-transcribe-streamin
 ```
 
 ### CDK Stack Dependency Order (11 stacks)
-{WebSearchGateway (us-east-1) + Storage} (parallel, no deps) → {Auth, Knowledge} (both depend on Storage) → AI (depends on Storage+Knowledge+Auth+WebSearchGateway) → {EdgeAuth (us-east-1, depends on Auth), Whisper (depends on Storage), ResearchAgent (depends on Storage+Knowledge), Gateway (depends on Auth+Storage+AI+Knowledge), Crawler (depends on AI+Storage+Knowledge+WebSearchGateway)} → Frontend (depends on Gateway+EdgeAuth+Auth). Gateway and Crawler are siblings — both depend on AI but not on each other. See `infra/bin/infra.ts` for the exact `addDependency` calls — this list is the actual graph, not stack creation order.
+{WebSearchGateway (us-east-1) + Storage} (parallel, no deps) → {Auth, Knowledge} (both depend on Storage) → AI (depends on Storage+Knowledge+Auth+WebSearchGateway) → {EdgeAuth (us-east-1, depends on Auth), Whisper (depends on Storage), ResearchAgent (depends on Storage+Knowledge), Gateway (depends on Auth+Storage+AI+Knowledge+WebSearchGateway — the QA Lambda's `WEB_SEARCH_GATEWAY_URL` is a cross-region ref, so GatewayStack sets `crossRegionReferences: true`), Crawler (depends on AI+Storage+Knowledge+WebSearchGateway)} → Frontend (depends on Gateway+EdgeAuth+Auth). Gateway and Crawler are siblings — both depend on AI but not on each other. See `infra/bin/infra.ts` for the exact `addDependency` calls — this list is the actual graph, not stack creation order.
 
 ### Backend (Go)
 
@@ -127,12 +128,13 @@ Error codes: `BAD_REQUEST` (400), `UNAUTHORIZED` (401), `FORBIDDEN` (403), `NOT_
 
 CDK injects env vars per Lambda — see CDK stacks for full list. Common: `TABLE_NAME`, `BUCKET_NAME`, `BEDROCK_MODEL_ID`. The `api` Lambda also gets `COGNITO_USER_POOL_ID`, `COGNITO_CLIENT_ID`, `KB_BUCKET_NAME`, `KMS_KEY_ID`, `FRONTEND_BASE_URL` (deployed frontend origin, built as `https://${ttobak:domainName}` — the `ttobak:domainName` CDK context key in `infra/cdk.json` must be a bare domain, e.g. `ttobak.atomai.click`, with no scheme; used to build absolute links, e.g. rewriting `transcript://`/`#ts-` deep links for Notion export).
 
-The news crawler Lambda (`ttobak-crawler-news`) gets `WEB_SEARCH_GATEWAY_URL` / `WEB_SEARCH_GATEWAY_REGION` (the AgentCore Gateway Web Search connector MCP endpoint — the gateway lives in us-east-1 only, so the ap-northeast-2 crawler calls it cross-region with SigV4, signing service name `bedrock-agentcore`). The research-agent AgentCore Runtime container (deployed **outside CDK** — role `ttobak-agentcore-research-role`) needs the same two env vars injected via its own deploy pipeline, not `infra/lib/crawler-stack.ts`'s `commonEnv`. **Deploy precondition**: `ttobak-agentcore-research-role` must already exist before `cdk deploy TtobakAiStack` — `AiStack` imports it by ARN (`iam.Role.fromRoleArn`) to attach the Gateway-invoke policy. `deploy-research-agent.yml` only *consumes* this role (`--role-arn` on `update-agent-runtime`); it does not create it — the role is a manually-created, pre-existing IAM resource (created once, out-of-band, when the AgentCore Runtime was first provisioned), not an artifact of any current CI pipeline. `deploy-infra.yml` runs an `aws iam get-role` preflight before `TtobakAiStack` so a missing role fails fast with a clear message instead of a CFN inline-policy-attach error.
+The news crawler Lambda (`ttobak-crawler-news`) and the QA Lambda (`ttobak-qa`, for its `search_web` tool) get `WEB_SEARCH_GATEWAY_URL` / `WEB_SEARCH_GATEWAY_REGION` (the AgentCore Gateway Web Search connector MCP endpoint — the gateway lives in us-east-1 only, so the ap-northeast-2 callers reach it cross-region with SigV4, signing service name `bedrock-agentcore`; the SigV4+MCP plumbing is triplicated in `crawler/news_crawler.py`, `research-agent/tools.py`, and `qa/web_search.py` — keep in sync). `search_web` queries (model-composed, ≤200 chars, may derive from meeting conversation) go to an external web search provider on BOTH the manual-question path and the proactive auto-fire path — only the auto-fire is gated by the frontend's opt-in toggle (default off); the manual path is mitigated by prompt/tool-description constraints (no customer names, internal codenames, or meeting figures in queries). QA logs never contain query plaintext — both `web_search.py`'s own logs and the agentic loop's tool-call log (`redact_tool_input_for_log`) record a sha256 prefix + length instead (ADR-028). The research-agent AgentCore Runtime container (deployed **outside CDK** — role `ttobak-agentcore-research-role`) needs the same two env vars injected via its own deploy pipeline, not `infra/lib/crawler-stack.ts`'s `commonEnv`. **Deploy precondition**: `ttobak-agentcore-research-role` must already exist before `cdk deploy TtobakAiStack` — `AiStack` imports it by ARN (`iam.Role.fromRoleArn`) to attach the Gateway-invoke policy. `deploy-research-agent.yml` only *consumes* this role (`--role-arn` on `update-agent-runtime`); it does not create it — the role is a manually-created, pre-existing IAM resource (created once, out-of-band, when the AgentCore Runtime was first provisioned), not an artifact of any current CI pipeline. `deploy-infra.yml` runs an `aws iam get-role` preflight before `TtobakAiStack` so a missing role fails fast with a clear message instead of a CFN inline-policy-attach error.
 
 ## Known Issues & Decisions
 
 ### HIGH
-- **`updateAttachmentByKey` not implemented** (`process-image/main.go`): Image processing results are not saved to DynamoDB. Needs meetingId parsing from S3 key path.
+- ~~`updateAttachmentByKey` not implemented~~ — **FIXED** (`process-image/main.go:121` matches the attachment by `originalKey` via `ListAttachments` and persists type/`processedContent`/status; meetingId/userId come from the EventBridge detail with `service.ExtractInfoFromImageKey` as the S3-key-path fallback)
+- **Meeting document attachments (PPTX/PDF/DOCX/MD) are never content-extracted**: upload category `file` marks the attachment done with no processing (`upload.go` CompleteUpload), so document contents reach neither the live summary (`summarize_live.go` is transcript-only) nor the final note prompt (only image `ProcessedContent` and document *filenames* are folded in — see `buildAttachmentContext`). RAG-wise, a document reaches the KB only via the manual per-attachment copy (`POST /api/kb/copy-attachment` → `kb/{userId}/`) + async ingestion job; note Bedrock KB's default parser does not index PPT/PPTX, so slide decks need conversion (e.g. the `convert-doc` PDF sidecar) before they're retrievable.
 
 ### Medium
 - **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID, `agentCoreRuntimeArn`, `researchAgentExecutionRoleArn` are hardcoded in CDK stacks. Should be extracted to CDK context for multi-account/stage support. The KB ID/DataSource ID hardcoded in `infra/lib/knowledge-stack.ts` are the real out-of-band values (`BJJLVLFTOR` / `3AVMMT3RF3`), not the `'PENDING'` placeholder they briefly regressed to — see ADR-021.
@@ -141,6 +143,7 @@ The news crawler Lambda (`ttobak-crawler-news`) gets `WEB_SEARCH_GATEWAY_URL` / 
 
 ### Low
 - Default table/bucket names in Go don't match CDK defaults (no runtime impact since CDK injects env vars)
+- **No server-side per-user rate limit on QA `search_web` / proactive search** — the frontend caps auto-fires (one per detection batch, once per question per recording) and `MAX_TOOL_ROUNDS` bounds each answer, but nothing server-side stops a hostile client from burning gateway calls; add if abuse signals appear (ADR-028 follow-up)
 - ~~`AudioContext` not closed on recording stop~~ — **FIXED** (`RecordButton.tsx:80` now calls `audioContextRef.current.close()`)
 - ~~JWT signature not verified in backend~~ — **FIXED**: `middleware/auth.go`'s `ParseVerifiedJWT` now verifies signatures against Cognito JWKS (RS256, issuer + exp checked), so the `cognito:groups` claim used by `RequireAdmin`/`IsAdmin` is backend-verified, not just Lambda@Edge-trusted.
 

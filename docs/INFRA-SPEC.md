@@ -5,16 +5,28 @@
 ## 1. Stack Overview
 
 ```
-TtobakApp (bin/ttobak.ts)
+TtobakApp (bin/infra.ts)
+├── WebSearchGatewayStack - AgentCore Gateway + Web Search 커넥터 (us-east-1)
 ├── AuthStack           - Cognito User Pool + App Client
 ├── StorageStack        - DynamoDB + S3
-├── AiStack             - Transcribe/Nova Sonic/Bedrock IAM
+├── AiStack             - Transcribe/Nova Sonic/Bedrock IAM (depends: WebSearchGateway 등)
 ├── WhisperStack        - ECS Cluster + GPU Spot ASG + ECR
 ├── KnowledgeStack      - Bedrock KB + OpenSearch Serverless
 ├── EdgeAuthStack       - Lambda@Edge (us-east-1, JWT 검증)
 ├── GatewayStack        - API Gateway HTTP + WebSocket + Lambda
-└── FrontendStack       - S3 + CloudFront (depends: EdgeAuth, Gateway)
+│                         (depends: Auth, Storage, AI, Knowledge, WebSearchGateway —
+│                          QA Lambda의 WEB_SEARCH_GATEWAY_URL이 크로스리전 참조)
+├── CrawlerStack        - Step Functions + 크롤러 Lambda (depends: AI, Storage, Knowledge, WebSearchGateway)
+├── ResearchAgentStack  - Bedrock Agent + tool Lambdas
+└── FrontendStack       - S3 + CloudFront (depends: EdgeAuth, Gateway, Auth)
 ```
+
+정확한 의존 그래프는 루트 `CLAUDE.md`의 "CDK Stack Dependency Order"(source of truth: `infra/bin/infra.ts`의
+`addDependency` 호출)를 따른다. Web Search Gateway의 MCP 도구명은
+`ttobak-web-search-tool___WebSearch`로 고정되어 있다 — `web-search-gateway-stack.ts`의
+CfnGatewayTarget `name` + `configurations[0].name`을 게이트웨이가 `{targetName}___{configurationName}`으로
+네임스페이싱한 값이며, 세 Python 호출자(`crawler/news_crawler.py`, `research-agent/tools.py`,
+`qa/web_search.py`)가 이 리터럴에 결합돼 있으므로 스택에서 이름을 바꾸면 세 파일도 함께 바꿔야 한다.
 
 ## 2. AuthStack
 
@@ -226,7 +238,8 @@ TtobakApp (bin/ttobak.ts)
 #### QA Lambda (`ttobak-qa`, Python)
 - **Trigger**: API Gateway HTTP (`/api/qa/*`, sync) + WebSocket Lambda의 async 재호출 (`InvocationType=Event`, live Q&A 스트리밍)
 - **Async retry**: `retryAttempts: 0` (`configureAsyncInvoke`) — 실패/타임아웃한 async 호출을 Lambda가 기본 2회 재시도하면, 몇 분 뒤 stale duplicate answer delta가 이미 끝난 WebSocket 세션으로 배달되는 문제를 차단
-- **Environment**: `TABLE_NAME`, `KB_ID`, `BEDROCK_MODEL_ID`, `DETECT_MODEL_ID`, `MAX_TOOL_ROUNDS`, `KB_CACHE_TTL_SECONDS`, `RESEARCH_SFN_ARN`
+- **Environment**: `TABLE_NAME`, `KB_ID`, `BEDROCK_MODEL_ID`, `DETECT_MODEL_ID`, `MAX_TOOL_ROUNDS`, `KB_CACHE_TTL_SECONDS`, `RESEARCH_SFN_ARN`, `WEB_SEARCH_GATEWAY_URL`/`WEB_SEARCH_GATEWAY_REGION` (`search_web` 도구 — us-east-1 AgentCore Web Search Gateway를 SigV4 크로스리전 호출; URL 미설정 시 도구는 계속 노출되되 호출 시 "web search not configured" 실패 사유를 모델에 반환)
+- **Permissions**: DynamoDB R/W, Bedrock InvokeModel(+stream)/Retrieve, Step Functions StartExecution, WebSocket ManageConnections, `bedrock-agentcore:InvokeGateway` (Web Search Gateway ARN으로 스코프, `ai-stack.ts`)
 
 #### Convert-Doc Lambda (ADR-022)
 - **Trigger**: S3 Event (prefix: `docs/`, suffix: `.ppt`/`.pptx`) via EventBridge
