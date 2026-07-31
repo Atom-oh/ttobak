@@ -249,10 +249,9 @@ export function RecordButton({
     if (audioSource === 'system' && isTauri()) {
       try {
         // Fail BEFORE anything is created or recorded if the installed app
-        // is too old to upload. Ordering matters: no draft meeting, no
-        // ScreenCaptureKit permission prompt, and — critically — no 83
-        // minutes of audio that can only fail at the very end. The catch
-        // below already routes this to onError.
+        // is too old to upload (see ADR-024 for the incident this guards
+        // against). Ordering matters: no draft meeting, no ScreenCaptureKit
+        // permission prompt. The catch below already routes this to onError.
         await assertUploadRecordingAvailable();
 
         // AWAIT onRecordingStart before starting native capture: the parent

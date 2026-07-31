@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, type MutableRefObject } from 'react';
 import { useRouter } from 'next/navigation';
 import { meetingsApi, uploadsApi } from '@/lib/api';
 import { putWithProgress, type UploadProgress } from '@/lib/upload';
-import { uploadRecordingWithRetry, onNativeUploadProgress, cleanupRecording, isCommandNotFound } from '@/lib/tauri';
+import { uploadRecordingWithRetry, onNativeUploadProgress, cleanupRecording, isCommandNotFound, VERSION_SKEW_MESSAGE } from '@/lib/tauri';
 import type { PostRecordingStep } from '@/components/record/PostRecordingBanner';
 
 function formatDefaultTitle(date: Date): string {
@@ -87,6 +87,12 @@ export function usePostRecording({
   // file — that would also re-fire the backend's S3-upload EventBridge rule
   // and duplicate the transcription run.
   const putDoneRef = useRef<{ key: string } | null>(null);
+  // Scopes `uploadRecordingWithRetry`'s offline wait to this specific flow
+  // invocation -- `reset()` aborts it so a user who walks away (Home) or
+  // starts a new recording doesn't leave a stale `online` listener pending
+  // forever, still holding the upload-progress unlisten and the old
+  // meeting's pendingAudioRef alive in closure.
+  const uploadAbortRef = useRef<AbortController | null>(null);
 
   /** Create a draft meeting at recording start for crash recovery */
   const createDraftMeeting = useCallback(async (): Promise<string | null> => {
@@ -99,6 +105,8 @@ export function usePostRecording({
     setServerMeetingId(null);
     pendingAudioRef.current = null;
     putDoneRef.current = null;
+    uploadAbortRef.current?.abort();
+    uploadAbortRef.current = null;
     try {
       const result = await withTimeout(
         meetingsApi.create({
@@ -166,33 +174,47 @@ export function usePostRecording({
                   : resolvedMime.includes('ogg') ? 'ogg'
                   : 'webm';
         const fileName = `recording_${Date.now()}.${ext}`;
-        const { uploadUrl, key } = await withTimeout(
-          uploadsApi.getPresignedUrl({
-            fileName,
-            fileType: resolvedMime,
-            category: 'audio',
-            meetingId,
-          }),
-          15000, 'Get upload URL',
-        );
 
         if (payload.kind === 'blob') {
+          const { uploadUrl, key } = await withTimeout(
+            uploadsApi.getPresignedUrl({ fileName, fileType: resolvedMime, category: 'audio', meetingId }),
+            15000, 'Get upload URL',
+          );
           await putWithProgress(uploadUrl, payload.blob, payload.mimeType, setUploadProgress);
+          putDoneRef.current = { key };
+          uploadKey = key;
         } else {
+          // Re-presigned per attempt inside uploadRecordingWithRetry (not
+          // fetched once up front) -- a presigned PUT URL's TTL can expire
+          // during a long offline wait, and re-presigning is what keeps
+          // each retry attempt valid. `key` only needs to be captured once
+          // since every re-presign for this flow uses the same fileName.
+          let key: string | null = null;
+          const getUploadUrl = async () => {
+            const presigned = await withTimeout(
+              uploadsApi.getPresignedUrl({ fileName, fileType: resolvedMime, category: 'audio', meetingId }),
+              15000, 'Get upload URL',
+            );
+            key = presigned.key;
+            return presigned.uploadUrl;
+          };
           const unlisten = onNativeUploadProgress(({ loaded, total }) => {
             setUploadProgress(
               total > 0 ? { loaded, total, percentage: Math.round((loaded / total) * 100) } : null,
             );
           });
+          uploadAbortRef.current = new AbortController();
           try {
-            await uploadRecordingWithRetry(payload.path, uploadUrl, 'audio/wav');
+            await uploadRecordingWithRetry(payload.path, getUploadUrl, 'audio/wav', uploadAbortRef.current.signal);
           } finally {
             unlisten();
+            uploadAbortRef.current = null;
           }
+          // getUploadUrl always resolves before uploadRecordingWithRetry can
+          // return successfully, so key is set by this point.
+          uploadKey = key!;
+          putDoneRef.current = { key: uploadKey };
         }
-
-        putDoneRef.current = { key };
-        uploadKey = key;
       }
 
       await withTimeout(
@@ -224,10 +246,10 @@ export function usePostRecording({
       if (isCommandNotFound(err)) {
         // Include the on-disk path: the WAV survives (cleanup_recording only
         // runs after a confirmed upload), so the next victim can find it
-        // without digging through CloudWatch.
+        // without digging through CloudWatch. Same base message as the
+        // preflight check (VERSION_SKEW_MESSAGE) so the two never diverge.
         setErrorMessage(
-          '설치된 Mac 앱 버전이 오래되어 업로드 명령이 없습니다 — 앱을 업데이트한 뒤 /record?mode=upload 로 다시 시도해주세요.' +
-          (payload.kind === 'native' ? ` 녹음 파일: ${payload.path}` : ''),
+          VERSION_SKEW_MESSAGE + (payload.kind === 'native' ? ` 녹음 파일: ${payload.path}` : ''),
         );
       } else {
         setErrorMessage(err instanceof Error ? err.message : 'Failed to process recording');
@@ -361,6 +383,11 @@ export function usePostRecording({
     setUploadProgress(null);
     pendingAudioRef.current = null;
     putDoneRef.current = null;
+    // Cancels a native upload's offline wait if one is still pending --
+    // otherwise it would resolve on the NEXT `online` event and resume
+    // uploading a recording the user already walked away from.
+    uploadAbortRef.current?.abort();
+    uploadAbortRef.current = null;
   }, []);
 
   return {

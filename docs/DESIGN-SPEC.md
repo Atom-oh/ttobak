@@ -317,13 +317,27 @@ moment native capture starts — before the async STT session start
 resolves, and even if Transcribe Streaming never successfully connects.
 
 Before any of that, the native start path runs a **preflight** probe
-(`assertUploadRecordingAvailable`, `lib/tauri.ts`) that fails the start
-outright when the installed app predates the `upload_recording` command —
-the amber "speech error" banner shows an update prompt and the button stays
-idle, with no draft meeting created and no screen-recording permission
-prompt. This turns a version skew into a ~5-second failure instead of one
-discovered only after the recording is over (an incident lost 83 minutes of
-audio that way).
+(`assertUploadRecordingAvailable`, `frontend/src/lib/tauri.ts`) that fails
+the start outright — a near-instant Tauri IPC rejection, not a timed
+check — when the installed app predates the `upload_recording` command.
+The amber "speech error" banner shows an update prompt and the button
+stays idle, with no draft meeting created and no screen-recording
+permission prompt. See ADR-024 for the incident (83 minutes of System
+Audio lost to this exact skew, discovered only after the recording ended)
+that motivated catching it before capture starts instead.
+
+Once uploading, native mode's `uploadRecordingWithRetry` (`lib/tauri.ts`)
+is network-aware: if the device goes offline mid-upload, it waits for the
+browser's `online` event (capped at 30 minutes, comfortably inside the
+presigned URL's 1h TTL) rather than failing immediately, then re-presigns
+before every retry — a fresh presigned URL, not the one that may have
+expired during the wait. A non-network failure (bad URL, server error)
+instead gets a small bounded retry (2 attempts, linear backoff). The wait
+is cancelled via an `AbortController` when the post-recording flow is
+reset (Home / new recording), so walking away never leaves a stale
+`online` listener resuming an abandoned upload later. The WAV itself is
+never at risk either way — `cleanupRecording` only runs after the
+backend's upload-complete notification succeeds.
 
 ### 2.7 Meeting Detail (Mobile)
 

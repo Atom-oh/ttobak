@@ -47,6 +47,12 @@ export function isCommandNotFound(err: unknown): boolean {
   return /not found|not allowed|unknown command/i.test(message);
 }
 
+/** Single source of truth for the version-skew message — used at both the
+ * preflight (before recording starts) and the post-recording upload catch
+ * (`usePostRecording.ts`), so the two never drift into different wording. */
+export const VERSION_SKEW_MESSAGE =
+  '설치된 Mac 앱 버전이 오래되어 업로드 명령이 없습니다 — 앱을 업데이트한 뒤 녹음을 다시 시도해주세요.';
+
 export interface TauriStartResponse {
   temp_path: string;
 }
@@ -107,41 +113,61 @@ export function uploadRecording(
   return invoke<number>('upload_recording', { path, uploadUrl, contentType });
 }
 
-function waitForOnline(): Promise<void> {
+/**
+ * Resolves once the browser reports `online`, or immediately if already
+ * online. Bounded by `deadlineMs` (default 30 min, comfortably inside a
+ * presigned URL's 1h TTL even after accounting for time already spent on
+ * earlier attempts) and cancellable via `signal` — both reject, so a caller
+ * that's abandoning the flow (unmount/reset) or has run out of TTL budget
+ * doesn't leave this pending forever with the `online` listener attached.
+ */
+function waitForOnline(deadlineMs: number, signal: AbortSignal): Promise<void> {
   if (typeof navigator === 'undefined' || navigator.onLine) return Promise.resolve();
-  return new Promise((resolve) => {
-    const handler = () => {
-      window.removeEventListener('online', handler);
-      resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener('online', onOnline);
+      signal.removeEventListener('abort', onAbort);
+      clearTimeout(timer);
     };
-    window.addEventListener('online', handler);
+    const onOnline = () => { cleanup(); resolve(); };
+    const onAbort = () => { cleanup(); reject(new Error('Upload cancelled while waiting for network')); };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Still offline after ${Math.round(deadlineMs / 1000)}s — giving up`));
+    }, deadlineMs);
+    window.addEventListener('online', onOnline);
+    signal.addEventListener('abort', onAbort);
   });
 }
 
 /**
  * Wraps `uploadRecording` with network-aware retry. Native mode has no
- * retry of its own (unlike `putWithProgress` for browser blob uploads) —
- * this checks connectivity before every attempt via `navigator.onLine`
- * (rung 4: native platform feature, no new dependency) and, while
- * offline, keeps waiting for the browser's `online` event instead of
- * giving up. Once online, falls back to a small bounded retry (mirrors
- * putWithProgress's maxRetries pattern) so a non-network failure (bad
- * presigned URL, server error) doesn't loop forever.
+ * retry of its own (unlike `putWithProgress` for browser blob uploads).
+ *
+ * `getUploadUrl` is called before EVERY attempt, not just the first — a
+ * presigned PUT URL is only valid for its TTL (1h server-side default), and
+ * an offline wait can outlast that, so re-presigning is what actually keeps
+ * each attempt valid rather than retrying with a URL that's silently
+ * expired. `signal` lets the caller abort an in-progress offline wait (see
+ * `waitForOnline`) when the user navigates away or resets the flow.
  */
 export async function uploadRecordingWithRetry(
   path: string,
-  uploadUrl: string,
+  getUploadUrl: () => Promise<string>,
   contentType: string,
+  signal: AbortSignal,
   maxRetries = 2,
 ): Promise<number> {
   let attempt = 0;
   while (true) {
-    await waitForOnline();
+    if (signal.aborted) throw new Error('Upload cancelled');
+    await waitForOnline(30 * 60_000, signal);
     try {
+      const uploadUrl = await getUploadUrl();
       return await uploadRecording(path, uploadUrl, contentType);
     } catch (err) {
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        continue; // offline again -- loop back to waitForOnline
+        continue; // offline again -- loop back to waitForOnline, doesn't count as an attempt
       }
       if (attempt >= maxRetries) throw err;
       attempt++;
@@ -152,26 +178,29 @@ export async function uploadRecordingWithRetry(
 
 /**
  * Preflight the existence of the `upload_recording` command BEFORE a
- * recording starts, so an installed-app/SPA version skew costs 5 seconds
- * instead of the whole meeting. Without this, the skew only surfaces after
- * the user has already recorded — one incident lost 83 minutes of System
- * Audio that way (the recording was fine on disk, but every upload attempt
- * was rejected instantly by Tauri's IPC as an unknown command).
+ * recording starts, so an installed-app/SPA version skew is caught at
+ * click time instead of only surfacing after the whole recording is done —
+ * one incident lost 83 minutes of System Audio that way (the recording was
+ * fine on disk, but every upload attempt was rejected instantly by Tauri's
+ * IPC as an unknown command).
  *
- * ponytail: invoking with an empty path is the cheapest existence check. If
- * the command exists, `validate_recording_path`'s `canonicalize("")` fails
- * with `AppError::Io` ("No such file or directory") before any FS/network
- * work — so "some other error" means the command IS there, and we stay
- * quiet. No side effects: it takes the lock, fails validation, returns; no
- * emit, no upload.
+ * Invoking with an empty path is the cheapest existence check, relying on
+ * an implicit contract with the Rust side (see ADR-024): if the command
+ * exists, `validate_recording_path`'s `canonicalize("")` fails with
+ * `AppError::Io` before any FS/network work, so "some other error" means
+ * the command IS there and we stay quiet. If that Rust-side validation
+ * order ever changes, this degrades silently (a genuinely missing command
+ * is still isCommandNotFound; other cases just pass through) — logged so
+ * it isn't invisible.
  */
 export async function assertUploadRecordingAvailable(): Promise<void> {
   try {
     await invoke<number>('upload_recording', { path: '', uploadUrl: '', contentType: '' });
   } catch (err) {
     if (isCommandNotFound(err)) {
-      throw new Error('설치된 Mac 앱 버전이 오래되어 녹음 업로드 명령이 없습니다 — 앱을 업데이트한 뒤 녹음을 시작해주세요.');
+      throw new Error(VERSION_SKEW_MESSAGE);
     }
+    console.debug('assertUploadRecordingAvailable: non-command-not-found rejection, treating command as present', err);
   }
 }
 
