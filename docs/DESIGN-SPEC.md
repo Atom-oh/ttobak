@@ -316,6 +316,15 @@ independent of `session.isRecording`, since it needs to be true from the
 moment native capture starts — before the async STT session start
 resolves, and even if Transcribe Streaming never successfully connects.
 
+Before any of that, the native start path runs a **preflight** probe
+(`assertUploadRecordingAvailable`, `lib/tauri.ts`) that fails the start
+outright when the installed app predates the `upload_recording` command —
+the amber "speech error" banner shows an update prompt and the button stays
+idle, with no draft meeting created and no screen-recording permission
+prompt. This turns a version skew into a ~5-second failure instead of one
+discovered only after the recording is over (an incident lost 83 minutes of
+audio that way).
+
 ### 2.7 Meeting Detail (Mobile)
 
 ```

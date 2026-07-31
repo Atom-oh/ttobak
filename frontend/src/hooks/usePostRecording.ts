@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, type MutableRefObject } from 'react';
 import { useRouter } from 'next/navigation';
 import { meetingsApi, uploadsApi } from '@/lib/api';
 import { putWithProgress, type UploadProgress } from '@/lib/upload';
-import { uploadRecording, onNativeUploadProgress, cleanupRecording, isCommandNotFound } from '@/lib/tauri';
+import { uploadRecordingWithRetry, onNativeUploadProgress, cleanupRecording, isCommandNotFound } from '@/lib/tauri';
 import type { PostRecordingStep } from '@/components/record/PostRecordingBanner';
 
 function formatDefaultTitle(date: Date): string {
@@ -185,7 +185,7 @@ export function usePostRecording({
             );
           });
           try {
-            await uploadRecording(payload.path, uploadUrl, 'audio/wav');
+            await uploadRecordingWithRetry(payload.path, uploadUrl, 'audio/wav');
           } finally {
             unlisten();
           }
@@ -222,8 +222,12 @@ export function usePostRecording({
       // Version skew: an older installed Mac app without the
       // upload_recording command (ADR-024) needs an update, not a retry.
       if (isCommandNotFound(err)) {
+        // Include the on-disk path: the WAV survives (cleanup_recording only
+        // runs after a confirmed upload), so the next victim can find it
+        // without digging through CloudWatch.
         setErrorMessage(
-          '설치된 Mac 앱 버전이 오래되어 업로드 명령이 없습니다 — 앱을 업데이트한 뒤 /record?mode=upload 로 다시 시도해주세요.',
+          '설치된 Mac 앱 버전이 오래되어 업로드 명령이 없습니다 — 앱을 업데이트한 뒤 /record?mode=upload 로 다시 시도해주세요.' +
+          (payload.kind === 'native' ? ` 녹음 파일: ${payload.path}` : ''),
         );
       } else {
         setErrorMessage(err instanceof Error ? err.message : 'Failed to process recording');

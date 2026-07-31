@@ -107,6 +107,74 @@ export function uploadRecording(
   return invoke<number>('upload_recording', { path, uploadUrl, contentType });
 }
 
+function waitForOnline(): Promise<void> {
+  if (typeof navigator === 'undefined' || navigator.onLine) return Promise.resolve();
+  return new Promise((resolve) => {
+    const handler = () => {
+      window.removeEventListener('online', handler);
+      resolve();
+    };
+    window.addEventListener('online', handler);
+  });
+}
+
+/**
+ * Wraps `uploadRecording` with network-aware retry. Native mode has no
+ * retry of its own (unlike `putWithProgress` for browser blob uploads) —
+ * this checks connectivity before every attempt via `navigator.onLine`
+ * (rung 4: native platform feature, no new dependency) and, while
+ * offline, keeps waiting for the browser's `online` event instead of
+ * giving up. Once online, falls back to a small bounded retry (mirrors
+ * putWithProgress's maxRetries pattern) so a non-network failure (bad
+ * presigned URL, server error) doesn't loop forever.
+ */
+export async function uploadRecordingWithRetry(
+  path: string,
+  uploadUrl: string,
+  contentType: string,
+  maxRetries = 2,
+): Promise<number> {
+  let attempt = 0;
+  while (true) {
+    await waitForOnline();
+    try {
+      return await uploadRecording(path, uploadUrl, contentType);
+    } catch (err) {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        continue; // offline again -- loop back to waitForOnline
+      }
+      if (attempt >= maxRetries) throw err;
+      attempt++;
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+}
+
+/**
+ * Preflight the existence of the `upload_recording` command BEFORE a
+ * recording starts, so an installed-app/SPA version skew costs 5 seconds
+ * instead of the whole meeting. Without this, the skew only surfaces after
+ * the user has already recorded — one incident lost 83 minutes of System
+ * Audio that way (the recording was fine on disk, but every upload attempt
+ * was rejected instantly by Tauri's IPC as an unknown command).
+ *
+ * ponytail: invoking with an empty path is the cheapest existence check. If
+ * the command exists, `validate_recording_path`'s `canonicalize("")` fails
+ * with `AppError::Io` ("No such file or directory") before any FS/network
+ * work — so "some other error" means the command IS there, and we stay
+ * quiet. No side effects: it takes the lock, fails validation, returns; no
+ * emit, no upload.
+ */
+export async function assertUploadRecordingAvailable(): Promise<void> {
+  try {
+    await invoke<number>('upload_recording', { path: '', uploadUrl: '', contentType: '' });
+  } catch (err) {
+    if (isCommandNotFound(err)) {
+      throw new Error('설치된 Mac 앱 버전이 오래되어 녹음 업로드 명령이 없습니다 — 앱을 업데이트한 뒤 녹음을 시작해주세요.');
+    }
+  }
+}
+
 export function cleanupRecording(path: string): Promise<void> {
   return invoke<void>('cleanup_recording', { path });
 }
