@@ -38,6 +38,56 @@ func TestBuildSummarizeUserPrompt_NoPriorContextOmitsMarker(t *testing.T) {
 	}
 }
 
+func TestBuildAttachmentContext_DiagramLabeledAsTrustedMermaidSource(t *testing.T) {
+	got := buildAttachmentContext([]model.Attachment{
+		{Type: model.AttachTypeDiagram, FileName: "arch.png", ProcessedContent: "```mermaid\ngraph TD\nA-->B\n```"},
+	})
+	if !strings.Contains(got, "첨부 다이어그램: arch.png") {
+		t.Fatalf("diagram attachment not labeled as 첨부 다이어그램: %q", got)
+	}
+	if !strings.Contains(got, "신뢰 소스") {
+		t.Fatalf("trusted-source instruction missing for diagram mermaid: %q", got)
+	}
+	if !strings.Contains(got, "graph TD") {
+		t.Fatalf("mermaid ProcessedContent missing: %q", got)
+	}
+}
+
+func TestBuildAttachmentContext_NonDiagramImageKeepsImageLabel(t *testing.T) {
+	got := buildAttachmentContext([]model.Attachment{
+		{Type: model.AttachTypeScreenshot, FileName: "shot.png", ProcessedContent: "화면 분석 결과"},
+	})
+	if !strings.Contains(got, "첨부 이미지: shot.png") {
+		t.Fatalf("screenshot attachment not labeled as 첨부 이미지: %q", got)
+	}
+}
+
+func TestBuildAttachmentContext_DocumentListedByNameOnly(t *testing.T) {
+	got := buildAttachmentContext([]model.Attachment{
+		{Type: model.AttachTypeDocument, FileName: "proposal.pptx"},
+		{Type: model.AttachTypeDocument, FileName: "spec.pdf"},
+	})
+	if !strings.Contains(got, "- proposal.pptx") || !strings.Contains(got, "- spec.pdf") {
+		t.Fatalf("document filenames missing: %q", got)
+	}
+	if !strings.Contains(got, "내용을 추측하지 말 것") {
+		t.Fatalf("no-content-guessing guard missing for unextracted documents: %q", got)
+	}
+}
+
+func TestBuildAttachmentContext_EmptyWhenNothingUsable(t *testing.T) {
+	// A document row without a filename and a still-processing image (no
+	// ProcessedContent) contribute nothing — the caller must get "" so no
+	// dangling "---" separator is appended to the prompt.
+	got := buildAttachmentContext([]model.Attachment{
+		{Type: model.AttachTypeDocument},
+		{Type: model.AttachTypePhoto, FileName: "p.jpg"},
+	})
+	if got != "" {
+		t.Fatalf("expected empty context, got: %q", got)
+	}
+}
+
 func TestHasNonOwnerCollaborator(t *testing.T) {
 	tests := []struct {
 		name    string

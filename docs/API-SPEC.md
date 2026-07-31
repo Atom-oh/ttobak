@@ -1443,10 +1443,11 @@ Manually curates a single crawled **news** document — e.g. a search result the
 - **역할**: Bedrock Claude로 회의록 요약
 - **처리**:
   1. 선택된 전사 텍스트 로드
-  2. Bedrock Claude Opus 4.8 호출
-  3. 구조화된 마크다운 회의록 생성
-  4. DynamoDB에 content 저장
-  5. 상태를 "done"으로 업데이트
+  2. 첨부 컨텍스트 구성: 이미지 분석 결과(다이어그램 첨부는 `첨부 다이어그램`으로 라벨링되어 mermaid 코드가 신뢰 소스로 전달) + 문서 첨부(PPTX/PDF 등, 본문 미추출) 파일명 목록
+  3. Bedrock Claude Opus 4.8 호출 — 회의록에 조건부 `## 아키텍처 다이어그램` 섹션 포함 (첨부 다이어그램 mermaid가 있거나 아키텍처 논의가 구체적일 때만; 아니면 섹션 생략)
+  4. 구조화된 마크다운 회의록 생성 (+ 하단에 `## 첨부 이미지`/`## 첨부 문서` — `attachment://{id}` 링크, 프론트엔드가 presigned URL로 해석)
+  5. DynamoDB에 content 저장
+  6. 상태를 "done"으로 업데이트
 - **환경변수**: TABLE_NAME, BEDROCK_MODEL_ID
 
 ### 4. Process Image Lambda (cmd/process-image)

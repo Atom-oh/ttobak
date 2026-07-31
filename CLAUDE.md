@@ -132,7 +132,8 @@ The news crawler Lambda (`ttobak-crawler-news`) gets `WEB_SEARCH_GATEWAY_URL` / 
 ## Known Issues & Decisions
 
 ### HIGH
-- **`updateAttachmentByKey` not implemented** (`process-image/main.go`): Image processing results are not saved to DynamoDB. Needs meetingId parsing from S3 key path.
+- ~~`updateAttachmentByKey` not implemented~~ — **FIXED** (`process-image/main.go:121` matches the attachment by `originalKey` via `ListAttachments` and persists type/`processedContent`/status; meetingId/userId come from the EventBridge detail with `service.ExtractInfoFromImageKey` as the S3-key-path fallback)
+- **Meeting document attachments (PPTX/PDF/DOCX/MD) are never content-extracted**: upload category `file` marks the attachment done with no processing (`upload.go` CompleteUpload), so document contents reach neither the live summary (`summarize_live.go` is transcript-only) nor the final note prompt (only image `ProcessedContent` and document *filenames* are folded in — see `buildAttachmentContext`). RAG-wise, a document reaches the KB only via the manual per-attachment copy (`POST /api/kb/copy-attachment` → `kb/{userId}/`) + async ingestion job; note Bedrock KB's default parser does not index PPT/PPTX, so slide decks need conversion (e.g. the `convert-doc` PDF sidecar) before they're retrievable.
 
 ### Medium
 - **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID, `agentCoreRuntimeArn`, `researchAgentExecutionRoleArn` are hardcoded in CDK stacks. Should be extracted to CDK context for multi-account/stage support. The KB ID/DataSource ID hardcoded in `infra/lib/knowledge-stack.ts` are the real out-of-band values (`BJJLVLFTOR` / `3AVMMT3RF3`), not the `'PENDING'` placeholder they briefly regressed to — see ADR-021.
