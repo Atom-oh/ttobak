@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/ttobak/backend/internal/duration"
 	"github.com/ttobak/backend/internal/speaker"
 )
 
@@ -133,23 +134,28 @@ func mergePartTranscripts(ctx context.Context, bucket, meetingID string, partCou
 		//      parts drift earlier)
 		//   3. last raw Whisper segment's End (covers RefineTranscript failure
 		//      AND missing duration metadata)
-		//   4. 0 (only when all sources are empty — part is effectively silent)
-		var partDuration float64
-		switch {
-		case audioDuration > 0:
-			partDuration = audioDuration
-		case len(segments) > 0:
-			partDuration = segments[len(segments)-1].EndTime
+		//   4. 0 (only when all sources are unusable — part is effectively silent)
+		var segmentsLastEnd, whisperSegmentsLastEnd float64
+		if len(segments) > 0 {
+			segmentsLastEnd = segments[len(segments)-1].EndTime
+		}
+		if len(whisperSegments) > 0 {
+			whisperSegmentsLastEnd = whisperSegments[len(whisperSegments)-1].End
+		}
+		partDuration, durationSource := duration.Resolve(audioDuration, segmentsLastEnd, whisperSegmentsLastEnd)
+		switch durationSource {
+		case duration.SourceSegmentEnd:
 			log.Printf(
 				"Part %d: whisper_metadata.duration_seconds missing; falling back to last segment EndTime=%.2fs (may drift)",
 				part.index, partDuration,
 			)
-		case len(whisperSegments) > 0:
-			partDuration = whisperSegments[len(whisperSegments)-1].End
+		case duration.SourceWhisperEnd:
 			log.Printf(
 				"Part %d had no refined segments and no duration; using raw Whisper end=%.2fs as duration",
 				part.index, partDuration,
 			)
+		case duration.SourceUnknown:
+			log.Printf("Part %d: no usable duration source; using 0 (may cause timestamp drift)", part.index)
 		}
 
 		// Offset segment timestamps and append to merged list

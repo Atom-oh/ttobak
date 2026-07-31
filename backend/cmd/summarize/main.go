@@ -22,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/ttobak/backend/internal/duration"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 	"github.com/ttobak/backend/internal/service"
@@ -257,7 +258,36 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 		}
 	}
 
-	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, isNova, audioDuration)
+	// Same fallback chain as the multi-part merge path (merge.go): the raw
+	// audioDuration comes only from whisper_metadata.duration_seconds, which is
+	// absent for AWS-Transcribe-fallback, Nova Sonic and pre-ADR-019
+	// transcripts -- passing it straight through silently persisted 0 for all
+	// of those (updateMeetingTranscript drops durationSeconds <= 0).
+	// Computed AFTER the refinement block so it sees the reassigned `segments`.
+	var segmentsLastEnd, whisperSegmentsLastEnd float64
+	if len(segments) > 0 {
+		segmentsLastEnd = segments[len(segments)-1].EndTime
+	}
+	if len(whisperSegments) > 0 {
+		whisperSegmentsLastEnd = whisperSegments[len(whisperSegments)-1].End
+	}
+	resolvedDuration, durationSource := duration.Resolve(audioDuration, segmentsLastEnd, whisperSegmentsLastEnd)
+	switch durationSource {
+	case duration.SourceSegmentEnd:
+		log.Printf(
+			"Meeting %s: whisper_metadata.duration_seconds missing; falling back to last segment EndTime=%.2fs (may drift)",
+			meetingID, resolvedDuration,
+		)
+	case duration.SourceWhisperEnd:
+		log.Printf(
+			"Meeting %s had no refined segments and no duration; using raw Whisper end=%.2fs as duration",
+			meetingID, resolvedDuration,
+		)
+	case duration.SourceUnknown:
+		log.Printf("Meeting %s: no usable duration source; using 0 (duration will not be persisted)", meetingID)
+	}
+
+	err = updateMeetingTranscript(ctx, meetingID, transcript, segments, isNova, resolvedDuration)
 	if err != nil {
 		log.Printf("Failed to update meeting with transcript: %v", err)
 		setMeetingError(ctx, meetingID)
