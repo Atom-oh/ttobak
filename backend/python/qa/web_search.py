@@ -10,6 +10,7 @@ tools.py (three separate deploy artifacts — a Lambda zip, another Lambda zip,
 and an AgentCore container — not worth a shared package for one function).
 Keep all copies in sync if this changes.
 """
+import hashlib
 import json
 import logging
 import os
@@ -62,6 +63,10 @@ def _sigv4_post(body_json):
     """POST body_json to the Gateway MCP endpoint, SigV4-signed."""
     if not WEB_SEARCH_GATEWAY_URL:
         raise RuntimeError('WEB_SEARCH_GATEWAY_URL is not set')
+    # A misconfigured http:// endpoint would send the SigV4 Authorization
+    # header (and the query) in cleartext — refuse rather than degrade.
+    if not WEB_SEARCH_GATEWAY_URL.startswith('https://'):
+        raise RuntimeError('WEB_SEARCH_GATEWAY_URL must be https')
     session = botocore.session.get_session()
     credentials = session.get_credentials()
     if credentials is None:
@@ -87,9 +92,22 @@ def _query_ref(query):
     conversation (customer names, project codenames, pricing) — never log
     them in plaintext to CloudWatch; a hash prefix + length is enough to
     correlate a log line with a specific request during debugging."""
-    import hashlib
     digest = hashlib.sha256(query.encode('utf-8')).hexdigest()[:12]
     return f'q#{digest}/len={len(query)}'
+
+
+def redact_tool_input_for_log(tool_name, tool_input):
+    """Return a log-safe copy of a tool input: search_web's query is replaced
+    with its _query_ref (the agentic loop logs every tool call's input, and a
+    plaintext query there would defeat this module's own hashed logging).
+    Other tools' inputs pass through unchanged — they carry meeting/account
+    identifiers, not free conversation text."""
+    if tool_name != 'search_web' or not isinstance(tool_input, dict):
+        return tool_input
+    redacted = dict(tool_input)
+    if isinstance(redacted.get('query'), str):
+        redacted['query'] = _query_ref(redacted['query'])
+    return redacted
 
 
 def gateway_web_search(query, max_results=5):
@@ -119,7 +137,11 @@ def gateway_web_search(query, max_results=5):
         raw_response = _sigv4_post(body)
         parsed = json.loads(raw_response)
         if 'error' in parsed:
-            logger.warning(f'Web search gateway JSON-RPC error for {qref}: {parsed["error"]}')
+            # Log only the error CODE — a gateway error object can echo the
+            # request (including the query) back in its message/data fields.
+            err = parsed['error']
+            code = err.get('code') if isinstance(err, dict) else None
+            logger.warning(f'Web search gateway JSON-RPC error for {qref}: code={code}')
             return [], 'gateway error'
         result = parsed.get('result', parsed)
         if not isinstance(result, dict):
@@ -170,7 +192,9 @@ def format_web_results(results, error):
         # side's sanitizeMarkdownText for attachment names.
         for ch in ('\\', '[', ']', '(', ')', '`'):
             title = title.replace(ch, '\\' + ch)
-        url = r.get('url', '')
+        # Parens in the URL itself would close the (url) part early —
+        # percent-encode them (valid in URLs, markdown-safe).
+        url = r.get('url', '').replace('(', '%28').replace(')', '%29')
         snippet = (r.get('text') or '').strip()[:500]
         published = (r.get('publishedDate') or '').strip()
         header = f'- [{title}]({url})' + (f' ({published[:10]})' if published else '')

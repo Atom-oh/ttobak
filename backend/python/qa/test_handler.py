@@ -533,6 +533,32 @@ class TestWebSearchTool(unittest.TestCase):
         self.assertNotIn('evil](https://phish.example)', text)
         self.assertIn('\\]', text)
 
+    def test_url_parens_percent_encoded_in_markdown_link(self):
+        import web_search
+        text, _ = web_search.format_web_results([
+            {'title': 't', 'url': 'https://en.example.com/wiki/Foo_(bar)', 'text': 's'},
+        ], None)
+        self.assertIn('https://en.example.com/wiki/Foo_%28bar%29', text)
+        self.assertNotIn('Foo_(bar)', text)
+
+    def test_redact_tool_input_masks_search_web_query_only(self):
+        # The agentic loop logs every tool call's input — search_web's query
+        # is conversation-derived and must be hashed there, exactly like
+        # web_search.py's own logs; other tools' inputs pass through.
+        import web_search
+        redacted = web_search.redact_tool_input_for_log('search_web', {'query': '민감한 고객사 키워드', 'maxResults': 3})
+        self.assertNotIn('민감한', json.dumps(redacted, ensure_ascii=False))
+        self.assertTrue(redacted['query'].startswith('q#'))
+        self.assertEqual(redacted['maxResults'], 3)
+        untouched = web_search.redact_tool_input_for_log('list_meetings', {'keyword': '고객사'})
+        self.assertEqual(untouched, {'keyword': '고객사'})
+
+    def test_sigv4_post_refuses_non_https_gateway(self):
+        import web_search
+        with mock.patch.object(web_search, 'WEB_SEARCH_GATEWAY_URL', 'http://gw.example/mcp'):
+            with self.assertRaises(RuntimeError):
+                web_search._sigv4_post('{}')
+
 
 if __name__ == '__main__':
     unittest.main()

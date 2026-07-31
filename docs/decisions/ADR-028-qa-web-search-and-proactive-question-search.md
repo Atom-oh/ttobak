@@ -26,16 +26,26 @@
      `gateway-stack.ts`가 주입(크로스리전 참조 → GatewayStack이 WebSearchGatewayStack에 의존 추가).
 2. **`detect-questions`에 `search` 플래그 추가**: 감지된 질문 중 "검색으로 즉시 사실 확인 가능"한 것을
    `proactive` 배열(questions의 부분집합)로 반환한다. 레거시 문자열 배열 응답도 계속 파싱한다.
-3. **선제 자동 발화는 기본 꺼짐(opt-in)**: 회의 대화에서 파생된 검색어가 사용자 조작 없이 외부 웹 검색
-   제공자로 나가는 것은 기존 `search_knowledge_base`(계정 내부)와 다른 신뢰 경계다. 따라서
-   - LiveQAPanel 헤더의 "선제 검색" 토글(localStorage, 기본 OFF)을 켠 사용자에게만 자동 발화하고,
-   - 검색 쿼리 원문은 CloudWatch에 로깅하지 않으며(해시 접두사+길이만),
-   - 외부 전송 사실을 API-SPEC에 명시한다.
-4. **자동 발화 가드**: 감지 배치당 1건, 질문당 미팅 네임스페이스로 전 패널 인스턴스에 걸쳐 1회
-   (모듈 레벨 claim set — 데스크톱 aside와 모바일 바텀시트가 동시에 마운트되므로 인스턴스 로컬 dedup은
-   이중 발화), 실패 시 claim 롤백(답 없이 질문이 영구 소진되는 것 방지), 답변 진행 중·사용자 입력 중·패널
-   비가시(IntersectionObserver로 반응형 추적) 상태에서는 보류. stale 응답 방지를 위해 detect 경로도
-   summary와 동일한 generation guard를 쓴다(`useLiveSummary`).
+3. **선제 자동 발화는 기본 꺼짐(opt-in), 단 opt-in의 범위는 '자동 발화'뿐**: 회의 대화에서 파생된 검색어가
+   사용자 조작 없이 외부 웹 검색 제공자로 나가는 것은 기존 `search_knowledge_base`(계정 내부)와 다른 신뢰
+   경계다. 따라서
+   - LiveQAPanel 헤더의 "선제 검색" 토글(localStorage 기반 모듈 스토어 — 두 패널 인스턴스가 동시에
+     마운트되므로 `useSyncExternalStore`로 인스턴스 간 동기화, 기본 OFF)을 켠 사용자에게만 자동 발화하고,
+   - **수동 질문 경로에서는 토글과 무관하게 모델이 `search_web`을 호출할 수 있다** — 이 경로의 완화책은
+     시스템 프롬프트/도구 설명의 쿼리 구성 제약(고객사·참석자 실명, 내부 코드명, 회의 수치 금지 — 일반화
+     키워드만)과 트랜스크립트-지시문 무시 인젝션 가드다. 참가자 발화가 system 컨텍스트에 들어가는 구조상
+     prompt injection → `search_web` exfil 표면이 남는데, 이는 소프트 완화이지 보안 경계가 아니다
+     (FoldLiveSummary의 위협 모델과 같은 등급) — 수용하되 문서화한다.
+   - 검색 쿼리 원문은 CloudWatch에 로깅하지 않으며(해시 접두사+길이만 — `web_search.py` 자체 로그와
+     에이전틱 루프의 tool-call 로그 양쪽 모두, `redact_tool_input_for_log`),
+   - 외부 전송 사실(수동 경로 포함)을 API-SPEC에 명시한다.
+4. **자동 발화 가드**: 감지 배치당 1건, 질문당 녹음 세션 내 전 패널 인스턴스에 걸쳐 1회(모듈 레벨 claim
+   set — 데스크톱 aside와 모바일 바텀시트가 동시에 마운트되므로 인스턴스 로컬 dedup은 이중 발화; 녹음
+   시작 시 `resetProactiveClaims()`로 초기화 — meetingId 네임스페이스는 녹음 중 id가 생기는 순간 키가
+   바뀌어 재발화하므로 쓰지 않는다), 실패 시 claim 롤백 + asked 기록을 성공 시점으로 미룸(답 없이 질문이
+   영구 소진되는 것 방지 — asked 기록이 detect의 previousQuestions로 전달되므로 선기록하면 롤백이 무력화됨),
+   답변 진행 중·사용자 입력 중·패널 비가시(IntersectionObserver로 반응형 추적) 상태에서는 보류. stale 응답
+   방지를 위해 detect 경로도 summary와 동일한 generation guard를 쓴다(`useLiveSummary`).
 
 ## Consequences
 

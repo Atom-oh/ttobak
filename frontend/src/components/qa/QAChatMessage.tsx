@@ -11,6 +11,17 @@ const TOOL_LABELS: Record<string, { label: string; color: string }> = {
   search_web: { label: '웹 검색', color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400' },
 };
 
+/** Hostname for display, or null when the string isn't a parseable URL —
+ * source URLs come from web search results, and a malformed one (e.g. a bare
+ * "https://") must render as plain text instead of crashing the panel. */
+function safeHostname(source: string): string | null {
+  try {
+    return new URL(source).hostname || null;
+  } catch {
+    return null;
+  }
+}
+
 interface QAChatMessageProps {
   question: string;
   answer: string;
@@ -127,8 +138,9 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
                     Sources
                   </p>
                   <div className="flex flex-wrap gap-1">
-                    {sources.map((source, idx) => (
-                      source.startsWith('http') ? (
+                    {sources.map((source, idx) => {
+                      const hostname = source.startsWith('http') ? safeHostname(source) : null;
+                      return hostname ? (
                         <a
                           key={idx}
                           href={source}
@@ -136,7 +148,7 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
                           rel="noopener noreferrer"
                           className="text-[10px] px-1.5 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded hover:underline"
                         >
-                          {new URL(source).hostname}
+                          {hostname}
                         </a>
                       ) : (
                         <span
@@ -145,8 +157,8 @@ export function QAChatMessage({ question, answer, sources, usedKB, usedDocs, too
                         >
                           {source}
                         </span>
-                      )
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

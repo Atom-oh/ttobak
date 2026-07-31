@@ -40,7 +40,7 @@ func TestBuildSummarizeUserPrompt_NoPriorContextOmitsMarker(t *testing.T) {
 
 func TestBuildAttachmentContext_DiagramLabeledAsTrustedMermaidSource(t *testing.T) {
 	got := buildAttachmentContext([]model.Attachment{
-		{Type: model.AttachTypeDiagram, FileName: "arch.png", ProcessedContent: "```mermaid\ngraph TD\nA-->B\n```"},
+		{Type: model.AttachTypeDiagram, FileName: "arch.png", ProcessedContent: "```mermaid\ngraph TD\nA-->B\n```", Status: model.AttachStatusDone},
 	})
 	if !strings.Contains(got, "첨부 다이어그램: arch.png") {
 		t.Fatalf("diagram attachment not labeled as 첨부 다이어그램: %q", got)
@@ -55,7 +55,7 @@ func TestBuildAttachmentContext_DiagramLabeledAsTrustedMermaidSource(t *testing.
 
 func TestBuildAttachmentContext_NonDiagramImageKeepsImageLabel(t *testing.T) {
 	got := buildAttachmentContext([]model.Attachment{
-		{Type: model.AttachTypeScreenshot, FileName: "shot.png", ProcessedContent: "화면 분석 결과"},
+		{Type: model.AttachTypeScreenshot, FileName: "shot.png", ProcessedContent: "화면 분석 결과", Status: model.AttachStatusDone},
 	})
 	if !strings.Contains(got, "첨부 이미지: shot.png") {
 		t.Fatalf("screenshot attachment not labeled as 첨부 이미지: %q", got)
@@ -92,9 +92,12 @@ func TestBuildAttachmentContext_NonDoneDocumentExcluded(t *testing.T) {
 	// cite a document that has no link.
 	got := buildAttachmentContext([]model.Attachment{
 		{Type: model.AttachTypeDocument, FileName: "half-uploaded.pptx", Status: model.AttachStatusUploaded},
+		// Image analyses are gated on done too — a processing-state row with
+		// (somehow) populated content must not be cited without a link.
+		{Type: model.AttachTypeScreenshot, FileName: "mid.png", ProcessedContent: "분석", Status: model.AttachStatusProcessing},
 	})
 	if got != "" {
-		t.Fatalf("non-done document leaked into prompt context: %q", got)
+		t.Fatalf("non-done attachment leaked into prompt context: %q", got)
 	}
 }
 

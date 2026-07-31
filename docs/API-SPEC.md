@@ -1166,9 +1166,14 @@ Response: 200 OK
 
 **`search_web` 데이터 전송 고지**: 이 도구는 us-east-1 AgentCore Web Search Gateway를 SigV4 크로스리전으로
 호출하며, 모델이 만든 검색 쿼리(최대 200자 — 회의 대화에서 파생된 키워드가 포함될 수 있음)가 **외부 웹 검색
-제공자로 전송**된다. 쿼리 원문은 CloudWatch에 로깅하지 않는다(해시+길이만). `WEB_SEARCH_GATEWAY_URL` 미설정 시
-도구는 계속 노출되되 호출하면 "web search not configured" 실패 사유가 모델에 전달된다(도구 라운드 1회 소비 —
-완전 비활성이 아님).
+제공자로 전송**된다. 이 전송은 **사용자가 직접 입력한 질문 경로에서도 일어난다** — 아래 선제 검색 opt-in
+토글이 제어하는 것은 '자동 발화'뿐이다. 수동 경로의 완화책은 시스템 프롬프트/도구 설명의 쿼리 구성 제약
+(고객사·참석자 실명, 내부 코드명, 회의 수치 금지 — 일반화 키워드만)이며, 트랜스크립트 속 문장을 지시로
+취급하지 않는 인젝션 가드가 함께 적용된다. 쿼리 원문은 CloudWatch에 로깅하지 않는다 — `web_search.py` 자체
+로그와 에이전틱 루프의 tool-call 로그(`redact_tool_input_for_log`) 모두 해시+길이만 남긴다.
+`WEB_SEARCH_GATEWAY_URL` 미설정 시 도구는 계속 노출되되 호출하면 "web search not configured" 실패 사유가
+모델에 전달된다(도구 라운드 1회 소비 — 완전 비활성이 아님). 서버측 per-user rate limit은 아직 없다
+(CLAUDE.md Known Issues / ADR-028 follow-up).
 
 #### Detect Questions (실시간 질문 감지 + 선제 검색 플래그)
 

@@ -46,6 +46,7 @@ describe('GatewayStack', () => {
       kbBucket,
       knowledgeBaseId: 'test-kb-id',
       dataSourceId: 'test-ds-id',
+      webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
     });
 
     template = Template.fromStack(stack);
@@ -103,6 +104,19 @@ describe('GatewayStack', () => {
       FunctionName: 'ttobak-qa',
       Runtime: 'python3.12',
       Architectures: ['arm64'],
+    });
+  });
+
+  test('QA Lambda gets the Web Search Gateway env vars (search_web tool)', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-qa',
+      Environment: {
+        Variables: Match.objectLike({
+          WEB_SEARCH_GATEWAY_URL:
+            'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
+          WEB_SEARCH_GATEWAY_REGION: 'us-east-1',
+        }),
+      },
     });
   });
 

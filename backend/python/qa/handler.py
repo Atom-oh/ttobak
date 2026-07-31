@@ -10,6 +10,7 @@ import boto3
 from aws_docs import search_aws_docs
 from prompts import get_system_prompt, DETECT_QUESTIONS_PROMPT
 from tools import TOOL_DEFINITIONS, execute_tool
+from web_search import redact_tool_input_for_log
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -861,7 +862,11 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
             for block in output_message["content"]:
                 if "toolUse" in block:
                     tool = block["toolUse"]
-                    logger.info(f"Tool call: {tool['name']} input={json.dumps(tool['input'], ensure_ascii=False)}")
+                    # search_web input carries a conversation-derived query —
+                    # redact it (hash+length) before logging, same policy as
+                    # web_search.py's own logs. Other tools' inputs are
+                    # meeting/account identifiers and stay loggable.
+                    logger.info(f"Tool call: {tool['name']} input={json.dumps(redact_tool_input_for_log(tool['name'], tool['input']), ensure_ascii=False)}")
                     try:
                         result, result_sources = execute_tool(
                             tool["name"], tool["input"], context

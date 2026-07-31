@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { qaApi } from '@/lib/api';
 import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
 import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
@@ -44,16 +44,44 @@ const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
 // instances: the desktop aside and the mobile bottom sheet are both MOUNTED
 // during recording (the desktop one is only CSS-hidden on mobile), so
 // instance-local dedup alone would double-fire every proactive search.
-// Keys are namespaced by meeting (`{meetingId}|{question}`) so the same
-// question wording in a LATER meeting isn't silently skipped, and a claim is
-// rolled back (deleted) when its ask fails — a WS stall/error must not
-// permanently consume a question that never got an answer.
+// Keys are the bare question text — safe because the set is scoped to ONE
+// recording: resetProactiveClaims() below is called on every recording
+// start. (A meetingId-based namespace would be unstable instead: the id
+// appears mid-recording when the draft meeting is created, and a key that
+// flips `live|q` → `{id}|q` re-fires the same question.) A claim is rolled
+// back (deleted) when its ask fails — a WS stall/error must not permanently
+// consume a question that never got an answer.
 const claimedProactiveQuestions = new Set<string>();
 
-// localStorage key for the proactive-search opt-in. Auto-firing sends
-// conversation-derived queries to an external web search provider, so it is
-// OFF by default and requires an explicit user toggle (persisted).
+/** Clear proactive-claim state for a new recording session. Called from the
+ * record page's recording-start handler (alongside useLiveSummary.reset())
+ * so the previous recording's fired questions can't shadow this one's. */
+export function resetProactiveClaims() {
+  claimedProactiveQuestions.clear();
+}
+
+// Proactive-search opt-in (default OFF — auto-firing sends conversation-
+// derived queries to an external web search provider). A tiny external
+// store, NOT per-instance state: both panel instances stay mounted, and an
+// instance-local copy read from localStorage once at mount would let a
+// toggle flipped OFF in one instance keep auto-firing from the other —
+// breaking the privacy control it exists to provide. `storage` events don't
+// fire within the same document, so the store notifies subscribers itself.
 const PROACTIVE_SEARCH_STORAGE_KEY = 'ttobak.proactiveSearchEnabled';
+const proactiveSearchListeners = new Set<() => void>();
+const proactiveSearchStore = {
+  get(): boolean {
+    try { return localStorage.getItem(PROACTIVE_SEARCH_STORAGE_KEY) === '1'; } catch { return false; }
+  },
+  set(value: boolean) {
+    try { localStorage.setItem(PROACTIVE_SEARCH_STORAGE_KEY, value ? '1' : '0'); } catch { /* stays off */ }
+    proactiveSearchListeners.forEach((l) => l());
+  },
+  subscribe(listener: () => void) {
+    proactiveSearchListeners.add(listener);
+    return () => { proactiveSearchListeners.delete(listener); };
+  },
+};
 
 /** Tail-truncate to at most maxBytes of UTF-8, without splitting a multi-byte char. */
 function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): string | undefined {
@@ -77,32 +105,42 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   const [askedQuestions, setAskedQuestions] = useState<string[]>([]);
   const wsRef = useRef<RealtimeWebSocket | null>(null);
   const activeEntryIdRef = useRef<string | null>(null);
-  // Proactive-search opt-in (default OFF — see PROACTIVE_SEARCH_STORAGE_KEY).
-  const [proactiveSearchEnabled, setProactiveSearchEnabled] = useState(false);
-  useEffect(() => {
-    try {
-      setProactiveSearchEnabled(localStorage.getItem(PROACTIVE_SEARCH_STORAGE_KEY) === '1');
-    } catch { /* storage unavailable → stays off */ }
-  }, []);
+  // Proactive-search opt-in, synchronized across panel instances via the
+  // module-level store (see proactiveSearchStore's comment). Server snapshot
+  // is false so the static export renders the safe default.
+  const proactiveSearchEnabled = useSyncExternalStore(
+    proactiveSearchStore.subscribe,
+    proactiveSearchStore.get,
+    () => false,
+  );
   const toggleProactiveSearch = useCallback(() => {
-    setProactiveSearchEnabled((prev) => {
-      const next = !prev;
-      try { localStorage.setItem(PROACTIVE_SEARCH_STORAGE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
-      return next;
-    });
+    proactiveSearchStore.set(!proactiveSearchStore.get());
   }, []);
-  // entryId → proactive claim key, so failure paths (watchdog timeout,
+  // entryId → proactive question, so failure paths (watchdog timeout,
   // answer_error, socket error, HTTP catch) can roll the claim back and let
   // a later detection batch retry the question instead of losing it forever.
   const proactiveClaimByEntryRef = useRef<Map<string, string>>(new Map());
   const rollbackProactiveClaim = useCallback((entryId: string | null) => {
     if (!entryId) return;
-    const key = proactiveClaimByEntryRef.current.get(entryId);
-    if (key) {
-      claimedProactiveQuestions.delete(key);
+    const claimed = proactiveClaimByEntryRef.current.get(entryId);
+    if (claimed) {
+      claimedProactiveQuestions.delete(claimed);
       proactiveClaimByEntryRef.current.delete(entryId);
     }
   }, []);
+  // A proactive question is recorded as "asked" only on SUCCESS: recording
+  // it up front (like manual asks) would survive every failure path via
+  // askedQuestions AND the parent's askedQuestionsRef (detect-questions'
+  // previousQuestions), so the backend would never re-suggest it and the
+  // `!askedQuestions.includes(q)` guard would block a retry — silently
+  // defeating the claim rollback above.
+  const recordProactiveAsked = useCallback((entryId: string) => {
+    const q = proactiveClaimByEntryRef.current.get(entryId);
+    if (!q) return;
+    proactiveClaimByEntryRef.current.delete(entryId);
+    setAskedQuestions(prev => (prev.includes(q) ? prev : [...prev, q]));
+    onAskedQuestion?.(q);
+  }, [onAskedQuestion]);
   // Watchdog for the WS streaming path: if no message arrives for the active
   // entry within this window, surface an error and unlock the input instead of
   // spinning forever on a stalled stream.
@@ -229,8 +267,9 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         break;
       case 'answer_complete':
         clearWatchdog();
-        // Success — the claim sticks; just drop the rollback bookkeeping.
-        proactiveClaimByEntryRef.current.delete(entryId);
+        // Success — the claim sticks; record the proactive question as asked
+        // (deferred from ask time, see recordProactiveAsked).
+        recordProactiveAsked(entryId);
         setQaHistory(prev =>
           prev.map(e =>
             e.id === entryId
@@ -286,7 +325,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
         break;
     }
-  }, [armWatchdog, clearWatchdog, meetingId, rollbackProactiveClaim]);
+  }, [armWatchdog, clearWatchdog, meetingId, rollbackProactiveClaim, recordProactiveAsked]);
 
   const ensureWebSocket = useCallback(async (): Promise<RealtimeWebSocket | null> => {
     if (!WS_URL) return null;
@@ -316,8 +355,16 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     if (!q.trim() || isAsking) return;
 
     setQuestion('');
-    setAskedQuestions(prev => [...prev, q.trim()]);
-    onAskedQuestion?.(q.trim());
+    if (!opts?.proactive) {
+      // Manual asks are recorded immediately. Proactive asks defer this to
+      // answer_complete / HTTP success (recordProactiveAsked): recording up
+      // front would make a FAILED auto-ask unretryable — askedQuestions and
+      // the parent's askedQuestionsRef (fed to detect-questions as
+      // previousQuestions) both suppress the question forever, nullifying
+      // the claim rollback.
+      setAskedQuestions(prev => [...prev, q.trim()]);
+      onAskedQuestion?.(q.trim());
+    }
     setDetectedQuestions(prev => {
       const next = prev.filter(dq => dq !== q.trim());
       onDetectedQuestionsChange?.(next.length);
@@ -341,9 +388,8 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     // a sibling panel instance's effect running in the same flush sees it as
     // taken. Registered per-entry so every failure path can roll it back.
     if (opts?.proactive) {
-      const claimKey = `${meetingId || 'live'}|${q.trim()}`;
-      claimedProactiveQuestions.add(claimKey);
-      proactiveClaimByEntryRef.current.set(entryId, claimKey);
+      claimedProactiveQuestions.add(q.trim());
+      proactiveClaimByEntryRef.current.set(entryId, q.trim());
     }
 
     // Try WebSocket streaming first
@@ -389,6 +435,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     try {
       setQaHistory(prev => prev.map(e => e.id === entryId ? { ...e, isStreaming: false } : e));
       const response = await qaApi.ask(q.trim(), transcriptContext, sessionId);
+      recordProactiveAsked(entryId);
       setQaHistory((prev) =>
         prev.map((entry) =>
           entry.id === entryId
@@ -450,8 +497,10 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   // opt-in). Guards keep it from becoming spam: at most ONE auto-ask per
   // detection batch (a batch is consumed the moment it fires — the rest
   // stay as tappable suggestion chips), each question auto-fires at most
-  // once per meeting ACROSS panel instances (claimedProactiveQuestions,
-  // module-level, claimed inside handleAsk and rolled back on failure),
+  // once per recording session ACROSS panel instances
+  // (claimedProactiveQuestions, module-level, claimed inside handleAsk,
+  // rolled back on failure, cleared on recording start via
+  // resetProactiveClaims),
   // only the visible panel fires (isPanelVisible above), and nothing fires
   // while another answer is in flight or while the user is composing their
   // own question (an auto-ask would steal the single active-entry streaming
@@ -466,7 +515,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     const next = proactiveQuestions.find(
       (q) =>
         q.trim() &&
-        !claimedProactiveQuestions.has(`${meetingId || 'live'}|${q.trim()}`) &&
+        !claimedProactiveQuestions.has(q.trim()) &&
         !askedQuestions.includes(q),
     );
     consumedProactiveBatchRef.current = proactiveQuestions;
@@ -476,7 +525,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     // it as a dep would add nothing (the consumed-batch ref already prevents
     // refires) while making the effect run on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proactiveSearchEnabled, proactiveQuestions, isAsking, question, askedQuestions, isPanelVisible, meetingId]);
+  }, [proactiveSearchEnabled, proactiveQuestions, isAsking, question, askedQuestions, isPanelVisible]);
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">

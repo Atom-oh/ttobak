@@ -390,7 +390,11 @@ func buildAttachmentContext(attachments []model.Attachment) string {
 	var docNames []string
 	seenDocs := make(map[string]bool)
 	for _, att := range attachments {
-		if att.ProcessedContent != "" {
+		// Same done-gate for image analyses as for documents and the
+		// appended link section: process-image only writes ProcessedContent
+		// together with status=done, but an inconsistent row must not get
+		// cited in the note body while missing from the link list.
+		if att.ProcessedContent != "" && att.Status == model.AttachStatusDone {
 			label := "첨부 이미지"
 			if att.Type == model.AttachTypeDiagram {
 				label = "첨부 다이어그램"
@@ -547,6 +551,7 @@ ADR-013 — 트랜스크립트 딥 링크:
 	const attachmentSentinel = "<!-- ttobak:attachments -->"
 	if len(attachments) > 0 && !strings.Contains(content, attachmentSentinel) {
 		var imgSection, docSection strings.Builder
+		seenDocLinks := make(map[string]bool) // mirror buildAttachmentContext's filename dedup
 		for _, att := range attachments {
 			if att.Status != model.AttachStatusDone {
 				continue
@@ -557,7 +562,8 @@ ADR-013 — 트랜스크립트 딥 링크:
 					"\n### %s\n![%s](attachment://%s)\n",
 					safeName, safeName, att.AttachmentID,
 				))
-			} else if att.Type == model.AttachTypeDocument && att.FileName != "" {
+			} else if att.Type == model.AttachTypeDocument && att.FileName != "" && !seenDocLinks[att.FileName] {
+				seenDocLinks[att.FileName] = true
 				docSection.WriteString(fmt.Sprintf(
 					"- [%s](attachment://%s)\n", safeName, att.AttachmentID,
 				))
