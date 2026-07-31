@@ -65,6 +65,8 @@ Response: 200 OK
       "summary": "AI 요약 미리보기 (첫 200자)...",
       "participants": ["Alice", "Bob"],
       "tags": ["Internal"],
+      "sentiment": "positive",    // positive | neutral | negative, omitted until analyzed
+      "duration": 1830,           // total audio length in seconds, omitted when unknown
       "isShared": false,          // true if this is a shared meeting
       "sharedBy": null,           // owner email if shared
       "permission": null,         // "read" | "edit" if shared
