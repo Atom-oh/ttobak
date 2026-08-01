@@ -103,6 +103,16 @@ export function usePostRecording({
 
   useEffect(() => {
     return () => {
+      // Bump generation FIRST: abort() alone only cancels the offline wait
+      // -- an already-in-flight PUT keeps running, and without the bump
+      // its eventual success would still pass isCurrent() and fire
+      // notifyComplete/cleanupRecording/router.push after the component
+      // (and the user, on whatever screen they navigated to) is gone.
+      // (exhaustive-deps' ref-cleanup warning doesn't apply here -- these
+      // are plain mutable counters/controllers, not DOM node refs, and
+      // reading `.current` at cleanup time is exactly the intended use.)
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      flowGenerationRef.current++;
       uploadAbortRef.current?.abort();
     };
   }, []);
@@ -219,17 +229,24 @@ export function usePostRecording({
               15000, 'Get upload URL',
             );
           const unlisten = onNativeUploadProgress(({ loaded, total }) => {
+            if (!isCurrent()) return; // an abandoned flow's PUT is still running -- don't clobber the current flow's progress display
             setUploadProgress(
               total > 0 ? { loaded, total, percentage: Math.round((loaded / total) * 100) } : null,
             );
           });
-          uploadAbortRef.current = new AbortController();
+          // Captured locally: this flow only ever clears ITS OWN controller
+          // from the shared ref below, never one a newer flow has since
+          // installed there -- an unconditional `uploadAbortRef.current =
+          // null` would otherwise let flow A's cleanup null out flow B's
+          // controller, leaving B's own offline wait un-abortable later.
+          const myController = new AbortController();
+          uploadAbortRef.current = myController;
           let result: { status: number; key: string };
           try {
-            result = await uploadRecordingWithRetry(payload.path, getUploadUrl, 'audio/wav', uploadAbortRef.current.signal);
+            result = await uploadRecordingWithRetry(payload.path, getUploadUrl, 'audio/wav', myController.signal);
           } finally {
             unlisten();
-            uploadAbortRef.current = null;
+            if (uploadAbortRef.current === myController) uploadAbortRef.current = null;
           }
           // abort() only cancels the offline wait, not an already-completed
           // PUT -- this catches the case where the PUT finished successfully

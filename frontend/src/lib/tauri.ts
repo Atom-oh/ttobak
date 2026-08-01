@@ -165,6 +165,18 @@ function waitForOnline(remainingMs: number, signal: AbortSignal): Promise<void> 
  * the caller abort mid-wait or mid-backoff (navigated away, reset) instead
  * of resuming a stale flow later.
  */
+/** `setTimeout` that also rejects immediately on abort, so a caller waiting
+ * out a backoff notices cancellation within milliseconds instead of only at
+ * the next loop iteration (up to `ms` late). */
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error('Upload cancelled'));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => { clearTimeout(timer); reject(new Error('Upload cancelled')); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 export async function uploadRecordingWithRetry(
   path: string,
   getUploadUrl: () => Promise<{ uploadUrl: string; key: string }>,
@@ -180,6 +192,11 @@ export async function uploadRecordingWithRetry(
     await waitForOnline(deadline - Date.now(), signal);
     try {
       const { uploadUrl, key } = await getUploadUrl();
+      // Re-check here, not just at the top of the loop: getUploadUrl's own
+      // network round-trip (up to 15s) is an await the caller could abort
+      // during, and without this a cancelled flow would still kick off the
+      // full-file PUT right after.
+      if (signal.aborted) throw new Error('Upload cancelled');
       const status = await uploadRecording(path, uploadUrl, contentType);
       return { status, key };
     } catch (err) {
@@ -191,12 +208,12 @@ export async function uploadRecordingWithRetry(
         // flapping connection can't hammer the presign endpoint; doesn't
         // consume an `attempt` since the failure was environmental, not
         // this attempt's fault.
-        await new Promise((r) => setTimeout(r, 2000));
+        await delay(2000, signal);
         continue;
       }
       if (attempt >= maxRetries) throw err;
       attempt++;
-      await new Promise((r) => setTimeout(r, 2000 * attempt));
+      await delay(2000 * attempt, signal);
     }
   }
 }
@@ -225,7 +242,10 @@ export async function assertUploadRecordingAvailable(): Promise<void> {
     if (isCommandNotFound(err)) {
       throw new Error(VERSION_SKEW_MESSAGE);
     }
-    console.debug('assertUploadRecordingAvailable: non-command-not-found rejection, treating command as present', err);
+    // console.debug is effectively invisible in production -- this is
+    // meant to be seen if the Rust-side validation order this probe
+    // depends on (see ADR-024) ever changes silently.
+    console.warn('assertUploadRecordingAvailable: non-command-not-found rejection, treating command as present', err);
   }
 }
 
