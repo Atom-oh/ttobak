@@ -103,6 +103,30 @@ fn allowed_dir() -> PathBuf {
 /// before any FS/network work. If this validation is ever reordered to run
 /// after something else in `upload_recording`, that probe silently stops
 /// meaning what it currently means.
+/// See `validate_recording_path`'s doc comment: the frontend's preflight probe
+/// treats "any rejection other than command-not-found" as proof the command
+/// exists, so an empty path must NOT produce a message matching its
+/// `/not found|not allowed|unknown command/i` heuristic. Pinned here because
+/// that contract otherwise lives only in comments on both sides.
+#[cfg(test)]
+mod preflight_contract_tests {
+    use super::*;
+
+    #[test]
+    fn empty_path_rejection_is_not_mistaken_for_a_missing_command() {
+        let err = validate_recording_path("", &HashSet::new())
+            .expect_err("empty path must be rejected");
+        let message = err.to_string().to_lowercase();
+        for needle in ["not found", "not allowed", "unknown command"] {
+            assert!(
+                !message.contains(needle),
+                "rejection message {message:?} contains {needle:?}, which the frontend's \
+                 isCommandNotFound() would misread as a version skew",
+            );
+        }
+    }
+}
+
 pub(crate) fn validate_recording_path(
     path: &str,
     recorded_paths: &HashSet<PathBuf>,

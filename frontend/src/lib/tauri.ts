@@ -127,7 +127,7 @@ export function uploadRecording(
 function waitForOnline(remainingMs: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.reject(new Error('Upload cancelled'));
   if (typeof navigator === 'undefined' || navigator.onLine) return Promise.resolve();
-  if (remainingMs <= 0) return Promise.reject(new Error('Offline wait budget exhausted'));
+  if (remainingMs <= 0) return Promise.reject(new Error('네트워크 대기 시간이 초과되었습니다 — 연결을 확인한 뒤 다시 시도해주세요.'));
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       window.removeEventListener('online', onOnline);
@@ -138,7 +138,7 @@ function waitForOnline(remainingMs: number, signal: AbortSignal): Promise<void> 
     const onAbort = () => { cleanup(); reject(new Error('Upload cancelled while waiting for network')); };
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error(`Still offline after ${Math.round(remainingMs / 1000)}s of budget — giving up`));
+      reject(new Error(`${Math.round(remainingMs / 60000)}분 동안 네트워크에 연결되지 않아 업로드를 중단했습니다.`));
     }, remainingMs);
     window.addEventListener('online', onOnline);
     signal.addEventListener('abort', onAbort);
