@@ -328,16 +328,25 @@ that motivated catching it before capture starts instead.
 
 Once uploading, native mode's `uploadRecordingWithRetry` (`lib/tauri.ts`)
 is network-aware: if the device goes offline mid-upload, it waits for the
-browser's `online` event (capped at 30 minutes, comfortably inside the
-presigned URL's 1h TTL) rather than failing immediately, then re-presigns
+browser's `online` event rather than failing immediately, then re-presigns
 before every retry — a fresh presigned URL, not the one that may have
-expired during the wait. A non-network failure (bad URL, server error)
-instead gets a small bounded retry (2 attempts, linear backoff). The wait
-is cancelled via an `AbortController` when the post-recording flow is
-reset (Home / new recording), so walking away never leaves a stale
-`online` listener resuming an abandoned upload later. The WAV itself is
-never at risk either way — `cleanupRecording` only runs after the
-backend's upload-complete notification succeeds.
+expired during the wait (the backend's presigned PUT TTL is 1h,
+`backend/internal/service/upload.go`'s `GeneratePresignedUploadURL`). The
+offline wait is bounded by a **cumulative** 45-minute wall-clock budget for
+the whole call (not reset on every offline→online→offline cycle — a
+flapping connection still eventually gives up), and each re-entry into the
+wait backs off briefly instead of tight-looping the presign endpoint. A
+non-network failure (bad URL, server error) instead gets a small bounded
+retry (2 retries beyond the first attempt, linear backoff). The wait, and
+the flow it's part of, are cancelled when the post-recording flow is reset
+(Home / new recording) or the component unmounts — both an `AbortController`
+(stops the in-progress wait) and a generation counter (`flowGenerationRef`
+in `usePostRecording.ts`, which also stops a PUT that finished successfully
+*after* the user already walked away from resuming the redirect/notify)
+are needed, since abort alone can't retroactively cancel a network call
+already past that point. The WAV itself is never at risk either way —
+`cleanupRecording` only runs after the backend's upload-complete
+notification succeeds.
 
 ### 2.7 Meeting Detail (Mobile)
 

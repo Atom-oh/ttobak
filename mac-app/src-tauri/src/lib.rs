@@ -95,6 +95,14 @@ fn allowed_dir() -> PathBuf {
 /// `upload.rs`'s `upload_recording` command can reuse the exact same guard
 /// `read_recording_bytes`/`cleanup_recording` already relied on — no new
 /// recording-path validation logic, just a new consumer of the existing one.
+///
+/// The frontend's `assertUploadRecordingAvailable` (`frontend/src/lib/tauri.ts`,
+/// ADR-024) has an implicit dependency on this function running first and
+/// failing on an empty path: it invokes `upload_recording('', '', '')` as a
+/// cheap existence probe, relying on `canonicalize("")` erroring out here
+/// before any FS/network work. If this validation is ever reordered to run
+/// after something else in `upload_recording`, that probe silently stops
+/// meaning what it currently means.
 pub(crate) fn validate_recording_path(
     path: &str,
     recorded_paths: &HashSet<PathBuf>,

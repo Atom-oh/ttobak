@@ -48,10 +48,13 @@ export function isCommandNotFound(err: unknown): boolean {
 }
 
 /** Single source of truth for the version-skew message — used at both the
- * preflight (before recording starts) and the post-recording upload catch
- * (`usePostRecording.ts`), so the two never drift into different wording. */
+ * preflight (before recording starts, where there is no recording to lose
+ * yet) and the post-recording upload catch (`usePostRecording.ts`), so the
+ * two never drift into different wording. The recovery path only applies
+ * post-recording (the WAV already exists on disk then), so it's appended
+ * there rather than baked into this shared string. */
 export const VERSION_SKEW_MESSAGE =
-  '설치된 Mac 앱 버전이 오래되어 업로드 명령이 없습니다 — 앱을 업데이트한 뒤 녹음을 다시 시도해주세요.';
+  '설치된 Mac 앱 버전이 오래되어 업로드 명령이 없습니다 — 앱을 업데이트해주세요.';
 
 export interface TauriStartResponse {
   temp_path: string;
@@ -115,14 +118,16 @@ export function uploadRecording(
 
 /**
  * Resolves once the browser reports `online`, or immediately if already
- * online. Bounded by `deadlineMs` (default 30 min, comfortably inside a
- * presigned URL's 1h TTL even after accounting for time already spent on
- * earlier attempts) and cancellable via `signal` — both reject, so a caller
- * that's abandoning the flow (unmount/reset) or has run out of TTL budget
- * doesn't leave this pending forever with the `online` listener attached.
+ * online. Bounded by `remainingMs` (the caller's *cumulative* budget, not a
+ * fresh timer per call — see `uploadRecordingWithRetry`) and cancellable
+ * via `signal` — both reject, so a caller that's abandoning the flow
+ * (unmount/reset) or has run out of budget doesn't leave this pending
+ * forever with the `online` listener attached.
  */
-function waitForOnline(deadlineMs: number, signal: AbortSignal): Promise<void> {
+function waitForOnline(remainingMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error('Upload cancelled'));
   if (typeof navigator === 'undefined' || navigator.onLine) return Promise.resolve();
+  if (remainingMs <= 0) return Promise.reject(new Error('Offline wait budget exhausted'));
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       window.removeEventListener('online', onOnline);
@@ -133,8 +138,8 @@ function waitForOnline(deadlineMs: number, signal: AbortSignal): Promise<void> {
     const onAbort = () => { cleanup(); reject(new Error('Upload cancelled while waiting for network')); };
     const timer = setTimeout(() => {
       cleanup();
-      reject(new Error(`Still offline after ${Math.round(deadlineMs / 1000)}s — giving up`));
-    }, deadlineMs);
+      reject(new Error(`Still offline after ${Math.round(remainingMs / 1000)}s of budget — giving up`));
+    }, remainingMs);
     window.addEventListener('online', onOnline);
     signal.addEventListener('abort', onAbort);
   });
@@ -148,26 +153,46 @@ function waitForOnline(deadlineMs: number, signal: AbortSignal): Promise<void> {
  * presigned PUT URL is only valid for its TTL (1h server-side default), and
  * an offline wait can outlast that, so re-presigning is what actually keeps
  * each attempt valid rather than retrying with a URL that's silently
- * expired. `signal` lets the caller abort an in-progress offline wait (see
- * `waitForOnline`) when the user navigates away or resets the flow.
+ * expired. Resolves to `{status, key}` — the S3 key the upload actually
+ * landed at (from the LAST successful `getUploadUrl` call) alongside the
+ * upload's HTTP status, so the caller's own bookkeeping doesn't need a
+ * separate variable capture or non-null assertion.
+ *
+ * `totalDeadlineMs` (default 45 min) is a *cumulative* wall-clock budget
+ * across the whole call, not reset on every offline-wait — without that, a
+ * flapping connection (offline → briefly online → offline again) could
+ * re-arm a fresh wait every cycle and never actually give up. `signal` lets
+ * the caller abort mid-wait or mid-backoff (navigated away, reset) instead
+ * of resuming a stale flow later.
  */
 export async function uploadRecordingWithRetry(
   path: string,
-  getUploadUrl: () => Promise<string>,
+  getUploadUrl: () => Promise<{ uploadUrl: string; key: string }>,
   contentType: string,
   signal: AbortSignal,
   maxRetries = 2,
-): Promise<number> {
+  totalDeadlineMs = 45 * 60_000,
+): Promise<{ status: number; key: string }> {
+  const deadline = Date.now() + totalDeadlineMs;
   let attempt = 0;
   while (true) {
     if (signal.aborted) throw new Error('Upload cancelled');
-    await waitForOnline(30 * 60_000, signal);
+    await waitForOnline(deadline - Date.now(), signal);
     try {
-      const uploadUrl = await getUploadUrl();
-      return await uploadRecording(path, uploadUrl, contentType);
+      const { uploadUrl, key } = await getUploadUrl();
+      const status = await uploadRecording(path, uploadUrl, contentType);
+      return { status, key };
     } catch (err) {
+      if (signal.aborted) throw err;
+      if (Date.now() >= deadline) throw err;
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        continue; // offline again -- loop back to waitForOnline, doesn't count as an attempt
+        // Offline again -- loop back to waitForOnline. Still backs off
+        // (rather than tight-looping presign+upload calls) so a rapidly
+        // flapping connection can't hammer the presign endpoint; doesn't
+        // consume an `attempt` since the failure was environmental, not
+        // this attempt's fault.
+        await new Promise((r) => setTimeout(r, 2000));
+        continue;
       }
       if (attempt >= maxRetries) throw err;
       attempt++;
