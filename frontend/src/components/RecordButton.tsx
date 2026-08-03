@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { isIOS, getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk } from '@/lib/tauri';
+import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 interface RecordButtonProps {
@@ -248,6 +248,12 @@ export function RecordButton({
     // temp ID).
     if (audioSource === 'system' && isTauri()) {
       try {
+        // Fail BEFORE anything is created or recorded if the installed app
+        // is too old to upload (see ADR-024 for the incident this guards
+        // against). Ordering matters: no draft meeting, no ScreenCaptureKit
+        // permission prompt. The catch below already routes this to onError.
+        await assertUploadRecordingAvailable();
+
         // AWAIT onRecordingStart before starting native capture: the parent
         // creates the draft meeting and starts the STT session in it. Firing
         // native capture concurrently invites a zombie state — native start

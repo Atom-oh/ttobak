@@ -316,6 +316,49 @@ independent of `session.isRecording`, since it needs to be true from the
 moment native capture starts — before the async STT session start
 resolves, and even if Transcribe Streaming never successfully connects.
 
+Before any of that, the native start path runs a **preflight** probe
+(`assertUploadRecordingAvailable`, `frontend/src/lib/tauri.ts`) that fails
+the start outright — a near-instant Tauri IPC rejection, not a timed
+check — when the installed app predates the `upload_recording` command.
+The amber "speech error" banner shows an update prompt and the button
+stays idle, with no draft meeting created and no screen-recording
+permission prompt. See ADR-024 for the incident (83 minutes of System
+Audio lost to this exact skew, discovered only after the recording ended)
+that motivated catching it before capture starts instead.
+
+Once uploading, native mode's `uploadRecordingWithRetry` (`lib/tauri.ts`)
+is network-aware: if the device goes offline mid-upload, it waits for the
+browser's `online` event rather than failing immediately, then re-presigns
+before every retry — a fresh presigned URL, not the one that may have
+expired during the wait (the backend's presigned PUT TTL is 1h,
+`backend/internal/service/upload.go`'s `GeneratePresignedUploadURL`). The
+offline-wait/retry-backoff cycle is bounded by a **cumulative** 45-minute
+wall-clock budget (not reset on every offline→online→offline cycle — a
+flapping connection still eventually gives up), and each re-entry into the
+wait backs off briefly instead of tight-looping the presign endpoint. This
+budget does not preempt a presign call or PUT already in flight — those
+run to completion (or to Rust's own stall watchdog) regardless. A
+non-network failure (bad URL, server error) instead gets a small bounded
+retry (2 retries beyond the first attempt, linear backoff).
+
+Both the offline wait and the flow it's part of are cancelled when the
+post-recording flow is reset (Home / new recording) or the component
+unmounts — via an `AbortController` (stops the in-progress wait, re-checked
+right after every presign call too, since that's its own multi-second
+await) AND a generation counter (`flowGenerationRef` in
+`usePostRecording.ts`, bumped by `reset()`/`createDraftMeeting()`/unmount).
+The counter is what actually gates the flow: abort alone can't retroactively
+cancel a PUT already past the wait, so without the counter a PUT that
+finishes successfully after the user walks away would still fire
+`notifyComplete`/`cleanupRecording`/redirect. Even with the counter, an
+abandoned PUT that reaches S3 still triggers the server-side
+transcribe/summarize pipeline (EventBridge on the `audio/` prefix doesn't
+know the SPA gave up) — the counter only stops this hook's own follow-on
+calls, not that pipeline; see ADR-024's Consequences for the tracked
+orphan-cleanup gap this leaves. The WAV itself is never at risk from the
+upload side either way — `cleanupRecording` only runs after the backend's
+upload-complete notification succeeds.
+
 ### 2.7 Meeting Detail (Mobile)
 
 ```

@@ -47,6 +47,15 @@ export function isCommandNotFound(err: unknown): boolean {
   return /not found|not allowed|unknown command/i.test(message);
 }
 
+/** Single source of truth for the version-skew message — used at both the
+ * preflight (before recording starts, where there is no recording to lose
+ * yet) and the post-recording upload catch (`usePostRecording.ts`), so the
+ * two never drift into different wording. The recovery path only applies
+ * post-recording (the WAV already exists on disk then), so it's appended
+ * there rather than baked into this shared string. */
+export const VERSION_SKEW_MESSAGE =
+  '설치된 Mac 앱 버전이 오래되어 업로드 명령이 없습니다 — 앱을 업데이트해주세요.';
+
 export interface TauriStartResponse {
   temp_path: string;
 }
@@ -105,6 +114,139 @@ export function uploadRecording(
   contentType: string,
 ): Promise<number> {
   return invoke<number>('upload_recording', { path, uploadUrl, contentType });
+}
+
+/**
+ * Resolves once the browser reports `online`, or immediately if already
+ * online. Bounded by `remainingMs` (the caller's *cumulative* budget, not a
+ * fresh timer per call — see `uploadRecordingWithRetry`) and cancellable
+ * via `signal` — both reject, so a caller that's abandoning the flow
+ * (unmount/reset) or has run out of budget doesn't leave this pending
+ * forever with the `online` listener attached.
+ */
+function waitForOnline(remainingMs: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error('Upload cancelled'));
+  if (typeof navigator === 'undefined' || navigator.onLine) return Promise.resolve();
+  if (remainingMs <= 0) return Promise.reject(new Error('네트워크 대기 시간이 초과되었습니다 — 연결을 확인한 뒤 다시 시도해주세요.'));
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener('online', onOnline);
+      signal.removeEventListener('abort', onAbort);
+      clearTimeout(timer);
+    };
+    const onOnline = () => { cleanup(); resolve(); };
+    const onAbort = () => { cleanup(); reject(new Error('Upload cancelled while waiting for network')); };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`${Math.round(remainingMs / 60000)}분 동안 네트워크에 연결되지 않아 업로드를 중단했습니다.`));
+    }, remainingMs);
+    window.addEventListener('online', onOnline);
+    signal.addEventListener('abort', onAbort);
+  });
+}
+
+/**
+ * Wraps `uploadRecording` with network-aware retry. Native mode has no
+ * retry of its own (unlike `putWithProgress` for browser blob uploads).
+ *
+ * `getUploadUrl` is called before EVERY attempt, not just the first — a
+ * presigned PUT URL is only valid for its TTL (1h server-side default), and
+ * an offline wait can outlast that, so re-presigning is what actually keeps
+ * each attempt valid rather than retrying with a URL that's silently
+ * expired. Resolves to `{status, key}` — the S3 key the upload actually
+ * landed at (from the LAST successful `getUploadUrl` call) alongside the
+ * upload's HTTP status, so the caller's own bookkeeping doesn't need a
+ * separate variable capture or non-null assertion.
+ *
+ * `totalDeadlineMs` (default 45 min) is a *cumulative* wall-clock budget
+ * across the whole call, not reset on every offline-wait — without that, a
+ * flapping connection (offline → briefly online → offline again) could
+ * re-arm a fresh wait every cycle and never actually give up. `signal` lets
+ * the caller abort mid-wait or mid-backoff (navigated away, reset) instead
+ * of resuming a stale flow later.
+ */
+/** `setTimeout` that also rejects immediately on abort, so a caller waiting
+ * out a backoff notices cancellation within milliseconds instead of only at
+ * the next loop iteration (up to `ms` late). */
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(new Error('Upload cancelled'));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => { clearTimeout(timer); reject(new Error('Upload cancelled')); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+export async function uploadRecordingWithRetry(
+  path: string,
+  getUploadUrl: () => Promise<{ uploadUrl: string; key: string }>,
+  contentType: string,
+  signal: AbortSignal,
+  maxRetries = 2,
+  totalDeadlineMs = 45 * 60_000,
+): Promise<{ status: number; key: string }> {
+  const deadline = Date.now() + totalDeadlineMs;
+  let attempt = 0;
+  while (true) {
+    if (signal.aborted) throw new Error('Upload cancelled');
+    await waitForOnline(deadline - Date.now(), signal);
+    try {
+      const { uploadUrl, key } = await getUploadUrl();
+      // Re-check here, not just at the top of the loop: getUploadUrl's own
+      // network round-trip (up to 15s) is an await the caller could abort
+      // during, and without this a cancelled flow would still kick off the
+      // full-file PUT right after.
+      if (signal.aborted) throw new Error('Upload cancelled');
+      const status = await uploadRecording(path, uploadUrl, contentType);
+      return { status, key };
+    } catch (err) {
+      if (signal.aborted) throw err;
+      if (Date.now() >= deadline) throw err;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        // Offline again -- loop back to waitForOnline. Still backs off
+        // (rather than tight-looping presign+upload calls) so a rapidly
+        // flapping connection can't hammer the presign endpoint; doesn't
+        // consume an `attempt` since the failure was environmental, not
+        // this attempt's fault.
+        await delay(2000, signal);
+        continue;
+      }
+      if (attempt >= maxRetries) throw err;
+      attempt++;
+      await delay(2000 * attempt, signal);
+    }
+  }
+}
+
+/**
+ * Preflight the existence of the `upload_recording` command BEFORE a
+ * recording starts, so an installed-app/SPA version skew is caught at
+ * click time instead of only surfacing after the whole recording is done —
+ * one incident lost 83 minutes of System Audio that way (the recording was
+ * fine on disk, but every upload attempt was rejected instantly by Tauri's
+ * IPC as an unknown command).
+ *
+ * Invoking with an empty path is the cheapest existence check, relying on
+ * an implicit contract with the Rust side (see ADR-024): if the command
+ * exists, `validate_recording_path`'s `canonicalize("")` fails with
+ * `AppError::Io` before any FS/network work, so "some other error" means
+ * the command IS there and we stay quiet. If that Rust-side validation
+ * order ever changes, this degrades silently (a genuinely missing command
+ * is still isCommandNotFound; other cases just pass through) — logged so
+ * it isn't invisible.
+ */
+export async function assertUploadRecordingAvailable(): Promise<void> {
+  try {
+    await invoke<number>('upload_recording', { path: '', uploadUrl: '', contentType: '' });
+  } catch (err) {
+    if (isCommandNotFound(err)) {
+      throw new Error(VERSION_SKEW_MESSAGE);
+    }
+    // console.debug is effectively invisible in production -- this is
+    // meant to be seen if the Rust-side validation order this probe
+    // depends on (see ADR-024) ever changes silently.
+    console.warn('assertUploadRecordingAvailable: non-command-not-found rejection, treating command as present', err);
+  }
 }
 
 export function cleanupRecording(path: string): Promise<void> {

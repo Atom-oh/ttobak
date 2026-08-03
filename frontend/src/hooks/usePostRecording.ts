@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useCallback, useRef, type MutableRefObject } from 'react';
+import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 'react';
 import { useRouter } from 'next/navigation';
 import { meetingsApi, uploadsApi } from '@/lib/api';
 import { putWithProgress, type UploadProgress } from '@/lib/upload';
-import { uploadRecording, onNativeUploadProgress, cleanupRecording, isCommandNotFound } from '@/lib/tauri';
+import { uploadRecordingWithRetry, onNativeUploadProgress, cleanupRecording, isCommandNotFound, VERSION_SKEW_MESSAGE } from '@/lib/tauri';
 import type { PostRecordingStep } from '@/components/record/PostRecordingBanner';
 
 function formatDefaultTitle(date: Date): string {
@@ -87,6 +87,35 @@ export function usePostRecording({
   // file — that would also re-fire the backend's S3-upload EventBridge rule
   // and duplicate the transcription run.
   const putDoneRef = useRef<{ key: string } | null>(null);
+  // Scopes `uploadRecordingWithRetry`'s offline wait to this specific flow
+  // invocation -- `reset()`/`createDraftMeeting()`/unmount all abort it so
+  // a user who walks away (Home), starts a new recording, or navigates off
+  // the page doesn't leave a stale `online` listener pending forever.
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  // Bumped on every reset/new-draft so a stale flow's catch block (which
+  // may run AFTER abort — the abort only cancels the in-progress wait, not
+  // the promise chain awaiting it) can tell it's no longer current and
+  // skip writing setStep('error')/setErrorMessage over whatever state the
+  // fresh flow has since established. Without this, "Home" during an
+  // offline wait could resurrect the old error banner, or a completed
+  // upload from an abandoned flow could still fire notifyComplete/redirect.
+  const flowGenerationRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      // Bump generation FIRST: abort() alone only cancels the offline wait
+      // -- an already-in-flight PUT keeps running, and without the bump
+      // its eventual success would still pass isCurrent() and fire
+      // notifyComplete/cleanupRecording/router.push after the component
+      // (and the user, on whatever screen they navigated to) is gone.
+      // (exhaustive-deps' ref-cleanup warning doesn't apply here -- these
+      // are plain mutable counters/controllers, not DOM node refs, and
+      // reading `.current` at cleanup time is exactly the intended use.)
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      flowGenerationRef.current++;
+      uploadAbortRef.current?.abort();
+    };
+  }, []);
 
   /** Create a draft meeting at recording start for crash recovery */
   const createDraftMeeting = useCallback(async (): Promise<string | null> => {
@@ -99,6 +128,9 @@ export function usePostRecording({
     setServerMeetingId(null);
     pendingAudioRef.current = null;
     putDoneRef.current = null;
+    uploadAbortRef.current?.abort();
+    uploadAbortRef.current = null;
+    flowGenerationRef.current++;
     try {
       const result = await withTimeout(
         meetingsApi.create({
@@ -120,8 +152,15 @@ export function usePostRecording({
    * succeeded (`putDoneRef` set), it's skipped and only `notifyComplete`
    * is retried. */
   const resumeUploadFlow = useCallback(async (payload: PendingAudio) => {
+    // Captured at entry: if reset()/createDraftMeeting() bumps this while
+    // we're mid-flight (e.g. during an offline wait the user gave up on),
+    // every state write below becomes a no-op instead of resurrecting a
+    // banner or redirecting for a flow the user already walked away from.
+    const myGeneration = flowGenerationRef.current;
+    const isCurrent = () => flowGenerationRef.current === myGeneration;
     try {
       await flushPendingSummary?.();
+      if (!isCurrent()) return; // abandoned during the flush await above
       let meetingId = serverMeetingId;
 
       if (meetingId) {
@@ -141,6 +180,7 @@ export function usePostRecording({
           meetingsApi.create({ title: meetingTitle || formatDefaultTitle(new Date()) }),
           15000, 'Create meeting',
         );
+        if (!isCurrent()) return; // abandoned while the meeting was being created
         meetingId = result.meetingId;
         setServerMeetingId(meetingId);
 
@@ -154,6 +194,7 @@ export function usePostRecording({
         );
       }
 
+      if (!isCurrent()) return;
       setStep('uploading');
       setUploadProgress(null);
 
@@ -166,39 +207,62 @@ export function usePostRecording({
                   : resolvedMime.includes('ogg') ? 'ogg'
                   : 'webm';
         const fileName = `recording_${Date.now()}.${ext}`;
-        const { uploadUrl, key } = await withTimeout(
-          uploadsApi.getPresignedUrl({
-            fileName,
-            fileType: resolvedMime,
-            category: 'audio',
-            meetingId,
-          }),
-          15000, 'Get upload URL',
-        );
 
         if (payload.kind === 'blob') {
+          const { uploadUrl, key } = await withTimeout(
+            uploadsApi.getPresignedUrl({ fileName, fileType: resolvedMime, category: 'audio', meetingId }),
+            15000, 'Get upload URL',
+          );
+          if (!isCurrent()) return; // abandoned before the PUT even started
           await putWithProgress(uploadUrl, payload.blob, payload.mimeType, setUploadProgress);
+          if (!isCurrent()) return; // uploaded, but the user already walked away -- skip notify/redirect
+          putDoneRef.current = { key };
+          uploadKey = key;
         } else {
+          // Re-presigned per attempt inside uploadRecordingWithRetry (not
+          // fetched once up front) -- a presigned PUT URL's TTL can expire
+          // during a long offline wait, and re-presigning is what keeps
+          // each retry attempt valid.
+          const getUploadUrl = () =>
+            withTimeout(
+              uploadsApi.getPresignedUrl({ fileName, fileType: resolvedMime, category: 'audio', meetingId }),
+              15000, 'Get upload URL',
+            );
           const unlisten = onNativeUploadProgress(({ loaded, total }) => {
+            if (!isCurrent()) return; // an abandoned flow's PUT is still running -- don't clobber the current flow's progress display
             setUploadProgress(
               total > 0 ? { loaded, total, percentage: Math.round((loaded / total) * 100) } : null,
             );
           });
+          // Captured locally: this flow only ever clears ITS OWN controller
+          // from the shared ref below, never one a newer flow has since
+          // installed there -- an unconditional `uploadAbortRef.current =
+          // null` would otherwise let flow A's cleanup null out flow B's
+          // controller, leaving B's own offline wait un-abortable later.
+          const myController = new AbortController();
+          uploadAbortRef.current = myController;
+          let result: { status: number; key: string };
           try {
-            await uploadRecording(payload.path, uploadUrl, 'audio/wav');
+            result = await uploadRecordingWithRetry(payload.path, getUploadUrl, 'audio/wav', myController.signal);
           } finally {
             unlisten();
+            if (uploadAbortRef.current === myController) uploadAbortRef.current = null;
           }
+          // abort() only cancels the offline wait, not an already-completed
+          // PUT -- this catches the case where the PUT finished successfully
+          // after the user reset the flow, so notify/cleanup/redirect below
+          // never run for a recording the user already walked away from.
+          if (!isCurrent()) return;
+          putDoneRef.current = { key: result.key };
+          uploadKey = result.key;
         }
-
-        putDoneRef.current = { key };
-        uploadKey = key;
       }
 
       await withTimeout(
         uploadsApi.notifyComplete({ meetingId, key: uploadKey, category: 'audio' }),
         15000, 'Notify upload complete',
       );
+      if (!isCurrent()) return;
 
       // Only now — upload confirmed and the backend has acknowledged it —
       // is it safe to delete the source file.
@@ -215,15 +279,26 @@ export function usePostRecording({
       setUploadProgress(null);
 
       // Redirect
+      if (!isCurrent()) return;
       setStep(null);
       router.push(`/meeting/${meetingId}`);
     } catch (err) {
+      if (!isCurrent()) return; // this flow was abandoned -- don't resurrect an error banner over whatever's current now
       console.error('Failed to process recording:', err);
       // Version skew: an older installed Mac app without the
       // upload_recording command (ADR-024) needs an update, not a retry.
       if (isCommandNotFound(err)) {
+        // Include the on-disk path and the recovery route: the WAV
+        // survives (cleanup_recording only runs after a confirmed upload),
+        // so the next victim can both find it and know how to resume,
+        // without digging through CloudWatch. Same base message as the
+        // preflight check (VERSION_SKEW_MESSAGE) so the two never diverge
+        // in wording -- this appends the post-recording-only recovery
+        // details that don't apply before a recording exists.
         setErrorMessage(
-          '설치된 Mac 앱 버전이 오래되어 업로드 명령이 없습니다 — 앱을 업데이트한 뒤 /record?mode=upload 로 다시 시도해주세요.',
+          VERSION_SKEW_MESSAGE +
+          (payload.kind === 'native' ? ` 녹음 파일: ${payload.path}` : '') +
+          ' /record?mode=upload 에서 다시 시도해주세요.',
         );
       } else {
         setErrorMessage(err instanceof Error ? err.message : 'Failed to process recording');
@@ -357,6 +432,18 @@ export function usePostRecording({
     setUploadProgress(null);
     pendingAudioRef.current = null;
     putDoneRef.current = null;
+    // Cancels a native upload's offline wait if one is still pending --
+    // otherwise it would resolve on the NEXT `online` event and resume
+    // uploading a recording the user already walked away from.
+    uploadAbortRef.current?.abort();
+    uploadAbortRef.current = null;
+    // Marks any in-flight resumeUploadFlow as stale: abort() alone only
+    // cancels the offline wait, not a PUT that's already past that point
+    // or any of the awaits before it -- this is what actually stops that
+    // flow's remaining state writes (isCurrent() checks) and its catch
+    // block from resurrecting a banner for a recording the user just
+    // dismissed.
+    flowGenerationRef.current++;
   }, []);
 
   return {
