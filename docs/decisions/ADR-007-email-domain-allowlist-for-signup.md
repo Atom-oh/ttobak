@@ -10,7 +10,15 @@
 # English
 
 ## Status
-Accepted
+Superseded in practice by company security policy (self sign-up is forbidden)
+
+> **Update**: self sign-up has since been disabled entirely — the User Pool sets
+> `selfSignUpEnabled: false` / `AllowAdminCreateUserOnly: true`, and accounts are
+> created only by an admin via `AdminCreateUser` (the invite flow). The Pre Sign-Up
+> allowlist Lambda described here therefore no longer runs on any live path: it fires
+> only on the self sign-up API that is now closed. It is kept as defense in depth in
+> case self sign-up is ever re-enabled — but re-enabling it is a policy violation, so
+> treat the allowlist as a backstop, not as the control that restricts who can join.
 
 ## Context
 
@@ -113,7 +121,15 @@ PUT  /api/settings/allowed-domains (auth)   -> { domains: string[] }
 # 한국어
 
 ## 상태
-승인됨
+회사 보안 정책에 의해 실질적으로 대체됨 (셀프 회원가입 금지)
+
+> **업데이트**: 이후 셀프 회원가입이 완전히 차단되었습니다 — User Pool이
+> `selfSignUpEnabled: false` / `AllowAdminCreateUserOnly: true`이고, 계정은 관리자가
+> `AdminCreateUser`(초대 플로우)로만 생성합니다. 따라서 이 문서의 Pre Sign-Up
+> allowlist Lambda는 현재 어떤 실제 경로에서도 실행되지 않습니다 — 이제 닫혀 있는
+> 셀프 회원가입 API에서만 트리거되기 때문입니다. 셀프 회원가입이 다시 열릴 경우를
+> 대비한 defense in depth로 남겨두지만, 다시 여는 것 자체가 정책 위반이므로 이
+> allowlist를 "누가 가입할 수 있는지 제한하는 통제 수단"으로 보아서는 안 됩니다.
 
 ## 배경
 

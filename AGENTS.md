@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 39e1a01c6a4d · generated-at: 2026-08-04 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 1ba2ab653b87 · generated-at: 2026-08-04 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -41,6 +41,7 @@ cd infra && npx cdk synth && npm test
 
 ## Banned Patterns / Security Mandates (CRITICAL — flag any violation)
 - **No public AWS resources.** ALL public traffic through CloudFront only. No Lambda Function URL with `AuthType: NONE`; no public ALB/NLB; S3 Block Public Access always on (serve via OAC); API Gateway reached only via CloudFront origin.
+- **No Cognito self sign-up.** `selfSignUpEnabled: true` is forbidden (company security policy) — accounts are admin-created only via `AdminCreateUser` (the admin-gated `POST /api/settings/invite-user` invite flow). `auth-stack.ts` declares `selfSignUpEnabled: false`, synthesizing `AllowAdminCreateUserOnly: true`; flipping it to true is a CRITICAL finding, not a fix. The `ttobak-pre-signup` email-domain allowlist (ADR-007) is defense in depth only — it fires solely on the closed self sign-up path, so don't cite it as the control over who can join. There is deliberately no sign-up form in the frontend and `lib/auth.ts` exports no `signUp`/`confirmSignUp`; invited users log in with the temporary password and complete `NEW_PASSWORD_REQUIRED`.
 - **One deliberate unauthenticated-route exception**: `GET /api/public/docs/{token}` (ADR-022) skips both the Lambda@Edge JWT check and the API Gateway authorizer, by design — it's a bearer-token public share link, not a missing-auth bug. It's still fail-closed: the handler re-validates the token against the doc's own `PublicShareToken` field rather than trusting the route bypass alone, and the presigned URL it hands out uses a dedicated 5-minute TTL (not the 1-hour default elsewhere) so a revoke closes most of the exposure window. **A *new* unauthenticated route anywhere else is a real CRITICAL finding** — this exception does not generalize.
 - **Security Groups**: never `0.0.0.0/0` inbound; SGs managed via CDK/Terraform only (no CLI mutation). Public ALB only behind CloudFront prefix list.
 - **IAM**: minimize `Resource: "*"` (require a `Condition` if used); no Lambda resource policy `Principal: "*"`.

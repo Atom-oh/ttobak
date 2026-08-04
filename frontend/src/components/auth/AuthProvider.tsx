@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { AuthUser, getCurrentUser, signIn, signOut, signUp, confirmSignUp, completeNewPassword, isNewPasswordRequired, NewPasswordRequiredResult, SignInResult } from '@/lib/auth';
+import { AuthUser, getCurrentUser, signIn, signOut, completeNewPassword, isNewPasswordRequired, NewPasswordRequiredResult, SignInResult } from '@/lib/auth';
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -12,8 +12,6 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<SignInResult>;
   completeNewPassword: (challenge: NewPasswordRequiredResult, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
-  register: (email: string, password: string, name?: string) => Promise<void>;
-  confirmRegistration: (email: string, code: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -86,14 +84,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }, []);
 
-  const register = useCallback(async (email: string, password: string, name?: string) => {
-    await signUp(email, password, name);
-  }, []);
-
-  const confirmRegistration = useCallback(async (email: string, code: string) => {
-    await confirmSignUp(email, code);
-  }, []);
-
   return (
     <AuthContext.Provider
       value={{
@@ -104,8 +94,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         completeNewPassword: completeNewPasswordAction,
         logout,
-        register,
-        confirmRegistration,
       }}
     >
       {children}
