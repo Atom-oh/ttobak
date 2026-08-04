@@ -258,6 +258,10 @@ export interface AccountResearchRef {
   createdAt: string;
 }
 
+// Assignable account team roles (owner is server-assigned, never offered here).
+// Keep in sync with backend/internal/model/account.go's AssignableRoles.
+export const ASSIGNABLE_ACCOUNT_ROLES = ['AM', 'TAM', 'SSA', 'SA', 'SA Manager', 'AM Manager'] as const;
+
 export interface AccountSummary {
   accountId: string;
   name: string;
@@ -374,6 +378,9 @@ export interface AccountDocument {
   /** Set once a public share link has been minted for this (personal,
    * slide) document; see docApi.createPublicShare. */
   publicShareToken?: string;
+  /** Owner's email — present only on a document someone shared directly with
+   * the current user. Read-only: edit/delete/share stay with the owner. */
+  sharedBy?: string;
 }
 
 export interface PutDocumentRequest {

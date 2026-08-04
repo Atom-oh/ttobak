@@ -145,6 +145,68 @@ func (h *DocumentHandler) ShareToAccount(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusCreated, dto)
 }
 
+// ShareWithUser handles POST /api/documents/{docId}/share — shares a personal
+// document with one other user by REFERENCE (read-only), unlike
+// ShareToAccount's copy. Mirrors ShareMeeting's request/response shape minus
+// `permission`, which a document share doesn't accept.
+func (h *DocumentHandler) ShareWithUser(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	userEmail := middleware.GetUserEmail(ctx)
+	docID := chi.URLParam(r, "docId")
+	if docID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Document ID is required")
+		return
+	}
+	var req model.ShareDocumentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "email is required")
+		return
+	}
+	share, err := h.accountService.ShareUserDocumentByEmail(ctx, userID, userEmail, docID, req.Email)
+	if err != nil {
+		writeDocumentServiceError(w, err, "")
+		return
+	}
+	writeJSON(w, http.StatusCreated, model.SharedWithResponse{SharedWith: model.ShareResponse{
+		UserID: share.SharedToID, Email: share.Email, Permission: share.Permission,
+	}})
+}
+
+// RevokeShare handles DELETE /api/documents/{docId}/share/{userId}.
+func (h *DocumentHandler) RevokeShare(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	docID := chi.URLParam(r, "docId")
+	targetUserID := chi.URLParam(r, "userId")
+	if docID == "" || targetUserID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Document ID and user ID are required")
+		return
+	}
+	if err := h.accountService.RevokeUserDocShare(ctx, userID, docID, targetUserID); err != nil {
+		writeDocumentServiceError(w, err, "")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListShares handles GET /api/documents/{docId}/shares (owner only).
+func (h *DocumentHandler) ListShares(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	docID := chi.URLParam(r, "docId")
+	if docID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Document ID is required")
+		return
+	}
+	shares, err := h.accountService.ListUserDocShares(ctx, userID, docID)
+	if err != nil {
+		writeDocumentServiceError(w, err, "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"shares": shares})
+}
+
 // CreatePublicShare handles POST /api/documents/{docId}/public-share —
 // mints an unauthenticated share link for a personal file-backed document
 // (gated on FileKey != "" in AccountService.CreateUserDocPublicShare, not
@@ -240,6 +302,10 @@ func writeDocumentServiceError(w http.ResponseWriter, err error, invalidInputMsg
 		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 	case errors.Is(err, service.ErrNotFound):
 		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Document not found")
+	case errors.Is(err, service.ErrUserNotFound):
+		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "사용자를 찾을 수 없습니다")
+	case errors.Is(err, service.ErrSelfShare):
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "자신에게는 공유할 수 없습니다")
 	case errors.Is(err, service.ErrLoopGuard):
 		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Document originated from TTOBAK (loop guard)")
 	case errors.Is(err, service.ErrInvalidInput):

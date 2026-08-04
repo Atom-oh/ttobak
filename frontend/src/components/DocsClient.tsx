@@ -162,6 +162,11 @@ export default function DocsClient() {
                   {d.docType === 'slide' ? 'slideshow' : 'article'}
                 </span>
                 <span className="font-medium text-slate-900 dark:text-text-main">{d.title}</span>
+                {d.sharedBy && (
+                  <span className="text-xs text-slate-500 dark:text-text-secondary">
+                    {d.sharedBy} 공유
+                  </span>
+                )}
               </div>
               {d.docType && (
                 <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary">

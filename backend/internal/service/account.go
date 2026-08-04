@@ -95,6 +95,11 @@ type accountRepo interface {
 	DeletePublicShare(ctx context.Context, token string) error
 	SetPublicShareTokenIfAbsent(ctx context.Context, pk, docID, token string) error
 	ClearPublicShareTokenIfMatches(ctx context.Context, pk, docID, expectedToken string) error
+	CreateDocShare(ctx context.Context, docID, ownerID, ownerEmail, sharedToID, email string) (*model.Share, error)
+	GetDocShare(ctx context.Context, sharedToID, docID string) (*model.Share, error)
+	DeleteDocShare(ctx context.Context, sharedToID, docID string) error
+	ListDocSharesForUser(ctx context.Context, userID string) ([]model.Share, error)
+	ListDocSharesForDoc(ctx context.Context, docID string) ([]model.Share, error)
 }
 
 // AccountRepo is the exported alias for cross-package (handler) tests.
@@ -135,12 +140,12 @@ func NewAccountServiceForTest(repo AccountRepo) *AccountService {
 }
 
 func isAssignableRole(role string) bool {
-	switch role {
-	case model.RoleAM, model.RoleTAM, model.RoleSSA:
-		return true
-	default:
-		return false
+	for _, r := range model.AssignableRoles {
+		if role == r {
+			return true
+		}
 	}
+	return false
 }
 
 func toAccountResponse(a *model.Account, members []model.AccountMember) *model.AccountResponse {
@@ -1100,17 +1105,112 @@ func (s *AccountService) PutUserDocument(ctx context.Context, userID string, req
 	return s.putDoc(ctx, userID, model.PrefixUser+userID, "", req, model.EntityTypeUserDoc)
 }
 
+// ListUserDocuments returns the caller's own documents plus the ones other
+// users shared directly with them (read-only; see ShareUserDocumentByEmail).
+// A shared doc is READ through the owner's partition rather than copied, so
+// the recipient always sees the current content.
 func (s *AccountService) ListUserDocuments(ctx context.Context, userID, docType string) ([]model.AccountDocumentDTO, error) {
-	return s.listDocs(ctx, model.PrefixUser+userID, docType)
+	out, err := s.listDocs(ctx, model.PrefixUser+userID, docType)
+	if err != nil {
+		return nil, err
+	}
+	shares, err := s.repo.ListDocSharesForUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for _, sh := range shares {
+		doc, err := s.repo.GetAccountDocument(ctx, model.PrefixUser+sh.OwnerID, sh.MeetingID)
+		if err != nil {
+			return nil, err
+		}
+		// A doc the owner deleted leaves its share rows behind (no cascade);
+		// skip rather than fail the whole list.
+		if doc == nil || (docType != "" && doc.DocType != docType) {
+			continue
+		}
+		dto := toDocumentDTO(doc)
+		dto.SharedBy = sh.OwnerEmail
+		out = append(out, dto)
+	}
+	return out, nil
 }
 
 func (s *AccountService) GetUserDocument(ctx context.Context, userID, docID string) (*model.AccountDocumentDetail, error) {
 	doc, err := s.getDoc(ctx, model.PrefixUser+userID, docID)
+	if errors.Is(err, ErrNotFound) {
+		return s.getSharedUserDocument(ctx, userID, docID)
+	}
 	if err != nil {
 		return nil, err
 	}
 	dto := toDocumentDTO(doc)
 	return &model.AccountDocumentDetail{AccountDocumentDTO: dto, Content: doc.Content, FileKey: doc.FileKey, PublicShareToken: doc.PublicShareToken}, nil
+}
+
+// getSharedUserDocument resolves a document shared TO userID. PublicShareToken
+// is deliberately not surfaced: minting/revoking a public link is the owner's
+// call alone, and the recipient has no need for the token itself.
+func (s *AccountService) getSharedUserDocument(ctx context.Context, userID, docID string) (*model.AccountDocumentDetail, error) {
+	share, err := s.repo.GetDocShare(ctx, userID, docID)
+	if err != nil {
+		return nil, err
+	}
+	if share == nil {
+		return nil, ErrNotFound
+	}
+	doc, err := s.getDoc(ctx, model.PrefixUser+share.OwnerID, docID)
+	if err != nil {
+		return nil, err
+	}
+	dto := toDocumentDTO(doc)
+	dto.SharedBy = share.OwnerEmail
+	return &model.AccountDocumentDetail{AccountDocumentDTO: dto, Content: doc.Content, FileKey: doc.FileKey}, nil
+}
+
+// ShareUserDocumentByEmail shares a personal document with one other user by
+// reference (contrast ShareUserDocumentToAccount, which copies): the
+// recipient reads the owner's item, so edits propagate and a revoke actually
+// revokes. Read-only by construction -- CreateDocShare hardcodes
+// PermissionRead and no update/delete path accepts a non-owner caller.
+func (s *AccountService) ShareUserDocumentByEmail(ctx context.Context, ownerID, ownerEmail, docID, targetEmail string) (*model.Share, error) {
+	if _, err := s.getDoc(ctx, model.PrefixUser+ownerID, docID); err != nil {
+		return nil, err
+	}
+	targetUser, err := s.repo.GetUserByEmail(ctx, targetEmail)
+	if err != nil {
+		return nil, err
+	}
+	if targetUser == nil {
+		return nil, ErrUserNotFound
+	}
+	if targetUser.UserID == ownerID {
+		return nil, ErrSelfShare
+	}
+	return s.repo.CreateDocShare(ctx, docID, ownerID, ownerEmail, targetUser.UserID, targetEmail)
+}
+
+// RevokeUserDocShare removes a per-user document share (owner only).
+func (s *AccountService) RevokeUserDocShare(ctx context.Context, ownerID, docID, sharedToID string) error {
+	if _, err := s.getDoc(ctx, model.PrefixUser+ownerID, docID); err != nil {
+		return err
+	}
+	return s.repo.DeleteDocShare(ctx, sharedToID, docID)
+}
+
+// ListUserDocShares lists who a document is shared with (owner only).
+func (s *AccountService) ListUserDocShares(ctx context.Context, ownerID, docID string) ([]model.ShareResponse, error) {
+	if _, err := s.getDoc(ctx, model.PrefixUser+ownerID, docID); err != nil {
+		return nil, err
+	}
+	shares, err := s.repo.ListDocSharesForDoc(ctx, docID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.ShareResponse, 0, len(shares))
+	for _, sh := range shares {
+		out = append(out, model.ShareResponse{UserID: sh.SharedToID, Email: sh.Email, Permission: sh.Permission})
+	}
+	return out, nil
 }
 
 func (s *AccountService) UpdateUserDocument(ctx context.Context, userID, docID string, req *model.PutDocumentRequest) (*model.AccountDocumentDTO, error) {

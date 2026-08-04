@@ -36,6 +36,7 @@ type mockHandlerAccountRepo struct {
 	meetings          map[string]*model.Meeting // meetingID -> meeting
 	shareOpErr        map[string]error          // meetingID -> forced GetShare/DeleteShare error
 	publicShares      map[string]*model.PublicShare
+	docShares         map[string]*model.Share // "sharedToID|docID" -> per-user doc share
 }
 
 func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
@@ -50,7 +51,54 @@ func newMockHandlerAccountRepo() *mockHandlerAccountRepo {
 		meetings:          make(map[string]*model.Meeting),
 		shareOpErr:        make(map[string]error),
 		publicShares:      make(map[string]*model.PublicShare),
+		docShares:         make(map[string]*model.Share),
 	}
+}
+
+func handlerDocShareKey(sharedToID, docID string) string { return sharedToID + "|" + docID }
+
+func (m *mockHandlerAccountRepo) CreateDocShare(_ context.Context, docID, ownerID, ownerEmail, sharedToID, email string) (*model.Share, error) {
+	sh := &model.Share{
+		MeetingID: docID, OwnerID: ownerID, OwnerEmail: ownerEmail,
+		SharedToID: sharedToID, Email: email,
+		Permission: model.PermissionRead, EntityType: model.EntityTypeDocShare,
+	}
+	m.docShares[handlerDocShareKey(sharedToID, docID)] = sh
+	return sh, nil
+}
+
+func (m *mockHandlerAccountRepo) GetDocShare(_ context.Context, sharedToID, docID string) (*model.Share, error) {
+	sh, ok := m.docShares[handlerDocShareKey(sharedToID, docID)]
+	if !ok {
+		return nil, nil
+	}
+	c := *sh
+	return &c, nil
+}
+
+func (m *mockHandlerAccountRepo) DeleteDocShare(_ context.Context, sharedToID, docID string) error {
+	delete(m.docShares, handlerDocShareKey(sharedToID, docID))
+	return nil
+}
+
+func (m *mockHandlerAccountRepo) ListDocSharesForUser(_ context.Context, userID string) ([]model.Share, error) {
+	var out []model.Share
+	for _, sh := range m.docShares {
+		if sh.SharedToID == userID {
+			out = append(out, *sh)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockHandlerAccountRepo) ListDocSharesForDoc(_ context.Context, docID string) ([]model.Share, error) {
+	var out []model.Share
+	for _, sh := range m.docShares {
+		if sh.MeetingID == docID {
+			out = append(out, *sh)
+		}
+	}
+	return out, nil
 }
 
 func (m *mockHandlerAccountRepo) GetMeetingByID(_ context.Context, meetingID string) (*model.Meeting, error) {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, type ReactNode } from 'react';
-import { usersApi, meetingsApi } from '@/lib/api';
+import { usersApi, meetingsApi, docApi } from '@/lib/api';
 import { NotionPushSection } from '@/components/meeting/NotionPushSection';
 import type { User, SharedUser } from '@/types/meeting';
 
@@ -19,6 +19,12 @@ interface ShareButtonProps {
    * `ShareButton` agnostic of meeting-specific exporters.
    */
   extraSection?: ReactNode;
+  /**
+   * Hides the view/edit toggle and always shares with 'read'. Document
+   * shares are read-only by design (the backend hardcodes it too), so
+   * offering the toggle would promise an edit permission that never lands.
+   */
+  readOnly?: boolean;
 }
 
 // Backwards-compatible wrapper for meetings
@@ -51,6 +57,44 @@ export function MeetingShareButton({
   );
 }
 
+/**
+ * Per-person document sharing (read-only, by reference). Owns its
+ * `sharedWith` list because the doc detail response doesn't carry one --
+ * `docApi.listShares` is owner-only, so a 403/404 just leaves it empty.
+ */
+export function DocumentShareButton({ docId }: { docId: string }) {
+  const [sharedWith, setSharedWith] = useState<SharedUser[]>(EMPTY_SHARED);
+
+  useEffect(() => {
+    let cancelled = false;
+    docApi.listShares(docId)
+      .then(({ shares }) => {
+        if (cancelled) return;
+        setSharedWith(shares.map((s) => ({
+          userId: s.userId,
+          email: s.email,
+          permission: 'read' as const,
+          sharedAt: '',
+        })));
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [docId]);
+
+  return (
+    <ShareButton
+      entityId={docId}
+      sharedWith={sharedWith}
+      onShare={(u) => setSharedWith((prev) => [...prev, u])}
+      onUnshare={(userId) => setSharedWith((prev) => prev.filter((s) => s.userId !== userId))}
+      shareApi={(id, { email }) => docApi.share(id, { email })}
+      unshareApi={docApi.unshare}
+      label="문서 공유 (읽기 전용)"
+      readOnly
+    />
+  );
+}
+
 export function ShareButton({
   entityId,
   sharedWith = EMPTY_SHARED,
@@ -60,6 +104,7 @@ export function ShareButton({
   unshareApi,
   label = 'Share',
   extraSection,
+  readOnly,
 }: ShareButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -120,15 +165,13 @@ export function ShareButton({
   const handleShare = async (user: User) => {
     setIsSharing(true);
     try {
-      await shareApi(entityId, {
-        email: user.email,
-        permission: selectedPermission,
-      });
+      const permission = readOnly ? 'read' : selectedPermission;
+      await shareApi(entityId, { email: user.email, permission });
       onShare?.({
         userId: user.userId,
         email: user.email,
         name: user.name,
-        permission: selectedPermission,
+        permission: readOnly ? 'read' : selectedPermission,
         sharedAt: new Date().toISOString(),
       });
       setSearchQuery('');
@@ -185,6 +228,7 @@ export function ShareButton({
               />
             </div>
 
+            {!readOnly && (
             <div className="flex gap-2 mt-3">
               <button
                 onClick={() => setSelectedPermission('read')}
@@ -207,6 +251,7 @@ export function ShareButton({
                 Can edit
               </button>
             </div>
+            )}
           </div>
 
           {searchQuery.length > 0 && searchQuery.length < 2 && (

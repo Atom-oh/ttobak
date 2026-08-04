@@ -152,6 +152,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-026: 인사이트 관련성 게이트 및 수동 큐레이션](decisions/ADR-026-insights-relevance-gate-and-curation.md) (승인됨)
 - [ADR-027: CloudFront 서명 URL로 다운로드 도메인 통일 (S3 버킷 주소 은닉)](decisions/ADR-027-cloudfront-signed-media-urls.md) (승인됨)
 - [ADR-028: QA 웹 검색 도구와 선제 질문 검색](decisions/ADR-028-qa-web-search-and-proactive-question-search.md) (승인됨)
+- [ADR-029: 개인 문서의 사용자 단위 공유 — 복제가 아닌 참조, 읽기 전용](decisions/ADR-029-per-user-document-sharing-by-reference.md) (승인됨)
 
 ### 운영
 
@@ -253,6 +254,7 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-026: Insights Relevance Gate and Manual Curation](decisions/ADR-026-insights-relevance-gate-and-curation.md) (Accepted)
 - [ADR-027: CloudFront Signed URLs for All Download Domains (S3 Bucket Address Hidden)](decisions/ADR-027-cloudfront-signed-media-urls.md) (Accepted)
 - [ADR-028: QA Web Search Tool and Proactive Question Search](decisions/ADR-028-qa-web-search-and-proactive-question-search.md) (Accepted)
+- [ADR-029: Per-User Document Sharing by Reference, Read-Only](decisions/ADR-029-per-user-document-sharing-by-reference.md) (Accepted)
 
 ### Operations
 
