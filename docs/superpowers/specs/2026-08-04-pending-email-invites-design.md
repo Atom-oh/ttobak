@@ -74,17 +74,30 @@ no user exists yet.
 
 ### Frontend
 
+`PendingInvite` is keyed only by `PENDINGINVITE#{email}` — there's no reverse
+index by accountId/meetingId/etc., so a pending grant can never be listed back
+for an account/meeting/doc/research the way real members/shares are. That means
+the pending badge can only be **shown once, from the invite response itself**,
+not persisted across a page reload as a row in the member/share list.
+
 - `SharedUser`, `AccountMember`, `ProjectMember` (`frontend/src/types/meeting.ts`)
-  gain `pending?: boolean`.
-- Member lists (`AccountDetailClient.tsx`, `ProjectDetailClient.tsx`) already render
-  `email || userId` with no avatar assumption — add a small "초대됨 · 가입 대기중"
-  badge next to the email when `pending`.
-- Share lists (`ShareButton.tsx`'s `sharedWith` block, used by meeting/doc/research
-  share) currently assume a resolved user (`name || email`, initial-letter avatar) —
-  add the same badge, and fall back cleanly to the email-only rendering they already
-  do when `name` is absent.
-- No new list/cancel-pending-invite UI (see Out of scope) — the badge is read-only,
-  it just tells the inviter "sent, not yet accepted."
+  gain `pending?: boolean`, populated from the API response the moment an
+  invite is sent.
+- **Two of the five invite surfaces have no way to submit an arbitrary email
+  today** and need that added first, or the new backend capability is
+  unreachable from them:
+  - `ShareButton.tsx` (meeting/doc/research share) and `MemberPicker.tsx`
+    (account member invite) both only let you pick a user found by
+    `usersApi.search` — there's no free-text submit.
+  - `ProjectDetailClient.tsx`'s invite form already takes a raw email input,
+    so it needs no picker change.
+  - Fix: when the search box's value looks like an email and returns zero
+    results, show an "이 이메일로 초대: {email}" row that invites that literal
+    string instead of a picked user.
+- On a successful invite where the response has `pending: true`, show a
+  one-time inline confirmation ("초대장을 보냈습니다 · 가입하면 자동으로
+  반영됩니다") at the call site instead of adding a row to the persisted
+  list — since fetching that list again won't include it.
 
 ## Out of scope (YAGNI)
 
