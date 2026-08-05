@@ -38,12 +38,12 @@ type Meeting struct {
 	// more accurate than the registered Participants list.
 	DiarizationSpeakerHint int      `dynamodbav:"diarizationSpeakerHint,omitempty"`
 	Participants           []string `dynamodbav:"participants,omitempty"`
-	Tags               []string          `dynamodbav:"tags,omitempty"`
-	Sentiment          string            `dynamodbav:"sentiment,omitempty"`        // "positive", "neutral", "negative" — extracted by summarize Lambda
-	Duration           int               `dynamodbav:"duration,omitempty"`         // Total audio length in seconds, written by the summarize Lambda
-	Insights           string            `dynamodbav:"insights,omitempty"`         // JSON []MeetingInsight
-	LinkedMeetingIDs   []string          `dynamodbav:"linkedMeetingIds,omitempty"` // Chronologically ordered predecessor IDs
-	AccountID          string            `dynamodbav:"accountId,omitempty"`        // linked Account
+	Tags                   []string `dynamodbav:"tags,omitempty"`
+	Sentiment              string   `dynamodbav:"sentiment,omitempty"`        // "positive", "neutral", "negative" — extracted by summarize Lambda
+	Duration               int      `dynamodbav:"duration,omitempty"`         // Total audio length in seconds, written by the summarize Lambda
+	Insights               string   `dynamodbav:"insights,omitempty"`         // JSON []MeetingInsight
+	LinkedMeetingIDs       []string `dynamodbav:"linkedMeetingIds,omitempty"` // Chronologically ordered predecessor IDs
+	AccountID              string   `dynamodbav:"accountId,omitempty"`        // linked Account
 	// ProjectIDs links this meeting to zero or more projects (many-to-many).
 	// Stored as a DynamoDB String Set (stringset tag), not a List, so link
 	// mutations can use atomic ADD/DELETE without a read-modify-write race.
@@ -83,14 +83,14 @@ type Attachment struct {
 // For recipient lookup: PK: USER#{sharedToUserId}, SK: SHARED#{meetingId}
 // For meeting's share list: PK: MEETING#{meetingId}, SK: SHARE_TO#{userId}
 type Share struct {
-	PK         string    `dynamodbav:"PK"`
-	SK         string    `dynamodbav:"SK"`
-	MeetingID  string    `dynamodbav:"meetingId"`
-	OwnerID    string    `dynamodbav:"ownerId"`
-	OwnerEmail string    `dynamodbav:"ownerEmail,omitempty"`
-	SharedToID string    `dynamodbav:"sharedToId"`
-	Email      string    `dynamodbav:"email"`
-	Permission string    `dynamodbav:"permission"` // "read" or "edit"
+	PK         string `dynamodbav:"PK"`
+	SK         string `dynamodbav:"SK"`
+	MeetingID  string `dynamodbav:"meetingId"`
+	OwnerID    string `dynamodbav:"ownerId"`
+	OwnerEmail string `dynamodbav:"ownerEmail,omitempty"`
+	SharedToID string `dynamodbav:"sharedToId"`
+	Email      string `dynamodbav:"email"`
+	Permission string `dynamodbav:"permission"` // "read" or "edit"
 	// Origin distinguishes a share created by ShareMeetingToAccount ("account")
 	// from one created by the owner directly via ShareMeetingByEmail (""/direct).
 	// RemoveMember's cleanup must only ever delete "account"-origin shares -- a

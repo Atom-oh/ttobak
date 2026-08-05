@@ -473,8 +473,8 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 // re-run. Multi-part audio is out of scope for v1 (would need per-part ECS
 // retriggers and an AudioPartsReady reset).
 func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID string, speakerCount int) error {
-	if speakerCount < 1 {
-		return fmt.Errorf("speakerCount must be at least 1")
+	if speakerCount < 1 || speakerCount > 20 {
+		return fmt.Errorf("speakerCount must be between 1 and 20: %w", ErrInvalidInput)
 	}
 
 	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
@@ -485,19 +485,36 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		return ErrNotFound
 	}
 	if meeting.SttProvider != "" && meeting.SttProvider != "whisper" {
-		return fmt.Errorf("rediarization is only supported for whisper-transcribed meetings")
+		return fmt.Errorf("rediarization is only supported for whisper-transcribed meetings: %w", ErrInvalidInput)
 	}
 	if meeting.AudioPartCount > 1 {
-		return fmt.Errorf("rediarization does not yet support multi-part audio")
+		return fmt.Errorf("rediarization does not yet support multi-part audio: %w", ErrInvalidInput)
 	}
 	if meeting.Status == model.StatusTranscribing || meeting.Status == model.StatusSummarizing {
-		return fmt.Errorf("meeting is still processing (status: %s)", meeting.Status)
+		return fmt.Errorf("meeting is still processing (status: %s): %w", meeting.Status, ErrInvalidInput)
 	}
 	audioKeys := meeting.GetEffectiveAudioKeys()
 	if len(audioKeys) == 0 || audioKeys[0] == "" {
-		return fmt.Errorf("no audio available to re-diarize")
+		return fmt.Errorf("no audio available to re-diarize: %w", ErrInvalidInput)
 	}
 	sourceKey := audioKeys[0]
+	if !strings.HasPrefix(sourceKey, "audio/"+userID+"/") {
+		return ErrForbidden
+	}
+
+	// Old spk_N -> name mappings no longer correspond once diarization
+	// re-runs from scratch; clear them and let the user re-map after. This
+	// must commit BEFORE the CopyObject below: the copy fires the
+	// EventBridge S3 event that wakes ttobak-transcribe, and a race where
+	// that Lambda reads the meeting before this write lands would re-diarize
+	// with the stale hint/speakerMap/status instead of the new ones.
+	if err := s.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+		"diarizationSpeakerHint": speakerCount,
+		"speakerMap":             map[string]string{},
+		"status":                 model.StatusTranscribing,
+	}); err != nil {
+		return fmt.Errorf("failed to update meeting for re-diarization: %w", err)
+	}
 
 	// A fresh key under the same meeting prefix, so the existing EventBridge
 	// S3 rule + ttobak-transcribe Lambda pick it up exactly as a new upload
@@ -506,18 +523,11 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 	if _, err := s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(s.bucketName),
 		Key:        aws.String(retriggerKey),
-		CopySource: aws.String(fmt.Sprintf("%s/%s", s.bucketName, sourceKey)),
+		CopySource: aws.String(fmt.Sprintf("%s/%s", s.bucketName, encodeS3CopySourceKey(sourceKey))),
 	}); err != nil {
 		return fmt.Errorf("failed to retrigger re-diarization: %w", err)
 	}
-
-	// Old spk_N -> name mappings no longer correspond once diarization
-	// re-runs from scratch; clear them and let the user re-map after.
-	return s.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-		"diarizationSpeakerHint": speakerCount,
-		"speakerMap":             map[string]string{},
-		"status":                 model.StatusTranscribing,
-	})
+	return nil
 }
 
 // ExtractInfoFromImageKey extracts user and meeting info from image S3 key

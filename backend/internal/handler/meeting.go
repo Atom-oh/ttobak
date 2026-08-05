@@ -482,11 +482,17 @@ func (h *MeetingHandler) RediarizeMeeting(w http.ResponseWriter, r *http.Request
 	}
 
 	if err := h.uploadService.RediarizeMeeting(ctx, userID, meetingID, req.SpeakerCount); err != nil {
-		if errors.Is(err, service.ErrNotFound) {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
-			return
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+		default:
+			log.Printf("RediarizeMeeting failed: %v", err)
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to re-diarize meeting")
 		}
-		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
 		return
 	}
 

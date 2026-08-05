@@ -315,19 +315,19 @@ type PutDocumentRequest struct {
 }
 
 type AccountDocumentDTO struct {
-	DocID        string    `json:"docId"`
-	Title        string    `json:"title"`
-	DocType      string    `json:"docType,omitempty"`
-	Path         string    `json:"path,omitempty"`
-	Links        []string  `json:"links,omitempty"`
-	FileName     string    `json:"fileName,omitempty"`
-	SourceUserID string    `json:"sourceUserId"`
+	DocID        string   `json:"docId"`
+	Title        string   `json:"title"`
+	DocType      string   `json:"docType,omitempty"`
+	Path         string   `json:"path,omitempty"`
+	Links        []string `json:"links,omitempty"`
+	FileName     string   `json:"fileName,omitempty"`
+	SourceUserID string   `json:"sourceUserId"`
 	// SharedBy is set only on a document the caller received via a per-user
 	// share (see PrefixDocShare) -- it carries the owner's email and doubles
 	// as the frontend's "this is read-only, not mine" marker.
-	SharedBy string `json:"sharedBy,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	SharedBy  string    `json:"sharedBy,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type AccountDocumentDetail struct {
