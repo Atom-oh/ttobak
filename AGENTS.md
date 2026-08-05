@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 1ba2ab653b87 · generated-at: 2026-08-04 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 8751b16fb00e · generated-at: 2026-08-05 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -48,6 +48,7 @@ cd infra && npx cdk synth && npm test
 - **Secrets**: never in env vars or code — use Secrets Manager / SSM. PII in DynamoDB requires KMS encryption + TTL.
 - **Trust boundary is the API, not the client.** Validate client-supplied identifiers server-side (e.g. an S3 `sourceKey` must be proven to belong to the caller before use — ownership is encoded in the key's `{prefix}/{userID}/` segment). Reject path traversal (`..`).
 - **Route53** must not point directly at ALB/EC2 — always via CloudFront.
+- **Tool call parameters**: non-ASCII text (Korean, etc.) inside tool-call parameters (JSON) must be written as literal UTF-8, never as `\uXXXX` escapes — escaped output renders broken/mojibake text.
 
 ## Review Expectations
 - **Tests**: Go changes need stdlib-`testing` coverage (table-driven, mock repos). Extract security-critical logic into pure functions so it's unit-testable without AWS mocks. Frontend has no test framework — verify via lint + build only.

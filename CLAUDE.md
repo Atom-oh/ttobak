@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TTOBAK (또박) is a Korean AI meeting assistant: record audio → real-time STT (AWS Transcribe Streaming in browser) → batch STT (Whisper ECS GPU Spot) → Bedrock Claude summary → Notion-style editor. The frontend is a Next.js 16 static SPA deployed to S3/CloudFront; the backend is Go Lambda functions behind API Gateway; infrastructure is CDK TypeScript.
 
+## Tool call parameters
+
+- 툴 호출 파라미터(JSON) 안의 한글 등 비ASCII 문자열은 항상 리터럴 UTF-8로 작성하고,
+  `\uXXXX` 유니코드 이스케이프로 표기하지 않는다 — 이스케이프 받아쓰기 과정에서 오기가
+  나면 mojibake로 깨진다. (upstream: anthropics/claude-code#83033)
+
 ## Build Commands
 
 ```bash
