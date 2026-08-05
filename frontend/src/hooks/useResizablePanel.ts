@@ -7,11 +7,20 @@ function clamp(n: number, min: number, max: number): number {
 }
 
 /**
- * Drag-to-resize width for a panel anchored to the right edge (dragging the
- * divider left grows the panel). Width persists to localStorage across
- * meetings/sessions.
+ * Drag-to-resize width for a panel. `anchor: 'right'` (default) is for a
+ * panel pinned to the right edge (dragging the divider left grows it, e.g.
+ * the meeting detail page's reference sidebar); `anchor: 'left'` is for a
+ * panel pinned to the left edge (dragging right grows it, e.g. the AI
+ * summary column next to action items). Width persists to localStorage
+ * across meetings/sessions.
  */
-export function useResizablePanel(storageKey: string, defaultWidth: number, min: number, max: number) {
+export function useResizablePanel(
+  storageKey: string,
+  defaultWidth: number,
+  min: number,
+  max: number,
+  anchor: 'left' | 'right' = 'right',
+) {
   const [width, setWidth] = useState(defaultWidth);
   const widthRef = useRef(defaultWidth);
 
@@ -33,7 +42,8 @@ export function useResizablePanel(storageKey: string, defaultWidth: number, min:
     const startWidth = widthRef.current;
 
     const onMove = (ev: MouseEvent) => {
-      const next = clamp(startWidth - (ev.clientX - startX), min, max);
+      const delta = ev.clientX - startX;
+      const next = clamp(anchor === 'right' ? startWidth - delta : startWidth + delta, min, max);
       widthRef.current = next;
       setWidth(next);
     };
