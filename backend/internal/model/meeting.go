@@ -32,7 +32,12 @@ type Meeting struct {
 	Notes              string            `dynamodbav:"notes,omitempty"`              // User-written meeting notes (post-recording)
 	LiveSummary        string            `dynamodbav:"liveSummary,omitempty"`        // Real-time summary built during recording (markdown incl. mermaid)
 	SpeakerMap         map[string]string `dynamodbav:"speakerMap,omitempty"`         // spk_0 -> "김팀장" mapping
-	Participants       []string          `dynamodbav:"participants,omitempty"`
+	// DiarizationSpeakerHint overrides len(Participants) as pyannote's
+	// max_speakers bound when re-diarizing a meeting on demand (see
+	// RediarizeMeeting) — set once a user-supplied headcount is known to be
+	// more accurate than the registered Participants list.
+	DiarizationSpeakerHint int      `dynamodbav:"diarizationSpeakerHint,omitempty"`
+	Participants           []string `dynamodbav:"participants,omitempty"`
 	Tags               []string          `dynamodbav:"tags,omitempty"`
 	Sentiment          string            `dynamodbav:"sentiment,omitempty"`        // "positive", "neutral", "negative" — extracted by summarize Lambda
 	Duration           int               `dynamodbav:"duration,omitempty"`         // Total audio length in seconds, written by the summarize Lambda

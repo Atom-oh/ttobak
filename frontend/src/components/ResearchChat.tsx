@@ -176,10 +176,10 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
 
   const si = statusIndicator[status] || statusIndicator.planning;
   const inputDisabled = status === 'running' || status === 'approved';
-  const isFullWidth = status === 'planning';
+  const isFullWidth = ['planning', 'running', 'approved'].includes(status);
 
   return (
-    <div className={`flex flex-col bg-surface-lowest border-l border-white/10 h-full ${isFullWidth ? 'w-full' : 'w-[400px] flex-shrink-0'}`}>
+    <div className="flex h-full w-full min-w-0 flex-col border-l border-white/10 bg-surface-lowest">
       {/* Header */}
       <div className="px-5 py-3 border-b border-white/10">
         <div className="flex items-center justify-between">

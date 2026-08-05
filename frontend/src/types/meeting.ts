@@ -18,7 +18,7 @@ export interface Meeting {
   sharedWith?: SharedUser[];
   createdAt: string;
   updatedAt: string;
-  sttProvider?: 'transcribe' | 'nova-sonic';
+  sttProvider?: 'transcribe' | 'nova-sonic' | 'whisper';
   /** Per ADR-014: ordered S3 keys for multi-file uploads. Falls back to audioKey for legacy single-file meetings. */
   audioKey?: string;
   audioKeys?: string[];
@@ -292,14 +292,21 @@ export interface AccountMeetingRef {
   date: string;
 }
 
-export interface AccountInsight {
+export interface FieldInsight {
   type: string;
   text: string;
-  sourceType: string;
+  evidence?: string;
+  implication?: string;
+  nextAction?: string;
+  sourceType?: string;
   sourceId: string;
   occurredAt: string;
   tsMarker?: string;
   entities?: string[];
+}
+
+export interface AccountInsight extends FieldInsight {
+  sourceType: string;
 }
 
 export interface ProjectMember {
@@ -344,14 +351,7 @@ export interface ProjectResearchRef {
   createdAt: string;
 }
 
-export interface ProjectInsight {
-  type: string;
-  text: string;
-  sourceId: string;
-  occurredAt: string;
-  tsMarker?: string;
-  entities?: string[];
-}
+export type ProjectInsight = FieldInsight;
 
 export interface ProjectBrief {
   project: Project;

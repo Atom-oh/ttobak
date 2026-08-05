@@ -178,12 +178,15 @@ type ProjectResearchDTO struct {
 }
 
 type ProjectInsightDTO struct {
-	Type       string    `json:"type"`
-	Text       string    `json:"text"`
-	SourceID   string    `json:"sourceId"`
-	OccurredAt time.Time `json:"occurredAt"`
-	TsMarker   string    `json:"tsMarker,omitempty"`
-	Entities   []string  `json:"entities,omitempty"`
+	Type        string    `json:"type"`
+	Text        string    `json:"text"`
+	Evidence    string    `json:"evidence,omitempty"`
+	Implication string    `json:"implication,omitempty"`
+	NextAction  string    `json:"nextAction,omitempty"`
+	SourceID    string    `json:"sourceId"`
+	OccurredAt  time.Time `json:"occurredAt"`
+	TsMarker    string    `json:"tsMarker,omitempty"`
+	Entities    []string  `json:"entities,omitempty"`
 }
 
 type ProjectBrief struct {

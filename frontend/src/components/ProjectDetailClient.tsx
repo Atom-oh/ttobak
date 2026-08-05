@@ -5,8 +5,8 @@ import type { FormEvent } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { FieldInsightsSection } from '@/components/FieldInsightsSection';
 import { projectApi } from '@/lib/api';
-import { INSIGHT_TYPES } from '@/types/meeting';
 import type {
   Project,
   ProjectInsight,
@@ -26,7 +26,6 @@ export default function ProjectDetailClient() {
   const [meetingsError, setMeetingsError] = useState(false);
   const [researchError, setResearchError] = useState(false);
   const [insightsError, setInsightsError] = useState(false);
-  const [activeType, setActiveType] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -64,7 +63,6 @@ export default function ProjectDetailClient() {
     setResearchError(false);
     setInsightsError(false);
     setError(null);
-    setActiveType('');
   }, [projectId]);
 
   const fetchAll = useCallback(async () => {
@@ -182,12 +180,11 @@ export default function ProjectDetailClient() {
     return null;
   }
 
-  const shownInsights = activeType ? insights.filter((insight) => insight.type === activeType) : insights;
   const isOwner = project ? user?.userId === project.ownerUserId : false;
 
   return (
     <AppLayout activePath="/projects">
-      <div className="p-4 lg:p-8 max-w-4xl mx-auto">
+      <div className="mx-auto w-full max-w-7xl p-4 lg:p-8">
         {error && (
           <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
             {error}
@@ -384,48 +381,10 @@ export default function ProjectDetailClient() {
               )}
             </section>
 
-            {/* Insights */}
-            <section className="mb-8">
-              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Field Insights</h3>
-              <div className="flex flex-wrap gap-2 mb-3">
-                <button
-                  onClick={() => setActiveType('')}
-                  className={`text-xs px-3 py-1 rounded-full border ${activeType === '' ? 'bg-primary text-white border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
-                >
-                  all
-                </button>
-                {INSIGHT_TYPES.map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => setActiveType(type)}
-                    className={`text-xs px-3 py-1 rounded-full border ${activeType === type ? 'bg-primary text-white border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
-                  >
-                    {type}
-                  </button>
-                ))}
-              </div>
-              {insightsError ? (
-                <p className="text-sm text-red-500">Failed to load insights.</p>
-              ) : shownInsights.length === 0 ? (
-                <p className="text-sm text-slate-400 dark:text-text-muted">No insights yet.</p>
-              ) : (
-                <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
-                  {shownInsights.map((insight, index) => (
-                    <div key={`${insight.sourceId}-${insight.occurredAt}-${index}`} className="p-3">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                          {insight.type}
-                        </span>
-                        <span className="text-xs text-slate-400 dark:text-text-muted">
-                          {new Date(insight.occurredAt).toLocaleDateString()}
-                        </span>
-                      </div>
-                      <p className="text-sm text-slate-700 dark:text-text-secondary">{insight.text}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
+            <FieldInsightsSection
+              insights={insights}
+              error={insightsError ? '인사이트를 불러오지 못했습니다.' : undefined}
+            />
           </>
         )}
       </div>

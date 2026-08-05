@@ -8,6 +8,11 @@ interface SpeakerMapEditorProps {
   content?: string;
   speakerMap?: Record<string, string>;
   onSave: (speakerMap: Record<string, string>) => Promise<void>;
+  /** Whisper-only (pyannote diarization) — undefined/'whisper' is eligible, other providers are not. */
+  sttProvider?: string;
+  /** Multi-part audio isn't supported yet (v1 scope). */
+  audioPartCount?: number;
+  onRediarize?: (speakerCount: number) => Promise<void>;
 }
 
 const UNMAPPED_PATTERN = /^(spk_\d+|화자[A-Z])$/;
@@ -18,7 +23,7 @@ function speakerSortKey(label: string): number {
   return 2000;
 }
 
-export function SpeakerMapEditor({ transcription, content, speakerMap: existingSpeakerMap, onSave }: SpeakerMapEditorProps) {
+export function SpeakerMapEditor({ transcription, content, speakerMap: existingSpeakerMap, onSave, sttProvider, audioPartCount, onRediarize }: SpeakerMapEditorProps) {
   const speakers = useMemo(() => {
     const labels = new Set<string>();
     transcription?.forEach((seg) => {
@@ -40,8 +45,22 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
   });
   const [saving, setSaving] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const [rediarizeCount, setRediarizeCount] = useState(speakers.length + 1);
+  const [rediarizing, setRediarizing] = useState(false);
 
   if (speakers.length === 0) return null;
+
+  const canRediarize = !!onRediarize && (sttProvider === undefined || sttProvider === 'whisper') && (audioPartCount === undefined || audioPartCount <= 1);
+
+  const handleRediarize = async () => {
+    if (!onRediarize) return;
+    setRediarizing(true);
+    try {
+      await onRediarize(rediarizeCount);
+    } finally {
+      setRediarizing(false);
+    }
+  };
 
   const hasAnyName = Object.values(mapping).some((v) => v.trim());
 
@@ -124,6 +143,43 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
               </>
             )}
           </button>
+
+          {canRediarize && (
+            <div className="pt-3 mt-3 border-t border-slate-200 dark:border-white/10">
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
+                화자가 더 있는데 {speakers.length}명만 감지됐나요? 화자 수를 지정해서 다시 분석할 수 있습니다.
+                다시 분석하면 트랜스크립트와 요약이 재생성되고 위 이름 매핑은 초기화됩니다.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={2}
+                  max={20}
+                  value={rediarizeCount}
+                  onChange={(e) => setRediarizeCount(Math.max(2, Math.min(20, parseInt(e.target.value) || 2)))}
+                  className="w-20 text-sm px-3 py-1.5 border border-slate-200 dark:border-white/10 rounded-lg bg-white dark:bg-white/5 text-slate-900 dark:text-white outline-none"
+                />
+                <span className="text-sm text-slate-500 dark:text-slate-400">명으로 재분석</span>
+                <button
+                  onClick={handleRediarize}
+                  disabled={rediarizing}
+                  className="ml-auto px-4 py-2 border border-primary text-primary rounded-lg text-sm font-semibold disabled:opacity-40 hover:bg-primary/5 transition-colors flex items-center gap-2"
+                >
+                  {rediarizing ? (
+                    <>
+                      <span className="animate-spin rounded-full h-4 w-4 border-2 border-primary/30 border-t-primary" />
+                      재분석 시작 중...
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-base">refresh</span>
+                      화자 재분석
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

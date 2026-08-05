@@ -19,6 +19,7 @@ import { ProcessingStatus } from '@/components/meeting/ProcessingStatus';
 import { TranscriptSection } from '@/components/meeting/TranscriptSection';
 import { SpeakerMapEditor } from '@/components/meeting/SpeakerMapEditor';
 import AccountSection from '@/components/meeting/AccountSection';
+import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { meetingsApi } from '@/lib/api';
 import type { Meeting, MeetingDetail, ActionItem, SharedUser } from '@/types/meeting';
 
@@ -289,6 +290,7 @@ function MeetingDetailContent() {
   const [showAudioUploader, setShowAudioUploader] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioUrls, setAudioUrls] = useState<string[]>([]);
+  const { width: asideWidth, startDrag: startAsideDrag } = useResizablePanel('ttobak:meetingAsideWidth', 384, 280, 640);
 
   // Extract meeting ID from URL. usePathname() updates on client-side navigation,
   // unlike window.location.pathname in a mount-only effect which goes stale.
@@ -480,6 +482,13 @@ function MeetingDetailContent() {
                 const refreshed = await meetingsApi.get(meeting.meetingId);
                 setMeeting(refreshed as Meeting);
               }}
+              sttProvider={meeting.sttProvider}
+              audioPartCount={meeting.audioPartCount}
+              onRediarize={async (speakerCount) => {
+                await meetingsApi.rediarize(meeting.meetingId, speakerCount);
+                const refreshed = await meetingsApi.get(meeting.meetingId);
+                setMeeting(refreshed as Meeting);
+              }}
             />
           )}
 
@@ -644,8 +653,17 @@ function MeetingDetailContent() {
           </div>
         </div>
 
+        {/* Drag-to-resize divider - Desktop only */}
+        <div
+          onMouseDown={startAsideDrag}
+          className="hidden lg:flex w-1 shrink-0 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
+        />
+
         {/* Q&A / 참조 Side Panel - Desktop only */}
-        <aside className="hidden lg:flex lg:w-80 xl:w-96 border-l border-slate-200 dark:border-white/10 dark:bg-surface-lowest/50 flex-col sticky top-0 h-screen">
+        <aside
+          className="hidden lg:flex border-l border-slate-200 dark:border-white/10 dark:bg-surface-lowest/50 flex-col sticky top-0 h-screen"
+          style={{ width: asideWidth }}
+        >{/* width persisted via useResizablePanel, see hooks/useResizablePanel.ts */}
           <ReferenceTabs
             qaPanel={<QAPanel meetingId={meeting.meetingId} />}
             referencePanel={<ReferencePanel accountId={meeting.accountId} />}

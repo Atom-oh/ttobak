@@ -876,8 +876,10 @@ func (s *ProjectService) GetProjectInsights(ctx context.Context, userID, project
 				continue
 			}
 			out = append(out, model.ProjectInsightDTO{
-				Type: insight.Type, Text: insight.Text, SourceID: meeting.MeetingID,
-				OccurredAt: meeting.Date, TsMarker: insight.TsMarker, Entities: insight.Entities,
+				Type: insight.Type, Text: insight.Text, Evidence: insight.Evidence,
+				Implication: insight.Implication, NextAction: insight.NextAction,
+				SourceID: meeting.MeetingID, OccurredAt: meeting.Date,
+				TsMarker: insight.TsMarker, Entities: insight.Entities,
 			})
 		}
 	}

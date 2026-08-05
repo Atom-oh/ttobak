@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -458,6 +459,64 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 	return s.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
 		"audioKey": finalKey,
 		"status":   model.StatusTranscribing,
+	})
+}
+
+// RediarizeMeeting re-runs Whisper speaker diarization on a meeting's
+// existing audio with a user-supplied speaker-count hint (e.g. after the
+// acoustic pass under-detected speakers). It re-triggers the existing
+// S3-event pipeline (audio upload -> EventBridge -> ttobak-transcribe -> Whisper
+// ECS) via a same-bucket S3 copy rather than calling ECS RunTask directly, so
+// this needs no new IAM grants on the api Lambda — see cmd/transcribe/main.go's
+// use of Meeting.DiarizationSpeakerHint. Whisper-only (pyannote diarization,
+// ADR-019); AWS Transcribe fallback meetings have no acoustic diarization to
+// re-run. Multi-part audio is out of scope for v1 (would need per-part ECS
+// retriggers and an AudioPartsReady reset).
+func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID string, speakerCount int) error {
+	if speakerCount < 1 {
+		return fmt.Errorf("speakerCount must be at least 1")
+	}
+
+	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil {
+		return fmt.Errorf("failed to get meeting: %w", err)
+	}
+	if meeting == nil {
+		return ErrNotFound
+	}
+	if meeting.SttProvider != "" && meeting.SttProvider != "whisper" {
+		return fmt.Errorf("rediarization is only supported for whisper-transcribed meetings")
+	}
+	if meeting.AudioPartCount > 1 {
+		return fmt.Errorf("rediarization does not yet support multi-part audio")
+	}
+	if meeting.Status == model.StatusTranscribing || meeting.Status == model.StatusSummarizing {
+		return fmt.Errorf("meeting is still processing (status: %s)", meeting.Status)
+	}
+	audioKeys := meeting.GetEffectiveAudioKeys()
+	if len(audioKeys) == 0 || audioKeys[0] == "" {
+		return fmt.Errorf("no audio available to re-diarize")
+	}
+	sourceKey := audioKeys[0]
+
+	// A fresh key under the same meeting prefix, so the existing EventBridge
+	// S3 rule + ttobak-transcribe Lambda pick it up exactly as a new upload
+	// would. The original audioKey is left untouched.
+	retriggerKey := fmt.Sprintf("audio/%s/%s/rediarize_%d_%s", userID, meetingID, time.Now().UnixMilli(), path.Base(sourceKey))
+	if _, err := s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(s.bucketName),
+		Key:        aws.String(retriggerKey),
+		CopySource: aws.String(fmt.Sprintf("%s/%s", s.bucketName, sourceKey)),
+	}); err != nil {
+		return fmt.Errorf("failed to retrigger re-diarization: %w", err)
+	}
+
+	// Old spk_N -> name mappings no longer correspond once diarization
+	// re-runs from scratch; clear them and let the user re-map after.
+	return s.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+		"diarizationSpeakerHint": speakerCount,
+		"speakerMap":             map[string]string{},
+		"status":                 model.StatusTranscribing,
 	})
 }
 

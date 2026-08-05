@@ -204,11 +204,14 @@ func IsValidInsightType(t string) bool {
 
 // MeetingInsight is one typed insight extracted from a meeting (stored as JSON in Meeting.Insights).
 type MeetingInsight struct {
-	ID       string   `json:"id"`
-	Type     string   `json:"type"`
-	Text     string   `json:"text"`
-	TsMarker string   `json:"tsMarker,omitempty"` // [TS:NNN] transcript deep link
-	Entities []string `json:"entities,omitempty"`
+	ID          string   `json:"id"`
+	Type        string   `json:"type"`
+	Text        string   `json:"text"`
+	Evidence    string   `json:"evidence,omitempty"`
+	Implication string   `json:"implication,omitempty"`
+	NextAction  string   `json:"nextAction,omitempty"`
+	TsMarker    string   `json:"tsMarker,omitempty"` // [TS:NNN] transcript deep link
+	Entities    []string `json:"entities,omitempty"`
 }
 
 // AccountInsight is a persisted insight item in the account partition.
@@ -220,6 +223,9 @@ type AccountInsight struct {
 	InsightID    string    `dynamodbav:"insightId"`
 	Type         string    `dynamodbav:"type"`
 	Text         string    `dynamodbav:"text"`
+	Evidence     string    `dynamodbav:"evidence,omitempty"`
+	Implication  string    `dynamodbav:"implication,omitempty"`
+	NextAction   string    `dynamodbav:"nextAction,omitempty"`
 	SourceType   string    `dynamodbav:"sourceType"` // "meeting" | "news" | "ingest"
 	SourceID     string    `dynamodbav:"sourceId"`
 	SourceUserID string    `dynamodbav:"sourceUserId,omitempty"`
@@ -231,13 +237,16 @@ type AccountInsight struct {
 }
 
 type AccountInsightDTO struct {
-	Type       string    `json:"type"`
-	Text       string    `json:"text"`
-	SourceType string    `json:"sourceType"`
-	SourceID   string    `json:"sourceId"`
-	OccurredAt time.Time `json:"occurredAt"`
-	TsMarker   string    `json:"tsMarker,omitempty"`
-	Entities   []string  `json:"entities,omitempty"`
+	Type        string    `json:"type"`
+	Text        string    `json:"text"`
+	Evidence    string    `json:"evidence,omitempty"`
+	Implication string    `json:"implication,omitempty"`
+	NextAction  string    `json:"nextAction,omitempty"`
+	SourceType  string    `json:"sourceType"`
+	SourceID    string    `json:"sourceId"`
+	OccurredAt  time.Time `json:"occurredAt"`
+	TsMarker    string    `json:"tsMarker,omitempty"`
+	Entities    []string  `json:"entities,omitempty"`
 }
 
 // AccountBrief bundles an account's raw material for one-shot consumption by

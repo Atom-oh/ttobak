@@ -1224,7 +1224,7 @@ func TestListAccountInsights_FilterByType(t *testing.T) {
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 	d := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
 	repo.insightsByAccount[acc.AccountID] = []model.AccountInsight{
-		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연", OccurredAt: d, SourceID: "m-1", SourceType: "meeting"},
+		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연", Evidence: "일정 미확정", Implication: "오픈 지연", NextAction: "일정 확정", OccurredAt: d, SourceID: "m-1", SourceType: "meeting"},
 		{AccountID: acc.AccountID, Type: model.InsightTech, Text: "EKS", OccurredAt: d, SourceID: "m-1", SourceType: "meeting"},
 	}
 	got, err := svc.ListAccountInsights(context.Background(), "owner-1", acc.AccountID, time.Time{}, time.Time{}, []string{model.InsightRisk})
@@ -1233,6 +1233,9 @@ func TestListAccountInsights_FilterByType(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Type != model.InsightRisk {
 		t.Errorf("expected only risk, got %+v", got)
+	}
+	if got[0].Evidence != "일정 미확정" || got[0].Implication != "오픈 지연" || got[0].NextAction != "일정 확정" {
+		t.Errorf("structured fields were not mapped to DTO: %+v", got[0])
 	}
 }
 

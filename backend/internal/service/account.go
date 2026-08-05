@@ -568,13 +568,16 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 			continue
 		}
 		out = append(out, model.AccountInsightDTO{
-			Type:       ins.Type,
-			Text:       ins.Text,
-			SourceType: ins.SourceType,
-			SourceID:   ins.SourceID,
-			OccurredAt: ins.OccurredAt,
-			TsMarker:   ins.TsMarker,
-			Entities:   ins.Entities,
+			Type:        ins.Type,
+			Text:        ins.Text,
+			Evidence:    ins.Evidence,
+			Implication: ins.Implication,
+			NextAction:  ins.NextAction,
+			SourceType:  ins.SourceType,
+			SourceID:    ins.SourceID,
+			OccurredAt:  ins.OccurredAt,
+			TsMarker:    ins.TsMarker,
+			Entities:    ins.Entities,
 		})
 	}
 	return out, nil

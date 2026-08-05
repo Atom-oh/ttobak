@@ -1,11 +1,18 @@
 'use client';
 
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { InsightsList } from '@/components/InsightsList';
 
 export default function InsightsPage() {
+  const router = useRouter();
   const { isLoading, isAuthenticated } = useAuth();
+
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) router.replace('/');
+  }, [isAuthenticated, isLoading, router]);
 
   if (isLoading) {
     return (
@@ -16,9 +23,6 @@ export default function InsightsPage() {
   }
 
   if (!isAuthenticated) {
-    if (typeof window !== 'undefined') {
-      window.location.href = '/';
-    }
     return null;
   }
 
@@ -38,7 +42,7 @@ export default function InsightsPage() {
 
       {/* Content Area */}
       <div className="flex-1 overflow-y-auto pb-24 lg:pb-8">
-        <div className="p-4 lg:px-16 lg:pt-16 lg:pb-8 max-w-4xl w-full">
+        <div className="mx-auto w-full max-w-7xl p-4 lg:px-8 lg:pb-8 lg:pt-12">
           {/* Page Header */}
           <div className="hidden lg:block mb-8">
             <h2 className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-text-main">

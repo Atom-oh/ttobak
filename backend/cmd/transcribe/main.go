@@ -191,6 +191,9 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			numSpeakers := 0
 			if meeting != nil {
 				numSpeakers = len(meeting.Participants)
+				if meeting.DiarizationSpeakerHint > 0 {
+					numSpeakers = meeting.DiarizationSpeakerHint
+				}
 			}
 			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt, outputKey, numSpeakers)
 			jobName = "whisper-ecs-" + meetingID

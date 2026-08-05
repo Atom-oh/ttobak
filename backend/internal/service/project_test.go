@@ -699,7 +699,7 @@ func TestGetProjectInsights_AggregatesAndFilters(t *testing.T) {
 	april := time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC)
 	may := time.Date(2026, 5, 10, 0, 0, 0, 0, time.UTC)
 	repo.meetings[projectMeetingKey("owner", "m1")] = &model.Meeting{MeetingID: "m1", UserID: "owner", Date: april, ProjectIDs: []string{"p1"}, Insights: `[{"type":"risk","text":"April risk"}]`}
-	repo.meetings[projectMeetingKey("owner", "m2")] = &model.Meeting{MeetingID: "m2", UserID: "owner", Date: may, ProjectIDs: []string{"p1"}, Insights: `[{"type":"risk","text":"May risk"},{"type":"tech","text":"EKS"}]`}
+	repo.meetings[projectMeetingKey("owner", "m2")] = &model.Meeting{MeetingID: "m2", UserID: "owner", Date: may, ProjectIDs: []string{"p1"}, Insights: `[{"type":"risk","text":"May risk","evidence":"schedule is open","implication":"launch may slip","nextAction":"confirm owner"},{"type":"tech","text":"EKS"}]`}
 	repo.meetingRefs["p1"] = []model.ProjectMeetingRef{{MeetingID: "m1", OwnerUserID: "owner"}, {MeetingID: "m2", OwnerUserID: "owner"}}
 	svc := newProjectServiceWithRepo(repo)
 	all, err := svc.GetProjectInsights(context.Background(), "owner", "p1", time.Time{}, time.Time{}, nil)
@@ -711,6 +711,11 @@ func TestGetProjectInsights_AggregatesAndFilters(t *testing.T) {
 	filtered, err := svc.GetProjectInsights(context.Background(), "owner", "p1", from, to, []string{model.InsightRisk})
 	if err != nil || len(filtered) != 1 || filtered[0].Text != "May risk" {
 		t.Fatalf("unexpected filtered insights: %v err=%v", filtered, err)
+	}
+	if filtered[0].Evidence != "schedule is open" ||
+		filtered[0].Implication != "launch may slip" ||
+		filtered[0].NextAction != "confirm owner" {
+		t.Errorf("structured fields were not mapped to project DTO: %+v", filtered[0])
 	}
 }
 
