@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
@@ -14,17 +14,20 @@ function clamp(n: number, min: number, max: number): number {
  * summary column next to action items). Width persists to localStorage
  * across meetings/sessions.
  *
- * `containerRef`+`reserve` (optional) additionally cap the width to the
- * container's *current* rendered width minus `reserve` px (space owed to the
- * divider, gaps, and the sibling column's own min-width) -- re-measured via
- * ResizeObserver rather than once at mount, since the container may not be
- * rendered yet (behind a loading early-return) when the mount effect first
- * runs, and the viewport can resize at any time afterward. The computed
- * ceiling is always floored at `min` (`Math.max(min, ...)`) so a narrow
- * container never makes max < min -- that inversion is what previously
- * turned clamp() into a permanent dead-zone, since
- * `Math.min(max, Math.max(min, n))` with max < min always returns max
- * regardless of n.
+ * `reserve` (optional, needs the returned `containerRef` attached to the
+ * row element) caps the width to that row's *current* rendered width minus
+ * `reserve` px (space owed to the divider, gaps, and the sibling column's
+ * own min-width) -- re-measured via ResizeObserver. `containerRef` is a
+ * callback ref (not a plain RefObject) so the hook's own state -- not a
+ * `.current` mutation React doesn't consider a dependency change -- drives
+ * when that effect (re)attaches; a `useRef` passed in from the caller and
+ * read via `ref.current` in a dependency array can silently never fire if
+ * the element wasn't there yet on the render where deps were last diffed
+ * (e.g. behind a loading early-return). The computed ceiling is always
+ * floored at `min` (`Math.max(min, ...)`) so a narrow container never makes
+ * max < min -- that inversion is what previously turned clamp() into a
+ * permanent dead-zone, since `Math.min(max, Math.max(min, n))` with
+ * max < min always returns max regardless of n.
  */
 export function useResizablePanel(
   storageKey: string,
@@ -32,15 +35,16 @@ export function useResizablePanel(
   min: number,
   max: number,
   anchor: 'left' | 'right' = 'right',
-  containerRef?: React.RefObject<HTMLElement | null>,
   reserve?: number,
 ) {
   const [width, setWidth] = useState(defaultWidth);
   const widthRef = useRef(defaultWidth);
+  const [container, setContainer] = useState<HTMLElement | null>(null);
+  const containerRef = useCallback((el: HTMLElement | null) => setContainer(el), []);
 
   const effectiveMax = () => {
-    if (containerRef?.current && reserve !== undefined) {
-      const available = containerRef.current.getBoundingClientRect().width - reserve;
+    if (container && reserve !== undefined) {
+      const available = container.getBoundingClientRect().width - reserve;
       return Math.max(min, Math.min(max, available));
     }
     return max;
@@ -58,8 +62,7 @@ export function useResizablePanel(
   }, [storageKey]);
 
   useEffect(() => {
-    const el = containerRef?.current;
-    if (!el || reserve === undefined) return;
+    if (!container || reserve === undefined) return;
     const reclamp = () => {
       const next = clamp(widthRef.current, min, effectiveMax());
       if (next !== widthRef.current) {
@@ -69,10 +72,10 @@ export function useResizablePanel(
     };
     reclamp();
     const ro = new ResizeObserver(reclamp);
-    ro.observe(el);
+    ro.observe(container);
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [containerRef?.current, reserve]);
+  }, [container, reserve]);
 
   const activeDragCleanup = useRef<(() => void) | null>(null);
 
@@ -108,5 +111,5 @@ export function useResizablePanel(
     return () => activeDragCleanup.current?.();
   }, []);
 
-  return { width, startDrag };
+  return { width, startDrag, containerRef };
 }

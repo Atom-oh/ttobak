@@ -290,13 +290,11 @@ function MeetingDetailContent() {
   const [showAudioUploader, setShowAudioUploader] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioUrls, setAudioUrls] = useState<string[]>([]);
-  const pageRowRef = useRef<HTMLDivElement>(null);
-  const summaryRowRef = useRef<HTMLDivElement>(null);
   // reserve = space owed to the sibling column: divider width + row gaps + the
   // sibling's own min-width, so effectiveMax leaves that column at least its
   // floor rather than a flat viewport ratio that can't see what's next to it.
-  const { width: asideWidth, startDrag: startAsideDrag } = useResizablePanel('ttobak:meetingAsideWidth', 384, 280, 640, 'right', pageRowRef, 488);
-  const { width: summaryWidth, startDrag: startSummaryDrag } = useResizablePanel('ttobak:meetingSummaryWidth', 640, 400, 900, 'left', summaryRowRef, 352);
+  const { width: asideWidth, startDrag: startAsideDrag, containerRef: pageRowRef } = useResizablePanel('ttobak:meetingAsideWidth', 384, 280, 640, 'right', 488);
+  const { width: summaryWidth, startDrag: startSummaryDrag, containerRef: summaryRowRef } = useResizablePanel('ttobak:meetingSummaryWidth', 640, 400, 900, 'left', 352);
 
   // Extract meeting ID from URL. usePathname() updates on client-side navigation,
   // unlike window.location.pathname in a mount-only effect which goes stale.
@@ -494,11 +492,15 @@ function MeetingDetailContent() {
           {/* Real-time summary captured during recording (collapsed by default) */}
           {meeting.liveSummary && <LiveSummaryCard content={meeting.liveSummary} />}
 
-          {/* Core Content Grid - show summary when done OR when content exists (e.g. error with saved live summary) */}
+          {/* Core Content Grid - show summary when done OR when content exists (e.g. error with saved live summary).
+              xl (not lg): this row's two sub-columns need ~750px combined minimum
+              (summary min + divider + gaps + action-items floor), which doesn't fit
+              next to the app sidebar + reference aside at 1024-1280px viewports.
+              Below xl it stacks to full-width, same as before resize was added. */}
           {(meeting.status === 'done' || meeting.content || meeting.summary) ? (
-            <div ref={summaryRowRef} className="flex flex-col lg:flex-row gap-8 mb-12">
+            <div ref={summaryRowRef} className="flex flex-col xl:flex-row gap-8 mb-12">
               <div
-                className="w-full lg:shrink-0 lg:w-[var(--summary-w)]"
+                className="w-full xl:shrink-0 xl:w-[var(--summary-w)]"
                 style={{ '--summary-w': `${summaryWidth}px` } as React.CSSProperties}
               >
                 <AISummaryCard
@@ -512,9 +514,9 @@ function MeetingDetailContent() {
               </div>
               <div
                 onMouseDown={startSummaryDrag}
-                className="hidden lg:flex w-2 shrink-0 self-stretch cursor-col-resize bg-slate-300 dark:bg-white/20 hover:bg-primary/60 active:bg-primary/80 transition-colors rounded-full"
+                className="hidden xl:flex w-2 shrink-0 self-stretch cursor-col-resize bg-slate-300 dark:bg-white/20 hover:bg-primary/60 active:bg-primary/80 transition-colors rounded-full"
               />
-              <div className="flex-1 min-w-0 lg:min-w-[280px]">
+              <div className="flex-1 min-w-0 xl:min-w-[280px]">
                 <ActionItemsCard
                   items={meeting.actionItems}
                   onToggle={handleActionItemToggle}
