@@ -6,16 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"path"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	dynamotypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -520,10 +523,10 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		return err
 	}
 
-	// Tags this specific call so its own failure handler below can't stomp a
-	// second, unrelated concurrent RediarizeMeeting call that's also
-	// mid-"transcribing" -- a bare status match can't tell those two apart
-	// since the string value is identical for both.
+	// A UUID, not a millisecond timestamp, so the S3 key below is actually
+	// guaranteed unique across concurrent calls (not merely unlikely to
+	// collide) -- the HeadObject check further down depends on this key
+	// belonging exclusively to this one call to mean anything.
 	attemptToken := uuid.New().String()
 
 	// Old spk_N -> name mappings no longer correspond once diarization
@@ -535,21 +538,36 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 	// ttobak-transcribe now reads via a strongly-consistent GetItem (see
 	// cmd/transcribe/main.go) rather than the GSI3 query, so it can never
 	// observe a value older than this write once it runs.
-	if err := s.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+	//
+	// Conditioned on status still being what GetMeeting just read (validated
+	// non-transcribing/summarizing above): two concurrent RediarizeMeeting
+	// calls both pass that eligibility check off the same read, but only one
+	// can win this write -- the loser gets ConditionalCheckFailedException
+	// and reports "already processing" instead of proceeding. This makes two
+	// genuinely concurrent in-flight attempts for the same meeting
+	// impossible, which is what the failure-path status check below relies
+	// on: without it, a later attempt's failure handler could mark the
+	// meeting errored while an earlier attempt's successful retrigger is
+	// still legitimately running, since DynamoDB only stores one status
+	// value and a plain overwrite loses any record that the earlier one ran.
+	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, userID, meetingID, map[string]interface{}{
+		"status": meeting.Status,
+	}, map[string]interface{}{
 		"diarizationSpeakerHint": speakerCount,
 		"speakerMap":             map[string]string{},
 		"status":                 model.StatusTranscribing,
 		"rediarizeAttemptToken":  attemptToken,
 	}); err != nil {
+		var ccfe *dynamotypes.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("meeting is already being processed: %w", ErrInvalidInput)
+		}
 		return fmt.Errorf("failed to update meeting for re-diarization: %w", err)
 	}
 
 	// A fresh key under the same meeting prefix, so the existing EventBridge
 	// S3 rule + ttobak-transcribe Lambda pick it up exactly as a new upload
-	// would. The original audioKey is left untouched. Keyed on attemptToken
-	// (a UUID), not a millisecond timestamp -- two calls landing in the same
-	// millisecond is unlikely but not impossible, and this key's uniqueness
-	// is what the HeadObject check below depends on to mean anything.
+	// would. The original audioKey is left untouched.
 	retriggerKey := fmt.Sprintf("audio/%s/%s/rediarize_%s_%s", userID, meetingID, attemptToken, path.Base(sourceKey))
 	if _, err := s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(s.bucketName),
@@ -562,11 +580,14 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		// destination key rather than guessing. If it exists, the copy (and
 		// therefore the EventBridge S3 event that wakes ttobak-transcribe)
 		// really did fire; this attempt's own pipeline is now legitimately
-		// running and must NOT be marked errored out from under it. A
-		// NotFound response is the only outcome treated as confirmed
-		// absence -- any other HeadObject error (throttling, a transient
-		// network blip) is itself ambiguous, so it falls through to "don't
-		// know" rather than being treated as proof of failure.
+		// running and must NOT be marked errored out from under it. Absence
+		// is confirmed either by the typed s3types.NotFound or by a generic
+		// HTTP 404 (HeadObject responses have no body for the SDK to parse
+		// an error code from, so a 404 often surfaces as an untyped
+		// *smithyhttp.ResponseError rather than s3types.NotFound). Any other
+		// outcome (throttling, a transient network blip) is itself
+		// ambiguous, so it falls through to "don't know" rather than being
+		// treated as proof of failure.
 		confirmedAbsent := false
 		if _, headErr := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 			Bucket: aws.String(s.bucketName),
@@ -576,7 +597,8 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 			return nil
 		} else {
 			var notFound *s3types.NotFound
-			if errors.As(headErr, &notFound) {
+			var respErr *smithyhttp.ResponseError
+			if errors.As(headErr, &notFound) || (errors.As(headErr, &respErr) && respErr.HTTPStatusCode() == http.StatusNotFound) {
 				confirmedAbsent = true
 			} else {
 				log.Printf("RediarizeMeeting: HeadObject check for meeting %s was itself inconclusive (%v) -- leaving status untouched rather than guessing", meetingID, headErr)
@@ -587,18 +609,16 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		}
 
 		// The copy is confirmed to have never landed. Mark the meeting
-		// errored, but only if status is STILL "transcribing" AND
-		// rediarizeAttemptToken still matches this call's own token --
-		// guards against a second,
-		// unrelated concurrent RediarizeMeeting call now being the one
-		// "transcribing", so this write is a no-op rather than clobbering
-		// that other call's real progress. The cleared speakerMap is a real
-		// cost on a genuine failure, but restoring it here would reopen the
-		// same ambiguity HeadObject just resolved, for a second write this
-		// time with no way to re-check it.
+		// errored, conditioned on status still being "transcribing" -- since
+		// the write above already makes concurrent in-flight attempts for
+		// this meeting mutually exclusive, that's now sufficient on its own
+		// (no separate token match needed): if status has already moved on,
+		// something else legitimately advanced it and this is a no-op. The
+		// cleared speakerMap is a real cost on a genuine failure, but
+		// restoring it here would reopen the same ambiguity HeadObject just
+		// resolved, for a second write this time with no way to re-check it.
 		if statusErr := s.repo.UpdateMeetingFieldsIfMatch(ctx, userID, meetingID, map[string]interface{}{
-			"status":                model.StatusTranscribing,
-			"rediarizeAttemptToken": attemptToken,
+			"status": model.StatusTranscribing,
 		}, map[string]interface{}{
 			"status": model.StatusError,
 		}); statusErr != nil {
