@@ -396,7 +396,7 @@ Response: 200 OK
 `meeting.go`). `evidence`는 미팅 자체의 `Insights` JSON을 통해 미팅 접근권이
 있는 사용자에게만 노출된다. `Project.Insights`
 (`GET /api/projects/{projectId}/insights`, `GET /api/projects/{projectId}/brief`)도
-같은 스키마(`FieldInsight`)와 같은 팬아웃 정책을 공유한다.
+같은 스키마(프론트엔드 타입 `FieldInsight`, `frontend/src/types/meeting.ts` — 백엔드는 `MeetingInsight`/`ProjectInsightDTO`)와 같은 팬아웃 정책을 공유한다.
 
 ```
 Error: 400 Bad Request (잘못된 from/to — RFC3339 아님)

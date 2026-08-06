@@ -62,7 +62,11 @@ Expected: PASS.
 
 - [ ] **Step 1: Add failing propagation assertions**
 
-Assert the three optional fields survive meeting-to-account fan-out, account DTO mapping, and project aggregation.
+Assert `implication`/`nextAction` survive meeting-to-account fan-out, account DTO
+mapping, and project aggregation — and assert `evidence` does NOT: near-verbatim
+meeting quotes must not fan out to partitions readable by account/project members
+who lack access to the source meeting (see the security note in
+`BuildAccountInsights`, `meeting.go`). `evidence` stays meeting-scoped only.
 
 - [ ] **Step 2: Run the focused service tests**
 
@@ -72,7 +76,11 @@ Expected: FAIL until every copy path includes the fields.
 
 - [ ] **Step 3: Add fields to persisted and response models**
 
-Add `Evidence`, `Implication`, and `NextAction` with `omitempty` tags to account persistence and both account/project DTOs, then copy each field explicitly in all three service paths.
+Add `Evidence`, `Implication`, and `NextAction` with `omitempty` tags to account
+persistence and both account/project DTOs, then copy `Implication`/`NextAction`
+explicitly in all three service paths — leaving `Evidence` unset there per Step 1's
+non-fan-out invariant (the model fields exist so the meeting-scoped read path can
+still carry it).
 
 - [ ] **Step 4: Re-run focused tests**
 
