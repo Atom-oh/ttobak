@@ -560,11 +560,16 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		// therefore the EventBridge S3 event that wakes ttobak-transcribe)
 		// really did fire; this attempt's own pipeline is now legitimately
 		// running and must NOT be marked errored out from under it.
-		if _, headErr := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+		// retriggerKey embeds this call's own millisecond timestamp, so no
+		// earlier RediarizeMeeting attempt could ever have written to this
+		// exact key -- but check LastModified is from the last few seconds
+		// anyway, as a belt-and-suspenders guard against relying on that
+		// invariant alone.
+		if head, headErr := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 			Bucket: aws.String(s.bucketName),
 			Key:    aws.String(retriggerKey),
-		}); headErr == nil {
-			log.Printf("RediarizeMeeting: CopyObject for meeting %s returned an error but the destination object exists -- treating as a real retrigger, not marking errored", meetingID)
+		}); headErr == nil && head.LastModified != nil && time.Since(*head.LastModified) < 30*time.Second {
+			log.Printf("RediarizeMeeting: CopyObject for meeting %s returned an error but the destination object exists and is fresh -- treating as a real retrigger, not marking errored", meetingID)
 			return nil
 		}
 
