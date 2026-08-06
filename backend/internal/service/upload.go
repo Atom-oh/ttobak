@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	dynamotypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -463,23 +462,13 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 	})
 }
 
-// RediarizeMeeting re-runs Whisper speaker diarization on a meeting's
-// existing audio with a user-supplied speaker-count hint (e.g. after the
-// acoustic pass under-detected speakers). It re-triggers the existing
-// S3-event pipeline (audio upload -> EventBridge -> ttobak-transcribe -> Whisper
-// ECS) via a same-bucket S3 copy rather than calling ECS RunTask directly, so
-// this needs no new IAM grants on the api Lambda — see cmd/transcribe/main.go's
-// use of Meeting.DiarizationSpeakerHint. Whisper-only (pyannote diarization,
-// ADR-019); AWS Transcribe fallback meetings have no acoustic diarization to
-// re-run. Multi-part audio is out of scope for v1 (would need per-part ECS
-// retriggers and an AudioPartsReady reset).
 // validateRediarizeEligibility is the pure decision core of RediarizeMeeting:
 // ownership, whisper-only, single-part-only, and not-currently-processing
 // guards. Kept side-effect-free so it can be table-tested without mocking S3
 // or DynamoDB. Returns the S3 key to re-copy on success.
 func validateRediarizeEligibility(meeting *model.Meeting, userID string, speakerCount int) (string, error) {
-	if speakerCount < 1 || speakerCount > 20 {
-		return "", fmt.Errorf("speakerCount must be between 1 and 20: %w", ErrInvalidInput)
+	if speakerCount < 2 || speakerCount > 20 {
+		return "", fmt.Errorf("speakerCount must be between 2 and 20: %w", ErrInvalidInput)
 	}
 	if meeting == nil {
 		return "", ErrNotFound
@@ -504,11 +493,21 @@ func validateRediarizeEligibility(meeting *model.Meeting, userID string, speaker
 	return sourceKey, nil
 }
 
+// RediarizeMeeting re-runs Whisper speaker diarization on a meeting's
+// existing audio with a user-supplied speaker-count hint (e.g. after the
+// acoustic pass under-detected speakers). It re-triggers the existing
+// S3-event pipeline (audio upload -> EventBridge -> ttobak-transcribe -> Whisper
+// ECS) via a same-bucket S3 copy rather than calling ECS RunTask directly, so
+// this needs no new IAM grants on the api Lambda — see cmd/transcribe/main.go's
+// use of Meeting.DiarizationSpeakerHint. Whisper-only (pyannote diarization,
+// ADR-019); AWS Transcribe fallback meetings have no acoustic diarization to
+// re-run. Multi-part audio is out of scope for v1 (would need per-part ECS
+// retriggers and an AudioPartsReady reset).
 func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID string, speakerCount int) error {
 	// Cheap bounds check before the repository round-trip -- a malformed
 	// speakerCount shouldn't cost a DynamoDB read.
-	if speakerCount < 1 || speakerCount > 20 {
-		return fmt.Errorf("speakerCount must be between 1 and 20: %w", ErrInvalidInput)
+	if speakerCount < 2 || speakerCount > 20 {
+		return fmt.Errorf("speakerCount must be between 2 and 20: %w", ErrInvalidInput)
 	}
 
 	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
@@ -544,8 +543,7 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		"speakerMap":             map[string]string{},
 		"status":                 model.StatusTranscribing,
 	}); err != nil {
-		var ccfe *dynamotypes.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
+		if errors.Is(err, repository.ErrConditionFailed) {
 			return fmt.Errorf("meeting is already being processed: %w", ErrInvalidInput)
 		}
 		return fmt.Errorf("failed to update meeting for re-diarization: %w", err)

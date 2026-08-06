@@ -141,8 +141,26 @@ Key design decisions:
 - 1회 수동 운영자 절차 필요: HuggingFace에서 `pyannote/speaker-diarization-3.1`, `pyannote/segmentation-3.0`, `pyannote/wespeaker-voxceleb-resnet34-LM` gating 동의 후 `HF_TOKEN`으로 `upload-diarization-model.sh` 실행 — 신규 컨테이너 이미지 배포 전에 완료 필요
 - 심하게 겹치는 한국어 발화에서 pyannote 정확도가 완벽하지는 않음 — 순수 텍스트 추론 대비 큰 개선이지만 완전한 해결은 아님. 구 트랜스크립트와 diarization 실패 시에는 기존 텍스트 추론 동작으로 폴백
 
+## 후속 업데이트 (2026-08): 사용자 지정 화자 수로 재분석
+
+pyannote는 `max_speakers` 상한 내에서 실제 화자 수를 자동 감지하므로(위 "결정" 절
+참조), 등록된 참석자 수보다 실제 발화자가 적으면 문제없지만 그 반대(예: 6명이
+발화했는데 4명만 감지)는 순수 acoustic 오탐으로 남아 있었다 — 이 ADR이 채택한
+best-effort 폴백만으로는 사후 교정 수단이 없었다.
+
+`POST /api/meetings/{meetingId}/rediarize`(`UploadService.RediarizeMeeting`,
+API-SPEC.md 참조)가 이 교정 수단을 추가한다: 사용자가 지정한 화자 수를
+`Meeting.DiarizationSpeakerHint`에 저장해 이후 모든 재전사에서 `len(Participants)`
+대신 `max_speakers` 힌트로 사용하고(sticky), 기존 오디오를 새 S3 키로
+`CopyObject`해 이 ADR이 구축한 동일 EventBridge → `ttobak-transcribe` → Whisper
+ECS(+pyannote) 파이프라인을 그대로 재사용한다 — ECS `RunTask`를 직접 호출하지
+않으므로 새 IAM 권한이 필요 없다. Whisper 전용(AWS Transcribe 폴백 미팅은
+acoustic diarization이 없어 대상 아님)이며, v1은 단일 파트 오디오로 스코프를
+제한한다(멀티파트는 파트별 재트리거 + `AudioPartsReady` 리셋이 추가로 필요).
+
 ## 참고 자료
 - [ADR-009: ECS Spot의 Whisper GPU](ADR-009-whisper-gpu-ecs-spot-zero-scale.md) — Whisper(AWS Transcribe 아님)가 기본 STT 엔진인 이유, 그리고 이번 ADR이 엔진 전환이 아니라 확장인 이유
 - [pyannote.audio](https://github.com/pyannote/pyannote-audio) — 화자분리 툴킷
 - `backend/whisper/transcribe.py`, `backend/whisper/upload-diarization-model.sh` — 구현
 - `backend/internal/service/bedrock.go`의 `refineChunk`/`buildRefineSystemPrompt` — 보존/추론 프롬프트 모드
+- `backend/internal/service/upload.go`의 `RediarizeMeeting`/`validateRediarizeEligibility` — 사용자 지정 화자 수 재분석 구현

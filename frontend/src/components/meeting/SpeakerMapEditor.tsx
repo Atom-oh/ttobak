@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { getSpeakerColor } from '@/lib/speakerColors';
 
 interface SpeakerMapEditorProps {
@@ -38,15 +38,26 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
 
   const hasUnmapped = speakers.some((s) => UNMAPPED_PATTERN.test(s));
 
-  const [mapping, setMapping] = useState<Record<string, string>>(() => {
+  const initMapping = () => {
     const init: Record<string, string> = {};
     speakers.forEach((s) => { init[s] = existingSpeakerMap?.[s] || ''; });
     return init;
-  });
+  };
+  const [mapping, setMapping] = useState<Record<string, string>>(initMapping);
   const [saving, setSaving] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [rediarizeCount, setRediarizeCount] = useState(speakers.length + 1);
   const [rediarizing, setRediarizing] = useState(false);
+
+  // Re-sync after a rediarize: the server clears speakerMap and the
+  // transcript is regenerated with a fresh (possibly different-length)
+  // spk_N set, but this component doesn't unmount across that refetch --
+  // without this, stale local `mapping` from the OLD diarization would get
+  // written back on the next save, undoing the server's clear.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setMapping(initMapping()); }, [existingSpeakerMap, speakers.join(',')]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setRediarizeCount(speakers.length + 1); }, [speakers.join(',')]);
 
   if (speakers.length === 0) return null;
 
@@ -54,9 +65,12 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
 
   const handleRediarize = async () => {
     if (!onRediarize) return;
+    // Re-clamp here too: onBlur may not have fired if the button is reached
+    // by click/tab straight from the input without leaving focus first.
+    const count = Math.max(2, Math.min(20, rediarizeCount || 2));
     setRediarizing(true);
     try {
-      await onRediarize(rediarizeCount);
+      await onRediarize(count);
     } finally {
       setRediarizing(false);
     }
@@ -156,7 +170,10 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
                   min={2}
                   max={20}
                   value={rediarizeCount}
-                  onChange={(e) => setRediarizeCount(Math.max(2, Math.min(20, parseInt(e.target.value) || 2)))}
+                  // Clamp on blur, not on every keystroke -- clamping while typing
+                  // "15" would force it to 2 the instant "1" alone is entered.
+                  onChange={(e) => setRediarizeCount(parseInt(e.target.value, 10) || 0)}
+                  onBlur={() => setRediarizeCount((v) => Math.max(2, Math.min(20, v || 2)))}
                   className="w-20 text-sm px-3 py-1.5 border border-slate-200 dark:border-white/10 rounded-lg bg-white dark:bg-white/5 text-slate-900 dark:text-white outline-none"
                 />
                 <span className="text-sm text-slate-500 dark:text-slate-400">명으로 재분석</span>
