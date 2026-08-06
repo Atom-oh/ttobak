@@ -290,8 +290,10 @@ function MeetingDetailContent() {
   const [showAudioUploader, setShowAudioUploader] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioUrls, setAudioUrls] = useState<string[]>([]);
-  const { width: asideWidth, startDrag: startAsideDrag } = useResizablePanel('ttobak:meetingAsideWidth', 384, 280, 640);
-  const { width: summaryWidth, startDrag: startSummaryDrag } = useResizablePanel('ttobak:meetingSummaryWidth', 640, 400, 900, 'left');
+  const pageRowRef = useRef<HTMLDivElement>(null);
+  const summaryRowRef = useRef<HTMLDivElement>(null);
+  const { width: asideWidth, startDrag: startAsideDrag } = useResizablePanel('ttobak:meetingAsideWidth', 384, 280, 640, 'right', pageRowRef, 0.4);
+  const { width: summaryWidth, startDrag: startSummaryDrag } = useResizablePanel('ttobak:meetingSummaryWidth', 640, 400, 900, 'left', summaryRowRef, 0.55);
 
   // Extract meeting ID from URL. usePathname() updates on client-side navigation,
   // unlike window.location.pathname in a mount-only effect which goes stale.
@@ -446,7 +448,7 @@ function MeetingDetailContent() {
       </header>
 
       {/* Content */}
-      <div className="flex flex-1 min-h-0">
+      <div ref={pageRowRef} className="flex flex-1 min-h-0">
         {/* Main Content */}
         <div className="flex-1 p-4 lg:p-8 overflow-y-auto">
           <div className="lg:max-w-7xl lg:mx-auto">
@@ -491,9 +493,9 @@ function MeetingDetailContent() {
 
           {/* Core Content Grid - show summary when done OR when content exists (e.g. error with saved live summary) */}
           {(meeting.status === 'done' || meeting.content || meeting.summary) ? (
-            <div className="flex flex-col lg:flex-row gap-8 mb-12">
+            <div ref={summaryRowRef} className="flex flex-col lg:flex-row gap-8 mb-12">
               <div
-                className="w-full lg:shrink-0 lg:w-[min(var(--summary-w),55%)]"
+                className="w-full lg:shrink-0 lg:w-[var(--summary-w)]"
                 style={{ '--summary-w': `${summaryWidth}px` } as React.CSSProperties}
               >
                 <AISummaryCard
