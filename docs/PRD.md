@@ -65,7 +65,7 @@
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| SUM-01 | STT 완료 후 자동으로 Bedrock Claude Opus 4.8 호출 | P0 | 완료 |
+| SUM-01 | STT 완료 후 자동으로 Bedrock Claude Opus 5 호출 | P0 | 완료 |
 | SUM-02 | 구조화된 회의록 생성: 참석자, 안건, 결정사항, 액션아이템 | P0 | 완료 |
 | SUM-03 | 마크다운 형식으로 저장 | P0 | 완료 |
 | SUM-04 | 요약 결과를 에디터에서 수정 가능 | P0 | 완료 |
@@ -232,7 +232,7 @@ Shadows: shadow-sm for cards, shadow-lg for FAB
 | DB | Amazon DynamoDB (Single Table Design) |
 | Storage | Amazon S3 |
 | STT | Amazon Transcribe (Primary) + Amazon Nova 2 Sonic (A/B) |
-| AI 요약 | Amazon Bedrock - Claude Opus 4.8 |
+| AI 요약 | Amazon Bedrock - Claude Opus 5 |
 | AI 이미지 | Amazon Bedrock - Claude Opus 4.8 (Vision) |
 
 ### 5.2 인프라 아키텍처

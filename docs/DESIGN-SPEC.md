@@ -385,12 +385,19 @@ Layout:
     - Title: text-4xl font-black tracking-tight
     - Date + Folder
     - Participants stack
-    - Grid (7/12 + 5/12):
-      - AI Summary (bg-white border rounded-xl p-6)
-      - Action Items (bg-primary/5 border-primary/20 rounded-xl p-6)
+    - AI Summary + Action Items row (드래그 리사이즈, useResizablePanel):
+      - AI Summary (bg-white border rounded-xl p-6) — 폭 400–900px 드래그 조절,
+        localStorage `ttobak:meetingSummaryWidth`에 저장
+      - w-2 divider (bg-slate-300 dark:bg-white/20, hover:bg-primary/60,
+        cursor-col-resize) — 시각적 경계 겸 드래그 핸들
+      - Action Items (bg-primary/5 border-primary/20 rounded-xl p-6, flex-1)
+      - 나란히/세로 스택 전환은 viewport breakpoint가 아니라 row 실측 폭
+        (ResizeObserver) 기준: min 폭 + reserve가 안 들어가면 자동 스택
     - Attachments Gallery (4열 grid, hover overlay)
     - Full Transcription (timestamp badges + speaker entries)
     - Floating Audio Player (sticky bottom-6, rounded-full, backdrop-blur)
+  reference aside (오른쪽, 드래그 리사이즈 280–640px, localStorage
+    `ttobak:meetingAsideWidth`) — 같은 w-2 divider 패턴
 ```
 
 ### 2.9 LiveTranscript Component

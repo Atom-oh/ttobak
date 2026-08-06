@@ -19,6 +19,7 @@ import { ProcessingStatus } from '@/components/meeting/ProcessingStatus';
 import { TranscriptSection } from '@/components/meeting/TranscriptSection';
 import { SpeakerMapEditor } from '@/components/meeting/SpeakerMapEditor';
 import AccountSection from '@/components/meeting/AccountSection';
+import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { meetingsApi } from '@/lib/api';
 import type { Meeting, MeetingDetail, ActionItem, SharedUser } from '@/types/meeting';
 
@@ -289,6 +290,11 @@ function MeetingDetailContent() {
   const [showAudioUploader, setShowAudioUploader] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioUrls, setAudioUrls] = useState<string[]>([]);
+  // reserve = space owed to the sibling column: divider width + row gaps + the
+  // sibling's own min-width, so effectiveMax leaves that column at least its
+  // floor rather than a flat viewport ratio that can't see what's next to it.
+  const { width: asideWidth, startDrag: startAsideDrag, containerRef: pageRowRef } = useResizablePanel('ttobak:meetingAsideWidth', 384, 280, 640, 'right', 488);
+  const { width: summaryWidth, startDrag: startSummaryDrag, containerRef: summaryRowRef, fits: summaryFits } = useResizablePanel('ttobak:meetingSummaryWidth', 640, 400, 900, 'left', 352);
 
   // Extract meeting ID from URL. usePathname() updates on client-side navigation,
   // unlike window.location.pathname in a mount-only effect which goes stale.
@@ -443,7 +449,7 @@ function MeetingDetailContent() {
       </header>
 
       {/* Content */}
-      <div className="flex flex-1 min-h-0">
+      <div ref={pageRowRef} className="flex flex-1 min-h-0">
         {/* Main Content */}
         <div className="flex-1 p-4 lg:p-8 overflow-y-auto">
           <div className="lg:max-w-7xl lg:mx-auto">
@@ -486,10 +492,19 @@ function MeetingDetailContent() {
           {/* Real-time summary captured during recording (collapsed by default) */}
           {meeting.liveSummary && <LiveSummaryCard content={meeting.liveSummary} />}
 
-          {/* Core Content Grid - show summary when done OR when content exists (e.g. error with saved live summary) */}
+          {/* Core Content Grid - show summary when done OR when content exists (e.g. error with saved live summary).
+              Side-by-side vs stacked is driven by summaryFits (the hook's
+              ResizeObserver measurement of THIS row minus the reserve owed to
+              the action-items column), not a viewport breakpoint -- a
+              breakpoint can't see how much width the app sidebar and the
+              resizable reference aside are already claiming, so any fixed
+              cutoff overflows for some combination of those. */}
           {(meeting.status === 'done' || meeting.content || meeting.summary) ? (
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-12">
-              <div className="lg:col-span-7">
+            <div ref={summaryRowRef} className={`flex ${summaryFits ? 'flex-row' : 'flex-col'} gap-8 mb-12`}>
+              <div
+                className={summaryFits ? 'shrink-0' : 'w-full'}
+                style={summaryFits ? { width: summaryWidth } : undefined}
+              >
                 <AISummaryCard
                   content={resolveTranscriptLinks(resolveAttachmentUrls(meeting.content || '', meeting.attachments))}
                   summary={resolveTranscriptLinks(meeting.summary || '')}
@@ -499,7 +514,11 @@ function MeetingDetailContent() {
                   }}
                 />
               </div>
-              <div className="lg:col-span-5">
+              <div
+                onMouseDown={startSummaryDrag}
+                className={`${summaryFits ? 'flex' : 'hidden'} w-2 shrink-0 self-stretch cursor-col-resize bg-slate-300 dark:bg-white/20 hover:bg-primary/60 active:bg-primary/80 transition-colors rounded-full`}
+              />
+              <div className="flex-1 min-w-0">
                 <ActionItemsCard
                   items={meeting.actionItems}
                   onToggle={handleActionItemToggle}
@@ -644,8 +663,21 @@ function MeetingDetailContent() {
           </div>
         </div>
 
+        {/* Drag-to-resize divider - Desktop only. Carries the visible boundary
+            line itself (aside no longer has its own border-l) so the resize
+            handle is actually discoverable at rest, not just on hover.
+            self-stretch is a defensive no-op (flex default) against any
+            ancestor accidentally not giving this row a definite height. */}
+        <div
+          onMouseDown={startAsideDrag}
+          className="hidden lg:flex w-2 shrink-0 self-stretch cursor-col-resize bg-slate-300 dark:bg-white/20 hover:bg-primary/60 active:bg-primary/80 transition-colors"
+        />
+
         {/* Q&A / 참조 Side Panel - Desktop only */}
-        <aside className="hidden lg:flex lg:w-80 xl:w-96 border-l border-slate-200 dark:border-white/10 dark:bg-surface-lowest/50 flex-col sticky top-0 h-screen">
+        <aside
+          className="hidden lg:flex dark:bg-surface-lowest/50 flex-col sticky top-0 h-screen"
+          style={{ width: asideWidth }}
+        >{/* width persisted via useResizablePanel, see hooks/useResizablePanel.ts */}
           <ReferenceTabs
             qaPanel={<QAPanel meetingId={meeting.meetingId} />}
             referencePanel={<ReferencePanel accountId={meeting.accountId} />}

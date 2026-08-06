@@ -23,7 +23,7 @@ import (
 // Model IDs for different use cases (cost optimization)
 var (
 	// ClaudeOpusModelID is for complex tasks (Q&A with tools, summarization, image analysis)
-	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-4-8")
+	ClaudeOpusModelID = getEnvOrDefault("BEDROCK_MODEL_ID", "global.anthropic.claude-opus-5")
 	// ClaudeSonnetModelID is for transcript refinement and mid-tier tasks
 	ClaudeSonnetModelID = getEnvOrDefaultChain("global.anthropic.claude-sonnet-5", "BEDROCK_SONNET_MODEL_ID", "BEDROCK_SUMMARIZE_MODEL_ID")
 	// ClaudeHaikuModelID is for live summary (fast, low-cost incremental updates)
@@ -496,6 +496,7 @@ Your output MUST follow this exact structure:
 
 Format in Korean unless the transcript is entirely in English.
 결정 사항과 액션 아이템만 bullet/checkbox 리스트로 작성하고, 그 외 섹션(개요/화자별 발언/논의 사항)은 문단 형태로 서술해 불필요한 불릿 나열을 피할 것. Include timestamps where available.
+각 섹션은 트랜스크립트에 담긴 구체적인 근거(누가 무엇을 언급했는지, 어떤 수치·이름·이유가 나왔는지)를 최대한 살려 상세하고 세밀하게 작성할 것 — 뭉뚱그린 한두 문장으로 축약하지 말 것.
 
 ADR-013 — 트랜스크립트 딥 링크:
 - 요약 각 항목(개요 문장, 화자별 발언, 논의 사항, 결정 사항, 액션 아이템)의 끝에 해당 발언이 시작된 시점을 [TS:NNN] 마커로 정확히 한 번 표기.
@@ -522,9 +523,9 @@ ADR-013 — 트랜스크립트 딥 링크:
 
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
-		// 8192 (not 4096): the integrated summary must have room to preserve
-		// live-summary detail and mermaid diagrams fed in via priorContext.
-		MaxTokens:        8192,
+		// 16000 (not 8192): Opus 5 is asked for more detail per-section, which
+		// needs more room than the previous Opus 4.8 prompt did.
+		MaxTokens:        16000,
 		System:           systemPrompt,
 		Messages: []ClaudeMessage{
 			{

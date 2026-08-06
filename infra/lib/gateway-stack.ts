@@ -198,7 +198,7 @@ export class GatewayStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-4-8',
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-5',
         BEDROCK_SONNET_MODEL_ID: 'global.anthropic.claude-sonnet-5',
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
         KB_ID: props.knowledgeBaseId || '',
@@ -220,6 +220,8 @@ export class GatewayStack extends cdk.Stack {
       environment: {
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
+        // Vision stays on Opus 4.8 deliberately -- the Opus 5 swap above is
+        // scoped to final-note summarization text quality, not image analysis.
         BEDROCK_MODEL_ID: 'global.anthropic.claude-opus-4-8',
         AWS_REGION_NAME: cdk.Aws.REGION,
       },
