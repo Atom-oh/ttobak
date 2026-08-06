@@ -349,13 +349,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'ttobak_add_account_member',
-      description: 'Add a teammate to an account by email. Only the account owner can do this. role must be AM, TAM, or SSA.',
+      description: 'Add a teammate to an account by email. Only the account owner can do this. role must be AM, TAM, SSA, SA, SA Manager, or AM Manager.',
       inputSchema: {
         type: 'object' as const,
         properties: {
           accountId: { type: 'string', description: 'Account ID' },
           email: { type: 'string', description: 'TTOBAK email of the teammate to add' },
-          role: { type: 'string', enum: ['AM', 'TAM', 'SSA'], description: 'Role to assign' },
+          // keep in sync with backend/internal/model/account.go's AssignableRoles
+          role: { type: 'string', enum: ['AM', 'TAM', 'SSA', 'SA', 'SA Manager', 'AM Manager'], description: 'Role to assign' },
         },
         required: ['accountId', 'email', 'role'],
       },
