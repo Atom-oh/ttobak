@@ -457,6 +457,48 @@ func (h *MeetingHandler) RecoverMeeting(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"meetingId": meetingID, "status": "transcribing"})
 }
 
+// RediarizeMeeting handles POST /api/meetings/{meetingId}/rediarize
+// Re-runs Whisper speaker diarization with a user-supplied speaker-count hint
+// (see UploadService.RediarizeMeeting for the whisper-only / single-part guards).
+func (h *MeetingHandler) RediarizeMeeting(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	meetingID := chi.URLParam(r, "meetingId")
+
+	if meetingID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Meeting ID is required")
+		return
+	}
+
+	var req model.RediarizeMeetingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	if h.uploadService == nil {
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Upload service not configured")
+		return
+	}
+
+	if err := h.uploadService.RediarizeMeeting(ctx, userID, meetingID, req.SpeakerCount); err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+		default:
+			log.Printf("RediarizeMeeting failed: %v", err)
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "Failed to re-diarize meeting")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"meetingId": meetingID, "status": "transcribing"})
+}
+
 // LinkMeetings handles POST /api/meetings/{meetingId}/link
 func (h *MeetingHandler) LinkMeetings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

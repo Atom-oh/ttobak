@@ -204,6 +204,9 @@ func init() {
 		// Recording recovery (crashed browser)
 		r.Post("/api/meetings/{meetingId}/recover", meetingHandler.RecoverMeeting)
 
+		// Re-run speaker diarization with an updated speaker-count hint
+		r.Post("/api/meetings/{meetingId}/rediarize", meetingHandler.RediarizeMeeting)
+
 		// Transcript selection
 		r.Put("/api/meetings/{meetingId}/transcript", meetingHandler.SelectTranscript)
 
