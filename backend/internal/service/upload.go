@@ -546,8 +546,11 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 
 	// A fresh key under the same meeting prefix, so the existing EventBridge
 	// S3 rule + ttobak-transcribe Lambda pick it up exactly as a new upload
-	// would. The original audioKey is left untouched.
-	retriggerKey := fmt.Sprintf("audio/%s/%s/rediarize_%d_%s", userID, meetingID, time.Now().UnixMilli(), path.Base(sourceKey))
+	// would. The original audioKey is left untouched. Keyed on attemptToken
+	// (a UUID), not a millisecond timestamp -- two calls landing in the same
+	// millisecond is unlikely but not impossible, and this key's uniqueness
+	// is what the HeadObject check below depends on to mean anything.
+	retriggerKey := fmt.Sprintf("audio/%s/%s/rediarize_%s_%s", userID, meetingID, attemptToken, path.Base(sourceKey))
 	if _, err := s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(s.bucketName),
 		Key:        aws.String(retriggerKey),
@@ -559,23 +562,34 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		// destination key rather than guessing. If it exists, the copy (and
 		// therefore the EventBridge S3 event that wakes ttobak-transcribe)
 		// really did fire; this attempt's own pipeline is now legitimately
-		// running and must NOT be marked errored out from under it.
-		// retriggerKey embeds this call's own millisecond timestamp, so no
-		// earlier RediarizeMeeting attempt could ever have written to this
-		// exact key -- but check LastModified is from the last few seconds
-		// anyway, as a belt-and-suspenders guard against relying on that
-		// invariant alone.
-		if head, headErr := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+		// running and must NOT be marked errored out from under it. A
+		// NotFound response is the only outcome treated as confirmed
+		// absence -- any other HeadObject error (throttling, a transient
+		// network blip) is itself ambiguous, so it falls through to "don't
+		// know" rather than being treated as proof of failure.
+		confirmedAbsent := false
+		if _, headErr := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 			Bucket: aws.String(s.bucketName),
 			Key:    aws.String(retriggerKey),
-		}); headErr == nil && head.LastModified != nil && time.Since(*head.LastModified) < 30*time.Second {
-			log.Printf("RediarizeMeeting: CopyObject for meeting %s returned an error but the destination object exists and is fresh -- treating as a real retrigger, not marking errored", meetingID)
+		}); headErr == nil {
+			log.Printf("RediarizeMeeting: CopyObject for meeting %s returned an error but the destination object exists -- treating as a real retrigger, not marking errored", meetingID)
 			return nil
+		} else {
+			var notFound *s3types.NotFound
+			if errors.As(headErr, &notFound) {
+				confirmedAbsent = true
+			} else {
+				log.Printf("RediarizeMeeting: HeadObject check for meeting %s was itself inconclusive (%v) -- leaving status untouched rather than guessing", meetingID, headErr)
+			}
+		}
+		if !confirmedAbsent {
+			return fmt.Errorf("failed to retrigger re-diarization: %w", err)
 		}
 
-		// The copy genuinely never landed. Mark the meeting errored, but
-		// only if status is STILL "transcribing" AND rediarizeAttemptToken
-		// still matches this call's own token -- guards against a second,
+		// The copy is confirmed to have never landed. Mark the meeting
+		// errored, but only if status is STILL "transcribing" AND
+		// rediarizeAttemptToken still matches this call's own token --
+		// guards against a second,
 		// unrelated concurrent RediarizeMeeting call now being the one
 		// "transcribing", so this write is a no-op rather than clobbering
 		// that other call's real progress. The cleared speakerMap is a real
