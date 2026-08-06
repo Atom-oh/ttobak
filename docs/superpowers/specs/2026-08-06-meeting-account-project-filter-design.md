@@ -70,6 +70,15 @@ correct across the full result set, not just one loaded page.
     after the GSI1 page read, so a filtered page can return fewer than the
     page size (already true of the existing `entityType` filter) — not a new
     regression, no fix needed here.
+  - Caveat: an unbounded number of selected accounts/projects would build an
+    unbounded `IN`/`OR` expression, risking DynamoDB's `FilterExpression`
+    size limit (4KB) and the `IN` operator's ~100-operand practical limit.
+    Given the frontend UI (a chip picker over "all accounts/projects the
+    user has access to") this is bounded in practice by how many
+    accounts/projects a single user realistically has, but
+    `buildAccountProjectFilterCondition` should cap the combined input size
+    defensively (e.g. clamp to the first N IDs and log if truncated) rather
+    than assume the caller-side bound always holds.
 - `MeetingHandler.ListMeetings` (`backend/internal/handler/meeting.go`): parse
   repeated `accountId=`/`projectId=` query params via `r.URL.Query()["accountId"]`
   / `["projectId"]`.

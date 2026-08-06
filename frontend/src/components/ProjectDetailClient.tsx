@@ -39,6 +39,7 @@ export default function ProjectDetailClient() {
   // make the account picker/display usable (see 2026-08-06 bug report: the
   // account field was a bare "Account ID" text box with nothing to pick from).
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
+  const [accountsLoading, setAccountsLoading] = useState(true);
   const [accountsError, setAccountsError] = useState(false);
 
   // This component is never remounted across /projects/A -> /projects/B
@@ -124,6 +125,7 @@ export default function ProjectDetailClient() {
   // re-run on projectId change or guard against a stale-navigation race.
   const fetchAccounts = useCallback(() => {
     if (!isAuthenticated) return;
+    setAccountsLoading(true);
     setAccountsError(false);
     accountApi.list()
       .then((res) => setAccounts(res.accounts))
@@ -131,7 +133,8 @@ export default function ProjectDetailClient() {
       // accounts" -- that would render the link-account picker as
       // permanently empty/disabled with no way to tell it's actually just a
       // fetch that failed, and no retry short of a full page reload.
-      .catch(() => setAccountsError(true));
+      .catch(() => setAccountsError(true))
+      .finally(() => setAccountsLoading(false));
   }, [isAuthenticated]);
 
   useEffect(() => {
@@ -332,7 +335,10 @@ export default function ProjectDetailClient() {
                     </div>
                   ))
                 )}
-                {isOwner && accountsError && (
+                {isOwner && accountsLoading && (
+                  <p className="pt-2 text-sm text-slate-400 dark:text-text-muted">Loading accounts…</p>
+                )}
+                {isOwner && !accountsLoading && accountsError && (
                   <div className="flex items-center gap-2 pt-2 text-sm text-red-500">
                     <span>Failed to load accounts.</span>
                     <button onClick={fetchAccounts} className="font-semibold hover:underline">
@@ -340,7 +346,7 @@ export default function ProjectDetailClient() {
                     </button>
                   </div>
                 )}
-                {isOwner && !accountsError && (() => {
+                {isOwner && !accountsLoading && !accountsError && (() => {
                   const linkableAccounts = accounts
                     .filter((a) => !project.accountIds.includes(a.accountId))
                     .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
