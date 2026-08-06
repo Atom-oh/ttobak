@@ -6,8 +6,9 @@ import { usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
-import { projectApi } from '@/lib/api';
+import { accountApi, projectApi } from '@/lib/api';
 import type {
+  AccountSummary,
   Project,
   ProjectInsight,
   ProjectMeetingRef,
@@ -32,6 +33,12 @@ export default function ProjectDetailClient() {
   const [inviting, setInviting] = useState(false);
   const [accountId, setAccountId] = useState('');
   const [linkingAccount, setLinkingAccount] = useState(false);
+  // The caller's own accessible accounts, for the link-account picker below
+  // and for showing linked accounts by name instead of raw UUID -- neither
+  // the project record nor projectApi.linkAccount need this, it's purely to
+  // make the account picker/display usable (see 2026-08-06 bug report: the
+  // account field was a bare "Account ID" text box with nothing to pick from).
+  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
 
   // This component is never remounted across /projects/A -> /projects/B
   // navigation (single static `_` route, reused across all project IDs --
@@ -111,6 +118,15 @@ export default function ProjectDetailClient() {
   useEffect(() => {
     if (isAuthenticated) fetchAll();
   }, [isAuthenticated, fetchAll]);
+
+  // User-scoped, not project-scoped -- unlike fetchAll, this doesn't need to
+  // re-run on projectId change or guard against a stale-navigation race.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    accountApi.list().then((res) => setAccounts(res.accounts)).catch(() => {});
+  }, [isAuthenticated]);
+
+  const accountNameById = new Map(accounts.map((a) => [a.accountId, a.name]));
 
   const handleInvite = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -290,7 +306,7 @@ export default function ProjectDetailClient() {
                         href={`/accounts/${linkedAccountId}`}
                         className="text-slate-700 dark:text-text-secondary hover:text-primary truncate"
                       >
-                        {linkedAccountId}
+                        {accountNameById.get(linkedAccountId) || linkedAccountId}
                       </a>
                       {isOwner && (
                         <button
@@ -304,25 +320,37 @@ export default function ProjectDetailClient() {
                     </div>
                   ))
                 )}
-                {isOwner && (
-                  <form onSubmit={handleLinkAccount} className="flex gap-2 pt-2">
-                    <input
-                      type="text"
-                      value={accountId}
-                      onChange={(event) => setAccountId(event.target.value)}
-                      placeholder="Account ID"
-                      required
-                      className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
-                    />
-                    <button
-                      type="submit"
-                      disabled={linkingAccount}
-                      className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50"
-                    >
-                      {linkingAccount ? 'Linking…' : 'Link'}
-                    </button>
-                  </form>
-                )}
+                {isOwner && (() => {
+                  const linkableAccounts = accounts
+                    .filter((a) => !project.accountIds.includes(a.accountId))
+                    .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+                  return (
+                    <form onSubmit={handleLinkAccount} className="flex gap-2 pt-2">
+                      <select
+                        value={accountId}
+                        onChange={(event) => setAccountId(event.target.value)}
+                        required
+                        className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
+                      >
+                        <option value="" disabled>
+                          {linkableAccounts.length === 0 ? 'No accounts available to link' : 'Select an account…'}
+                        </option>
+                        {linkableAccounts.map((a) => (
+                          <option key={a.accountId} value={a.accountId}>
+                            {a.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="submit"
+                        disabled={linkingAccount || linkableAccounts.length === 0}
+                        className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50"
+                      >
+                        {linkingAccount ? 'Linking…' : 'Link'}
+                      </button>
+                    </form>
+                  );
+                })()}
               </div>
             </section>
 
