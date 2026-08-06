@@ -1438,8 +1438,13 @@ tsMarker는 입력에 정확한 [TS:NNN] 표식이 있을 때만 그대로 복�
 
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
-		MaxTokens:        2048,
-		System:           systemPrompt,
+		// 6000 (not 2048): each insight now carries 6 fields (evidence/
+		// implication/nextAction added), each up to 1-2 sentences -- 2048
+		// risked truncating the JSON array mid-object, which
+		// parseMeetingInsights can't recover from (invalid JSON -> "[]",
+		// silently dropping every insight rather than just the last one).
+		MaxTokens: 6000,
+		System:    systemPrompt,
 		Messages: []ClaudeMessage{
 			{Role: "user", Content: []ContentBlock{{Type: "text", Text: userPrompt}}},
 		},

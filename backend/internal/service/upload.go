@@ -472,34 +472,46 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 // ADR-019); AWS Transcribe fallback meetings have no acoustic diarization to
 // re-run. Multi-part audio is out of scope for v1 (would need per-part ECS
 // retriggers and an AudioPartsReady reset).
-func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID string, speakerCount int) error {
+// validateRediarizeEligibility is the pure decision core of RediarizeMeeting:
+// ownership, whisper-only, single-part-only, and not-currently-processing
+// guards. Kept side-effect-free so it can be table-tested without mocking S3
+// or DynamoDB. Returns the S3 key to re-copy on success.
+func validateRediarizeEligibility(meeting *model.Meeting, userID string, speakerCount int) (string, error) {
 	if speakerCount < 1 || speakerCount > 20 {
-		return fmt.Errorf("speakerCount must be between 1 and 20: %w", ErrInvalidInput)
+		return "", fmt.Errorf("speakerCount must be between 1 and 20: %w", ErrInvalidInput)
 	}
+	if meeting == nil {
+		return "", ErrNotFound
+	}
+	if meeting.SttProvider != "" && meeting.SttProvider != "whisper" {
+		return "", fmt.Errorf("rediarization is only supported for whisper-transcribed meetings: %w", ErrInvalidInput)
+	}
+	audioKeys := meeting.GetEffectiveAudioKeys()
+	if meeting.AudioPartCount > 1 || len(audioKeys) > 1 {
+		return "", fmt.Errorf("rediarization does not yet support multi-part audio: %w", ErrInvalidInput)
+	}
+	if meeting.Status == model.StatusTranscribing || meeting.Status == model.StatusSummarizing {
+		return "", fmt.Errorf("meeting is still processing (status: %s): %w", meeting.Status, ErrInvalidInput)
+	}
+	if len(audioKeys) == 0 || audioKeys[0] == "" {
+		return "", fmt.Errorf("no audio available to re-diarize: %w", ErrInvalidInput)
+	}
+	sourceKey := audioKeys[0]
+	if !strings.HasPrefix(sourceKey, "audio/"+userID+"/") {
+		return "", ErrForbidden
+	}
+	return sourceKey, nil
+}
 
+func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID string, speakerCount int) error {
 	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
 	if err != nil {
 		return fmt.Errorf("failed to get meeting: %w", err)
 	}
-	if meeting == nil {
-		return ErrNotFound
-	}
-	if meeting.SttProvider != "" && meeting.SttProvider != "whisper" {
-		return fmt.Errorf("rediarization is only supported for whisper-transcribed meetings: %w", ErrInvalidInput)
-	}
-	if meeting.AudioPartCount > 1 {
-		return fmt.Errorf("rediarization does not yet support multi-part audio: %w", ErrInvalidInput)
-	}
-	if meeting.Status == model.StatusTranscribing || meeting.Status == model.StatusSummarizing {
-		return fmt.Errorf("meeting is still processing (status: %s): %w", meeting.Status, ErrInvalidInput)
-	}
-	audioKeys := meeting.GetEffectiveAudioKeys()
-	if len(audioKeys) == 0 || audioKeys[0] == "" {
-		return fmt.Errorf("no audio available to re-diarize: %w", ErrInvalidInput)
-	}
-	sourceKey := audioKeys[0]
-	if !strings.HasPrefix(sourceKey, "audio/"+userID+"/") {
-		return ErrForbidden
+
+	sourceKey, err := validateRediarizeEligibility(meeting, userID, speakerCount)
+	if err != nil {
+		return err
 	}
 
 	// Old spk_N -> name mappings no longer correspond once diarization
@@ -508,6 +520,9 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 	// EventBridge S3 event that wakes ttobak-transcribe, and a race where
 	// that Lambda reads the meeting before this write lands would re-diarize
 	// with the stale hint/speakerMap/status instead of the new ones.
+	// ttobak-transcribe now reads via a strongly-consistent GetItem (see
+	// cmd/transcribe/main.go) rather than the GSI3 query, so it can never
+	// observe a value older than this write once it runs.
 	if err := s.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
 		"diarizationSpeakerHint": speakerCount,
 		"speakerMap":             map[string]string{},
@@ -525,6 +540,23 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		Key:        aws.String(retriggerKey),
 		CopySource: aws.String(fmt.Sprintf("%s/%s", s.bucketName, encodeS3CopySourceKey(sourceKey))),
 	}); err != nil {
+		// Do NOT restore the previous speakerMap/status here: a CopyObject
+		// error from the SDK doesn't guarantee S3 never completed the copy
+		// (e.g. a response lost after the object was written) -- writing the
+		// old hint/speakerMap/status back could race an S3 event that
+		// actually did fire and land ttobak-transcribe on stale settings
+		// instead of the new ones, reintroducing the exact race this
+		// function's earlier ordering fix was meant to close. Mark the
+		// meeting as errored instead of guessing; if the copy secretly
+		// succeeded, the transcribe pipeline's own status writes supersede
+		// this once it completes. The cleared speakerMap is a real cost on a
+		// genuine failure, but it is a stale-write hazard we choose not to
+		// risk to avoid it.
+		if statusErr := s.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+			"status": model.StatusError,
+		}); statusErr != nil {
+			log.Printf("RediarizeMeeting: failed to mark meeting %s as errored after CopyObject failure: %v", meetingID, statusErr)
+		}
 		return fmt.Errorf("failed to retrigger re-diarization: %w", err)
 	}
 	return nil
