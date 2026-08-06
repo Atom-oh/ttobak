@@ -294,7 +294,7 @@ function MeetingDetailContent() {
   // sibling's own min-width, so effectiveMax leaves that column at least its
   // floor rather than a flat viewport ratio that can't see what's next to it.
   const { width: asideWidth, startDrag: startAsideDrag, containerRef: pageRowRef } = useResizablePanel('ttobak:meetingAsideWidth', 384, 280, 640, 'right', 488);
-  const { width: summaryWidth, startDrag: startSummaryDrag, containerRef: summaryRowRef } = useResizablePanel('ttobak:meetingSummaryWidth', 640, 400, 900, 'left', 352);
+  const { width: summaryWidth, startDrag: startSummaryDrag, containerRef: summaryRowRef, fits: summaryFits } = useResizablePanel('ttobak:meetingSummaryWidth', 640, 400, 900, 'left', 352);
 
   // Extract meeting ID from URL. usePathname() updates on client-side navigation,
   // unlike window.location.pathname in a mount-only effect which goes stale.
@@ -493,15 +493,17 @@ function MeetingDetailContent() {
           {meeting.liveSummary && <LiveSummaryCard content={meeting.liveSummary} />}
 
           {/* Core Content Grid - show summary when done OR when content exists (e.g. error with saved live summary).
-              xl (not lg): this row's two sub-columns need ~750px combined minimum
-              (summary min + divider + gaps + action-items floor), which doesn't fit
-              next to the app sidebar + reference aside at 1024-1280px viewports.
-              Below xl it stacks to full-width, same as before resize was added. */}
+              Side-by-side vs stacked is driven by summaryFits (the hook's
+              ResizeObserver measurement of THIS row minus the reserve owed to
+              the action-items column), not a viewport breakpoint -- a
+              breakpoint can't see how much width the app sidebar and the
+              resizable reference aside are already claiming, so any fixed
+              cutoff overflows for some combination of those. */}
           {(meeting.status === 'done' || meeting.content || meeting.summary) ? (
-            <div ref={summaryRowRef} className="flex flex-col xl:flex-row gap-8 mb-12">
+            <div ref={summaryRowRef} className={`flex ${summaryFits ? 'flex-row' : 'flex-col'} gap-8 mb-12`}>
               <div
-                className="w-full xl:w-[var(--summary-w)] min-w-0"
-                style={{ '--summary-w': `${summaryWidth}px` } as React.CSSProperties}
+                className={summaryFits ? 'shrink-0' : 'w-full'}
+                style={summaryFits ? { width: summaryWidth } : undefined}
               >
                 <AISummaryCard
                   content={resolveTranscriptLinks(resolveAttachmentUrls(meeting.content || '', meeting.attachments))}
@@ -514,9 +516,9 @@ function MeetingDetailContent() {
               </div>
               <div
                 onMouseDown={startSummaryDrag}
-                className="hidden xl:flex w-2 shrink-0 self-stretch cursor-col-resize bg-slate-300 dark:bg-white/20 hover:bg-primary/60 active:bg-primary/80 transition-colors rounded-full"
+                className={`${summaryFits ? 'flex' : 'hidden'} w-2 shrink-0 self-stretch cursor-col-resize bg-slate-300 dark:bg-white/20 hover:bg-primary/60 active:bg-primary/80 transition-colors rounded-full`}
               />
-              <div className="flex-1 min-w-0 xl:min-w-[280px]">
+              <div className="flex-1 min-w-0">
                 <ActionItemsCard
                   items={meeting.actionItems}
                   onToggle={handleActionItemToggle}
