@@ -497,6 +497,26 @@ func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUser
 // condition inherent in the PutItem-based UpdateMeeting method.
 // Fields map keys must be DynamoDB attribute names (e.g., "status", "audioKey", "content").
 func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error {
+	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, expression.AttributeExists(expression.Name("PK")), fields)
+}
+
+// UpdateMeetingFieldsIfStatus is UpdateMeetingFields with an added
+// `status = expectedStatus` condition, for callers rolling back a field
+// write they made earlier -- e.g. RediarizeMeeting restoring speakerMap
+// after a failed CopyObject retrigger. Without the condition, the rollback
+// could stomp a status transition that already landed in the meantime (the
+// retrigger's own pipeline picking the meeting back up despite the client
+// seeing an ambiguous S3 error, or a second concurrent request), silently
+// reverting real progress back to stale data. ErrConditionalCheckFailed-style
+// DynamoDB errors from a failed condition are returned as-is so callers can
+// tell "nothing to roll back" apart from a real write failure.
+func (r *DynamoDBRepository) UpdateMeetingFieldsIfStatus(ctx context.Context, userID, meetingID, expectedStatus string, fields map[string]interface{}) error {
+	condition := expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name("status").Equal(expression.Value(expectedStatus)))
+	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, fields)
+}
+
+func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}) error {
 	// Handle S3 transcript overflow for large transcript fields
 	if r.s3Client != nil && r.bucketName != "" {
 		for _, field := range []string{"transcriptA", "transcriptB"} {
@@ -526,9 +546,6 @@ func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, me
 			update = update.Set(expression.Name(k), expression.Value(v))
 		}
 	}
-
-	// Condition: item must already exist
-	condition := expression.AttributeExists(expression.Name("PK"))
 
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
 	if err != nil {

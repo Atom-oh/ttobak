@@ -504,6 +504,12 @@ func validateRediarizeEligibility(meeting *model.Meeting, userID string, speaker
 }
 
 func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID string, speakerCount int) error {
+	// Cheap bounds check before the repository round-trip -- a malformed
+	// speakerCount shouldn't cost a DynamoDB read.
+	if speakerCount < 1 || speakerCount > 20 {
+		return fmt.Errorf("speakerCount must be between 1 and 20: %w", ErrInvalidInput)
+	}
+
 	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
 	if err != nil {
 		return fmt.Errorf("failed to get meeting: %w", err)
@@ -540,22 +546,22 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		Key:        aws.String(retriggerKey),
 		CopySource: aws.String(fmt.Sprintf("%s/%s", s.bucketName, encodeS3CopySourceKey(sourceKey))),
 	}); err != nil {
-		// Do NOT restore the previous speakerMap/status here: a CopyObject
-		// error from the SDK doesn't guarantee S3 never completed the copy
-		// (e.g. a response lost after the object was written) -- writing the
-		// old hint/speakerMap/status back could race an S3 event that
-		// actually did fire and land ttobak-transcribe on stale settings
-		// instead of the new ones, reintroducing the exact race this
-		// function's earlier ordering fix was meant to close. Mark the
-		// meeting as errored instead of guessing; if the copy secretly
-		// succeeded, the transcribe pipeline's own status writes supersede
-		// this once it completes. The cleared speakerMap is a real cost on a
-		// genuine failure, but it is a stale-write hazard we choose not to
-		// risk to avoid it.
-		if statusErr := s.repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
+		// Do NOT restore the previous speakerMap here: a CopyObject error from
+		// the SDK doesn't guarantee S3 never completed the copy (e.g. a
+		// response lost after the object was written) -- writing the old
+		// hint/speakerMap back could race an S3 event that actually did fire,
+		// landing ttobak-transcribe on stale settings instead of the new
+		// ones. Mark the meeting as errored instead of guessing, but only if
+		// status is STILL "transcribing" (the condition on
+		// UpdateMeetingFieldsIfStatus): if the copy secretly succeeded and
+		// the retriggered pipeline already advanced status past that point,
+		// this write is a no-op rather than clobbering real progress. The
+		// cleared speakerMap is a real cost on a genuine failure, but it is a
+		// stale-write hazard we choose not to risk to avoid it.
+		if statusErr := s.repo.UpdateMeetingFieldsIfStatus(ctx, userID, meetingID, model.StatusTranscribing, map[string]interface{}{
 			"status": model.StatusError,
 		}); statusErr != nil {
-			log.Printf("RediarizeMeeting: failed to mark meeting %s as errored after CopyObject failure: %v", meetingID, statusErr)
+			log.Printf("RediarizeMeeting: skip/failed marking meeting %s errored after CopyObject failure (status may have already advanced): %v", meetingID, statusErr)
 		}
 		return fmt.Errorf("failed to retrigger re-diarization: %w", err)
 	}
