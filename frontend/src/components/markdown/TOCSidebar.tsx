@@ -17,38 +17,41 @@ export function TOCSidebar({ contentRef }: TOCSidebarProps) {
   const observerRef = useRef<IntersectionObserver | null>(null);
 
   useEffect(() => {
-    const el = contentRef.current;
-    if (!el) return;
+    const frame = window.requestAnimationFrame(() => {
+      const el = contentRef.current;
+      if (!el) return;
 
-    const headings = el.querySelectorAll('h2, h3');
-    const tocItems: TocItem[] = [];
-    headings.forEach((heading) => {
-      const id = heading.id;
-      const text = heading.textContent ?? '';
-      if (!id || !text) return;
-      const level = heading.tagName === 'H2' ? 0 : 1;
-      tocItems.push({ id, text, level });
-    });
-    setItems(tocItems);
+      const headings = el.querySelectorAll('h2, h3');
+      const tocItems: TocItem[] = [];
+      headings.forEach((heading) => {
+        const id = heading.id;
+        const text = heading.textContent ?? '';
+        if (!id || !text) return;
+        const level = heading.tagName === 'H2' ? 0 : 1;
+        tocItems.push({ id, text, level });
+      });
+      setItems(tocItems);
 
-    if (tocItems.length < 2) return;
+      if (tocItems.length < 2) return;
 
-    observerRef.current = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            setActiveId(entry.target.id);
+      observerRef.current = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              setActiveId(entry.target.id);
+            }
           }
-        }
-      },
-      { rootMargin: '-80px 0px -60% 0px', threshold: 0.1 }
-    );
+        },
+        { rootMargin: '-80px 0px -60% 0px', threshold: 0.1 }
+      );
 
-    headings.forEach((heading) => {
-      if (heading.id) observerRef.current?.observe(heading);
+      headings.forEach((heading) => {
+        if (heading.id) observerRef.current?.observe(heading);
+      });
     });
 
     return () => {
+      window.cancelAnimationFrame(frame);
       observerRef.current?.disconnect();
     };
   }, [contentRef]);
@@ -75,7 +78,7 @@ export function TOCSidebar({ contentRef }: TOCSidebarProps) {
               )}
               <button
                 onClick={() => handleClick(item.id)}
-                className={`block w-full text-left text-[13px] leading-snug py-1 transition-colors ${
+                className={`block w-full rounded-sm text-left text-[13px] leading-snug py-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
                   item.level === 0 ? 'pl-3' : 'pl-6'
                 } ${
                   isActive

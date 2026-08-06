@@ -5,12 +5,14 @@ import { useAuth } from './AuthProvider';
 import { PrimaryButton } from '@/components/ui/Button';
 import { isNewPasswordRequired, NewPasswordRequiredResult } from '@/lib/auth';
 
+// No sign-up entry point: self sign-up is forbidden by company security policy,
+// so an invited user's only path in is the temporary password + NEW_PASSWORD_REQUIRED
+// challenge handled below.
 interface LoginFormProps {
-  onSwitchToSignUp?: () => void;
   onForgotPassword?: () => void;
 }
 
-export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps) {
+export function LoginForm({ onForgotPassword }: LoginFormProps) {
   const { login, completeNewPassword } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -226,19 +228,6 @@ export function LoginForm({ onSwitchToSignUp, onForgotPassword }: LoginFormProps
           {isLoading ? '로그인 중...' : '로그인'}
         </PrimaryButton>
       </form>
-
-      
-      {onSwitchToSignUp && (
-        <p className="text-center mt-6 text-slate-600 dark:text-text-muted text-sm">
-          계정이 없으신가요?{' '}
-          <button
-            onClick={onSwitchToSignUp}
-            className="text-primary font-semibold hover:underline"
-          >
-            회원가입
-          </button>
-        </p>
-      )}
     </div>
   );
 }

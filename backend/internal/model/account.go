@@ -5,7 +5,8 @@ import "time"
 // Key prefixes / constants for the Account partition.
 // Account META:   PK: ACCOUNT#{accountId}, SK: META
 // Account member: PK: ACCOUNT#{accountId}, SK: MEMBER#{userId}
-//                 (GSI1PK: USER#{userId}, GSI1SK: ACCOUNT#{accountId} for reverse lookup)
+//
+//	(GSI1PK: USER#{userId}, GSI1SK: ACCOUNT#{accountId} for reverse lookup)
 const (
 	PrefixAccount = "ACCOUNT#"
 	SKAccountMeta = "META"
@@ -17,11 +18,18 @@ const (
 
 // Account member roles. owner is assigned only to the creator.
 const (
-	RoleOwner = "owner"
-	RoleAM    = "AM"
-	RoleTAM   = "TAM"
-	RoleSSA   = "SSA"
+	RoleOwner     = "owner"
+	RoleAM        = "AM"
+	RoleTAM       = "TAM"
+	RoleSSA       = "SSA"
+	RoleSA        = "SA"
+	RoleSAManager = "SA Manager"
+	RoleAMManager = "AM Manager"
 )
+
+// AssignableRoles is the allowlist for AddMember / UpdateMemberRole.
+// owner is deliberately absent — it is server-assigned to the creator only.
+var AssignableRoles = []string{RoleAM, RoleTAM, RoleSSA, RoleSA, RoleSAManager, RoleAMManager}
 
 // Account is a first-class customer/company entity shared across a team.
 type Account struct {
@@ -196,11 +204,14 @@ func IsValidInsightType(t string) bool {
 
 // MeetingInsight is one typed insight extracted from a meeting (stored as JSON in Meeting.Insights).
 type MeetingInsight struct {
-	ID       string   `json:"id"`
-	Type     string   `json:"type"`
-	Text     string   `json:"text"`
-	TsMarker string   `json:"tsMarker,omitempty"` // [TS:NNN] transcript deep link
-	Entities []string `json:"entities,omitempty"`
+	ID          string   `json:"id"`
+	Type        string   `json:"type"`
+	Text        string   `json:"text"`
+	Evidence    string   `json:"evidence,omitempty"`
+	Implication string   `json:"implication,omitempty"`
+	NextAction  string   `json:"nextAction,omitempty"`
+	TsMarker    string   `json:"tsMarker,omitempty"` // [TS:NNN] transcript deep link
+	Entities    []string `json:"entities,omitempty"`
 }
 
 // AccountInsight is a persisted insight item in the account partition.
@@ -212,6 +223,9 @@ type AccountInsight struct {
 	InsightID    string    `dynamodbav:"insightId"`
 	Type         string    `dynamodbav:"type"`
 	Text         string    `dynamodbav:"text"`
+	Evidence     string    `dynamodbav:"evidence,omitempty"`
+	Implication  string    `dynamodbav:"implication,omitempty"`
+	NextAction   string    `dynamodbav:"nextAction,omitempty"`
 	SourceType   string    `dynamodbav:"sourceType"` // "meeting" | "news" | "ingest"
 	SourceID     string    `dynamodbav:"sourceId"`
 	SourceUserID string    `dynamodbav:"sourceUserId,omitempty"`
@@ -223,13 +237,16 @@ type AccountInsight struct {
 }
 
 type AccountInsightDTO struct {
-	Type       string    `json:"type"`
-	Text       string    `json:"text"`
-	SourceType string    `json:"sourceType"`
-	SourceID   string    `json:"sourceId"`
-	OccurredAt time.Time `json:"occurredAt"`
-	TsMarker   string    `json:"tsMarker,omitempty"`
-	Entities   []string  `json:"entities,omitempty"`
+	Type        string    `json:"type"`
+	Text        string    `json:"text"`
+	Evidence    string    `json:"evidence,omitempty"`
+	Implication string    `json:"implication,omitempty"`
+	NextAction  string    `json:"nextAction,omitempty"`
+	SourceType  string    `json:"sourceType"`
+	SourceID    string    `json:"sourceId"`
+	OccurredAt  time.Time `json:"occurredAt"`
+	TsMarker    string    `json:"tsMarker,omitempty"`
+	Entities    []string  `json:"entities,omitempty"`
 }
 
 // AccountBrief bundles an account's raw material for one-shot consumption by
@@ -255,21 +272,21 @@ const (
 // TtobakOrigin=false. Links holds normalized [[wikilink]] targets parsed out
 // of Content on every put/update -- a future graph view's data source.
 type AccountDocument struct {
-	PK           string    `dynamodbav:"PK"`
-	SK           string    `dynamodbav:"SK"`
-	AccountID    string    `dynamodbav:"accountId,omitempty"`
-	DocID        string    `dynamodbav:"docId"`
-	Title        string    `dynamodbav:"title"`
-	DocType      string    `dynamodbav:"docType,omitempty"` // "prep" | "reference" | "note" | "blog" | "slide" | ...
-	Path         string    `dynamodbav:"path,omitempty"`    // original vault path
-	Content      string    `dynamodbav:"content"`           // inline markdown; empty for a slide
-	Links        []string  `dynamodbav:"links,omitempty"`   // normalized [[wikilink]] targets found in Content
-	FileKey      string    `dynamodbav:"fileKey,omitempty"` // S3 key under docs/{userId}/... for a slide upload
-	FileName     string    `dynamodbav:"fileName,omitempty"`
-	MimeType     string    `dynamodbav:"mimeType,omitempty"`
-	FileSize     int64     `dynamodbav:"fileSize,omitempty"`
-	SourceUserID string    `dynamodbav:"sourceUserId"`
-	TtobakOrigin bool      `dynamodbav:"ttobakOrigin"`
+	PK           string   `dynamodbav:"PK"`
+	SK           string   `dynamodbav:"SK"`
+	AccountID    string   `dynamodbav:"accountId,omitempty"`
+	DocID        string   `dynamodbav:"docId"`
+	Title        string   `dynamodbav:"title"`
+	DocType      string   `dynamodbav:"docType,omitempty"` // "prep" | "reference" | "note" | "blog" | "slide" | ...
+	Path         string   `dynamodbav:"path,omitempty"`    // original vault path
+	Content      string   `dynamodbav:"content"`           // inline markdown; empty for a slide
+	Links        []string `dynamodbav:"links,omitempty"`   // normalized [[wikilink]] targets found in Content
+	FileKey      string   `dynamodbav:"fileKey,omitempty"` // S3 key under docs/{userId}/... for a slide upload
+	FileName     string   `dynamodbav:"fileName,omitempty"`
+	MimeType     string   `dynamodbav:"mimeType,omitempty"`
+	FileSize     int64    `dynamodbav:"fileSize,omitempty"`
+	SourceUserID string   `dynamodbav:"sourceUserId"`
+	TtobakOrigin bool     `dynamodbav:"ttobakOrigin"`
 	// PublicShareToken is set once CreateUserDocPublicShare mints an
 	// unauthenticated share link for this (personal, slide) document; see
 	// PublicShare for the token->doc pointer item this references.
@@ -298,15 +315,19 @@ type PutDocumentRequest struct {
 }
 
 type AccountDocumentDTO struct {
-	DocID        string    `json:"docId"`
-	Title        string    `json:"title"`
-	DocType      string    `json:"docType,omitempty"`
-	Path         string    `json:"path,omitempty"`
-	Links        []string  `json:"links,omitempty"`
-	FileName     string    `json:"fileName,omitempty"`
-	SourceUserID string    `json:"sourceUserId"`
-	CreatedAt    time.Time `json:"createdAt"`
-	UpdatedAt    time.Time `json:"updatedAt"`
+	DocID        string   `json:"docId"`
+	Title        string   `json:"title"`
+	DocType      string   `json:"docType,omitempty"`
+	Path         string   `json:"path,omitempty"`
+	Links        []string `json:"links,omitempty"`
+	FileName     string   `json:"fileName,omitempty"`
+	SourceUserID string   `json:"sourceUserId"`
+	// SharedBy is set only on a document the caller received via a per-user
+	// share (see PrefixDocShare) -- it carries the owner's email and doubles
+	// as the frontend's "this is read-only, not mine" marker.
+	SharedBy  string    `json:"sharedBy,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 type AccountDocumentDetail struct {
@@ -327,6 +348,26 @@ const (
 	SKPubShare         = "PUBSHARE"
 	EntityTypePubShare = "PUB_SHARE"
 )
+
+// Per-user document sharing (reference, not copy -- contrast
+// ShareUserDocumentToAccount, which copies). Reuses model.Share as the item
+// shape (MeetingID carries the docId) but with its own SK prefixes: the
+// recipient-side row must NOT be "SHARED#" or a shared document would be
+// picked up by ListSharesForUser / the meetings "shared" tab, which both
+// key off that prefix alone.
+const (
+	PrefixDocShare     = "SHAREDDOC#" // PK: USER#{sharedToUserId}, SK: SHAREDDOC#{docId}
+	PrefixDocShareTo   = "DOCSHARE_TO#"
+	EntityTypeDocShare = "DOC_SHARE"
+	PrefixDocSharePart = "USERDOC#" // PK for the doc-side share list: USERDOC#{docId}
+)
+
+// ShareDocumentRequest is the body of POST /api/documents/{docId}/share.
+// Permission is deliberately absent: a document share is read-only (the
+// owner alone edits/deletes/shares), unlike a meeting share's read|edit.
+type ShareDocumentRequest struct {
+	Email string `json:"email"`
+}
 
 // PublicShare is a token -> document pointer enabling one unauthenticated
 // GET route (see handler.DocumentHandler.PublicGetDoc) to resolve a share

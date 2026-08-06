@@ -976,7 +976,7 @@ func TestBuildAccountInsights(t *testing.T) {
 	when := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
 	meeting := &model.Meeting{
 		MeetingID: "m-1", UserID: "owner-1", Date: when,
-		Insights: `[{"id":"ins_1","type":"risk","text":"일정 지연","entities":["PoC"]},{"id":"ins_2","type":"opportunity","text":"확대 여지"}]`,
+		Insights: `[{"id":"ins_1","type":"risk","text":"일정 지연","evidence":"보안 검토 일정 미확정","implication":"오픈 일정 영향","nextAction":"검토 일정 확정","entities":["PoC"]},{"id":"ins_2","type":"opportunity","text":"확대 여지"}]`,
 	}
 	items, err := BuildAccountInsights("acc-1", meeting)
 	if err != nil {
@@ -995,6 +995,9 @@ func TestBuildAccountInsights(t *testing.T) {
 	}
 	if got.Type != "risk" || got.SourceType != "meeting" || got.SourceID != "m-1" || got.SourceUserID != "owner-1" {
 		t.Errorf("bad fields: %+v", got)
+	}
+	if got.Evidence != "보안 검토 일정 미확정" || got.Implication != "오픈 일정 영향" || got.NextAction != "검토 일정 확정" {
+		t.Errorf("structured fields were not fanned out: %+v", got)
 	}
 	if !got.OccurredAt.Equal(when) {
 		t.Errorf("bad occurredAt: %v", got.OccurredAt)

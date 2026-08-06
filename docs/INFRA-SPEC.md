@@ -31,7 +31,7 @@ CfnGatewayTarget `name` + `configurations[0].name`을 게이트웨이가 `{targe
 ## 2. AuthStack
 
 ### Cognito User Pool
-- **Self-signup**: enabled
+- **Self-signup**: disabled (`selfSignUpEnabled: false` / `AllowAdminCreateUserOnly: true` — company security policy, accounts are admin-created only via `AdminCreateUser`/`InviteUser`)
 - **Sign-in aliases**: email
 - **Password policy**: min 8 chars, require lowercase, require digits (uppercase/symbols 불필요)
 - **Email verification**: required (Cognito default email)

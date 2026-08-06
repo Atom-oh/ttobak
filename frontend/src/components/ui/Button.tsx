@@ -1,7 +1,6 @@
 import { ButtonHTMLAttributes } from 'react';
 
-// The one button style shared by the auth forms — was duplicated byte-for-byte
-// across LoginForm and SignUpForm.
+// The one button style used by the auth form.
 export function PrimaryButton({ className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
     <button
