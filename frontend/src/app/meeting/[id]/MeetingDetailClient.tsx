@@ -292,8 +292,11 @@ function MeetingDetailContent() {
   const [audioUrls, setAudioUrls] = useState<string[]>([]);
   const pageRowRef = useRef<HTMLDivElement>(null);
   const summaryRowRef = useRef<HTMLDivElement>(null);
-  const { width: asideWidth, startDrag: startAsideDrag } = useResizablePanel('ttobak:meetingAsideWidth', 384, 280, 640, 'right', pageRowRef, 0.4);
-  const { width: summaryWidth, startDrag: startSummaryDrag } = useResizablePanel('ttobak:meetingSummaryWidth', 640, 400, 900, 'left', summaryRowRef, 0.55);
+  // reserve = space owed to the sibling column: divider width + row gaps + the
+  // sibling's own min-width, so effectiveMax leaves that column at least its
+  // floor rather than a flat viewport ratio that can't see what's next to it.
+  const { width: asideWidth, startDrag: startAsideDrag } = useResizablePanel('ttobak:meetingAsideWidth', 384, 280, 640, 'right', pageRowRef, 488);
+  const { width: summaryWidth, startDrag: startSummaryDrag } = useResizablePanel('ttobak:meetingSummaryWidth', 640, 400, 900, 'left', summaryRowRef, 352);
 
   // Extract meeting ID from URL. usePathname() updates on client-side navigation,
   // unlike window.location.pathname in a mount-only effect which goes stale.

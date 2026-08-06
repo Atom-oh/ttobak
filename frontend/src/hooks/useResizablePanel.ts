@@ -14,13 +14,17 @@ function clamp(n: number, min: number, max: number): number {
  * summary column next to action items). Width persists to localStorage
  * across meetings/sessions.
  *
- * `containerRef`+`maxRatio` (optional) additionally cap the width to a
- * fraction of the containing row's *current* rendered width, re-measured on
- * mount and at drag start. Without this, `max` is a static px ceiling that
- * doesn't know about the viewport -- on a narrower lg screen the panel can
- * overflow its row or (if a CSS-side clamp is layered on top instead) create
- * a drag dead-zone where the stored px value already exceeds what CSS
- * allows, so moving the mouse does nothing.
+ * `containerRef`+`reserve` (optional) additionally cap the width to the
+ * container's *current* rendered width minus `reserve` px (space owed to the
+ * divider, gaps, and the sibling column's own min-width) -- re-measured via
+ * ResizeObserver rather than once at mount, since the container may not be
+ * rendered yet (behind a loading early-return) when the mount effect first
+ * runs, and the viewport can resize at any time afterward. The computed
+ * ceiling is always floored at `min` (`Math.max(min, ...)`) so a narrow
+ * container never makes max < min -- that inversion is what previously
+ * turned clamp() into a permanent dead-zone, since
+ * `Math.min(max, Math.max(min, n))` with max < min always returns max
+ * regardless of n.
  */
 export function useResizablePanel(
   storageKey: string,
@@ -29,14 +33,15 @@ export function useResizablePanel(
   max: number,
   anchor: 'left' | 'right' = 'right',
   containerRef?: React.RefObject<HTMLElement | null>,
-  maxRatio?: number,
+  reserve?: number,
 ) {
   const [width, setWidth] = useState(defaultWidth);
   const widthRef = useRef(defaultWidth);
 
   const effectiveMax = () => {
-    if (containerRef?.current && maxRatio) {
-      return Math.min(max, containerRef.current.getBoundingClientRect().width * maxRatio);
+    if (containerRef?.current && reserve !== undefined) {
+      const available = containerRef.current.getBoundingClientRect().width - reserve;
+      return Math.max(min, Math.min(max, available));
     }
     return max;
   };
@@ -47,9 +52,29 @@ export function useResizablePanel(
     const clamped = clamp(isNaN(n) ? defaultWidth : n, min, effectiveMax());
     widthRef.current = clamped;
     setWidth(clamped);
-    // Only read the stored value / re-clamp to the container once on mount.
+    // Only read the stored value once on mount; re-clamping to the
+    // container's size is handled by the ResizeObserver effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
+
+  useEffect(() => {
+    const el = containerRef?.current;
+    if (!el || reserve === undefined) return;
+    const reclamp = () => {
+      const next = clamp(widthRef.current, min, effectiveMax());
+      if (next !== widthRef.current) {
+        widthRef.current = next;
+        setWidth(next);
+      }
+    };
+    reclamp();
+    const ro = new ResizeObserver(reclamp);
+    ro.observe(el);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [containerRef?.current, reserve]);
+
+  const activeDragCleanup = useRef<(() => void) | null>(null);
 
   const startDrag = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -68,11 +93,20 @@ export function useResizablePanel(
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      activeDragCleanup.current = null;
       localStorage.setItem(storageKey, String(widthRef.current));
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+    activeDragCleanup.current = onUp;
   };
+
+  // If the component unmounts mid-drag (route change while dragging), the
+  // mousemove/mouseup listeners above would otherwise outlive it and keep
+  // calling setWidth on an unmounted component.
+  useEffect(() => {
+    return () => activeDragCleanup.current?.();
+  }, []);
 
   return { width, startDrag };
 }
