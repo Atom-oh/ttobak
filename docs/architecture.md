@@ -130,7 +130,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-004: SA 지식베이스를 위한 크롤러 및 인사이트](decisions/ADR-004-crawler-insights-for-sa-knowledge-base.md) (승인됨)
 - [ADR-005: STT 다국어 자동 감지](decisions/ADR-005-multi-language-auto-detection-for-stt.md) (승인됨)
 - [ADR-006: 탭 오디오 캡처 + Tauri Mac App](decisions/ADR-006-tab-audio-capture-and-tauri-mac-app.md) (승인됨)
-- [ADR-007: 회원가입 이메일 도메인 허용 목록](decisions/ADR-007-email-domain-allowlist-for-signup.md) (승인됨)
+- [ADR-007: 회원가입 이메일 도메인 허용 목록](decisions/ADR-007-email-domain-allowlist-for-signup.md) (셀프 회원가입 금지로 실질 대체됨)
 - [ADR-008: STT 정확도 향상을 위한 커스텀 사전](decisions/ADR-008-custom-dictionary-for-stt-accuracy.md) (제안됨, 구현 대기)
 - [ADR-009: Whisper GPU ECS Spot Zero-Scale](decisions/ADR-009-whisper-gpu-ecs-spot-zero-scale.md) — AWS Transcribe → Whisper GPU 전환, 품질 2배·비용 36배 절감 (승인됨)
 - [ADR-010: Insights Obsidian 스타일 마크다운 렌더링](decisions/ADR-010-insights-obsidian-style-markdown-rendering.md) (승인됨)
@@ -150,6 +150,9 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-024: Mac 앱 네이티브 스트리밍 업로드 및 System Audio 라이브 자막](decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md) (승인됨)
 - [ADR-025: Project(SFDC Opportunity) 엔티티 — 그래프 레퍼런스 연동, 하이브리드 멤버십, 읽기 시점 인사이트 집계](decisions/ADR-025-project-entity-sfdc-oppty.md) (승인됨)
 - [ADR-026: 인사이트 관련성 게이트 및 수동 큐레이션](decisions/ADR-026-insights-relevance-gate-and-curation.md) (승인됨)
+- [ADR-027: CloudFront 서명 URL로 다운로드 도메인 통일 (S3 버킷 주소 은닉)](decisions/ADR-027-cloudfront-signed-media-urls.md) (승인됨)
+- [ADR-028: QA 웹 검색 도구와 선제 질문 검색](decisions/ADR-028-qa-web-search-and-proactive-question-search.md) (승인됨)
+- [ADR-029: 개인 문서의 사용자 단위 공유 — 복제가 아닌 참조, 읽기 전용](decisions/ADR-029-per-user-document-sharing-by-reference.md) (승인됨)
 
 ### 운영
 
@@ -229,7 +232,7 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-004: Crawler & Insights for SA Knowledge Base](decisions/ADR-004-crawler-insights-for-sa-knowledge-base.md) (Accepted)
 - [ADR-005: Multi-Language Auto-Detection for STT](decisions/ADR-005-multi-language-auto-detection-for-stt.md) (Accepted)
 - [ADR-006: Tab Audio Capture + Tauri Mac App](decisions/ADR-006-tab-audio-capture-and-tauri-mac-app.md) (Accepted)
-- [ADR-007: Email Domain Allowlist for Signup](decisions/ADR-007-email-domain-allowlist-for-signup.md) (Accepted)
+- [ADR-007: Email Domain Allowlist for Signup](decisions/ADR-007-email-domain-allowlist-for-signup.md) (Superseded in practice — self sign-up forbidden)
 - [ADR-008: Custom Dictionary for STT Accuracy](decisions/ADR-008-custom-dictionary-for-stt-accuracy.md) (Proposed, implementation pending)
 - [ADR-009: Whisper GPU ECS Spot Zero-Scale](decisions/ADR-009-whisper-gpu-ecs-spot-zero-scale.md) — Migrate from AWS Transcribe to Whisper GPU; 2× quality, 36× cost reduction (Accepted)
 - [ADR-010: Obsidian-style Rich Markdown Rendering for Insights](decisions/ADR-010-insights-obsidian-style-markdown-rendering.md) (Accepted)
@@ -249,6 +252,9 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-024: Mac App Native Streaming Upload and System Audio Live Captions](decisions/ADR-024-mac-app-native-streaming-upload-and-system-audio-captions.md) (Accepted)
 - [ADR-025: Project (SFDC Opportunity) Entity — Graph-Reference Linking, Hybrid Membership, Read-Time Insight Aggregation](decisions/ADR-025-project-entity-sfdc-oppty.md) (Accepted)
 - [ADR-026: Insights Relevance Gate and Manual Curation](decisions/ADR-026-insights-relevance-gate-and-curation.md) (Accepted)
+- [ADR-027: CloudFront Signed URLs for All Download Domains (S3 Bucket Address Hidden)](decisions/ADR-027-cloudfront-signed-media-urls.md) (Accepted)
+- [ADR-028: QA Web Search Tool and Proactive Question Search](decisions/ADR-028-qa-web-search-and-proactive-question-search.md) (Accepted)
+- [ADR-029: Per-User Document Sharing by Reference, Read-Only](decisions/ADR-029-per-user-document-sharing-by-reference.md) (Accepted)
 
 ### Operations
 
