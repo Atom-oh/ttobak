@@ -500,19 +500,26 @@ func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, me
 	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, expression.AttributeExists(expression.Name("PK")), fields)
 }
 
-// UpdateMeetingFieldsIfStatus is UpdateMeetingFields with an added
-// `status = expectedStatus` condition, for callers rolling back a field
-// write they made earlier -- e.g. RediarizeMeeting restoring speakerMap
-// after a failed CopyObject retrigger. Without the condition, the rollback
-// could stomp a status transition that already landed in the meantime (the
-// retrigger's own pipeline picking the meeting back up despite the client
-// seeing an ambiguous S3 error, or a second concurrent request), silently
-// reverting real progress back to stale data. ErrConditionalCheckFailed-style
-// DynamoDB errors from a failed condition are returned as-is so callers can
-// tell "nothing to roll back" apart from a real write failure.
-func (r *DynamoDBRepository) UpdateMeetingFieldsIfStatus(ctx context.Context, userID, meetingID, expectedStatus string, fields map[string]interface{}) error {
-	condition := expression.AttributeExists(expression.Name("PK")).
-		And(expression.Name("status").Equal(expression.Value(expectedStatus)))
+// UpdateMeetingFieldsIfMatch is UpdateMeetingFields with an added condition
+// that every field in expected must still equal its given value, for callers
+// rolling back a field write they made earlier -- e.g. RediarizeMeeting
+// marking a meeting errored after a failed CopyObject retrigger. Without the
+// condition, the write could stomp a status transition that already landed
+// in the meantime (the retrigger's own pipeline picking the meeting back up
+// despite the client seeing an ambiguous S3 error), silently reverting real
+// progress back to stale data. A bare status match isn't enough on its own
+// to distinguish that from a second, unrelated concurrent call that also
+// happens to be mid-"transcribing" -- callers needing that distinction
+// should also match on a value unique to their own attempt (e.g.
+// diarizationSpeakerHint or a per-attempt token) alongside status.
+// ErrConditionalCheckFailed-style DynamoDB errors from a failed condition
+// are returned as-is so callers can tell "nothing to roll back" apart from a
+// real write failure.
+func (r *DynamoDBRepository) UpdateMeetingFieldsIfMatch(ctx context.Context, userID, meetingID string, expected map[string]interface{}, fields map[string]interface{}) error {
+	condition := expression.AttributeExists(expression.Name("PK"))
+	for k, v := range expected {
+		condition = condition.And(expression.Name(k).Equal(expression.Value(v)))
+	}
 	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, fields)
 }
 

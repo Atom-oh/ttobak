@@ -520,6 +520,12 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		return err
 	}
 
+	// Tags this specific call so its own failure handler below can't stomp a
+	// second, unrelated concurrent RediarizeMeeting call that's also
+	// mid-"transcribing" -- a bare status match can't tell those two apart
+	// since the string value is identical for both.
+	attemptToken := uuid.New().String()
+
 	// Old spk_N -> name mappings no longer correspond once diarization
 	// re-runs from scratch; clear them and let the user re-map after. This
 	// must commit BEFORE the CopyObject below: the copy fires the
@@ -533,6 +539,7 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		"diarizationSpeakerHint": speakerCount,
 		"speakerMap":             map[string]string{},
 		"status":                 model.StatusTranscribing,
+		"rediarizeAttemptToken":  attemptToken,
 	}); err != nil {
 		return fmt.Errorf("failed to update meeting for re-diarization: %w", err)
 	}
@@ -552,13 +559,18 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		// hint/speakerMap back could race an S3 event that actually did fire,
 		// landing ttobak-transcribe on stale settings instead of the new
 		// ones. Mark the meeting as errored instead of guessing, but only if
-		// status is STILL "transcribing" (the condition on
-		// UpdateMeetingFieldsIfStatus): if the copy secretly succeeded and
+		// status is STILL "transcribing" AND rediarizeAttemptToken still
+		// matches this call's own token: if the copy secretly succeeded and
 		// the retriggered pipeline already advanced status past that point,
-		// this write is a no-op rather than clobbering real progress. The
-		// cleared speakerMap is a real cost on a genuine failure, but it is a
-		// stale-write hazard we choose not to risk to avoid it.
-		if statusErr := s.repo.UpdateMeetingFieldsIfStatus(ctx, userID, meetingID, model.StatusTranscribing, map[string]interface{}{
+		// or a second concurrent RediarizeMeeting call is now the one
+		// "transcribing", this write is a no-op rather than clobbering real
+		// (possibly unrelated) progress. The cleared speakerMap is a real
+		// cost on a genuine failure, but it is a stale-write hazard we choose
+		// not to risk to avoid it.
+		if statusErr := s.repo.UpdateMeetingFieldsIfMatch(ctx, userID, meetingID, map[string]interface{}{
+			"status":                model.StatusTranscribing,
+			"rediarizeAttemptToken": attemptToken,
+		}, map[string]interface{}{
 			"status": model.StatusError,
 		}); statusErr != nil {
 			log.Printf("RediarizeMeeting: skip/failed marking meeting %s errored after CopyObject failure (status may have already advanced): %v", meetingID, statusErr)
