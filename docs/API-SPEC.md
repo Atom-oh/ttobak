@@ -199,7 +199,7 @@ Response: 200 OK
     {
       "accountId": "uuid",
       "name": "하나은행",
-      "role": "owner"            // owner | AM | TAM | SSA
+      "role": "owner"            // owner | AM | TAM | SSA | SA | SA Manager | AM Manager
     }
   ]
 }
@@ -269,7 +269,7 @@ POST /api/accounts/{accountId}/members
 Request:
 {
   "email": "tam@example.com",   // 기존 등록 사용자의 이메일
-  "role": "TAM"                 // AM | TAM | SSA (owner는 지정 불가)
+  "role": "TAM"                 // AM | TAM | SSA | SA | SA Manager | AM Manager (owner는 지정 불가)
 }
 
 Response: 201 Created
@@ -290,7 +290,7 @@ Error: 400 Bad Request (이미 멤버이거나 잘못된 역할)
 PUT /api/accounts/{accountId}/members/{userId}
 Request:
 {
-  "role": "AM"                  // AM | TAM | SSA (owner로는 변경 불가)
+  "role": "AM"                  // AM | TAM | SSA | SA | SA Manager | AM Manager (owner로는 변경 불가)
 }
 
 Response: 200 OK
@@ -375,6 +375,9 @@ Response: 200 OK
     {
       "type": "risk",
       "text": "PoC 일정 2개월 지연 가능",
+      "evidence": "발췌: \"인프라 승인이 늦어지면 PoC가 밀릴 것 같습니다\"",
+      "implication": "Q3 갱신 협상 전 PoC 결과가 나오지 않을 위험",
+      "nextAction": "인프라 승인 상태를 TAM이 이번 주 확인",
       "sourceType": "meeting",
       "sourceId": "meeting-uuid",
       "occurredAt": "2026-05-12T09:00:00Z",
@@ -383,7 +386,15 @@ Response: 200 OK
     }
   ]
 }
+```
 
+`evidence`(발언 준-verbatim 인용)/`implication`(함의)/`nextAction`(권장 조치)은
+모두 선택 필드로, `ExtractInsights`(Bedrock Haiku)가 구조화된 근거를 함께
+생성할 때 채워진다 — 이전에는 `type`/`text`만 있었다. `Project.Insights`
+(`GET /api/projects/{projectId}/insights`, `GET /api/projects/{projectId}/brief`)도
+같은 스키마(`FieldInsight`)를 공유한다.
+
+```
 Error: 400 Bad Request (잘못된 from/to — RFC3339 아님)
 Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (Account 없음)
@@ -608,6 +619,38 @@ Error: 400 Bad Request (accountId 누락)
 Error: 403 Forbidden (문서 소유자가 아님, 또는 accountId 멤버가 아님)
 Error: 404 Not Found (문서 없음)
 ```
+
+#### Share Document with a Specific User (개인 문서 → 1인 공유, 참조 방식)
+
+개인 문서를 이메일로 지정한 한 사용자와 공유한다. 위 Share-to-Account와 달리
+**복제가 아니라 참조** — 소유자의 문서 한 부만 존재하고, `ListUserDocuments`/
+`GetUserDocument`는 소유자 파티션을 그대로 읽으므로 수신자는 항상 최신
+내용을 본다. 항상 읽기 전용(요청에 `permission` 필드 자체가 없음 —
+`ShareMeeting`과 달리 편집 공유는 지원하지 않음). 소유자만 공유/조회/철회
+가능 — 소유자가 아니면 `getDoc`이 404를 반환해(권한 여부를 드러내지 않는
+fail-closed) 자동으로 막힌다.
+
+```
+POST /api/documents/{docId}/share
+{ "email": "target@example.com" }
+
+Response: 201 Created
+{ "sharedWith": { "userId": "user-uuid", "email": "target@example.com", "permission": "read" } }
+
+GET /api/documents/{docId}/shares
+Response: 200 OK
+{ "shares": [ { "userId": "...", "email": "...", "permission": "read", "sharedAt": "..." }, ... ] }
+
+DELETE /api/documents/{docId}/share/{userId}
+Response: 204 No Content
+
+Error: 400 Bad Request (email 누락)
+Error: 404 Not Found (문서 없음, 또는 호출자가 소유자가 아님 — 403 대신 404로 존재 자체를 숨김)
+```
+
+수신자 쪽 `GetUserDocument`/`ListUserDocuments` 응답에는 `sharedBy`(소유자
+이메일)가 채워지고 `publicShareToken`은 생략된다 — 프론트엔드는 `sharedBy`
+유무로 읽기 전용 뱃지를 표시한다(`ShareButton`의 `readOnly` prop).
 
 #### Public Share Link (개인 파일 문서 무인증 공개 링크)
 
