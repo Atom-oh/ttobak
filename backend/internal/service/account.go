@@ -568,9 +568,14 @@ func (s *AccountService) ListAccountInsights(ctx context.Context, userID, accoun
 			continue
 		}
 		out = append(out, model.AccountInsightDTO{
-			Type:        ins.Type,
-			Text:        ins.Text,
-			Evidence:    ins.Evidence,
+			Type: ins.Type,
+			Text: ins.Text,
+			// Evidence deliberately NOT mapped: the write path
+			// (BuildAccountInsights) never fans it out, but this read path
+			// must not rely on every writer's restraint -- AccountInsight
+			// rows also come from other SourceTypes (news/ingest), and any
+			// writer that ever sets Evidence would otherwise expose
+			// near-verbatim quotes account-wide through this DTO.
 			Implication: ins.Implication,
 			NextAction:  ins.NextAction,
 			SourceType:  ins.SourceType,

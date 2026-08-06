@@ -236,10 +236,13 @@ type AccountInsight struct {
 	EntityType   string    `dynamodbav:"entityType"` // "ACCOUNT_INSIGHT"
 }
 
+// AccountInsightDTO deliberately has no Evidence field: near-verbatim meeting
+// quotes are meeting-scoped only and must never surface through account-wide
+// reads (see BuildAccountInsights in service/meeting.go). Removing the field
+// makes that impossible to regress by a stray mapping, not just unlikely.
 type AccountInsightDTO struct {
 	Type        string    `json:"type"`
 	Text        string    `json:"text"`
-	Evidence    string    `json:"evidence,omitempty"`
 	Implication string    `json:"implication,omitempty"`
 	NextAction  string    `json:"nextAction,omitempty"`
 	SourceType  string    `json:"sourceType"`

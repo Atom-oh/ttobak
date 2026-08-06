@@ -1234,9 +1234,11 @@ func TestListAccountInsights_FilterByType(t *testing.T) {
 	if len(got) != 1 || got[0].Type != model.InsightRisk {
 		t.Errorf("expected only risk, got %+v", got)
 	}
-	if got[0].Evidence != "일정 미확정" || got[0].Implication != "오픈 지연" || got[0].NextAction != "일정 확정" {
+	if got[0].Implication != "오픈 지연" || got[0].NextAction != "일정 확정" {
 		t.Errorf("structured fields were not mapped to DTO: %+v", got[0])
 	}
+	// Evidence non-exposure needs no runtime assert: AccountInsightDTO has no
+	// Evidence field at all, so a mapping regression is a compile error.
 }
 
 func TestListAccountInsights_FilterByPeriod(t *testing.T) {

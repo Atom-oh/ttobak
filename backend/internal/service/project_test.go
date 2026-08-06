@@ -716,9 +716,8 @@ func TestGetProjectInsights_AggregatesAndFilters(t *testing.T) {
 		filtered[0].NextAction != "confirm owner" {
 		t.Errorf("structured fields were not mapped to project DTO: %+v", filtered[0])
 	}
-	if filtered[0].Evidence != "" {
-		t.Errorf("evidence must not be fanned out to the project partition: %+v", filtered[0])
-	}
+	// Evidence non-exposure needs no runtime assert: ProjectInsightDTO has no
+	// Evidence field at all, so a mapping regression is a compile error.
 }
 
 func TestGetProjectInsights_NoLinksReturnsEmpty(t *testing.T) {

@@ -186,7 +186,7 @@ Error: 403 Forbidden (only owner can delete)
 
 ### Accounts
 
-고객사(Account)는 팀이 공유하는 1급 엔티티다. 생성자는 자동으로 `owner` 멤버가 되며, owner만 멤버를 추가할 수 있다. 멤버십(역할 AM/TAM/SSA/owner)이 곧 접근 권한이다. 모든 엔드포인트는 인증 필요.
+고객사(Account)는 팀이 공유하는 1급 엔티티다. 생성자는 자동으로 `owner` 멤버가 되며, owner만 멤버를 추가할 수 있다. 멤버십(역할 owner/AM/TAM/SSA/SA/SA Manager/AM Manager — 지정 가능 목록은 `model.AssignableRoles`)이 곧 접근 권한이다. 모든 엔드포인트는 인증 필요.
 
 #### List Accounts (내 Account 목록)
 
@@ -648,8 +648,9 @@ Response: 200 OK
 DELETE /api/documents/{docId}/share/{userId}
 Response: 204 No Content
 
-Error: 400 Bad Request (email 누락)
-Error: 404 Not Found (문서 없음, 또는 호출자가 소유자가 아님 — 403 대신 404로 존재 자체를 숨김)
+Error: 400 Bad Request (email 누락, 또는 자기 자신에게 공유 시도)
+Error: 404 Not Found (문서 없음, 호출자가 소유자가 아님 — 403 대신 404로 존재
+                       자체를 숨김 — 또는 대상 이메일의 사용자가 없음)
 ```
 
 수신자 쪽 `GetUserDocument`/`ListUserDocuments` 응답에는 `sharedBy`(소유자
@@ -841,7 +842,7 @@ DELETE /api/projects/{projectId}/members/{userId}
 Response: 204 No Content
 ```
 
-멤버는 Account처럼 역할(owner/AM/TAM/SSA) 구분이 없다 — 있으면(owner) 있고
+멤버는 Account처럼 역할(owner/AM/TAM/SSA/SA/SA Manager/AM Manager) 구분이 없다 — 있으면(owner) 있고
 없으면(member) 없는 이진 상태.
 
 #### Link / Unlink Account
