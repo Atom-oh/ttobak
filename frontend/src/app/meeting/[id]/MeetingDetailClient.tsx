@@ -500,7 +500,7 @@ function MeetingDetailContent() {
           {(meeting.status === 'done' || meeting.content || meeting.summary) ? (
             <div ref={summaryRowRef} className="flex flex-col xl:flex-row gap-8 mb-12">
               <div
-                className="w-full xl:shrink-0 xl:w-[var(--summary-w)]"
+                className="w-full xl:w-[var(--summary-w)] min-w-0"
                 style={{ '--summary-w': `${summaryWidth}px` } as React.CSSProperties}
               >
                 <AISummaryCard
