@@ -553,20 +553,30 @@ func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID 
 		Key:        aws.String(retriggerKey),
 		CopySource: aws.String(fmt.Sprintf("%s/%s", s.bucketName, encodeS3CopySourceKey(sourceKey))),
 	}); err != nil {
-		// Do NOT restore the previous speakerMap here: a CopyObject error from
-		// the SDK doesn't guarantee S3 never completed the copy (e.g. a
-		// response lost after the object was written) -- writing the old
-		// hint/speakerMap back could race an S3 event that actually did fire,
-		// landing ttobak-transcribe on stale settings instead of the new
-		// ones. Mark the meeting as errored instead of guessing, but only if
-		// status is STILL "transcribing" AND rediarizeAttemptToken still
-		// matches this call's own token: if the copy secretly succeeded and
-		// the retriggered pipeline already advanced status past that point,
-		// or a second concurrent RediarizeMeeting call is now the one
-		// "transcribing", this write is a no-op rather than clobbering real
-		// (possibly unrelated) progress. The cleared speakerMap is a real
-		// cost on a genuine failure, but it is a stale-write hazard we choose
-		// not to risk to avoid it.
+		// A CopyObject error from the SDK doesn't prove S3 never completed
+		// the copy (e.g. a response lost after the object was written) --
+		// resolve that ambiguity directly with a HeadObject on the
+		// destination key rather than guessing. If it exists, the copy (and
+		// therefore the EventBridge S3 event that wakes ttobak-transcribe)
+		// really did fire; this attempt's own pipeline is now legitimately
+		// running and must NOT be marked errored out from under it.
+		if _, headErr := s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+			Bucket: aws.String(s.bucketName),
+			Key:    aws.String(retriggerKey),
+		}); headErr == nil {
+			log.Printf("RediarizeMeeting: CopyObject for meeting %s returned an error but the destination object exists -- treating as a real retrigger, not marking errored", meetingID)
+			return nil
+		}
+
+		// The copy genuinely never landed. Mark the meeting errored, but
+		// only if status is STILL "transcribing" AND rediarizeAttemptToken
+		// still matches this call's own token -- guards against a second,
+		// unrelated concurrent RediarizeMeeting call now being the one
+		// "transcribing", so this write is a no-op rather than clobbering
+		// that other call's real progress. The cleared speakerMap is a real
+		// cost on a genuine failure, but restoring it here would reopen the
+		// same ambiguity HeadObject just resolved, for a second write this
+		// time with no way to re-check it.
 		if statusErr := s.repo.UpdateMeetingFieldsIfMatch(ctx, userID, meetingID, map[string]interface{}{
 			"status":                model.StatusTranscribing,
 			"rediarizeAttemptToken": attemptToken,
