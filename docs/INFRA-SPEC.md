@@ -373,7 +373,7 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
 
 ### IAM Policies (Lambda에 부여)
 - **Transcribe**: `transcribe:StartTranscriptionJob`, `transcribe:GetTranscriptionJob`
-- **Bedrock (Summarize/Image)**: `bedrock:InvokeModel` on `anthropic.claude-opus-4-8`
+- **Bedrock (Summarize/Image)**: `bedrock:InvokeModel` on `anthropic.claude-opus-5 (summarize) / anthropic.claude-opus-4-8 (image)`
 - **Bedrock (Nova Sonic STT)**: `bedrock:InvokeModelWithBidirectionalStream` on `amazon.nova-sonic-v2:0`
 - **Bedrock (Translation)**: `bedrock:InvokeModel` on `anthropic.claude-3-haiku-*` (빠른 번역용)
 - **Bedrock KB RAG**: `bedrock:Retrieve`, `bedrock:RetrieveAndGenerate`

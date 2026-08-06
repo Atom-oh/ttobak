@@ -493,7 +493,7 @@ function MeetingDetailContent() {
           {(meeting.status === 'done' || meeting.content || meeting.summary) ? (
             <div className="flex flex-col lg:flex-row gap-8 mb-12">
               <div
-                className="w-full lg:shrink-0 lg:w-[var(--summary-w)]"
+                className="w-full lg:shrink-0 lg:w-[min(var(--summary-w),55%)]"
                 style={{ '--summary-w': `${summaryWidth}px` } as React.CSSProperties}
               >
                 <AISummaryCard
@@ -509,7 +509,7 @@ function MeetingDetailContent() {
                 onMouseDown={startSummaryDrag}
                 className="hidden lg:flex w-2 shrink-0 self-stretch cursor-col-resize bg-slate-300 dark:bg-white/20 hover:bg-primary/60 active:bg-primary/80 transition-colors rounded-full"
               />
-              <div className="flex-1 min-w-0">
+              <div className="flex-1 min-w-0 lg:min-w-[280px]">
                 <ActionItemsCard
                   items={meeting.actionItems}
                   onToggle={handleActionItemToggle}
