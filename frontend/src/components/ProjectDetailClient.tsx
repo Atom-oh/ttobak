@@ -39,6 +39,7 @@ export default function ProjectDetailClient() {
   // make the account picker/display usable (see 2026-08-06 bug report: the
   // account field was a bare "Account ID" text box with nothing to pick from).
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
+  const [accountsError, setAccountsError] = useState(false);
 
   // This component is never remounted across /projects/A -> /projects/B
   // navigation (single static `_` route, reused across all project IDs --
@@ -121,10 +122,21 @@ export default function ProjectDetailClient() {
 
   // User-scoped, not project-scoped -- unlike fetchAll, this doesn't need to
   // re-run on projectId change or guard against a stale-navigation race.
-  useEffect(() => {
+  const fetchAccounts = useCallback(() => {
     if (!isAuthenticated) return;
-    accountApi.list().then((res) => setAccounts(res.accounts)).catch(() => {});
+    setAccountsError(false);
+    accountApi.list()
+      .then((res) => setAccounts(res.accounts))
+      // A failure here must not look identical to "genuinely zero
+      // accounts" -- that would render the link-account picker as
+      // permanently empty/disabled with no way to tell it's actually just a
+      // fetch that failed, and no retry short of a full page reload.
+      .catch(() => setAccountsError(true));
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    fetchAccounts();
+  }, [fetchAccounts]);
 
   const accountNameById = new Map(accounts.map((a) => [a.accountId, a.name]));
 
@@ -320,7 +332,15 @@ export default function ProjectDetailClient() {
                     </div>
                   ))
                 )}
-                {isOwner && (() => {
+                {isOwner && accountsError && (
+                  <div className="flex items-center gap-2 pt-2 text-sm text-red-500">
+                    <span>Failed to load accounts.</span>
+                    <button onClick={fetchAccounts} className="font-semibold hover:underline">
+                      Retry
+                    </button>
+                  </div>
+                )}
+                {isOwner && !accountsError && (() => {
                   const linkableAccounts = accounts
                     .filter((a) => !project.accountIds.includes(a.accountId))
                     .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
