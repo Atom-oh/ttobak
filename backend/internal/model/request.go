@@ -187,9 +187,10 @@ type UserSearchListResponse struct {
 
 // ShareResponse represents a share record in API responses
 type ShareResponse struct {
-	UserID     string `json:"userId"`
-	Email      string `json:"email"`
-	Permission string `json:"permission"`
+	UserID     string     `json:"userId"`
+	Email      string     `json:"email"`
+	Permission string     `json:"permission"`
+	SharedAt   *time.Time `json:"sharedAt,omitempty"`
 }
 
 // SharedWithResponse represents the response for sharing a meeting

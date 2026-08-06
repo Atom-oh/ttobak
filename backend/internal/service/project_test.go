@@ -712,10 +712,12 @@ func TestGetProjectInsights_AggregatesAndFilters(t *testing.T) {
 	if err != nil || len(filtered) != 1 || filtered[0].Text != "May risk" {
 		t.Fatalf("unexpected filtered insights: %v err=%v", filtered, err)
 	}
-	if filtered[0].Evidence != "schedule is open" ||
-		filtered[0].Implication != "launch may slip" ||
+	if filtered[0].Implication != "launch may slip" ||
 		filtered[0].NextAction != "confirm owner" {
 		t.Errorf("structured fields were not mapped to project DTO: %+v", filtered[0])
+	}
+	if filtered[0].Evidence != "" {
+		t.Errorf("evidence must not be fanned out to the project partition: %+v", filtered[0])
 	}
 }
 

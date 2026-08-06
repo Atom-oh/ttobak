@@ -996,8 +996,11 @@ func TestBuildAccountInsights(t *testing.T) {
 	if got.Type != "risk" || got.SourceType != "meeting" || got.SourceID != "m-1" || got.SourceUserID != "owner-1" {
 		t.Errorf("bad fields: %+v", got)
 	}
-	if got.Evidence != "보안 검토 일정 미확정" || got.Implication != "오픈 일정 영향" || got.NextAction != "검토 일정 확정" {
+	if got.Implication != "오픈 일정 영향" || got.NextAction != "검토 일정 확정" {
 		t.Errorf("structured fields were not fanned out: %+v", got)
+	}
+	if got.Evidence != "" {
+		t.Errorf("evidence must not be fanned out to the account partition: %+v", got)
 	}
 	if !got.OccurredAt.Equal(when) {
 		t.Errorf("bad occurredAt: %v", got.OccurredAt)

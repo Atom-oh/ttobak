@@ -375,7 +375,6 @@ Response: 200 OK
     {
       "type": "risk",
       "text": "PoC 일정 2개월 지연 가능",
-      "evidence": "발췌: \"인프라 승인이 늦어지면 PoC가 밀릴 것 같습니다\"",
       "implication": "Q3 갱신 협상 전 PoC 결과가 나오지 않을 위험",
       "nextAction": "인프라 승인 상태를 TAM이 이번 주 확인",
       "sourceType": "meeting",
@@ -388,11 +387,16 @@ Response: 200 OK
 }
 ```
 
-`evidence`(발언 준-verbatim 인용)/`implication`(함의)/`nextAction`(권장 조치)은
-모두 선택 필드로, `ExtractInsights`(Bedrock Haiku)가 구조화된 근거를 함께
-생성할 때 채워진다 — 이전에는 `type`/`text`만 있었다. `Project.Insights`
+`implication`(함의)/`nextAction`(권장 조치)은 모두 선택 필드로,
+`ExtractInsights`(Bedrock Haiku)가 구조화된 근거를 함께 생성할 때 채워진다 —
+이전에는 `type`/`text`만 있었다. `ExtractInsights`는 `evidence`(발언
+준-verbatim 인용)도 함께 생성하지만, account/project 파티션으로 팬아웃되는
+이 응답에는 **의도적으로 포함되지 않는다** — 미팅 접근권 없는 account/project
+멤버가 원본 발언 인용을 읽게 되는 노출을 막기 위함(`BuildAccountInsights`,
+`meeting.go`). `evidence`는 미팅 자체의 `Insights` JSON을 통해 미팅 접근권이
+있는 사용자에게만 노출된다. `Project.Insights`
 (`GET /api/projects/{projectId}/insights`, `GET /api/projects/{projectId}/brief`)도
-같은 스키마(`FieldInsight`)를 공유한다.
+같은 스키마(`FieldInsight`)와 같은 팬아웃 정책을 공유한다.
 
 ```
 Error: 400 Bad Request (잘못된 from/to — RFC3339 아님)

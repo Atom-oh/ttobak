@@ -1211,7 +1211,8 @@ func (s *AccountService) ListUserDocShares(ctx context.Context, ownerID, docID s
 	}
 	out := make([]model.ShareResponse, 0, len(shares))
 	for _, sh := range shares {
-		out = append(out, model.ShareResponse{UserID: sh.SharedToID, Email: sh.Email, Permission: sh.Permission})
+		createdAt := sh.CreatedAt
+		out = append(out, model.ShareResponse{UserID: sh.SharedToID, Email: sh.Email, Permission: sh.Permission, SharedAt: &createdAt})
 	}
 	return out, nil
 }
