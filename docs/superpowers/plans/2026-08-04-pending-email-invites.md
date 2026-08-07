@@ -235,7 +235,7 @@ git commit -m "feat: add PendingInvite model and Pending response fields"
 
 **Interfaces:**
 - Consumes: `model.PendingInvite` (Task 1); existing `(*DynamoDBRepository).CreateShare`, `.CreateDocShare`, `.CreateResearchShare`, `.PutMember`, `.PutProjectMember` (all pre-existing, unchanged signatures).
-- Produces: `(*DynamoDBRepository) CreatePendingInvite(ctx, invite *model.PendingInvite) error`, `.ListPendingInvites(ctx, email string) ([]model.PendingInvite, error)`, `.DeletePendingInvite(ctx, email, invType, entityID string) error` (양쪽 행을 트랜잭션 삭제 — 키는 내부 파생) — these three are what Task 3-6's service interfaces will add. `reconcilePendingInvites` is package-private, called only from `GetOrCreateUser`.
+- Produces: `(*DynamoDBRepository) CreatePendingInvite(ctx, invite *model.PendingInvite) error`, `.ListPendingInvites(ctx, email string) ([]model.PendingInvite, error)`, `.ListPendingInvitesForEntity(ctx, entityID string) ([]model.PendingInvite, error)` (Task 7의 owner-side GET이 읽는 `PENDINGREF#{entityId}` 파티션 Query), `.DeletePendingInvite(ctx, email, invType, entityID string) error` (양쪽 행을 트랜잭션 삭제 — 키는 내부 파생) — the first/second/fourth are what Task 3-6's service interfaces will add; the third is consumed only by Task 7's pending-invite handler service. `reconcilePendingInvites` is package-private, called only from `GetOrCreateUser`.
 
 - [ ] **Step 1: Write the failing repository test (pure functions only)**
 
@@ -473,7 +473,13 @@ func (r *DynamoDBRepository) reconcilePendingInvites(ctx context.Context, user *
 		case model.PendingInviteDocShare:
 			_, matErr = r.CreateDocShare(ctx, inv.EntityID, inv.OwnerID, inv.OwnerEmail, user.UserID, user.Email)
 		case model.PendingInviteResearchShare:
-			_, matErr = r.CreateResearchShare(ctx, inv.EntityID, inv.OwnerID, inv.OwnerEmail, user.UserID, user.Email, inv.Permission)
+			// CreateResearchShare lives on *ResearchRepository, NOT on
+			// *DynamoDBRepository -- calling r.CreateResearchShare here would
+			// not compile. Construct one over the same client/table
+			// (NewResearchRepository(r.client, r.tableName) is stateless) or
+			// hold it as a field initialized in the DynamoDBRepository
+			// constructor; the snippet assumes a `researchRepo` field.
+			_, matErr = r.researchRepo.CreateResearchShare(ctx, inv.EntityID, inv.OwnerID, inv.OwnerEmail, user.UserID, user.Email, inv.Permission)
 		case model.PendingInviteAccountMember:
 			matErr = r.PutMember(ctx, &model.AccountMember{
 				PK: model.PrefixAccount + inv.EntityID, SK: model.PrefixMember + user.UserID,
@@ -523,11 +529,22 @@ In `backend/internal/repository/dynamodb.go`, find the `GetOrCreateUser` functio
 Change it to:
 
 ```go
+	// attribute_not_exists makes "brand-new user" a fact the write itself
+	// proves: two concurrent first-requests can both reach this branch off
+	// the same empty read, but only one Put wins -- the loser gets
+	// ConditionalCheckFailedException, re-reads the (now-existing) profile,
+	// and skips reconciliation, so reconcile runs at most once per user
+	// instead of racing twice over the same pending rows.
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      item,
+		TableName:           aws.String(r.tableName),
+		Item:                item,
+		ConditionExpression: aws.String("attribute_not_exists(PK)"),
 	})
 	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return r.GetUser(ctx, userID) // lost the race; profile now exists
+		}
 		return nil, fmt.Errorf("failed to put user: %w", err)
 	}
 
@@ -537,7 +554,7 @@ Change it to:
 }
 ```
 
-(This only runs in the "new user" branch of the function, not the earlier `if result.Item != nil { ... return &user, nil }` branch — reconciliation must never re-run for an existing user.)
+(This only runs in the "new user" branch of the function, not the earlier `if result.Item != nil { ... return &user, nil }` branch — reconciliation must never re-run for an existing user. Adjust the lost-race re-read to whatever user-fetch helper the function's earlier branch already uses.)
 
 - [ ] **Step 5: Run the test to verify it passes**
 
