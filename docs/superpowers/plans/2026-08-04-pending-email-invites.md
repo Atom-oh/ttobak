@@ -72,6 +72,17 @@ const (
 // ProjectMember row by DynamoDBRepository's reconcilePendingInvites, called
 // once from GetOrCreateUser the moment a brand-new user profile is created
 // -- see docs/superpowers/specs/2026-08-04-pending-email-invites-design.md.
+// Two rows per invite, written/deleted together via TransactWriteItems --
+// same dual-row convention as the Research-Account RESEARCHREF# pattern:
+//   canonical:   PK PENDINGINVITE#{lowercased email} / SK {Type}#{EntityID}
+//                (what signup-time reconciliation queries by email)
+//   reverse ref: PK PENDINGREF#{EntityID} / SK PENDINGINVITE#{lowercased email}#{Type}
+//                (what Task 7's owner-side "list pending invites for my
+//                entity" endpoint queries -- without it, entityId-scoped
+//                lookup would require a table Scan)
+// Both rows carry the same attributes below (incl. TTL) so either read is
+// self-sufficient; the reverse ref is denormalized, and DeletePendingInvite
+// removes both transactionally.
 type PendingInvite struct {
 	PK string `dynamodbav:"PK"` // PENDINGINVITE#{lowercased email}
 	SK string `dynamodbav:"SK"` // {Type}#{EntityID}
@@ -91,15 +102,19 @@ type PendingInvite struct {
 	// PROJECT_MEMBER and DOC_SHARE, which have no permission/role concept.
 	Permission string    `dynamodbav:"permission,omitempty"`
 	CreatedAt  time.Time `dynamodbav:"createdAt"`
-	// ExpiresAt is a DynamoDB TTL attribute (epoch seconds; enable TTL on
-	// this attribute in the table if not already on). A pending invite holds
-	// PII (an email address) for someone who may never sign up -- the repo's
-	// data-handling mandate requires PII rows in DynamoDB to carry a TTL, so
-	// unclaimed invites self-expire (90 days) instead of accumulating
-	// indefinitely. Reconciliation must treat an expired-but-not-yet-swept
-	// row (TTL deletion is lazy) as absent: skip when
-	// time.Now().Unix() > ExpiresAt.
-	ExpiresAt  int64  `dynamodbav:"expiresAt"`
+	// ExpiresAt maps to the table's ONE shared TTL attribute name "TTL"
+	// (epoch seconds) -- DynamoDB allows a single TTL attribute per table,
+	// and backend/python/qa/handler.py already writes "TTL" on its
+	// session/feedback/cache rows (with its own lazy read-time expiry
+	// filtering, so enabling real sweeping is compatible). Do NOT introduce
+	// a second attribute name like "expiresAt"; enabling TTL on it would
+	// permanently orphan the QA rows' field. A pending invite holds PII (an
+	// email address) for someone who may never sign up -- the repo's
+	// data-handling mandate requires PII rows in DynamoDB to carry a TTL,
+	// so unclaimed invites self-expire (90 days). Reconciliation must treat
+	// an expired-but-not-yet-swept row (TTL deletion is lazy) as absent:
+	// skip when time.Now().Unix() > ExpiresAt.
+	ExpiresAt  int64  `dynamodbav:"TTL"`
 	EntityType string `dynamodbav:"entityType"` // "PENDING_INVITE"
 }
 ```
@@ -206,11 +221,17 @@ git commit -m "feat: add PendingInvite model and Pending response fields"
 - Create: `backend/internal/repository/pending_invite_test.go`
 - Modify: `backend/internal/repository/dynamodb.go:1796-1846` (`GetOrCreateUser`)
 - Modify: `infra/lib/storage-stack.ts` — the `ttobak-main` Table construct has
-  no TTL configured today; add `timeToLiveAttribute: 'expiresAt'` so the
-  `ExpiresAt` values `CreatePendingInvite` writes actually get swept. Without
-  this CDK change the attribute is inert and the PII-TTL mandate is not met.
-  (Deploy note: TTL enablement is an UpdateTimeToLive API call CloudFormation
-  performs in place — no table replacement.)
+  no TTL configured and the live table's TTL status is DISABLED (verified via
+  `aws dynamodb describe-time-to-live`); add `timeToLiveAttribute: 'TTL'` —
+  the attribute name `backend/python/qa/handler.py` ALREADY writes (DynamoDB
+  supports one TTL attribute per table, so pending invites reuse it rather
+  than introducing a second name). Side effect to note in the PR: QA's
+  session/feedback/KB-cache rows, which today rely only on lazy read-time
+  filtering, will start being genuinely swept — compatible, since their
+  readers already treat expired rows as absent. Without this CDK change the
+  attribute is inert and the PII-TTL mandate is not met. (Deploy:
+  `npx cdk deploy TtobakStorageStack --exclusively` — TTL enablement is an
+  in-place UpdateTimeToLive call, no table replacement.)
 
 **Interfaces:**
 - Consumes: `model.PendingInvite` (Task 1); existing `(*DynamoDBRepository).CreateShare`, `.CreateDocShare`, `.CreateResearchShare`, `.PutMember`, `.PutProjectMember` (all pre-existing, unchanged signatures).
@@ -358,21 +379,37 @@ func (r *DynamoDBRepository) CreatePendingInvite(ctx context.Context, invite *mo
 	invite.SK = invite.Type + "#" + invite.EntityID
 	invite.EntityType = model.EntityTypePendingInvite
 	// Set centrally here, NOT at the five service call sites -- a call site
-	// that forgot would store expiresAt: 0, which the reconciliation guard
+	// that forgot would store TTL: 0, which the reconciliation guard
 	// (now > ExpiresAt) reads as already-expired and silently skips.
 	invite.ExpiresAt = time.Now().Add(pendingInviteTTL).Unix()
 	item, err := attributevalue.MarshalMap(invite)
 	if err != nil {
 		return fmt.Errorf("failed to marshal pending invite: %w", err)
 	}
-	if _, err := r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      item,
+	// Denormalized reverse ref for owner-side entity-scoped listing
+	// (GET /api/pending-invites) -- same attributes, entity-keyed.
+	ref := *invite
+	ref.PK = "PENDINGREF#" + invite.EntityID
+	ref.SK = pendingInvitePK(invite.Email) + "#" + invite.Type
+	refItem, err := attributevalue.MarshalMap(&ref)
+	if err != nil {
+		return fmt.Errorf("failed to marshal pending invite ref: %w", err)
+	}
+	// One transaction so the two rows can never diverge (mirrors the
+	// Research-Account LinkAccountTransactional convention).
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: item}},
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: refItem}},
+		},
 	}); err != nil {
 		return fmt.Errorf("failed to put pending invite: %w", err)
 	}
 	return nil
 }
+// DeletePendingInvite must delete BOTH rows in one TransactWriteItems call
+// (canonical + PENDINGREF#) -- reconciliation and the revoke endpoint both
+// route through it.
 
 // ListPendingInvites returns every pending grant queued for email
 // (case-insensitive).
@@ -533,7 +570,7 @@ Expected: all PASS, including every pre-existing `GetOrCreateUser`-related test.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add backend/internal/repository/pending_invite.go backend/internal/repository/pending_invite_test.go backend/internal/repository/dynamodb.go
+git add backend/internal/repository/pending_invite.go backend/internal/repository/pending_invite_test.go backend/internal/repository/dynamodb.go infra/lib/storage-stack.ts
 git commit -m "feat: reconcile pending email invites on first signup"
 ```
 
@@ -1165,11 +1202,12 @@ git commit -m "feat(research): pending invite for research share on unregistered
 - Create: `backend/internal/handler/pending_invite.go` — the owner-only
   list/revoke endpoints required by Global Constraints:
   `GET /api/pending-invites?entityId=...&type=...` (list this owner's pending
-  invites for an entity they own) and
+  invites for an entity they own — served by a Query on the
+  `PENDINGREF#{entityId}` reverse-ref partition Task 1/2 define, no Scan) and
   `DELETE /api/pending-invites/{type}/{entityId}?email=...` (cancel a
   mistyped-email invite: verify caller owns the entity, then
-  `DeletePendingInvite`). Register both in `cmd/api/main.go`'s authenticated
-  subrouter.
+  `DeletePendingInvite`, which removes canonical + ref rows transactionally).
+  Register both in `cmd/api/main.go`'s authenticated subrouter.
 - Create: `backend/internal/handler/pending_invite_test.go`
 
 **Interfaces:**
@@ -1251,7 +1289,7 @@ Expected: all PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add backend/internal/handler/share.go backend/internal/handler/document.go backend/internal/handler/research_share.go
+git add backend/internal/handler/share.go backend/internal/handler/document.go backend/internal/handler/research_share.go backend/internal/handler/pending_invite.go backend/internal/handler/pending_invite_test.go backend/cmd/api/main.go
 git commit -m "feat: surface pending flag in meeting/doc/research share API responses"
 ```
 
@@ -1299,15 +1337,17 @@ a brand-new profile, then deletes the pending row. This runs exactly once
 per invite, self-cleans, and needs no new Cognito trigger.
 
 ## Consequences
-- A pending grant has no reverse index by entity (meeting/account/etc.) —
-  its primary key is by email. The dedicated owner-only endpoints
-  (`GET /api/pending-invites?entityId=...`,
-  `DELETE /api/pending-invites/{type}/{entityId}?email=...`, Task 7) are how
-  a mistyped-email invite gets found and cancelled — the entity-scoped list
-  is served by a filtered scan-free query on the known (email, type#entity)
-  key shape when the caller supplies both, or documented as owner-supplied
-  email lookup. An unclaimed invite that is never cancelled self-expires via
-  the 90-day DynamoDB TTL (`expiresAt`) instead of sitting inert forever.
+- A pending invite is stored as two rows written in one transaction: the
+  canonical row keyed by email (what signup reconciliation reads) and a
+  `PENDINGREF#{entityId}` reverse-ref row (what the owner-only
+  `GET /api/pending-invites?entityId=...` list reads — same dual-row
+  convention as the Research↔Account `RESEARCHREF#` pattern, and for the
+  same reason: an entity-scoped lookup on an email-keyed row would need a
+  table Scan). `DELETE /api/pending-invites/{type}/{entityId}?email=...`
+  cancels a mistyped-email invite by removing both rows transactionally.
+  An unclaimed invite that is never cancelled self-expires via the 90-day
+  DynamoDB TTL (shared table attribute `TTL`) instead of sitting inert
+  forever.
   Frontend surfaces `pending: true` as a one-time confirmation at invite
   time, not a persisted badge on the member/share list (see
   `docs/superpowers/specs/2026-08-04-pending-email-invites-design.md`).
@@ -1889,6 +1929,13 @@ git commit -m "feat(frontend): show pending-invite confirmation for account/proj
 - [ ] **Step 1: Full backend build + test**
 
 Run: `cd backend && for dir in cmd/api cmd/transcribe cmd/summarize cmd/process-image cmd/kb cmd/research-worker cmd/websocket cmd/ws-authorizer; do GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o $dir/bootstrap ./$dir; done`
+
+- [ ] **Step 1b: Infra synth + tests (Task 2's storage-stack TTL change)**
+
+Run: `cd infra && npx cdk synth && npm test`
+Expected: synth succeeds and jest passes — this validates the
+`timeToLiveAttribute: 'TTL'` addition compiled and didn't break existing
+stack assertions.
 Expected: all 8 binaries build with no errors.
 
 Run: `cd backend && /usr/local/go/bin/go test ./... -v 2>&1 | tail -80`
