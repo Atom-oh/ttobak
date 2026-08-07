@@ -186,7 +186,7 @@ export default function AccountsClient() {
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-200 dark:glass-panel dark:divide-white/5">
-          {accounts.map((a) => (
+          {[...accounts].sort((a, b) => a.name.localeCompare(b.name, 'ko')).map((a) => (
             <button
               key={a.accountId}
               onClick={() => router.push(`/accounts/${a.accountId}`)}
