@@ -624,26 +624,38 @@ Error: 403 Forbidden (문서 소유자가 아님, 또는 accountId 멤버가 아
 Error: 404 Not Found (문서 없음)
 ```
 
-#### Share Document with a Specific User (개인 문서 → 1인 공유, 참조 방식)
+#### Share Document with a User (개인 문서 → 특정 사람, 참조·읽기 전용)
 
-개인 문서를 이메일로 지정한 한 사용자와 공유한다. 위 Share-to-Account와 달리
-**복제가 아니라 참조** — 소유자의 문서 한 부만 존재하고, `ListUserDocuments`/
-`GetUserDocument`는 소유자 파티션을 그대로 읽으므로 수신자는 항상 최신
-내용을 본다. 항상 읽기 전용(요청에 `permission` 필드 자체가 없음 —
-`ShareMeeting`과 달리 편집 공유는 지원하지 않음). 소유자만 공유/조회/철회
-가능 — 소유자가 아니면 `getDoc`이 404를 반환해(권한 여부를 드러내지 않는
-fail-closed) 자동으로 막힌다.
+개인 문서를 다른 사용자 **한 명**에게 이메일로 공유한다. 위 Share to Account가
+S3 객체를 복제하는 것과 달리 이쪽은 **참조** — 원본 한 부만 존재하고 수신자는
+소유자가 수정한 내용을 그대로 보게 되며, 철회하면 즉시 사라진다. 항상
+**읽기 전용**이다: 리포지토리가 `permission`을 `read`로 하드코딩하고 요청
+바디에 `permission` 필드가 아예 없다(미팅 공유와 다른 점). 소유자만 발급/철회/
+목록 조회가 가능하며, 소유자가 아닌 호출자는 문서가 자기 파티션에 없으므로
+403이 아니라 404를 받는다(권한 여부를 드러내지 않는 fail-closed).
+
+수신자 쪽에서는 `GET /api/documents`(목록)와 `GET /api/documents/{docId}`(상세)
+응답에 소유자 이메일이 담긴 `sharedBy` 필드가 붙어 함께 반환된다 — 프론트엔드는
+이 필드를 "읽기 전용" 표시로 쓴다(`ShareButton`의 `readOnly` prop). 수신자의
+상세 응답에는 `publicShareToken`이 의도적으로 포함되지 않는다(공개 링크
+발급/철회는 소유자 고유 권한). 소유자가 문서를 삭제하면 공유 레코드는
+캐스케이드되지 않고 남지만, 목록 조회 시 조용히 건너뛴다.
+
+내부적으로 공유 레코드는 미팅/리서치 공유와 **다른** DynamoDB 접두어
+(`SHAREDDOC#` / `DOCSHARE_TO#`, `EntityType=DOC_SHARE`)를 쓴다 — `SHARED#`를
+재사용하면 `begins_with(SK, "SHARED#")`로 읽는 공유 미팅 목록에 문서 공유가
+섞여 들어가 그쪽 페이지네이션을 오염시킨다(ADR-029).
 
 ```
 POST /api/documents/{docId}/share
-{ "email": "target@example.com" }
+{ "email": "teammate@example.com" }
 
 Response: 201 Created
-{ "sharedWith": { "userId": "user-uuid", "email": "target@example.com", "permission": "read" } }
+{ "sharedWith": { "userId": "user-uuid", "email": "teammate@example.com", "permission": "read" } }
 
 GET /api/documents/{docId}/shares
 Response: 200 OK
-{ "shares": [ { "userId": "...", "email": "...", "permission": "read", "sharedAt": "..." }, ... ] }
+{ "shares": [ { "userId": "user-uuid", "email": "teammate@example.com", "permission": "read", "sharedAt": "..." } ] }
 
 DELETE /api/documents/{docId}/share/{userId}
 Response: 204 No Content
@@ -652,11 +664,6 @@ Error: 400 Bad Request (email 누락, 또는 자기 자신에게 공유 시도)
 Error: 404 Not Found (문서 없음, 호출자가 소유자가 아님 — 403 대신 404로 존재
                        자체를 숨김 — 또는 대상 이메일의 사용자가 없음)
 ```
-
-수신자 쪽 `GetUserDocument`/`ListUserDocuments` 응답에는 `sharedBy`(소유자
-이메일)가 채워지고 `publicShareToken`은 생략된다 — 프론트엔드는 `sharedBy`
-유무로 읽기 전용 뱃지를 표시한다(`ShareButton`의 `readOnly` prop).
-
 #### Public Share Link (개인 파일 문서 무인증 공개 링크)
 
 128비트 랜덤 토큰(`crypto/rand`)을 발급해 인증 없이 접근 가능한 링크를
