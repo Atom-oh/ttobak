@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { getSpeakerColor } from '@/lib/speakerColors';
 
 interface SpeakerMapEditorProps {
@@ -8,6 +8,11 @@ interface SpeakerMapEditorProps {
   content?: string;
   speakerMap?: Record<string, string>;
   onSave: (speakerMap: Record<string, string>) => Promise<void>;
+  /** Whisper-only (pyannote diarization) — undefined/'whisper' is eligible, other providers are not. */
+  sttProvider?: string;
+  /** Multi-part audio isn't supported yet (v1 scope). */
+  audioPartCount?: number;
+  onRediarize?: (speakerCount: number) => Promise<void>;
 }
 
 const UNMAPPED_PATTERN = /^(spk_\d+|화자[A-Z])$/;
@@ -18,7 +23,7 @@ function speakerSortKey(label: string): number {
   return 2000;
 }
 
-export function SpeakerMapEditor({ transcription, content, speakerMap: existingSpeakerMap, onSave }: SpeakerMapEditorProps) {
+export function SpeakerMapEditor({ transcription, content, speakerMap: existingSpeakerMap, onSave, sttProvider, audioPartCount, onRediarize }: SpeakerMapEditorProps) {
   const speakers = useMemo(() => {
     const labels = new Set<string>();
     transcription?.forEach((seg) => {
@@ -33,15 +38,43 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
 
   const hasUnmapped = speakers.some((s) => UNMAPPED_PATTERN.test(s));
 
-  const [mapping, setMapping] = useState<Record<string, string>>(() => {
+  const initMapping = () => {
     const init: Record<string, string> = {};
     speakers.forEach((s) => { init[s] = existingSpeakerMap?.[s] || ''; });
     return init;
-  });
+  };
+  const [mapping, setMapping] = useState<Record<string, string>>(initMapping);
   const [saving, setSaving] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const [rediarizeCount, setRediarizeCount] = useState(speakers.length + 1);
+  const [rediarizing, setRediarizing] = useState(false);
+
+  // Re-sync after a rediarize: the server clears speakerMap and the
+  // transcript is regenerated with a fresh (possibly different-length)
+  // spk_N set, but this component doesn't unmount across that refetch --
+  // without this, stale local `mapping` from the OLD diarization would get
+  // written back on the next save, undoing the server's clear.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setMapping(initMapping()); }, [existingSpeakerMap, speakers.join(',')]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setRediarizeCount(speakers.length + 1); }, [speakers.join(',')]);
 
   if (speakers.length === 0) return null;
+
+  const canRediarize = !!onRediarize && (sttProvider === undefined || sttProvider === 'whisper') && (audioPartCount === undefined || audioPartCount <= 1);
+
+  const handleRediarize = async () => {
+    if (!onRediarize) return;
+    // Re-clamp here too: onBlur may not have fired if the button is reached
+    // by click/tab straight from the input without leaving focus first.
+    const count = Math.max(2, Math.min(20, rediarizeCount || 2));
+    setRediarizing(true);
+    try {
+      await onRediarize(count);
+    } finally {
+      setRediarizing(false);
+    }
+  };
 
   const hasAnyName = Object.values(mapping).some((v) => v.trim());
 
@@ -124,6 +157,46 @@ export function SpeakerMapEditor({ transcription, content, speakerMap: existingS
               </>
             )}
           </button>
+
+          {canRediarize && (
+            <div className="pt-3 mt-3 border-t border-slate-200 dark:border-white/10">
+              <p className="text-xs text-slate-500 dark:text-slate-400 mb-2">
+                화자가 더 있는데 {speakers.length}명만 감지됐나요? 화자 수를 지정해서 다시 분석할 수 있습니다.
+                다시 분석하면 트랜스크립트와 요약이 재생성되고 위 이름 매핑은 초기화됩니다.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={2}
+                  max={20}
+                  value={rediarizeCount}
+                  // Clamp on blur, not on every keystroke -- clamping while typing
+                  // "15" would force it to 2 the instant "1" alone is entered.
+                  onChange={(e) => setRediarizeCount(parseInt(e.target.value, 10) || 0)}
+                  onBlur={() => setRediarizeCount((v) => Math.max(2, Math.min(20, v || 2)))}
+                  className="w-20 text-sm px-3 py-1.5 border border-slate-200 dark:border-white/10 rounded-lg bg-white dark:bg-white/5 text-slate-900 dark:text-white outline-none"
+                />
+                <span className="text-sm text-slate-500 dark:text-slate-400">명으로 재분석</span>
+                <button
+                  onClick={handleRediarize}
+                  disabled={rediarizing}
+                  className="ml-auto px-4 py-2 border border-primary text-primary rounded-lg text-sm font-semibold disabled:opacity-40 hover:bg-primary/5 transition-colors flex items-center gap-2"
+                >
+                  {rediarizing ? (
+                    <>
+                      <span className="animate-spin rounded-full h-4 w-4 border-2 border-primary/30 border-t-primary" />
+                      재분석 시작 중...
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-base">refresh</span>
+                      화자 재분석
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -18,7 +18,7 @@ export interface Meeting {
   sharedWith?: SharedUser[];
   createdAt: string;
   updatedAt: string;
-  sttProvider?: 'transcribe' | 'nova-sonic';
+  sttProvider?: 'transcribe' | 'nova-sonic' | 'whisper';
   /** Per ADR-014: ordered S3 keys for multi-file uploads. Falls back to audioKey for legacy single-file meetings. */
   audioKey?: string;
   audioKeys?: string[];

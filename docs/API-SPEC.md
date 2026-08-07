@@ -1060,6 +1060,44 @@ Request:
 Response: 200 OK
 ```
 
+#### Re-diarize (화자 수 재지정 후 재분석, ADR-019)
+
+acoustic diarization(pyannote)이 화자 수를 실제보다 적게 감지했을 때, 사용자가
+지정한 화자 수 힌트로 같은 오디오를 다시 분석한다. Whisper 트랜스크립션 미팅에만
+가능(AWS Transcribe 폴백 미팅은 acoustic diarization 자체가 없어 대상 아님),
+단일 파트 오디오만 지원(v1 스코프 — 멀티파트는 파트별 ECS 재트리거 +
+`AudioPartsReady` 리셋이 추가로 필요). ECS `RunTask`를 직접 호출하지 않고
+기존 오디오 S3 객체를 새 키(`audio/{userId}/{meetingId}/rediarize_{uuid}_...`)로
+`CopyObject`해서 기존 EventBridge S3 이벤트 → `ttobak-transcribe` 파이프라인을
+그대로 재사용한다 — `api` Lambda에 새 IAM 권한이 필요 없다.
+
+```
+POST /api/meetings/{meetingId}/rediarize
+{ "speakerCount": 6 }                 // 2-20
+
+Response: 200 OK
+{ "meetingId": "uuid", "status": "transcribing" }
+
+Error: 400 Bad Request (speakerCount가 2-20 범위 밖, whisper가 아닌 미팅, 멀티파트 오디오,
+                         오디오 없음, 또는 이미 처리 중인 미팅)
+Error: 403 Forbidden (본인 미팅 아님)
+Error: 404 Not Found (미팅 없음)
+```
+
+호출 즉시 미팅의 `speakerMap`을 비우고(재분석 후 `spk_N` 인덱스가 처음부터 다시
+매겨지므로 이전 이름 매핑은 무의미해짐) `status`를 `transcribing`으로 되돌리며,
+지정한 `speakerCount`를 `Meeting.DiarizationSpeakerHint`에 저장한다 —
+`cmd/transcribe/main.go`가 이 값을 `len(Participants)` 대신 pyannote의
+`max_speakers` 힌트로 사용한다. 이 힌트는 **sticky**: 한 번 설정되면 이후
+일반 재전사에도 계속 적용된다(등록된 참석자 수 대신). `speakerMap`을 비우는
+쓰기는 미팅을 다시 읽어 얻은 현재 `status`와 일치할 때만 성공하는 조건부
+쓰기(`UpdateMeetingFieldsIfMatch`)로 나가— 동시에 두 번 호출되면 하나만
+성공하고 나머지는 400(`meeting is already being processed`)을 받는다. `CopyObject`
+자체가 실패하면(모호한 SDK 에러 포함) 별도 복구 없이 기존 30분
+stuck-transcribing 자동 만료(`GetMeeting` 핸들러)에 정리를 위임한다 — 이미
+`transcribing`으로 넘어간 상태를 롤백하려는 별도 쓰기가 그 사이 실제로 픽업된
+재트리거 파이프라인의 상태 전이와 경합할 수 있기 때문이다.
+
 ---
 
 ### WebSocket (API Gateway) — 미구현

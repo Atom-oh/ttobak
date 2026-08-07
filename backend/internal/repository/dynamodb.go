@@ -497,6 +497,35 @@ func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUser
 // condition inherent in the PutItem-based UpdateMeeting method.
 // Fields map keys must be DynamoDB attribute names (e.g., "status", "audioKey", "content").
 func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error {
+	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, expression.AttributeExists(expression.Name("PK")), fields)
+}
+
+// UpdateMeetingFieldsIfMatch is UpdateMeetingFields with an added condition
+// that every field in expected must still equal its given value -- for
+// callers that read a meeting, decided to write based on that read, and need
+// to guard against a concurrent writer having changed the field in between.
+// e.g. RediarizeMeeting conditions on status still being what its own
+// GetMeeting just read: two concurrent RediarizeMeeting calls can both pass
+// eligibility off the same read, but only one wins this write -- the loser
+// gets ErrConditionFailed and reports "already processing" instead of both
+// proceeding and racing two retrigger pipelines over the same meeting. A
+// bare status match isn't enough on its own to distinguish a losing
+// concurrent call from some other unrelated call that also happens to be
+// mid-"transcribing" -- callers needing that distinction should also match
+// on a value unique to their own attempt (e.g. diarizationSpeakerHint or a
+// per-attempt token) alongside status. Returns ErrConditionFailed (not the
+// raw DynamoDB SDK exception type) when the condition fails, so callers stay
+// on repository-layer sentinel errors per this codebase's service/repository
+// error-handling convention rather than importing dynamodb SDK types.
+func (r *DynamoDBRepository) UpdateMeetingFieldsIfMatch(ctx context.Context, userID, meetingID string, expected map[string]interface{}, fields map[string]interface{}) error {
+	condition := expression.AttributeExists(expression.Name("PK"))
+	for k, v := range expected {
+		condition = condition.And(expression.Name(k).Equal(expression.Value(v)))
+	}
+	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, fields)
+}
+
+func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}) error {
 	// Handle S3 transcript overflow for large transcript fields
 	if r.s3Client != nil && r.bucketName != "" {
 		for _, field := range []string{"transcriptA", "transcriptB"} {
@@ -527,9 +556,6 @@ func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, me
 		}
 	}
 
-	// Condition: item must already exist
-	condition := expression.AttributeExists(expression.Name("PK"))
-
 	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
 	if err != nil {
 		return fmt.Errorf("failed to build update expression: %w", err)
@@ -547,6 +573,10 @@ func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, me
 		ExpressionAttributeValues: expr.Values(),
 	})
 	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return fmt.Errorf("%w: meeting %s condition not met", ErrConditionFailed, meetingID)
+		}
 		return fmt.Errorf("failed to update meeting fields: %w", err)
 	}
 

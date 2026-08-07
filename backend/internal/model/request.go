@@ -225,6 +225,12 @@ type LinkMeetingsRequest struct {
 	LinkedMeetingIDs []string `json:"linkedMeetingIds"`
 }
 
+// RediarizeMeetingRequest represents the request body for re-running speaker
+// diarization with an updated speaker-count hint (see UploadService.RediarizeMeeting).
+type RediarizeMeetingRequest struct {
+	SpeakerCount int `json:"speakerCount"`
+}
+
 // AudioURLResponse represents the response for audio URL(s)
 type AudioURLResponse struct {
 	AudioUrl  string   `json:"audioUrl,omitempty"`

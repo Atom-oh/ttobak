@@ -131,8 +131,27 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 
 	log.Printf("Starting transcription for meeting: %s", meetingID)
 
-	// Read meeting record to check sttProvider selection
-	meeting, err := repo.GetMeetingByID(ctx, meetingID)
+	// Extract userID from key: audio/{userID}/{meetingID}/{filename}
+	parts := strings.Split(key, "/")
+	userID := ""
+	if len(parts) >= 3 {
+		userID = parts[1]
+	}
+
+	// Read meeting record to check sttProvider selection and the rediarize
+	// speaker-count hint. GetMeeting (PK/SK GetItem) is used over
+	// GetMeetingByID (GSI3 Query) whenever userID is known -- GSI reads on
+	// DynamoDB can never be ConsistentRead, so a RediarizeMeeting-triggered
+	// re-upload landing here before that GSI replica catches up would read a
+	// stale DiarizationSpeakerHint/Participants and silently re-run with the
+	// old speaker count.
+	var meeting *model.Meeting
+	var err error
+	if userID != "" {
+		meeting, err = repo.GetMeeting(ctx, userID, meetingID)
+	} else {
+		meeting, err = repo.GetMeetingByID(ctx, meetingID)
+	}
 	if err != nil {
 		log.Printf("Failed to get meeting record: %v", err)
 	}
@@ -140,13 +159,6 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	sttProvider := "whisper"
 	if meeting != nil && meeting.SttProvider != "" {
 		sttProvider = meeting.SttProvider
-	}
-
-	// Extract userID from key: audio/{userID}/{meetingID}/{filename}
-	parts := strings.Split(key, "/")
-	userID := ""
-	if len(parts) >= 3 {
-		userID = parts[1]
 	}
 
 	// Look up user's custom vocabulary for Transcribe
@@ -191,6 +203,9 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 			numSpeakers := 0
 			if meeting != nil {
 				numSpeakers = len(meeting.Participants)
+				if meeting.DiarizationSpeakerHint > 0 {
+					numSpeakers = meeting.DiarizationSpeakerHint
+				}
 			}
 			err = startWhisperTask(ctx, meetingID, userID, key, initialPrompt, outputKey, numSpeakers)
 			jobName = "whisper-ecs-" + meetingID

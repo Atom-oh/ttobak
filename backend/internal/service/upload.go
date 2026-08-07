@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -459,6 +460,118 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 		"audioKey": finalKey,
 		"status":   model.StatusTranscribing,
 	})
+}
+
+// validateRediarizeEligibility is the pure decision core of RediarizeMeeting:
+// ownership, whisper-only, single-part-only, and not-currently-processing
+// guards. Kept side-effect-free so it can be table-tested without mocking S3
+// or DynamoDB. Returns the S3 key to re-copy on success.
+func validateRediarizeEligibility(meeting *model.Meeting, userID string, speakerCount int) (string, error) {
+	if speakerCount < 2 || speakerCount > 20 {
+		return "", fmt.Errorf("speakerCount must be between 2 and 20: %w", ErrInvalidInput)
+	}
+	if meeting == nil {
+		return "", ErrNotFound
+	}
+	if meeting.SttProvider != "" && meeting.SttProvider != "whisper" {
+		return "", fmt.Errorf("rediarization is only supported for whisper-transcribed meetings: %w", ErrInvalidInput)
+	}
+	audioKeys := meeting.GetEffectiveAudioKeys()
+	if meeting.AudioPartCount > 1 || len(audioKeys) > 1 {
+		return "", fmt.Errorf("rediarization does not yet support multi-part audio: %w", ErrInvalidInput)
+	}
+	if meeting.Status == model.StatusTranscribing || meeting.Status == model.StatusSummarizing {
+		return "", fmt.Errorf("meeting is still processing (status: %s): %w", meeting.Status, ErrInvalidInput)
+	}
+	if len(audioKeys) == 0 || audioKeys[0] == "" {
+		return "", fmt.Errorf("no audio available to re-diarize: %w", ErrInvalidInput)
+	}
+	sourceKey := audioKeys[0]
+	if !strings.HasPrefix(sourceKey, "audio/"+userID+"/") {
+		return "", ErrForbidden
+	}
+	return sourceKey, nil
+}
+
+// RediarizeMeeting re-runs Whisper speaker diarization on a meeting's
+// existing audio with a user-supplied speaker-count hint (e.g. after the
+// acoustic pass under-detected speakers). It re-triggers the existing
+// S3-event pipeline (audio upload -> EventBridge -> ttobak-transcribe -> Whisper
+// ECS) via a same-bucket S3 copy rather than calling ECS RunTask directly, so
+// this needs no new IAM grants on the api Lambda — see cmd/transcribe/main.go's
+// use of Meeting.DiarizationSpeakerHint. Whisper-only (pyannote diarization,
+// ADR-019); AWS Transcribe fallback meetings have no acoustic diarization to
+// re-run. Multi-part audio is out of scope for v1 (would need per-part ECS
+// retriggers and an AudioPartsReady reset).
+func (s *UploadService) RediarizeMeeting(ctx context.Context, userID, meetingID string, speakerCount int) error {
+	// Cheap bounds check before the repository round-trip -- a malformed
+	// speakerCount shouldn't cost a DynamoDB read.
+	if speakerCount < 2 || speakerCount > 20 {
+		return fmt.Errorf("speakerCount must be between 2 and 20: %w", ErrInvalidInput)
+	}
+
+	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil {
+		return fmt.Errorf("failed to get meeting: %w", err)
+	}
+
+	sourceKey, err := validateRediarizeEligibility(meeting, userID, speakerCount)
+	if err != nil {
+		return err
+	}
+
+	// Old spk_N -> name mappings no longer correspond once diarization
+	// re-runs from scratch; clear them and let the user re-map after. This
+	// must commit BEFORE the CopyObject below: the copy fires the
+	// EventBridge S3 event that wakes ttobak-transcribe, and a race where
+	// that Lambda reads the meeting before this write lands would re-diarize
+	// with the stale hint/speakerMap/status instead of the new ones.
+	// ttobak-transcribe now reads via a strongly-consistent GetItem (see
+	// cmd/transcribe/main.go) rather than the GSI3 query, so it can never
+	// observe a value older than this write once it runs.
+	//
+	// Conditioned on status still being what GetMeeting just read (validated
+	// non-transcribing/summarizing above): two concurrent RediarizeMeeting
+	// calls both pass that eligibility check off the same read, but only one
+	// can win this write -- the loser gets ConditionalCheckFailedException
+	// and reports "already processing" instead of proceeding, rather than
+	// two copy pipelines racing each other over the same meeting.
+	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, userID, meetingID, map[string]interface{}{
+		"status": meeting.Status,
+	}, map[string]interface{}{
+		"diarizationSpeakerHint": speakerCount,
+		"speakerMap":             map[string]string{},
+		"status":                 model.StatusTranscribing,
+	}); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return fmt.Errorf("meeting is already being processed: %w", ErrInvalidInput)
+		}
+		return fmt.Errorf("failed to update meeting for re-diarization: %w", err)
+	}
+
+	// A fresh key under the same meeting prefix, so the existing EventBridge
+	// S3 rule + ttobak-transcribe Lambda pick it up exactly as a new upload
+	// would. The original audioKey is left untouched.
+	retriggerKey := fmt.Sprintf("audio/%s/%s/rediarize_%s_%s", userID, meetingID, uuid.New().String(), path.Base(sourceKey))
+	if _, err := s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(s.bucketName),
+		Key:        aws.String(retriggerKey),
+		CopySource: aws.String(fmt.Sprintf("%s/%s", s.bucketName, encodeS3CopySourceKey(sourceKey))),
+	}); err != nil {
+		// Deliberately not attempting to resolve here whether the copy
+		// secretly landed despite this SDK error (a HeadObject immediately
+		// after can't prove that either -- S3 could still be completing it
+		// asynchronously) or to write the meeting back to any particular
+		// status: any inline write here risks racing the retriggered
+		// pipeline's own status transitions if the copy did secretly
+		// succeed. The status write above already moved this meeting to
+		// "transcribing", so a genuinely failed copy leaves it stuck there --
+		// which is exactly what the existing 30-minute stuck-transcribing
+		// auto-expiry (meeting.go's stuckTranscribingThreshold, surfaced via
+		// GetMeeting) is for. Let that reconcile it instead of guessing here.
+		return fmt.Errorf("failed to retrigger re-diarization: %w", err)
+	}
+	return nil
 }
 
 // ExtractInfoFromImageKey extracts user and meeting info from image S3 key
