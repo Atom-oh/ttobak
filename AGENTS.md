@@ -48,9 +48,9 @@ cd infra && npx cdk synth && npm test
 - **Secrets**: never in env vars or code — use Secrets Manager / SSM. PII in DynamoDB requires KMS encryption + TTL.
 - **Trust boundary is the API, not the client.** Validate client-supplied identifiers server-side (e.g. an S3 `sourceKey` must be proven to belong to the caller before use — ownership is encoded in the key's `{prefix}/{userID}/` segment). Reject path traversal (`..`).
 - **Route53** must not point directly at ALB/EC2 — always via CloudFront.
-- **Tool call parameters**: non-ASCII text (Korean, etc.) inside tool-call parameters (JSON) must be written as literal UTF-8, never as `\uXXXX` escapes — escaped output renders broken/mojibake text.
 
 ## Review Expectations
+- **Tool call parameters**: non-ASCII text (Korean, etc.) inside tool-call parameters (JSON) must be written as literal UTF-8, never as `\uXXXX` escapes — escaped output renders broken/mojibake text.
 - **Tests**: Go changes need stdlib-`testing` coverage (table-driven, mock repos). Extract security-critical logic into pure functions so it's unit-testable without AWS mocks. Frontend has no test framework — verify via lint + build only.
 - **Error handling**: no silent failures; use sentinel errors + `errors.Is`. Best-effort side effects (e.g. KB promotion) must be visibly surfaced, not swallowed.
 - **Pagination**: DynamoDB `Query`/`Scan` over user-owned collections must paginate (`LastEvaluatedKey` loop) — unbounded single-page reads are a MAJOR finding.

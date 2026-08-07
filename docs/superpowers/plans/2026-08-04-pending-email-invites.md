@@ -235,18 +235,31 @@ git commit -m "feat: add PendingInvite model and Pending response fields"
 
 **Interfaces:**
 - Consumes: `model.PendingInvite` (Task 1); existing `(*DynamoDBRepository).CreateShare`, `.CreateDocShare`, `.CreateResearchShare`, `.PutMember`, `.PutProjectMember` (all pre-existing, unchanged signatures).
-- Produces: `(*DynamoDBRepository) CreatePendingInvite(ctx, invite *model.PendingInvite) error`, `.ListPendingInvites(ctx, email string) ([]model.PendingInvite, error)`, `.DeletePendingInvite(ctx, pk, sk string) error` — these three are what Task 3-6's service interfaces will add. `reconcilePendingInvites` is package-private, called only from `GetOrCreateUser`.
+- Produces: `(*DynamoDBRepository) CreatePendingInvite(ctx, invite *model.PendingInvite) error`, `.ListPendingInvites(ctx, email string) ([]model.PendingInvite, error)`, `.DeletePendingInvite(ctx, email, invType, entityID string) error` (양쪽 행을 트랜잭션 삭제 — 키는 내부 파생) — these three are what Task 3-6's service interfaces will add. `reconcilePendingInvites` is package-private, called only from `GetOrCreateUser`.
 
-- [ ] **Step 1: Write the failing repository test**
+- [ ] **Step 1: Write the failing repository test (pure functions only)**
 
-Create `backend/internal/repository/pending_invite_test.go`. This test needs a live or fake DynamoDB — check how existing repository tests in this package are set up:
+Create `backend/internal/repository/pending_invite_test.go`. **This repo's
+repository tests have NO DynamoDB-local/LocalStack bootstrap** — every
+existing `*_test.go` in `backend/internal/repository/` tests pure decision
+functions with no AWS client (see `dynamodb_test.go`'s
+`classifyProjectIDsPutItemErr` tests, `research_test.go`'s
+`mapTransactionCanceledError` tests). Follow that convention: extract the
+key-derivation and expiry logic into pure functions and test those. The
+DynamoDB round-trip behavior (create → list → reconcile → consumed) is
+covered at the SERVICE layer with mock repos in Tasks 3–6, same as every
+other feature. Structure the implementation as:
 
-```bash
-grep -rn "func Test" backend/internal/repository/*_test.go | head -5
-grep -n "func newTestRepo\|func setupTest\|dynamodb-local\|localstack" backend/internal/repository/*_test.go | head -10
+```go
+// pendingInviteKeys derives all four key strings for an invite's two rows.
+func pendingInviteKeys(email, invType, entityID string) (canonicalPK, canonicalSK, refPK, refSK string)
+
+// pendingInviteExpired reports whether an invite's TTL has lapsed
+// (TTL sweep is lazy, so reads must filter).
+func pendingInviteExpired(inv *model.PendingInvite, now time.Time) bool
 ```
 
-Run the above to find the existing test-repo bootstrap helper (e.g. a `newTestRepository(t)` that points at a local DynamoDB endpoint or a table-per-test setup). Use that exact helper — do not invent a new one. Write:
+Then write:
 
 ```go
 package repository
@@ -259,89 +272,45 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
-func TestPendingInviteCreateListDelete(t *testing.T) {
-	repo := newTestRepository(t) // replace with whatever helper the grep above found
-	ctx := context.Background()
-
-	invite := &model.PendingInvite{
-		Email: "New.User@Example.com", Type: model.PendingInviteMeetingShare,
-		EntityID: "meeting-1", OwnerID: "owner-1", OwnerEmail: "owner@example.com",
-		Permission: "read", CreatedAt: time.Now().UTC(),
+func TestPendingInviteKeys(t *testing.T) {
+	// Email is lowercased in BOTH rows' keys (lookup is case-insensitive),
+	// and the two rows' keys mirror each other so a Create/Delete pair over
+	// the same identity always touches the same two items.
+	cpk, csk, rpk, rsk := pendingInviteKeys("New.User@Example.com", model.PendingInviteMeetingShare, "meeting-1")
+	if cpk != "PENDINGINVITE#new.user@example.com" || csk != model.PendingInviteMeetingShare+"#meeting-1" {
+		t.Fatalf("bad canonical keys: %s / %s", cpk, csk)
 	}
-	if err := repo.CreatePendingInvite(ctx, invite); err != nil {
-		t.Fatalf("CreatePendingInvite: %v", err)
-	}
-
-	// Lookup is case-insensitive on email.
-	got, err := repo.ListPendingInvites(ctx, "new.user@example.com")
-	if err != nil {
-		t.Fatalf("ListPendingInvites: %v", err)
-	}
-	if len(got) != 1 || got[0].EntityID != "meeting-1" {
-		t.Fatalf("expected 1 invite for meeting-1, got %+v", got)
-	}
-
-	if err := repo.DeletePendingInvite(ctx, got[0].PK, got[0].SK); err != nil {
-		t.Fatalf("DeletePendingInvite: %v", err)
-	}
-	got, err = repo.ListPendingInvites(ctx, "new.user@example.com")
-	if err != nil {
-		t.Fatalf("ListPendingInvites after delete: %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("expected 0 invites after delete, got %+v", got)
+	if rpk != "PENDINGREF#meeting-1" || rsk != "PENDINGINVITE#new.user@example.com#"+model.PendingInviteMeetingShare {
+		t.Fatalf("bad ref keys: %s / %s", rpk, rsk)
 	}
 }
 
-func TestPendingInviteReconciledOnFirstSignup(t *testing.T) {
-	repo := newTestRepository(t) // replace with whatever helper the grep above found
-	ctx := context.Background()
-
-	if err := repo.CreatePendingInvite(ctx, &model.PendingInvite{
-		Email: "invitee@example.com", Type: model.PendingInviteAccountMember,
-		EntityID: "acct-1", OwnerID: "owner-1", Permission: model.RoleAM,
-		CreatedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("seed pending invite: %v", err)
+func TestPendingInviteExpired(t *testing.T) {
+	now := time.Date(2026, 8, 7, 0, 0, 0, 0, time.UTC)
+	fresh := &model.PendingInvite{ExpiresAt: now.Add(time.Hour).Unix()}
+	lapsed := &model.PendingInvite{ExpiresAt: now.Add(-time.Hour).Unix()}
+	// zero ExpiresAt (a row written by code that skipped CreatePendingInvite's
+	// central stamping) must read as expired, never as immortal.
+	zero := &model.PendingInvite{}
+	if pendingInviteExpired(fresh, now) {
+		t.Fatal("fresh invite must not be expired")
 	}
-
-	user, err := repo.GetOrCreateUser(ctx, "new-user-id", "invitee@example.com", "Invitee")
-	if err != nil {
-		t.Fatalf("GetOrCreateUser: %v", err)
-	}
-	if user.UserID != "new-user-id" {
-		t.Fatalf("expected new-user-id, got %s", user.UserID)
-	}
-
-	member, err := repo.GetMember(ctx, "acct-1", "new-user-id")
-	if err != nil {
-		t.Fatalf("GetMember: %v", err)
-	}
-	if member == nil || member.Role != model.RoleAM {
-		t.Fatalf("expected member with role AM, got %+v", member)
-	}
-
-	remaining, err := repo.ListPendingInvites(ctx, "invitee@example.com")
-	if err != nil {
-		t.Fatalf("ListPendingInvites after reconcile: %v", err)
-	}
-	if len(remaining) != 0 {
-		t.Fatalf("expected pending invite consumed, got %+v", remaining)
-	}
-
-	// A second GetOrCreateUser call for the SAME (already-existing) user must
-	// not error or re-run reconciliation (no pending invites left to find,
-	// this just proves the existing-user branch is untouched).
-	if _, err := repo.GetOrCreateUser(ctx, "new-user-id", "invitee@example.com", "Invitee"); err != nil {
-		t.Fatalf("second GetOrCreateUser: %v", err)
+	if !pendingInviteExpired(lapsed, now) || !pendingInviteExpired(zero, now) {
+		t.Fatal("lapsed and zero-TTL invites must both read as expired")
 	}
 }
 ```
 
+The full round-trip (create pending → new-user signup materializes the grant
+→ pending consumed, both rows gone; second signup call is a no-op) is
+asserted at the service layer in Tasks 3–6 with mock repos — the mocks must
+model BOTH rows (canonical + ref) so a service-layer regression that orphans
+the ref row fails a test.
+
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `cd backend && /usr/local/go/bin/go test ./internal/repository/... -run TestPendingInvite -v`
-Expected: FAIL — `repo.CreatePendingInvite undefined` (method doesn't exist yet).
+Expected: FAIL — `pendingInviteKeys`/`pendingInviteExpired` undefined (functions don't exist yet).
 
 - [ ] **Step 3: Implement `pending_invite.go`**
 
@@ -435,16 +404,29 @@ func (r *DynamoDBRepository) ListPendingInvites(ctx context.Context, email strin
 	return invites, nil
 }
 
-// DeletePendingInvite removes one materialized (or abandoned) pending row.
-func (r *DynamoDBRepository) DeletePendingInvite(ctx context.Context, pk, sk string) error {
-	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: pk},
-			"SK": &types.AttributeValueMemberS{Value: sk},
+// DeletePendingInvite removes one materialized (or abandoned) pending
+// invite -- BOTH rows (canonical + PENDINGREF#) in one TransactWriteItems,
+// matching how CreatePendingInvite wrote them. The signature takes the
+// invite's identity (email, invType, entityID), not raw pk/sk: both keys
+// are derived internally, so no caller can structurally delete only one
+// row and orphan the other (a leftover ref would keep showing an
+// already-consumed/cancelled invite in the owner-side GET for up to the
+// 90-day TTL).
+func (r *DynamoDBRepository) DeletePendingInvite(ctx context.Context, email, invType, entityID string) error {
+	canonicalKey := map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: pendingInvitePK(email)},
+		"SK": &types.AttributeValueMemberS{Value: invType + "#" + entityID},
+	}
+	refKey := map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: "PENDINGREF#" + entityID},
+		"SK": &types.AttributeValueMemberS{Value: pendingInvitePK(email) + "#" + invType},
+	}
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: canonicalKey}},
+			{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: refKey}},
 		},
-	})
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("failed to delete pending invite: %w", err)
 	}
 	return nil
@@ -514,7 +496,7 @@ func (r *DynamoDBRepository) reconcilePendingInvites(ctx context.Context, user *
 			log.Printf("reconcilePendingInvites: materialize %s (%s) for %s failed: %v", inv.Type, inv.EntityID, user.Email, matErr)
 			continue
 		}
-		if err := r.DeletePendingInvite(ctx, inv.PK, inv.SK); err != nil {
+		if err := r.DeletePendingInvite(ctx, inv.Email, inv.Type, inv.EntityID); err != nil {
 			log.Printf("reconcilePendingInvites: delete pending row for %s failed: %v", user.Email, err)
 		}
 	}
