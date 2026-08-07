@@ -1353,6 +1353,17 @@ per invite, self-cleans, and needs no new Cognito trigger.
 - Materialization failure for one pending row (its underlying
   meeting/doc/research/account/project was deleted while the invite sat
   pending) is logged and skipped, never fails the user's signup.
+- Two accepted limitations, both bounded by fail-closed reads: (1) the
+  existence check before materialization is check-then-act — an entity
+  deleted in that window still gets a grant row, but grant rows confer no
+  access by themselves (every read path re-verifies the target and 404s/
+  skips missing entities, same as the repo's existing share/ref rows), so
+  the residue is cosmetic, not a privilege. (2) Reconciliation is
+  deliberately one-shot at signup; a transiently-failed row stays pending
+  (not deleted) until its TTL. Recovery is the normal share/add-member
+  flow — the recipient now exists as a real user, so the owner simply
+  re-invites and the live path takes over. Neither warrants a retry
+  daemon at this feature's scale.
 - A user who signs up (Cognito) but never opens the app never triggers
   reconciliation — acceptable, since there's nothing to show them either
   way until they do.
