@@ -205,6 +205,12 @@ git commit -m "feat: add PendingInvite model and Pending response fields"
 - Create: `backend/internal/repository/pending_invite.go`
 - Create: `backend/internal/repository/pending_invite_test.go`
 - Modify: `backend/internal/repository/dynamodb.go:1796-1846` (`GetOrCreateUser`)
+- Modify: `infra/lib/storage-stack.ts` — the `ttobak-main` Table construct has
+  no TTL configured today; add `timeToLiveAttribute: 'expiresAt'` so the
+  `ExpiresAt` values `CreatePendingInvite` writes actually get swept. Without
+  this CDK change the attribute is inert and the PII-TTL mandate is not met.
+  (Deploy note: TTL enablement is an UpdateTimeToLive API call CloudFormation
+  performs in place — no table replacement.)
 
 **Interfaces:**
 - Consumes: `model.PendingInvite` (Task 1); existing `(*DynamoDBRepository).CreateShare`, `.CreateDocShare`, `.CreateResearchShare`, `.PutMember`, `.PutProjectMember` (all pre-existing, unchanged signatures).
@@ -343,10 +349,18 @@ func pendingInvitePK(email string) string {
 // CreatePendingInvite queues a grant for an email that isn't registered yet.
 // Overwrites any existing pending invite of the same Type+EntityID for the
 // same email -- re-inviting is idempotent, not an error.
+// pendingInviteTTL bounds how long an unclaimed invite (PII: an email
+// address) may sit in the table before DynamoDB TTL sweeps it.
+const pendingInviteTTL = 90 * 24 * time.Hour
+
 func (r *DynamoDBRepository) CreatePendingInvite(ctx context.Context, invite *model.PendingInvite) error {
 	invite.PK = pendingInvitePK(invite.Email)
 	invite.SK = invite.Type + "#" + invite.EntityID
 	invite.EntityType = model.EntityTypePendingInvite
+	// Set centrally here, NOT at the five service call sites -- a call site
+	// that forgot would store expiresAt: 0, which the reconciliation guard
+	// (now > ExpiresAt) reads as already-expired and silently skips.
+	invite.ExpiresAt = time.Now().Add(pendingInviteTTL).Unix()
 	item, err := attributevalue.MarshalMap(invite)
 	if err != nil {
 		return fmt.Errorf("failed to marshal pending invite: %w", err)
@@ -409,15 +423,17 @@ func (r *DynamoDBRepository) DeletePendingInvite(ctx context.Context, pk, sk str
 //
 // IMPORTANT (zombie-grant prevention): before each materialization below,
 // verify the target entity still exists (GetMeetingByID / getDoc /
-// GetResearch / GetAccount / GetProject returning non-nil) and skip --
-// LEAVING the pending row deleted -- when it doesn't. The Create*/Put*
-// calls this loop uses are unconditional puts, so without that existence
-// check an invite whose meeting/doc/account/project was deleted while it
-// sat pending would silently create a grant row pointing at nothing --
-// the same zombie pattern the Research-Account link's
-// attribute_exists(PK) transaction exists to prevent (see CLAUDE.md).
-// The snippets below elide those checks for brevity; the implementation
-// must include them (one existence read per invite, before the switch).
+// GetResearch / GetAccount / GetProject returning non-nil). When it
+// doesn't, skip the materialization AND delete the pending row (fall
+// through to DeletePendingInvite) so the dead invite doesn't replay
+// forever. The Create*/Put* calls this loop uses are unconditional puts,
+// so without that existence check an invite whose meeting/doc/account/
+// project was deleted while it sat pending would silently create a grant
+// row pointing at nothing -- the same zombie pattern the Research-Account
+// link's attribute_exists(PK) transaction exists to prevent (see
+// CLAUDE.md). The snippets below elide those checks for brevity; the
+// implementation must include them (one existence read per invite,
+// before the switch).
 func (r *DynamoDBRepository) reconcilePendingInvites(ctx context.Context, user *model.User) {
 	invites, err := r.ListPendingInvites(ctx, user.Email)
 	if err != nil {
@@ -425,6 +441,12 @@ func (r *DynamoDBRepository) reconcilePendingInvites(ctx context.Context, user *
 		return
 	}
 	for _, inv := range invites {
+		// TTL deletion is lazy -- an expired row can linger for up to ~48h
+		// before DynamoDB sweeps it. Treat it as already gone. (ExpiresAt is
+		// always set: CreatePendingInvite stamps it centrally.)
+		if time.Now().Unix() > inv.ExpiresAt {
+			continue
+		}
 		var matErr error
 		switch inv.Type {
 		case model.PendingInviteMeetingShare:
@@ -1134,17 +1156,29 @@ git commit -m "feat(research): pending invite for research share on unregistered
 
 ---
 
-### Task 7: Handlers — surface `Pending` in the three share responses
+### Task 7: Handlers — surface `Pending` in share responses + pending list/revoke endpoints
 
 **Files:**
 - Modify: `backend/internal/handler/share.go:79-87` (`ShareMeeting`)
 - Modify: `backend/internal/handler/document.go:171-173` (`ShareWithUser`)
 - Modify: `backend/internal/handler/research_share.go:76-80` (research share handler)
+- Create: `backend/internal/handler/pending_invite.go` — the owner-only
+  list/revoke endpoints required by Global Constraints:
+  `GET /api/pending-invites?entityId=...&type=...` (list this owner's pending
+  invites for an entity they own) and
+  `DELETE /api/pending-invites/{type}/{entityId}?email=...` (cancel a
+  mistyped-email invite: verify caller owns the entity, then
+  `DeletePendingInvite`). Register both in `cmd/api/main.go`'s authenticated
+  subrouter.
+- Create: `backend/internal/handler/pending_invite_test.go`
 
 **Interfaces:**
-- Consumes: `model.Share.Pending`, `model.ShareResponse.Pending` (Task 1); `MeetingService.ShareMeetingByEmail`, `AccountService.ShareUserDocumentByEmail`, `ResearchService.ShareResearchByEmail` (Tasks 3/5/6, unchanged signatures, now sometimes returning `Pending: true` with no error).
+- Consumes: `model.Share.Pending`, `model.ShareResponse.Pending` (Task 1); `MeetingService.ShareMeetingByEmail`, `AccountService.ShareUserDocumentByEmail`, `ResearchService.ShareResearchByEmail` (Tasks 3/5/6, unchanged signatures, now sometimes returning `Pending: true` with no error); `ListPendingInvites`/`DeletePendingInvite` (Task 2) via a small service wrapper that enforces entity ownership before touching the row.
 
-No handler test file changes are needed here — these are pure pass-through field additions with no new branching; existing handler tests (if any) that assert on the non-pending success shape are unaffected since `pending` is `omitempty` and defaults to `false`/absent.
+The three `Pending` pass-throughs need no handler test changes (pure field
+additions, `omitempty`); the NEW pending-invite endpoints DO need stdlib
+handler tests (ownership rejection, happy-path list/delete) in
+`pending_invite_test.go` per the repo's Go test-coverage expectation.
 
 - [ ] **Step 1: Update `ShareMeeting` handler**
 
@@ -1266,10 +1300,16 @@ per invite, self-cleans, and needs no new Cognito trigger.
 
 ## Consequences
 - A pending grant has no reverse index by entity (meeting/account/etc.) —
-  only by email. It can't be listed, browsed, or canceled once sent; it
-  either materializes on signup or sits inert forever if that email never
-  registers. Frontend surfaces `pending: true` as a one-time confirmation
-  at invite time, not a persisted badge on the member/share list (see
+  its primary key is by email. The dedicated owner-only endpoints
+  (`GET /api/pending-invites?entityId=...`,
+  `DELETE /api/pending-invites/{type}/{entityId}?email=...`, Task 7) are how
+  a mistyped-email invite gets found and cancelled — the entity-scoped list
+  is served by a filtered scan-free query on the known (email, type#entity)
+  key shape when the caller supplies both, or documented as owner-supplied
+  email lookup. An unclaimed invite that is never cancelled self-expires via
+  the 90-day DynamoDB TTL (`expiresAt`) instead of sitting inert forever.
+  Frontend surfaces `pending: true` as a one-time confirmation at invite
+  time, not a persisted badge on the member/share list (see
   `docs/superpowers/specs/2026-08-04-pending-email-invites-design.md`).
 - Materialization failure for one pending row (its underlying
   meeting/doc/research/account/project was deleted while the invite sat
