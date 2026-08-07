@@ -15,6 +15,14 @@
 - Every DynamoDB item needs `EntityType` set and must go through the expression builder for queries, not raw strings (see backend/CLAUDE.md conventions).
 - API errors follow `{ "error": { "code": "...", "message": "..." } }` with codes `BAD_REQUEST`/`UNAUTHORIZED`/`FORBIDDEN`/`NOT_FOUND`/`INTERNAL_ERROR` — this plan doesn't add new error codes, it removes an existing 404 path.
 - Design doc: `docs/superpowers/specs/2026-08-04-pending-email-invites-design.md` — read it once before Task 1; it has the full rationale each task below only summarizes.
+- **Pending invites need their own list/revoke path.** The existing revoke
+  routes (`DELETE .../share/{userId}` 등) key on a `userId` that a pending
+  invite doesn't have yet, so without a dedicated path a mistyped-email invite
+  can't be cancelled until its TTL expires. Task 7 must include
+  `GET /api/pending-invites?entityId=...` (owner-only) and
+  `DELETE /api/pending-invites/{type}/{entityId}?email=...` (owner-only,
+  deletes the `PENDINGINVITE#` row) alongside surfacing `Pending` in
+  responses.
 
 ---
 
@@ -83,7 +91,16 @@ type PendingInvite struct {
 	// PROJECT_MEMBER and DOC_SHARE, which have no permission/role concept.
 	Permission string    `dynamodbav:"permission,omitempty"`
 	CreatedAt  time.Time `dynamodbav:"createdAt"`
-	EntityType string    `dynamodbav:"entityType"` // "PENDING_INVITE"
+	// ExpiresAt is a DynamoDB TTL attribute (epoch seconds; enable TTL on
+	// this attribute in the table if not already on). A pending invite holds
+	// PII (an email address) for someone who may never sign up -- the repo's
+	// data-handling mandate requires PII rows in DynamoDB to carry a TTL, so
+	// unclaimed invites self-expire (90 days) instead of accumulating
+	// indefinitely. Reconciliation must treat an expired-but-not-yet-swept
+	// row (TTL deletion is lazy) as absent: skip when
+	// time.Now().Unix() > ExpiresAt.
+	ExpiresAt  int64  `dynamodbav:"expiresAt"`
+	EntityType string `dynamodbav:"entityType"` // "PENDING_INVITE"
 }
 ```
 
@@ -386,10 +403,21 @@ func (r *DynamoDBRepository) DeletePendingInvite(ctx context.Context, pk, sk str
 // brand-new user's email into its real Share/AccountMember/ProjectMember
 // row, then deletes the pending row. Called once, from GetOrCreateUser,
 // right after a new profile is created -- never on an existing user's
-// lookup. A single row's materialization failing (e.g. its underlying
-// meeting/doc/research/account/project was deleted while the invite sat
-// pending) is logged and skipped rather than failing signup -- a user must
-// never fail to provision because a stale invite couldn't be replayed.
+// lookup. A single row's materialization failing is logged and skipped
+// rather than failing signup -- a user must never fail to provision
+// because a stale invite couldn't be replayed.
+//
+// IMPORTANT (zombie-grant prevention): before each materialization below,
+// verify the target entity still exists (GetMeetingByID / getDoc /
+// GetResearch / GetAccount / GetProject returning non-nil) and skip --
+// LEAVING the pending row deleted -- when it doesn't. The Create*/Put*
+// calls this loop uses are unconditional puts, so without that existence
+// check an invite whose meeting/doc/account/project was deleted while it
+// sat pending would silently create a grant row pointing at nothing --
+// the same zombie pattern the Research-Account link's
+// attribute_exists(PK) transaction exists to prevent (see CLAUDE.md).
+// The snippets below elide those checks for brevity; the implementation
+// must include them (one existence read per invite, before the switch).
 func (r *DynamoDBRepository) reconcilePendingInvites(ctx context.Context, user *model.User) {
 	invites, err := r.ListPendingInvites(ctx, user.Email)
 	if err != nil {
@@ -504,7 +532,7 @@ git commit -m "feat: reconcile pending email invites on first signup"
 In `backend/internal/service/account_test.go`, add:
 
 ```go
-func TestAddMember_PendingInviteForUnregisteredEmail(t *testing.T) {
+func TestAccountAddMember_PendingInviteForUnregisteredEmail(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	seedUser(repo, "owner-1", "owner@example.com")
@@ -578,7 +606,7 @@ func (m *mockAccountRepo) CreatePendingInvite(_ context.Context, invite *model.P
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd backend && /usr/local/go/bin/go test ./internal/service/... -run TestAddMember_PendingInvite -v` and `-run TestShareUserDocumentByEmail_Pending`
+Run: `cd backend && /usr/local/go/bin/go test ./internal/service/... -run TestAccountAddMember_PendingInvite -v` and `-run TestShareUserDocumentByEmail_Pending`
 Expected: FAIL — compile error, `accountRepo` has no method `CreatePendingInvite` / `AddMember` returns `ErrUserNotFound` instead of a pending DTO.
 
 - [ ] **Step 3: Add `CreatePendingInvite` to the `accountRepo` interface**
@@ -658,7 +686,7 @@ In `backend/internal/service/account.go`, find:
 		}); err != nil {
 			return nil, err
 		}
-		return &model.Share{Email: targetEmail, Pending: true}, nil
+		return &model.Share{Email: targetEmail, Permission: model.PermissionRead, Pending: true}, nil
 	}
 	if targetUser.UserID == ownerID {
 		return nil, ErrSelfShare
@@ -670,7 +698,7 @@ In `backend/internal/service/account.go`, find:
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `cd backend && /usr/local/go/bin/go test ./internal/service/... -run 'TestAddMember_PendingInvite|TestShareUserDocumentByEmail_' -v`
+Run: `cd backend && /usr/local/go/bin/go test ./internal/service/... -run 'TestAccountAddMember_PendingInvite|TestShareUserDocumentByEmail_' -v`
 Expected: PASS.
 
 - [ ] **Step 7: Run the full account service test suite to check for regressions**
@@ -702,7 +730,7 @@ git commit -m "feat(account): pending invite for member-add and doc-share on unr
 In `backend/internal/service/project_test.go`, add:
 
 ```go
-func TestAddMember_PendingInviteForUnregisteredEmail(t *testing.T) {
+func TestProjectAddMember_PendingInviteForUnregisteredEmail(t *testing.T) {
 	repo := newMockProjectRepo()
 	svc := newProjectServiceWithRepo(repo)
 	repo.projects["proj-1"] = &model.Project{ProjectID: "proj-1", OwnerUserID: "owner-1"}
@@ -738,7 +766,7 @@ func (m *mockProjectRepo) CreatePendingInvite(_ context.Context, invite *model.P
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd backend && /usr/local/go/bin/go test ./internal/service/... -run TestAddMember_PendingInviteForUnregisteredEmail -v`
+Run: `cd backend && /usr/local/go/bin/go test ./internal/service/... -run TestProjectAddMember_PendingInviteForUnregisteredEmail -v`
 Expected: FAIL — compile error (`projectRepo` has no `CreatePendingInvite`) or `ErrUserNotFound` returned.
 
 - [ ] **Step 3: Add `CreatePendingInvite` to the `projectRepo` interface**
@@ -788,7 +816,7 @@ Check whether `time` is already imported in `project.go` (`grep -n '"time"' back
 
 - [ ] **Step 5: Run the test to verify it passes**
 
-Run: `cd backend && /usr/local/go/bin/go test ./internal/service/... -run TestAddMember_PendingInviteForUnregisteredEmail -v`
+Run: `cd backend && /usr/local/go/bin/go test ./internal/service/... -run TestProjectAddMember_PendingInviteForUnregisteredEmail -v`
 Expected: PASS.
 
 - [ ] **Step 6: Run the full project service test suite to check for regressions**
