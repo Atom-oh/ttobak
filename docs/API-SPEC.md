@@ -186,7 +186,7 @@ Error: 403 Forbidden (only owner can delete)
 
 ### Accounts
 
-고객사(Account)는 팀이 공유하는 1급 엔티티다. 생성자는 자동으로 `owner` 멤버가 되며, owner만 멤버를 추가할 수 있다. 멤버십(역할 AM/TAM/SSA/owner)이 곧 접근 권한이다. 모든 엔드포인트는 인증 필요.
+고객사(Account)는 팀이 공유하는 1급 엔티티다. 생성자는 자동으로 `owner` 멤버가 되며, owner만 멤버를 추가할 수 있다. 멤버십(역할 owner/AM/TAM/SSA/SA/SA Manager/AM Manager — 지정 가능 목록은 `model.AssignableRoles`)이 곧 접근 권한이다. 모든 엔드포인트는 인증 필요.
 
 #### List Accounts (내 Account 목록)
 
@@ -199,7 +199,7 @@ Response: 200 OK
     {
       "accountId": "uuid",
       "name": "하나은행",
-      "role": "owner"            // owner | AM | TAM | SSA
+      "role": "owner"            // owner | AM | TAM | SSA | SA | SA Manager | AM Manager
     }
   ]
 }
@@ -269,7 +269,7 @@ POST /api/accounts/{accountId}/members
 Request:
 {
   "email": "tam@example.com",   // 기존 등록 사용자의 이메일
-  "role": "TAM"                 // AM | TAM | SSA (owner는 지정 불가)
+  "role": "TAM"                 // AM | TAM | SSA | SA | SA Manager | AM Manager (owner는 지정 불가)
 }
 
 Response: 201 Created
@@ -290,7 +290,7 @@ Error: 400 Bad Request (이미 멤버이거나 잘못된 역할)
 PUT /api/accounts/{accountId}/members/{userId}
 Request:
 {
-  "role": "AM"                  // AM | TAM | SSA (owner로는 변경 불가)
+  "role": "AM"                  // AM | TAM | SSA | SA | SA Manager | AM Manager (owner로는 변경 불가)
 }
 
 Response: 200 OK
@@ -375,6 +375,8 @@ Response: 200 OK
     {
       "type": "risk",
       "text": "PoC 일정 2개월 지연 가능",
+      "implication": "Q3 갱신 협상 전 PoC 결과가 나오지 않을 위험",
+      "nextAction": "인프라 승인 상태를 TAM이 이번 주 확인",
       "sourceType": "meeting",
       "sourceId": "meeting-uuid",
       "occurredAt": "2026-05-12T09:00:00Z",
@@ -383,7 +385,20 @@ Response: 200 OK
     }
   ]
 }
+```
 
+`implication`(함의)/`nextAction`(권장 조치)은 모두 선택 필드로,
+`ExtractInsights`(Bedrock Haiku)가 구조화된 근거를 함께 생성할 때 채워진다 —
+이전에는 `type`/`text`만 있었다. `ExtractInsights`는 `evidence`(발언
+준-verbatim 인용)도 함께 생성하지만, account/project 파티션으로 팬아웃되는
+이 응답에는 **의도적으로 포함되지 않는다** — 미팅 접근권 없는 account/project
+멤버가 원본 발언 인용을 읽게 되는 노출을 막기 위함(`BuildAccountInsights`,
+`meeting.go`). `evidence`는 미팅 자체의 `Insights` JSON을 통해 미팅 접근권이
+있는 사용자에게만 노출된다. `Project.Insights`
+(`GET /api/projects/{projectId}/insights`, `GET /api/projects/{projectId}/brief`)도
+같은 스키마(프론트엔드 타입 `FieldInsight`, `frontend/src/types/meeting.ts` — 백엔드는 `MeetingInsight`/`ProjectInsightDTO`)와 같은 팬아웃 정책을 공유한다.
+
+```
 Error: 400 Bad Request (잘못된 from/to — RFC3339 아님)
 Error: 403 Forbidden (멤버가 아님)
 Error: 404 Not Found (Account 없음)
@@ -609,6 +624,39 @@ Error: 403 Forbidden (문서 소유자가 아님, 또는 accountId 멤버가 아
 Error: 404 Not Found (문서 없음)
 ```
 
+#### Share Document with a Specific User (개인 문서 → 1인 공유, 참조 방식)
+
+개인 문서를 이메일로 지정한 한 사용자와 공유한다. 위 Share-to-Account와 달리
+**복제가 아니라 참조** — 소유자의 문서 한 부만 존재하고, `ListUserDocuments`/
+`GetUserDocument`는 소유자 파티션을 그대로 읽으므로 수신자는 항상 최신
+내용을 본다. 항상 읽기 전용(요청에 `permission` 필드 자체가 없음 —
+`ShareMeeting`과 달리 편집 공유는 지원하지 않음). 소유자만 공유/조회/철회
+가능 — 소유자가 아니면 `getDoc`이 404를 반환해(권한 여부를 드러내지 않는
+fail-closed) 자동으로 막힌다.
+
+```
+POST /api/documents/{docId}/share
+{ "email": "target@example.com" }
+
+Response: 201 Created
+{ "sharedWith": { "userId": "user-uuid", "email": "target@example.com", "permission": "read" } }
+
+GET /api/documents/{docId}/shares
+Response: 200 OK
+{ "shares": [ { "userId": "...", "email": "...", "permission": "read", "sharedAt": "..." }, ... ] }
+
+DELETE /api/documents/{docId}/share/{userId}
+Response: 204 No Content
+
+Error: 400 Bad Request (email 누락, 또는 자기 자신에게 공유 시도)
+Error: 404 Not Found (문서 없음, 호출자가 소유자가 아님 — 403 대신 404로 존재
+                       자체를 숨김 — 또는 대상 이메일의 사용자가 없음)
+```
+
+수신자 쪽 `GetUserDocument`/`ListUserDocuments` 응답에는 `sharedBy`(소유자
+이메일)가 채워지고 `publicShareToken`은 생략된다 — 프론트엔드는 `sharedBy`
+유무로 읽기 전용 뱃지를 표시한다(`ShareButton`의 `readOnly` prop).
+
 #### Public Share Link (개인 파일 문서 무인증 공개 링크)
 
 128비트 랜덤 토큰(`crypto/rand`)을 발급해 인증 없이 접근 가능한 링크를
@@ -794,7 +842,7 @@ DELETE /api/projects/{projectId}/members/{userId}
 Response: 204 No Content
 ```
 
-멤버는 Account처럼 역할(owner/AM/TAM/SSA) 구분이 없다 — 있으면(owner) 있고
+멤버는 Account처럼 역할(owner/AM/TAM/SSA/SA/SA Manager/AM Manager) 구분이 없다 — 있으면(owner) 있고
 없으면(member) 없는 이진 상태.
 
 #### Link / Unlink Account

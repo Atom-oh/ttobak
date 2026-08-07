@@ -47,7 +47,11 @@ export class AuthStack extends cdk.Stack {
     // Cognito User Pool with email/password sign-up/sign-in
     this.userPool = new cognito.UserPool(this, 'TtobakUserPool', {
       userPoolName: 'ttobak-user-pool',
-      selfSignUpEnabled: true,
+      // Company security policy: self sign-up is FORBIDDEN. Accounts are created
+      // by an admin only (InviteUser -> AdminCreateUser). Never flip this to true --
+      // the pre-signup domain allowlist below is defense in depth, not a substitute,
+      // since it only runs on the self sign-up path this keeps closed.
+      selfSignUpEnabled: false,
       signInAliases: {
         email: true,
       },

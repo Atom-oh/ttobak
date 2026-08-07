@@ -9,6 +9,7 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi, docApi } from '@/lib/api';
 import { uploadDocFile } from '@/lib/upload';
+import { DocumentShareButton } from '@/components/ShareButton';
 import type { AccountDocument, AccountSummary } from '@/types/meeting';
 
 const MeetingEditor = dynamic(() => import('./MeetingEditor').then(m => ({ default: m.MeetingEditor })), {
@@ -288,6 +289,10 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
   // behind a slide view with nothing to show.
   const isSlide = !!doc.downloadUrl;
   const isPdf = (doc.fileName ?? '').toLowerCase().endsWith('.pdf');
+  // A doc someone shared with this user directly: view + download only. The
+  // backend enforces this too (no update/delete/share path accepts a
+  // non-owner), so hiding the controls is UX, not the security boundary.
+  const isReceivedShare = !!doc.sharedBy;
 
   return (
     <AppLayout activePath={accountId ? '/accounts' : '/docs'}>
@@ -295,6 +300,12 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
         {error && (
           <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
             {error}
+          </div>
+        )}
+        {isReceivedShare && (
+          <div className="flex items-center gap-2 glass-panel rounded-xl p-3 mb-4 text-sm text-slate-600 dark:text-text-secondary">
+            <span className="material-symbols-outlined text-primary" aria-hidden="true">visibility</span>
+            <span>{doc.sharedBy} 님이 공유한 문서입니다 — 읽기 전용</span>
           </div>
         )}
         <div className="flex items-center gap-3 mb-6">
@@ -305,7 +316,7 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             onBlur={handleTitleBlur}
-            disabled={isSlide}
+            disabled={isSlide || isReceivedShare}
             className="flex-1 text-2xl font-bold bg-transparent border-none outline-none focus:ring-0 text-slate-900 dark:text-text-main disabled:text-slate-500"
           />
           {doc.docType && (
@@ -317,7 +328,13 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
           {savedAt && !saving && <span className="text-xs text-slate-400">Saved {savedAt}</span>}
         </div>
 
-        {!accountScoped && accounts.length > 0 && (
+        {!accountScoped && !isReceivedShare && (
+          <div className="mb-6">
+            <DocumentShareButton docId={docId} />
+          </div>
+        )}
+
+        {!accountScoped && !isReceivedShare && accounts.length > 0 && (
           <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-6">
             <select
               value={shareAccountId}
@@ -393,6 +410,7 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
                   className="hidden"
                   onChange={handleReplaceFile}
                 />
+                {!isReceivedShare && (
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={replacing}
@@ -400,6 +418,7 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
                 >
                   {replacing ? '교체 중…' : '파일 변경'}
                 </button>
+                )}
                 {doc.downloadUrl && (
                   <a
                     href={doc.downloadUrl}
@@ -412,7 +431,7 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
               </div>
             </div>
 
-            {!accountScoped && (
+            {!accountScoped && !isReceivedShare && (
               <div className="flex items-center gap-2 glass-panel rounded-xl p-4">
                 <button
                   onClick={handleTogglePublicShare}
@@ -438,6 +457,7 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
             onChange={handleChange}
             onAutoSave={handleAutoSave}
             autoSaveDelay={2000}
+            readOnly={isReceivedShare}
             wikilinkTitles={titles}
           />
         )}

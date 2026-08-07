@@ -137,7 +137,7 @@ func (h *AccountHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, service.ErrMemberExists):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "User is already a member")
 		case errors.Is(err, service.ErrInvalidInput):
-			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid role (AM/TAM/SSA)")
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid role ("+strings.Join(model.AssignableRoles, "/")+")")
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}
@@ -168,7 +168,7 @@ func (h *AccountHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request
 		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Member not found")
 		case errors.Is(err, service.ErrInvalidInput):
-			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid role (AM/TAM/SSA) or target is the owner")
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid role ("+strings.Join(model.AssignableRoles, "/")+") or target is the owner")
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}

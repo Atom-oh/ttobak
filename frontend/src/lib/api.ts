@@ -505,6 +505,16 @@ export const docApi = {
   delete: (docId: string) => api.delete<void>(`/api/documents/${encodeURIComponent(docId)}`),
   shareToAccount: (docId: string, accountId: string) =>
     api.post<AccountDocument>(`/api/documents/${encodeURIComponent(docId)}/share-account`, { accountId }),
+  /** Share with one person by reference (read-only) — no `permission` field,
+   * unlike meetingsApi.share. */
+  share: (docId: string, data: { email: string }) =>
+    api.post<{ sharedWith: { userId: string; email: string; permission: string } }>(
+      `/api/documents/${encodeURIComponent(docId)}/share`, data),
+  unshare: (docId: string, userId: string) =>
+    api.delete<void>(`/api/documents/${encodeURIComponent(docId)}/share/${encodeURIComponent(userId)}`),
+  listShares: (docId: string) =>
+    api.get<{ shares: { userId: string; email: string; permission: string }[] }>(
+      `/api/documents/${encodeURIComponent(docId)}/shares`),
   createPublicShare: (docId: string) =>
     api.post<{ token: string }>(`/api/documents/${encodeURIComponent(docId)}/public-share`, {}),
   revokePublicShare: (docId: string) =>

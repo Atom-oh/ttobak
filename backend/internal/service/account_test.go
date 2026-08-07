@@ -23,6 +23,7 @@ type mockAccountRepo struct {
 	shares            map[string]*model.Share            // "sharedToID|meetingID" -> share
 	meetings          map[string]*model.Meeting          // meetingID -> meeting
 	publicShares      map[string]*model.PublicShare      // token -> share
+	docShares         map[string]*model.Share            // "sharedToID|docID" -> per-user doc share
 
 	// shareOpErr, when non-nil, is returned by GetShare/DeleteShare for the
 	// specific meetingID it's keyed to test cleanup-failure handling without
@@ -96,7 +97,56 @@ func newMockAccountRepo() *mockAccountRepo {
 		meetings:          make(map[string]*model.Meeting),
 		shareOpErr:        make(map[string]error),
 		publicShares:      make(map[string]*model.PublicShare),
+		docShares:         make(map[string]*model.Share),
 	}
+}
+
+// --- per-user document shares (SHAREDDOC#) ---
+
+func docShareKey(sharedToID, docID string) string { return sharedToID + "|" + docID }
+
+func (m *mockAccountRepo) CreateDocShare(_ context.Context, docID, ownerID, ownerEmail, sharedToID, email string) (*model.Share, error) {
+	sh := &model.Share{
+		MeetingID: docID, OwnerID: ownerID, OwnerEmail: ownerEmail,
+		SharedToID: sharedToID, Email: email,
+		Permission: model.PermissionRead, EntityType: model.EntityTypeDocShare,
+	}
+	m.docShares[docShareKey(sharedToID, docID)] = sh
+	return sh, nil
+}
+
+func (m *mockAccountRepo) GetDocShare(_ context.Context, sharedToID, docID string) (*model.Share, error) {
+	sh, ok := m.docShares[docShareKey(sharedToID, docID)]
+	if !ok {
+		return nil, nil
+	}
+	cp := *sh
+	return &cp, nil
+}
+
+func (m *mockAccountRepo) DeleteDocShare(_ context.Context, sharedToID, docID string) error {
+	delete(m.docShares, docShareKey(sharedToID, docID))
+	return nil
+}
+
+func (m *mockAccountRepo) ListDocSharesForUser(_ context.Context, userID string) ([]model.Share, error) {
+	var out []model.Share
+	for _, sh := range m.docShares {
+		if sh.SharedToID == userID {
+			out = append(out, *sh)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockAccountRepo) ListDocSharesForDoc(_ context.Context, docID string) ([]model.Share, error) {
+	var out []model.Share
+	for _, sh := range m.docShares {
+		if sh.MeetingID == docID {
+			out = append(out, *sh)
+		}
+	}
+	return out, nil
 }
 
 func (m *mockAccountRepo) GetMeetingByID(_ context.Context, meetingID string) (*model.Meeting, error) {
@@ -1132,13 +1182,49 @@ func TestAddMember_InvalidRole(t *testing.T) {
 	}
 }
 
+func TestAddMember_NewRoleAccepted(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "x-1", "x@x.com")
+	dto, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "x@x.com", Role: model.RoleSAManager})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dto.Role != model.RoleSAManager {
+		t.Errorf("expected role %q, got %q", model.RoleSAManager, dto.Role)
+	}
+}
+
+func TestAddMember_ArbitraryRoleRejected(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "x-1", "x@x.com")
+	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "x@x.com", Role: "PM"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestAddMember_LowercaseRoleRejected(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "x-1", "x@x.com")
+	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "x@x.com", Role: "ssa"})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput (case-sensitive), got %v", err)
+	}
+}
+
 func TestListAccountInsights_FilterByType(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 	d := time.Date(2026, 5, 12, 9, 0, 0, 0, time.UTC)
 	repo.insightsByAccount[acc.AccountID] = []model.AccountInsight{
-		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연", OccurredAt: d, SourceID: "m-1", SourceType: "meeting"},
+		{AccountID: acc.AccountID, Type: model.InsightRisk, Text: "지연", Evidence: "일정 미확정", Implication: "오픈 지연", NextAction: "일정 확정", OccurredAt: d, SourceID: "m-1", SourceType: "meeting"},
 		{AccountID: acc.AccountID, Type: model.InsightTech, Text: "EKS", OccurredAt: d, SourceID: "m-1", SourceType: "meeting"},
 	}
 	got, err := svc.ListAccountInsights(context.Background(), "owner-1", acc.AccountID, time.Time{}, time.Time{}, []string{model.InsightRisk})
@@ -1148,6 +1234,11 @@ func TestListAccountInsights_FilterByType(t *testing.T) {
 	if len(got) != 1 || got[0].Type != model.InsightRisk {
 		t.Errorf("expected only risk, got %+v", got)
 	}
+	if got[0].Implication != "오픈 지연" || got[0].NextAction != "일정 확정" {
+		t.Errorf("structured fields were not mapped to DTO: %+v", got[0])
+	}
+	// Evidence non-exposure needs no runtime assert: AccountInsightDTO has no
+	// Evidence field at all, so a mapping regression is a compile error.
 }
 
 func TestListAccountInsights_FilterByPeriod(t *testing.T) {
@@ -2461,5 +2552,126 @@ func TestDeleteUserDocument_CleansUpPublicSharePointer(t *testing.T) {
 
 	if _, ok := repo.publicShares[token]; ok {
 		t.Fatalf("expected PublicShare pointer %q to be cleaned up on doc delete", token)
+	}
+}
+
+// --- per-user document sharing (reference, read-only) ---
+
+func seedUserDoc(repo *mockAccountRepo, ownerID, docID, title string) {
+	pk := model.PrefixUser + ownerID
+	repo.documents[pk] = append(repo.documents[pk], model.AccountDocument{
+		PK: pk, SK: model.PrefixDoc + docID, DocID: docID, Title: title,
+		Content: "# " + title, SourceUserID: ownerID, EntityType: model.EntityTypeUserDoc,
+	})
+}
+
+func TestShareUserDocumentByEmail(t *testing.T) {
+	ctx := context.Background()
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	repo.users["b@example.com"] = &model.User{UserID: "user-b", Email: "b@example.com"}
+	repo.users["a@example.com"] = &model.User{UserID: "user-a", Email: "a@example.com"}
+	seedUserDoc(repo, "user-a", "doc-1", "노트")
+
+	if _, err := svc.ShareUserDocumentByEmail(ctx, "user-a", "a@example.com", "missing", "b@example.com"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for unknown doc, got %v", err)
+	}
+	// A non-owner cannot share: the doc isn't in their partition at all.
+	if _, err := svc.ShareUserDocumentByEmail(ctx, "user-b", "b@example.com", "doc-1", "a@example.com"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for non-owner sharer, got %v", err)
+	}
+	if _, err := svc.ShareUserDocumentByEmail(ctx, "user-a", "a@example.com", "doc-1", "nobody@example.com"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	}
+	if _, err := svc.ShareUserDocumentByEmail(ctx, "user-a", "a@example.com", "doc-1", "a@example.com"); !errors.Is(err, ErrSelfShare) {
+		t.Fatalf("expected ErrSelfShare, got %v", err)
+	}
+
+	share, err := svc.ShareUserDocumentByEmail(ctx, "user-a", "a@example.com", "doc-1", "b@example.com")
+	if err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+	if share.SharedToID != "user-b" || share.Permission != model.PermissionRead {
+		t.Fatalf("expected read-only share to user-b, got %+v", share)
+	}
+
+	// The recipient reads the OWNER's item -- no copy was made.
+	detail, err := svc.GetUserDocument(ctx, "user-b", "doc-1")
+	if err != nil {
+		t.Fatalf("recipient get failed: %v", err)
+	}
+	if detail.Content != "# 노트" || detail.SharedBy != "a@example.com" {
+		t.Fatalf("expected shared content + sharedBy, got %+v", detail)
+	}
+	if len(repo.documents[model.PrefixUser+"user-b"]) != 0 {
+		t.Fatal("share must not copy the document into the recipient's partition")
+	}
+	list, err := svc.ListUserDocuments(ctx, "user-b", "")
+	if err != nil || len(list) != 1 || list[0].DocID != "doc-1" {
+		t.Fatalf("expected shared doc in recipient's list, got %v (%v)", list, err)
+	}
+
+	// Read-only: the recipient can neither update nor delete.
+	if _, err := svc.UpdateUserDocument(ctx, "user-b", "doc-1", &model.PutDocumentRequest{Title: "hijack", Markdown: mdPtr("x")}); err == nil {
+		t.Fatal("expected recipient update to fail")
+	}
+	if err := svc.DeleteUserDocument(ctx, "user-b", "doc-1"); err == nil {
+		t.Fatal("expected recipient delete to fail")
+	}
+	// ...nor re-share it onward.
+	if _, err := svc.ShareUserDocumentByEmail(ctx, "user-b", "b@example.com", "doc-1", "a@example.com"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected recipient re-share to fail, got %v", err)
+	}
+
+	// Revoke is owner-only and actually revokes.
+	if err := svc.RevokeUserDocShare(ctx, "user-b", "doc-1", "user-b"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected non-owner revoke to fail, got %v", err)
+	}
+	if err := svc.RevokeUserDocShare(ctx, "user-a", "doc-1", "user-b"); err != nil {
+		t.Fatalf("revoke failed: %v", err)
+	}
+	if _, err := svc.GetUserDocument(ctx, "user-b", "doc-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound after revoke, got %v", err)
+	}
+}
+
+func TestListUserDocuments_SkipsDeletedSharedDoc(t *testing.T) {
+	ctx := context.Background()
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	// A share row pointing at a doc the owner has since deleted (no cascade)
+	// must be skipped, not fail the whole listing.
+	repo.docShares[docShareKey("user-b", "gone")] = &model.Share{
+		MeetingID: "gone", OwnerID: "user-a", OwnerEmail: "a@example.com",
+		SharedToID: "user-b", Permission: model.PermissionRead,
+		EntityType: model.EntityTypeDocShare,
+	}
+	list, err := svc.ListUserDocuments(ctx, "user-b", "")
+	if err != nil {
+		t.Fatalf("expected dangling share to be skipped, got error: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected empty list, got %v", list)
+	}
+}
+
+func TestListUserDocShares(t *testing.T) {
+	ctx := context.Background()
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	repo.users["b@example.com"] = &model.User{UserID: "user-b", Email: "b@example.com"}
+	seedUserDoc(repo, "user-a", "doc-1", "노트")
+	if _, err := svc.ShareUserDocumentByEmail(ctx, "user-a", "a@example.com", "doc-1", "b@example.com"); err != nil {
+		t.Fatalf("share failed: %v", err)
+	}
+	if _, err := svc.ListUserDocShares(ctx, "user-b", "doc-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected non-owner list to fail, got %v", err)
+	}
+	shares, err := svc.ListUserDocShares(ctx, "user-a", "doc-1")
+	if err != nil {
+		t.Fatalf("list shares failed: %v", err)
+	}
+	if len(shares) != 1 || shares[0].Email != "b@example.com" || shares[0].Permission != model.PermissionRead {
+		t.Fatalf("unexpected shares: %+v", shares)
 	}
 }

@@ -230,7 +230,7 @@ class TestTechCrawlerNewDoc(unittest.TestCase):
 
     @mock.patch.object(tech_crawler, '_write_metadata')
     @mock.patch.object(tech_crawler, '_write_to_s3')
-    @mock.patch.object(tech_crawler, '_summarize_and_tag', return_value=('Test summary', ['Lambda']))
+    @mock.patch.object(tech_crawler, '_summarize_and_tag', return_value=('Test preview', '## Test briefing', ['Lambda']))
     @mock.patch.object(tech_crawler, '_fetch_url')
     @mock.patch.object(tech_crawler, '_doc_exists', return_value=False)
     @mock.patch.object(tech_crawler, '_fetch_blog_rss', return_value=[])
@@ -258,6 +258,8 @@ class TestTechCrawlerNewDoc(unittest.TestCase):
         mock_summarize.assert_called_once()
         mock_s3.assert_called_once()
         mock_meta.assert_called_once()
+        self.assertEqual(mock_s3.call_args.args[5], '## Test briefing')
+        self.assertEqual(mock_meta.call_args.args[5], 'Test preview')
         self.assertEqual(result['docsAdded'], 1)
 
     @mock.patch.object(tech_crawler, '_write_metadata')
@@ -297,7 +299,7 @@ class TestHandlerCustomUrls(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', [], True, 1.0))
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('preview', '## briefing', [], True, 1.0))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
     @mock.patch.object(news_crawler, '_fetch_url')
     @mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None))
@@ -319,7 +321,7 @@ class TestHandlerCustomUrls(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', [], True, 1.0))
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('preview', '## briefing', [], True, 1.0))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
     @mock.patch.object(news_crawler, '_fetch_url')
     @mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None))
@@ -345,7 +347,7 @@ class TestHandlerCustomUrls(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', [], True, 1.0))
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('preview', '## briefing', [], True, 1.0))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
     @mock.patch.object(news_crawler, '_fetch_url')
     def test_custom_urls_processed_before_search_queries(
@@ -427,7 +429,7 @@ class TestHandlerCustomUrls(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', [], True, 1.0))
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('preview', '## briefing', [], True, 1.0))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
     @mock.patch.object(news_crawler, '_fetch_url')
     @mock.patch.object(news_crawler, '_gateway_web_search', return_value=([], None))
@@ -688,11 +690,12 @@ class TestSummarizeAndTagDelimiterEscape(unittest.TestCase):
             ]}}}
 
         with mock.patch.object(news_crawler.bedrock, 'converse', side_effect=fake_converse):
-            summary, tags, relevant, confidence = news_crawler._summarize_and_tag(
+            preview, briefing, tags, relevant, confidence = news_crawler._summarize_and_tag(
                 'Title', 'normal body text that is long enough to pass the length check here',
             )
 
-        self.assertIsInstance(summary, str)
+        self.assertIsInstance(preview, str)
+        self.assertIsInstance(briefing, str)
 
     def test_stringified_relevant_false_does_not_pass_gate(self):
         # Bedrock is instructed to return a JSON boolean, but a stringified
@@ -704,11 +707,49 @@ class TestSummarizeAndTagDelimiterEscape(unittest.TestCase):
             ]}}}
 
         with mock.patch.object(news_crawler.bedrock, 'converse', side_effect=fake_converse):
-            _, _, relevant, _ = news_crawler._summarize_and_tag(
+            _, _, _, relevant, _ = news_crawler._summarize_and_tag(
                 'Title', 'normal body text that is long enough to pass the length check here',
             )
 
         self.assertFalse(relevant)
+
+
+class TestStructuredBriefingPrompts(unittest.TestCase):
+    def test_news_prompt_requires_readable_markdown_sections(self):
+        captured = {}
+
+        def fake_converse(modelId, messages, inferenceConfig):
+            captured['prompt'] = messages[0]['content'][0]['text']
+            return {'output': {'message': {'content': [{
+                'text': '{"relevant": true, "relevanceConfidence": 1, "summary": "s", "tags": []}'
+            }]}}}
+
+        with mock.patch.object(news_crawler.bedrock, 'converse', side_effect=fake_converse):
+            news_crawler._summarize_and_tag(
+                '고객사 AI 투자 확대',
+                '고객사가 생성형 AI와 클라우드 투자를 확대한다는 내용의 충분히 긴 기사 본문입니다.',
+                '고객사',
+            )
+
+        prompt = captured['prompt']
+        for heading in ('## 핵심 요약', '## 비즈니스 시사점', '## AWS 관련성 및 다음 액션'):
+            self.assertIn(heading, prompt)
+
+    def test_tech_prompt_requires_readable_markdown_sections(self):
+        captured = {}
+
+        def fake_converse(modelId, messages, inferenceConfig):
+            captured['prompt'] = messages[0]['content'][0]['text']
+            return {'output': {'message': {'content': [{
+                'text': '{"summary": "s", "tags": []}'
+            }]}}}
+
+        with mock.patch.object(tech_crawler.bedrock, 'converse', side_effect=fake_converse):
+            tech_crawler._summarize_and_tag('Lambda update', 'x' * 200, 'lambda')
+
+        prompt = captured['prompt']
+        for heading in ('## 핵심 요약', '## 주요 변경·주의사항', '## AWS 적용 포인트', '## SA 다음 액션'):
+            self.assertIn(heading, prompt)
 
 
 class TestWriteToS3TitleSanitized(unittest.TestCase):
@@ -1311,7 +1352,7 @@ class TestNewsCrawlerNewArticle(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('Article summary', ['AI'], True, 0.9))
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('Article preview', '## Article briefing', ['AI'], True, 0.9))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
     def test_new_article_writes_s3_and_dynamo(self, mock_exists, mock_summarize, mock_s3, mock_meta):
         """Verify S3 + DynamoDB writes for a new search-result snippet."""
@@ -1329,6 +1370,8 @@ class TestNewsCrawlerNewArticle(unittest.TestCase):
         s3_call_args = mock_s3.call_args
         self.assertEqual(s3_call_args[0][0], 'tech-news')  # source_id
         self.assertEqual(s3_call_args[0][2], 'New AWS Article')  # title
+        self.assertEqual(s3_call_args[0][5], '## Article briefing')
+        self.assertEqual(mock_meta.call_args[0][5], 'Article preview')
 
 
 class TestProcessArticleRelevanceGate(unittest.TestCase):
@@ -1339,7 +1382,7 @@ class TestProcessArticleRelevanceGate(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', [], False, 0.1))
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('preview', '## briefing', [], False, 0.1))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
     def test_irrelevant_article_rejected(self, mock_exists, mock_summarize, mock_s3, mock_meta):
         result = news_crawler._process_article(
@@ -1353,7 +1396,7 @@ class TestProcessArticleRelevanceGate(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', [], True, 0.9))
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('preview', '## briefing', [], True, 0.9))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
     def test_relevant_high_confidence_article_written(self, mock_exists, mock_summarize, mock_s3, mock_meta):
         result = news_crawler._process_article(
@@ -1370,7 +1413,7 @@ class TestProcessArticleRelevanceGate(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', [], True, 0.65))
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('preview', '## briefing', [], True, 0.65))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
     def test_below_threshold_confidence_rejected(self, mock_exists, mock_summarize, mock_s3, mock_meta):
         # relevant=True but below RELEVANCE_THRESHOLD (0.7 default) --
@@ -1402,7 +1445,7 @@ class TestProcessArticleRelevanceGate(unittest.TestCase):
 
     @mock.patch.object(news_crawler, '_write_metadata')
     @mock.patch.object(news_crawler, '_write_to_s3')
-    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('summary', [], False, 0.1))
+    @mock.patch.object(news_crawler, '_summarize_and_tag', return_value=('preview', '## briefing', [], False, 0.1))
     @mock.patch.object(news_crawler, '_doc_exists', return_value=False)
     def test_require_relevance_false_bypasses_gate(self, mock_exists, mock_summarize, mock_s3, mock_meta):
         # customUrls path: require_relevance=False -- a user-supplied URL is
@@ -1779,7 +1822,7 @@ class TestArticleCapIncludesWebSearch(unittest.TestCase):
 
     @mock.patch.object(tech_crawler, '_write_metadata')
     @mock.patch.object(tech_crawler, '_write_to_s3')
-    @mock.patch.object(tech_crawler, '_summarize_and_tag', return_value=('summary', []))
+    @mock.patch.object(tech_crawler, '_summarize_and_tag', return_value=('preview', '## briefing', []))
     @mock.patch.object(tech_crawler, '_fetch_url', side_effect=Exception('no full page'))
     @mock.patch.object(tech_crawler, '_doc_exists', return_value=False)
     @mock.patch.object(tech_crawler, '_fetch_blog_rss')

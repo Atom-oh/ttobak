@@ -7,7 +7,8 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi, projectApi } from '@/lib/api';
 import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
-import { INSIGHT_TYPES } from '@/types/meeting';
+import { FieldInsightsSection } from '@/components/FieldInsightsSection';
+import { ASSIGNABLE_ACCOUNT_ROLES } from '@/types/meeting';
 import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef, ProjectSummary, User } from '@/types/meeting';
 
 export default function AccountDetailClient() {
@@ -24,7 +25,6 @@ export default function AccountDetailClient() {
   const [research, setResearch] = useState<AccountResearchRef[]>([]);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectsError, setProjectsError] = useState(false);
-  const [activeType, setActiveType] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [uploadingSlide, setUploadingSlide] = useState(false);
@@ -194,11 +194,9 @@ export default function AccountDetailClient() {
     return null;
   }
 
-  const shownInsights = activeType ? insights.filter((i) => i.type === activeType) : insights;
-
   return (
     <AppLayout activePath="/accounts">
-      <div className="p-4 lg:p-8 max-w-4xl mx-auto">
+      <div className="mx-auto w-full max-w-7xl p-4 lg:p-8">
         {error && (
           <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
             {error}
@@ -239,9 +237,9 @@ export default function AccountDetailClient() {
                             onChange={(e) => handleRoleChange(m.userId, e.target.value)}
                             className="text-xs px-2 py-1 rounded-full border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-primary font-semibold"
                           >
-                            <option value="AM">AM</option>
-                            <option value="TAM">TAM</option>
-                            <option value="SSA">SSA</option>
+                            {ASSIGNABLE_ACCOUNT_ROLES.map((r) => (
+                              <option key={r} value={r}>{r}</option>
+                            ))}
                           </select>
                           <button
                             onClick={() => handleRemoveMember(m.userId)}
@@ -272,53 +270,16 @@ export default function AccountDetailClient() {
                       disabled={inviting}
                       className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm h-fit"
                     >
-                      <option value="AM">AM</option>
-                      <option value="TAM">TAM</option>
-                      <option value="SSA">SSA</option>
+                      {ASSIGNABLE_ACCOUNT_ROLES.map((r) => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
                     </select>
                   </div>
                 )}
               </div>
             </section>
 
-            {/* Insights */}
-            <section className="mb-8">
-              <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Field Insights</h3>
-              <div className="flex flex-wrap gap-2 mb-3">
-                <button
-                  onClick={() => setActiveType('')}
-                  className={`text-xs px-3 py-1 rounded-full border ${activeType === '' ? 'bg-primary text-white border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
-                >
-                  all
-                </button>
-                {INSIGHT_TYPES.map((t) => (
-                  <button
-                    key={t}
-                    onClick={() => setActiveType(t)}
-                    className={`text-xs px-3 py-1 rounded-full border ${activeType === t ? 'bg-primary text-white border-primary' : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-text-muted'}`}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-              {shownInsights.length === 0 ? (
-                <p className="text-sm text-slate-400 dark:text-text-muted">No insights yet.</p>
-              ) : (
-                <div className="glass-panel rounded-xl divide-y divide-slate-200 dark:divide-white/5">
-                  {shownInsights.map((ins, idx) => (
-                    <div key={idx} className="p-3">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary">{ins.type}</span>
-                        <span className="text-xs text-slate-400 dark:text-text-muted">
-                          {new Date(ins.occurredAt).toLocaleDateString()}
-                        </span>
-                      </div>
-                      <p className="text-sm text-slate-700 dark:text-text-secondary">{ins.text}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
+            <FieldInsightsSection insights={insights} />
 
             {/* Linked projects */}
             <section className="mb-8">
