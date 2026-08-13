@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { isIOS, getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
+import { getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
 import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
@@ -101,7 +101,11 @@ export function RecordButton({
   const nativeUnlistenRef = useRef<(() => void) | null>(null);
   const nativePcmUnlistenRef = useRef<(() => void) | null>(null);
 
-  const useNativeCapture = isIOS() || !supportsMediaRecorder();
+  // iOS Safari has supported MediaRecorder since 14.3 (audio/mp4 output,
+  // mapped to .m4a below), so it should take the normal recording path --
+  // live captions, waveform, pause/resume, checkpoints -- not this file-input
+  // fallback. Only browsers that truly lack MediaRecorder fall back.
+  const useNativeCapture = !supportsMediaRecorder();
 
   const cleanupAudioResources = useCallback(() => {
     isRecordingRef.current = false;
@@ -340,6 +344,13 @@ export function RecordButton({
       // Set up audio analyser for waveform
       const audioContext = new AudioContext();
       audioContextRef.current = audioContext;
+      // iOS Safari can start a new AudioContext 'suspended' when creation
+      // happens after the getUserMedia await above has stepped outside the
+      // click's user-activation window -- without this the waveform never
+      // animates even though recording itself (MediaRecorder) is unaffected.
+      if (audioContext.state === 'suspended') {
+        audioContext.resume().catch(() => {});
+      }
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
@@ -570,7 +581,6 @@ export function RecordButton({
           ref={fileInputRef}
           type="file"
           accept="audio/*"
-          capture="environment"
           onChange={handleFileSelect}
           className="hidden"
         />
