@@ -85,38 +85,22 @@ fans out bounded candidate work to focused workers.
 
 The implementation reuses the current stacks and storage:
 
-- `TtobakCrawlerStack`: discovery, enrichment, publication, KB ingestion, and later
-  dictionary/digest scheduling. This is reuse of the stack's role, not a claim that
-  no CDK changes are needed, and the changes span two stacks, not one:
-  - `TtobakAiStack` owns `crawlerRole` (`infra/lib/ai-stack.ts`) and currently grants
-    it `kbBucket.grantReadWrite(crawlerRole)` — bucket-wide, not prefix-scoped. Phase 1
-    adds, in `ai-stack.ts`: a prefix-scoped grant for `knowledge-artifacts/*` on the
-    assets bucket (§9.1's staging and JSON-artifact paths), and `bedrock:InvokeModel`
-    on the selected inference profile and destination-Region foundation-model ARNs
-    (cross-Region inference profiles require both). The existing bucket-wide
-    `kbBucket` grant is not narrowed by this design — narrowing it is a separate,
-    larger change against every existing crawler code path that already relies on it.
-  - `TtobakCrawlerStack` (`infra/lib/crawler-stack.ts`) currently receives only the
-    KB bucket (`props.kbBucket`) and injects `SUMMARIZE_MODEL_ID`. Phase 1 adds the
-    assets bucket reference from `TtobakStorageStack` and its bucket name as an
-    environment variable, plus `FINAL_MODEL_ID` and the Bedrock client Region
-    (§7.1's `us.anthropic.claude-opus-5` / `us-west-2`) — the model routing §7.1
-    describes is not wired into `crawler-stack.ts` today and must be added
-    alongside the enrichment code that reads it.
-  - Deployment order: `TtobakAiStack --exclusively` (new IAM grants) before
-    `TtobakCrawlerStack --exclusively` (new env vars/bucket reference), consistent
-    with the existing dependency graph (`AiStack` does not depend on
-    `CrawlerStack`, so this ordering is about the IAM grant being in place before
-    the Lambda code that needs it redeploys, not a new stack dependency edge).
-  - The state machine itself also changes, not only its env vars/IAM. Today
-    `crawler-stack.ts` runs a per-**source** `sfn.Map` calling one Lambda per
-    source, with no `Retry`/`Catch`/DLQ configured. §15.1 requires per-**candidate**
-    fan-out, independent retry, and an ingestion failure that fails the workflow
-    visibly rather than returning as a successful Lambda payload — none of which
-    the current shape provides. Restructuring the state machine (nested per-source
-    → per-candidate `Map`, `Retry`/`Catch` on the enrichment step, a DLQ for
-    exhausted retries) is Phase 1 CDK scope in `crawler-stack.ts`, alongside the
-    env var/bucket-reference change above, not a later-phase refinement.
+- `TtobakCrawlerStack`: discovery, enrichment, publication, KB ingestion, later
+  dictionary/digest scheduling. Reuses the stack's role, but real changes span two
+  stacks:
+  - `TtobakAiStack` owns `crawlerRole` (`kbBucket.grantReadWrite`, bucket-wide,
+    unchanged) — adds a prefix-scoped `knowledge-artifacts/*` grant and
+    `bedrock:InvokeModel` on the selected inference profile + destination-Region
+    foundation-model ARN.
+  - `TtobakCrawlerStack` (currently only `props.kbBucket` + `SUMMARIZE_MODEL_ID`)
+    adds the assets-bucket reference/env var, plus `FINAL_MODEL_ID` and the Bedrock
+    client Region (§7.1) — not wired in today.
+  - Deploy `TtobakAiStack --exclusively` before `TtobakCrawlerStack --exclusively`
+    (IAM before the Lambda code that needs it).
+  - State machine restructuring is also Phase 1 scope, not just env/IAM: today's
+    per-source `sfn.Map` (no `Retry`/`Catch`/DLQ) doesn't meet §15.1's
+    per-candidate fan-out + independent retry + visible ingestion-failure
+    requirements.
 - `ttobak-main`: source configuration, insight metadata, term state, digest state,
   and run history.
 - Main versioned assets bucket: private structured artifacts under
@@ -220,14 +204,10 @@ Rules:
   Mermaid.
 - Raw model output is retained only in short-lived execution logs with body fields
   excluded. The accepted artifact is the validated object.
-- Evidence excerpts (`supportingExcerpt`) and `sourceUrl` values are neutralized a
-  second time — the same prompt-delimiter/instruction-text neutralization applied to
-  fetched bodies before model use (§14) — immediately before they are embedded in
-  canonical Markdown. Without this, third-party text that survives quality gates as
-  a short "evidence" quote could later be retrieved from the KB and re-injected into
-  a Q&A model call, where it now reads as trusted repository content rather than
-  untrusted web content. This output-direction pass is required in addition to, not
-  instead of, the input-direction neutralization already applied before enrichment.
+- `supportingExcerpt`/`sourceUrl` are neutralized again (same as §14's
+  pre-enrichment pass) immediately before embedding in canonical Markdown — the KB
+  is a re-injection path into Q&A, so an evidence quote that survived the quality
+  gate still needs output-direction neutralization, not just input-direction.
 
 ### 5.3 Canonical Markdown
 
@@ -354,25 +334,14 @@ Environment variable: FINAL_MODEL_ID
 ```
 
 The US geo inference profile keeps data in US and Canada Regions. The public
-news/official-doc pipeline contains public source material. Every *other* Opus use
-listed below can have internal context reach it — including approved deep
-research, whose `approvedPlan` snapshot (§12.1) carries selected accounts/projects
-and user answers that may themselves be confidential — and must disclose that
-selected internal context is sent to the US geography.
-
-This is enforced, not only disclosed, and the gate applies to every one of those
-code paths uniformly, not only prep packets and architecture briefs. A
-deployment-owner config flag (default `false`) gates whether *any* code path that
-can carry internal context into an Opus call — prep packet, architecture brief, or
-approved deep research — may invoke the US-geo inference profile at all. A
-deployment with a stricter residency policy leaves the flag `false`, and a request
-on any of those paths fails closed with an explicit error rather than silently
-sending internal context — the per-request disclosure UI is in addition to this
-server-side gate, not a substitute for it. Enabling the flag is a one-time
-deployment decision, not a per-request user consent checkbox. An approved regional
-model, once configured, is a separate way to satisfy the same residency requirement
-without disabling any of those paths. The public news/technical-enrichment pipeline
-is unaffected by this flag either way, since it never carries internal context.
+news/official-doc pipeline is unaffected (public source material only). Prep
+packets, architecture briefs, and approved deep research (§12.1's `approvedPlan`
+carries confidential accounts/projects/answers) can all carry internal context, so
+all three disclose it and are gated the same way: a deployment-owner config flag
+(default `false`) must be enabled before any of them may invoke the US-geo
+profile; a request fails closed otherwise, server-side, not just via the
+disclosure UI. An approved regional model is a separate way to satisfy the same
+requirement per deployment.
 
 Use Opus 5 only for:
 
@@ -465,48 +434,35 @@ SK: DOCCHANGE#{docHash}#{changedAt}
 
 ### 9.1 Crawled document metadata
 
-Three distinct hashes exist in this design, each with a different scope and
-purpose — they are not interchangeable and none supersedes another:
+Three hashes, distinct purposes: `candidateId` (§5.1, `sha256(sourceId +
+canonicalCandidateUrl)`) dedupes raw search results within one discovery run.
+`docHash` (§6.2, `hash(kind + canonicalUrl)`) is the stable, source-independent
+document identity used in S3 paths and keys below. `contentHash` (§8.2,
+`sha256(normalized body)`) changes when fetched content changes and drives the
+state machine below.
 
-- `candidateId` (§5.1) = `sha256(sourceId + canonicalCandidateUrl)`. Identifies one
-  discovery-time candidate, before canonicalization. Used only within a single
-  discovery run to dedupe raw search results.
-- `docHash` (§6.2) = `hash(kind + canonicalUrl)`. The stable, long-lived identity of
-  a document once canonicalized — this is the `{docHash}` used in the `DOC#{docHash}`
-  key and in S3 paths below. It never changes for a given canonical URL, even when
-  the URL's content changes over time.
-- `contentHash` (§8.2) = `sha256(normalized body)`. Changes whenever the fetched
-  content changes. Used to decide whether a technical refresh requires re-enrichment,
-  and — see below — to make publication of a content change race-free.
-
-**The state machine below is source-independent, but the existing list/detail API
-key is not.** `docHash` (§6.2: `hash(kind + canonicalUrl)`) is source-independent —
-two sources can discover the same canonical URL. If the claim/enrich/promote state
-lived on the per-source row alone, two sources finding the same URL could each
-successfully claim it under their own `CRAWLER#{sourceId}` partition, breaking the
-single-writer guarantee the claim exists to provide. So the state that matters for
-concurrency control lives on one canonical, source-independent row, and the
-existing per-source row becomes a read-side projection of it:
+`docHash` is source-independent, but two different sources can discover the same
+URL. Concurrency state therefore lives on one canonical row per `docHash`, not on
+the per-source row — otherwise two sources could each successfully claim the same
+document under their own partition:
 
 ```text
-# Canonical row — one per docHash, regardless of how many sources discovered it.
-# All claim/enrich/promote state lives here; this is the only row any conditional
-# update in this section targets.
+# Canonical — one per docHash. All claim/enrich/promote state lives here.
 PK: CRAWLERDOC#{docHash}
 SK: STATE
 
 schemaVersion: number
 kind: string
 canonicalUrl: string
-publishedContentHash: string?   # last successfully PUBLISHED version; absent for a new doc
-candidateContentHash: string?   # in-flight claim; absent when qualityStatus is PUBLISHED
+publishedContentHash: string?   # last PUBLISHED version; absent for a new doc
+candidateContentHash: string?   # in-flight claim; absent when PUBLISHED
 qualityStatus: "ENRICHING" | "PROMOTING" | "PUBLISHED"
-claimedAt: string?              # set on claim; cleared on PUBLISHED or rejection rollback
-promotingAt: string?            # set when qualityStatus enters PROMOTING; cleared on PUBLISHED
+claimedAt: string?              # set on claim; cleared on PUBLISHED or rejection
+promotingAt: string?
 lastRejectedContentHash: string?
 lastRejectedReason: string?
 lastRejectedAt: string?
-discoveredBySourceIds: String Set   # every sourceId that has found this docHash
+discoveredBySourceIds: String Set
 artifactKey: string
 s3Key: string
 qualityScore: number
@@ -514,20 +470,16 @@ qualityGateVersion: string
 promptVersion: string
 modelId: string
 sourceAuthority: "official" | "trusted" | "open-web"
-keyTakeaways: string[]         # bounded list-card projection
+keyTakeaways: string[]
 firstSeenAt: string
 updatedAt: string
 ```
 
 ```text
-# Per-source row — keeps the existing list/detail API key and shape.
+# Per-source — unchanged key, now a read-side projection of the canonical row.
 PK: CRAWLER#{sourceId}
 SK: DOC#{docHash}
-```
 
-Add to the per-source row:
-
-```text
 schemaVersion: number
 canonicalUrl: string
 lastCheckedAt: string
@@ -535,7 +487,7 @@ eventGroupId: string?
 corroboratingSourceCount: number
 artifactKey: string
 s3Key: string
-qualityStatus: "PUBLISHED"     # this row only ever reflects a published state
+qualityStatus: "PUBLISHED"
 qualityScore: number
 qualityGateVersion: string
 promptVersion: string
@@ -543,164 +495,82 @@ modelId: string
 firstSeenAt: string
 updatedAt: string
 sourceAuthority: "official" | "trusted" | "open-web"
-keyTakeaways: string[]        # bounded list-card projection
+keyTakeaways: string[]
 ```
 
-The per-source row is written only in the fan-out step after a canonical-row
-promote succeeds (step 7 below) — it is never itself the target of a claim, so it
-never needs an `ENRICHING`/`PROMOTING` state, and two sources finding the same URL
-simply both get their own row updated from the same single canonical publish.
+The per-source row is written only by the fan-out step (step 8) after a canonical
+promote succeeds — it's never itself a claim target, so it needs no
+`ENRICHING`/`PROMOTING` state.
 
-**Per-kind KB prefix mapping.** `docHash` is source-independent (§6.2:
-`hash(kind + canonicalUrl)`), but the promoted key layout is not uniform across
-`kind` — it must match what the crawler already writes today, or Phase 1 creates a
-second, parallel key format for existing documents:
+**Per-kind KB prefix mapping** (`docHash` is source-independent; the promoted key
+layout is not):
 
-| `kind`       | Promoted KB key                                  |
-|--------------|---------------------------------------------------|
-| `news`       | `shared/news/{sourceId}/{docHash}.md`              |
-| `technical`  | `shared/aws-docs/{service}/{docHash}.md`           |
+| `kind`      | Promoted KB key                          |
+|-------------|-------------------------------------------|
+| `news`      | `shared/news/{sourceId}/{docHash}.md`      |
+| `technical` | `shared/aws-docs/{service}/{docHash}.md`   |
 
-`technical`'s second path segment is `service` (the AWS service the document
-covers), not `sourceId` — these are different values, and treating them as
-interchangeable would either 404 on promote or create a second copy under the
-wrong prefix. Any `kind` added later must add its own row to this table before
-Phase-gating it on.
+`technical`'s second segment is `service`, not `sourceId` — a new `kind` must add
+its own row here before being phased on.
 
-`summary` remains for backward-compatible list responses but now contains the
-substantive executive summary, capped at a safe DynamoDB size. The complete
-structured object is staged at a content-hash-versioned key in the **assets**
-bucket:
+`summary` stays for backward-compatible list responses (capped, now substantive).
+The full structured object and canonical Markdown are staged at a
+content-hash-versioned key in the **assets** bucket — never the KB bucket, since
+the out-of-band Bedrock data source has no inclusion prefix (§4) and scans the
+whole bucket:
 
 ```text
 s3://ttobak-assets-{account}/knowledge-artifacts/{kind}/{sourceId}/{docHash}/{contentHash}.json
-```
-
-Canonical Markdown is staged the same way, also in the assets bucket, never in the
-KB bucket:
-
-```text
 s3://ttobak-assets-{account}/knowledge-artifacts/{kind}/{sourceId}/{docHash}/{contentHash}.md
 ```
 
-This is deliberate, not incidental: the out-of-band Bedrock data source has no
-CDK-managed inclusion prefix (§4) — it scans the entire KB bucket, not a
-sub-prefix. Staging Markdown inside the KB bucket under any prefix (`staging/` or
-otherwise) would make each staged version a candidate for indexing as a duplicate
-knowledge document, exactly the risk §4 already flags for the JSON artifact. Keeping
-every staged version in the assets bucket, and letting only one promoted file per
-document ever exist in the KB bucket, avoids that risk entirely rather than relying
-on a prefix filter that does not exist in the current out-of-band configuration.
+**Publication is single-writer, decided before enrichment runs** — deciding only at
+promotion time doesn't work, since Opus's non-deterministic output means two
+workers enriching the identical `contentHash` could produce two different
+artifacts racing for the same staging key. All conditional updates target the
+canonical row:
 
-**The decision happens before enrichment runs, not after.** An earlier version of
-this design staged the enriched artifact first and used a conditional write only to
-decide *promotion* afterward. That does not work: Opus's output is not
-deterministic, so two workers refetching the same URL at nearly the same time could
-each independently enrich the *same* `contentHash` (deterministic — it hashes the
-fetched body, not the model output) into two *different* JSON/Markdown pairs, both
-racing to occupy the same staging key. Making enrichment single-writer removes the
-ambiguity at its source instead of reconciling two already-divergent artifacts
-after the fact. All conditional updates below target the canonical
-`CRAWLERDOC#{docHash}/STATE` row:
+1. Fetch, normalize, compute `contentHash`. If this `sourceId` has no per-source
+   row yet, add it to `discoveredBySourceIds` and (if canonical is `PUBLISHED`)
+   upsert its per-source row from the current published state — a second source
+   finding an already-published doc isn't a content change but still needs its own
+   row. If `contentHash == publishedContentHash`, stop (§8.2 step 3).
+2. **Claim**: conditional update requiring `qualityStatus = PUBLISHED` AND
+   `publishedContentHash <> contentHash` (or no row yet) → sets
+   `candidateContentHash`, `qualityStatus: ENRICHING`, `claimedAt: now`. Losers
+   stop immediately, before calling Opus.
+3. Winner calls Opus, stages JSON + Markdown at the `{contentHash}` keys.
+4. **Quality gate** (§7.2) runs.
+5. **Pass**: `ENRICHING -> PROMOTING`, conditioned on
+   `candidateContentHash`/`claimedAt` → promote (step 7).
+6. **Fail**: `ENRICHING -> PUBLISHED` (rollback, `publishedContentHash` untouched),
+   set `lastRejected*`. A repeat fetch of the same rejected `contentHash` within a
+   cooldown (e.g. 24h) skips re-claiming.
+7. **Promote** (self-correcting loop, since a resumed promote must never overwrite
+   a newer version):
+   a. Read current `candidateContentHash` (`H`).
+   b. `CopyObject` staged Markdown for `H` to the KB-bucket key.
+   c. Re-read; if `candidateContentHash != H`, repeat from (a) with the new value.
+   d. `PROMOTING -> PUBLISHED`, `publishedContentHash: H`, conditioned on
+      `candidateContentHash == H`; retry from (a) on conflict.
+8. **Fan out**: upsert every `discoveredBySourceIds` row with the published
+   summary/`keyTakeaways`/`qualityStatus`/`s3Key`.
+9. Trigger KB ingestion.
 
-1. Fetch and normalize the body; compute `contentHash` (deterministic, no model
-   call yet). If this `sourceId` has no per-source row for this `docHash` yet —
-   this source is discovering an already-known document for the first time, not
-   necessarily encountering new content — add it to the canonical row's
-   `discoveredBySourceIds` (idempotent set add) and, if the canonical row is
-   already `PUBLISHED`, upsert this source's per-source row from the canonical
-   row's current published state right away. This has to happen independently of
-   the content-change check below: a second source finding a URL a first source
-   already published is not a content change, but it must still end up in that
-   source's own list, or it would never appear there at all. Then, if the computed
-   `contentHash` equals the canonical row's `publishedContentHash`, nothing about
-   the content changed — stop (this is §8.2 step 3; comparing against
-   `publishedContentHash` specifically, never against a candidate that might have
-   been rejected, is what keeps this check correct after a rejection — see step
-   5b).
-2. **Claim**: a conditional DynamoDB update — requires `qualityStatus = PUBLISHED`
-   AND `publishedContentHash <> contentHash` (or the row not to exist yet, for a
-   new document) — and, on success, sets `candidateContentHash: contentHash`,
-   `qualityStatus: ENRICHING`, and `claimedAt: now`. The `publishedContentHash`
-   condition guards a race step 1 alone can't close: if another worker completed
-   its own full enrich/promote cycle for this exact `contentHash` in the gap
-   between this worker's step-1 read and this claim attempt, retrying the claim
-   would re-enrich content that's already published — wasted Opus cost, not a
-   correctness bug, but worth closing since the check is free. This is the single
-   decision point, and it is source-independent by construction: because it
-   targets the canonical row keyed only by `docHash`, two different sources
-   discovering the same URL contend for the *same* claim, not two separate ones.
-   Any worker that loses this conditional write stops immediately — it never calls
-   Opus and never stages anything for this version.
-3. The claim winner calls Opus, builds the structured JSON and canonical Markdown,
-   and stages both at the `{contentHash}` keys above (now genuinely idempotent:
-   exactly one worker ever produces content for a given `(docHash, contentHash)`
-   pair).
-4. **Quality gate** (§7.2) runs against the staged artifact.
-5. **On pass**: conditional update — `qualityStatus: ENRICHING -> PROMOTING`,
-   conditioned on `candidateContentHash`/`claimedAt` still matching what this
-   worker set in step 2 — then continue to promote (step 7).
-6. **On fail** (schema repair exhausted, or quality gate rejects): conditional
-   update — `qualityStatus: ENRICHING -> PUBLISHED`, conditioned on `claimedAt`
-   still matching, clearing `candidateContentHash`/`claimedAt` and setting
-   `lastRejectedContentHash`/`lastRejectedReason`/`lastRejectedAt`.
-   `publishedContentHash` is **not** touched — this is the rollback an earlier
-   version of this design was missing. Without it, a rejected candidate would
-   leave the row's only hash pointing at unpublished content, and the next run's
-   step 1 comparison (against what would have been the same field) would see "no
-   change" and never retry a body that was never actually published. A repeated
-   fetch of unfixably bad content is throttled instead by comparing the freshly
-   computed `contentHash` against `lastRejectedContentHash`: if they match and
-   `lastRejectedAt` is inside a cooldown window (for example, 24 hours), skip
-   re-claiming; otherwise (cooldown elapsed, or the content has genuinely changed
-   again) claiming proceeds normally.
-7. **Promote**, run as a self-correcting loop rather than a single copy, because a
-   promote that resumes after a long pause (see the reconciliation note below)
-   must never overwrite a version newer than the one it started with:
-   a. Read the canonical row's current `candidateContentHash` (call it `H`).
-   b. `CopyObject` the staged Markdown for `H` to the stable KB-bucket key from the
-      per-kind mapping above.
-   c. Re-read the row. If `candidateContentHash` no longer equals `H` — a newer
-      claim has already superseded this one — repeat from (a) with the now-current
-      value instead of aborting. This means whichever execution of this loop
-      happens to run last always ends by copying the version that is actually
-      current at that moment.
-   d. Conditional update: `qualityStatus: PROMOTING -> PUBLISHED`,
-      `publishedContentHash: H`, clearing `candidateContentHash`/`claimedAt`/
-      `promotingAt`, conditioned on `candidateContentHash` still equalling `H`. If
-      this fails (raced by a newer claim between (c) and (d)), go back to (a).
-8. **Fan out**: for every `sourceId` in `discoveredBySourceIds`, upsert the
-   per-source `CRAWLER#{sourceId}/DOC#{docHash}` row with the just-published
-   summary, `keyTakeaways`, `qualityStatus: PUBLISHED`, and `s3Key` — this is what
-   keeps the existing list/detail APIs working against an unchanged key shape.
-9. Trigger KB ingestion for the promoted key.
+A row stuck in `ENRICHING`/`PROMOTING` past a short lease (e.g. 10 minutes, same
+pattern as §11.3's `CLAIMED` reclaim) means the claim holder crashed.
+Reconciliation renews the lease (`claimedAt: old -> now`, conditioned on the stale
+value) before acting, so a merely-slow original worker loses its own subsequent
+writes:
 
-A row stuck in `ENRICHING` or `PROMOTING` for longer than a short lease (for
-example, ten minutes — the same pattern §11.3 uses for a stuck `CLAIMED` digest
-delivery) means the claim holder crashed. Reconciliation takes over by conditional
-lease renewal — `claimedAt: old -> now`, conditioned on `claimedAt` still equalling
-the stale value it observed — exactly the pattern §11.3 already uses, so the
-original worker (if it was merely slow rather than dead) loses its own subsequent
-conditional writes the moment reconciliation renews the lease, the same way a
-second claimant would:
+- **Stuck `ENRICHING`**: bodies aren't retained (§6.3) and SHA-256 is one-way, so
+  reconciliation must re-fetch and re-verify `contentHash` against
+  `candidateContentHash` before redoing enrichment; on mismatch, roll back (as
+  step 6, no rejection reason) and let the next fetch claim fresh.
+- **Stuck `PROMOTING`**: re-enter the promote loop (step 7) — already idempotent.
 
-- **Stuck `ENRICHING`**: the fetched body is never retained (§6.3: "exists in
-  process memory only"), so `contentHash` alone cannot be used to resume — SHA-256
-  is one-way. Reconciliation must re-fetch the body from `canonicalUrl`, recompute
-  `contentHash`, and compare it against `candidateContentHash`. If it matches, it is
-  safe to redo enrichment (step 3) with the renewed lease. If it does not match —
-  content changed again since the original claim — release the stale claim via the
-  same rollback as step 6 (without recording a rejection reason, since this was
-  never a quality failure), and let the current fetch make its own fresh claim with
-  the new hash.
-- **Stuck `PROMOTING`**: simply re-enter the promote loop (step 7) using the row's
-  current `candidateContentHash` — the loop is idempotent and self-correcting by
-  construction, so resuming it from any point is safe.
-
-The staged keys accumulate one object per historical `contentHash`; a lifecycle
-rule on the `knowledge-artifacts/` staging paths expires them after a short window
-(for example, seven days) since only the promoted copy in `shared/` is a
-long-term artifact — the DR retention in §17.2 already covers that copy.
+Staged keys get a short lifecycle (e.g. 7 days, assets bucket); only the promoted
+`shared/` copy is long-term (§17.2).
 
 ### 9.2 Run history
 
@@ -734,10 +604,7 @@ Existing title/snippet-grade items are not grandfathered as knowledge-grade:
 6. Trigger one KB ingestion after each bounded migration batch.
 
 The migration is resumable by stable document key and `schemaVersion`. Legacy items
-already use the §9.1 per-kind key mapping (`docHash`-based, source-independent), so
-step 3 replaces content at the same key rather than introducing a second location —
-no separate delete-old-key/re-ingest pass is needed beyond the KB ingestion trigger
-in step 6.
+already use §9.1's per-kind key mapping, so step 3 replaces content at the same key.
 
 ## 10. Custom Dictionary Automation
 
@@ -879,40 +746,21 @@ progresses through `CLAIMED -> SENDING -> SENT|FAILED|BOUNCED|COMPLAINED|UNKNOWN
 post-`SENDING` crash makes the actual outcome unknowable. SES message ID and a
 `deliveryKey` message tag correlate feedback.
 
-Two crash windows are handled differently, because only one of them is safe to
-retry automatically:
+Two crash windows, only one safe to auto-retry:
 
-- **Crash while `CLAIMED`, before `SendEmail` is ever called**: SES was never
-  invoked, so no message could have been sent. Reconciliation may reclaim a
-  `CLAIMED` row whose `claimedAt` is older than a short lease window (for example,
-  ten minutes) via a conditional update requiring the row still be `CLAIMED` with
-  that same `claimedAt` — this closes what would otherwise be a permanently stuck
-  key, since the worker crashed before reaching the at-most-once boundary below.
-  Without this, the digest for that user/scope/day could never be retried at all,
-  automatically or manually, because the deterministic key is already claimed.
-- **Crash after `SendEmail` is called (at or after `SENDING`)**: the system is
-  intentionally at-most-once from this point on. If the worker crashes after SES
-  accepts the message but before the row becomes `SENT`, automatic retry does not
-  send a possible duplicate. Reconciliation marks the delivery `UNKNOWN` and
-  surfaces it for manual retry.
+- **Crash while `CLAIMED`, before `SendEmail`**: SES never invoked. Reconciliation
+  reclaims a `CLAIMED` row past a short lease (e.g. 10 min) via a conditional
+  update on the same `claimedAt` — otherwise the key stays stuck forever.
+- **Crash at/after `SENDING`**: intentionally at-most-once from here — no retry.
+  Reconciliation marks `UNKNOWN` for manual retry.
 
-This at-most-once boundary depends on two rules that must hold exactly, not just as
-general intent:
-
-- The `CLAIMED -> SENDING` conditional update must commit *before* `SendEmail` is
-  called, never after. If a worker called `SendEmail` first and only recorded
-  `SENDING` afterward, a crash in between would leave the row still `CLAIMED` —
-  indistinguishable from "SES was never invoked" — and the reconciliation lease
-  above would reclaim and resend a message SES already accepted.
-- Every status transition is a conditional update on the row's *current* status,
-  and a terminal feedback status (`BOUNCED`, `COMPLAINED`) is never overwritten by
-  a later write. Concretely: the sender's own `SENDING -> SENT` update is
-  conditioned on the row still being `SENDING`. If an SNS/EventBridge bounce
-  notification arrives first and flips the row to `BOUNCED`, the sender's `SENT`
-  write then fails its condition and simply does not happen — `BOUNCED` stands. A
-  same-key overwrite here (a `SENT` write with no condition) would let a
-  fast-arriving bounce get silently clobbered back to looking like a successful
-  send.
+Two rules make this hold: (1) `CLAIMED -> SENDING` must commit *before*
+`SendEmail` is called, not after — otherwise a crash in between is
+indistinguishable from "never invoked" and reconciliation would resend a message
+SES already accepted. (2) every transition is conditioned on current status, and a
+terminal feedback status (`BOUNCED`/`COMPLAINED`) can't be overwritten — the
+sender's `SENDING -> SENT` write is conditioned on still being `SENDING`, so a
+fast-arriving bounce wins and isn't clobbered back to `SENT`.
 
 Permanent bounce or complaint disables the subscription and raises an operational
 event.
@@ -933,31 +781,20 @@ The snapshot is stored as `approvedPlan`, hashed, and passed to the execute requ
 Execution must follow that exact snapshot. Later chat messages do not silently alter
 an already-running job.
 
-A snapshot taken at approval time does not itself confer standing access at
-execution time. Before execution starts, and again before each stage that touches a
-referenced resource, the backend re-verifies server-side that the calling user still
-has access to every account/project/meeting referenced in `approvedPlan` — the same
-fail-closed re-verification pattern §11.1 already applies to digest subscriptions.
-If access was revoked between approval and execution, the job fails closed instead
-of running against stale authorization.
+A snapshot doesn't confer standing access at execution time — the backend
+re-verifies server-side, before execution and before each stage touching a
+referenced resource, that the caller still has access to every account/project/
+meeting in `approvedPlan` (same pattern as §11.1). Revoked access fails the job
+closed.
 
-Deep research's execution is a single iterative agentic loop (existing Bedrock
-Agent action groups: `web_search`, `fetch_page`, `save_report`) — unlike the prep
-packet's bounded flow (§12.2), it cannot be split into a public-context call
-followed by a separate synthesis call, since the same turn-by-turn reasoning that
-decides the next search *is* the reasoning that has `approvedPlan`'s internal
-context (selected accounts/projects, user answers) in its context window. The
-`web_search`/`fetch_page` tool boundary is therefore the enforcement point instead:
-every query argument a tool call carries is checked server-side, before it reaches
-the web-search provider, against the same approved-alias/generic-topic allowlist
-§6.1 already defines — a deterministic value check on the actual argument, not a
-prompt instruction the model could fail to follow. A query containing any term
-outside that allowlist is rejected before dispatch, the same fail-closed posture as
-§6.3's URL/address validation. §7.1's enforced residency flag applies to this
-execution path as well (already stated there) — the two controls are
-complementary: the allowlist check bounds what leaves as a search query, and the
-residency flag bounds where the internal-context-bearing reasoning itself may be
-processed.
+Deep research is a single iterative agentic loop (`web_search`/`fetch_page`/
+`save_report`), so unlike the prep packet (§12.2) it can't split into a
+public-then-synthesis call — the same reasoning that picks the next search has
+`approvedPlan`'s internal context in its window. The enforcement point is
+therefore the tool boundary: every `web_search`/`fetch_page` query argument is
+checked server-side against §6.1's approved-alias/generic-topic allowlist before
+dispatch — a deterministic value check, not a prompt instruction. §7.1's residency
+flag applies here too.
 
 The tool layer records a source manifest for every successful `web_search` and
 `fetch_page`. `save_report` computes unique source count and word count itself; it
@@ -978,27 +815,18 @@ lets the user select open action items and prior meetings. The packet combines:
 - user-provided agenda and constraints,
 - unresolved questions and decisions.
 
-This separation is structurally enforced, not only a prompt instruction — the same
-"enforced, not disclosed" bar §7.1 sets for residency applies here: a model call
-that has both internal context and web-search/fetch tools available cannot be
-proven, by policy text alone, to never route the former into the latter. Execution
-is therefore split into two model calls with disjoint capabilities:
+Enforced structurally (§7.1's "enforced, not disclosed" bar), via two model calls
+with disjoint capabilities:
 
-1. A **public-context call** with `web_search`/`fetch_page` tools available and
-   only public inputs (approved aliases, AWS services, generic topics). Its output —
-   the fetched public news/technical material — is captured and fixed before step 2
-   starts.
-2. A **synthesis call** with no web-search or fetch tools bound at all (not merely
-   instructed not to use them) that receives the selected internal action-item
-   text, prior summaries, and step 1's fixed public output, and produces the final
-   packet. Because this call has no tool that could exfiltrate a query externally,
-   internal content cannot reach the web-search provider regardless of what the
-   model generates.
+1. **Public-context call**: `web_search`/`fetch_page` tools, public inputs only.
+   Output is captured and fixed before step 2.
+2. **Synthesis call**: no web/fetch tools bound at all — receives internal
+   action-item text, prior summaries, and step 1's output, produces the packet.
+   No tool means internal content can't reach the web-search provider regardless
+   of model output.
 
-Internal action-item text and meeting content are also excluded from any
-long-lived Step Functions state-machine payload — they flow through the synthesis
-call's input directly, not through orchestration state that could be logged or
-inspected outside the call itself.
+Internal action-item/meeting content also stays out of any Step Functions
+state-machine payload — it flows directly into the synthesis call's input.
 
 Output sections:
 
@@ -1047,50 +875,32 @@ research/{userId}/{researchId}/report.json
 research/{userId}/{researchId}/report.md
 ```
 
-They must never be written to `shared/research/`. Research reports are already
-being written there today, independent of this design, by **three** currently-
-deployed writers — not the two this section previously named, and not all
-deployed the same way:
+They must never be written to `shared/research/`. Today, three deployed writers
+still do:
 
-- `backend/internal/service/research.go` — the `api` Lambda, owned by
-  `TtobakGatewayStack`.
-- `backend/python/research-tools/save_report.py` — despite the name suggesting an
-  ad-hoc script, this is a CDK-deployed Lambda (`ttobak-research-save-report`,
-  `infra/lib/research-agent-stack.ts`), invoked as a Bedrock Agent action-group
-  tool. Its `toolsRole` currently has `kbBucket.grantReadWrite` only and reads
-  `KB_BUCKET_NAME` from its environment — there is no assets-bucket grant or env
-  var to redirect it with today.
-- `backend/python/research-agent/tools.py` — the *separate* AgentCore Runtime
-  container, which genuinely is deployed outside CDK, via its own pipeline
-  (`deploy-research-agent.yml`).
+- `backend/internal/service/research.go` (`api` Lambda, `TtobakGatewayStack`).
+- `backend/python/research-tools/save_report.py` — a CDK Lambda
+  (`ttobak-research-save-report`, `infra/lib/research-agent-stack.ts`) despite the
+  script-like name, invoked as a Bedrock Agent action-group tool. `toolsRole` has
+  only `kbBucket.grantReadWrite` and reads `KB_BUCKET_NAME` — no assets-bucket
+  grant/env var yet.
+- `backend/python/research-agent/tools.py` — the AgentCore Runtime container,
+  genuinely outside CDK (`deploy-research-agent.yml`).
 
-That exposure is not introduced by this pipeline and should not wait on Phase 4 —
-but closing it requires three things, not one, and the first two are Phase 1
-scope, spanning stacks/pipelines this design otherwise doesn't touch:
+This exposure predates this design and shouldn't wait on Phase 4. Closing it, in
+Phase 1:
 
-1. **Redirect the writers.** Change all three call sites above to write to the new
-   owner-scoped `research/{userId}/{researchId}/...` keys, instead of
-   `shared/research/`. Without this, remediating the existing backlog only clears
-   it once — the same deployed code immediately starts writing new reports back
-   into `shared/research/`, and the exposure recreates itself. Concretely, Phase 1
-   deploys: a `TtobakGatewayStack` change (`research.go`); a
-   `TtobakResearchAgentStack` change (`research-agent-stack.ts` — add a
-   prefix-scoped grant on the assets bucket for `research/*` to `toolsRole`, and
-   replace/add the environment variable `save_report.py` reads so it writes to the
-   assets bucket instead of `KB_BUCKET_NAME`); and a `deploy-research-agent.yml` run
-   carrying the equivalent assets-bucket env var/permission for the AgentCore
-   Runtime container — in addition to the `TtobakAiStack`/`TtobakCrawlerStack`
-   changes above.
-2. **Migrate the backlog.** Move already-published reports out of `shared/research/`
-   (to owner-scoped storage, or confirm and keep only the ones with public
-   material).
-3. **Clear the vector index.** The Bedrock KB's already-ingested vectors are a
-   separate copy from the S3 objects — deleting or moving the S3 objects in step 2
-   does not by itself remove vectors already indexed from them. A KB re-ingestion
-   targeting the `shared/research/` prefix (or a full re-sync, if the out-of-band
-   data source has no narrower scope available) must run after step 2, and
-   remediation is only verified complete once a KB retrieval query against migrated
-   report content returns zero hits — not merely once the S3 objects are gone.
+1. **Redirect all three writers** to the owner-scoped keys above — otherwise
+   backlog remediation just gets refilled by the same code. Deploys:
+   `TtobakGatewayStack` (`research.go`); `TtobakResearchAgentStack` (grant
+   `research/*` on the assets bucket to `toolsRole`, swap `save_report.py`'s env
+   var); a `deploy-research-agent.yml` run with the equivalent for the AgentCore
+   container.
+2. **Migrate the backlog** to owner-scoped storage (or confirm/keep only
+   public-material reports).
+3. **Clear the vector index** — deleting/moving S3 objects doesn't remove
+   already-ingested vectors. Re-run KB ingestion on `shared/research/` after step
+   2; verify via a zero-hit retrieval query, not just an empty S3 prefix.
 
 Phase 4 only needs to confirm all three are in place, since Phase 1 will already
 have closed the writer path and cleared the backlog. Account sharing continues
@@ -1144,22 +954,16 @@ content retains the current fallback.
 
 ## 14. Security and Privacy
 
-- All AWS resources this design introduces remain private; public traffic continues
-  through CloudFront. One pre-existing, unrelated exception: the Bedrock Knowledge
-  Base's OpenSearch Serverless collection network policy currently sets
-  `AllowFromPublic: true` (`infra/lib/knowledge-stack.ts`) rather than a VPC
-  endpoint. This predates this design, is not introduced or widened by it, and
-  remains a tracked gap (see CLAUDE.md Known Issues) — a VPC-endpoint migration for
-  that collection is out of scope here.
-- No new unauthenticated API route is introduced.
-- New IAM grants added by this design are prefix- and action-scoped: the new
-  `knowledge-artifacts/*` access, the selected Bedrock inference profile, and the
-  existing AgentCore Gateway. One pre-existing, unrelated exception, kept
-  deliberately rather than narrowed here: `crawlerRole`'s existing
-  `kbBucket.grantReadWrite(crawlerRole)` (`infra/lib/ai-stack.ts`) is bucket-wide,
-  not prefix-scoped, and predates this design. Narrowing it is a separate, larger
-  change against every existing crawler code path that already relies on it (§4) —
-  out of scope here, same as the AOSS exception above.
+- All AWS resources this design introduces remain private; CloudFront-only public
+  traffic. Pre-existing exception, not introduced/widened here: the KB's AOSS
+  collection has `AllowFromPublic: true` (`knowledge-stack.ts`) instead of a VPC
+  endpoint — tracked in CLAUDE.md Known Issues, out of scope.
+- No new unauthenticated API route.
+- New IAM grants are prefix/action-scoped (`knowledge-artifacts/*`, the selected
+  inference profile, existing AgentCore Gateway). Pre-existing exception:
+  `crawlerRole`'s `kbBucket.grantReadWrite` (`ai-stack.ts`) is bucket-wide and not
+  narrowed here — narrowing it is a separate change against every crawler path
+  that relies on it (§4).
 - Search/fetch input is untrusted. Prompt delimiters, role markers, and instruction
   text are neutralized before model use, and again (§5.2) before third-party
   evidence excerpts are embedded in canonical Markdown — the KB is a re-injection
@@ -1290,27 +1094,14 @@ and failover are a separate higher-tier requirement.
 
 - DynamoDB PITR remains enabled. Add a daily same-Region AWS Backup recovery point
   with 35-day retention for an independently scheduled 24-hour checkpoint.
-- Both assets and KB buckets remain versioned. Noncurrent-version retention is two
-  separate controls, on two separate buckets owned by two separate stacks — not one
-  blocked item:
-  - **Assets bucket** (`ttobak-assets-{account}`, `TtobakStorageStack`): the
-    `knowledge-artifacts/` **staging** paths (§9.1) get a *short* lifecycle rule —
-    seven days — since only the promoted copy in the KB bucket is a long-term
-    artifact; the JSON artifact copy also under `knowledge-artifacts/` is likewise
-    short-lived. This is deployable now, through `TtobakStorageStack`, independent
-    of the KB bucket's blocker below.
-  - **KB bucket** (`ttobak-kb-{account}`, `TtobakKnowledgeStack`): retain noncurrent
-    versions of the **promoted** canonical-Markdown copies for at least 35 days.
-    This is the control that's currently blocked: adding it requires deploying
-    `TtobakKnowledgeStack`, which cannot be safely deployed today because it stages
-    an undeployed KB teardown (CLAUDE.md Known Issues, `cdk deploy --all` warning).
-    Until that teardown is resolved, this 35-day policy is a planned control, not
-    yet in place; bucket versioning itself (already enabled) still provides
-    object-level recovery in the interim.
-
-  These are different objects on different buckets — the assets-bucket staging
-  copies and the KB-bucket promoted copies — so the 7-day and 35-day windows above
-  are not in tension with each other despite both appearing in this design.
+- Both assets and KB buckets remain versioned. Two separate controls, different
+  buckets/stacks:
+  - **Assets bucket** (`TtobakStorageStack`): 7-day lifecycle on
+    `knowledge-artifacts/` staging paths (§9.1) — deployable now.
+  - **KB bucket** (`TtobakKnowledgeStack`): 35-day noncurrent retention on the
+    promoted copies — blocked until `TtobakKnowledgeStack` is deployable again
+    (staged KB teardown, CLAUDE.md Known Issues); versioning alone covers the
+    interim.
 - Infrastructure, state-machine definitions, prompts, schemas, and runbooks remain
   in Git/CDK.
 - Canonical Markdown in S3 is the rebuild source for the Bedrock KB. The vector index
