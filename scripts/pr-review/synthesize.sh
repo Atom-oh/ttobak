@@ -5,16 +5,14 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
 DIFF="$1"; WORK="$2"; PR_NUMBER="$3"; PR_TITLE="$4"; OUT="$5"
-# The workflow cancels an in-progress run on every new push to the PR
-# (concurrency: cancel-in-progress) on a non-ephemeral runner -- a chair-stream
-# temp file left by a happy-path-only `rm -f` would survive that SIGTERM. A
-# bare `trap ... INT TERM` only runs the handler and lets the script continue
-# (bash does not exit on a trapped signal by default) -- on cancellation that
-# meant primary died, cleanup ran, and the script kept going into the fallback
-# branch, which recreates the unscrubbed stream file right as the runner's
-# grace-period SIGKILL (which no trap can catch) lands. `cleanup; exit N` in
-# the INT/TERM handlers is what actually stops the script there.
-cleanup() { rm -f "$WORK/chair-stream.jsonl"; }
+# chair.err briefly holds raw claude/jq stderr (pre-scrub) -- surfaced excerpts
+# already go through scrub_secrets (below), but the full file on disk doesn't.
+# Clean it up on exit/cancellation so that residual copy doesn't outlive the
+# run. `cleanup; exit N` in the INT/TERM handlers (not a bare trap) matters
+# because bash does not exit a script on a trapped signal by default -- an
+# unconditional-exit-less handler would let the script fall through into the
+# fallback branch on cancellation.
+cleanup() { rm -f "$WORK/chair.err"; }
 trap cleanup EXIT
 trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
@@ -160,21 +158,26 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
   # stream-json + --include-partial-messages: logs a progress signal instead of
   # 25min of silence. Logs delta *length* only, never delta text — text would skip
   # scrub_secrets, and a credential split across chunk boundaries wouldn't be
-  # caught by per-chunk scrubbing. Final text is scrubbed once from the full
-  # buffered stream (below), not incrementally.
-  # chair-stream.jsonl briefly holds the full unscrubbed model output; cleanup is
-  # the script-level trap above (covers cancellation, not just this happy path).
-  # rm -f before creating guards a symlink left at this fixed path on the
-  # non-ephemeral runner (same threat lib.sh's ensure_slots -L guard covers).
-  local stream_file="$WORK/chair-stream.jsonl"
+  # caught by per-chunk scrubbing.
+  #
+  # The full unscrubbed model output never touches disk: an earlier version of
+  # this piped `tee` into a fixed-path file for the result-extraction jq to
+  # re-read, but that put pre-scrub chair output at rest on a non-ephemeral,
+  # self-hosted runner (pr-review.yml: `runs-on: ttobak-claude-arm`) between
+  # writes and its own cleanup -- a SIGKILL or runner crash (neither catchable
+  # by any trap) could leave it there into a later run, since that run only
+  # clears `lenses/` at start, not this path. `tee >(...)` fans the same
+  # stdout into a second jq (for the "result" event, scrubbed straight into
+  # "$OUT") without an intermediate file at all -- the process-substitution
+  # subshell only ever holds the buffer in its own pipe, never at a
+  # predictable path.
   if command -v jq >/dev/null 2>&1; then
-    rm -f "$stream_file"
-    ( umask 077; : > "$stream_file" )
     if ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
          claude -p "$(cat "$WORK/synth-prompt.txt")" \
          --output-format stream-json --include-partial-messages --verbose \
          < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" \
-         | tee "$stream_file" \
+         | tee >(jq -r 'select(.type=="result") | .result // empty' 2>>"$WORK/chair.err" \
+                   | scrub_secrets > "$OUT") \
          | jq --unbuffered -r \
              'select(.type=="stream_event" and .event.type=="content_block_delta"
                      and .event.delta.type=="text_delta") | (.event.delta.text | utf8bytelength)' \
@@ -187,23 +190,25 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
     else
       CHAIR_RC="${PIPESTATUS[0]}"   # timeout 이 죽였으면 124 (파이프 첫 단계 = claude/timeout)
     fi
-    # Final text is one "result" event, not a delta reassembly. Guarded with
-    # if/elif, not a bare pipeline: under set -e a truncated last line (claude
-    # killed mid-write on timeout) makes jq exit non-zero, which would otherwise
-    # kill this whole script and skip the fallback/comment-posting logic below.
-    if jq -r 'select(.type=="result") | .result // empty' "$stream_file" 2>>"$WORK/chair.err" \
-         | scrub_secrets > "$OUT"
-    then
-      rm -f "$stream_file"   # result captured -- shrink the unscrubbed-plaintext window to seconds
-    elif [ "$CHAIR_RC" = 0 ]; then
-      CHAIR_RC=1   # preserve 124 if already set
-    fi
-    # rc=0 with an empty $OUT means the "result" event never showed up (schema
-    # drift, or the stream was truncated in a way jq tolerated) -- surface that
-    # as a failure instead of silently producing "budget exhausted" downstream.
-    if [ "$CHAIR_RC" = 0 ] && [ ! -s "$OUT" ]; then
-      CHAIR_RC=1
-      echo "::warning::chair stream produced no 'result' event despite rc=0 -- possible output-format schema drift"
+    # `tee >(...)`'s process substitution is its own background subshell --
+    # the foreground pipeline above (tee | jq | awk) can finish before that
+    # subshell has finished writing "$OUT". `wait` (no args) blocks on every
+    # still-running child of this shell, substitution included, so the
+    # emptiness check below never races a write in progress. Its own exit
+    # status is irrelevant here (already reflected in "$OUT"'s contents), so
+    # it's discarded rather than folded into CHAIR_RC.
+    if ! wait 2>/dev/null; then :; fi
+    # Empty "$OUT" covers two cases the same way: the "result" event never
+    # showed up (schema drift, or truncation jq tolerated), or the pipe was
+    # killed before producing one (timeout). If CHAIR_RC is already 124 from
+    # above, leave it -- that's the more specific diagnosis; only promote to a
+    # generic failure when the main pipeline reported success but the result
+    # extraction silently produced nothing.
+    if [ ! -s "$OUT" ]; then
+      if [ "$CHAIR_RC" = 0 ]; then
+        CHAIR_RC=1
+        echo "::warning::chair stream produced no 'result' event despite rc=0 -- possible output-format schema drift"
+      fi
     fi
   else
     # No jq: fall back to text mode rather than blocking the review on it.
