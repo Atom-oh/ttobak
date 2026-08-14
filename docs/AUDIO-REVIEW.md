@@ -99,19 +99,13 @@
   };
   ```
 
-### FR-002 | CRITICAL | AudioContext suspended 상태 미확인
+### FR-002 | CRITICAL | AudioContext suspended 상태 미확인 — **FIXED**
 - **리뷰어**: Claude, Gemini
-- **파일**: `frontend/src/components/RecordButton.tsx:119`
+- **파일**: `frontend/src/components/RecordButton.tsx` (녹음용 AudioContext 생성 직후)
 - **현상**: `new AudioContext()` 생성 후 `.state` 확인이나 `.resume()` 호출 없음.
-- **영향**: 모바일 브라우저(iOS Safari, Chrome Android)에서 AudioContext가 `suspended` 상태로 생성됨. AnalyserNode(파형 시각화)가 작동하지 않아 레벨미터가 0 표시 → 사용자가 "마이크가 안 된다"고 오인. `page.tsx:154`의 미리보기 AudioContext에도 동일 문제.
+- **영향**: 모바일 브라우저(iOS Safari, Chrome Android)에서 AudioContext가 `suspended` 상태로 생성됨. AnalyserNode(파형 시각화)가 작동하지 않아 레벨미터가 0 표시 → 사용자가 "마이크가 안 된다"고 오인. `page.tsx:154`의 미리보기 AudioContext에도 동일 문제(미수정 — 프리뷰는 idle 상태에서 생성되므로 이 회귀 조사(iOS에서 Record 버튼이 카메라를 여는 문제, 2026-08-13)의 범위 밖).
 - **재현**: 모바일 브라우저에서 녹음 시작 → 파형 애니메이션 없음
-- **수정 방향**:
-  ```typescript
-  const audioContext = new AudioContext();
-  if (audioContext.state === 'suspended') {
-    await audioContext.resume();
-  }
-  ```
+- **수정 내용**: `new AudioContext()` 생성 직후 `state === 'suspended'`면 `resume()` 시도, 실패 시 `console.warn`으로 표면화(무음 처리 금지 — AGENTS.md "no silent failures"). 이후에도 `onstatechange`에서 같은 재시도 로직을 걸어, iOS의 전화 수신 등 오디오 세션 인터럽션으로 이미 실행 중이던 컨텍스트가 다시 `suspended`되는 경우도 커버.
 
 ### FR-003 | HIGH | MediaStream track ended 이벤트 미처리
 - **리뷰어**: Claude
@@ -172,12 +166,12 @@
 - **영향**: 일부 모바일 브라우저에서 녹음 시작 불가. `startRecording`의 try/catch에서 잡히지만 에러 메시지가 모호함.
 - **수정 방향**: 폴백 시 빈 문자열 반환 → `MediaRecorder`가 기본 포맷 자동 선택하도록.
 
-### FR-009 | LOW | iPadOS 데스크톱 UA 미감지
+### FR-009 | LOW | iPadOS 데스크톱 UA 미감지 — **더 이상 해당 없음**
 - **리뷰어**: Claude
 - **파일**: `frontend/src/lib/device.ts:3-8`
 - **현상**: iPadOS 13+는 macOS user agent 사용. `isIOS()`가 `false` 반환 → MediaRecorder 경로 사용 (native file input 대신).
 - **영향**: iPad Safari에서 MediaRecorder 지원이 제한적이면 FR-008 폴백 문제 발생 가능. 실제 영향은 낮음 (Safari 14.5+ 지원).
-- **수정 방향**: `navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)` 추가.
+- **경과 (2026-08-13)**: `RecordButton`의 `useNativeCapture`가 더 이상 `isIOS()`를 참조하지 않는다 — iPhone Safari를 강제로 native file-input 폴백으로 보내던 분기 자체를 제거했다(그 폴백 input에 실수로 붙어 있던 `capture="environment"`가 Record 버튼을 누르면 카메라를 여는 원인이었다). 이제 `useNativeCapture = !supportsMediaRecorder()`만 남아, iPhone과 iPad UA 차이는 이 판단에 영향을 주지 않는다. iPadOS UA 오분류 자체가 사라진 것은 아니지만(`isIOS()` 함수는 여전히 이렇게 동작함), 이 파일에서는 더 이상 그 결과에 의존하지 않으므로 원래 우려했던 영향 경로가 없다.
 
 ### FR-010 | LOW | 프리뷰/녹음 AudioContext 이중 생성
 - **리뷰어**: Claude
