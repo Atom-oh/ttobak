@@ -56,7 +56,7 @@ PR 이전(main) 내용만 보이므로, "로컬에 없다"는 diff 에 있는 �
 Synthesize ONE final review, grouped by lens (L2/L3/L4/L5):
 1. **Summary** (2-3문장, 한국어)
 2. **Issues per lens** — CRITICAL/MAJOR/MINOR. 같은 lens 를 본 여러 모델 간 합의/이견을 표시
-   (예: "3/4 모델 CRITICAL 지적, 1/4 미언급"). 서로 다른 모델이 독립적으로 같은 finding에
+   (예: "2/3 모델 CRITICAL 지적, 1/3 미언급"). 서로 다른 모델이 독립적으로 같은 finding에
    도달했으면 신호가 강하다고 명시하되, 합의 자체를 증거로 취급하지 말고 diff와 대조해 확인하라
    (공유 학습 편향으로 여러 모델이 같은 오탐에 도달할 수 있음; 위 로컬 체크아웃 경고 참고 —
    diff 대조는 stdin 의 diff 텍스트 기준이어야 하며 로컬 파일 기준이면 안 된다).
@@ -111,8 +111,8 @@ FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-5}"
 #   oh-my-cloud-skills  5647줄   2m19s   20m00s(캡 2회) 실패
 #
 # 읽어야 할 것:
-#   ① 병목은 체어다 — 정상 실행에서도 이 단계의 38~78%, 실패 실행에선 86~89%. 패널(kiro×3+
-#      codex 16셀)은 전부 병렬이라 35초~5분에 끝난다.
+#   ① 병목은 체어다 — 정상 실행에서도 이 단계의 38~78%, 실패 실행에선 86~89%. 패널(kiro×2+
+#      codex 12셀)은 전부 병렬이라 35초~5분에 끝난다.
 #   ② **체어 소요는 diff 줄수와 비례하지 않는다.** awsops 는 1909줄 PR 을 5분 36초에 끝냈고,
 #      mra 는 72줄에 7분 43초를 썼다. 상관 있는 건 체어가 생성하는 리뷰 분량이며 관측 처리량은
 #      17~42 B/s 다(5~10KB 리뷰 = 2~8분).
