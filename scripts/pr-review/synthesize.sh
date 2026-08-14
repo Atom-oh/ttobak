@@ -149,8 +149,13 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
   # scrub_secrets, and a credential split across chunk boundaries wouldn't be
   # caught by per-chunk scrubbing. Final text is scrubbed once from the full
   # buffered stream (below), not incrementally.
+  # $WORK/chair-stream.jsonl is created with umask 077 (owner-only) and removed
+  # right after extraction: it briefly holds the full unscrubbed model output on
+  # disk, and this runner is non-ephemeral (lib.sh) with a fixed $WORK path, so a
+  # leftover file here would persist across runs.
   local stream_file="$WORK/chair-stream.jsonl"
   if command -v jq >/dev/null 2>&1; then
+    ( umask 077; : > "$stream_file" )
     if ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
          claude -p "$(cat "$WORK/synth-prompt.txt")" \
          --output-format stream-json --include-partial-messages --verbose \
@@ -158,19 +163,31 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
          | tee "$stream_file" \
          | jq --unbuffered -r \
              'select(.type=="stream_event" and .event.type=="content_block_delta"
-                     and .event.delta.type=="text_delta") | (.event.delta.text | length)' \
+                     and .event.delta.type=="text_delta") | (.event.delta.text | utf8bytelength)' \
              2>/dev/null \
          | awk -v model="$(chair_label "$1")" \
-             '{ total+=$1; if (total-last>=500) { print "chair " model ": " total "B generated so far..."; last=total } }'
+             '{ total+=$1; if (total-last>=500) { print "chair " model ": " total "B generated so far..."; fflush(); last=total } }
+              END { print "chair " model ": " total "B total" }'
     then
       CHAIR_RC=0
     else
       CHAIR_RC="${PIPESTATUS[0]}"   # timeout 이 죽였으면 124 (파이프 첫 단계 = claude/timeout)
     fi
-    # Final text is one "result" event, not a delta reassembly. Empty on
-    # failure/timeout, same as text mode.
-    jq -r 'select(.type=="result") | .result // empty' "$stream_file" 2>/dev/null \
-      | scrub_secrets > "$OUT"
+    # Final text is one "result" event, not a delta reassembly. Guarded with
+    # if/else, not a bare pipeline: under set -e a truncated last line (claude
+    # killed mid-write on timeout) makes jq exit non-zero, which would otherwise
+    # kill this whole script and skip the fallback/comment-posting logic below.
+    if jq -r 'select(.type=="result") | .result // empty' "$stream_file" 2>/dev/null \
+         | scrub_secrets > "$OUT"
+    then :; else CHAIR_RC=1; fi
+    # rc=0 with an empty $OUT means the "result" event never showed up (schema
+    # drift, or the stream was truncated in a way jq tolerated) -- surface that
+    # as a failure instead of silently producing "budget exhausted" downstream.
+    if [ "$CHAIR_RC" = 0 ] && [ ! -s "$OUT" ]; then
+      CHAIR_RC=1
+      echo "::warning::chair stream produced no 'result' event despite rc=0 -- possible output-format schema drift"
+    fi
+    rm -f "$stream_file"
   else
     # No jq: fall back to text mode rather than blocking the review on it.
     echo "::warning::jq not found on runner — chair progress logging disabled, falling back to non-streaming mode"
