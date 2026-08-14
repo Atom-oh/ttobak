@@ -5,6 +5,12 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
 DIFF="$1"; WORK="$2"; PR_NUMBER="$3"; PR_TITLE="$4"; OUT="$5"
+# The workflow cancels an in-progress run on every new push to the PR
+# (concurrency: cancel-in-progress) on a non-ephemeral runner -- a chair-stream
+# temp file left by a happy-path-only `rm -f` would survive that SIGTERM. EXIT
+# covers normal/error exit; INT/TERM are explicit so an unhandled TERM doesn't
+# skip it.
+trap 'rm -f "$WORK/chair-stream.jsonl"' EXIT INT TERM
 SLOT="$WORK/slot"
 RESP="$(tr '\n' ',' < "$WORK/responded.txt" 2>/dev/null | sed 's/,$//')" || true
 [ -z "$RESP" ] && RESP="(none — Claude solo)"
@@ -149,12 +155,13 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
   # scrub_secrets, and a credential split across chunk boundaries wouldn't be
   # caught by per-chunk scrubbing. Final text is scrubbed once from the full
   # buffered stream (below), not incrementally.
-  # $WORK/chair-stream.jsonl is created with umask 077 (owner-only) and removed
-  # right after extraction: it briefly holds the full unscrubbed model output on
-  # disk, and this runner is non-ephemeral (lib.sh) with a fixed $WORK path, so a
-  # leftover file here would persist across runs.
+  # chair-stream.jsonl briefly holds the full unscrubbed model output; cleanup is
+  # the script-level trap above (covers cancellation, not just this happy path).
+  # rm -f before creating guards a symlink left at this fixed path on the
+  # non-ephemeral runner (same threat lib.sh's ensure_slots -L guard covers).
   local stream_file="$WORK/chair-stream.jsonl"
   if command -v jq >/dev/null 2>&1; then
+    rm -f "$stream_file"
     ( umask 077; : > "$stream_file" )
     if ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
          claude -p "$(cat "$WORK/synth-prompt.txt")" \
@@ -179,7 +186,7 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
     # kill this whole script and skip the fallback/comment-posting logic below.
     if jq -r 'select(.type=="result") | .result // empty' "$stream_file" 2>/dev/null \
          | scrub_secrets > "$OUT"
-    then :; else CHAIR_RC=1; fi
+    then :; else [ "$CHAIR_RC" = 0 ] && CHAIR_RC=1; fi  # preserve 124 if already set
     # rc=0 with an empty $OUT means the "result" event never showed up (schema
     # drift, or the stream was truncated in a way jq tolerated) -- surface that
     # as a failure instead of silently producing "budget exhausted" downstream.
@@ -187,7 +194,6 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
       CHAIR_RC=1
       echo "::warning::chair stream produced no 'result' event despite rc=0 -- possible output-format schema drift"
     fi
-    rm -f "$stream_file"
   else
     # No jq: fall back to text mode rather than blocking the review on it.
     echo "::warning::jq not found on runner — chair progress logging disabled, falling back to non-streaming mode"
