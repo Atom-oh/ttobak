@@ -108,6 +108,15 @@ The implementation reuses the current stacks and storage:
     with the existing dependency graph (`AiStack` does not depend on
     `CrawlerStack`, so this ordering is about the IAM grant being in place before
     the Lambda code that needs it redeploys, not a new stack dependency edge).
+  - The state machine itself also changes, not only its env vars/IAM. Today
+    `crawler-stack.ts` runs a per-**source** `sfn.Map` calling one Lambda per
+    source, with no `Retry`/`Catch`/DLQ configured. §15.1 requires per-**candidate**
+    fan-out, independent retry, and an ingestion failure that fails the workflow
+    visibly rather than returning as a successful Lambda payload — none of which
+    the current shape provides. Restructuring the state machine (nested per-source
+    → per-candidate `Map`, `Retry`/`Catch` on the enrichment step, a DLQ for
+    exhausted retries) is Phase 1 CDK scope in `crawler-stack.ts`, alongside the
+    env var/bucket-reference change above, not a later-phase refinement.
 - `ttobak-main`: source configuration, insight metadata, term state, digest state,
   and run history.
 - Main versioned assets bucket: private structured artifacts under
@@ -345,19 +354,25 @@ Environment variable: FINAL_MODEL_ID
 ```
 
 The US geo inference profile keeps data in US and Canada Regions. The public
-news/official-doc pipeline contains public source material. Project-specific briefs
-are user-initiated and must disclose that selected internal context is sent to the
-US geography.
+news/official-doc pipeline contains public source material. Every *other* Opus use
+listed below can have internal context reach it — including approved deep
+research, whose `approvedPlan` snapshot (§12.1) carries selected accounts/projects
+and user answers that may themselves be confidential — and must disclose that
+selected internal context is sent to the US geography.
 
-This is enforced, not only disclosed. A deployment-owner config flag (default
-`false`) gates whether the prep-packet/architecture-brief code path may invoke the
-US-geo inference profile at all. A deployment with a stricter residency policy
-leaves the flag `false`, and a request for that brief type fails closed with an
-explicit error rather than silently sending internal context — the per-request
-disclosure UI is in addition to this server-side gate, not a substitute for it.
-Enabling the flag is a one-time deployment decision, not a per-request user consent
-checkbox. An approved regional model, once configured, is a separate way to satisfy
-the same residency requirement without disabling the brief type.
+This is enforced, not only disclosed, and the gate applies to every one of those
+code paths uniformly, not only prep packets and architecture briefs. A
+deployment-owner config flag (default `false`) gates whether *any* code path that
+can carry internal context into an Opus call — prep packet, architecture brief, or
+approved deep research — may invoke the US-geo inference profile at all. A
+deployment with a stricter residency policy leaves the flag `false`, and a request
+on any of those paths fails closed with an explicit error rather than silently
+sending internal context — the per-request disclosure UI is in addition to this
+server-side gate, not a substitute for it. Enabling the flag is a one-time
+deployment decision, not a per-request user consent checkbox. An approved regional
+model, once configured, is a separate way to satisfy the same residency requirement
+without disabling any of those paths. The public news/technical-enrichment pipeline
+is unaffected by this flag either way, since it never carries internal context.
 
 Use Opus 5 only for:
 
@@ -464,36 +479,77 @@ purpose — they are not interchangeable and none supersedes another:
   content changes. Used to decide whether a technical refresh requires re-enrichment,
   and — see below — to make publication of a content change race-free.
 
-Keep the existing key so current list/detail APIs remain compatible:
+**The state machine below is source-independent, but the existing list/detail API
+key is not.** `docHash` (§6.2: `hash(kind + canonicalUrl)`) is source-independent —
+two sources can discover the same canonical URL. If the claim/enrich/promote state
+lived on the per-source row alone, two sources finding the same URL could each
+successfully claim it under their own `CRAWLER#{sourceId}` partition, breaking the
+single-writer guarantee the claim exists to provide. So the state that matters for
+concurrency control lives on one canonical, source-independent row, and the
+existing per-source row becomes a read-side projection of it:
 
 ```text
+# Canonical row — one per docHash, regardless of how many sources discovered it.
+# All claim/enrich/promote state lives here; this is the only row any conditional
+# update in this section targets.
+PK: CRAWLERDOC#{docHash}
+SK: STATE
+
+schemaVersion: number
+kind: string
+canonicalUrl: string
+publishedContentHash: string?   # last successfully PUBLISHED version; absent for a new doc
+candidateContentHash: string?   # in-flight claim; absent when qualityStatus is PUBLISHED
+qualityStatus: "ENRICHING" | "PROMOTING" | "PUBLISHED"
+claimedAt: string?              # set on claim; cleared on PUBLISHED or rejection rollback
+promotingAt: string?            # set when qualityStatus enters PROMOTING; cleared on PUBLISHED
+lastRejectedContentHash: string?
+lastRejectedReason: string?
+lastRejectedAt: string?
+discoveredBySourceIds: String Set   # every sourceId that has found this docHash
+artifactKey: string
+s3Key: string
+qualityScore: number
+qualityGateVersion: string
+promptVersion: string
+modelId: string
+sourceAuthority: "official" | "trusted" | "open-web"
+keyTakeaways: string[]         # bounded list-card projection
+firstSeenAt: string
+updatedAt: string
+```
+
+```text
+# Per-source row — keeps the existing list/detail API key and shape.
 PK: CRAWLER#{sourceId}
 SK: DOC#{docHash}
 ```
 
-Add:
+Add to the per-source row:
 
 ```text
 schemaVersion: number
 canonicalUrl: string
-contentHash: string
+lastCheckedAt: string
 eventGroupId: string?
 corroboratingSourceCount: number
 artifactKey: string
 s3Key: string
-qualityStatus: "ENRICHING" | "PROMOTING" | "PUBLISHED"
+qualityStatus: "PUBLISHED"     # this row only ever reflects a published state
 qualityScore: number
 qualityGateVersion: string
 promptVersion: string
 modelId: string
 firstSeenAt: string
-lastCheckedAt: string
 updatedAt: string
-claimedAt: string?             # set when qualityStatus enters ENRICHING; cleared on PUBLISHED
-promotingAt: string?           # set when qualityStatus enters PROMOTING; cleared on PUBLISHED
 sourceAuthority: "official" | "trusted" | "open-web"
 keyTakeaways: string[]        # bounded list-card projection
 ```
+
+The per-source row is written only in the fan-out step after a canonical-row
+promote succeeds (step 7 below) — it is never itself the target of a claim, so it
+never needs an `ENRICHING`/`PROMOTING` state, and two sources finding the same URL
+simply both get their own row updated from the same single canonical publish.
 
 **Per-kind KB prefix mapping.** `docHash` is source-independent (§6.2:
 `hash(kind + canonicalUrl)`), but the promoted key layout is not uniform across
@@ -544,45 +600,87 @@ each independently enrich the *same* `contentHash` (deterministic — it hashes 
 fetched body, not the model output) into two *different* JSON/Markdown pairs, both
 racing to occupy the same staging key. Making enrichment single-writer removes the
 ambiguity at its source instead of reconciling two already-divergent artifacts
-after the fact:
+after the fact. All conditional updates below target the canonical
+`CRAWLERDOC#{docHash}/STATE` row:
 
 1. Fetch and normalize the body; compute `contentHash` (deterministic, no model
-   call yet).
-2. **Claim**: a conditional DynamoDB update — `contentHash: old -> new` (`old` is
-   the previously observed value, or the attribute must not exist for a new
-   document) — and, on success, also set `qualityStatus: ENRICHING` and
-   `claimedAt: now`. This is the single decision point. Any other worker that
-   fetched the identical body and computed the identical `contentHash` loses this
-   conditional write and stops immediately — it never calls Opus and never stages
-   anything for this version, so no second artifact for the same key can exist.
+   call yet). If it equals the canonical row's `publishedContentHash`, nothing
+   changed — update `lastCheckedAt` on the per-source row and stop (this is §8.2
+   step 3; comparing against `publishedContentHash` specifically, never against a
+   candidate that might have been rejected, is what keeps this check correct after
+   a rejection — see step 5b).
+2. **Claim**: a conditional DynamoDB update — requires `qualityStatus = PUBLISHED`
+   (or the row not to exist yet, for a new document) — and, on success, sets
+   `candidateContentHash: contentHash`, `qualityStatus: ENRICHING`, and
+   `claimedAt: now`. This is the single decision point, and it is source-independent
+   by construction: because it targets the canonical row keyed only by `docHash`,
+   two different sources discovering the same URL contend for the *same* claim, not
+   two separate ones. Any worker that loses this conditional write stops
+   immediately — it never calls Opus and never stages anything for this version.
 3. The claim winner calls Opus, builds the structured JSON and canonical Markdown,
    and stages both at the `{contentHash}` keys above (now genuinely idempotent:
    exactly one worker ever produces content for a given `(docHash, contentHash)`
    pair).
-4. Conditional DynamoDB update: `qualityStatus: ENRICHING -> PROMOTING`, conditioned
-   on `contentHash`/`claimedAt` still matching what this worker set in step 2.
-5. **Promote**: `CopyObject` the staged Markdown to the stable KB-bucket key from
-   the per-kind mapping above.
-6. Conditional DynamoDB update: `qualityStatus: PROMOTING -> PUBLISHED`, conditioned
-   on `contentHash` still equalling the value just copied.
-7. Trigger KB ingestion for the promoted key.
-
-A genuinely new content change can still claim `ENRICHING` while an older version
-is mid-promote (steps 4-6) — for example, a technical page changes twice in quick
-succession. When that happens, the older version's own step-6 conditional update
-fails (its `contentHash` no longer matches), and `shared/` may briefly hold the
-older version's bytes until the newer claim completes its own steps 3-6. This is
-bounded, self-correcting staleness — never a state where two versions permanently
-disagree — not a claim of instant cross-worker atomicity on the promoted object.
+4. **Quality gate** (§7.2) runs against the staged artifact.
+5. **On pass**: conditional update — `qualityStatus: ENRICHING -> PROMOTING`,
+   conditioned on `candidateContentHash`/`claimedAt` still matching what this
+   worker set in step 2 — then continue to promote (step 7).
+6. **On fail** (schema repair exhausted, or quality gate rejects): conditional
+   update — `qualityStatus: ENRICHING -> PUBLISHED`, conditioned on `claimedAt`
+   still matching, clearing `candidateContentHash`/`claimedAt` and setting
+   `lastRejectedContentHash`/`lastRejectedReason`/`lastRejectedAt`.
+   `publishedContentHash` is **not** touched — this is the rollback an earlier
+   version of this design was missing. Without it, a rejected candidate would
+   leave the row's only hash pointing at unpublished content, and the next run's
+   step 1 comparison (against what would have been the same field) would see "no
+   change" and never retry a body that was never actually published. A repeated
+   fetch of unfixably bad content is throttled instead by comparing the freshly
+   computed `contentHash` against `lastRejectedContentHash`: if they match and
+   `lastRejectedAt` is inside a cooldown window (for example, 24 hours), skip
+   re-claiming; otherwise (cooldown elapsed, or the content has genuinely changed
+   again) claiming proceeds normally.
+7. **Promote**, run as a self-correcting loop rather than a single copy, because a
+   promote that resumes after a long pause (see the reconciliation note below)
+   must never overwrite a version newer than the one it started with:
+   a. Read the canonical row's current `candidateContentHash` (call it `H`).
+   b. `CopyObject` the staged Markdown for `H` to the stable KB-bucket key from the
+      per-kind mapping above.
+   c. Re-read the row. If `candidateContentHash` no longer equals `H` — a newer
+      claim has already superseded this one — repeat from (a) with the now-current
+      value instead of aborting. This means whichever execution of this loop
+      happens to run last always ends by copying the version that is actually
+      current at that moment.
+   d. Conditional update: `qualityStatus: PROMOTING -> PUBLISHED`,
+      `publishedContentHash: H`, clearing `candidateContentHash`/`claimedAt`/
+      `promotingAt`, conditioned on `candidateContentHash` still equalling `H`. If
+      this fails (raced by a newer claim between (c) and (d)), go back to (a).
+8. **Fan out**: for every `sourceId` in `discoveredBySourceIds`, upsert the
+   per-source `CRAWLER#{sourceId}/DOC#{docHash}` row with the just-published
+   summary, `keyTakeaways`, `qualityStatus: PUBLISHED`, and `s3Key` — this is what
+   keeps the existing list/detail APIs working against an unchanged key shape.
+9. Trigger KB ingestion for the promoted key.
 
 A row stuck in `ENRICHING` or `PROMOTING` for longer than a short lease (for
 example, ten minutes — the same pattern §11.3 uses for a stuck `CLAIMED` digest
-delivery) means the claim holder crashed. A reconciliation sweep re-attempts the
-row's current step (re-run enrichment for a stuck `ENRICHING` row using its
-committed `contentHash`; re-run promote for a stuck `PROMOTING` row) without
-requiring the original worker to still be alive — this closes the orphan window
-(list APIs would otherwise show a document with no matching `shared/` content, or
-a claim that can never be retried because its key is permanently occupied).
+delivery) means the claim holder crashed. Reconciliation takes over by conditional
+lease renewal — `claimedAt: old -> now`, conditioned on `claimedAt` still equalling
+the stale value it observed — exactly the pattern §11.3 already uses, so the
+original worker (if it was merely slow rather than dead) loses its own subsequent
+conditional writes the moment reconciliation renews the lease, the same way a
+second claimant would:
+
+- **Stuck `ENRICHING`**: the fetched body is never retained (§6.3: "exists in
+  process memory only"), so `contentHash` alone cannot be used to resume — SHA-256
+  is one-way. Reconciliation must re-fetch the body from `canonicalUrl`, recompute
+  `contentHash`, and compare it against `candidateContentHash`. If it matches, it is
+  safe to redo enrichment (step 3) with the renewed lease. If it does not match —
+  content changed again since the original claim — release the stale claim via the
+  same rollback as step 6 (without recording a rejection reason, since this was
+  never a quality failure), and let the current fetch make its own fresh claim with
+  the new hash.
+- **Stuck `PROMOTING`**: simply re-enter the promote loop (step 7) using the row's
+  current `candidateContentHash` — the loop is idempotent and self-correcting by
+  construction, so resuming it from any point is safe.
 
 The staged keys accumulate one object per historical `contentHash`; a lifecycle
 rule on the `knowledge-artifacts/` staging paths expires them after a short window
@@ -761,8 +859,10 @@ SK: DELIVERY#{localDate}#{scopeType}#{scopeId}
 ```
 
 A conditional put claims the key before `SendEmail` and records `claimedAt`. Status
-progresses through `CLAIMED -> SENDING -> SENT|FAILED|BOUNCED|COMPLAINED`. SES
-message ID and a `deliveryKey` message tag correlate feedback.
+progresses through `CLAIMED -> SENDING -> SENT|FAILED|BOUNCED|COMPLAINED|UNKNOWN` —
+`UNKNOWN` is the terminal state the at-most-once path below assigns when a
+post-`SENDING` crash makes the actual outcome unknowable. SES message ID and a
+`deliveryKey` message tag correlate feedback.
 
 Two crash windows are handled differently, because only one of them is safe to
 retry automatically:
@@ -825,6 +925,24 @@ has access to every account/project/meeting referenced in `approvedPlan` — the
 fail-closed re-verification pattern §11.1 already applies to digest subscriptions.
 If access was revoked between approval and execution, the job fails closed instead
 of running against stale authorization.
+
+Deep research's execution is a single iterative agentic loop (existing Bedrock
+Agent action groups: `web_search`, `fetch_page`, `save_report`) — unlike the prep
+packet's bounded flow (§12.2), it cannot be split into a public-context call
+followed by a separate synthesis call, since the same turn-by-turn reasoning that
+decides the next search *is* the reasoning that has `approvedPlan`'s internal
+context (selected accounts/projects, user answers) in its context window. The
+`web_search`/`fetch_page` tool boundary is therefore the enforcement point instead:
+every query argument a tool call carries is checked server-side, before it reaches
+the web-search provider, against the same approved-alias/generic-topic allowlist
+§6.1 already defines — a deterministic value check on the actual argument, not a
+prompt instruction the model could fail to follow. A query containing any term
+outside that allowlist is rejected before dispatch, the same fail-closed posture as
+§6.3's URL/address validation. §7.1's enforced residency flag applies to this
+execution path as well (already stated there) — the two controls are
+complementary: the allowlist check bounds what leaves as a search query, and the
+residency flag bounds where the internal-context-bearing reasoning itself may be
+processed.
 
 The tool layer records a source manifest for every successful `web_search` and
 `fetch_page`. `save_report` computes unique source count and word count itself; it
@@ -915,22 +1033,39 @@ research/{userId}/{researchId}/report.md
 ```
 
 They must never be written to `shared/research/`. Research reports are already
-being written there today, independent of this design, by two currently-deployed
-code paths: `backend/internal/service/research.go` (the `api` Lambda, owned by
-`TtobakGatewayStack`) and the research-agent AgentCore runtime
-(`backend/python/research-agent/tools.py`, `research-tools/save_report.py`,
-deployed outside CDK via its own pipeline). That exposure is not introduced by this
-pipeline and should not wait on Phase 4 — but closing it requires three things,
-not one, and the first two are Phase 1 scope, spanning stacks/pipelines this design
-otherwise doesn't touch:
+being written there today, independent of this design, by **three** currently-
+deployed writers — not the two this section previously named, and not all
+deployed the same way:
 
-1. **Redirect the writers.** Change `research.go` and the research-agent's report
-   path to write to the new owner-scoped `research/{userId}/{researchId}/...` keys
-   above, instead of `shared/research/`. Without this, remediating the existing
-   backlog only clears it once — the same deployed code immediately starts writing
-   new reports back into `shared/research/`, and the exposure recreates itself. This
-   means Phase 1 deploys a `TtobakGatewayStack` change and a `deploy-research-agent.yml`
-   run, in addition to the `TtobakAiStack`/`TtobakCrawlerStack` changes above.
+- `backend/internal/service/research.go` — the `api` Lambda, owned by
+  `TtobakGatewayStack`.
+- `backend/python/research-tools/save_report.py` — despite the name suggesting an
+  ad-hoc script, this is a CDK-deployed Lambda (`ttobak-research-save-report`,
+  `infra/lib/research-agent-stack.ts`), invoked as a Bedrock Agent action-group
+  tool. Its `toolsRole` currently has `kbBucket.grantReadWrite` only and reads
+  `KB_BUCKET_NAME` from its environment — there is no assets-bucket grant or env
+  var to redirect it with today.
+- `backend/python/research-agent/tools.py` — the *separate* AgentCore Runtime
+  container, which genuinely is deployed outside CDK, via its own pipeline
+  (`deploy-research-agent.yml`).
+
+That exposure is not introduced by this pipeline and should not wait on Phase 4 —
+but closing it requires three things, not one, and the first two are Phase 1
+scope, spanning stacks/pipelines this design otherwise doesn't touch:
+
+1. **Redirect the writers.** Change all three call sites above to write to the new
+   owner-scoped `research/{userId}/{researchId}/...` keys, instead of
+   `shared/research/`. Without this, remediating the existing backlog only clears
+   it once — the same deployed code immediately starts writing new reports back
+   into `shared/research/`, and the exposure recreates itself. Concretely, Phase 1
+   deploys: a `TtobakGatewayStack` change (`research.go`); a
+   `TtobakResearchAgentStack` change (`research-agent-stack.ts` — add a
+   prefix-scoped grant on the assets bucket for `research/*` to `toolsRole`, and
+   replace/add the environment variable `save_report.py` reads so it writes to the
+   assets bucket instead of `KB_BUCKET_NAME`); and a `deploy-research-agent.yml` run
+   carrying the equivalent assets-bucket env var/permission for the AgentCore
+   Runtime container — in addition to the `TtobakAiStack`/`TtobakCrawlerStack`
+   changes above.
 2. **Migrate the backlog.** Move already-published reports out of `shared/research/`
    (to owner-scoped storage, or confirm and keep only the ones with public
    material).
@@ -1140,14 +1275,27 @@ and failover are a separate higher-tier requirement.
 
 - DynamoDB PITR remains enabled. Add a daily same-Region AWS Backup recovery point
   with 35-day retention for an independently scheduled 24-hour checkpoint.
-- Both assets and KB buckets remain versioned. Retain noncurrent knowledge-artifact
-  and canonical-Markdown versions for at least 35 days. Adding this lifecycle rule
-  requires deploying `TtobakKnowledgeStack`, which currently cannot be safely
-  deployed because it stages an undeployed KB teardown (CLAUDE.md Known Issues,
-  `cdk deploy --all` warning). Until that teardown is resolved, the 35-day
-  noncurrent-version lifecycle policy is a planned control, not yet in place;
-  bucket versioning itself (already enabled) still provides object-level recovery
-  in the interim.
+- Both assets and KB buckets remain versioned. Noncurrent-version retention is two
+  separate controls, on two separate buckets owned by two separate stacks — not one
+  blocked item:
+  - **Assets bucket** (`ttobak-assets-{account}`, `TtobakStorageStack`): the
+    `knowledge-artifacts/` **staging** paths (§9.1) get a *short* lifecycle rule —
+    seven days — since only the promoted copy in the KB bucket is a long-term
+    artifact; the JSON artifact copy also under `knowledge-artifacts/` is likewise
+    short-lived. This is deployable now, through `TtobakStorageStack`, independent
+    of the KB bucket's blocker below.
+  - **KB bucket** (`ttobak-kb-{account}`, `TtobakKnowledgeStack`): retain noncurrent
+    versions of the **promoted** canonical-Markdown copies for at least 35 days.
+    This is the control that's currently blocked: adding it requires deploying
+    `TtobakKnowledgeStack`, which cannot be safely deployed today because it stages
+    an undeployed KB teardown (CLAUDE.md Known Issues, `cdk deploy --all` warning).
+    Until that teardown is resolved, this 35-day policy is a planned control, not
+    yet in place; bucket versioning itself (already enabled) still provides
+    object-level recovery in the interim.
+
+  These are different objects on different buckets — the assets-bucket staging
+  copies and the KB-bucket promoted copies — so the 7-day and 35-day windows above
+  are not in tension with each other despite both appearing in this design.
 - Infrastructure, state-machine definitions, prompts, schemas, and runbooks remain
   in Git/CDK.
 - Canonical Markdown in S3 is the rebuild source for the Bedrock KB. The vector index
@@ -1241,13 +1389,15 @@ No text, control, badge, diagram, or table may overlap or expand a fixed control
 - Store private JSON + canonical KB Markdown.
 - Upgrade insight list/detail UX.
 - Add metrics, alarms, cost budgets, and legacy migration.
-- Remediate existing `shared/research/` exposure (§12.4), all three parts: redirect
-  `research.go` (`TtobakGatewayStack`) and the research-agent runtime to owner-scoped
-  storage, migrate the already-published backlog, and re-run KB ingestion to clear
-  already-indexed vectors. This is independent of Phase 4's research/prep
-  *features* — it fixes a pre-existing exposure, not a Phase 4 regression, so it
-  does not wait for Phase 4, even though it touches stacks/pipelines Phase 1's other
-  bullets don't otherwise require.
+- Remediate existing `shared/research/` exposure (§12.4), all three parts:
+  redirect all three writers — `research.go` (`TtobakGatewayStack`),
+  `save_report.py` (`TtobakResearchAgentStack`), and the AgentCore Runtime
+  container (`deploy-research-agent.yml`) — to owner-scoped storage, migrate the
+  already-published backlog, and re-run KB ingestion to clear already-indexed
+  vectors. This is independent of Phase 4's research/prep *features* — it fixes a
+  pre-existing exposure, not a Phase 4 regression, so it does not wait for Phase 4,
+  even though it touches stacks/pipelines Phase 1's other bullets don't otherwise
+  require.
 
 **Exit criteria:** 100% of visible news has `schemaVersion=1`, passed full fetch, has
 three or more facts and evidence, and is understandable without opening the original.
