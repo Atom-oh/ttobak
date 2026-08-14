@@ -292,7 +292,7 @@ func TestFoldLiveSummary_SentinelStripping(t *testing.T) {
 
 func TestParseMeetingInsights_KeepsValidDropsInvalid(t *testing.T) {
 	raw := "```json\n" + `[
-	  {"type":"risk","text":"PoC 일정 지연 가능"},
+	  {"type":"risk","text":"PoC 일정 지연 가능","evidence":"보안 검토 일정 미확정","implication":"목표 오픈 일정 영향","nextAction":"보안 담당자와 일정 확정"},
 	  {"type":"opportunity","text":"ROSA 확대 여지","entities":["ROSA"]},
 	  {"type":"bogus","text":"버려야 함"},
 	  {"type":"need","text":"   "}
@@ -309,6 +309,11 @@ func TestParseMeetingInsights_KeepsValidDropsInvalid(t *testing.T) {
 	}
 	if got[0].ID == "" || got[1].ID == "" {
 		t.Error("expected IDs assigned")
+	}
+	if got[0].Evidence != "보안 검토 일정 미확정" ||
+		got[0].Implication != "목표 오픈 일정 영향" ||
+		got[0].NextAction != "보안 담당자와 일정 확정" {
+		t.Errorf("structured fields were not preserved: %+v", got[0])
 	}
 }
 

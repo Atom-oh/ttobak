@@ -47,7 +47,14 @@ export class AuthStack extends cdk.Stack {
     // Cognito User Pool with email/password sign-up/sign-in
     this.userPool = new cognito.UserPool(this, 'TtobakUserPool', {
       userPoolName: 'ttobak-user-pool',
-      selfSignUpEnabled: true,
+      // Company security policy: self sign-up is FORBIDDEN. Accounts are created
+      // by an admin only (InviteUser -> AdminCreateUser). Never flip this to true.
+      // The pre-signup domain allowlist below is not a substitute for this
+      // setting -- though note Cognito fires the Pre Sign-Up trigger for
+      // AdminCreateUser too (triggerSource: PreSignUp_AdminCreateUser) and the
+      // Lambda doesn't branch on triggerSource, so it's a live constraint on
+      // the invite flow as well, not dead code behind this closed path.
+      selfSignUpEnabled: false,
       signInAliases: {
         email: true,
       },

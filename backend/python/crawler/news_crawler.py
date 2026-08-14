@@ -446,8 +446,8 @@ def _summarize_and_tag(title: str, text: str, source_name: str = '',
                        keywords: list = None) -> tuple:
     """Generate SA briefing + auto-tags + a relevance verdict.
 
-    Returns (summary, tags_list, relevant, confidence). `relevant`/
-    `confidence` answer "is this article actually about the customer
+    Returns (preview, briefing_markdown, tags_list, relevant, confidence).
+    `relevant`/`confidence` answer "is this article actually about the customer
     (source_name) or the topic keywords?" -- a search for a bare company
     name or a bare keyword like "AI" returns plenty of results that only
     mention the term in passing, and this is the single choke point where
@@ -495,8 +495,17 @@ def _summarize_and_tag(title: str, text: str, source_name: str = '',
         f'기사, 동명이인/동명 기업, 경쟁사 위주 기사는 관련 없음으로 판단).\n\n'
         f'분석 결과를 한국어로 다음 형식의 JSON으로 응답하세요:\n\n'
         f'{{"relevant": true|false, "relevanceConfidence": 0.0-1.0, '
-        f'"summary": "브리핑 내용 (핵심요약 3-5문장 + 비즈니스 시사점 + AWS 관련성)", '
+        f'"preview": "목록에서 빠르게 읽는 2문장 이내의 평문 요약", '
+        f'"briefingMarkdown": "아래 필수 섹션을 포함한 상세 Markdown 브리핑", '
         f'"tags": ["태그1", "태그2", ...]}}\n\n'
+        f'briefingMarkdown 형식 (JSON 문자열 안의 줄바꿈은 \\n으로 이스케이프):\n'
+        f'## 핵심 요약\n'
+        f'- 기사에서 확인된 핵심 사실과 수치를 3-5개 불릿으로 작성\n\n'
+        f'## 비즈니스 시사점\n'
+        f'고객의 우선순위, 리스크, 기회에 미치는 의미를 1-2개 문단으로 설명\n\n'
+        f'## AWS 관련성 및 다음 액션\n'
+        f'관련 AWS 서비스와 연결 근거를 설명하고 SA가 확인할 구체적인 다음 액션을 2개 이내로 제안\n\n'
+        f'기사에 없는 사실이나 수치는 만들지 말고, AWS 관련성이 약하면 그 사실을 명시하세요.\n\n'
         f'태그 규칙:\n'
         f'- 기사 내용에서 핵심 주제/키워드를 3-8개 추출\n'
         f'- 회사명 (예: 우리은행, 삼성전자, SK텔레콤)\n'
@@ -513,7 +522,7 @@ def _summarize_and_tag(title: str, text: str, source_name: str = '',
         resp = bedrock.converse(
             modelId=SUMMARIZE_MODEL_ID,
             messages=[{'role': 'user', 'content': [{'text': prompt}]}],
-            inferenceConfig={'maxTokens': 1500},
+            inferenceConfig={'maxTokens': 2200},
         )
         response_text = _response_text(resp)
 
@@ -522,10 +531,15 @@ def _summarize_and_tag(title: str, text: str, source_name: str = '',
             # No JSON object at all -- can't recover a relevance verdict from
             # free text, so fail closed rather than accepting on faith.
             logger.warning(f'Bedrock summarize+tag returned no JSON for "{title}"')
-            return '', [], False, 0.0
+            return '', '', [], False, 0.0
 
         parsed, _ = json.JSONDecoder().raw_decode(response_text, start_idx)
-        summary = str(parsed.get('summary', ''))
+        # `summary` is the pre-structured response key. Keeping it as a
+        # fallback lets in-flight/older model responses complete while new
+        # responses separate the list preview from the formatted briefing.
+        legacy_summary = parsed.get('summary', '')
+        preview = str(parsed.get('preview', legacy_summary))
+        briefing_markdown = str(parsed.get('briefingMarkdown', legacy_summary))
         tags = parsed.get('tags', [])
         if isinstance(tags, list):
             tags = [str(t).strip() for t in tags if t][:10]
@@ -539,10 +553,10 @@ def _summarize_and_tag(title: str, text: str, source_name: str = '',
             confidence = float(parsed.get('relevanceConfidence', 0.0))
         except (TypeError, ValueError):
             confidence = 0.0
-        return summary, tags, relevant, confidence
+        return preview, briefing_markdown, tags, relevant, confidence
     except Exception as e:
         logger.warning(f'Bedrock summarize+tag failed for "{title}": {e}')
-        return '', [], False, 0.0
+        return '', '', [], False, 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -767,17 +781,17 @@ def _process_article(source_id: str, title: str, url: str,
     if seen_urls is not None:
         seen_urls.add(url)
 
-    summary, tags, relevant, confidence = _summarize_and_tag(
+    preview, briefing_markdown, tags, relevant, confidence = _summarize_and_tag(
         title, snippet, crawler_source_name, keywords)
 
     # require_relevance=False for customUrls -- a user-supplied URL is an
     # explicit ingest request, not a search result to be judged for
     # relevance, so the relevance threshold itself doesn't apply. But a
     # failed/unparseable Bedrock call (_summarize_and_tag's fail-closed
-    # path) returns an empty summary regardless of require_relevance --
+    # path) returns an empty briefing regardless of require_relevance --
     # skip that unconditionally so customUrls never writes a blank-summary
     # doc, not just the search path.
-    if not summary.strip():
+    if not briefing_markdown.strip():
         logger.warning(f'Skipping result with unscorable/empty summary: {title!r} {url}')
         return False
     if require_relevance and (not relevant or confidence < RELEVANCE_THRESHOLD):
@@ -786,8 +800,8 @@ def _process_article(source_id: str, title: str, url: str,
         return False
 
     source_name = _extract_source_name(title)
-    _write_to_s3(source_id, doc_hash, title, url, snippet, summary, pub_date, tags)
-    _write_metadata(source_id, doc_hash, title, url, pub_date, summary, source_name,
+    _write_to_s3(source_id, doc_hash, title, url, snippet, briefing_markdown, pub_date, tags)
+    _write_metadata(source_id, doc_hash, title, url, pub_date, preview, source_name,
                     tags, relevance=confidence,
                     ingest_source='search' if require_relevance else 'custom')
     return True

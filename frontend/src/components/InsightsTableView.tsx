@@ -39,9 +39,9 @@ export function InsightsTableView({
   const endIdx = Math.min(page * limit, totalCount);
 
   return (
-    <div className="glass-panel rounded-xl overflow-hidden">
+    <div className="glass-panel max-w-full overflow-hidden rounded-lg">
       <div className="overflow-x-auto">
-        <table className="w-full">
+        <table className="w-full min-w-[920px] table-fixed">
           <thead>
             <tr className="bg-white/[0.04]">
               <th className="text-xs font-semibold text-text-muted text-left px-4 py-3" style={{ width: '40%' }}>
@@ -69,7 +69,7 @@ export function InsightsTableView({
                 className="border-t border-white/[0.05] hover:bg-white/[0.03] cursor-pointer transition-colors"
               >
                 <td className="px-4 py-3">
-                  <span className="font-medium text-text-main line-clamp-1 text-sm">
+                  <span className="line-clamp-2 break-words text-sm font-medium text-text-main">
                     {doc.title}
                   </span>
                 </td>
@@ -94,7 +94,8 @@ export function InsightsTableView({
                             e.stopPropagation();
                             onTagClick?.(tag);
                           }}
-                          className={`text-xs px-2 py-0.5 rounded-full transition-colors ${
+                          aria-pressed={isActive}
+                          className={`rounded px-2 py-0.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
                             isActive
                               ? 'bg-primary/20 text-primary'
                               : 'bg-white/5 text-text-secondary hover:bg-white/10'

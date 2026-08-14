@@ -4,15 +4,17 @@ import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { LoginForm } from '@/components/auth/LoginForm';
-import { SignUpForm } from '@/components/auth/SignUpForm';
 import { MeetingList } from '@/components/MeetingList';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { meetingsApi } from '@/lib/api';
 import type { Meeting } from '@/types/meeting';
 
+// Self sign-up is forbidden by company security policy (the User Pool sets
+// AllowAdminCreateUserOnly), so there is no sign-up form to switch to --
+// offering one only produced a confusing "sign-up is not enabled" Cognito
+// error. Invited users log in with the temporary password from the invite
+// email and complete the NEW_PASSWORD_REQUIRED challenge in LoginForm.
 function AuthScreen() {
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
-
   return (
     <div className="min-h-screen flex items-center justify-center overflow-hidden relative bg-[#f6f6f8] dark:bg-background-dark">
       {/* Crystal Polygon Background — dark mode only */}
@@ -62,11 +64,7 @@ function AuthScreen() {
 
         {/* Form Panel */}
         <div className="glass-panel rounded-2xl shadow-xl dark:shadow-none p-8 md:p-10">
-          {mode === 'login' ? (
-            <LoginForm onSwitchToSignUp={() => setMode('signup')} />
-          ) : (
-            <SignUpForm onSwitchToLogin={() => setMode('login')} />
-          )}
+          <LoginForm />
         </div>
       </main>
     </div>

@@ -187,9 +187,10 @@ type UserSearchListResponse struct {
 
 // ShareResponse represents a share record in API responses
 type ShareResponse struct {
-	UserID     string `json:"userId"`
-	Email      string `json:"email"`
-	Permission string `json:"permission"`
+	UserID     string     `json:"userId"`
+	Email      string     `json:"email"`
+	Permission string     `json:"permission"`
+	SharedAt   *time.Time `json:"sharedAt,omitempty"`
 }
 
 // SharedWithResponse represents the response for sharing a meeting
@@ -223,6 +224,12 @@ type MeetingUpdateResponse struct {
 // LinkMeetingsRequest represents the request body for linking follow-up meetings
 type LinkMeetingsRequest struct {
 	LinkedMeetingIDs []string `json:"linkedMeetingIds"`
+}
+
+// RediarizeMeetingRequest represents the request body for re-running speaker
+// diarization with an updated speaker-count hint (see UploadService.RediarizeMeeting).
+type RediarizeMeetingRequest struct {
+	SpeakerCount int `json:"speakerCount"`
 }
 
 // AudioURLResponse represents the response for audio URL(s)

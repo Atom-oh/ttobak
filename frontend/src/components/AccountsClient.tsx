@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { accountApi } from '@/lib/api';
 import { MemberPicker } from '@/components/MemberPicker';
+import { ASSIGNABLE_ACCOUNT_ROLES } from '@/types/meeting';
 import type { AccountSummary, User } from '@/types/meeting';
 
 interface PendingMember extends User {
@@ -139,9 +140,9 @@ export default function AccountsClient() {
                 onChange={(e) => setPendingRole(e.target.value)}
                 className="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm h-fit"
               >
-                <option value="AM">AM</option>
-                <option value="TAM">TAM</option>
-                <option value="SSA">SSA</option>
+                {ASSIGNABLE_ACCOUNT_ROLES.map((r) => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
               </select>
             </div>
             {pendingMembers.length > 0 && (

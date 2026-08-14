@@ -14,7 +14,7 @@ npm run lint      # ESLint
 
 - `src/app/` — App Router pages (record, meeting/[id], accounts, accounts/[id], chat, insights, kb, files, settings, profile)
 - `src/components/` — React components
-  - `auth/` — LoginForm, SignUpForm, AuthProvider (Cognito)
+  - `auth/` — LoginForm, AuthProvider (Cognito). No sign-up form: self sign-up is forbidden by company security policy, so an invited user logs in with the temporary password and completes the `NEW_PASSWORD_REQUIRED` challenge inside `LoginForm`.
   - `layout/` — Sidebar (incl. Accounts nav entry), DesktopHeader, MobileNav, AppLayout
   - `meeting/` — MeetingHeader, AISummaryCard, ActionItemsCard, TranscriptSection, ProcessingStatus, AccountSection (link/share-to-team)
   - `qa/` — QAChatMessage, QAEmptyState, QASuggestedQuestions
@@ -23,7 +23,7 @@ npm run lint      # ESLint
   - Root: RecordButton, LiveTranscript, LiveSummary, MeetingList, AudioPlayer, AccountsClient, AccountDetailClient (members/insights/meetings/documents), etc.
 - `src/lib/` — Utilities
   - `api.ts` — apiFetch wrapper with Bearer token + refresh; also `accountApi` (CRUD/members/brief) and `meetingAccountApi` (link/share-to-account)
-  - `auth.ts` — Cognito SDK (signUp, login, refresh, getCurrentUser)
+  - `auth.ts` — Cognito SDK (login, `completeNewPassword`, refresh, getCurrentUser — deliberately no `signUp`/`confirmSignUp`)
   - `sttManager.ts` — Orchestrates live STT engine switching (Web Speech / AWS Transcribe Streaming)
   - `transcribeStreamingClient.ts` — Browser-to-AWS Transcribe Streaming via `@aws-sdk/client-transcribe-streaming`
   - `speechRecognition.ts` — Web Speech API wrapper

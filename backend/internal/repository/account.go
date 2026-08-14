@@ -735,3 +735,118 @@ func (r *DynamoDBRepository) DeleteAccountDocument(ctx context.Context, pk, docI
 	}
 	return nil
 }
+
+// --- Per-user document sharing (reference-style; see model.PrefixDocShare) ---
+//
+// Same dual-row, single-TransactWriteItems layout as CreateShare/
+// CreateResearchShare: a recipient-side row for "which docs are shared with
+// me" and a doc-side row for "who is this doc shared with", written together
+// so the two can never diverge.
+
+func (r *DynamoDBRepository) CreateDocShare(ctx context.Context, docID, ownerID, ownerEmail, sharedToID, email string) (*model.Share, error) {
+	now := time.Now().UTC()
+
+	forRecipient := &model.Share{
+		PK: model.PrefixUser + sharedToID, SK: model.PrefixDocShare + docID,
+		MeetingID: docID, OwnerID: ownerID, OwnerEmail: ownerEmail,
+		SharedToID: sharedToID, Email: email,
+		Permission: model.PermissionRead, // read-only by design
+		CreatedAt:  now, EntityType: model.EntityTypeDocShare,
+	}
+	item1, err := attributevalue.MarshalMap(forRecipient)
+	if err != nil {
+		return nil, fmt.Errorf("marshal doc share: %w", err)
+	}
+
+	forDoc := *forRecipient
+	forDoc.PK = model.PrefixDocSharePart + docID
+	forDoc.SK = model.PrefixDocShareTo + sharedToID
+	item2, err := attributevalue.MarshalMap(&forDoc)
+	if err != nil {
+		return nil, fmt.Errorf("marshal doc share: %w", err)
+	}
+
+	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: item1}},
+			{Put: &types.Put{TableName: aws.String(r.tableName), Item: item2}},
+		},
+	}); err != nil {
+		return nil, fmt.Errorf("create doc share: %w", err)
+	}
+	return forRecipient, nil
+}
+
+func (r *DynamoDBRepository) GetDocShare(ctx context.Context, sharedToID, docID string) (*model.Share, error) {
+	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixDocShare + docID},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get doc share: %w", err)
+	}
+	if out.Item == nil {
+		return nil, nil
+	}
+	var share model.Share
+	if err := attributevalue.UnmarshalMap(out.Item, &share); err != nil {
+		return nil, fmt.Errorf("unmarshal doc share: %w", err)
+	}
+	return &share, nil
+}
+
+func (r *DynamoDBRepository) DeleteDocShare(ctx context.Context, sharedToID, docID string) error {
+	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixDocShare + docID},
+			}}},
+			{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixDocSharePart + docID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixDocShareTo + sharedToID},
+			}}},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("delete doc share: %w", err)
+	}
+	return nil
+}
+
+// ListDocSharesForUser lists every document shared TO userID. Paginated via
+// queryAllPages -- a user's shared-doc set grows unbounded over time.
+func (r *DynamoDBRepository) ListDocSharesForUser(ctx context.Context, userID string) ([]model.Share, error) {
+	return r.queryDocShares(ctx, model.PrefixUser+userID, model.PrefixDocShare)
+}
+
+// ListDocSharesForDoc lists every recipient of docID.
+func (r *DynamoDBRepository) ListDocSharesForDoc(ctx context.Context, docID string) ([]model.Share, error) {
+	return r.queryDocShares(ctx, model.PrefixDocSharePart+docID, model.PrefixDocShareTo)
+}
+
+func (r *DynamoDBRepository) queryDocShares(ctx context.Context, pk, skPrefix string) ([]model.Share, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(pk)).
+		And(expression.Key("SK").BeginsWith(skPrefix))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build doc share query: %w", err)
+	}
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query doc shares: %w", err)
+	}
+	shares := []model.Share{}
+	if err := attributevalue.UnmarshalListOfMaps(items, &shares); err != nil {
+		return nil, fmt.Errorf("unmarshal doc shares: %w", err)
+	}
+	return shares, nil
+}

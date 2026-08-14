@@ -267,7 +267,11 @@ export default function ResearchDetailPage() {
     <AppLayout activePath="/insights">
       {/* Mobile Header */}
       <header className="lg:hidden flex items-center bg-white dark:bg-[var(--surface)] px-4 py-3 gap-3 border-b border-slate-100 dark:border-white/10 sticky top-0 z-10">
-        <button onClick={() => router.push('/insights')} className="text-slate-500 dark:text-text-muted">
+        <button
+          onClick={() => router.push('/insights')}
+          className="rounded text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 dark:text-text-muted"
+          aria-label="인사이트 목록으로 돌아가기"
+        >
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
         <h1 className="text-slate-900 dark:text-text-main text-base font-semibold truncate">
@@ -278,7 +282,7 @@ export default function ResearchDetailPage() {
       <div className="flex flex-1 min-h-0">
         {/* Main content area — hidden during planning/running (chat-only until report ready) */}
         <div className={`flex-1 overflow-y-auto pb-24 lg:pb-8 ${research?.status === 'planning' || research?.status === 'running' || research?.status === 'approved' ? 'hidden' : ''}`}>
-          <div className="p-4 lg:px-16 lg:pt-10 lg:pb-8 w-full">
+          <div className="mx-auto w-full max-w-7xl p-4 lg:px-8 lg:pb-8 lg:pt-10">
 
             {/* Back button (desktop) */}
             <button
@@ -464,11 +468,11 @@ export default function ResearchDetailPage() {
 
                 {/* Content — continuous document with TOC sidebar */}
                 {displayContent && (
-                  <div className="flex gap-0">
-                    <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 flex-1 min-w-0">
+                  <div className="flex justify-center gap-8">
+                    <div ref={contentRef} className="glass-panel w-full max-w-[76ch] min-w-0 rounded-lg p-6 lg:p-8">
                       <MarkdownRenderer content={displayContent} />
                     </div>
-                    <TOCSidebar contentRef={contentRef} />
+                    {!chatOpen && <TOCSidebar contentRef={contentRef} />}
                   </div>
                 )}
               </div>
@@ -483,8 +487,9 @@ export default function ResearchDetailPage() {
             {!chatOpen && ['done', 'error'].includes(research.status) && (
               <button
                 onClick={() => setChatOpen(true)}
-                className="hidden lg:flex items-center justify-center w-10 h-10 rounded-full bg-primary/20 text-primary hover:bg-primary/30 transition-colors self-start mt-4 mr-2 flex-shrink-0"
+                className="mt-4 mr-2 hidden size-10 flex-shrink-0 items-center justify-center self-start rounded-full bg-primary/20 text-primary transition-colors hover:bg-primary/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 lg:flex"
                 title="Open chat"
+                aria-label="연구 채팅 열기"
               >
                 <span className="material-symbols-outlined text-lg">chat</span>
               </button>
@@ -494,12 +499,13 @@ export default function ResearchDetailPage() {
             <div className={`hidden lg:flex flex-shrink-0 ${
               ['planning', 'running', 'approved'].includes(research.status) ? 'flex-1' : chatOpen ? '' : 'w-0 overflow-hidden'
             }`}>
-              <div className={`relative ${['planning', 'running', 'approved'].includes(research.status) ? 'w-full' : 'w-[360px]'}`}>
+              <div className={`relative ${['planning', 'running', 'approved'].includes(research.status) ? 'w-full' : 'w-[400px]'}`}>
                 {research.status !== 'planning' && chatOpen && (
                   <button
                     onClick={() => setChatOpen(false)}
-                    className="absolute top-3 right-3 z-10 p-1 rounded text-text-muted hover:text-text-main hover:bg-white/5 transition-colors"
+                    className="absolute top-3 right-3 z-10 rounded p-1 text-text-muted transition-colors hover:bg-white/5 hover:text-text-main focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
                     title="Close chat"
+                    aria-label="연구 채팅 닫기"
                   >
                     <span className="material-symbols-outlined text-sm">close</span>
                   </button>

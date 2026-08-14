@@ -916,8 +916,15 @@ func BuildAccountInsights(accountID string, meeting *model.Meeting) ([]model.Acc
 			SK:           fmt.Sprintf("%s%s#%s#%d", model.PrefixInsight, occurred, meeting.MeetingID, i),
 			AccountID:    accountID,
 			InsightID:    fmt.Sprintf("%s_%d", meeting.MeetingID, i),
-			Type:         p.Type,
-			Text:         p.Text,
+			Type: p.Type,
+			Text: p.Text,
+			// Evidence (near-verbatim meeting quotes) is deliberately NOT
+			// fanned out here -- account members without access to the
+			// source meeting would otherwise be able to read direct quotes
+			// from it via this derived view. Implication/nextAction are
+			// LLM-generated summaries, not quotes, so they're safe to carry.
+			Implication:  p.Implication,
+			NextAction:   p.NextAction,
 			SourceType:   "meeting",
 			SourceID:     meeting.MeetingID,
 			SourceUserID: meeting.UserID,

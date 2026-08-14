@@ -1409,7 +1409,16 @@ func (s *BedrockService) ExtractInsights(ctx context.Context, meetingID string, 
 	}
 
 	systemPrompt := `회의 요약/트랜스크립트에서 영업·고객 인사이트를 추출해 분류하세요.
-각 인사이트: { "type": <유형>, "text": <한국어 설명>, "entities": [관련 고유명사들] }
+각 인사이트를 다음 구조로 작성하세요:
+{
+  "type": <유형>,
+  "text": <한 문장의 구체적인 핵심 결론>,
+  "evidence": <회의에서 확인된 사실, 발언, 수치 또는 상황>,
+  "implication": <고객 또는 영업 기회에 미치는 의미>,
+  "nextAction": <담당자가 바로 실행할 수 있는 다음 단계>,
+  "tsMarker": <원문에 존재하는 [TS:NNN] 표식>,
+  "entities": [관련 고객명, 서비스명, 프로젝트명, 인물명]
+}
 유형(type)은 반드시 다음 8가지 중 하나:
 - trend: 고객/시장 트렌드 (예: 그룹사 클라우드 전환 가속)
 - need: 고객 니즈/요구사항 (예: DR 금융보안 컴플라이언스)
@@ -1419,15 +1428,23 @@ func (s *BedrockService) ExtractInsights(ctx context.Context, meetingID string, 
 - tech: 기술 주제/워크로드 (예: EKS, PrivateLink)
 - stakeholder: 이해관계자 변화 (예: 신임 CTO 부임)
 - action: 우리측 다음 액션 (예: 다음주 아키텍처 리뷰)
-해당 유형이 명확한 항목만 추출하세요. 유효한 JSON 배열만 반환하고, 없으면 []를 반환하세요.
-예시: [{"type":"risk","text":"PoC 일정 2개월 지연 가능","entities":["PoC"]}]`
+해당 유형이 명확하고 회의 내용으로 뒷받침되는 항목만 추출하세요.
+evidence, implication, nextAction은 근거가 있을 때 각각 1~2문장으로 작성하고, 추측이 필요한 필드는 빈 문자열로 두세요.
+tsMarker는 입력에 정확한 [TS:NNN] 표식이 있을 때만 그대로 복사하고 절대 만들어내지 마세요.
+같은 내용을 여러 유형으로 중복하지 마세요. 유효한 JSON 배열만 반환하고, 없으면 []를 반환하세요.
+예시: [{"type":"risk","text":"PoC 일정이 최대 2개월 지연될 수 있다","evidence":"보안 검토 일정이 아직 확정되지 않았다","implication":"목표 오픈 일정과 후속 워크로드 전환이 밀릴 수 있다","nextAction":"고객 보안 담당자와 검토 일정을 확정한다","entities":["PoC"]}]`
 
 	userPrompt := fmt.Sprintf("다음 회의 내용에서 인사이트를 추출하세요:\n\n%s", source)
 
 	request := ClaudeRequest{
 		AnthropicVersion: "bedrock-2023-05-31",
-		MaxTokens:        1536,
-		System:           systemPrompt,
+		// 6000 (not 1536): each insight now carries 6 fields (evidence/
+		// implication/nextAction added), each up to 1-2 sentences -- a small
+		// budget risked truncating the JSON array mid-object, which
+		// parseMeetingInsights can't recover from (invalid JSON -> "[]",
+		// silently dropping every insight rather than just the last one).
+		MaxTokens: 6000,
+		System:    systemPrompt,
 		Messages: []ClaudeMessage{
 			{Role: "user", Content: []ContentBlock{{Type: "text", Text: userPrompt}}},
 		},

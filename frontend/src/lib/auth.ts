@@ -4,7 +4,6 @@ import {
   CognitoUserPool,
   CognitoUser,
   AuthenticationDetails,
-  CognitoUserAttribute,
   CognitoUserSession,
   CognitoRefreshToken,
 } from 'amazon-cognito-identity-js';
@@ -68,56 +67,6 @@ export function isNewPasswordRequired(
   result: SignInResult
 ): result is NewPasswordRequiredResult {
   return (result as NewPasswordRequiredResult).challenge === 'NEW_PASSWORD_REQUIRED';
-}
-
-export async function signUp(
-  email: string,
-  password: string,
-  name?: string
-): Promise<void> {
-  const pool = await getUserPool();
-  return new Promise((resolve, reject) => {
-    const attributeList: CognitoUserAttribute[] = [];
-
-    attributeList.push(
-      new CognitoUserAttribute({ Name: 'email', Value: email })
-    );
-
-    if (name) {
-      attributeList.push(
-        new CognitoUserAttribute({ Name: 'name', Value: name })
-      );
-    }
-
-    pool.signUp(email, password, attributeList, [], (err) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
-export async function confirmSignUp(
-  email: string,
-  code: string
-): Promise<void> {
-  const pool = await getUserPool();
-  return new Promise((resolve, reject) => {
-    const cognitoUser = new CognitoUser({
-      Username: email,
-      Pool: pool,
-    });
-
-    cognitoUser.confirmRegistration(code, true, (err) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve();
-    });
-  });
 }
 
 export async function signIn(

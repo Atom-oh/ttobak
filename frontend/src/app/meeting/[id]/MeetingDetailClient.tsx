@@ -486,6 +486,13 @@ function MeetingDetailContent() {
                 const refreshed = await meetingsApi.get(meeting.meetingId);
                 setMeeting(refreshed as Meeting);
               }}
+              sttProvider={meeting.sttProvider}
+              audioPartCount={meeting.audioPartCount}
+              onRediarize={async (speakerCount) => {
+                await meetingsApi.rediarize(meeting.meetingId, speakerCount);
+                const refreshed = await meetingsApi.get(meeting.meetingId);
+                setMeeting(refreshed as Meeting);
+              }}
             />
           )}
 

@@ -336,12 +336,23 @@ def _get_service_aliases(service: str) -> list:
 # ---------------------------------------------------------------------------
 
 def _summarize_and_tag(title: str, text: str, service: str) -> tuple:
-    """Generate summary + tags. Returns (summary, tags_list)."""
+    """Generate a list preview, Markdown briefing, and tags."""
     truncated = text[:6000] if len(text) > 6000 else text
     prompt = (
         f'다음 AWS 기술 문서/블로그를 한국어로 분석하여 JSON으로 응답하세요:\n\n'
-        f'{{"summary": "핵심 개념, 사용법, 주의사항을 포함한 간결한 요약", '
+        f'{{"preview": "목록에서 빠르게 읽는 2문장 이내의 평문 요약", '
+        f'"briefingMarkdown": "아래 필수 섹션을 포함한 상세 Markdown 브리핑", '
         f'"tags": ["태그1", "태그2", ...]}}\n\n'
+        f'briefingMarkdown 형식 (JSON 문자열 안의 줄바꿈은 \\n으로 이스케이프):\n'
+        f'## 핵심 요약\n'
+        f'- 주요 기능과 변경점을 3-5개 불릿으로 작성\n\n'
+        f'## 주요 변경·주의사항\n'
+        f'버전, 제약, 보안, 비용, 운영상 주의점을 구체적으로 설명\n\n'
+        f'## AWS 적용 포인트\n'
+        f'적합한 워크로드와 기존 아키텍처에 적용할 때의 판단 기준을 설명\n\n'
+        f'## SA 다음 액션\n'
+        f'고객과 확인하거나 검증할 구체적인 후속 조치를 2개 이내로 제안\n\n'
+        f'원문에 없는 기능, 수치, 제한은 만들지 마세요.\n\n'
         f'태그 규칙:\n'
         f'- AWS 서비스명 (예: Lambda, S3, Bedrock, EKS)\n'
         f'- 기술 카테고리 (예: 서버리스, 컨테이너, AI/ML, 데이터베이스, 보안, 네트워킹)\n'
@@ -355,14 +366,16 @@ def _summarize_and_tag(title: str, text: str, service: str) -> tuple:
         resp = bedrock.converse(
             modelId=SUMMARIZE_MODEL_ID,
             messages=[{'role': 'user', 'content': [{'text': prompt}]}],
-            inferenceConfig={'maxTokens': 1500},
+            inferenceConfig={'maxTokens': 2200},
         )
         response_text = news_crawler._response_text(resp)
 
         start_idx = response_text.find('{')
         if start_idx >= 0:
             parsed, _ = json.JSONDecoder().raw_decode(response_text, start_idx)
-            summary = parsed.get('summary', '')
+            legacy_summary = parsed.get('summary', '')
+            preview = str(parsed.get('preview', legacy_summary))
+            briefing_markdown = str(parsed.get('briefingMarkdown', legacy_summary))
             tags = parsed.get('tags', [])
             if isinstance(tags, list):
                 tags = [str(t).strip() for t in tags if t][:10]
@@ -370,12 +383,12 @@ def _summarize_and_tag(title: str, text: str, service: str) -> tuple:
                 tags = []
             if service and service not in [t.lower() for t in tags]:
                 tags.insert(0, service.upper() if len(service) <= 3 else service.capitalize())
-            return summary, tags
+            return preview, briefing_markdown, tags
 
-        return response_text, [service]
+        return response_text, response_text, [service]
     except Exception as e:
         logger.warning(f'Bedrock summarize+tag failed for "{title}": {e}')
-        return '', [service]
+        return '', '', [service]
 
 
 # ---------------------------------------------------------------------------
@@ -632,9 +645,9 @@ def handler(event, context):
                     logger.info(f'Skipping low-content page ({len(text or "")} chars): {title[:60]}')
                     continue
 
-                summary, tags = _summarize_and_tag(title, text, service)
-                _write_to_s3(service, doc_hash, title, url, text, summary, tags)
-                _write_metadata(source_id, doc_hash, title, url, service, summary, tags,
+                preview, briefing_markdown, tags = _summarize_and_tag(title, text, service)
+                _write_to_s3(service, doc_hash, title, url, text, briefing_markdown, tags)
+                _write_metadata(source_id, doc_hash, title, url, service, preview, tags,
                                 article.get('pubDate', ''))
                 docs_added += 1
 

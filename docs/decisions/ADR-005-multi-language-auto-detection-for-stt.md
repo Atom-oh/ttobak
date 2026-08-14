@@ -41,7 +41,7 @@ Use Option 2: AWS Transcribe `IdentifyMultipleLanguages` with `LanguageOptions: 
 
 Implementation scope:
 - **Batch STT (post-recording)**: `IdentifyMultipleLanguages: true` + `LanguageOptions` on both standard and Nova Sonic transcription paths in `backend/internal/service/transcribe.go`
-- **Live STT (Transcribe Streaming)**: Planned for future iteration; currently still `ko-KR`
+- **Live STT (Transcribe Streaming)**: originally deferred, now implemented as well — `sttManager.ts` passes `multiLanguage: true` on both live paths, and `transcribeStreamingClient.ts` translates that into `IdentifyMultipleLanguages` + `LanguageOptions: 'ko-KR,en-US'` + `PreferredLanguage: 'ko-KR'`. The `else` branch's single `LanguageCode` remains only for a caller that explicitly opts out.
 - **Web Speech API (browser fallback)**: No change possible due to API limitation; users needing multi-language should use AWS Transcribe Streaming
 
 ## Consequences
@@ -100,7 +100,7 @@ TTOBAK은 한국 기업 환경에서 사용되며, 미팅 중 한국어와 영�
 
 구현 범위:
 - **배치 STT (녹음 후)**: `backend/internal/service/transcribe.go`의 표준 및 Nova Sonic 전사 경로 모두에 `IdentifyMultipleLanguages: true` + `LanguageOptions` 적용
-- **실시간 STT (Transcribe Streaming)**: 향후 반복에서 계획; 현재는 `ko-KR` 유지
+- **실시간 STT (Transcribe Streaming)**: 처음에는 후속 과제로 미뤘으나 현재는 구현 완료 — `sttManager.ts`가 두 라이브 경로 모두에 `multiLanguage: true`를 넘기고, `transcribeStreamingClient.ts`가 이를 `IdentifyMultipleLanguages` + `LanguageOptions: 'ko-KR,en-US'` + `PreferredLanguage: 'ko-KR'`로 변환한다. `else` 분기의 단일 `LanguageCode`는 명시적으로 opt-out하는 호출자를 위해서만 남아 있다.
 - **Web Speech API (브라우저 폴백)**: API 제한으로 변경 불가; 다국어가 필요한 사용자는 AWS Transcribe Streaming 사용 권장
 
 ## 영향

@@ -875,9 +875,14 @@ func (s *ProjectService) GetProjectInsights(ctx context.Context, userID, project
 			if len(typeSet) > 0 && !typeSet[insight.Type] {
 				continue
 			}
+			// Evidence intentionally omitted -- see BuildAccountInsights in
+			// meeting.go for why near-verbatim meeting quotes aren't fanned
+			// out to a partition members without meeting access can read.
 			out = append(out, model.ProjectInsightDTO{
-				Type: insight.Type, Text: insight.Text, SourceID: meeting.MeetingID,
-				OccurredAt: meeting.Date, TsMarker: insight.TsMarker, Entities: insight.Entities,
+				Type: insight.Type, Text: insight.Text,
+				Implication: insight.Implication, NextAction: insight.NextAction,
+				SourceID: meeting.MeetingID, OccurredAt: meeting.Date,
+				TsMarker: insight.TsMarker, Entities: insight.Entities,
 			})
 		}
 	}

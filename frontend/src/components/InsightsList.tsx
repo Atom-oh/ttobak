@@ -263,12 +263,6 @@ export function InsightsList() {
     return Array.from(sources).sort();
   }, [documents]);
 
-  // Collect unique news outlets from current results
-  const uniqueSources = useMemo(() => {
-    const sources = new Set(documents.map((d) => d.source).filter(Boolean));
-    return Array.from(sources).sort();
-  }, [documents]);
-
   // Collect unique AWS services from current results
   const uniqueServices = useMemo(() => {
     const services = new Set(documents.flatMap((d) => d.awsServices || []));
@@ -315,10 +309,13 @@ export function InsightsList() {
   return (
     <div className="space-y-6">
       {/* Tabs */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="인사이트 카테고리">
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'news'}
           onClick={() => handleTabChange('news')}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+          className={`rounded-md px-4 py-2 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
             activeTab === 'news'
               ? 'bg-primary text-white'
               : 'text-slate-600 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-white/5'
@@ -330,8 +327,11 @@ export function InsightsList() {
           </span>
         </button>
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'tech'}
           onClick={() => handleTabChange('tech')}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+          className={`rounded-md px-4 py-2 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
             activeTab === 'tech'
               ? 'bg-primary text-white'
               : 'text-slate-600 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-white/5'
@@ -343,8 +343,11 @@ export function InsightsList() {
           </span>
         </button>
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'research'}
           onClick={() => handleTabChange('research')}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+          className={`rounded-md px-4 py-2 text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
             activeTab === 'research'
               ? 'bg-primary text-white'
               : 'text-slate-600 dark:text-text-muted hover:bg-slate-100 dark:hover:bg-white/5'
@@ -628,14 +631,22 @@ export function InsightsList() {
               </select>
               <div className="flex items-center gap-1 ml-2">
                 <button
+                  type="button"
                   onClick={() => setViewMode('card')}
-                  className={`p-1.5 rounded-lg transition-colors ${viewMode === 'card' ? 'bg-white/10 text-primary' : 'text-text-muted hover:text-text-secondary'}`}
+                  aria-label="카드 보기"
+                  aria-pressed={viewMode === 'card'}
+                  title="카드 보기"
+                  className={`rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${viewMode === 'card' ? 'bg-slate-100 text-primary dark:bg-white/10' : 'text-text-muted hover:text-text-secondary'}`}
                 >
                   <span className="material-symbols-outlined text-lg">grid_view</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => setViewMode('table')}
-                  className={`p-1.5 rounded-lg transition-colors ${viewMode === 'table' ? 'bg-white/10 text-primary' : 'text-text-muted hover:text-text-secondary'}`}
+                  aria-label="표 보기"
+                  aria-pressed={viewMode === 'table'}
+                  title="표 보기"
+                  className={`rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${viewMode === 'table' ? 'bg-slate-100 text-primary dark:bg-white/10' : 'text-text-muted hover:text-text-secondary'}`}
                 >
                   <span className="material-symbols-outlined text-lg">table_rows</span>
                 </button>
@@ -736,7 +747,7 @@ export function InsightsList() {
                   {/* Title */}
                   <button
                     onClick={() => doc.sourceId && doc.docHash && router.push(`/insights/${doc.sourceId}/${doc.docHash}`)}
-                    className="text-left w-full group"
+                    className="group w-full min-w-0 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
                   >
                     <h3 className="text-base font-semibold text-slate-900 dark:text-text-main leading-snug group-hover:text-primary transition-colors line-clamp-2">
                       {doc.title}
@@ -835,7 +846,8 @@ export function InsightsList() {
                           onClick={() => handleDelete(doc)}
                           disabled={deletingKeys.has(`${doc.sourceId}#${doc.docHash}`)}
                           title="Delete this insight"
-                          className="flex items-center justify-center p-1.5 text-slate-400 dark:text-text-muted hover:text-red-500 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          aria-label="인사이트 삭제"
+                          className="flex items-center justify-center rounded-md p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 disabled:cursor-not-allowed disabled:opacity-40 dark:text-text-muted dark:hover:bg-red-500/10 dark:hover:text-red-400"
                         >
                           <span className="material-symbols-outlined text-lg">
                             {deletingKeys.has(`${doc.sourceId}#${doc.docHash}`) ? 'hourglass_empty' : 'delete'}

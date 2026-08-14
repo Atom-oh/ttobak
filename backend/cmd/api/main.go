@@ -185,6 +185,9 @@ func init() {
 		r.Put("/api/documents/{docId}", documentHandler.UpdateDocument)
 		r.Delete("/api/documents/{docId}", documentHandler.DeleteDocument)
 		r.Post("/api/documents/{docId}/share-account", documentHandler.ShareToAccount)
+		r.Post("/api/documents/{docId}/share", documentHandler.ShareWithUser)
+		r.Get("/api/documents/{docId}/shares", documentHandler.ListShares)
+		r.Delete("/api/documents/{docId}/share/{userId}", documentHandler.RevokeShare)
 		r.Post("/api/documents/{docId}/public-share", documentHandler.CreatePublicShare)
 		r.Delete("/api/documents/{docId}/public-share", documentHandler.RevokePublicShare)
 		r.Get("/api/vault/export", vaultHandler.ExportVault)
@@ -203,6 +206,9 @@ func init() {
 
 		// Recording recovery (crashed browser)
 		r.Post("/api/meetings/{meetingId}/recover", meetingHandler.RecoverMeeting)
+
+		// Re-run speaker diarization with an updated speaker-count hint
+		r.Post("/api/meetings/{meetingId}/rediarize", meetingHandler.RediarizeMeeting)
 
 		// Transcript selection
 		r.Put("/api/meetings/{meetingId}/transcript", meetingHandler.SelectTranscript)

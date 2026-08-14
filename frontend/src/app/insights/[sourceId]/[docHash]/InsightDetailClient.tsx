@@ -99,7 +99,7 @@ export default function InsightDetailPage() {
   const contentRef = useRef<HTMLDivElement>(null);
   const exportRef = useRef<HTMLDivElement>(null);
   const [doc, setDoc] = useState<(CrawledDocument & { content: string }) | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loadedKey, setLoadedKey] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -117,16 +117,36 @@ export default function InsightDetailPage() {
       docHash: parts[1] || '',
     };
   }, [pathname]);
+  const detailKey = sourceId && docHash ? `${sourceId}/${docHash}` : '';
+  const loading = detailKey !== '' && loadedKey !== detailKey;
 
   useEffect(() => {
     if (!sourceId || !docHash || sourceId === '_') return;
-    setLoading(true);
-    setDeleteError(null);
+    const requestKey = `${sourceId}/${docHash}`;
+    let cancelled = false;
     insightsApi.getDetail(sourceId, docHash)
-      .then(setDoc)
-      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load article'))
-      .finally(() => setLoading(false));
+      .then((data) => {
+        if (cancelled) return;
+        setDoc(data);
+        setError(null);
+        setDeleteError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setDoc(null);
+        setError(err instanceof Error ? err.message : 'Failed to load article');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadedKey(requestKey);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [sourceId, docHash]);
+
+  useEffect(() => {
+    if (!authLoading && !isAuthenticated) router.replace('/');
+  }, [authLoading, isAuthenticated, router]);
 
   // Click-outside to close export dropdown
   useEffect(() => {
@@ -188,7 +208,6 @@ export default function InsightDetailPage() {
   }
 
   if (!isAuthenticated) {
-    if (typeof window !== 'undefined') window.location.href = '/';
     return null;
   }
 
@@ -196,7 +215,11 @@ export default function InsightDetailPage() {
     <AppLayout activePath="/insights">
       {/* Mobile Header */}
       <header className="lg:hidden flex items-center bg-white dark:bg-[var(--surface)] px-4 py-3 gap-3 border-b border-slate-100 dark:border-white/10 sticky top-0 z-10">
-        <button onClick={() => router.push('/insights')} className="text-slate-500 dark:text-text-muted">
+        <button
+          onClick={() => router.push('/insights')}
+          className="rounded text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 dark:text-text-muted"
+          aria-label="인사이트 목록으로 돌아가기"
+        >
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
         <h1 className="text-slate-900 dark:text-text-main text-base font-semibold truncate">
@@ -205,7 +228,7 @@ export default function InsightDetailPage() {
       </header>
 
       <div className="flex-1 overflow-y-auto pb-24 lg:pb-8">
-        <div className="p-4 lg:px-16 lg:pt-10 lg:pb-8 w-full">
+        <div className="mx-auto w-full max-w-7xl p-4 lg:px-8 lg:pb-8 lg:pt-10">
 
           {/* Back button (desktop) */}
           <button
@@ -342,8 +365,8 @@ export default function InsightDetailPage() {
 
               {/* Briefing Content — the raw scrape is a separate, collapsed
                   block below */}
-              <div className="flex gap-0">
-                <div ref={contentRef} className="glass-panel rounded-2xl p-6 lg:p-8 flex-1 min-w-0">
+              <div className="flex justify-center gap-8">
+                <div ref={contentRef} className="glass-panel w-full max-w-[76ch] min-w-0 rounded-lg p-6 lg:p-8">
                   <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-text-main uppercase tracking-wide mb-4">
                     <span className="material-symbols-outlined text-primary text-lg">auto_awesome</span>
                     AI Briefing
