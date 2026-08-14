@@ -86,7 +86,13 @@ fans out bounded candidate work to focused workers.
 The implementation reuses the current stacks and storage:
 
 - `TtobakCrawlerStack`: discovery, enrichment, publication, KB ingestion, and later
-  dictionary/digest scheduling.
+  dictionary/digest scheduling. This is reuse of the stack's role, not a claim that
+  no CDK changes are needed: today `TtobakCrawlerStack` receives only the KB bucket
+  (`props.kbBucket`, `infra/lib/crawler-stack.ts`). Phase 1 requires new wiring —
+  the assets bucket reference from `TtobakStorageStack` (for `knowledge-artifacts/*`
+  and the staging prefixes in §9.1), a prefix-scoped IAM grant for those new
+  prefixes, and the selected Bedrock inference profile ARN — as net-new changes to
+  `crawler-stack.ts`, deployed in the stack's usual `--exclusively` order.
 - `ttobak-main`: source configuration, insight metadata, term state, digest state,
   and run history.
 - Main versioned assets bucket: private structured artifacts under
@@ -190,6 +196,14 @@ Rules:
   Mermaid.
 - Raw model output is retained only in short-lived execution logs with body fields
   excluded. The accepted artifact is the validated object.
+- Evidence excerpts (`supportingExcerpt`) and `sourceUrl` values are neutralized a
+  second time — the same prompt-delimiter/instruction-text neutralization applied to
+  fetched bodies before model use (§14) — immediately before they are embedded in
+  canonical Markdown. Without this, third-party text that survives quality gates as
+  a short "evidence" quote could later be retrieved from the KB and re-injected into
+  a Q&A model call, where it now reads as trusted repository content rather than
+  untrusted web content. This output-direction pass is required in addition to, not
+  instead of, the input-direction neutralization already applied before enrichment.
 
 ### 5.3 Canonical Markdown
 
@@ -318,8 +332,17 @@ Environment variable: FINAL_MODEL_ID
 The US geo inference profile keeps data in US and Canada Regions. The public
 news/official-doc pipeline contains public source material. Project-specific briefs
 are user-initiated and must disclose that selected internal context is sent to the
-US geography. An environment with a stricter residency policy must block that brief
-type until an approved regional model is configured.
+US geography.
+
+This is enforced, not only disclosed. A deployment-owner config flag (default
+`false`) gates whether the prep-packet/architecture-brief code path may invoke the
+US-geo inference profile at all. A deployment with a stricter residency policy
+leaves the flag `false`, and a request for that brief type fails closed with an
+explicit error rather than silently sending internal context — the per-request
+disclosure UI is in addition to this server-side gate, not a substitute for it.
+Enabling the flag is a one-time deployment decision, not a per-request user consent
+checkbox. An approved regional model, once configured, is a separate way to satisfy
+the same residency requirement without disabling the brief type.
 
 Use Opus 5 only for:
 
@@ -412,6 +435,20 @@ SK: DOCCHANGE#{docHash}#{changedAt}
 
 ### 9.1 Crawled document metadata
 
+Three distinct hashes exist in this design, each with a different scope and
+purpose — they are not interchangeable and none supersedes another:
+
+- `candidateId` (§5.1) = `sha256(sourceId + canonicalCandidateUrl)`. Identifies one
+  discovery-time candidate, before canonicalization. Used only within a single
+  discovery run to dedupe raw search results.
+- `docHash` (§6.2) = `hash(kind + canonicalUrl)`. The stable, long-lived identity of
+  a document once canonicalized — this is the `{docHash}` used in the `DOC#{docHash}`
+  key and in S3 paths below. It never changes for a given canonical URL, even when
+  the URL's content changes over time.
+- `contentHash` (§8.2) = `sha256(normalized body)`. Changes whenever the fetched
+  content changes. Used to decide whether a technical refresh requires re-enrichment,
+  and — see below — to make publication of a content change race-free.
+
 Keep the existing key so current list/detail APIs remain compatible:
 
 ```text
@@ -443,23 +480,52 @@ keyTakeaways: string[]        # bounded list-card projection
 
 `summary` remains for backward-compatible list responses but now contains the
 substantive executive summary, capped at a safe DynamoDB size. The complete
-structured object is stored at:
+structured object is first staged at a content-hash-versioned key:
 
 ```text
-s3://ttobak-assets-{account}/knowledge-artifacts/{kind}/{sourceId}/{docHash}.json
+s3://ttobak-assets-{account}/knowledge-artifacts/{kind}/{sourceId}/{docHash}/{contentHash}.json
 ```
 
-Canonical Markdown stays at the existing KB paths:
+Canonical Markdown is staged the same way, under a versioned prefix that KB
+ingestion does not scan:
+
+```text
+s3://ttobak-kb-{account}/staging/news/{sourceId}/{docHash}/{contentHash}.md
+s3://ttobak-kb-{account}/staging/aws-docs/{service}/{docHash}/{contentHash}.md
+```
+
+Only after the conditional DynamoDB metadata update (below) succeeds does the
+winner copy its staged Markdown to the stable, KB-ingested key that list/detail APIs
+and KB ingestion already expect:
 
 ```text
 s3://ttobak-kb-{account}/shared/news/{sourceId}/{docHash}.md
 s3://ttobak-kb-{account}/shared/aws-docs/{service}/{docHash}.md
 ```
 
-Publication order is artifact JSON -> canonical Markdown -> conditional DynamoDB
-metadata update. A failure before metadata publication leaves no visible insight;
-the stable keys make retry idempotent. Updates condition on the previously observed
-`contentHash`; a race re-reads and retries instead of overwriting newer work.
+Publication order is therefore: staged artifact JSON -> staged canonical Markdown ->
+conditional DynamoDB metadata update (`contentHash` must still equal the previously
+observed value, or not exist for a new document) -> promote staged Markdown to the
+stable `shared/` key -> trigger KB ingestion for that key. This ordering closes two
+problems a same-key-overwrite design would have:
+
+- **Concurrent refresh race**: if two workers refetch the same URL concurrently,
+  each stages its own version under its own `{contentHash}` (idempotent — identical
+  content always produces the same key, so a duplicate write of the same version is
+  harmless). The DynamoDB conditional update is the single point that decides which
+  version is current; only that winner promotes to `shared/`. The loser's staged
+  objects are simply never promoted, so `shared/{docHash}.md` can never end up
+  containing a version whose `contentHash` doesn't match the metadata row users and
+  KB retrieval read — the race that a bare overwrite-in-place would allow.
+- **Orphan KB exposure**: because canonical Markdown is not written under `shared/`
+  until *after* the metadata update succeeds, a failure between staging and the
+  DynamoDB write leaves a staged object that KB ingestion never scans and that
+  nothing links to — not a live document in `shared/` with no matching metadata row.
+  A failure before metadata publication therefore truly leaves no visible or indexed
+  insight, matching the intent of the original claim.
+
+The stable keys make retry idempotent: a retried run recomputes the same
+`{contentHash}` for unchanged content and stages to the same location.
 
 ### 9.2 Run history
 
@@ -519,32 +585,46 @@ confidence, source IDs, first/last seen time, seen count, and status
 
 ### 10.2 Effective vocabulary build
 
-The effective vocabulary is:
+The effective vocabulary is scoped per user, not global:
 
 ```text
-active system terms
-+ user manual terms
-+ user-approved suggestions
+active system terms (shared, official-source-derived)
++ this user's manual terms
++ this user's approved suggestions
 ```
 
-It is normalized, deduplicated, sorted, size-checked against Transcribe limits, and
-hashed daily. A build runs only when the effective hash changes.
-
-Do not update the currently active vocabulary in place. Maintain:
+A customer or product name one user approves is confidential to that user's
+accounts and must never appear in another user's Transcribe custom vocabulary,
+hint, or transcription output. Vocabulary build state is therefore keyed per user:
 
 ```text
+PK: USER#{userId}
+SK: VOCABULARY#EFFECTIVE
+
 activeVocabularyName
 activeVocabularyHash
 pendingVocabularyName
 pendingVocabularyHash
 vocabularyStatus
 lastBuildError
+buildRetryCount
 ```
 
-The builder creates a hash-versioned pending vocabulary. Transcription continues to
-use the previous READY vocabulary while the pending version builds. Only a confirmed
-READY version is atomically promoted to active. A FAILED build is visible and never
-degrades active transcription.
+The vocabulary is normalized, deduplicated, sorted, size-checked against Transcribe
+limits, and hashed daily. A build runs when the effective hash changes, **or** when
+`vocabularyStatus` is `FAILED` for the current hash. Without the second condition, a
+build that fails once (for example, a term Transcribe rejects) would never retry
+automatically — the effective hash stays the same until a user's approvals change
+again, so dictionary automation would silently freeze until someone calls the manual
+`POST /rebuild` API. `buildRetryCount` bounds automatic retries of the same failing
+hash (for example, three attempts with backoff per day) before requiring manual
+intervention, so a persistently invalid term doesn't retry-loop forever either.
+
+Do not update the currently active vocabulary in place. The builder creates a
+hash-versioned pending vocabulary. Transcription continues to use the previous READY
+vocabulary while the pending version builds. Only a confirmed READY version is
+atomically promoted to active. A FAILED build is visible and never degrades active
+transcription.
 
 New APIs:
 
@@ -614,15 +694,29 @@ PK: DIGEST#{userId}
 SK: DELIVERY#{localDate}#{scopeType}#{scopeId}
 ```
 
-A conditional put claims the key before `SendEmail`. Status progresses through
-`CLAIMED -> SENDING -> SENT|FAILED|BOUNCED|COMPLAINED`. SES message ID and a
-`deliveryKey` message tag correlate feedback.
+A conditional put claims the key before `SendEmail` and records `claimedAt`. Status
+progresses through `CLAIMED -> SENDING -> SENT|FAILED|BOUNCED|COMPLAINED`. SES
+message ID and a `deliveryKey` message tag correlate feedback.
 
-The system is intentionally at-most-once after `SENDING`: if the worker crashes after
-SES accepts the message but before the row becomes `SENT`, automatic retry does not
-send a possible duplicate. Reconciliation marks the delivery `UNKNOWN` and surfaces
-it for manual retry. Permanent bounce or complaint disables the subscription and
-raises an operational event.
+Two crash windows are handled differently, because only one of them is safe to
+retry automatically:
+
+- **Crash while `CLAIMED`, before `SendEmail` is ever called**: SES was never
+  invoked, so no message could have been sent. Reconciliation may reclaim a
+  `CLAIMED` row whose `claimedAt` is older than a short lease window (for example,
+  ten minutes) via a conditional update requiring the row still be `CLAIMED` with
+  that same `claimedAt` — this closes what would otherwise be a permanently stuck
+  key, since the worker crashed before reaching the at-most-once boundary below.
+  Without this, the digest for that user/scope/day could never be retried at all,
+  automatically or manually, because the deterministic key is already claimed.
+- **Crash after `SendEmail` is called (at or after `SENDING`)**: the system is
+  intentionally at-most-once from this point on. If the worker crashes after SES
+  accepts the message but before the row becomes `SENT`, automatic retry does not
+  send a possible duplicate. Reconciliation marks the delivery `UNKNOWN` and
+  surfaces it for manual retry.
+
+Permanent bounce or complaint disables the subscription and raises an operational
+event.
 
 ## 12. Research, Meeting Prep, and Architecture Brief
 
@@ -640,13 +734,25 @@ The snapshot is stored as `approvedPlan`, hashed, and passed to the execute requ
 Execution must follow that exact snapshot. Later chat messages do not silently alter
 an already-running job.
 
+A snapshot taken at approval time does not itself confer standing access at
+execution time. Before execution starts, and again before each stage that touches a
+referenced resource, the backend re-verifies server-side that the calling user still
+has access to every account/project/meeting referenced in `approvedPlan` — the same
+fail-closed re-verification pattern §11.1 already applies to digest subscriptions.
+If access was revoked between approval and execution, the job fails closed instead
+of running against stale authorization.
+
 The tool layer records a source manifest for every successful `web_search` and
 `fetch_page`. `save_report` computes unique source count and word count itself; it
 does not accept model-reported counts as authoritative.
 
 ### 12.2 Meeting preparation packet
 
-A user can create a prep packet from an Account, Project, or upcoming Meeting. The UI
+A user can create a prep packet from an Account, Project, or upcoming Meeting. The
+backend re-verifies server-side, at request time, that the calling user has access
+to the selected Account/Project/Meeting and every selected action item — the same
+fail-closed check as §11.1 and §12.1 — before any of that content (including
+internal action-item text) is included in the packet or sent to the model. The UI
 lets the user select open action items and prior meetings. The packet combines:
 
 - selected prior summaries and open actions,
@@ -706,9 +812,15 @@ research/{userId}/{researchId}/report.json
 research/{userId}/{researchId}/report.md
 ```
 
-They must never be written to `shared/research/`. Before Phase 4 is enabled, the
-existing research publication path is migrated to owner-scoped storage or explicitly
-limited to reports confirmed to contain public material. Account sharing continues
+They must never be written to `shared/research/`. This closes the path for *new*
+reports, but research reports are already being written to `shared/research/` in
+the deployed system today, independent of this design — that exposure is not
+introduced by this pipeline and should not wait on it. Remediating it (migrating
+existing reports to owner-scoped storage, or confirming and keeping only the ones
+that contain public material) is a Phase 1 action item, done alongside — not
+gated behind — the Phase 1 rollout below; Phase 4 only needs to confirm the
+publication path itself no longer writes to `shared/research/`, since the backlog
+of already-exposed reports will already be cleared. Account sharing continues
 through the existing account/document access checks, not a globally retrievable KB
 prefix.
 
@@ -759,14 +871,23 @@ content retains the current fallback.
 
 ## 14. Security and Privacy
 
-- All AWS resources remain private; public traffic continues through CloudFront.
+- All AWS resources this design introduces remain private; public traffic continues
+  through CloudFront. One pre-existing, unrelated exception: the Bedrock Knowledge
+  Base's OpenSearch Serverless collection network policy currently sets
+  `AllowFromPublic: true` (`infra/lib/knowledge-stack.ts`) rather than a VPC
+  endpoint. This predates this design, is not introduced or widened by it, and
+  remains a tracked gap (see CLAUDE.md Known Issues) — a VPC-endpoint migration for
+  that collection is out of scope here.
 - No new unauthenticated API route is introduced.
 - IAM grants are prefix- and action-scoped. The crawler gets access to
   `knowledge-artifacts/*`, existing knowledge Markdown prefixes, required table
   operations, the selected Bedrock inference profile, and the existing AgentCore
   Gateway only.
 - Search/fetch input is untrusted. Prompt delimiters, role markers, and instruction
-  text are neutralized before model use.
+  text are neutralized before model use, and again (§5.2) before third-party
+  evidence excerpts are embedded in canonical Markdown — the KB is a re-injection
+  path back into the Q&A model, not only a read-only store, so the input-direction
+  neutralization alone is not sufficient.
 - URL schemes, redirects, resolved addresses, body size, and content type are
   validated server-side.
 - Article bodies, plaintext search queries, recipient email content, and internal
@@ -893,7 +1014,13 @@ and failover are a separate higher-tier requirement.
 - DynamoDB PITR remains enabled. Add a daily same-Region AWS Backup recovery point
   with 35-day retention for an independently scheduled 24-hour checkpoint.
 - Both assets and KB buckets remain versioned. Retain noncurrent knowledge-artifact
-  and canonical-Markdown versions for at least 35 days.
+  and canonical-Markdown versions for at least 35 days. Adding this lifecycle rule
+  requires deploying `TtobakKnowledgeStack`, which currently cannot be safely
+  deployed because it stages an undeployed KB teardown (CLAUDE.md Known Issues,
+  `cdk deploy --all` warning). Until that teardown is resolved, the 35-day
+  noncurrent-version lifecycle policy is a planned control, not yet in place;
+  bucket versioning itself (already enabled) still provides object-level recovery
+  in the interim.
 - Infrastructure, state-machine definitions, prompts, schemas, and runbooks remain
   in Git/CDK.
 - Canonical Markdown in S3 is the rebuild source for the Bedrock KB. The vector index
@@ -987,10 +1114,16 @@ No text, control, badge, diagram, or table may overlap or expand a fixed control
 - Store private JSON + canonical KB Markdown.
 - Upgrade insight list/detail UX.
 - Add metrics, alarms, cost budgets, and legacy migration.
+- Remediate existing `shared/research/` exposure (§12.4): migrate already-published
+  research reports to owner-scoped storage, or confirm and retain only the ones with
+  public material. This is independent of Phase 4's research/prep features — it
+  fixes a pre-existing exposure, not a Phase 4 regression, so it does not wait for
+  Phase 4.
 
 **Exit criteria:** 100% of visible news has `schemaVersion=1`, passed full fetch, has
 three or more facts and evidence, and is understandable without opening the original.
-Fetch failures create no visible or indexed item.
+Fetch failures create no visible or indexed item. No research report remains
+reachable from `shared/research/` unless confirmed public.
 
 ### Phase 2: Living Technical Knowledge + Dictionary
 
@@ -1017,7 +1150,8 @@ most one send; bounce/complaint is visible and suppresses future delivery.
 - Measure source/word counts from tool records.
 - Add meeting-prep and architecture templates.
 - Add cost/reliability/observability/DR sections and Mermaid validation.
-- Move new internal reports out of the globally shared research prefix.
+- Confirm new internal reports are written only to owner-scoped storage, never
+  `shared/research/` — the existing backlog is already remediated in Phase 1.
 
 **Exit criteria:** execution matches the approved plan, every external claim is
 cited, Mermaid parses before publication, cost scenarios are reproducible, and
