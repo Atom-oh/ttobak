@@ -604,19 +604,34 @@ after the fact. All conditional updates below target the canonical
 `CRAWLERDOC#{docHash}/STATE` row:
 
 1. Fetch and normalize the body; compute `contentHash` (deterministic, no model
-   call yet). If it equals the canonical row's `publishedContentHash`, nothing
-   changed — update `lastCheckedAt` on the per-source row and stop (this is §8.2
-   step 3; comparing against `publishedContentHash` specifically, never against a
-   candidate that might have been rejected, is what keeps this check correct after
-   a rejection — see step 5b).
+   call yet). If this `sourceId` has no per-source row for this `docHash` yet —
+   this source is discovering an already-known document for the first time, not
+   necessarily encountering new content — add it to the canonical row's
+   `discoveredBySourceIds` (idempotent set add) and, if the canonical row is
+   already `PUBLISHED`, upsert this source's per-source row from the canonical
+   row's current published state right away. This has to happen independently of
+   the content-change check below: a second source finding a URL a first source
+   already published is not a content change, but it must still end up in that
+   source's own list, or it would never appear there at all. Then, if the computed
+   `contentHash` equals the canonical row's `publishedContentHash`, nothing about
+   the content changed — stop (this is §8.2 step 3; comparing against
+   `publishedContentHash` specifically, never against a candidate that might have
+   been rejected, is what keeps this check correct after a rejection — see step
+   5b).
 2. **Claim**: a conditional DynamoDB update — requires `qualityStatus = PUBLISHED`
-   (or the row not to exist yet, for a new document) — and, on success, sets
-   `candidateContentHash: contentHash`, `qualityStatus: ENRICHING`, and
-   `claimedAt: now`. This is the single decision point, and it is source-independent
-   by construction: because it targets the canonical row keyed only by `docHash`,
-   two different sources discovering the same URL contend for the *same* claim, not
-   two separate ones. Any worker that loses this conditional write stops
-   immediately — it never calls Opus and never stages anything for this version.
+   AND `publishedContentHash <> contentHash` (or the row not to exist yet, for a
+   new document) — and, on success, sets `candidateContentHash: contentHash`,
+   `qualityStatus: ENRICHING`, and `claimedAt: now`. The `publishedContentHash`
+   condition guards a race step 1 alone can't close: if another worker completed
+   its own full enrich/promote cycle for this exact `contentHash` in the gap
+   between this worker's step-1 read and this claim attempt, retrying the claim
+   would re-enrich content that's already published — wasted Opus cost, not a
+   correctness bug, but worth closing since the check is free. This is the single
+   decision point, and it is source-independent by construction: because it
+   targets the canonical row keyed only by `docHash`, two different sources
+   discovering the same URL contend for the *same* claim, not two separate ones.
+   Any worker that loses this conditional write stops immediately — it never calls
+   Opus and never stages anything for this version.
 3. The claim winner calls Opus, builds the structured JSON and canonical Markdown,
    and stages both at the `{contentHash}` keys above (now genuinely idempotent:
    exactly one worker ever produces content for a given `(docHash, contentHash)`
