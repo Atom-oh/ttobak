@@ -28,6 +28,17 @@ and `Meeting.ProjectIDs` already exist on the data model (ADR-015, ADR-025).
 - No change to how tag filter / search / sort work today — they remain
   client-side over the loaded page, layered on top of the new server-side
   account/project filter.
+- **No account/project filtering on the "shared" tab.** The shared tab's list
+  path (`MeetingService.ListMeetings`, `tab=shared`) does not query GSI1 at
+  all — it looks up `Share` items for the user and resolves them via
+  `BatchGetMeetings`. `Share` items carry no `accountId`/`projectIds`
+  attributes, and `BatchGetItem` has no `FilterExpression` support, so the
+  GSI1-`FilterExpression` design below cannot apply there. Wiring this tab up
+  would need its own design (a service-layer filter applied to the batch-get
+  results, with pagination-size implications since filtering after the fact
+  can shrink a page below the requested count) and is deferred to a follow-up
+  PR. For this PR, the account/project filter UI is disabled (or hidden) while
+  `tab=shared` is active.
 
 ## Design
 
@@ -37,9 +48,8 @@ and `Meeting.ProjectIDs` already exist on the data model (ADR-015, ADR-025).
   meetings linked to *either*.
 - OR across categories: selecting Account A and Project B shows meetings
   linked to Account A *or* Project B (not intersection).
-- Combines as a pure additive filter on top of the existing `tab` param
-  (`all`/`shared`) — a user on the "shared" tab can still filter by
-  account/project within their shared meetings.
+- Combines as a pure additive filter on top of the existing `tab` param, but
+  only for `tab=all` — see the shared-tab Non-goal above.
 
 ### Backend
 
@@ -75,10 +85,20 @@ correct across the full result set, not just one loaded page.
     size limit (4KB) and the `IN` operator's ~100-operand practical limit.
     Given the frontend UI (a chip picker over "all accounts/projects the
     user has access to") this is bounded in practice by how many
-    accounts/projects a single user realistically has, but
-    `buildAccountProjectFilterCondition` should cap the combined input size
-    defensively (e.g. clamp to the first N IDs and log if truncated) rather
-    than assume the caller-side bound always holds.
+    accounts/projects a single user realistically has, but the combined
+    input size must still be capped defensively rather than assuming the
+    caller-side bound always holds. **The cap must be enforced as an
+    explicit rejection, not silent truncation**: if `len(AccountIDs) +
+    len(ProjectIDs)` exceeds the cap (`maxFilterIDs = 100`, matching the
+    `IN` operand limit), `MeetingHandler.ListMeetings` returns `400
+    BAD_REQUEST` before calling the service/repository at all. Silently
+    dropping IDs would narrow the filter without the caller knowing, which
+    directly contradicts Goal 2 (filtering must be correct for the full
+    selected criteria, not a subset of it) — a user who selected 120
+    accounts expecting an OR over all 120 must not get back an OR over an
+    arbitrary first 100 with no indication anything was dropped.
+    `buildAccountProjectFilterCondition` itself stays a pure function over
+    an already-validated input and does not need its own truncation logic.
 - `MeetingHandler.ListMeetings` (`backend/internal/handler/meeting.go`): parse
   repeated `accountId=`/`projectId=` query params via `r.URL.Query()["accountId"]`
   / `["projectId"]`.
@@ -117,6 +137,13 @@ sufficient at this scale (matches how `entityType` is already filtered).
 
 - Backend: table-driven test for `buildAccountProjectFilterCondition` covering
   account-only, project-only, both, and neither (nil) cases.
+- Backend: `MeetingHandler.ListMeetings` returns `400 BAD_REQUEST` when
+  `len(accountId) + len(projectId)` exceeds `maxFilterIDs`, and does not call
+  the service layer in that case.
+- Backend: **a filter can never widen the result set.** Explicit test that
+  filtering by an account/project ID the calling user has no relationship to
+  (e.g. another user's `accountId`) returns an empty result, not an error and
+  not the unfiltered list — the filter is a narrowing-only operation.
 - Frontend: manual verification in dev — select an account, confirm the list
   narrows and pagination still works; select a project; select both; clear
-  filters.
+  filters; confirm the filter UI is disabled/hidden on the "shared" tab.
