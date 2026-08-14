@@ -144,13 +144,44 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
   # 유보되고 else 진입 전까지 다른 명령이 없어 PIPESTATUS 가 보존된다(실측: 124 유지).
   local t0 t1
   t0="$(date +%s)"
-  if ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
-       claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
-       < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT"
-  then
-    CHAIR_RC=0
+  # stream-json + --include-partial-messages: logs a progress signal instead of
+  # 25min of silence. Logs delta *length* only, never delta text — text would skip
+  # scrub_secrets, and a credential split across chunk boundaries wouldn't be
+  # caught by per-chunk scrubbing. Final text is scrubbed once from the full
+  # buffered stream (below), not incrementally.
+  local stream_file="$WORK/chair-stream.jsonl"
+  if command -v jq >/dev/null 2>&1; then
+    if ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
+         claude -p "$(cat "$WORK/synth-prompt.txt")" \
+         --output-format stream-json --include-partial-messages --verbose \
+         < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" \
+         | tee "$stream_file" \
+         | jq --unbuffered -r \
+             'select(.type=="stream_event" and .event.type=="content_block_delta"
+                     and .event.delta.type=="text_delta") | (.event.delta.text | length)' \
+             2>/dev/null \
+         | awk -v model="$(chair_label "$1")" \
+             '{ total+=$1; if (total-last>=500) { print "chair " model ": " total "B generated so far..."; last=total } }'
+    then
+      CHAIR_RC=0
+    else
+      CHAIR_RC="${PIPESTATUS[0]}"   # timeout 이 죽였으면 124 (파이프 첫 단계 = claude/timeout)
+    fi
+    # Final text is one "result" event, not a delta reassembly. Empty on
+    # failure/timeout, same as text mode.
+    jq -r 'select(.type=="result") | .result // empty' "$stream_file" 2>/dev/null \
+      | scrub_secrets > "$OUT"
   else
-    CHAIR_RC="${PIPESTATUS[0]}"   # timeout 이 죽였으면 124
+    # No jq: fall back to text mode rather than blocking the review on it.
+    echo "::warning::jq not found on runner — chair progress logging disabled, falling back to non-streaming mode"
+    if ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
+         claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
+         < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT"
+    then
+      CHAIR_RC=0
+    else
+      CHAIR_RC="${PIPESTATUS[0]}"
+    fi
   fi
   t1="$(date +%s)"; CHAIR_ELAPSED="$((t1 - t0))"
   echo "chair $(chair_label "$1"): ${CHAIR_ELAPSED}s, rc=$CHAIR_RC, stdin=$(wc -c < "$WORK/synth-stdin.txt")B, out=$(wc -c < "$OUT")B"
