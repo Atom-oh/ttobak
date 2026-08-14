@@ -7,10 +7,17 @@ DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
 DIFF="$1"; WORK="$2"; PR_NUMBER="$3"; PR_TITLE="$4"; OUT="$5"
 # The workflow cancels an in-progress run on every new push to the PR
 # (concurrency: cancel-in-progress) on a non-ephemeral runner -- a chair-stream
-# temp file left by a happy-path-only `rm -f` would survive that SIGTERM. EXIT
-# covers normal/error exit; INT/TERM are explicit so an unhandled TERM doesn't
-# skip it.
-trap 'rm -f "$WORK/chair-stream.jsonl"' EXIT INT TERM
+# temp file left by a happy-path-only `rm -f` would survive that SIGTERM. A
+# bare `trap ... INT TERM` only runs the handler and lets the script continue
+# (bash does not exit on a trapped signal by default) -- on cancellation that
+# meant primary died, cleanup ran, and the script kept going into the fallback
+# branch, which recreates the unscrubbed stream file right as the runner's
+# grace-period SIGKILL (which no trap can catch) lands. `cleanup; exit N` in
+# the INT/TERM handlers is what actually stops the script there.
+cleanup() { rm -f "$WORK/chair-stream.jsonl"; }
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 SLOT="$WORK/slot"
 RESP="$(tr '\n' ',' < "$WORK/responded.txt" 2>/dev/null | sed 's/,$//')" || true
 [ -z "$RESP" ] && RESP="(none — Claude solo)"
@@ -171,9 +178,9 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
          | jq --unbuffered -r \
              'select(.type=="stream_event" and .event.type=="content_block_delta"
                      and .event.delta.type=="text_delta") | (.event.delta.text | utf8bytelength)' \
-             2>/dev/null \
+             2>>"$WORK/chair.err" \
          | awk -v model="$(chair_label "$1")" \
-             '{ total+=$1; if (total-last>=500) { print "chair " model ": " total "B generated so far..."; fflush(); last=total } }
+             'BEGIN { total=0 } { total+=$1; if (total-last>=500) { print "chair " model ": " total "B generated so far..."; fflush(); last=total } }
               END { print "chair " model ": " total "B total" }'
     then
       CHAIR_RC=0
@@ -181,12 +188,16 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
       CHAIR_RC="${PIPESTATUS[0]}"   # timeout 이 죽였으면 124 (파이프 첫 단계 = claude/timeout)
     fi
     # Final text is one "result" event, not a delta reassembly. Guarded with
-    # if/else, not a bare pipeline: under set -e a truncated last line (claude
+    # if/elif, not a bare pipeline: under set -e a truncated last line (claude
     # killed mid-write on timeout) makes jq exit non-zero, which would otherwise
     # kill this whole script and skip the fallback/comment-posting logic below.
-    if jq -r 'select(.type=="result") | .result // empty' "$stream_file" 2>/dev/null \
+    if jq -r 'select(.type=="result") | .result // empty' "$stream_file" 2>>"$WORK/chair.err" \
          | scrub_secrets > "$OUT"
-    then :; else [ "$CHAIR_RC" = 0 ] && CHAIR_RC=1; fi  # preserve 124 if already set
+    then
+      rm -f "$stream_file"   # result captured -- shrink the unscrubbed-plaintext window to seconds
+    elif [ "$CHAIR_RC" = 0 ]; then
+      CHAIR_RC=1   # preserve 124 if already set
+    fi
     # rc=0 with an empty $OUT means the "result" event never showed up (schema
     # drift, or the stream was truncated in a way jq tolerated) -- surface that
     # as a failure instead of silently producing "budget exhausted" downstream.
