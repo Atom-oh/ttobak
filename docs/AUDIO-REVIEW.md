@@ -105,7 +105,7 @@
 - **현상**: `new AudioContext()` 생성 후 `.state` 확인이나 `.resume()` 호출 없음.
 - **영향**: 모바일 브라우저(iOS Safari, Chrome Android)에서 AudioContext가 `suspended` 상태로 생성됨. AnalyserNode(파형 시각화)가 작동하지 않아 레벨미터가 0 표시 → 사용자가 "마이크가 안 된다"고 오인. `page.tsx:154`의 미리보기 AudioContext에도 동일 문제(미수정 — 프리뷰는 idle 상태에서 생성되므로 이 회귀 조사(iOS에서 Record 버튼이 카메라를 여는 문제, 2026-08-13)의 범위 밖).
 - **재현**: 모바일 브라우저에서 녹음 시작 → 파형 애니메이션 없음
-- **수정 내용**: `new AudioContext()` 생성 직후 `state === 'suspended'`면 `resume().catch(() => {})` 호출 (fire-and-forget — 녹음 자체는 AudioContext와 무관하므로 실패해도 치명적이지 않음).
+- **수정 내용**: `new AudioContext()` 생성 직후 `state === 'suspended'`면 `resume()` 시도, 실패 시 `console.warn`으로 표면화(무음 처리 금지 — AGENTS.md "no silent failures"). 이후에도 `onstatechange`에서 같은 재시도 로직을 걸어, iOS의 전화 수신 등 오디오 세션 인터럽션으로 이미 실행 중이던 컨텍스트가 다시 `suspended`되는 경우도 커버.
 
 ### FR-003 | HIGH | MediaStream track ended 이벤트 미처리
 - **리뷰어**: Claude

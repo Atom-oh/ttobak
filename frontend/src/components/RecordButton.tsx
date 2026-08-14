@@ -348,9 +348,18 @@ export function RecordButton({
       // happens after the getUserMedia await above has stepped outside the
       // click's user-activation window -- without this the waveform never
       // animates even though recording itself (MediaRecorder) is unaffected.
-      if (audioContext.state === 'suspended') {
-        audioContext.resume().catch(() => {});
-      }
+      // Surface (don't swallow) a failed resume, and re-attempt on any later
+      // suspension too -- e.g. an iOS phone-call/Siri audio-session
+      // interruption can suspend an already-running context mid-recording.
+      const tryResumeAudioContext = () => {
+        if (audioContext.state === 'suspended') {
+          audioContext.resume().catch((err) => {
+            console.warn('AudioContext resume failed; waveform may not animate:', err);
+          });
+        }
+      };
+      tryResumeAudioContext();
+      audioContext.onstatechange = tryResumeAudioContext;
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
