@@ -850,6 +850,46 @@ Knowledge Base 파일 업로드 및 목록 관리 컴포넌트.
 </div>
 ```
 
+### 2.16 Account Picker (select-based, with loading/error states)
+
+프로젝트 상세 페이지(`ProjectDetailClient.tsx`)의 "Link account" 컨트롤. 이전에는
+사용자가 직접 계정 UUID를 입력해야 하는 텍스트 입력창이었으나(선택할 방법이
+없어 실질적으로 사용 불가), `accountApi.list()`로 가져온 접근 가능한 전체
+계정 목록을 이름 기준(한국어 로케일)으로 정렬해 보여주는 `<select>`로 대체.
+이미 연결된 계정은 옵션에서 제외한다. 로딩/에러 상태를 명시적으로 분리해,
+목록을 가져오는 fetch가 실패한 경우와 "실제로 계정이 0개인 경우"를 사용자가
+구분할 수 있게 하고(실패 시 Retry 버튼 제공), fetch가 아직 완료되지 않은
+로딩 구간을 "선택 가능한 계정 없음"으로 잘못 표시하지 않는다. `AccountsClient`의
+계정 목록도 동일하게 이름 기준 정렬을 적용한다.
+
+```html
+<!-- Loading -->
+<p class="pt-2 text-sm text-slate-400 dark:text-text-muted">Loading accounts…</p>
+
+<!-- Error -->
+<div class="flex items-center gap-2 pt-2 text-sm text-red-500">
+  <span>Failed to load accounts.</span>
+  <button class="font-semibold hover:underline">Retry</button>
+</div>
+
+<!-- Loaded: select + submit, same input/button styling as other project forms -->
+<form class="flex gap-2 pt-2">
+  <select class="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm">
+    <option disabled>Select an account…</option>
+    <option>Acme Corp</option>
+    <option>Globex</option>
+  </select>
+  <button class="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50">
+    Link
+  </button>
+</form>
+```
+
+**참고**: Account/Project 페이지 전반(`AccountsClient`, `AccountDetailClient`,
+`ProjectDetailClient`)은 이 문서에 아직 별도 섹션이 없다 — 이 항목은 이번에
+새로 만든 패턴만 다루며, 나머지 페이지 전체를 다루는 문서화는 이 변경의
+범위 밖이다 (별도 후속 작업으로 남김).
+
 ## 3. Interaction Patterns
 
 ### 3.1 Hover States
