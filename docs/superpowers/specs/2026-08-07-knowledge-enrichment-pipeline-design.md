@@ -585,11 +585,18 @@ conditional updates target the canonical row:
      `PutItem` won the race for the same new `docHash`): the canonical row now
      exists under the winner's `primarySourceId`, but this source never ran
      step 1's `discoveredBySourceIds` add for it (there was no row yet). Before
-     stopping, the loser must issue the same unconditioned `ADD` from step 1
-     against the now-existing row — otherwise its per-source projection never
-     gets created in step 8's fan-out and the document is permanently invisible
-     under this source's filter, even though this source genuinely discovered
-     the URL.
+     stopping, the loser must re-run step 1's full logic against the
+     now-existing row — not just the bare `ADD`. A bare `ADD` isn't enough:
+     step 8's fan-out only runs once, at the winner's own promote, so if that
+     promote has already completed by the time the loser's `ADD` lands (a
+     plausible ordering — the loser only retries after its failed `PutItem`,
+     while the winner is already mid-pipeline), no future fan-out is scheduled
+     to create this source's per-source projection, leaving it permanently
+     missing. Re-running step 1 in full closes this: the `ADD` still records
+     membership, but the loser also checks canonical's current state and, if
+     it's already `PUBLISHED` with `publishedContentHash` set, upserts its own
+     per-source row directly from that state immediately — the same path step
+     1 already uses when a source discovers an existing published document.
    - Existing row (`UpdateItem`): conditioned on `qualityStatus = PUBLISHED AND
      (attribute_not_exists(publishedContentHash) OR publishedContentHash <>
      contentHash)` — the explicit `attribute_not_exists` branch matters here too:
