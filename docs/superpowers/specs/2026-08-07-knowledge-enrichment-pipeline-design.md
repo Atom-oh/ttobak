@@ -98,8 +98,10 @@ The implementation reuses the current stacks and storage:
   - `TtobakCrawlerStack` (currently only `props.kbBucket` + `SUMMARIZE_MODEL_ID`)
     adds the assets-bucket reference/env var, plus `FINAL_MODEL_ID` and the Bedrock
     client Region (§7.1) — not wired in today.
-  - Deploy `TtobakAiStack --exclusively` before `TtobakCrawlerStack --exclusively`
-    (IAM before the Lambda code that needs it).
+  - Deploy order: `TtobakStorageStack --exclusively` (assets-bucket lifecycle,
+    §17.2) -> `TtobakAiStack --exclusively` (IAM) -> `TtobakGatewayStack
+    --exclusively` (`research.go` writer move, §12.4) -> `TtobakCrawlerStack
+    --exclusively`.
   - State machine restructuring is also Phase 1 scope, not just env/IAM: today's
     per-source `sfn.Map` (no `Retry`/`Catch`/DLQ) doesn't meet §15.1's
     per-candidate fan-out + independent retry + visible ingestion-failure
@@ -352,7 +354,12 @@ all three disclose it and are gated the same way: a deployment-owner config flag
 (default `false`) must be enabled before any of them may invoke the US-geo
 profile; a request fails closed otherwise, server-side, not just via the
 disclosure UI. An approved regional model is a separate way to satisfy the same
-requirement per deployment.
+requirement per deployment. Delivered as a CDK-context-derived environment
+variable — no new stack: `TtobakCrawlerStack`'s crawler Lambda and
+`TtobakGatewayStack`'s `api` Lambda (prep packets, architecture briefs) get it
+the same way they get `FINAL_MODEL_ID`; the AgentCore Runtime container gets it
+via `deploy-research-agent.yml`'s existing env-injection step (same mechanism as
+`WEB_SEARCH_GATEWAY_URL`, CLAUDE.md).
 
 Use Opus 5 only for:
 
@@ -467,7 +474,9 @@ kind: string
 canonicalUrl: string
 primarySourceId: string         # set once at first claim; immutable — the {sourceId}
                                  # segment in staged/promoted keys never changes owner
-service: string?                # kind=technical only; the {service} promoted-key segment
+service: string?                # kind=technical only; set once at first claim, immutable
+                                 # (same lifecycle as primarySourceId) — the {service}
+                                 # promoted-key segment never changes owner either
 publishedContentHash: string?   # last PUBLISHED version; absent if never published
 candidateContentHash: string?   # in-flight claim; absent when idle/PUBLISHED
 qualityStatus: "ENRICHING" | "PROMOTING" | "PUBLISHED"
@@ -556,18 +565,31 @@ promotion time doesn't work: Opus's non-deterministic output means two workers
 enriching the identical `contentHash` could produce different artifacts. All
 conditional updates target the canonical row:
 
-1. Fetch, normalize, compute `contentHash`. If this `sourceId` has no per-source
-   row yet, add it to `discoveredBySourceIds` and, if canonical is `PUBLISHED`
-   **and** `publishedContentHash` exists (genuinely published, not idle-after-
-   rejection), upsert its per-source row from the current published state. If
-   `contentHash == publishedContentHash`, stop (§8.2 step 3).
+1. Fetch, normalize, compute `contentHash`. If the canonical row already exists
+   and this `sourceId` has no per-source row yet, add it to
+   `discoveredBySourceIds` (unconditioned `ADD` to the String Set — idempotent,
+   touches no claim/promote field, so it can never conflict with a concurrent
+   claim) and, if canonical is `PUBLISHED` **and** `publishedContentHash` exists
+   (genuinely published, not idle-after-rejection), upsert its per-source row
+   from the current published state. If `contentHash == publishedContentHash`,
+   stop (§8.2 step 3). If the canonical row does not exist yet, skip straight to
+   step 2 — there is nothing to add this source to until a row exists.
 2. **Claim**: the condition depends on whether the canonical row exists yet —
    requiring `qualityStatus = PUBLISHED` unconditionally would make a brand-new
    `docHash` (no row, so no `qualityStatus` attribute either) permanently
    unclaimable, since a comparison against a missing attribute evaluates false.
    - New row (`PutItem`): conditioned on `attribute_not_exists(PK)`. Sets
      `candidateContentHash`, `qualityStatus: ENRICHING`, `claimedAt: now`,
-     `primarySourceId` (immutable from here on).
+     `primarySourceId` (immutable from here on), and seeds
+     `discoveredBySourceIds` with this source. **Loser** (another source's
+     `PutItem` won the race for the same new `docHash`): the canonical row now
+     exists under the winner's `primarySourceId`, but this source never ran
+     step 1's `discoveredBySourceIds` add for it (there was no row yet). Before
+     stopping, the loser must issue the same unconditioned `ADD` from step 1
+     against the now-existing row — otherwise its per-source projection never
+     gets created in step 8's fan-out and the document is permanently invisible
+     under this source's filter, even though this source genuinely discovered
+     the URL.
    - Existing row (`UpdateItem`): conditioned on `qualityStatus = PUBLISHED AND
      (attribute_not_exists(publishedContentHash) OR publishedContentHash <>
      contentHash)` — the explicit `attribute_not_exists` branch matters here too:
@@ -580,9 +602,10 @@ conditional updates target the canonical row:
 4. **Quality gate** (§7.2) runs.
 5. **Pass**: `ENRICHING -> PROMOTING`, conditioned on
    `candidateContentHash`/`claimedAt` → promote (step 7).
-6. **Fail**: `ENRICHING -> PUBLISHED` (rollback, `publishedContentHash` untouched),
-   set `lastRejected*`. A repeat fetch of the same rejected `contentHash` within a
-   cooldown (e.g. 24h) skips re-claiming.
+6. **Fail**: `ENRICHING -> PUBLISHED` (rollback, `publishedContentHash`
+   untouched), clearing `candidateContentHash`/`claimedAt` (schema: absent when
+   idle) and setting `lastRejected*`. A repeat fetch of the same rejected
+   `contentHash` within a cooldown (e.g. 24h) skips re-claiming.
 7. **Promote** (self-correcting loop — a resumed promote must never overwrite a
    newer version):
    a. Read current `candidateContentHash`/`claimedAt` (`H`/`A`).
@@ -600,7 +623,12 @@ conditional updates target the canonical row:
       retry from (a) on conflict.
 8. **Fan out**: upsert every `discoveredBySourceIds` row with the published
    summary/`keyTakeaways`/`qualityStatus`/`s3Key`.
-9. Trigger KB ingestion, then clear `postPublishPending`.
+9. Read `publishedContentHash` (`H`), trigger KB ingestion for its artifact, then
+   clear `postPublishPending` conditioned on `publishedContentHash == H` — if a
+   newer publish (a later `contentHash`) has landed and re-set
+   `postPublishPending: true` in the meantime, this clear must not fire, or the
+   newer publish's pending flag becomes permanently invisible to reconciliation
+   even though its own ingestion never ran.
 
 A row stuck in `ENRICHING`/`PROMOTING` past a short lease (e.g. 10 minutes, same
 pattern as §11.3's `CLAIMED` reclaim) means the claim holder crashed. The two
@@ -629,7 +657,10 @@ states need different reconciliation, not the same lease-renewal treatment:
   otherwise be permanently invisible to reconciliation (the row is already
   `PUBLISHED`, and the next fetch's step 1 stops immediately on matching
   `contentHash`), so this flag is swept independently of the `ENRICHING`/
-  `PROMOTING` lease checks above.
+  `PROMOTING` lease checks above. Re-read `publishedContentHash` at the start of
+  the sweep (not a value captured earlier) and apply step 9's same
+  generation-conditioned clear, so a concurrently-landing newer publish's own
+  pending flag is never clobbered by this sweep.
 
 Staged keys get a short lifecycle (e.g. 7 days, assets bucket); the promoted
 `shared/` Markdown and `artifactKey` JSON copies are long-term (§17.2).
@@ -795,7 +826,9 @@ images and CSS enhancements are unavailable.
 ### 11.3 Delivery reliability
 
 Use SES with a configuration set and SNS/EventBridge feedback events for delivery,
-bounce, and complaint status. Every send has a deterministic key:
+bounce, and complaint status — owned by `TtobakCrawlerStack` (the stack that
+already owns digest scheduling per §4; Phase 3, §19). Every send has a
+deterministic key:
 
 ```text
 PK: DIGEST#{userId}
@@ -964,8 +997,17 @@ readers still touch that prefix — redirecting only the writers breaks the read
   genuinely outside CDK (`deploy-research-agent.yml`).
 - **Readers** (miss these and the detail API / follow-up research break once
   writers move): `research.go`'s own `GetObject` (same file, same Lambda) reads
-  the report back to serve it; `research-agent/agent.py`'s parent-report lookup
-  reads a prior research's Markdown when a follow-up references it.
+  the report back to serve it, already scoped to the caller's own partition;
+  `research-agent/agent.py`'s parent-report lookup reads a prior research's
+  Markdown when a follow-up references it. That lookup must apply the same
+  fail-closed, verified-execution-context owner check §12.1 requires of
+  `save_report`'s write — the parent-report reference reaches it via
+  `approvedPlan`/tool arguments, which are model-adjacent and untrusted for
+  authorization purposes, the same threat model §12.1 already accepts for
+  writes. Without this check the read path is asymmetric with the write path:
+  a manipulated reference could read another tenant's
+  `research/{userId}/{researchId}/report.md` even though `save_report` itself
+  cannot be steered into writing there.
 
 This exposure predates this design and shouldn't wait on Phase 4. Closing it, in
 Phase 1:
@@ -1029,8 +1071,10 @@ The renderer keeps Mermaid `securityLevel: "strict"` and sanitized Markdown link
 ### 13.3 Mermaid publication gate
 
 The server validates every Mermaid block using the same pinned Mermaid major version
-as the frontend. A small Node render/validation worker calls `mermaid.parse()` before
-publication:
+as the frontend. A small Node (ARM64) render/validation worker — owned by
+`TtobakCrawlerStack` alongside the rest of the publication pipeline (Phase 1,
+§19), with its Mermaid version pin sourced from the frontend's `package.json` as
+the single source of truth — calls `mermaid.parse()` before publication:
 
 1. parse generated Mermaid;
 2. on failure, request one repair with only the diagram and parser error;
@@ -1048,10 +1092,15 @@ content retains the current fallback.
   endpoint — tracked in CLAUDE.md Known Issues, out of scope.
 - No new unauthenticated API route.
 - New IAM grants are prefix/action-scoped (`knowledge-artifacts/*`, the selected
-  inference profile, existing AgentCore Gateway). Pre-existing exception:
+  inference profile, existing AgentCore Gateway, and `research/*` replacing the
+  removed `shared/research/*` grant per §12.4). Pre-existing exception:
   `crawlerRole`'s `kbBucket.grantReadWrite` (`ai-stack.ts`) is bucket-wide and not
   narrowed here — narrowing it is a separate change against every crawler path
-  that relies on it (§4).
+  that relies on it (§4). `research/*` is a prefix ceiling, not a per-user
+  boundary — like the bucket-wide grants above, IAM alone permits any tool
+  invocation under that role to read/write any `research/{userId}/*`; per-user
+  isolation is enforced in application code (owner-derived path + the
+  fail-closed check in §12.1/§12.4), not by the grant itself.
 - Search/fetch input is untrusted. Prompt delimiters, role markers, and instruction
   text are neutralized before model use, and again (§5.2) before third-party
   evidence excerpts are embedded in canonical Markdown — the KB is a re-injection
@@ -1178,17 +1227,31 @@ This protects against application errors, accidental deletion, and resource
 replacement. It is not protection against a full Region outage. Cross-Region standby
 and failover are a separate higher-tier requirement.
 
+The RTO figure is conditional on §17.3 step 3's table-name parameterization
+shipping as a Phase 1 deliverable (§19) — until then, `storage-stack.ts`
+creates `ttobak-main` with a fixed name and no import path, so there is no CDK
+mechanism to switch to a restored table and the 24h target is not yet
+achievable, only targeted.
+
 ### 17.2 Controls
 
 - DynamoDB PITR remains enabled. Add a daily same-Region AWS Backup recovery point
-  with 35-day retention for an independently scheduled 24-hour checkpoint.
+  with 35-day retention for an independently scheduled 24-hour checkpoint —
+  owned by `TtobakStorageStack` (co-located with the table it backs up; Phase 1,
+  §19).
 - Both assets and KB buckets remain versioned. Two separate controls, different
   buckets/stacks:
-  - **Assets bucket** (`TtobakStorageStack`): a `noncurrentVersionExpiration` rule
-    (not a current-version delete rule — the bucket is versioned, so a bare
-    expiration would leave noncurrent versions behind forever) at 7 days on
-    `knowledge-artifacts/staging/` only (§9.1) — the promoted `knowledge-artifacts/
-    promoted/` copy is excluded and long-term. Deployable now.
+  - **Assets bucket** (`TtobakStorageStack`): staging keys are never
+    overwritten — §9.1's `{contentHash}-{claimedAt}` suffix is unique per claim
+    attempt — so a bare `noncurrentVersionExpiration` rule never fires; there is
+    never a newer version to push an old one into "noncurrent." The rule instead
+    pairs a current-version `expiration` at 7 days (which creates a delete
+    marker, itself removable once it ages past the same window) with
+    `noncurrentVersionExpiration` at 7 days (covers any version left behind once
+    a delete marker exists) and `abortIncompleteMultipartUpload` at 1 day,
+    scoped to `knowledge-artifacts/staging/` only (§9.1) — the promoted
+    `knowledge-artifacts/promoted/` copy is excluded and long-term. Deployable
+    now.
   - **KB bucket** (`TtobakKnowledgeStack`): 35-day noncurrent retention on the
     promoted copies — blocked until `TtobakKnowledgeStack` is deployable again
     (staged KB teardown, CLAUDE.md Known Issues); versioning alone covers the
@@ -1213,7 +1276,8 @@ and failover are a separate higher-tier requirement.
    other stack references it by that fixed name; there is no table-import
    parameter today, so this step has no CDK mechanism yet. The 24h RTO in §17.1
    depends on this step; resolving it (table-name context parameter, or an
-   import path) is an implementation-time decision, not settled by this design.
+   import path) is a Phase 1 deliverable (§19), not deferred to
+   implementation time.
 4. Recover required S3 object versions.
 5. Rebuild/ingest the Bedrock KB from canonical Markdown.
 6. Reconcile vocabulary active names with Transcribe and rebuild missing versions.
@@ -1259,8 +1323,11 @@ Use stdlib `testing` and mock repositories for:
 
 ### 18.3 Frontend
 
-Run lint and static export build. Add Playwright visual checks for desktop/mobile and
-light/dark:
+Run lint and static export build. AGENTS.md currently states the frontend has no
+test framework ("lint+build only"); adopting Playwright below is an explicit
+convention change scoped to this rollout (§19 Phase 1 amends AGENTS.md
+accordingly), not a silent addition. Add Playwright visual checks for
+desktop/mobile and light/dark:
 
 - substantive news cards with long Korean text;
 - article headings, facts, evidence, tables, and callouts;
@@ -1291,6 +1358,11 @@ No text, control, badge, diagram, or table may overlap or expand a fixed control
 - Store private JSON + canonical KB Markdown.
 - Upgrade insight list/detail UX.
 - Add metrics, alarms, cost budgets, and legacy migration.
+- Add a table-name context parameter (or import path) for `ttobak-main` restore
+  (§17.3 step 3) — required for the 24h RTO baseline (§17.1) to be achievable,
+  not just targeted.
+- Amend AGENTS.md's "Frontend has no test framework" line to scope in
+  Playwright (§18.3).
 - Remediate existing `shared/research/` exposure (§12.4): redirect all three
   writers and both readers — `research.go` (`TtobakGatewayStack`, writer and
   reader both), `save_report.py` (`TtobakResearchAgentStack`), and the AgentCore
@@ -1360,9 +1432,17 @@ The project is successful when:
   reliability, observability, RTO/RPO, and DR.
 - Mermaid and long-form Markdown are readable on desktop/mobile and light/dark.
 - Failures are visible, retries are bounded, publication is idempotent, and the
-  system can be restored within the accepted 24-hour objectives.
+  system can be restored within the accepted 24-hour objectives once §17.3 step
+  3's table-name parameterization ships (Phase 1).
 
 ## 21. References
+
+Three decisions here are ADR-worthy per CLAUDE.md's Auto-Sync Rules and will
+each get a new/superseding ADR under `docs/decisions/`, filed alongside Phase 1
+implementation rather than deferred: final-model routing + US-geo residency
+gate (§7.1); the `shared/research/` -> owner-scoped storage boundary change
+(supersedes ADR-011); per-user vocabulary build scoping (extends/supersedes
+ADR-008).
 
 - [Claude Opus 5 model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5.html)
 - [Amazon Bedrock pricing](https://aws.amazon.com/bedrock/pricing/)
