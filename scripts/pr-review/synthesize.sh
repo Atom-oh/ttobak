@@ -5,6 +5,17 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"; . "$DIR/lib.sh"
 DIFF="$1"; WORK="$2"; PR_NUMBER="$3"; PR_TITLE="$4"; OUT="$5"
+# chair.err briefly holds raw claude/jq stderr (pre-scrub) -- surfaced excerpts
+# already go through scrub_secrets (below), but the full file on disk doesn't.
+# Clean it up on exit/cancellation so that residual copy doesn't outlive the
+# run. `cleanup; exit N` in the INT/TERM handlers (not a bare trap) matters
+# because bash does not exit a script on a trapped signal by default -- an
+# unconditional-exit-less handler would let the script fall through into the
+# fallback branch on cancellation.
+cleanup() { rm -f "$WORK/chair.err"; }
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 SLOT="$WORK/slot"
 RESP="$(tr '\n' ',' < "$WORK/responded.txt" 2>/dev/null | sed 's/,$//')" || true
 [ -z "$RESP" ] && RESP="(none — Claude solo)"
@@ -144,13 +155,72 @@ run_chair() {  # $1=model → "$OUT" 에 기록(scrub 통과). claude 실패해�
   # 유보되고 else 진입 전까지 다른 명령이 없어 PIPESTATUS 가 보존된다(실측: 124 유지).
   local t0 t1
   t0="$(date +%s)"
-  if ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
-       claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
-       < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT"
-  then
-    CHAIR_RC=0
+  # stream-json + --include-partial-messages: logs a progress signal instead of
+  # 25min of silence. Logs delta *length* only, never delta text — text would skip
+  # scrub_secrets, and a credential split across chunk boundaries wouldn't be
+  # caught by per-chunk scrubbing.
+  #
+  # The full unscrubbed model output never touches disk: an earlier version of
+  # this piped `tee` into a fixed-path file for the result-extraction jq to
+  # re-read, but that put pre-scrub chair output at rest on a non-ephemeral,
+  # self-hosted runner (pr-review.yml: `runs-on: ttobak-claude-arm`) between
+  # writes and its own cleanup -- a SIGKILL or runner crash (neither catchable
+  # by any trap) could leave it there into a later run, since that run only
+  # clears `lenses/` at start, not this path. `tee >(...)` fans the same
+  # stdout into a second jq (for the "result" event, scrubbed straight into
+  # "$OUT") without an intermediate file at all -- the process-substitution
+  # subshell only ever holds the buffer in its own pipe, never at a
+  # predictable path.
+  if command -v jq >/dev/null 2>&1; then
+    if ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
+         claude -p "$(cat "$WORK/synth-prompt.txt")" \
+         --output-format stream-json --include-partial-messages --verbose \
+         < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" \
+         | tee >(jq -r 'select(.type=="result") | .result // empty' 2>>"$WORK/chair.err" \
+                   | scrub_secrets > "$OUT") \
+         | jq --unbuffered -r \
+             'select(.type=="stream_event" and .event.type=="content_block_delta"
+                     and .event.delta.type=="text_delta") | (.event.delta.text | utf8bytelength)' \
+             2>>"$WORK/chair.err" \
+         | awk -v model="$(chair_label "$1")" \
+             'BEGIN { total=0 } { total+=$1; if (total-last>=500) { print "chair " model ": " total "B generated so far..."; fflush(); last=total } }
+              END { print "chair " model ": " total "B total" }'
+    then
+      CHAIR_RC=0
+    else
+      CHAIR_RC="${PIPESTATUS[0]}"   # timeout 이 죽였으면 124 (파이프 첫 단계 = claude/timeout)
+    fi
+    # `tee >(...)`'s process substitution is its own background subshell --
+    # the foreground pipeline above (tee | jq | awk) can finish before that
+    # subshell has finished writing "$OUT". `wait` (no args) blocks on every
+    # still-running child of this shell, substitution included, so the
+    # emptiness check below never races a write in progress. Its own exit
+    # status is irrelevant here (already reflected in "$OUT"'s contents), so
+    # it's discarded rather than folded into CHAIR_RC.
+    if ! wait 2>/dev/null; then :; fi
+    # Empty "$OUT" covers two cases the same way: the "result" event never
+    # showed up (schema drift, or truncation jq tolerated), or the pipe was
+    # killed before producing one (timeout). If CHAIR_RC is already 124 from
+    # above, leave it -- that's the more specific diagnosis; only promote to a
+    # generic failure when the main pipeline reported success but the result
+    # extraction silently produced nothing.
+    if [ ! -s "$OUT" ]; then
+      if [ "$CHAIR_RC" = 0 ]; then
+        CHAIR_RC=1
+        echo "::warning::chair stream produced no 'result' event despite rc=0 -- possible output-format schema drift"
+      fi
+    fi
   else
-    CHAIR_RC="${PIPESTATUS[0]}"   # timeout 이 죽였으면 124
+    # No jq: fall back to text mode rather than blocking the review on it.
+    echo "::warning::jq not found on runner — chair progress logging disabled, falling back to non-streaming mode"
+    if ANTHROPIC_MODEL="$1" timeout "$CHAIR_TIMEOUT" \
+         claude -p "$(cat "$WORK/synth-prompt.txt")" --output-format text \
+         < "$WORK/synth-stdin.txt" 2>"$WORK/chair.err" | scrub_secrets > "$OUT"
+    then
+      CHAIR_RC=0
+    else
+      CHAIR_RC="${PIPESTATUS[0]}"
+    fi
   fi
   t1="$(date +%s)"; CHAIR_ELAPSED="$((t1 - t0))"
   echo "chair $(chair_label "$1"): ${CHAIR_ELAPSED}s, rc=$CHAIR_RC, stdin=$(wc -c < "$WORK/synth-stdin.txt")B, out=$(wc -c < "$OUT")B"
