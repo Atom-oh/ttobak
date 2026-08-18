@@ -1,15 +1,15 @@
 # TTOBAK - Design Specification
 
-> design_sample/ HTML 파일에서 추출한 정확한 디자인 시스템
+> Design system extracted from design_sample/ HTML files.
 
 ## 1. Design Tokens
 
 ### 1.1 Colors
 
-단일 브랜드(indigo/violet)를 라이트/다크에 공유한다 — neon cyan/purple, glow, glass blur는 폐기(`frontend/src/app/globals.css`). `primary`/`accent`/`secondary`/`surface-*`/`text-*`/`border-subtle`/`error`는 `:root`에서 라이트 값을 정의하고 `.dark`가 같은 CSS 변수명을 override 하므로, `text-primary` 같은 유틸리티는 `dark:` 접두어 없이도 다크모드에서 자동으로 violet 값을 픽업한다(Tailwind v4 `@theme inline`의 lazy `var()` 해석). `background-light`/`background-dark`만 예외로 별도 토큰 두 개를 두고 `dark:bg-background-dark`처럼 명시적 `dark:` 유틸리티로 전환한다.
+One brand (indigo/violet) shared across light/dark — neon cyan/purple, glow, and glass blur have been removed (`frontend/src/app/globals.css`). `primary`/`accent`/`secondary`/`surface-*`/`text-*`/`border-subtle`/`error` define light values in `:root`; `.dark` overrides the same CSS var names, so utilities like `text-primary` auto-pick the violet value in dark mode with no `dark:` prefix (Tailwind v4 `@theme inline` lazy `var()` resolution). Exception: `background-light`/`background-dark` are two separate tokens switched via explicit `dark:bg-background-dark`.
 
 ```css
-/* :root (라이트) */
+/* :root (light) */
 --primary: #3211d4;
 --primary-hover: #2a0eb3;
 --accent: #7c3aed;
@@ -26,7 +26,7 @@
 --border-subtle: #e2e8f0;
 --error: #dc2626;
 
-/* .dark — 같은 변수명을 override (primary · accent · secondary · surface-* · text-* · border-subtle · error) */
+/* .dark — overrides the same variable names (primary, accent, secondary, surface-*, text-*, border-subtle, error) */
 --primary: #8b85f7;
 --primary-hover: #a5a0f9;
 --accent: #a78bfa;
@@ -42,7 +42,7 @@
 --error: #f87171;
 ```
 
-레거시 클래스(`glass-panel`, `glow-*`, `neon-text-*`, `active-pill`)는 삭제 대신 `box-shadow:none`/`text-shadow:none` 등 no-op으로 유지 — 기존 사용처를 깨지 않으면서 시각 효과만 제거.
+Legacy classes (`glass-panel`, `glow-*`, `neon-text-*`, `active-pill`) are kept as no-ops (`box-shadow:none`/`text-shadow:none`) instead of being deleted, so existing usages don't break while the visual effect goes away.
 
 ```css
 /* Semantic Colors */
@@ -156,7 +156,7 @@ Items: Home (home), Record (mic), Files (description), Profile (person)
       <span class="material-symbols-outlined">record_voice_over</span>
     </div>
     <div>
-      <h1 class="font-bold text-slate-900">또박</h1>
+      <h1 class="font-bold text-slate-900">TTOBAK</h1>
       <p class="text-[10px] text-slate-500 font-medium uppercase tracking-wider">AI Meeting Assistant</p>
     </div>
   </div>
@@ -254,14 +254,14 @@ Sidebar nav items: Meetings (videocam), Files (folder_open), Insights (analytics
 
 ```
 Layout:
-  header: 뒤로가기 + 타이틀(input) + 번역언어(select) + 로그아웃(logout icon)
+  header: back button + title (input) + translation-language (select) + logout icon
   main:
-    - 원형 타이머 (bg-primary/10 pulse, bg-primary/20, white circle with border-4 border-primary)
-    - 웨이브폼 바 (w-1 bg-primary rounded-full, heights varying)
-    - "Recording in progress..." 텍스트
-    - 컨트롤: [일시정지] [정지(primary, large)] [카메라]
-    - Recently Captured 그리드 (3열)
-  bottom-nav: 고정
+    - circular timer (bg-primary/10 pulse, bg-primary/20, white circle with border-4 border-primary)
+    - waveform bars (w-1 bg-primary rounded-full, heights varying)
+    - "Recording in progress..." text
+    - controls: [pause] [stop (primary, large)] [camera]
+    - Recently Captured grid (3 columns)
+  bottom-nav: fixed
 ```
 
 ### 2.6 Recording Screen (PC)
@@ -270,14 +270,14 @@ Layout:
 Layout:
   sidebar (w-64)
   main:
-    header: 네비게이션 + 타이틀 + "RECORDING LIVE" 배지 + 검색 + 프로필
+    header: nav + title + "RECORDING LIVE" badge + search + profile
     content (flex):
       center:
         - Status Card (rounded-2xl shadow-sm border, p-8)
-          - 타이머: text-6xl font-black tracking-tighter
-          - 웨이브폼: gradient bars
-          - 통계: Storage / Quality / Bitrate
-        - Captured Assets Grid (4열)
+          - timer: text-6xl font-black tracking-tighter
+          - waveform: gradient bars
+          - stats: Storage / Quality / Bitrate
+        - Captured Assets Grid (4 columns)
       right-panel (w-80):
         - Live Transcription
         - Speaker entries with avatar initials + timestamp
@@ -286,15 +286,12 @@ Layout:
 
 ### 2.6a Post-Recording Banner & System Audio Mode (current implementation, ADR-024)
 
-`components/record/PostRecordingBanner.tsx` — fixed top toast shown while
-`usePostRecording`'s `step` is non-null (`creating` → `notes` → `saving` →
-`uploading` → `redirecting`, or `error`; `notes` pauses the flow for the
-notes-input dialog before the save/upload resumes).
+`components/record/PostRecordingBanner.tsx` — a fixed top toast shown while `usePostRecording`'s `step` is non-null (`creating` → `notes` → `saving` → `uploading` → `redirecting`, or `error`; `notes` pauses the flow for the notes-input dialog before save/upload resumes).
 
 ```
 Uploading step:
-  spinner + "업로드 중... N% (X MB / Y MB)" when `uploadProgress` is set
-  (both browser blob uploads and Tauri native file uploads report this now)
+  spinner + "Uploading... N% (X MB / Y MB)" when `uploadProgress` is set
+  (both browser blob uploads and Tauri native file uploads report this)
   else: plain "Uploading audio..." label
   thin progress bar (bg-primary, width = percentage) underneath the label
 
@@ -304,66 +301,17 @@ Error step:
   [Home] — clears state and navigates away (does NOT retry)
 ```
 
-Tauri desktop app, System Audio mode (`audioSource === 'system'`,
-`isTauri()`): the pre-recording setup notice and the during-recording
-banner (purple, `speaker` icon) both state that live captions are
-best-effort in this mode (fed by Rust-downsampled PCM over
-`native-pcm-chunk` into the same Transcribe Streaming pipeline mic/tab
-modes use — no Web Speech fallback exists here) and that transcription
-happens automatically after the meeting ends regardless. `isNativeRecording`
-(`app/record/page.tsx`) drives the during-recording banner/title/nav-lock
-independent of `session.isRecording`, since it needs to be true from the
-moment native capture starts — before the async STT session start
-resolves, and even if Transcribe Streaming never successfully connects.
+In Tauri desktop System Audio mode (`audioSource === 'system'`, `isTauri()`), both the pre-recording setup notice and the during-recording banner (purple, `speaker` icon) note that live captions are best-effort (fed by Rust-downsampled PCM over `native-pcm-chunk` into the same Transcribe Streaming pipeline mic/tab modes use — no Web Speech fallback here) and that transcription still happens automatically once the meeting ends. `isNativeRecording` (`app/record/page.tsx`) drives the during-recording banner/title/nav-lock independently of `session.isRecording`, since it must be true from the moment native capture starts, before the STT session resolves.
 
-Before any of that, the native start path runs a **preflight** probe
-(`assertUploadRecordingAvailable`, `frontend/src/lib/tauri.ts`) that fails
-the start outright — a near-instant Tauri IPC rejection, not a timed
-check — when the installed app predates the `upload_recording` command.
-The amber "speech error" banner shows an update prompt and the button
-stays idle, with no draft meeting created and no screen-recording
-permission prompt. See ADR-024 for the incident (83 minutes of System
-Audio lost to this exact skew, discovered only after the recording ended)
-that motivated catching it before capture starts instead.
+Before that, the native start path runs a **preflight** check (`assertUploadRecordingAvailable`, `frontend/src/lib/tauri.ts`) that fails the start outright — an instant rejection, not a timed check — if the installed app predates the `upload_recording` command; the amber "speech error" banner shows an update prompt with no draft meeting created (see ADR-024, motivated by an incident where this version skew silently lost 83 minutes of System Audio recording).
 
-Once uploading, native mode's `uploadRecordingWithRetry` (`lib/tauri.ts`)
-is network-aware: if the device goes offline mid-upload, it waits for the
-browser's `online` event rather than failing immediately, then re-presigns
-before every retry — a fresh presigned URL, not the one that may have
-expired during the wait (the backend's presigned PUT TTL is 1h,
-`backend/internal/service/upload.go`'s `GeneratePresignedUploadURL`). The
-offline-wait/retry-backoff cycle is bounded by a **cumulative** 45-minute
-wall-clock budget (not reset on every offline→online→offline cycle — a
-flapping connection still eventually gives up), and each re-entry into the
-wait backs off briefly instead of tight-looping the presign endpoint. This
-budget does not preempt a presign call or PUT already in flight — those
-run to completion (or to Rust's own stall watchdog) regardless. A
-non-network failure (bad URL, server error) instead gets a small bounded
-retry (2 retries beyond the first attempt, linear backoff).
-
-Both the offline wait and the flow it's part of are cancelled when the
-post-recording flow is reset (Home / new recording) or the component
-unmounts — via an `AbortController` (stops the in-progress wait, re-checked
-right after every presign call too, since that's its own multi-second
-await) AND a generation counter (`flowGenerationRef` in
-`usePostRecording.ts`, bumped by `reset()`/`createDraftMeeting()`/unmount).
-The counter is what actually gates the flow: abort alone can't retroactively
-cancel a PUT already past the wait, so without the counter a PUT that
-finishes successfully after the user walks away would still fire
-`notifyComplete`/`cleanupRecording`/redirect. Even with the counter, an
-abandoned PUT that reaches S3 still triggers the server-side
-transcribe/summarize pipeline (EventBridge on the `audio/` prefix doesn't
-know the SPA gave up) — the counter only stops this hook's own follow-on
-calls, not that pipeline; see ADR-024's Consequences for the tracked
-orphan-cleanup gap this leaves. The WAV itself is never at risk from the
-upload side either way — `cleanupRecording` only runs after the backend's
-upload-complete notification succeeds.
+Once uploading, native mode's `uploadRecordingWithRetry` (`lib/tauri.ts`) is network-aware: on going offline mid-upload it waits for the browser's `online` event rather than failing, then re-presigns before every retry (uploads use a 1h presign TTL). This wait/retry cycle is bounded by a cumulative 45-minute budget (not reset per offline/online cycle); non-network failures instead get a small bounded retry (2 retries, linear backoff). Both the wait and its enclosing flow are cancelled on reset/unmount via an `AbortController` plus a generation counter (`flowGenerationRef`) — the counter is what actually gates the flow, since abort alone can't retroactively cancel a PUT already in flight. An abandoned-but-completed PUT still triggers the server-side transcribe/summarize pipeline regardless (tracked as a known orphan-cleanup gap in ADR-024's Consequences); the WAV itself is never at risk, since `cleanupRecording` only runs after the backend confirms upload-complete.
 
 ### 2.7 Meeting Detail (Mobile)
 
 ```
 Layout:
-  header: 뒤로가기 + "Meeting Report" + more
+  header: back button + "Meeting Report" + more
   main (scrollable):
     - Tag + Date
     - Title: text-3xl font-bold
@@ -385,24 +333,24 @@ Layout:
     - Title: text-4xl font-black tracking-tight
     - Date + Folder
     - Participants stack
-    - AI Summary + Action Items row (드래그 리사이즈, useResizablePanel):
-      - AI Summary (bg-white border rounded-xl p-6) — 폭 400–900px 드래그 조절,
-        localStorage `ttobak:meetingSummaryWidth`에 저장
+    - AI Summary + Action Items row (drag-resizable, useResizablePanel):
+      - AI Summary (bg-white border rounded-xl p-6) — drag-resizable width 400-900px,
+        persisted to localStorage `ttobak:meetingSummaryWidth`
       - w-2 divider (bg-slate-300 dark:bg-white/20, hover:bg-primary/60,
-        cursor-col-resize) — 시각적 경계 겸 드래그 핸들
+        cursor-col-resize) — visual boundary and drag handle
       - Action Items (bg-primary/5 border-primary/20 rounded-xl p-6, flex-1)
-      - 나란히/세로 스택 전환은 viewport breakpoint가 아니라 row 실측 폭
-        (ResizeObserver) 기준: min 폭 + reserve가 안 들어가면 자동 스택
-    - Attachments Gallery (4열 grid, hover overlay)
+      - side-by-side vs. stacked switches on measured row width (ResizeObserver),
+        not a viewport breakpoint — auto-stacks when the min width + reserve won't fit
+    - Attachments Gallery (4-column grid, hover overlay)
     - Full Transcription (timestamp badges + speaker entries)
     - Floating Audio Player (sticky bottom-6, rounded-full, backdrop-blur)
-  reference aside (오른쪽, 드래그 리사이즈 280–640px, localStorage
-    `ttobak:meetingAsideWidth`) — 같은 w-2 divider 패턴
+  reference aside (right side, drag-resizable 280-640px, localStorage
+    `ttobak:meetingAsideWidth`) — same w-2 divider pattern
 ```
 
 ### 2.9 LiveTranscript Component
 
-실시간 전사 및 번역 결과를 스트리밍으로 표시하는 컴포넌트.
+Displays streaming real-time transcription and translation results.
 
 ```html
 <div class="bg-white border border-slate-200 rounded-xl p-4 h-[400px] overflow-y-auto">
@@ -429,7 +377,7 @@ Layout:
           <span class="text-xs font-semibold text-slate-700">Speaker 1</span>
           <span class="text-[10px] text-slate-400">10:23:45</span>
         </div>
-        <p class="text-sm text-slate-600">전사된 텍스트가 여기에 표시됩니다.</p>
+        <p class="text-sm text-slate-600">Transcribed text appears here.</p>
         <!-- Translation (if enabled) -->
         <p class="text-sm text-primary/80 mt-1 pl-2 border-l-2 border-primary/30">
           The transcribed text appears here.
@@ -442,7 +390,7 @@ Layout:
       <div class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center
                   text-xs font-bold text-slate-400 shrink-0">S2</div>
       <div>
-        <p class="text-sm text-slate-500">현재 말하고 있는 내용...</p>
+        <p class="text-sm text-slate-500">Currently speaking...</p>
         <div class="flex gap-1 mt-1">
           <span class="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></span>
           <span class="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce [animation-delay:0.1s]"></span>
@@ -456,7 +404,7 @@ Layout:
 
 ### 2.10 QAPanel Component
 
-회의 중 질문을 입력하고 KB RAG 응답을 표시하는 패널.
+Panel for asking questions during a meeting and displaying KB RAG answers.
 
 ```html
 <div class="bg-white border border-slate-200 rounded-xl overflow-hidden">
@@ -473,18 +421,18 @@ Layout:
       <!-- Question -->
       <div class="flex gap-2">
         <span class="material-symbols-outlined text-slate-400 text-lg">help</span>
-        <p class="text-sm font-medium text-slate-700">이 회의에서 결정된 마감일은?</p>
+        <p class="text-sm font-medium text-slate-700">What deadline was decided in this meeting?</p>
       </div>
       <!-- Answer -->
       <div class="ml-6 bg-primary/5 rounded-lg p-3">
-        <p class="text-sm text-slate-600">마감일은 3월 15일로 결정되었습니다.</p>
+        <p class="text-sm text-slate-600">The deadline was set for March 15.</p>
         <!-- Sources -->
         <div class="mt-2 pt-2 border-t border-slate-200">
           <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Sources</span>
           <div class="mt-1 space-y-1">
             <a class="flex items-center gap-1 text-xs text-primary hover:underline">
               <span class="material-symbols-outlined text-[14px]">description</span>
-              Product Strategy Sync (이 회의)
+              Product Strategy Sync (this meeting)
             </a>
             <a class="flex items-center gap-1 text-xs text-primary hover:underline">
               <span class="material-symbols-outlined text-[14px]">folder</span>
@@ -515,20 +463,11 @@ Layout:
 </div>
 ```
 
-**선제 검색 (proactive search, LiveQAPanel — 녹음 중 라이브 패널 전용)**
-
-- 헤더 우측에 "선제 검색 ON/OFF" 토글 칩: `travel_explore` 아이콘 + pill 형태.
-  ON은 sky 계열(`bg-sky-50 border-sky-300 text-sky-600`, 다크 `bg-sky-900/20 border-sky-700 text-sky-400`),
-  OFF는 slate 계열로 비활성 톤. **기본 OFF** — 대화 파생 검색어가 외부 웹 검색으로 전송되므로 명시적
-  opt-in(툴팁으로 고지). 상태는 localStorage `ttobak.proactiveSearchEnabled`에 저장.
-- 자동 발화된 질문 버블은 일반 질문과 구분: sky 배경(`bg-sky-50 dark:bg-sky-900/20` + sky 보더)에
-  버블 상단 `travel_explore` 아이콘 + "선제 검색 · 대화에서 감지된 질문" 캡션(`text-[10px]` uppercase).
-- 답변의 도구 배지에 `search_web` → "웹 검색"(sky 계열) 추가 — 기존 KB 검색(emerald)/AWS Docs(blue)/
-  회의록 검색(violet)/AWS 추천(amber)과 같은 배지 시스템.
+**Proactive search** (`LiveQAPanel`, live recording panel only): a header toggle chip ("Proactive search ON/OFF", `travel_explore` icon, pill shape) — ON uses sky tones (`bg-sky-50 border-sky-300 text-sky-600`, dark `bg-sky-900/20 border-sky-700 text-sky-400`), OFF uses slate. **Default OFF**, since conversation-derived search terms go out to an external web search — opt-in with a tooltip disclosure, state persisted to localStorage `ttobak.proactiveSearchEnabled`. Auto-fired question bubbles are visually distinct from manual questions (sky background + border, `travel_explore` icon, "Proactive search · detected from conversation" caption). Answer tool badges add `search_web` → "Web Search" (sky) alongside the existing KB search (emerald)/AWS Docs (blue)/meeting-transcript search (violet)/AWS recommendation (amber) badges.
 
 ### 2.11 KBFileList Component
 
-Knowledge Base 파일 업로드 및 목록 관리 컴포넌트.
+Component for uploading and managing Knowledge Base files.
 
 ```html
 <div class="bg-white border border-slate-200 rounded-xl">
@@ -607,7 +546,7 @@ Knowledge Base 파일 업로드 및 목록 관리 컴포넌트.
 
 ### 2.12 ExportMenu Component
 
-회의 내보내기 옵션을 제공하는 드롭다운 메뉴.
+Dropdown menu offering meeting export options.
 
 ```html
 <div class="relative">
@@ -668,7 +607,7 @@ Knowledge Base 파일 업로드 및 목록 관리 컴포넌트.
 
 ### 2.13 IntegrationSettings Component
 
-외부 서비스 API 키 설정 UI.
+UI for configuring external service API keys.
 
 ```html
 <div class="bg-white border border-slate-200 rounded-xl">
@@ -770,7 +709,7 @@ Knowledge Base 파일 업로드 및 목록 관리 컴포넌트.
 
 ### 2.14 Recording Mode Toggle
 
-녹음 화면에서 오프라인/온라인 모드 전환 체크박스.
+Checkbox on the recording screen for switching between offline/online mode.
 
 ```html
 <div class="bg-white border border-slate-200 rounded-xl p-4">
@@ -808,7 +747,7 @@ Knowledge Base 파일 업로드 및 목록 관리 컴포넌트.
 
 ### 2.15 Translation Language Selector
 
-번역 대상 언어 선택 체크박스 그룹.
+Checkbox group for selecting real-time translation target languages.
 
 ```html
 <div class="bg-white border border-slate-200 rounded-xl p-4">
@@ -822,25 +761,21 @@ Knowledge Base 파일 업로드 및 목록 관리 컴포넌트.
     <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer">
       <input type="checkbox" class="w-4 h-4 rounded text-primary focus:ring-primary" />
       <span class="text-sm text-slate-600">Korean → English</span>
-      <span class="text-xs text-slate-400 ml-auto">한→영</span>
     </label>
 
     <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer">
       <input type="checkbox" class="w-4 h-4 rounded text-primary focus:ring-primary" checked />
       <span class="text-sm text-slate-600">English → Korean</span>
-      <span class="text-xs text-slate-400 ml-auto">영→한</span>
     </label>
 
     <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer">
       <input type="checkbox" class="w-4 h-4 rounded text-primary focus:ring-primary" />
       <span class="text-sm text-slate-600">Japanese → Korean</span>
-      <span class="text-xs text-slate-400 ml-auto">일→한</span>
     </label>
 
     <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 cursor-pointer">
       <input type="checkbox" class="w-4 h-4 rounded text-primary focus:ring-primary" />
       <span class="text-sm text-slate-600">Chinese → Korean</span>
-      <span class="text-xs text-slate-400 ml-auto">중→한</span>
     </label>
   </div>
 
@@ -878,49 +813,49 @@ Knowledge Base 파일 업로드 및 목록 관리 컴포넌트.
 
 ## 4. Icon Mapping
 
-| 용도 | Material Symbol | 사용 위치 |
-|------|----------------|-----------|
-| 홈 | home | 모바일 하단 네비 |
-| 회의 | videocam / video_camera_front | 사이드바 |
-| 녹음 | mic | 모바일 하단 네비 |
-| 파일 | description / folder_open | 네비게이션 |
-| 설정 | settings | 네비게이션 |
-| 프로필 | person / account_circle | 네비게이션 |
-| 검색 | search | 검색바 |
-| 캘린더 | calendar_today / calendar_month | 날짜 표시 |
-| 추가 | add / add_circle | FAB, 새 회의 |
-| 뒤로 | arrow_back | 모바일 헤더 |
-| 더보기 | more_horiz | 카드 메뉴 |
+| Purpose | Material Symbol | Used In |
+|---------|----------------|-----------|
+| Home | home | Mobile bottom nav |
+| Meetings | videocam / video_camera_front | Sidebar |
+| Record | mic | Mobile bottom nav |
+| Files | description / folder_open | Navigation |
+| Settings | settings | Navigation |
+| Profile | person / account_circle | Navigation |
+| Search | search | Search bar |
+| Calendar | calendar_today / calendar_month | Date display |
+| Add | add / add_circle | FAB, new meeting |
+| Back | arrow_back | Mobile header |
+| More | more_horiz | Card menu |
 | AI | auto_awesome | AI Summary |
-| 체크 | check_circle | 액션아이템 |
-| 일시정지 | pause | 녹음 컨트롤 |
-| 정지 | stop | 녹음 컨트롤 |
-| 카메라 | add_a_photo | 녹음 중 캡처 |
-| 전사 | translate | 라이브 전사 |
-| 첨부 | attachment | 첨부파일 |
-| 메모 | notes | 전사본 |
-| 재생 | play_arrow | 오디오 플레이어 |
-| 다운로드 | download | 내보내기 |
-| 알림 | notifications | 헤더 |
-| 공유 | share | 공유 버튼 |
-| 비교 | compare | 이미지 비교 |
-| 업로드 | upload_file | 파일 업로드 |
-| 팀 | group | 사이드바 |
-| 프로젝트 (SFDC Oppty) | work | 사이드바 (모바일 하단 네비는 4-5 items 제약으로 제외 — §2.1) |
-| 인사이트 | analytics / insights | 사이드바 |
-| 번역 | translate | 실시간 번역 |
-| Q&A | question_answer | 미팅 Q&A |
-| Knowledge Base | library_books | KB 관리 |
-| 내보내기 | file_download | Export 메뉴 |
-| API 키 | vpn_key | 연동 설정 |
-| Obsidian | link | Obsidian 내보내기 |
-| 확장 | extension | Integrations |
-| WiFi | wifi | 온라인 모드 |
-| 번개 | bolt | 실시간 모드 |
-| PDF | picture_as_pdf | PDF 내보내기 |
-| 코드 | code | Markdown 내보내기 |
-| 노트 | note_alt | Notion 내보내기 |
-| 도움말 | help | Q&A 질문 |
-| 전송 | send | Q&A 전송 버튼 |
-| 삭제 | delete | KB 파일 삭제 |
-| 클라우드 | cloud | 외부 서비스 |
+| Check | check_circle | Action items |
+| Pause | pause | Recording controls |
+| Stop | stop | Recording controls |
+| Camera | add_a_photo | Capture during recording |
+| Transcribe | translate | Live transcription |
+| Attachment | attachment | Attached files |
+| Notes | notes | Transcript |
+| Play | play_arrow | Audio player |
+| Download | download | Export |
+| Notifications | notifications | Header |
+| Share | share | Share button |
+| Compare | compare | Image comparison |
+| Upload | upload_file | File upload |
+| Team | group | Sidebar |
+| Project (SFDC Oppty) | work | Sidebar (excluded from mobile bottom nav — limited to 4-5 items, §2.1) |
+| Insights | analytics / insights | Sidebar |
+| Translation | translate | Real-time translation |
+| Q&A | question_answer | Meeting Q&A |
+| Knowledge Base | library_books | KB management |
+| Export | file_download | Export menu |
+| API Key | vpn_key | Integration settings |
+| Obsidian | link | Obsidian export |
+| Extensions | extension | Integrations |
+| WiFi | wifi | Online mode |
+| Lightning | bolt | Real-time mode |
+| PDF | picture_as_pdf | PDF export |
+| Code | code | Markdown export |
+| Note | note_alt | Notion export |
+| Help | help | Q&A question |
+| Send | send | Q&A send button |
+| Delete | delete | Delete KB file |
+| Cloud | cloud | External service |
