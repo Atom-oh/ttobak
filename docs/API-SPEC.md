@@ -988,6 +988,51 @@ Error: 404 Not Found (meeting doesn't exist)
 
 On call, immediately clears the meeting's `speakerMap` (re-analysis re-numbers `spk_N` from scratch, so old name mappings are meaningless) and resets `status` to `transcribing`, storing the requested `speakerCount` in `Meeting.DiarizationSpeakerHint` — `cmd/transcribe/main.go` uses this as pyannote's `max_speakers` hint instead of `len(Participants)`. This hint is **sticky**: once set, it applies to future re-transcriptions too (instead of the registered participant count). Clearing `speakerMap` is a conditional write (`UpdateMeetingFieldsIfMatch`) gated on the freshly-read current `status` — a double call only lets one succeed, the other gets 400 (`meeting is already being processed`). A `CopyObject` failure (including ambiguous SDK errors) has no dedicated recovery — it's left to the existing 30-minute stuck-transcribing auto-expiry (`GetMeeting` handler), since a separate rollback write could race with the re-trigger pipeline's own state transition.
 
+#### Cost/sizing simulator (ADR-031, AgentCore Code Interpreter)
+
+Extracts quantitative requirements (users, TPS, data volume, SLO...) from a done meeting, lets the user confirm/correct them, then runs a real Python computation in AgentCore Code Interpreter comparing 2-3 architecture options (TCO, chart PNGs, markdown report). `SimRun` is a singleton per meeting (`SIMRUN` sort key) — a fresh extraction overwrites any prior draft/result; running is gated behind `PutSimRunIfNotRunning`'s conditional write (no two concurrent runs per meeting). The generated code never receives the meeting transcript — only the server-validated requirements/options JSON — so a transcript can influence extracted *values* but never the *code itself* (see ADR-031's trust-boundary section).
+
+```
+POST /api/meetings/{meetingId}/sim/extract
+
+Response: 200 OK
+{
+  "simRunId": "uuid", "status": "extracted",
+  "requirements": [
+    { "key": "monthlyActiveUsers", "label": "월간 활성 사용자", "value": "100000",
+      "required": true, "source": "extracted", "evidence": "transcript://seg-12" }
+  ],
+  "createdAt": "...", "updatedAt": "..."
+}
+
+Error: 400 Bad Request (meeting not done yet)
+Error: 403 Forbidden (not my meeting)
+Error: 404 Not Found (meeting doesn't exist)
+```
+
+```
+POST /api/meetings/{meetingId}/sim
+{
+  "requirements": [ { "key": "monthlyActiveUsers", "label": "...", "value": "100000",
+                       "required": true, "source": "user" } ],
+  "options": [ { "name": "서버리스", "description": "Lambda + API Gateway" },
+               { "name": "컨테이너", "description": "ECS Fargate" } ]   // 2-3 required
+}
+
+Response: 202 Accepted
+{ "simRunId": "uuid", "status": "queued", ... }
+
+Error: 400 Bad Request (unknown requirement key, value out of range/not in allowlist,
+                         missing required value, wrong option count 2-3, meeting not
+                         done, or a simulation is already running for this meeting)
+Error: 403 Forbidden (not my meeting)
+Error: 404 Not Found (meeting doesn't exist)
+```
+
+Every field is re-validated server-side against a fixed allowlist (`AllowedSimRequirementKeys`) regardless of what the confirm form submits — the form is a UX gate, not the trust boundary. Async hand-off to `ttobak-sim` (`InvocationType=Event`); the frontend polls `GET /api/meetings/{meetingId}` for `simRun.status` (see below), not a new WebSocket channel — this is a 1-3 minute job, not a token stream. A `queued`/`running` run older than 20 minutes is reported as `error` at read time (mirrors the existing 30-minute `isStuck` reconciliation for transcribing/summarizing meetings) without being persisted that way.
+
+`GetMeeting`'s response gains a `simRun` field (same shape as the extract response, plus `charts: [{key, url}]` with presigned CloudFront URLs, `reportMarkdown`, `codeKey`, `priceSnapshotAt`, `errorMessage` once `status` reaches `done`/`error`). Generated chart PNGs land under the existing `images/` prefix and the report/code/price-snapshot under `files/` (both already in the OAC allowlist — no new CloudFront behavior needed, see ADR-027's "Download URLs" note above and ADR-031).
+
 ---
 
 ### WebSocket (API Gateway) — not implemented
@@ -1327,6 +1372,79 @@ Response: 201 Created
 - `409 BAD_REQUEST` — a user with this email already exists
 
 **Partial success:** if `admin: true` but adding the user to the `admins` group fails after the account was already created and invited, the response is still `201 Created` with `addedToAdmins: false` rather than an error — the invite itself succeeded.
+
+#### Admin User Management (admin-only)
+
+Backs the Settings page's "사용자 관리" panel. All six routes require the caller's JWT `cognito:groups` claim to contain `admins` (same `middleware.RequireAdmin` gate as Invite User above). Implemented in `service.UserAdminService` (`backend/internal/service/user_admin.go`) behind a Cognito-SDK-shaped interface, so these operations are unit-tested without a live AWS account.
+
+```
+GET /api/settings/users
+
+Response: 200 OK
+{
+  "users": [
+    {
+      "userId": "04f86dfc-30b1-7059-896c-55801dacccda",  // Cognito Username == sub for this pool
+      "email": "admin@example.com",
+      "name": "Admin",
+      "status": "CONFIRMED",           // Cognito UserStatus
+      "enabled": true,
+      "isAdmin": true,
+      "createdAt": "2026-04-21T09:01:32Z",
+      "lastLoginAt": "2026-08-15T02:11:04Z",  // null if never recorded (see dormancy note below)
+      "dormant": false
+    }
+  ],
+  "lastLoginUnavailable": false,  // true if the DynamoDB last-login join failed; users are still returned
+  "truncated": false              // true if the pool exceeds the internal pagination safety cap (~1200 users)
+}
+```
+
+Last-login tracking is written by a Cognito `PostAuthentication` Lambda trigger (`infra/lambda/post-authentication`) to a dedicated `USER#{userId}/LOGIN` DynamoDB item (never onto `USER#{userId}/PROFILE`, to avoid ever creating a stub profile missing its email-search GSI keys). Dormancy has three states, not two — `lastLoginAt` absent is **not** the same as dormant:
+- `lastLoginAt` present and older than 90 days → `dormant: true`
+- `lastLoginAt` absent and `status: "FORCE_CHANGE_PASSWORD"` → still awaiting first login, not dormant
+- `lastLoginAt` absent and `status: "CONFIRMED"` → no record yet (e.g. pre-dates this feature, or last login was via a refresh token, which does not re-fire the trigger), not dormant
+
+```
+DELETE /api/settings/users/{userId}
+
+Response: 200 OK
+{ "userId": "...", "warning": "" }
+```
+Deletes the Cognito account only — DynamoDB data (meetings, documents) is preserved. Before deleting, the profile's `GSI2PK`/`GSI2SK` email-search keys are detached (not the whole item) so a later re-invite of the same email can't resolve back to the deleted user's dead ID. `AdminUserGlobalSignOut` runs **before** the delete (a deleted user can no longer be signed out) to close the window where an already-issued access/ID token would otherwise stay valid until it naturally expires.
+
+```
+PUT /api/settings/users/{userId}/enable
+PUT /api/settings/users/{userId}/disable
+
+Response: 200 OK
+{ "userId": "...", "warning": "" }
+```
+Toggles the Cognito `Enabled` flag. Disable also calls `AdminUserGlobalSignOut` immediately afterward, for the same already-issued-token reason as delete.
+
+```
+POST /api/settings/users/{userId}/resend-invite
+
+Response: 200 OK
+{ "userId": "..." }
+```
+Only valid when the target's Cognito status is `FORCE_CHANGE_PASSWORD` (never completed first login) — re-sends the invite email with a fresh temporary password (`AdminCreateUser` with `MessageAction=RESEND`). `400 BAD_REQUEST` otherwise.
+
+```
+POST /api/settings/users/{userId}/reset-password
+
+Response: 200 OK
+{ "userId": "..." }
+```
+Only valid when the target's status is `CONFIRMED` — calls `AdminResetUserPassword`, which emails the user a reset code. The user completes the reset via the login screen's "비밀번호를 잊으셨나요?" flow (`ForgotPasswordForm.tsx`, using the previously-unwired `forgotPassword`/`confirmForgotPassword` in `lib/auth.ts`). Deliberately rejected with `400 BAD_REQUEST` for a `FORCE_CHANGE_PASSWORD` user — that state has no code-entry screen, so calling this on them would lock the account out instead of helping.
+
+**Guards on delete/disable:** both reject with `400 BAD_REQUEST` if the target is the caller's own account, or the sole remaining member of the `admins` group (`"마지막 관리자 계정은 삭제할 수 없습니다..."`-style Korean message, since the frontend only surfaces the error `message`, not a code). A same-instant concurrent removal by two admins can theoretically both pass this check (TOCTOU); the service re-checks after acting and returns a `warning` field (not an error, since the primary action already succeeded) if the group is found empty. Recovery in that case is `aws cognito-idp admin-add-user-to-group` from an operator shell.
+
+**Errors (all six routes):**
+- `400 BAD_REQUEST` — self-delete/disable, last-admin delete/disable, or wrong status for resend-invite/reset-password
+- `403 FORBIDDEN` — caller is not in the `admins` group
+- `404 NOT_FOUND` — target user does not exist
+- `500 INTERNAL_ERROR` — Cognito/DynamoDB failure
 
 ---
 

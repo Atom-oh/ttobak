@@ -154,8 +154,42 @@ type MeetingDetailResponse struct {
 	Permission         string               `json:"permission"` // "owner", "read", or "edit"
 	Attachments        []AttachmentResponse `json:"attachments,omitempty"`
 	Shares             []ShareResponse      `json:"shares,omitempty"` // Only visible to owner
+	SimRun             *SimRunResponse      `json:"simRun,omitempty"` // ADR-031 cost/sizing simulator, singleton per meeting
 	CreatedAt          string               `json:"createdAt"`
 	UpdatedAt          string               `json:"updatedAt"`
+}
+
+// SimChartResponse is one generated chart with its presigned CloudFront URL,
+// attached by the handler the same way AttachmentResponse.URL is (see
+// MeetingHandler.GetMeeting's presign loop).
+type SimChartResponse struct {
+	Key string `json:"key"`
+	URL string `json:"url,omitempty"`
+}
+
+// SimRunResponse is the API shape of model.SimRun (ADR-031). Requirements/
+// Options are re-parsed from their JSON-string storage form into typed
+// slices for the frontend confirm form.
+type SimRunResponse struct {
+	SimRunID     string          `json:"simRunId"`
+	Status       string          `json:"status"`
+	Requirements []SimRequirement `json:"requirements,omitempty"`
+	Options      []SimOption      `json:"options,omitempty"`
+	Charts       []SimChartResponse `json:"charts,omitempty"`
+	ReportMarkdown string        `json:"reportMarkdown,omitempty"`
+	CodeKey        string        `json:"codeKey,omitempty"`
+	PriceSnapshotAt string       `json:"priceSnapshotAt,omitempty"`
+	ErrorMessage    string       `json:"errorMessage,omitempty"`
+	CreatedAt       string       `json:"createdAt"`
+	UpdatedAt       string       `json:"updatedAt"`
+}
+
+// CreateSimulationRequest is the body of POST /api/meetings/{id}/sim -- the
+// user-confirmed/corrected form. Every field is re-validated server-side
+// (see service.validateSimRequirements); nothing here is trusted as-is.
+type CreateSimulationRequest struct {
+	Requirements []SimRequirement `json:"requirements"`
+	Options      []SimOption      `json:"options"`
 }
 
 // AttachmentResponse represents an attachment in API responses
@@ -250,6 +284,43 @@ type InviteUserResponse struct {
 	Email         string `json:"email"`
 	Invited       bool   `json:"invited"`
 	AddedToAdmins bool   `json:"addedToAdmins"`
+}
+
+// AdminUserSummary represents one row of the admin user-management panel
+// (GET /api/settings/users). UserID is the Cognito Username, which for this
+// pool is always the sub (see service.UserAdminService doc notes).
+type AdminUserSummary struct {
+	UserID      string     `json:"userId"`
+	Email       string     `json:"email"`
+	Name        string     `json:"name,omitempty"`
+	Status      string     `json:"status"` // Cognito UserStatus (e.g. CONFIRMED, FORCE_CHANGE_PASSWORD)
+	Enabled     bool       `json:"enabled"`
+	IsAdmin     bool       `json:"isAdmin"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	LastLoginAt *time.Time `json:"lastLoginAt"` // nil = no login recorded yet (not necessarily dormant -- see Dormant)
+	Dormant     bool       `json:"dormant"`     // true only when LastLoginAt is set and older than the dormancy threshold
+}
+
+// AdminUserListResponse represents the response for the admin user list
+type AdminUserListResponse struct {
+	Users []AdminUserSummary `json:"users"`
+	// LastLoginUnavailable is true when the DynamoDB join for last-login
+	// timestamps failed; Users is still returned with LastLoginAt/Dormant
+	// left at their zero values rather than failing the whole request.
+	LastLoginUnavailable bool `json:"lastLoginUnavailable,omitempty"`
+	// Truncated is true if the Cognito user pool has more users than the
+	// endpoint's internal pagination safety cap covers.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// AdminUserActionResponse represents the response for a single admin action
+// (delete, enable, disable) on a user.
+type AdminUserActionResponse struct {
+	UserID string `json:"userId"`
+	// Warning surfaces a non-fatal problem with the action (e.g. session
+	// sign-out failed, or the admins group is now empty) without failing the
+	// request -- the primary action already succeeded.
+	Warning string `json:"warning,omitempty"`
 }
 
 // NewErrorResponse creates a new error response

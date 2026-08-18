@@ -24,6 +24,45 @@ export interface Meeting {
   audioKeys?: string[];
   /** Per ADR-014 Phase 6: ordered predecessor meeting IDs whose summaries are prepended to this meeting's prompt. */
   linkedMeetingIds?: string[];
+  /** ADR-031 cost/sizing simulator, singleton per meeting. */
+  simRun?: SimRun;
+}
+
+/** Mirrors backend/internal/model.SimRequirement's JSON shape exactly. */
+export interface SimRequirement {
+  key: string;
+  label: string;
+  value: string;
+  unit?: string;
+  required: boolean;
+  source: 'extracted' | 'user';
+  /** transcript://{segmentId} deep link (ADR-013), empty when user-entered. */
+  evidence?: string;
+}
+
+export interface SimOption {
+  name: string;
+  description?: string;
+}
+
+export interface SimChart {
+  key: string;
+  url?: string;
+}
+
+/** Mirrors backend/internal/model.SimRunResponse's JSON shape (ADR-031). */
+export interface SimRun {
+  simRunId: string;
+  status: 'extracted' | 'queued' | 'running' | 'done' | 'error';
+  requirements?: SimRequirement[];
+  options?: SimOption[];
+  charts?: SimChart[];
+  reportMarkdown?: string;
+  codeKey?: string;
+  priceSnapshotAt?: string;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Participant {

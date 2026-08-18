@@ -53,8 +53,14 @@ Exact dependency graph: root `CLAUDE.md`'s "CDK Stack Dependency Order" (source 
 - Cognito hosted domain: `ttobak-auth-{accountId}`
 
 ### Admins Group
-- **CfnUserPoolGroup** `admins` — members get `admins` in the ID token's `cognito:groups` claim, checked by backend `middleware.RequireAdmin` to gate admin-only endpoints (e.g. `POST /api/settings/invite-user`).
+- **CfnUserPoolGroup** `admins` — members get `admins` in the ID token's `cognito:groups` claim, checked by backend `middleware.RequireAdmin` to gate admin-only endpoints (e.g. `POST /api/settings/invite-user`, the `/api/settings/users*` admin panel).
 - CDK creates the group but doesn't add members automatically — use `aws cognito-idp admin-add-user-to-group`.
+
+### Lambda Triggers
+Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAsset`) pointing at a single `index.mjs` with no `package.json`/build step — `@aws-sdk/client-dynamodb` comes from the Lambda Node runtime's bundled SDK. They are deliberately outside the Go build loop (`CLAUDE.md`'s 8 zip Lambdas) and outside `bin/infra.ts`'s dependency graph beyond `AuthStack.addDependency(storageStack)` for table access.
+
+- **`ttobak-pre-signup`** (`infra/lambda/pre-signup`) — `PreSignUp` trigger. Rejects sign-up (including `AdminCreateUser`, which fires this trigger too) if the email domain isn't in the `CONFIG`/`ALLOWED_DOMAINS` DynamoDB item (ADR-007). Timeout 5s, memory 128MB, `dynamodb:GetItem` only.
+- **`ttobak-post-authentication`** (`infra/lambda/post-authentication`) — `PostAuthentication` trigger. Writes `lastLoginAt` to a dedicated `USER#{sub}/LOGIN` DynamoDB item (never onto `USER#{sub}/PROFILE`, to avoid ever creating a stub profile) for the admin user-management panel's dormancy display. **Written to fail open**: a throwing/timing-out trigger here would block every login pool-wide, not just this feature, so the handler wraps all work in try/catch with a single `return event` exit, bounds the DynamoDB call with a 1.5s `AbortController` well inside Cognito's ~5s trigger budget, sets no `reservedConcurrentExecutions` (a concurrency cap would turn a login spike into blocked logins), and honors a `DISABLED=1` env var kill switch that needs no redeploy. Timeout 5s, memory 128MB, `dynamodb:PutItem` only. Does not fire on refresh-token re-authentication — see ADR-030.
 
 ### Outputs
 - `UserPoolId`
@@ -194,6 +200,15 @@ Exact dependency graph: root `CLAUDE.md`'s "CDK Stack Dependency Order" (source 
 - Permissions: scoped `grantRead('docs/*')` + `grantPut('docs-pdf/*')` — narrower than the bucket-wide `grantReadWrite` other upload-triggered Lambdas share, since this role runs a third-party parser (LibreOffice) against untrusted content. The `soffice` subprocess has every `AWS_*` env var stripped before exec. Still cross-tenant within the `docs/*` grant (any user's uploads, not just the triggering key) — tracked as a residual risk in ADR-022, not yet closed.
 - Network: `PRIVATE_ISOLATED` subnets of the pre-existing VPC `vpc-04e77172c67f19814` (shared with WhisperStack, no new VPC/NAT cost). No internet/NAT route; S3 access goes through this VPC's pre-existing gateway endpoint (`vpce-04a82e15d312f39b8`) — don't add a second one (`vpc.addGatewayEndpoint`); CDK's first attempt did and CloudFormation rejected it (`AlreadyExists` on the S3 prefix-list route), rolling back the stack. This closes the network half of the LibreOffice RCE surface (SSRF, exfiltration) — see ADR-022 Consequences for what it doesn't close.
 
+#### Sim Lambda (`ttobak-sim`, Python, ADR-031)
+- Trigger: async invoke from the `api` Lambda (`InvocationType=Event`) once a run is recorded `queued` — no API Gateway integration of its own
+- Async retry: `retryAttempts: 0` — a retried invoke would start a second, billable AgentCore Code Interpreter session and Sonnet codegen for the same run
+- Timeout: 15 minutes / 1024MB — budgets one Code Interpreter session (`sessionTimeoutSeconds: 600`) plus up to 3 codegen/execute rounds
+- Env: `TABLE_NAME`, `BUCKET_NAME`, `BEDROCK_MODEL_ID` (Sonnet, codegen), `CODE_INTERPRETER_ID`, `DAILY_SIM_LIMIT` (3)
+- Permissions (`ttobak-sim-role`): DynamoDB R/W, S3 write scoped to `images/*` + read/write `files/*` (chart PNGs, report/code/price-snapshot artifacts — never the bucket-wide grant `apiRole` holds), `bedrock:InvokeModel`(+stream), Code Interpreter session lifecycle (`grantUse` on the `CodeInterpreterCustom` below), `pricing:GetProducts`/`DescribeServices` (`Resource:"*"` — the Price List API has no resource-level permissions at all; documented exception in ADR-031)
+- AgentCore Code Interpreter: `CodeInterpreterCustom` named `ttobak_sim`, `networkConfiguration: usingSandboxNetwork()` (the L2's default is `usingPublicNetwork()` — must be explicit), no execution role supplied so CDK creates one automatically with **zero policies attached**. What actually denies AWS API access is the empty role, not the SANDBOX network mode (SANDBOX only removes the public internet path). Never attach a policy to this construct's own service role.
+- The generated Python never receives the meeting transcript — only the server-validated requirements/options JSON the invoke payload carries (see ADR-031's trust-boundary section)
+
 ### EventBridge Rules
 - **audio-uploaded**: S3 PutObject (prefix `audio/`) → Transcribe Lambda
 - **image-uploaded**: S3 PutObject (prefix `images/`) → Process Image Lambda
@@ -300,7 +315,7 @@ ECS infra for Whisper GPU batch transcription. After a recording completes, `tto
 - **Bedrock KB RAG**: `bedrock:Retrieve`, `bedrock:RetrieveAndGenerate`
 - **OpenSearch Serverless**: `aoss:APIAccessAll` on the collection
 - **S3**: read from `audio/`, `images/`, `kb/`; write to `processed/`, `transcripts/`
-- **Cognito Admin (api Lambda only)**: `cognito-idp:AdminCreateUser`, `cognito-idp:AdminAddUserToGroup` on the TTOBAK user pool (scoped via `userPoolArn` imported from AuthStack) — backs `POST /api/settings/invite-user`.
+- **Cognito Admin (api Lambda only)**: `cognito-idp:AdminCreateUser`, `cognito-idp:AdminAddUserToGroup`, `cognito-idp:AdminDeleteUser`, `cognito-idp:AdminDisableUser`, `cognito-idp:AdminEnableUser`, `cognito-idp:AdminResetUserPassword`, `cognito-idp:AdminUserGlobalSignOut`, `cognito-idp:AdminGetUser`, `cognito-idp:ListUsersInGroup` on the TTOBAK user pool (scoped via `userPoolArn` imported from AuthStack) — backs `POST /api/settings/invite-user` and the `/api/settings/users*` admin panel. `cognito-idp:ListUsers` is a separate, legacy statement still scoped to `Resource: '*'` (pre-dates the no-unconditioned-wildcard IAM mandate; tightening it is tracked follow-up, not fixed here).
 
 ## 9. FrontendStack
 

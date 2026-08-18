@@ -79,11 +79,50 @@ type meetingRepo interface {
 // MeetingService handles meeting business logic
 type MeetingService struct {
 	repo meetingRepo
+
+	// cognito/cognitoPoolID back InviteUser/SearchUsers. When unset, both
+	// methods fall back to building a client inline via
+	// config.LoadDefaultConfig (today's behavior) so existing callers that
+	// never call SetCognitoAdminAPI keep working unchanged; SetCognitoAdminAPI
+	// exists so cmd/api/main.go can inject the cold-start client (avoiding a
+	// LoadDefaultConfig call per invite) and so tests can inject a mock.
+	cognito       cognitoAdminAPI
+	cognitoPoolID string
 }
 
 // NewMeetingService creates a new meeting service
 func NewMeetingService(repo *repository.DynamoDBRepository) *MeetingService {
 	return &MeetingService{repo: repo}
+}
+
+// SetCognitoAdminAPI wires a Cognito client for InviteUser/SearchUsers to use
+// instead of building one inline per call.
+func (s *MeetingService) SetCognitoAdminAPI(client cognitoAdminAPI, poolID string) {
+	s.cognito = client
+	s.cognitoPoolID = poolID
+}
+
+// resolveCognitoPoolID prefers the pool ID set via SetCognitoAdminAPI,
+// falling back to the environment variable for callers that never wired one.
+func (s *MeetingService) resolveCognitoPoolID() string {
+	if s.cognitoPoolID != "" {
+		return s.cognitoPoolID
+	}
+	return os.Getenv("COGNITO_USER_POOL_ID")
+}
+
+// resolveCognitoClient returns the injected client if SetCognitoAdminAPI was
+// called, otherwise builds one inline (today's behavior, preserved for any
+// caller that constructs MeetingService without wiring a client).
+func (s *MeetingService) resolveCognitoClient(ctx context.Context) (cognitoAdminAPI, error) {
+	if s.cognito != nil {
+		return s.cognito, nil
+	}
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+	}
+	return cognitoidp.NewFromConfig(cfg), nil
 }
 
 // newMeetingServiceWithRepo creates a MeetingService with a custom repo (for testing).
@@ -637,16 +676,14 @@ var ErrAdminGroupAddFailed = errors.New("user invited but failed to add to admin
 // SES/templating needed on our side. If admin is true, the new user is also
 // added to the "admins" group.
 func (s *MeetingService) InviteUser(ctx context.Context, email, name string, admin bool) error {
-	poolID := os.Getenv("COGNITO_USER_POOL_ID")
+	poolID := s.resolveCognitoPoolID()
 	if poolID == "" {
 		return fmt.Errorf("server misconfiguration: COGNITO_USER_POOL_ID is not set")
 	}
-
-	cfg, err := config.LoadDefaultConfig(ctx)
+	client, err := s.resolveCognitoClient(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load AWS config: %w", err)
+		return err
 	}
-	client := cognitoidp.NewFromConfig(cfg)
 
 	attrs := []cognitoidptypes.AttributeType{
 		{Name: aws.String("email"), Value: aws.String(email)},
@@ -688,16 +725,15 @@ func (s *MeetingService) InviteUser(ctx context.Context, email, name string, adm
 
 // SearchUsers searches users by email using Cognito ListUsers API
 func (s *MeetingService) SearchUsers(ctx context.Context, query string) ([]model.UserSearchResponse, error) {
-	poolID := os.Getenv("COGNITO_USER_POOL_ID")
+	poolID := s.resolveCognitoPoolID()
 	if poolID == "" {
 		return []model.UserSearchResponse{}, nil
 	}
 
-	cfg, err := config.LoadDefaultConfig(ctx)
+	client, err := s.resolveCognitoClient(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+		return nil, err
 	}
-	client := cognitoidp.NewFromConfig(cfg)
 
 	result, err := client.ListUsers(ctx, &cognitoidp.ListUsersInput{
 		UserPoolId: aws.String(poolID),

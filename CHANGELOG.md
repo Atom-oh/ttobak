@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Meeting-driven cost/sizing simulator: extracts quantitative requirements from a meeting, runs a Sonnet-generated Python computation in AgentCore Code Interpreter to compare architecture options (ADR-031)
+- Zoom/pan and fullscreen lightbox for mermaid diagrams rendered from meeting notes
 - Export button on Research Detail page (Copy Markdown, Download .md, Notion)
 - AI Code Review workflow with Bedrock Claude Opus 4.7 on PR open/sync
 - Insights tab URL sync (`/insights?tab=research`) for back/forward navigation
@@ -71,6 +73,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- 미팅 기반 비용·사이징 시뮬레이터 — 정량 요구사항 추출 후 AgentCore Code Interpreter에서 Sonnet이 생성한 파이썬으로 아키텍처 대안 비교 (ADR-031)
+- 회의록 mermaid 다이어그램 확대·이동 및 전체화면 라이트박스
 - Research Detail 페이지 Export 버튼 (Markdown 복사, .md 다운로드, Notion)
 - Bedrock Claude Opus 4.7 기반 AI 코드 리뷰 워크플로우 (PR 오픈/동기화 시)
 - Insights 탭 URL 동기화 (`/insights?tab=research`) — 뒤로가기/북마크 지원

@@ -152,6 +152,15 @@ export const meetingsApi = {
   rediarize: (meetingId: string, speakerCount: number) =>
     api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/rediarize`, { speakerCount }),
 
+  // ADR-031 cost/sizing simulator
+  extractSimRequirements: (meetingId: string) =>
+    api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim/extract`, {}),
+
+  createSimulation: (
+    meetingId: string,
+    data: { requirements: import('@/types/meeting').SimRequirement[]; options: import('@/types/meeting').SimOption[] }
+  ) => api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim`, data),
+
   update: (id: string, data: { title?: string; content?: string; notes?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }, options?: { signal?: AbortSignal }) =>
     api.put<{ meetingId: string; updatedAt: string }>(`/api/meetings/${id}`, data, options),
 
@@ -284,6 +293,51 @@ export interface InviteUserResponse {
   email: string;
   invited: boolean;
   addedToAdmins: boolean;
+}
+
+// Admin user-management API (Settings › 사용자 관리). All routes are
+// admin-only server-side (middleware.RequireAdmin) -- the frontend's isAdmin
+// check only controls whether the section renders.
+export const adminUsersApi = {
+  list: () => api.get<AdminUserListResponse>('/api/settings/users'),
+
+  delete: (userId: string) =>
+    api.delete<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}`),
+
+  enable: (userId: string) =>
+    api.put<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}/enable`),
+
+  disable: (userId: string) =>
+    api.put<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}/disable`),
+
+  resendInvite: (userId: string) =>
+    api.post<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}/resend-invite`),
+
+  resetPassword: (userId: string) =>
+    api.post<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}/reset-password`),
+};
+
+export interface AdminUserSummary {
+  userId: string;
+  email: string;
+  name?: string;
+  status: string;
+  enabled: boolean;
+  isAdmin: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+  dormant: boolean;
+}
+
+export interface AdminUserListResponse {
+  users: AdminUserSummary[];
+  lastLoginUnavailable?: boolean;
+  truncated?: boolean;
+}
+
+export interface AdminUserActionResponse {
+  userId: string;
+  warning?: string;
 }
 
 // Translation API

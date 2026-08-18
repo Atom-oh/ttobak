@@ -3,6 +3,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import { Construct } from 'constructs';
 import { RESEARCH_SFN_NAME } from './gateway-stack';
 
@@ -30,6 +31,10 @@ export class AiStack extends cdk.Stack {
   public readonly crawlerRole: iam.Role;
   public readonly researchWorkerRole: iam.Role;
   public readonly convertDocRole: iam.Role;
+  public readonly simRole: iam.Role;
+  /** aws.codeinterpreter.v1's custom sibling (ADR-031) -- SANDBOX network,
+   * no policy ever attached to its own execution role. */
+  public readonly simCodeInterpreter: agentcore.CodeInterpreterCustom;
   public readonly kmsKey: kms.Key;
   /** @deprecated Legacy shared role — kept for RealtimeStack backward compatibility */
   public readonly legacyRole: iam.Role;
@@ -101,6 +106,18 @@ export class AiStack extends cdk.Stack {
       })
     );
 
+    // api Lambda hands a confirmed simulation run off to ttobak-sim
+    // asynchronously (ADR-031) -- same InvocationType=Event shape as
+    // websocketRole's InvokeQALambda grant below.
+    this.apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'InvokeSimLambda',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [`arn:aws:lambda:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:function:ttobak-sim`],
+      })
+    );
+
     // Bedrock KB ingestion (for POST /api/kb/sync — same action summarize/kb
     // roles hold, but scoped to the one KB this deployment uses instead of
     // their legacy '*': the IAM mandate bans NEW unconditioned wildcard
@@ -118,10 +135,15 @@ export class AiStack extends cdk.Stack {
       );
     }
 
-    // Admin user invitation — scoped to this User Pool only. AdminCreateUser
-    // triggers Cognito's built-in invite email (username + temp password, no
-    // login link); AdminAddUserToGroup adds the new user to "admins" when
-    // requested by the invite-user endpoint.
+    // Admin user invitation and management — scoped to this User Pool only.
+    // AdminCreateUser triggers Cognito's built-in invite email (username +
+    // temp password, no login link) and also re-sends it (MessageAction=
+    // RESEND) for the "초대 메일 재발송" action; AdminAddUserToGroup adds the
+    // new user to "admins" when requested by the invite-user endpoint.
+    // AdminDeleteUser/AdminDisableUser/AdminEnableUser/AdminResetUserPassword/
+    // AdminUserGlobalSignOut/AdminGetUser/ListUsersInGroup back the admin
+    // user-management panel's delete/disable/enable/reset-password actions,
+    // its own status lookups before acting, and its last-admin guard.
     this.apiRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'CognitoAdminUserManagement',
@@ -129,6 +151,13 @@ export class AiStack extends cdk.Stack {
         actions: [
           'cognito-idp:AdminCreateUser',
           'cognito-idp:AdminAddUserToGroup',
+          'cognito-idp:AdminDeleteUser',
+          'cognito-idp:AdminDisableUser',
+          'cognito-idp:AdminEnableUser',
+          'cognito-idp:AdminResetUserPassword',
+          'cognito-idp:AdminUserGlobalSignOut',
+          'cognito-idp:AdminGetUser',
+          'cognito-idp:ListUsersInGroup',
         ],
         resources: [props.userPoolArn],
       })
@@ -361,6 +390,56 @@ export class AiStack extends cdk.Stack {
     // attachment. Harmless if VPC config is ever omitted (unused grant).
     this.convertDocRole.addManagedPolicy(
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaVPCAccessExecutionRole')
+    );
+
+    // ==================== Sim Code Interpreter (ADR-031) ====================
+    // usingSandboxNetwork() must be explicit -- the L2 construct's default
+    // is usingPublicNetwork(), which would silently give the sandbox
+    // internet access. What actually keeps the sandbox from reaching AWS
+    // (S3, DynamoDB, etc.) is that its own execution role -- created by CDK
+    // automatically since none is supplied here -- has NO policy attached,
+    // not the network mode. SANDBOX only removes the public internet path;
+    // "empty execution role" is what removes the AWS-API path. Never attach
+    // a policy to this construct's own service role.
+    this.simCodeInterpreter = new agentcore.CodeInterpreterCustom(this, 'SimCodeInterpreter', {
+      codeInterpreterCustomName: 'ttobak_sim',
+      networkConfiguration: agentcore.CodeInterpreterNetworkConfiguration.usingSandboxNetwork(),
+    });
+
+    // ==================== Sim Role ====================
+    // Needs: DynamoDB R/W, S3 write scoped to images/*+files/* (chart PNGs,
+    // report/code/price-snapshot artifacts), Bedrock InvokeModel (codegen),
+    // Code Interpreter session lifecycle, and Price List API (read-only,
+    // no resource-level permissions exist for it -- see the wildcard note
+    // below).
+    this.simRole = createLambdaRole(
+      'TtobakSimRole',
+      'ttobak-sim-role',
+      'Role for ttobak-sim Lambda function (ADR-031 cost/sizing simulator)'
+    );
+    props.table.grantReadWriteData(this.simRole);
+    props.bucket.grantWrite(this.simRole, 'images/*');
+    props.bucket.grantReadWrite(this.simRole, 'files/*');
+    this.simRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockInvokeModelForCodegen',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+        resources: bedrockModelResources,
+      })
+    );
+    this.simCodeInterpreter.grantUse(this.simRole);
+    // Price List API has no resource-level permissions at all -- Resource:"*"
+    // is unavoidable, not a shortcut. Documented exception (ADR-031),
+    // alongside the existing CognitoListUsers/BedrockKBRetrieve wildcards:
+    // read-only, publicly-published pricing data, nothing tenant-specific.
+    this.simRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'PricingReadOnly',
+        effect: iam.Effect.ALLOW,
+        actions: ['pricing:GetProducts', 'pricing:DescribeServices'],
+        resources: ['*'],
+      })
     );
 
     // ==================== KB Role ====================
@@ -608,6 +687,16 @@ export class AiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'CrawlerRoleArn', {
       value: this.crawlerRole.roleArn,
       exportName: 'TtobakCrawlerRoleArn',
+    });
+
+    new cdk.CfnOutput(this, 'SimRoleArn', {
+      value: this.simRole.roleArn,
+      exportName: 'TtobakSimRoleArn',
+    });
+
+    new cdk.CfnOutput(this, 'SimCodeInterpreterId', {
+      value: this.simCodeInterpreter.codeInterpreterId,
+      exportName: 'TtobakSimCodeInterpreterId',
     });
   }
 }

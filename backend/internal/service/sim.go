@@ -1,0 +1,460 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/lambda"
+	lambdatypes "github.com/aws/aws-sdk-go-v2/service/lambda/types"
+	"github.com/google/uuid"
+	"github.com/ttobak/backend/internal/model"
+	"github.com/ttobak/backend/internal/repository"
+)
+
+// simRequirementBound describes the server-side allowlist for one
+// SimRequirement key: whether it's numeric (with a sane range) or an enum
+// (with a fixed set of allowed values). This -- not the confirm form -- is
+// the actual trust boundary between the untrusted meeting transcript and
+// the codegen prompt: only keys/values that pass this allowlist ever reach
+// ExtractSimRequirements's output or a POST /sim body, so free text from a
+// transcript can never shape the generated Python (see ADR-031).
+type simRequirementBound struct {
+	label   string
+	numeric bool
+	min     float64
+	max     float64
+	enum    []string // for non-numeric keys
+}
+
+// AllowedSimRequirementKeys is deliberately scoped to 또박's own stack
+// (v1 service range decision in the design doc) -- Lambda/API Gateway/
+// DynamoDB/S3/CloudFront/Bedrock -- so unit-price lookups stay simple SKU
+// filters instead of the fiddly multi-attribute matching EC2/RDS/ALB
+// pricing needs. Anything outside this allowlist is rejected outright
+// rather than guessed at.
+var AllowedSimRequirementKeys = map[string]simRequirementBound{
+	"monthlyActiveUsers":    {label: "월간 활성 사용자", numeric: true, min: 0, max: 1e9},
+	"peakRequestsPerSecond": {label: "피크 초당 요청 수(TPS)", numeric: true, min: 0, max: 1e7},
+	"avgRequestsPerSecond":  {label: "평균 초당 요청 수(TPS)", numeric: true, min: 0, max: 1e7},
+	"dataVolumeGbPerDay":    {label: "일간 데이터량(GB)", numeric: true, min: 0, max: 1e7},
+	"storageVolumeGb":       {label: "총 저장 데이터량(GB)", numeric: true, min: 0, max: 1e9},
+	"avgPayloadSizeKb":      {label: "평균 요청 페이로드(KB)", numeric: true, min: 0, max: 1e6},
+	"targetLatencyMs":       {label: "목표 응답 지연(ms)", numeric: true, min: 0, max: 1e6},
+	"availabilitySlo":       {label: "가용성 SLO(%)", numeric: true, min: 90, max: 100},
+	"retentionDays":         {label: "데이터 보존 기간(일)", numeric: true, min: 0, max: 36500},
+	"region": {
+		label: "리전", enum: []string{"ap-northeast-2", "us-east-1", "us-west-2", "eu-west-1", "ap-northeast-1"},
+	},
+}
+
+const (
+	simLabelMaxLen  = 80
+	simOptionMinLen = 2
+	simOptionMaxLen = 3
+	// simReportMaxBytes caps the generated report before it's written to
+	// DynamoDB -- defense against a runaway generated report ballooning an
+	// item past DynamoDB's 400KB limit; the full report always also lands
+	// in S3 regardless of this cap.
+	simReportMaxBytes = 100_000
+)
+
+// SimRun status set that PutSimRunIfNotRunning's condition also encodes --
+// kept as a Go-side helper for callers that want to short-circuit before a
+// round-trip to DynamoDB (e.g. reporting a friendlier "이미 실행 중" without
+// waiting for a ConditionalCheckFailed).
+func isSimRunActive(status string) bool {
+	return status == model.SimStatusQueued || status == model.SimStatusRunning
+}
+
+// labelCharsetRe restricts free-text SimRequirement labels and SimOption
+// names to characters that can't smuggle prompt-injection-shaped control
+// text past the length cap -- Korean/English/digits/basic punctuation only.
+var labelCharsetRe = regexpMustCompileSimLabel()
+
+func regexpMustCompileSimLabel() *simCharsetChecker {
+	return &simCharsetChecker{}
+}
+
+// simCharsetChecker avoids importing "regexp" for a check simple enough to
+// do by hand: reject control characters and anything that looks like a
+// prompt-injection delimiter ("```", "<|", "system:") rather than trying to
+// enumerate every allowed Unicode script.
+type simCharsetChecker struct{}
+
+func (simCharsetChecker) valid(s string) bool {
+	if strings.Contains(s, "```") || strings.Contains(s, "<|") {
+		return false
+	}
+	for _, r := range s {
+		if r < 0x20 && r != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+// validateSimRequirements is the pure decision core for POST
+// /api/meetings/{id}/sim: every requirement key must be in
+// AllowedSimRequirementKeys, every numeric value must parse within that
+// key's bounds, every enum value must be in that key's allowlist, every
+// free-text field is length- and charset-capped, and every Required
+// requirement must have a non-empty value. Side-effect-free so it can be
+// table-tested without mocking DynamoDB or Bedrock -- this is the security
+// boundary (see AllowedSimRequirementKeys' doc comment), so it needs to be
+// exhaustively tested, not just exercised end-to-end.
+func validateSimRequirements(meeting *model.Meeting, userID string, reqs []model.SimRequirement, opts []model.SimOption, existingStatus string) error {
+	if meeting == nil {
+		return ErrNotFound
+	}
+	if meeting.UserID != userID {
+		return ErrForbidden
+	}
+	if meeting.Status != model.StatusDone {
+		return fmt.Errorf("meeting must be done before simulating (status: %s): %w", meeting.Status, ErrInvalidInput)
+	}
+	if isSimRunActive(existingStatus) {
+		return fmt.Errorf("a simulation is already running for this meeting: %w", ErrInvalidInput)
+	}
+	if len(opts) < simOptionMinLen || len(opts) > simOptionMaxLen {
+		return fmt.Errorf("must compare between %d and %d architecture options: %w", simOptionMinLen, simOptionMaxLen, ErrInvalidInput)
+	}
+	for _, o := range opts {
+		if strings.TrimSpace(o.Name) == "" {
+			return fmt.Errorf("option name is required: %w", ErrInvalidInput)
+		}
+		if len(o.Name) > simLabelMaxLen || len(o.Description) > simLabelMaxLen*4 {
+			return fmt.Errorf("option name/description too long: %w", ErrInvalidInput)
+		}
+		if !labelCharsetRe.valid(o.Name) || !labelCharsetRe.valid(o.Description) {
+			return fmt.Errorf("option name/description contains disallowed characters: %w", ErrInvalidInput)
+		}
+	}
+
+	if len(reqs) == 0 {
+		return fmt.Errorf("at least one requirement is needed: %w", ErrInvalidInput)
+	}
+	for _, req := range reqs {
+		bound, ok := AllowedSimRequirementKeys[req.Key]
+		if !ok {
+			return fmt.Errorf("unknown requirement key %q: %w", req.Key, ErrInvalidInput)
+		}
+		if len(req.Label) > simLabelMaxLen || !labelCharsetRe.valid(req.Label) {
+			return fmt.Errorf("requirement %q label invalid: %w", req.Key, ErrInvalidInput)
+		}
+		value := strings.TrimSpace(req.Value)
+		if req.Required && value == "" {
+			return fmt.Errorf("required value missing for %q (%s): %w", req.Key, bound.label, ErrInvalidInput)
+		}
+		if value == "" {
+			continue // optional and unset -- fine
+		}
+		if bound.numeric {
+			n, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return fmt.Errorf("requirement %q must be numeric: %w", req.Key, ErrInvalidInput)
+			}
+			if n < bound.min || n > bound.max {
+				return fmt.Errorf("requirement %q out of range [%v, %v]: %w", req.Key, bound.min, bound.max, ErrInvalidInput)
+			}
+		} else {
+			allowed := false
+			for _, v := range bound.enum {
+				if v == value {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("requirement %q value %q not in allowed set: %w", req.Key, value, ErrInvalidInput)
+			}
+		}
+	}
+	return nil
+}
+
+// parseSimRequirements parses ExtractSimRequirements's Haiku JSON output
+// into a draft []model.SimRequirement, dropping (never fabricating) any
+// entry that fails the same allowlist validateSimRequirements enforces --
+// an extraction draft is shown to the user for confirmation, but it must
+// never contain a value that couldn't survive the real run-time
+// validation, or the confirm form would show something the run endpoint
+// would then reject.
+func parseSimRequirements(raw string, segments []speakerSegment) []model.SimRequirement {
+	raw = stripCodeFences(raw)
+	// Haiku occasionally appends a trailing sentence after the array
+	// ("이상입니다.") despite the system prompt asking for JSON only.
+	// json.Unmarshal rejects trailing non-whitespace, so narrow to the
+	// outermost [...] span first rather than failing the whole extraction
+	// over one stray sentence.
+	if start := strings.Index(raw, "["); start >= 0 {
+		if end := strings.LastIndex(raw, "]"); end > start {
+			raw = raw[start : end+1]
+		}
+	}
+	type rawReq struct {
+		Key      string `json:"key"`
+		Value    string `json:"value"`
+		Required bool   `json:"required"`
+		TSMarker string `json:"tsMarker"`
+	}
+	var items []rawReq
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return []model.SimRequirement{}
+	}
+
+	out := make([]model.SimRequirement, 0, len(items))
+	seen := map[string]bool{}
+	for _, it := range items {
+		bound, ok := AllowedSimRequirementKeys[it.Key]
+		if !ok || seen[it.Key] {
+			continue
+		}
+		value := strings.TrimSpace(it.Value)
+		if value != "" {
+			if bound.numeric {
+				if _, err := strconv.ParseFloat(value, 64); err != nil {
+					continue // never pass an unparseable number through to the form
+				}
+			} else {
+				allowed := false
+				for _, v := range bound.enum {
+					if v == value {
+						allowed = true
+						break
+					}
+				}
+				if !allowed {
+					continue
+				}
+			}
+		}
+		seen[it.Key] = true
+
+		evidence := ""
+		if it.TSMarker != "" {
+			if m := tsMarkerSeconds(it.TSMarker); m >= 0 {
+				if seg := nearestSegment(segments, float64(m)); seg != nil && seg.ID != "" {
+					evidence = "transcript://" + seg.ID
+				}
+			}
+		}
+		out = append(out, model.SimRequirement{
+			Key:      it.Key,
+			Label:    bound.label,
+			Value:    value,
+			Required: it.Required,
+			Source:   model.SimRequirementSourceExtracted,
+			Evidence: evidence,
+		})
+	}
+	return out
+}
+
+// tsMarkerSeconds extracts NNN from a "[TS:NNN]" marker, or -1 if malformed.
+func tsMarkerSeconds(marker string) int {
+	marker = strings.TrimPrefix(marker, "[TS:")
+	marker = strings.TrimSuffix(marker, "]")
+	n, err := strconv.Atoi(strings.TrimSpace(marker))
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+// nearestSegment mirrors resolveTranscriptAnchors' snap-to-nearest logic
+// for evidence links found outside the markdown-anchor path.
+func nearestSegment(segments []speakerSegment, targetSeconds float64) *speakerSegment {
+	if len(segments) == 0 {
+		return nil
+	}
+	bestIdx := -1
+	bestDiff := -1.0
+	for i, seg := range segments {
+		diff := seg.StartTime - targetSeconds
+		if diff < 0 {
+			diff = -diff
+		}
+		if bestDiff < 0 || diff < bestDiff {
+			bestDiff = diff
+			bestIdx = i
+		}
+	}
+	if bestIdx < 0 {
+		return nil
+	}
+	return &segments[bestIdx]
+}
+
+// simRepo defines the repository methods SimService needs -- kept minimal
+// and interface-based so tests can substitute a fake without a real
+// DynamoDB client, matching this codebase's meetingRepo convention.
+type simRepo interface {
+	GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error)
+	GetSimRun(ctx context.Context, meetingID string) (*model.SimRun, error)
+	PutSimRun(ctx context.Context, run *model.SimRun) error
+	PutSimRunIfNotRunning(ctx context.Context, run *model.SimRun) error
+}
+
+// SimService owns the eligibility/validation core and the async hand-off
+// to ttobak-sim (ADR-031). Extraction (which needs the transcript-anchor
+// resolver, Go-only per ADR-013) lives on BedrockService; SimService only
+// validates the user-confirmed requirements and kicks off the run.
+type SimService struct {
+	repo            simRepo
+	bedrock         *BedrockService
+	lambdaClient    *lambda.Client
+	simFunctionName string
+}
+
+// NewSimService constructs a SimService. lambdaClient/simFunctionName may
+// be zero-valued in tests that only exercise Extract/validate paths.
+func NewSimService(repo simRepo, bedrock *BedrockService, lambdaClient *lambda.Client, simFunctionName string) *SimService {
+	return &SimService{repo: repo, bedrock: bedrock, lambdaClient: lambdaClient, simFunctionName: simFunctionName}
+}
+
+// ExtractRequirements produces a draft requirement set for the user to
+// confirm/correct, and persists it as the meeting's current SimRun in
+// "extracted" state (overwriting any prior draft/result -- re-extracting is
+// how a user retries a bad first draft).
+func (s *SimService) ExtractRequirements(ctx context.Context, userID, meetingID string) (*model.SimRun, error) {
+	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get meeting: %w", err)
+	}
+	if meeting == nil {
+		return nil, ErrNotFound
+	}
+	if meeting.UserID != userID {
+		return nil, ErrForbidden
+	}
+	if meeting.Status != model.StatusDone {
+		return nil, fmt.Errorf("meeting must be done before simulating (status: %s): %w", meeting.Status, ErrInvalidInput)
+	}
+
+	reqs, err := s.bedrock.ExtractSimRequirements(ctx, meeting)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract simulation requirements: %w", err)
+	}
+	reqsJSON, err := json.Marshal(reqs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode requirements: %w", err)
+	}
+
+	run := &model.SimRun{
+		SimRunID:     uuid.New().String(),
+		MeetingID:    meetingID,
+		UserID:       userID,
+		Status:       model.SimStatusExtracted,
+		Requirements: string(reqsJSON),
+	}
+	if err := s.repo.PutSimRun(ctx, run); err != nil {
+		return nil, fmt.Errorf("failed to save extracted requirements: %w", err)
+	}
+	return run, nil
+}
+
+// CreateSimulation validates the user-confirmed requirements/options,
+// atomically claims the meeting's SimRun slot (rejecting a second
+// concurrent run), and hands off to ttobak-sim asynchronously. The Lambda
+// invoke is fire-and-forget (InvocationType Event) -- the caller polls
+// GetMeeting for status, matching ResearchDetailClient's existing job-poll
+// pattern rather than adding a new WebSocket path for a minutes-long job.
+func (s *SimService) CreateSimulation(ctx context.Context, userID, meetingID string, reqs []model.SimRequirement, opts []model.SimOption) (*model.SimRun, error) {
+	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get meeting: %w", err)
+	}
+
+	existing, err := s.repo.GetSimRun(ctx, meetingID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get existing sim run: %w", err)
+	}
+	existingStatus := ""
+	if existing != nil {
+		existingStatus = existing.Status
+	}
+
+	if err := validateSimRequirements(meeting, userID, reqs, opts, existingStatus); err != nil {
+		return nil, err
+	}
+
+	reqsJSON, err := json.Marshal(reqs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode requirements: %w", err)
+	}
+	optsJSON, err := json.Marshal(opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode options: %w", err)
+	}
+
+	run := &model.SimRun{
+		SimRunID:     uuid.New().String(),
+		MeetingID:    meetingID,
+		UserID:       userID,
+		Status:       model.SimStatusQueued,
+		Requirements: string(reqsJSON),
+		Options:      string(optsJSON),
+	}
+	if err := s.repo.PutSimRunIfNotRunning(ctx, run); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil, fmt.Errorf("a simulation is already running for this meeting: %w", ErrInvalidInput)
+		}
+		return nil, fmt.Errorf("failed to create sim run: %w", err)
+	}
+
+	payload, err := json.Marshal(map[string]interface{}{
+		"simRunId":     run.SimRunID,
+		"meetingId":    meetingID,
+		"userId":       userID,
+		"requirements": reqs,
+		"options":      opts,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode invoke payload: %w", err)
+	}
+
+	if s.lambdaClient != nil && s.simFunctionName != "" {
+		if _, err := s.lambdaClient.Invoke(ctx, &lambda.InvokeInput{
+			FunctionName:   aws.String(s.simFunctionName),
+			InvocationType: lambdatypes.InvocationTypeEvent,
+			Payload:        payload,
+		}); err != nil {
+			// The run is already recorded as "queued"; leave it for the
+			// 20-minute stuck-run reconciliation (mirroring isStuck) to
+			// surface as an error rather than trying to unwind the write here.
+			return nil, fmt.Errorf("failed to invoke ttobak-sim: %w", err)
+		}
+	}
+
+	return run, nil
+}
+
+// GetSimRun is a thin passthrough used by the meeting handler to attach the
+// current simulation state to GetMeeting's response.
+func (s *SimService) GetSimRun(ctx context.Context, meetingID string) (*model.SimRun, error) {
+	return s.repo.GetSimRun(ctx, meetingID)
+}
+
+// simRunStuckThreshold mirrors meeting.go's 30-minute isStuck window, but
+// shorter: a sim run has no long-running external process analogous to
+// Whisper ECS, so 20 minutes past Lambda's own 15-minute timeout is already
+// generous slack for a Lambda that died without writing "error".
+const simRunStuckThreshold = 20 * time.Minute
+
+// ReconcileStuckSimRun reports whether run should be treated as errored due
+// to age, without mutating it -- callers decide whether/how to persist that.
+func ReconcileStuckSimRun(run *model.SimRun) bool {
+	if run == nil {
+		return false
+	}
+	if run.Status != model.SimStatusQueued && run.Status != model.SimStatusRunning {
+		return false
+	}
+	return time.Since(run.UpdatedAt) > simRunStuckThreshold
+}

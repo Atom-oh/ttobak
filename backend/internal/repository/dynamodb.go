@@ -468,8 +468,8 @@ func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUser
 		return nil, fmt.Errorf("build projectIds projection: %w", err)
 	}
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName:                aws.String(r.tableName),
-		ConsistentRead:           aws.Bool(true),
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + ownerUserID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
@@ -892,6 +892,21 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 		})
 	}
 
+	// 4. Sim run (ADR-031) -- unconditional delete; a Delete against a
+	// nonexistent key is a no-op, not an error, so this is safe whether or
+	// not a simulation was ever run for this meeting. Exactly +1 item
+	// regardless of how many times the meeting was re-simulated, because
+	// SimRun is a singleton (SK=SIMRUN), not a history.
+	transactItems = append(transactItems, types.TransactWriteItem{
+		Delete: &types.Delete{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixSimRun},
+			},
+		},
+	})
+
 	// Execute in batches of 100 (TransactWriteItems limit)
 	for i := 0; i < len(transactItems); i += 100 {
 		end := i + 100
@@ -911,10 +926,10 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 
 // ListMeetingsParams contains parameters for listing meetings
 type ListMeetingsParams struct {
-	UserID     string
-	Tab        string // "all" or "shared"
-	Cursor     string // base64-encoded LastEvaluatedKey
-	Limit      int32
+	UserID string
+	Tab    string // "all" or "shared"
+	Cursor string // base64-encoded LastEvaluatedKey
+	Limit  int32
 }
 
 // ListMeetingsResult contains the result of listing meetings
@@ -1959,6 +1974,104 @@ func (r *DynamoDBRepository) GetUserByEmail(ctx context.Context, email string) (
 	}
 
 	return &user, nil
+}
+
+// BatchGetUserLastLogins retrieves lastLoginAt for a set of user IDs from
+// their USER#{userId}/LOGIN items (written by the PostAuthentication
+// trigger, see model.UserLogin). Users who have never logged in simply have
+// no entry in the returned map -- callers must treat that as "unknown", not
+// as a signal to zero-value it, since a zero time.Time would incorrectly
+// read as "logged in at the Unix epoch" rather than "no record".
+func (r *DynamoDBRepository) BatchGetUserLastLogins(ctx context.Context, userIDs []string) (map[string]time.Time, error) {
+	if len(userIDs) == 0 {
+		return map[string]time.Time{}, nil
+	}
+
+	result := make(map[string]time.Time, len(userIDs))
+
+	// Process in chunks of 100 (BatchGetItem limit)
+	for i := 0; i < len(userIDs); i += 100 {
+		end := i + 100
+		if end > len(userIDs) {
+			end = len(userIDs)
+		}
+		chunk := userIDs[i:end]
+
+		ddbKeys := make([]map[string]types.AttributeValue, len(chunk))
+		for j, id := range chunk {
+			ddbKeys[j] = map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + id},
+				"SK": &types.AttributeValueMemberS{Value: model.SKUserLogin},
+			}
+		}
+
+		requestItems := map[string]types.KeysAndAttributes{
+			r.tableName: {Keys: ddbKeys},
+		}
+
+		for len(requestItems) > 0 {
+			out, err := r.client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
+				RequestItems: requestItems,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to batch get user logins: %w", err)
+			}
+
+			for _, item := range out.Responses[r.tableName] {
+				var login model.UserLogin
+				if err := attributevalue.UnmarshalMap(item, &login); err != nil {
+					return nil, fmt.Errorf("failed to unmarshal user login: %w", err)
+				}
+				userID := strings.TrimPrefix(login.PK, model.PrefixUser)
+				result[userID] = login.LastLoginAt
+			}
+
+			if len(out.UnprocessedKeys) > 0 {
+				requestItems = out.UnprocessedKeys
+			} else {
+				break
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// DetachDeletedUserProfile removes the GSI2 email-search keys from a user's
+// PROFILE item after their Cognito account is deleted, without deleting the
+// profile itself (meeting/document data referencing this userID must keep
+// resolving). Without this, re-inviting the same email creates a second
+// PROFILE item with the same GSI2PK, and GetUserByEmail could non-
+// deterministically resolve to the dead userID instead of the new one. A
+// missing profile (nothing to detach) is not an error.
+func (r *DynamoDBRepository) DetachDeletedUserProfile(ctx context.Context, userID string) error {
+	update := expression.Set(expression.Name("deletedAt"), expression.Value(time.Now().UTC())).
+		Remove(expression.Name("GSI2PK")).
+		Remove(expression.Name("GSI2SK"))
+	expr, err := expression.NewBuilder().WithUpdate(update).Build()
+	if err != nil {
+		return fmt.Errorf("failed to build expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixProfile},
+		},
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ConditionExpression:       aws.String("attribute_exists(PK)"),
+	})
+	if err != nil {
+		var cce *types.ConditionalCheckFailedException
+		if errors.As(err, &cce) {
+			return nil // no profile to detach -- not an error
+		}
+		return fmt.Errorf("failed to detach deleted user profile: %w", err)
+	}
+	return nil
 }
 
 // GetIntegration retrieves an integration by userID and service

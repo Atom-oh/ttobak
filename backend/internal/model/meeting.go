@@ -128,6 +128,21 @@ type User struct {
 	EntityType string    `dynamodbav:"entityType"`       // "USER"
 }
 
+// UserLogin represents the last-login timestamp for the admin user-management
+// panel, written by the Cognito PostAuthentication trigger
+// (infra/lambda/post-authentication). Deliberately a separate item from
+// User/PROFILE above: writing lastLoginAt onto PROFILE would risk creating a
+// stub profile item (missing email/GSI2PK/GSI2SK) if the trigger's write
+// raced GetOrCreateUser on a user's very first login, silently breaking
+// email-based search/sharing for that user. This item carries no GSI keys.
+// PK: USER#{userId}, SK: LOGIN
+type UserLogin struct {
+	PK          string    `dynamodbav:"PK"`
+	SK          string    `dynamodbav:"SK"`
+	LastLoginAt time.Time `dynamodbav:"lastLoginAt"`
+	EntityType  string    `dynamodbav:"entityType"` // "USER_LOGIN"
+}
+
 // CrawlerSource represents a crawler source configuration
 // PK: USER#{userId}, SK: CRAWLER#{sourceId}
 type CrawlerSource struct {
@@ -286,6 +301,9 @@ const (
 	PrefixConfig     = "CONFIG"
 	PrefixResearch   = "RESEARCH#"
 )
+
+// SKUserLogin is the sort key for the UserLogin item (see UserLogin doc comment).
+const SKUserLogin = "LOGIN"
 
 // Config SK constants
 const (

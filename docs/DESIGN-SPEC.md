@@ -785,6 +785,18 @@ Checkbox group for selecting real-time translation target languages.
 </div>
 ```
 
+### 2.16 Cost/Sizing Simulator Card (`SimCard`, ADR-031)
+
+Appears on the meeting detail page only once the meeting note itself is `done`. Five states driven by `SimRun.status`, one card, no separate page:
+
+- **idle** (no `SimRun` yet): one-line explainer + a single "시뮬레이션 실행" button (`query_stats` icon in the section header)
+- **extracted**: confirm/correct form — one row per extracted `SimRequirement` (label, required-marker, an editable value input, and a "녹취록에서 확인" link when `evidence` is present) + 2–3 architecture-option name/description input pairs. "실행" is disabled until every required requirement has a value and at least 2 options have a name — this is a UX convenience only, the server re-validates everything (ADR-031)
+- **queued / running**: spinner + "1~3분 소요, 다른 작업을 계속하셔도 됩니다" — no page-blocking modal, since this is a background job
+- **done**: an amber "추정치 — 검증 필요" banner with the price-snapshot timestamp, then the generated `report.md` rendered through the same `MarkdownRenderer` every other markdown surface uses, with `sim://chart_N` rewritten to each chart's presigned URL before render (same rewrite-before-render shape as `resolveAttachmentUrls`) — charts inherit `ZoomPanViewport` for free through `MermaidBlock`'s sibling markdown image handling
+- **error**: `errorMessage` + "다시 시도" (re-runs extraction)
+
+No dedicated color token — reuses the existing primary/amber/red palette (amber = "needs verification" banner, red = error text), consistent with the rest of the meeting detail page.
+
 ## 3. Interaction Patterns
 
 ### 3.1 Hover States
@@ -810,6 +822,13 @@ Checkbox group for selecting real-time translation target languages.
 - Recording waveform: varying height bars
 - Live transcription dots: `animate-bounce` with staggered delays
 - No other heavy animations
+
+### 3.5 Diagram Zoom/Pan (`ZoomPanViewport`, `DiagramLightbox`)
+- Plain wheel scroll always scrolls the page; only `Ctrl`/`⌘`+wheel zooms (0.25×–8×) — a diagram must never trap normal page scroll while reading a note
+- One-finger drag / pointer drag pans; two-finger pinch zooms (`touch-action: none` applied only once zoomed past 1× — the default scale still scrolls normally on touch)
+- Zoom controls (`zoom_in`/`zoom_out`/`fit_screen`/`fullscreen`) fade in on hover (desktop) or stay visible (touch, `group-focus-within`)
+- Fullscreen opens `DiagramLightbox`, reusing `AttachmentGallery`'s image-modal visual language (`fixed inset-0 z-50 bg-black/80 backdrop-blur-sm`, backdrop-click or `Esc` to close, top-right close button) rather than a new one
+- Applied to every mermaid diagram via `MermaidBlock` — since `MarkdownRenderer` is the single markdown surface, this covers meeting notes, live summary, docs, insights, and research uniformly
 
 ## 4. Icon Mapping
 
@@ -859,3 +878,8 @@ Checkbox group for selecting real-time translation target languages.
 | Send | send | Q&A send button |
 | Delete | delete | Delete KB file |
 | Cloud | cloud | External service |
+| Zoom in | zoom_in | Diagram zoom/pan controls (`ZoomPanViewport`) |
+| Zoom out | zoom_out | Diagram zoom/pan controls |
+| Fit to screen | fit_screen | Diagram zoom/pan reset |
+| Fullscreen | fullscreen | Diagram lightbox (`DiagramLightbox`) |
+| Cost simulator | query_stats | Cost/sizing simulator card (`SimCard`, ADR-031) |

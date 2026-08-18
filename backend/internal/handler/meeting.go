@@ -20,6 +20,16 @@ type MeetingHandler struct {
 	meetingService *service.MeetingService
 	uploadService  *service.UploadService
 	repo           *repository.DynamoDBRepository
+	// simService is optional (see SetSimService) so GetMeeting can attach
+	// the meeting's SimRun (ADR-031) without every existing NewMeetingHandler
+	// call site needing to change.
+	simService *service.SimService
+}
+
+// SetSimService injects the cost/sizing simulator service (ADR-031) so
+// GetMeeting can attach the meeting's current SimRun to its response.
+func (h *MeetingHandler) SetSimService(s *service.SimService) {
+	h.simService = s
 }
 
 // NewMeetingHandler creates a new meeting handler
@@ -205,6 +215,28 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 			if att.OriginalKey != "" {
 				if url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, att.OriginalKey); err == nil {
 					att.URL = url
+				}
+			}
+		}
+	}
+
+	// Attach the meeting's cost/sizing simulation state, if any (ADR-031).
+	// A stuck run (Lambda died mid-write) is reported as errored here rather
+	// than persisted as errored, mirroring isStuck's read-time-only
+	// reconciliation for transcribing/summarizing meetings.
+	if h.simService != nil {
+		if run, err := h.simService.GetSimRun(ctx, meetingID); err == nil && run != nil {
+			if service.ReconcileStuckSimRun(run) {
+				run.Status = model.SimStatusError
+				run.ErrorMessage = "시뮬레이션이 응답하지 않아 시간 초과로 처리되었습니다"
+			}
+			result.SimRun = model.ToSimRunResponse(run)
+			if h.uploadService != nil {
+				for i := range result.SimRun.Charts {
+					c := &result.SimRun.Charts[i]
+					if url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, c.Key); err == nil {
+						c.URL = url
+					}
 				}
 			}
 		}
