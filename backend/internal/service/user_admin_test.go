@@ -132,12 +132,34 @@ func (f *fakeUserAdminRepo) DetachDeletedUserProfile(_ context.Context, userID s
 }
 
 // adminGroupOf returns a ListUsersInGroup responder that always reports the
-// given usernames as the sole membership of the admins group.
+// given usernames as the sole membership of the admins group, all Enabled --
+// i.e. all currently able to act as an admin. guardNotSelfAndNotLastAdmin/
+// warnIfNoAdminsLeft only count Enabled members (see
+// listEnabledAdminUserIDs), so a disabled entry here would silently drop out
+// of every last-admin scenario these tests exercise. Use
+// adminGroupWithDisabled below for a test that specifically needs a
+// disabled admin still counted as a group member but not as active.
 func adminGroupOf(usernames ...string) func(context.Context, *cognitoidp.ListUsersInGroupInput) (*cognitoidp.ListUsersInGroupOutput, error) {
 	return func(_ context.Context, _ *cognitoidp.ListUsersInGroupInput) (*cognitoidp.ListUsersInGroupOutput, error) {
 		users := make([]cognitoidptypes.UserType, len(usernames))
 		for i, u := range usernames {
-			users[i] = cognitoidptypes.UserType{Username: aws.String(u)}
+			users[i] = cognitoidptypes.UserType{Username: aws.String(u), Enabled: true}
+		}
+		return &cognitoidp.ListUsersInGroupOutput{Users: users}, nil
+	}
+}
+
+// adminGroupWithDisabled reports enabledUsernames as Enabled admins and
+// disabledUsernames as group members that are NOT Enabled -- for exercising
+// listEnabledAdminUserIDs' filtering directly.
+func adminGroupWithDisabled(enabledUsernames, disabledUsernames []string) func(context.Context, *cognitoidp.ListUsersInGroupInput) (*cognitoidp.ListUsersInGroupOutput, error) {
+	return func(_ context.Context, _ *cognitoidp.ListUsersInGroupInput) (*cognitoidp.ListUsersInGroupOutput, error) {
+		var users []cognitoidptypes.UserType
+		for _, u := range enabledUsernames {
+			users = append(users, cognitoidptypes.UserType{Username: aws.String(u), Enabled: true})
+		}
+		for _, u := range disabledUsernames {
+			users = append(users, cognitoidptypes.UserType{Username: aws.String(u), Enabled: false})
 		}
 		return &cognitoidp.ListUsersInGroupOutput{Users: users}, nil
 	}
@@ -299,6 +321,25 @@ func TestDeleteUser_SignOutBeforeDelete_NonFatalOnFailure(t *testing.T) {
 	}
 }
 
+func TestDeleteUser_DisabledAdminIsNotCountedAsLastAdmin(t *testing.T) {
+	// A disabled admin contributes nothing to "is someone still able to act
+	// as admin" -- deleting them must not be blocked by the last-admin
+	// guard even if they're the sole group member. Before
+	// listEnabledAdminUserIDs, this would have incorrectly returned
+	// ErrLastAdmin.
+	cognito := &fakeCognitoAdminAPI{
+		listUsersInGroupFn: adminGroupWithDisabled(nil, []string{"target"}),
+	}
+	svc := newTestUserAdminService(cognito, &fakeUserAdminRepo{})
+
+	if _, err := svc.DeleteUser(context.Background(), "actor", "target"); err != nil {
+		t.Fatalf("deleting an already-disabled sole admin must not be blocked: %v", err)
+	}
+	if len(cognito.deletedUsers) != 1 {
+		t.Errorf("expected the delete to proceed")
+	}
+}
+
 func TestDeleteUser_WarnsWhenAdminsGroupEndsUpEmpty(t *testing.T) {
 	// Simulates the TOCTOU window: the pre-action guard sees two admins (so
 	// deleting "target" is allowed), but by the time the post-hoc check runs
@@ -309,7 +350,7 @@ func TestDeleteUser_WarnsWhenAdminsGroupEndsUpEmpty(t *testing.T) {
 			calls++
 			if calls == 1 {
 				return &cognitoidp.ListUsersInGroupOutput{Users: []cognitoidptypes.UserType{
-					{Username: aws.String("target")}, {Username: aws.String("other-admin")},
+					{Username: aws.String("target"), Enabled: true}, {Username: aws.String("other-admin"), Enabled: true},
 				}}, nil
 			}
 			return &cognitoidp.ListUsersInGroupOutput{}, nil
@@ -352,6 +393,43 @@ func TestDisableUser_RejectsSelfAndLastAdmin(t *testing.T) {
 	svc2 := newTestUserAdminService(cognito, &fakeUserAdminRepo{})
 	if _, err := svc2.DisableUser(context.Background(), "actor", "target"); !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("expected ErrLastAdmin, got %v", err)
+	}
+}
+
+func TestDisableUser_WarnsWhenAdminsGroupEndsUpEmpty(t *testing.T) {
+	// Mirrors TestDeleteUser_WarnsWhenAdminsGroupEndsUpEmpty for the disable
+	// path. Before listEnabledAdminUserIDs this scenario was structurally
+	// impossible to detect: AdminDisableUser never changes group
+	// membership at all, so a membership-based count could never reach
+	// zero as a *result* of a disable action, and warnIfNoAdminsLeft could
+	// never fire on this path.
+	calls := 0
+	cognito := &fakeCognitoAdminAPI{
+		listUsersInGroupFn: func(_ context.Context, _ *cognitoidp.ListUsersInGroupInput) (*cognitoidp.ListUsersInGroupOutput, error) {
+			calls++
+			if calls == 1 {
+				// Pre-action guard: two enabled admins, so disabling
+				// "target" is allowed.
+				return &cognitoidp.ListUsersInGroupOutput{Users: []cognitoidptypes.UserType{
+					{Username: aws.String("target"), Enabled: true}, {Username: aws.String("other-admin"), Enabled: true},
+				}}, nil
+			}
+			// Post-hoc check: a concurrent disable already took out
+			// other-admin by the time this runs -- same group membership,
+			// zero enabled.
+			return &cognitoidp.ListUsersInGroupOutput{Users: []cognitoidptypes.UserType{
+				{Username: aws.String("target"), Enabled: false}, {Username: aws.String("other-admin"), Enabled: false},
+			}}, nil
+		},
+	}
+	svc := newTestUserAdminService(cognito, &fakeUserAdminRepo{})
+
+	resp, err := svc.DisableUser(context.Background(), "actor", "target")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Warning == "" {
+		t.Errorf("expected a warning when the admins group ends up with zero enabled admins after disabling")
 	}
 }
 

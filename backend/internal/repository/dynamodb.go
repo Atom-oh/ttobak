@@ -2056,6 +2056,16 @@ func (r *DynamoDBRepository) BatchGetUserLastLogins(ctx context.Context, userIDs
 				requestItems = nil
 			}
 		}
+
+		// Retry budget exhausted with keys still unprocessed (sustained
+		// throttling) -- returning the partial result with a nil error
+		// would let those users' absence from the map read as "no login
+		// record" (not dormant) instead of "unknown", which is a different
+		// and misleading claim. Surface it as an error so ListUsers can
+		// degrade to LastLoginUnavailable=true instead.
+		if len(requestItems) > 0 {
+			return nil, fmt.Errorf("failed to batch get user logins: exhausted %d retries with unprocessed keys remaining", batchGetMaxRetries)
+		}
 	}
 
 	return result, nil

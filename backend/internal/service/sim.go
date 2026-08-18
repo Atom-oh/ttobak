@@ -84,9 +84,13 @@ func regexpMustCompileSimLabel() *simCharsetChecker {
 }
 
 // simCharsetChecker avoids importing "regexp" for a check simple enough to
-// do by hand: reject control characters and anything that looks like a
-// prompt-injection delimiter ("```", "<|", "system:") rather than trying to
-// enumerate every allowed Unicode script.
+// do by hand: reject control characters and the two prompt-injection
+// delimiters most likely to appear verbatim in model-visible text ("```",
+// "<|") rather than trying to enumerate every allowed Unicode script. Does
+// NOT reject a bare "system:" substring -- legitimate text ("distributed
+// system: microservices") can contain it, and this is explicitly
+// defense-in-depth, not the actual trust boundary (that's the empty Code
+// Interpreter execution role + SANDBOX network mode, see ADR-031).
 type simCharsetChecker struct{}
 
 func (simCharsetChecker) valid(s string) bool {
@@ -237,8 +241,14 @@ func parseSimRequirements(raw string, segments []speakerSegment) []model.SimRequ
 		value := strings.TrimSpace(it.Value)
 		if value != "" {
 			if bound.numeric {
-				if _, err := strconv.ParseFloat(value, 64); err != nil {
-					continue // never pass an unparseable number through to the form
+				n, err := strconv.ParseFloat(value, 64)
+				// Same finite+range check as validateSimRequirements -- this
+				// function's own contract is "draft never shows an
+				// unsubmittable value", so a value the run endpoint would
+				// reject (NaN/Inf, or out of [min, max]) must not survive
+				// into the draft either.
+				if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < bound.min || n > bound.max {
+					continue // never pass an unparseable/out-of-range number through to the form
 				}
 			} else {
 				allowed := false
@@ -466,9 +476,20 @@ func (s *SimService) CreateSimulation(ctx context.Context, userID, meetingID str
 			InvocationType: lambdatypes.InvocationTypeEvent,
 			Payload:        payload,
 		}); err != nil {
-			// The run is already recorded as "queued"; leave it for the
-			// 20-minute stuck-run reconciliation (mirroring isStuck) to
-			// surface as an error rather than trying to unwind the write here.
+			// The run is already recorded as "queued". An IAM/config
+			// misroute or throttling here is common enough that leaving
+			// this for the 20-minute stuck-run reconciliation would lock
+			// out every retry for 20 minutes on what's often a
+			// deterministic, immediately-retryable failure -- flip it to
+			// "error" now instead. Best-effort: if this update itself fails
+			// (or loses to a concurrent claim), the 20-minute reconciliation
+			// is still the fallback, so a failure here isn't escalated.
+			if uerr := s.repo.UpdateSimRunFieldsIfMatch(ctx, meetingID, run.SimRunID, map[string]interface{}{
+				"status":       model.SimStatusError,
+				"errorMessage": "시뮬레이션 실행을 시작하지 못했습니다. 다시 시도해주세요.",
+			}); uerr != nil {
+				log.Printf("CreateSimulation: failed to mark run %s as errored after invoke failure: %v", run.SimRunID, uerr)
+			}
 			return nil, fmt.Errorf("failed to invoke ttobak-sim: %w", err)
 		}
 	}

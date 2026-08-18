@@ -117,6 +117,45 @@ func (s *UserAdminService) listAdminUserIDs(ctx context.Context) ([]string, erro
 	return ids, nil
 }
 
+// listEnabledAdminUserIDs is listAdminUserIDs filtered to accounts that can
+// actually act as an admin right now. This is deliberately a separate
+// function from listAdminUserIDs, not a shared implementation with a bool
+// flag -- the two callers want different semantics and conflating them was
+// the actual bug: ListUsers' "관리자" badge is about group *membership*
+// (a disabled admin should still show the badge), while
+// guardNotSelfAndNotLastAdmin/warnIfNoAdminsLeft are about how many admins
+// can *act* right now. Counting group membership there meant (a) a
+// just-disabled admin with a still-valid JWT could disable the last
+// genuinely active admin and pass the guard, and (b) more concretely,
+// AdminDisableUser never changes group membership at all, so
+// warnIfNoAdminsLeft's TOCTOU backstop could structurally never fire on the
+// disable path -- half its documented contract was dead code.
+func (s *UserAdminService) listEnabledAdminUserIDs(ctx context.Context) ([]string, error) {
+	var ids []string
+	var nextToken *string
+	for page := 0; page < maxCognitoListPages; page++ {
+		out, err := s.cognito.ListUsersInGroup(ctx, &cognitoidp.ListUsersInGroupInput{
+			UserPoolId: aws.String(s.poolID),
+			GroupName:  aws.String(adminsGroupName),
+			Limit:      aws.Int32(cognitoPageSize),
+			NextToken:  nextToken,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range out.Users {
+			if u.Enabled {
+				ids = append(ids, aws.ToString(u.Username))
+			}
+		}
+		if out.NextToken == nil {
+			break
+		}
+		nextToken = out.NextToken
+	}
+	return ids, nil
+}
+
 // guardNotSelfAndNotLastAdmin rejects an admin-removal action (delete,
 // disable) targeting the acting admin's own account, or targeting the sole
 // remaining member of the admins group. The last-admin check has a
@@ -127,7 +166,10 @@ func (s *UserAdminService) guardNotSelfAndNotLastAdmin(ctx context.Context, acto
 	if actorUserID == targetUserID {
 		return ErrCannotModifySelf
 	}
-	adminIDs, err := s.listAdminUserIDs(ctx)
+	// Enabled-only: a disabled admin contributes nothing to "can someone
+	// still act as an admin", so counting them here would let the true last
+	// active admin be removed (see listEnabledAdminUserIDs's doc comment).
+	adminIDs, err := s.listEnabledAdminUserIDs(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to check admins group: %w", err)
 	}
@@ -150,7 +192,11 @@ func (s *UserAdminService) guardNotSelfAndNotLastAdmin(ctx context.Context, acto
 // zero admins is not permanently stuck: `aws cognito-idp
 // admin-add-user-to-group` from an operator shell recovers it.
 func (s *UserAdminService) warnIfNoAdminsLeft(ctx context.Context) string {
-	ids, err := s.listAdminUserIDs(ctx)
+	// Enabled-only -- see listEnabledAdminUserIDs's doc comment. Using the
+	// full membership list here meant this backstop could never fire on the
+	// disable path at all: AdminDisableUser never changes group membership,
+	// so len(ids) would never reach zero from disabling, only from delete.
+	ids, err := s.listEnabledAdminUserIDs(ctx)
 	if err != nil {
 		log.Printf("warnIfNoAdminsLeft: failed to check admins group: %v", err)
 		return ""

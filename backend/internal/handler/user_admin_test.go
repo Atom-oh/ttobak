@@ -47,7 +47,10 @@ func (s *stubCognitoAdminAPI) ListUsers(_ context.Context, _ *cognitoidp.ListUse
 func (s *stubCognitoAdminAPI) ListUsersInGroup(_ context.Context, _ *cognitoidp.ListUsersInGroupInput, _ ...func(*cognitoidp.Options)) (*cognitoidp.ListUsersInGroupOutput, error) {
 	users := make([]cognitoidptypes.UserType, len(s.adminGroup))
 	for i, u := range s.adminGroup {
-		users[i] = cognitoidptypes.UserType{Username: aws.String(u)}
+		// Enabled: true -- guardNotSelfAndNotLastAdmin/warnIfNoAdminsLeft
+		// only count Enabled members (listEnabledAdminUserIDs); adminGroup
+		// represents currently-active admins for every test using this stub.
+		users[i] = cognitoidptypes.UserType{Username: aws.String(u), Enabled: true}
 	}
 	return &cognitoidp.ListUsersInGroupOutput{Users: users}, nil
 }

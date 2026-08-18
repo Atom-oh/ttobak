@@ -245,6 +245,8 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 					c := &result.SimRun.Charts[i]
 					if url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, c.Key); err == nil {
 						c.URL = url
+					} else {
+						log.Printf("GetMeeting: failed to presign sim chart %s for meeting %s: %v", c.Key, meetingID, err)
 					}
 				}
 			}
