@@ -221,11 +221,20 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Attach the meeting's cost/sizing simulation state, if any (ADR-031).
-	// A stuck run (Lambda died mid-write) is reported as errored here rather
-	// than persisted as errored, mirroring isStuck's read-time-only
-	// reconciliation for transcribing/summarizing meetings.
+	// A stuck run (Lambda died mid-write) is detected AND persisted as
+	// errored inside SimService.GetSimRun itself now (mirrors isStuck's
+	// read-triggered write for transcribing/summarizing meetings) --
+	// ReconcileStuckSimRun here is just a defensive fallback for this one
+	// response in case that persist failed, not the primary reconciliation
+	// path anymore.
 	if h.simService != nil {
-		if run, err := h.simService.GetSimRun(ctx, meetingID); err == nil && run != nil {
+		run, err := h.simService.GetSimRun(ctx, meetingID)
+		if err != nil {
+			// Best-effort attach: simRun is a secondary field on GetMeeting,
+			// not worth failing the whole request over -- but a silent
+			// swallow here previously gave no signal at all when this broke.
+			log.Printf("GetMeeting: failed to get sim run for meeting %s: %v", meetingID, err)
+		} else if run != nil {
 			if service.ReconcileStuckSimRun(run) {
 				run.Status = model.SimStatusError
 				run.ErrorMessage = "시뮬레이션이 응답하지 않아 시간 초과로 처리되었습니다"

@@ -78,25 +78,48 @@ def check_sim_limit(user_id):
         return True
 
 
-def update_sim_run(meeting_id, fields):
+def update_sim_run(meeting_id, sim_run_id, fields):
     """Patches the meeting's singleton SimRun item. Attribute names here
     must match model.SimRun's `dynamodbav` tags exactly (SCHEMA SYNC with
     backend/internal/model/sim.go) -- status, chartKeys, reportMarkdown,
     reportKey, codeKey, priceSnapshotKey, priceSnapshotAt, attempts,
-    errorMessage."""
+    errorMessage.
+
+    Conditioned on simRunId still matching this worker's own run -- without
+    this, a zombied worker for an OLD run (superseded by a fresh claim on
+    the same meeting, e.g. after a stuck-run timeout freed the slot) could
+    write a late update straight onto the NEW run's row. A condition failure
+    here means exactly that -- this worker's result is moot -- so it's
+    swallowed, not raised; the Go repository's UpdateSimRunFieldsIfMatch
+    implements the identical guard independently (cross-language, no shared
+    code) and must be kept in sync.
+    """
     from datetime import datetime, timezone
+
+    from botocore.exceptions import ClientError
 
     fields = dict(fields)
     fields["updatedAt"] = datetime.now(timezone.utc).isoformat()
     names = {f"#{k}": k for k in fields}
     values = {f":{k}": v for k, v in fields.items()}
+    values[":expectedSimRunId"] = sim_run_id
     update_expr = "SET " + ", ".join(f"#{k} = :{k}" for k in fields)
-    table.update_item(
-        Key={"PK": f"MEETING#{meeting_id}", "SK": "SIMRUN"},
-        UpdateExpression=update_expr,
-        ExpressionAttributeNames=names,
-        ExpressionAttributeValues=values,
-    )
+    try:
+        table.update_item(
+            Key={"PK": f"MEETING#{meeting_id}", "SK": "SIMRUN"},
+            UpdateExpression=update_expr,
+            ConditionExpression="simRunId = :expectedSimRunId",
+            ExpressionAttributeNames=names,
+            ExpressionAttributeValues=values,
+        )
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            logger.warning(
+                "update_sim_run: simRunId %s no longer matches meeting %s (superseded) -- dropping this update",
+                sim_run_id, meeting_id,
+            )
+            return
+        raise
 
 
 def _invoke_codegen(bedrock_client, system_prompt, user_prompt):
@@ -187,7 +210,7 @@ def lambda_handler(event, context):
     options = event.get("options", [])
 
     if not check_sim_limit(user_id):
-        update_sim_run(meeting_id, {
+        update_sim_run(meeting_id, sim_run_id, {
             "status": "error",
             "errorMessage": "일일 시뮬레이션 실행 횟수를 초과했습니다. 내일 다시 시도해주세요.",
         })
@@ -199,7 +222,7 @@ def lambda_handler(event, context):
 
     try:
         prices = fetch_unit_prices()
-        update_sim_run(meeting_id, {"status": "running"})
+        update_sim_run(meeting_id, sim_run_id, {"status": "running"})
 
         session_id = ci_client.start_code_interpreter_session(
             codeInterpreterIdentifier=CODE_INTERPRETER_ID,
@@ -247,7 +270,7 @@ def lambda_handler(event, context):
             ContentType="application/json",
         )
 
-        update_sim_run(meeting_id, {
+        update_sim_run(meeting_id, sim_run_id, {
             "status": "done",
             "chartKeys": chart_keys,
             "reportMarkdown": report_text[:100_000],
@@ -260,5 +283,5 @@ def lambda_handler(event, context):
 
     except Exception as e:  # noqa: BLE001 -- top-level: always leave the run in a terminal state
         logger.exception("simulation failed for meeting %s", meeting_id)
-        update_sim_run(meeting_id, {"status": "error", "errorMessage": str(e)[:2000]})
+        update_sim_run(meeting_id, sim_run_id, {"status": "error", "errorMessage": str(e)[:2000]})
         return {"status": "error", "reason": str(e)[:200]}

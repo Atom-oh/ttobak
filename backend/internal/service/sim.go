@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -147,6 +149,17 @@ func validateSimRequirements(meeting *model.Meeting, userID string, reqs []model
 		if len(req.Label) > simLabelMaxLen || !labelCharsetRe.valid(req.Label) {
 			return fmt.Errorf("requirement %q label invalid: %w", req.Key, ErrInvalidInput)
 		}
+		// Unit/Evidence are free text too and reach the ttobak-sim invoke
+		// payload unmodified (CreateSimulation marshals reqs as-is) -- the
+		// function doc's "every free-text field is length- and
+		// charset-capped" claim must actually hold for these two, not just
+		// Label/Value.
+		if len(req.Unit) > simLabelMaxLen || !labelCharsetRe.valid(req.Unit) {
+			return fmt.Errorf("requirement %q unit invalid: %w", req.Key, ErrInvalidInput)
+		}
+		if len(req.Evidence) > simLabelMaxLen || !labelCharsetRe.valid(req.Evidence) {
+			return fmt.Errorf("requirement %q evidence invalid: %w", req.Key, ErrInvalidInput)
+		}
 		value := strings.TrimSpace(req.Value)
 		if req.Required && value == "" {
 			return fmt.Errorf("required value missing for %q (%s): %w", req.Key, bound.label, ErrInvalidInput)
@@ -158,6 +171,12 @@ func validateSimRequirements(meeting *model.Meeting, userID string, reqs []model
 			n, err := strconv.ParseFloat(value, 64)
 			if err != nil {
 				return fmt.Errorf("requirement %q must be numeric: %w", req.Key, ErrInvalidInput)
+			}
+			// ParseFloat accepts "NaN"/"Inf"/"-Inf" as valid floats, and NaN
+			// compares false against both bounds below (n < min and n > max
+			// are both false), silently bypassing the range check entirely.
+			if math.IsNaN(n) || math.IsInf(n, 0) {
+				return fmt.Errorf("requirement %q must be a finite number: %w", req.Key, ErrInvalidInput)
 			}
 			if n < bound.min || n > bound.max {
 				return fmt.Errorf("requirement %q out of range [%v, %v]: %w", req.Key, bound.min, bound.max, ErrInvalidInput)
@@ -297,8 +316,8 @@ func nearestSegment(segments []speakerSegment, targetSeconds float64) *speakerSe
 type simRepo interface {
 	GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error)
 	GetSimRun(ctx context.Context, meetingID string) (*model.SimRun, error)
-	PutSimRun(ctx context.Context, run *model.SimRun) error
 	PutSimRunIfNotRunning(ctx context.Context, run *model.SimRun) error
+	UpdateSimRunFieldsIfMatch(ctx context.Context, meetingID, simRunID string, fields map[string]interface{}) error
 }
 
 // SimService owns the eligibility/validation core and the async hand-off
@@ -321,7 +340,13 @@ func NewSimService(repo simRepo, bedrock *BedrockService, lambdaClient *lambda.C
 // ExtractRequirements produces a draft requirement set for the user to
 // confirm/correct, and persists it as the meeting's current SimRun in
 // "extracted" state (overwriting any prior draft/result -- re-extracting is
-// how a user retries a bad first draft).
+// how a user retries a bad first draft). It must NOT be allowed to overwrite
+// a genuinely active (queued/running) run -- that would reset the row to
+// "extracted" out from under a live Code Interpreter session, and a
+// subsequent POST /sim would then pass PutSimRunIfNotRunning's check and
+// start a second, concurrent run for the same meeting. PutSimRunIfNotRunning
+// (not the unconditional PutSimRun) is reused here for exactly that guard;
+// its condition already encodes "not currently queued/running".
 func (s *SimService) ExtractRequirements(ctx context.Context, userID, meetingID string) (*model.SimRun, error) {
 	meeting, err := s.repo.GetMeeting(ctx, userID, meetingID)
 	if err != nil {
@@ -335,6 +360,14 @@ func (s *SimService) ExtractRequirements(ctx context.Context, userID, meetingID 
 	}
 	if meeting.Status != model.StatusDone {
 		return nil, fmt.Errorf("meeting must be done before simulating (status: %s): %w", meeting.Status, ErrInvalidInput)
+	}
+
+	// Reconcile-and-persist a stuck run to "error" before the write below --
+	// otherwise a stale queued/running row (dead worker) would still read as
+	// active and PutSimRunIfNotRunning would reject this extraction too,
+	// even though the meeting has no live run left to protect.
+	if _, err := s.GetSimRun(ctx, meetingID); err != nil {
+		return nil, fmt.Errorf("failed to check existing sim run: %w", err)
 	}
 
 	reqs, err := s.bedrock.ExtractSimRequirements(ctx, meeting)
@@ -353,7 +386,10 @@ func (s *SimService) ExtractRequirements(ctx context.Context, userID, meetingID 
 		Status:       model.SimStatusExtracted,
 		Requirements: string(reqsJSON),
 	}
-	if err := s.repo.PutSimRun(ctx, run); err != nil {
+	if err := s.repo.PutSimRunIfNotRunning(ctx, run); err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return nil, fmt.Errorf("a simulation is already running for this meeting: %w", ErrInvalidInput)
+		}
 		return nil, fmt.Errorf("failed to save extracted requirements: %w", err)
 	}
 	return run, nil
@@ -371,7 +407,12 @@ func (s *SimService) CreateSimulation(ctx context.Context, userID, meetingID str
 		return nil, fmt.Errorf("failed to get meeting: %w", err)
 	}
 
-	existing, err := s.repo.GetSimRun(ctx, meetingID)
+	// GetSimRun (the service method, not repo.GetSimRun) reconciles-and-
+	// persists a stuck run to "error" first -- without this, a stale
+	// queued/running row from a dead worker would keep isSimRunActive true
+	// forever and PutSimRunIfNotRunning's condition would keep rejecting
+	// every retry, permanently blocking this meeting's simulator.
+	existing, err := s.GetSimRun(ctx, meetingID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get existing sim run: %w", err)
 	}
@@ -435,10 +476,39 @@ func (s *SimService) CreateSimulation(ctx context.Context, userID, meetingID str
 	return run, nil
 }
 
-// GetSimRun is a thin passthrough used by the meeting handler to attach the
-// current simulation state to GetMeeting's response.
+// GetSimRun fetches the meeting's current simulation state and, if it finds
+// a stuck run, persists the "error" transition before returning -- mirrors
+// MeetingService.GetMeetingDetail's isStuck pattern (read-triggered write),
+// rather than only reporting staleness in-memory for this one response. This
+// is what actually closes the permanent-block failure mode: once persisted,
+// isSimRunActive/PutSimRunIfNotRunning's condition see "error", not a stale
+// "queued"/"running", so the next extract/run attempt is no longer rejected.
+// The persist uses UpdateSimRunFieldsIfMatch (simRunId-conditioned) so a
+// concurrent newer run that has already claimed the row is never clobbered
+// by this reconciliation of an older one.
 func (s *SimService) GetSimRun(ctx context.Context, meetingID string) (*model.SimRun, error) {
-	return s.repo.GetSimRun(ctx, meetingID)
+	run, err := s.repo.GetSimRun(ctx, meetingID)
+	if err != nil {
+		return nil, err
+	}
+	if ReconcileStuckSimRun(run) {
+		const stuckMessage = "시뮬레이션이 응답하지 않아 시간 초과로 처리되었습니다"
+		if err := s.repo.UpdateSimRunFieldsIfMatch(ctx, meetingID, run.SimRunID, map[string]interface{}{
+			"status":       model.SimStatusError,
+			"errorMessage": stuckMessage,
+		}); err != nil && !errors.Is(err, repository.ErrConditionFailed) {
+			// A condition failure just means a newer run already took over
+			// this row -- not an error worth surfacing. Anything else is
+			// logged by the caller's own error handling; this reconciliation
+			// is best-effort, so fall through and still return the in-memory
+			// view below rather than failing the whole read.
+			log.Printf("GetSimRun: failed to persist stuck-run reconciliation for meeting %s: %v", meetingID, err)
+		} else if err == nil {
+			run.Status = model.SimStatusError
+			run.ErrorMessage = stuckMessage
+		}
+	}
+	return run, nil
 }
 
 // simRunStuckThreshold mirrors meeting.go's 30-minute isStuck window, but

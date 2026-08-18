@@ -1976,6 +1976,13 @@ func (r *DynamoDBRepository) GetUserByEmail(ctx context.Context, email string) (
 	return &user, nil
 }
 
+// batchGetMaxRetries/batchGetRetryBackoff bound BatchGetUserLastLogins'
+// UnprocessedKeys retry against sustained throttling.
+const (
+	batchGetMaxRetries   = 5
+	batchGetRetryBackoff = 100 * time.Millisecond
+)
+
 // BatchGetUserLastLogins retrieves lastLoginAt for a set of user IDs from
 // their USER#{userId}/LOGIN items (written by the PostAuthentication
 // trigger, see model.UserLogin). Users who have never logged in simply have
@@ -2009,7 +2016,15 @@ func (r *DynamoDBRepository) BatchGetUserLastLogins(ctx context.Context, userIDs
 			r.tableName: {Keys: ddbKeys},
 		}
 
-		for len(requestItems) > 0 {
+		// Bounded retry with backoff on UnprocessedKeys (throttling) -- an
+		// unconditional retry loop would tight-spin against DynamoDB if the
+		// table stays throttled. (Other BatchGetItem call sites in this file
+		// retry UnprocessedKeys unconditionally too; not touched here --
+		// keep this fix scoped to what the review flagged.)
+		for attempt := 0; len(requestItems) > 0 && attempt < batchGetMaxRetries; attempt++ {
+			if attempt > 0 {
+				time.Sleep(batchGetRetryBackoff * time.Duration(attempt))
+			}
 			out, err := r.client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
 				RequestItems: requestItems,
 			})
@@ -2022,6 +2037,15 @@ func (r *DynamoDBRepository) BatchGetUserLastLogins(ctx context.Context, userIDs
 				if err := attributevalue.UnmarshalMap(item, &login); err != nil {
 					return nil, fmt.Errorf("failed to unmarshal user login: %w", err)
 				}
+				// A zero LastLoginAt (missing/malformed attribute -- should
+				// not happen since the PostAuthentication trigger always
+				// writes it, but defensively) must never be stored: callers
+				// treat "present in this map" as "has a real login record",
+				// and a zero time.Time reads as 1970 -- old enough to flip
+				// Dormant=true for a user who may simply have no login yet.
+				if login.LastLoginAt.IsZero() {
+					continue
+				}
 				userID := strings.TrimPrefix(login.PK, model.PrefixUser)
 				result[userID] = login.LastLoginAt
 			}
@@ -2029,7 +2053,7 @@ func (r *DynamoDBRepository) BatchGetUserLastLogins(ctx context.Context, userIDs
 			if len(out.UnprocessedKeys) > 0 {
 				requestItems = out.UnprocessedKeys
 			} else {
-				break
+				requestItems = nil
 			}
 		}
 	}

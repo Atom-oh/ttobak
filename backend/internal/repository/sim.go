@@ -42,39 +42,16 @@ func (r *DynamoDBRepository) GetSimRun(ctx context.Context, meetingID string) (*
 	return &run, nil
 }
 
-// PutSimRun unconditionally writes the sim run item -- used for the
-// extraction step, which has no prior run to race against (a fresh
-// extraction always overwrites any earlier draft/result for this meeting).
-func (r *DynamoDBRepository) PutSimRun(ctx context.Context, run *model.SimRun) error {
-	run.PK = model.PrefixMeeting + run.MeetingID
-	run.SK = model.PrefixSimRun
-	run.EntityType = "SIM_RUN"
-	run.UpdatedAt = time.Now().UTC()
-	if run.CreatedAt.IsZero() {
-		run.CreatedAt = run.UpdatedAt
-	}
-	item, err := attributevalue.MarshalMap(run)
-	if err != nil {
-		return fmt.Errorf("failed to marshal sim run: %w", err)
-	}
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      item,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to put sim run: %w", err)
-	}
-	return nil
-}
-
-// PutSimRunIfNotRunning is the concurrency gate for starting a run: it
-// succeeds only if no run exists yet, or the existing run is in a terminal-
-// or-draft state (extracted/done/error) -- never while another run for the
-// same meeting is queued/running. Two concurrent "실행" clicks off the same
+// PutSimRunIfNotRunning is the concurrency gate for both starting a run
+// (POST /sim) and re-extracting a draft (POST /sim/extract): it succeeds
+// only if no run exists yet, or the existing run is in a terminal-or-draft
+// state (extracted/done/error) -- never while another run for the same
+// meeting is queued/running. Two concurrent "실행" clicks off the same
 // confirmed form both pass client-side validation, but only one wins this
 // write; the loser gets ErrConditionFailed and should report "이미 실행
 // 중입니다" instead of starting a second Code Interpreter session and Sonnet
-// codegen for the same meeting.
+// codegen for the same meeting -- and the same guard keeps a re-extraction
+// from silently resetting a live run's row out from under it.
 func (r *DynamoDBRepository) PutSimRunIfNotRunning(ctx context.Context, run *model.SimRun) error {
 	run.PK = model.PrefixMeeting + run.MeetingID
 	run.SK = model.PrefixSimRun
@@ -116,9 +93,15 @@ func (r *DynamoDBRepository) PutSimRunIfNotRunning(ctx context.Context, run *mod
 	return nil
 }
 
-// UpdateSimRunFields patches the sim run item (used by ttobak-sim as the run
-// progresses through pricing/generating/running/done/error).
-func (r *DynamoDBRepository) UpdateSimRunFields(ctx context.Context, meetingID string, fields map[string]interface{}) error {
+// UpdateSimRunFieldsIfMatch patches the sim run item, conditioned on the
+// row's simRunId still matching the caller's -- without this, a worker for
+// an OLD run (crashed/zombied, then superseded by a fresh claim on the same
+// meeting) could write its late pricing/generating/running/done/error update
+// straight onto the NEW run's row, corrupting it with stale data the new
+// run never produced. The Python ttobak-sim worker (backend/python/sim/
+// handler.py) implements the same simRunId-conditioned update independently
+// (cross-language, no shared code) -- keep both in sync.
+func (r *DynamoDBRepository) UpdateSimRunFieldsIfMatch(ctx context.Context, meetingID, simRunID string, fields map[string]interface{}) error {
 	fields["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
 
 	var update expression.UpdateBuilder
@@ -134,7 +117,7 @@ func (r *DynamoDBRepository) UpdateSimRunFields(ctx context.Context, meetingID s
 
 	expr, err := expression.NewBuilder().
 		WithUpdate(update).
-		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		WithCondition(expression.Name("simRunId").Equal(expression.Value(simRunID))).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to build update expression: %w", err)
@@ -151,7 +134,7 @@ func (r *DynamoDBRepository) UpdateSimRunFields(ctx context.Context, meetingID s
 	if err != nil {
 		var ccfe *types.ConditionalCheckFailedException
 		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: sim run for meeting %s not found", ErrConditionFailed, meetingID)
+			return fmt.Errorf("%w: sim run %s for meeting %s not found or superseded", ErrConditionFailed, simRunID, meetingID)
 		}
 		return fmt.Errorf("failed to update sim run fields: %w", err)
 	}

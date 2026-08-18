@@ -41,7 +41,7 @@ func (h *SimHandler) ExtractRequirements(w http.ResponseWriter, r *http.Request)
 		writeSimError(w, err, "ExtractRequirements")
 		return
 	}
-	writeJSON(w, http.StatusOK, run)
+	writeJSON(w, http.StatusOK, model.ToSimRunResponse(run))
 }
 
 // CreateSimulation handles POST /api/meetings/{meetingId}/sim.
@@ -67,7 +67,7 @@ func (h *SimHandler) CreateSimulation(w http.ResponseWriter, r *http.Request) {
 		writeSimError(w, err, "CreateSimulation")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, run)
+	writeJSON(w, http.StatusAccepted, model.ToSimRunResponse(run))
 }
 
 func writeSimError(w http.ResponseWriter, err error, op string) {

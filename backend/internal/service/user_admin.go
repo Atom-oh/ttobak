@@ -279,12 +279,15 @@ func (s *UserAdminService) DeleteUser(ctx context.Context, actorUserID, targetUs
 
 	resp := &model.AdminUserActionResponse{UserID: targetUserID}
 
-	// Global sign-out BEFORE delete: AdminDeleteUser alone would leave any
-	// already-issued access/ID token valid until it naturally expires (up to
-	// 1h), since the API verifies JWTs locally without re-checking Cognito.
-	// Once the user is deleted, AdminUserGlobalSignOut can no longer target
-	// them, so this must run first. A failure here is non-fatal -- the
-	// delete below is the operation that actually matters.
+	// Global sign-out BEFORE delete: AdminUserGlobalSignOut invalidates the
+	// user's refresh tokens, so they can no longer silently renew a session
+	// -- but it does NOT invalidate an access/ID token already issued; this
+	// API verifies JWTs locally (JWKS) without re-checking Cognito per
+	// request, so an already-issued token stays valid until its own natural
+	// expiry (up to ~1h) regardless. This call narrows that window, it does
+	// not close it. Also: once the user is deleted, AdminUserGlobalSignOut
+	// can no longer target them, so this must run first. A failure here is
+	// non-fatal -- the delete below is the operation that actually matters.
 	if _, err := s.cognito.AdminUserGlobalSignOut(ctx, &cognitoidp.AdminUserGlobalSignOutInput{
 		UserPoolId: aws.String(s.poolID),
 		Username:   aws.String(targetUserID),
@@ -301,9 +304,14 @@ func (s *UserAdminService) DeleteUser(ctx context.Context, actorUserID, targetUs
 	}
 
 	// Preserve DynamoDB data but detach the email-search index so re-inviting
-	// the same address later can't resolve back to this now-dead userID.
+	// the same address later can't resolve back to this now-dead userID. A
+	// failure here is surfaced as a Warning, not just logged -- silently
+	// swallowing it would let exactly the GetUserByEmail non-determinism
+	// this call exists to prevent recur on the next re-invite, with no
+	// signal to the admin that cleanup didn't happen.
 	if err := s.repo.DetachDeletedUserProfile(ctx, targetUserID); err != nil {
 		log.Printf("DeleteUser: failed to detach profile for %s: %v", targetUserID, err)
+		resp.Warning = appendWarning(resp.Warning, "계정은 삭제됐지만 이전 데이터 정리에 실패했습니다. 같은 이메일 재초대 시 문제가 발생할 수 있습니다.")
 	}
 
 	resp.Warning = appendWarning(resp.Warning, s.warnIfNoAdminsLeft(ctx))
@@ -327,11 +335,13 @@ func (s *UserAdminService) DisableUser(ctx context.Context, actorUserID, targetU
 
 	resp := &model.AdminUserActionResponse{UserID: targetUserID}
 
-	// AdminDisableUser only blocks new sign-ins; already-issued tokens stay
-	// valid until they expire (the API verifies JWTs locally, it doesn't
-	// re-check Cognito per request). Sign out immediately to close that
-	// window instead of leaving the disabled user with up to an hour of
-	// continued access. Non-fatal on failure -- the disable already succeeded.
+	// AdminDisableUser only blocks new sign-ins; an already-issued access/ID
+	// token stays valid until it expires regardless (the API verifies JWTs
+	// locally, it doesn't re-check Cognito per request). AdminUserGlobalSignOut
+	// only revokes refresh tokens -- it does NOT invalidate that already-issued
+	// token, so it narrows the up-to-an-hour continued-access window (the user
+	// can no longer silently renew), it does not close it. Non-fatal on
+	// failure -- the disable already succeeded.
 	if _, err := s.cognito.AdminUserGlobalSignOut(ctx, &cognitoidp.AdminUserGlobalSignOutInput{
 		UserPoolId: aws.String(s.poolID),
 		Username:   aws.String(targetUserID),
