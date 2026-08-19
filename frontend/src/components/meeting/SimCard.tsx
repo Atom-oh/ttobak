@@ -206,12 +206,22 @@ function SimCardInner({ meetingId, simRun, onUpdate }: SimCardProps) {
               </span>
             </div>
             <MarkdownRenderer content={resolveSimChartUrls(simRun.reportMarkdown || '', simRun.charts)} />
-            <button
-              onClick={extract}
-              className="mt-3 text-xs text-primary hover:underline"
-            >
-              다시 실행
-            </button>
+            <div className="mt-3 flex items-center gap-3">
+              <button onClick={extract} className="text-xs text-primary hover:underline">
+                다시 실행
+              </button>
+              {simRun.codeUrl && (
+                <a
+                  href={simRun.codeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary hover:underline flex items-center gap-1"
+                >
+                  <span className="material-symbols-outlined text-sm">code</span>
+                  실행된 코드 보기
+                </a>
+              )}
+            </div>
           </div>
         )}
       </div>

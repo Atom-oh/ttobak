@@ -171,17 +171,23 @@ type SimChartResponse struct {
 // Options are re-parsed from their JSON-string storage form into typed
 // slices for the frontend confirm form.
 type SimRunResponse struct {
-	SimRunID        string             `json:"simRunId"`
-	Status          string             `json:"status"`
-	Requirements    []SimRequirement   `json:"requirements,omitempty"`
-	Options         []SimOption        `json:"options,omitempty"`
-	Charts          []SimChartResponse `json:"charts,omitempty"`
-	ReportMarkdown  string             `json:"reportMarkdown,omitempty"`
-	CodeKey         string             `json:"codeKey,omitempty"`
-	PriceSnapshotAt string             `json:"priceSnapshotAt,omitempty"`
-	ErrorMessage    string             `json:"errorMessage,omitempty"`
-	CreatedAt       string             `json:"createdAt"`
-	UpdatedAt       string             `json:"updatedAt"`
+	SimRunID       string             `json:"simRunId"`
+	Status         string             `json:"status"`
+	Requirements   []SimRequirement   `json:"requirements,omitempty"`
+	Options        []SimOption        `json:"options,omitempty"`
+	Charts         []SimChartResponse `json:"charts,omitempty"`
+	ReportMarkdown string             `json:"reportMarkdown,omitempty"`
+	CodeKey        string             `json:"codeKey,omitempty"`
+	// CodeURL is the presigned download URL for CodeKey (generated.py), set
+	// by MeetingHandler.GetMeeting the same way SimChartResponse.URL is --
+	// CodeKey alone is a raw S3 key and unreachable from the browser
+	// post-ADR-027 (no direct S3 access). Without this the report's
+	// "generated code" claim is unfulfillable from the frontend.
+	CodeURL         string `json:"codeUrl,omitempty"`
+	PriceSnapshotAt string `json:"priceSnapshotAt,omitempty"`
+	ErrorMessage    string `json:"errorMessage,omitempty"`
+	CreatedAt       string `json:"createdAt"`
+	UpdatedAt       string `json:"updatedAt"`
 }
 
 // CreateSimulationRequest is the body of POST /api/meetings/{id}/sim -- the

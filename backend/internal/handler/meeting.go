@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -241,12 +242,33 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 			}
 			result.SimRun = model.ToSimRunResponse(run)
 			if h.uploadService != nil {
+				// SimRun.ChartKeys/CodeKey are read straight out of the
+				// DynamoDB row and handed to a bucket-wide presigner --
+				// assert each key actually belongs to this meeting's own
+				// sim prefix before presigning, so a corrupted/mistargeted
+				// row can never turn into a valid signed URL for an
+				// unrelated object (e.g. another user's transcripts/audio).
+				simPrefix := fmt.Sprintf("images/%s/%s/sim/", userID, meetingID)
+				filesSimPrefix := fmt.Sprintf("files/%s/%s/sim/", userID, meetingID)
 				for i := range result.SimRun.Charts {
 					c := &result.SimRun.Charts[i]
+					if !strings.HasPrefix(c.Key, simPrefix) {
+						log.Printf("GetMeeting: sim chart key %q for meeting %s does not match expected prefix %q, skipping presign", c.Key, meetingID, simPrefix)
+						continue
+					}
 					if url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, c.Key); err == nil {
 						c.URL = url
 					} else {
 						log.Printf("GetMeeting: failed to presign sim chart %s for meeting %s: %v", c.Key, meetingID, err)
+					}
+				}
+				if result.SimRun.CodeKey != "" {
+					if !strings.HasPrefix(result.SimRun.CodeKey, filesSimPrefix) {
+						log.Printf("GetMeeting: sim code key %q for meeting %s does not match expected prefix %q, skipping presign", result.SimRun.CodeKey, meetingID, filesSimPrefix)
+					} else if url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, result.SimRun.CodeKey); err == nil {
+						result.SimRun.CodeURL = url
+					} else {
+						log.Printf("GetMeeting: failed to presign sim code %s for meeting %s: %v", result.SimRun.CodeKey, meetingID, err)
 					}
 				}
 			}

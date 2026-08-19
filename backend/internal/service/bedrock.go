@@ -1500,10 +1500,13 @@ func (s *BedrockService) ExtractSimRequirements(ctx context.Context, meeting *mo
 	// transcript is also where a [TS:NNN] marker can still be *added*
 	// against real segment start times below.
 	transcript := meeting.TranscriptA
+	usingSelectedB := false
 	if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
 		transcript = meeting.TranscriptB
+		usingSelectedB = true
 	} else if transcript == "" && meeting.TranscriptB != "" {
 		transcript = meeting.TranscriptB
+		usingSelectedB = true
 	}
 	if transcript == "" && meeting.Content != "" {
 		// No raw transcript at all (e.g. a manually-created meeting) --
@@ -1513,6 +1516,15 @@ func (s *BedrockService) ExtractSimRequirements(ctx context.Context, meeting *mo
 	}
 	if transcript == "" {
 		return []model.SimRequirement{}, nil
+	}
+	// TranscriptSegments is produced against TranscriptA (the batch STT
+	// merge/diarization pipeline) -- it has no relationship to TranscriptB
+	// (Nova Sonic). If the user explicitly selected B, using segments here
+	// would silently extract from the wrong transcript entirely, defeating
+	// the point of SelectTranscript. Only trust segments when we're
+	// actually using A.
+	if usingSelectedB {
+		segments = nil
 	}
 
 	var sourceText string

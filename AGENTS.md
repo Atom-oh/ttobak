@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 8a2b71a38197 · generated-at: 2026-08-19 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 4b1660657435 · generated-at: 2026-08-19 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context

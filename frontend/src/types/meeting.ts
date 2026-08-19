@@ -59,6 +59,8 @@ export interface SimRun {
   charts?: SimChart[];
   reportMarkdown?: string;
   codeKey?: string;
+  /** Presigned download URL for codeKey (generated.py) -- codeKey alone is a raw S3 key, unreachable from the browser post-ADR-027. */
+  codeUrl?: string;
   priceSnapshotAt?: string;
   errorMessage?: string;
   createdAt: string;
