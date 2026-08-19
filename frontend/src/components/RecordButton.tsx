@@ -330,13 +330,20 @@ export function RecordButton({
       streamRef.current = stream;
       isRecordingRef.current = true;
 
-      if (audioSource === 'tab') {
-        stream.getAudioTracks()[0].onended = () => {
-          if (isRecordingRef.current) {
-            stopRecording();
-          }
-        };
-      }
+      // Mobile Safari/Chrome can kill the mic track out from under a running
+      // recording (screen lock, phone call, another app grabbing the mic,
+      // OS memory pressure on a backgrounded tab) with no visible signal
+      // otherwise -- MediaRecorder just silently stops receiving data, so
+      // the UI still reads "recording" while the resulting blob ends up
+      // empty or truncated. Route it through the same graceful stopRecording
+      // path the 'tab' source already used only for its own end event, so
+      // whatever was captured up to that point still gets finalized/
+      // uploaded instead of the session hanging in an unrecoverable state.
+      stream.getAudioTracks()[0].onended = () => {
+        if (isRecordingRef.current) {
+          stopRecording();
+        }
+      };
 
       const mimeType = getPreferredMimeType();
       const mediaRecorder = new MediaRecorder(stream, { mimeType });
@@ -372,6 +379,23 @@ export function RecordButton({
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           chunksRef.current.push(event.data);
+        }
+      };
+
+      // Without this, a mid-recording MediaRecorder failure (seen on mobile
+      // Safari/Chrome when the OS reclaims the mic under memory pressure, or
+      // an unsupported codec edge case) fires no onstop -- the UI is left
+      // reading "recording" forever with no chunks ever finalized, and
+      // nothing tells the user their audio wasn't captured.
+      mediaRecorder.onerror = (event) => {
+        console.error('MediaRecorder error during recording:', event);
+        if (isRecordingRef.current) {
+          isRecordingRef.current = false;
+          if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+          if (checkpointTimerRef.current) { clearInterval(checkpointTimerRef.current); checkpointTimerRef.current = null; }
+          cleanupAudioResources();
+          setRecordingState('idle');
+          onError?.('녹음 중 오류가 발생했습니다. 다시 시도해주세요.');
         }
       };
 
