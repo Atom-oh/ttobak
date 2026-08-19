@@ -26,25 +26,13 @@ import (
 // to avoid killing an active session — but still short enough to eventually
 // reclaim recordings abandoned by a closed tab or crashed browser.
 const (
-	// 60 minutes covers observed worst-case pipeline latency: Whisper GPU
-	// Spot cold start (~16 min when the ASG has to provision a fresh
-	// instance) + batch transcription + Bedrock refine/summarize, with
-	// margin. 30 minutes previously left almost no slack past a cold start.
-	stuckTranscribingThreshold = 60 * time.Minute
+	stuckTranscribingThreshold = 30 * time.Minute
 	stuckRecordingThreshold    = 6 * time.Hour
 )
 
 // isStuck reports whether a meeting's status has been sitting unchanged past
 // its auto-expiry threshold.
 func isStuck(status string, updatedAt time.Time) bool {
-	return IsStuck(status, updatedAt)
-}
-
-// IsStuck reports whether a meeting's status has been sitting unchanged past
-// its auto-expiry threshold. Exported so cmd/summarize can reuse the same
-// "stale in-progress attempt" check to distinguish a dead attempt (safe to
-// reprocess) from one that's merely still running (must not be raced).
-func IsStuck(status string, updatedAt time.Time) bool {
 	switch status {
 	case model.StatusTranscribing, model.StatusSummarizing:
 		return time.Since(updatedAt) > stuckTranscribingThreshold

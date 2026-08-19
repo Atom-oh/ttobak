@@ -731,7 +731,7 @@ func TestGetMeetingDetail_ExpiresStuckTranscribing(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)
 
-	old := time.Now().Add(-61 * time.Minute)
+	old := time.Now().Add(-31 * time.Minute)
 	repo.addMeeting(&model.Meeting{
 		MeetingID: "m-1", UserID: "user-1", Title: "Stuck Transcribing",
 		Status: model.StatusTranscribing,
