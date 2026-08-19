@@ -18,7 +18,7 @@ import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingC
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
-import { supportsTabAudioCapture, isMobile } from '@/lib/device';
+import { supportsTabAudioCapture, hasMobileMicConflictRisk } from '@/lib/device';
 import { isTauri } from '@/lib/tauri';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
@@ -346,7 +346,7 @@ function RecordPageInner() {
     // overlapping mic streams risk the OS ending one of their tracks on
     // iOS/Android, which (via RecordButton's onended handler) now stops the
     // recording outright. Not worth a live level meter on the idle screen.
-    if (isMobile()) return;
+    if (hasMobileMicConflictRisk()) return;
 
     const cleanupPreview = () => {
       previewStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -862,11 +862,19 @@ function RecordPageInner() {
                 session.stopSession();
                 postRecording.failWithError(error);
               } else if (session.isRecording) {
+                // A mid-recording MediaRecorder failure (RecordButton's
+                // onerror). Its stopRecording() call already tore the
+                // session down via onRecordingStop above (this closure's
+                // `session.isRecording` still reads stale/true here — it's
+                // a state var snapshotted at render time, not flushed yet)
+                // and whatever was captured up to the failure still
+                // finalizes through the normal onstop -> onBlobReady flow.
+                // Surface the failure on the captions/session banner
+                // instead of discarding it -- setSpeechError(null) here
+                // used to silently drop the message once onerror started
+                // calling into this branch (2eac72f/#160 MAJOR-1).
                 postRecording.reset(); // clear any previous banner state
-                // setStep and errorMessage handled by handleBlobReady on
-                // real post-recording errors. For recording errors, show
-                // blocking overlay instead.
-                session.setSpeechError(null);
+                session.setSpeechError(error);
               } else {
                 session.setSpeechError(error);
               }

@@ -42,7 +42,7 @@ const speechErrorMessages: Record<string, string> = {
   // iOS/Android (see SttManager.fallbackToWebSpeech), so it's never used
   // as a fallback on mobile while a mic/tab stream is recording. Recording
   // itself is unaffected — only live captions stop.
-  'web-speech-mobile-unavailable': '이 기기에서는 브라우저 음성 인식을 실시간 자막에 사용할 수 없습니다. 녹음은 계속됩니다.',
+  'web-speech-mobile-unavailable': '이 기기에서는 브라우저 음성 인식을 실시간 자막에 사용할 수 없습니다. 녹음은 계속되며, AWS 자막 연결이 준비되면 자동으로 다시 시작됩니다.',
 };
 
 interface UseRecordingSessionOptions {
@@ -87,6 +87,12 @@ export function useRecordingSession({
   const transcriptsRef = useRef(transcripts);
   const onTranscriptUpdateRef = useRef(onTranscriptUpdate);
   const transcribeConfigRef = useRef<TranscribeConfig | null>(null);
+  // Read inside the config-load effect below, which has an empty dep array
+  // (it must only run once, not re-fetch on every liveSttProvider change) --
+  // a plain closure over the `liveSttProvider` param would freeze at
+  // whatever it was on mount.
+  const liveSttProviderRef = useRef(liveSttProvider);
+  useEffect(() => { liveSttProviderRef.current = liveSttProvider; }, [liveSttProvider]);
 
   // Load runtime Cognito config once (fetched from /config.json at startup)
   useEffect(() => {
@@ -104,12 +110,24 @@ export function useRecordingSession({
         } catch {
           // Dictionary not available — proceed without custom vocabulary
         }
-        transcribeConfigRef.current = {
+        const config: TranscribeConfig = {
           region: cfg.cognito.region,
           identityPoolId: cfg.cognito.identityPoolId,
           userPoolId: cfg.cognito.userPoolId,
           vocabularyName,
         };
+        transcribeConfigRef.current = config;
+        // A recording that started (createManager, below) before this fetch
+        // resolved was permanently forced onto Web Speech -- or, on mobile,
+        // blocked from live captions entirely (SttManager.fallbackToWebSpeech)
+        // -- for the rest of that recording, with no way to ever pick
+        // Transcribe Streaming back up. Promote it now that a config is
+        // actually available, but only if the live preference genuinely
+        // wants Transcribe Streaming -- never override a user's explicit
+        // 'web-speech' choice.
+        if (liveSttProviderRef.current === 'transcribe-streaming') {
+          sttManagerRef.current?.retryWithConfig(config);
+        }
       }
     });
     return () => { cancelled = true; };

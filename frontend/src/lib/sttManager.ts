@@ -11,7 +11,7 @@
 import { TranscribeFallbackClient, type TranscribeCallbacks } from './transcribeClient';
 import { TranscribeStreamingSession } from './transcribeStreamingClient';
 import { translateApi } from './api';
-import { isMobile } from './device';
+import { hasMobileMicConflictRisk } from './device';
 
 export type LiveSttProvider = 'transcribe-streaming' | 'web-speech';
 
@@ -70,6 +70,27 @@ export class SttManager {
   }
 
   /**
+   * Promote a running session onto Transcribe Streaming once a config
+   * arrives after `start()` already had to decide without one (the
+   * runtime-config + dictionary-lookup fetch in useRecordingSession can
+   * still be in flight when a user starts recording right away). Without
+   * this, that race permanently stuck the session on whatever `start()`
+   * fell back to — on mobile, "no captions at all" for the rest of the
+   * recording, with no way to ever recover. No-op if Transcribe Streaming
+   * is already active, or if there's no browser stream (native/system
+   * mode has no fallback to recover from in the first place).
+   */
+  retryWithConfig(config: SttManagerConfig['transcribeStreamingConfig']): void {
+    if (!config || this.activeProvider === 'transcribe-streaming' || !this.stream) return;
+    this.config.transcribeStreamingConfig = config;
+    this.webSpeechClient?.stop();
+    this.webSpeechClient = null;
+    this.startTranscribeStreaming(this.stream);
+    this.activeProvider = 'transcribe-streaming';
+    this.config.onProviderChange?.('transcribe-streaming');
+  }
+
+  /**
    * Fall back to (or start) Web Speech — guarded against a mobile mic
    * conflict. Web Speech's own SpeechRecognition capture runs independent
    * of the MediaStream MediaRecorder already holds for the recording
@@ -82,7 +103,7 @@ export class SttManager {
    * keeps going untouched.
    */
   private fallbackToWebSpeech(notifyChange: boolean): void {
-    if (this.stream && isMobile()) {
+    if (this.stream && hasMobileMicConflictRisk()) {
       this.config.callbacks.onError('web-speech-mobile-unavailable');
       return;
     }

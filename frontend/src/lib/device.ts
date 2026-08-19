@@ -24,6 +24,19 @@ export function isDesktop(): boolean {
   return !isMobile();
 }
 
+/**
+ * True on iOS/Android specifically — NOT `isMobile()`'s broader
+ * `window.innerWidth < 768`. Used to gate the Web Speech / mic-stream
+ * conflict guard (SttManager.fallbackToWebSpeech and friends): the actual
+ * risk is a mobile OS's SpeechRecognition implementation stealing the mic
+ * track out from under a running MediaRecorder, which is a platform
+ * property, not a viewport-width one — a narrow desktop browser window
+ * has none of that risk and shouldn't lose Web Speech captions over it.
+ */
+export function hasMobileMicConflictRisk(): boolean {
+  return isIOS() || isAndroid();
+}
+
 export function isSafari(): boolean {
   if (typeof window === 'undefined') return false;
 

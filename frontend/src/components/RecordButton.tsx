@@ -386,17 +386,19 @@ export function RecordButton({
       // Safari/Chrome when the OS reclaims the mic under memory pressure, or
       // an unsupported codec edge case) fires no onstop -- the UI is left
       // reading "recording" forever with no chunks ever finalized, and
-      // nothing tells the user their audio wasn't captured.
+      // nothing tells the user their audio wasn't captured. Route through
+      // stopRecording() (same as the mic/tab onended handler above) instead
+      // of duplicating its teardown here: that guarantees onRecordingStop
+      // fires (tearing down the parent's STT session — a hand-rolled
+      // teardown here left it zombied, since only onRecordingStop does
+      // that), and leaves the onstop handler below as the SINGLE place that
+      // finalizes captured chunks, whether or not it happens to still fire
+      // after this error.
       mediaRecorder.onerror = (event) => {
         console.error('MediaRecorder error during recording:', event);
-        if (isRecordingRef.current) {
-          isRecordingRef.current = false;
-          if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-          if (checkpointTimerRef.current) { clearInterval(checkpointTimerRef.current); checkpointTimerRef.current = null; }
-          cleanupAudioResources();
-          setRecordingState('idle');
-          onError?.('녹음 중 오류가 발생했습니다. 다시 시도해주세요.');
-        }
+        if (!isRecordingRef.current) return;
+        onError?.('녹음 중 오류가 발생했습니다. 다시 시도해주세요.');
+        stopRecording();
       };
 
       mediaRecorder.onstop = async () => {

@@ -326,6 +326,18 @@ permission prompt. See ADR-024 for the incident (83 minutes of System
 Audio lost to this exact skew, discovered only after the recording ended)
 that motivated catching it before capture starts instead.
 
+Browser mic/tab modes on iOS/Android (`lib/device.ts`'s
+`hasMobileMicConflictRisk`, i.e. actual iOS/Android UA, not just a narrow
+viewport): live captions default to AWS Transcribe Streaming, and the
+`LiveSttSelector`'s "Browser" (Web Speech) option is disabled outright —
+Web Speech's own `SpeechRecognition` capture runs independent of the
+`MediaStream` `MediaRecorder` is recording from, and on these platforms it
+can end that mic track mid-recording with no other signal. Recording is
+never sacrificed for captions: if Transcribe Streaming isn't configured or
+fails, captions become unavailable (amber "speech error" banner) rather
+than silently falling back to Web Speech, and the recording itself keeps
+going untouched (`lib/sttManager.ts`'s `fallbackToWebSpeech`).
+
 Once uploading, native mode's `uploadRecordingWithRetry` (`lib/tauri.ts`)
 is network-aware: if the device goes offline mid-upload, it waits for the
 browser's `online` event rather than failing immediately, then re-presigns
