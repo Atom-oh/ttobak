@@ -266,6 +266,8 @@ export interface ChatMessage {
 export interface Research {
   researchId: string;
   userId?: string;
+  /** User-editable display label, defaults to `topic` at creation. `topic` (the original prompt) stays immutable. */
+  title?: string;
   topic: string;
   mode: 'quick' | 'standard' | 'deep';
   status: 'planning' | 'approved' | 'running' | 'done' | 'error';

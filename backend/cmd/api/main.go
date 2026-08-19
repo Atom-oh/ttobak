@@ -319,6 +319,7 @@ func init() {
 		r.Post("/api/research", researchHandler.CreateResearch)
 		r.Get("/api/research", researchHandler.ListResearch)
 		r.Get("/api/research/{researchId}", researchHandler.GetResearchDetail)
+		r.Put("/api/research/{researchId}", researchHandler.UpdateResearch)
 		r.Delete("/api/research/{researchId}", researchHandler.DeleteResearch)
 		r.Post("/api/research/{researchId}/restore", researchHandler.RestoreResearch)
 		r.Post("/api/research/{researchId}/export", researchHandler.ExportResearch)

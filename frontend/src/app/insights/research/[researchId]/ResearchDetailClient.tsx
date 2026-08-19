@@ -34,7 +34,7 @@ function buildResearchFrontmatter(r: ResearchDetail): string {
     : new Date().toISOString().split('T')[0];
   return [
     '---',
-    `title: "${r.topic.replace(/"/g, '\\"')}"`,
+    `title: "${(r.title || r.topic).replace(/"/g, '\\"')}"`,
     `date: ${date}`,
     `source: ttobak-research`,
     `type: research`,
@@ -82,6 +82,9 @@ export default function ResearchDetailPage() {
   const [activeContent, setActiveContent] = useState<ResearchDetail | null>(null);
   const [chatOpen, setChatOpen] = useState(true);
   const [addingSubPage, setAddingSubPage] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [savingTitle, setSavingTitle] = useState(false);
 
 
   useEffect(() => {
@@ -104,7 +107,7 @@ export default function ResearchDetailPage() {
   const handleDownloadMarkdown = () => {
     if (!research?.content) return;
     const md = buildResearchFrontmatter(research) + research.content;
-    const slug = research.topic.replace(/[^a-zA-Z0-9가-힣\s-]/g, '').replace(/\s+/g, '-').slice(0, 60);
+    const slug = (research.title || research.topic).replace(/[^a-zA-Z0-9가-힣\s-]/g, '').replace(/\s+/g, '-').slice(0, 60);
     const blob = new Blob([md], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -115,6 +118,40 @@ export default function ResearchDetailPage() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     setExportOpen(false);
+  };
+
+  const startEditTitle = () => {
+    const displayed = activeContent || research;
+    if (!displayed) return;
+    setTitleDraft(displayed.title || displayed.topic);
+    setEditingTitle(true);
+  };
+
+  const cancelEditTitle = () => setEditingTitle(false);
+
+  const saveTitle = async () => {
+    const displayed = activeContent || research;
+    const trimmed = titleDraft.trim();
+    if (!displayed || !trimmed) {
+      setEditingTitle(false);
+      return;
+    }
+    const targetId = displayed.researchId;
+    setSavingTitle(true);
+    try {
+      await researchApi.update(targetId, { title: trimmed });
+      if (activeContent && activeContent.researchId === targetId) {
+        setActiveContent((prev) => (prev ? { ...prev, title: trimmed } : prev));
+      } else {
+        setResearch((prev) => (prev ? { ...prev, title: trimmed } : prev));
+      }
+      setSubpages((prev) => prev.map((p) => (p.researchId === targetId ? { ...p, title: trimmed } : p)));
+      setEditingTitle(false);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '제목 수정에 실패했습니다');
+    } finally {
+      setSavingTitle(false);
+    }
   };
 
   const handleTrash = async () => {
@@ -332,11 +369,53 @@ export default function ResearchDetailPage() {
                     </span>
                   </div>
 
-                  {/* Topic + Export + Share */}
+                  {/* Title (editable) + Export + Share */}
                   <div className="flex items-start justify-between gap-4">
-                    <h1 className="text-2xl lg:text-3xl font-bold text-slate-900 dark:text-text-main leading-tight">
-                      {(activeContent || research).topic}
-                    </h1>
+                    {editingTitle ? (
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <input
+                          autoFocus
+                          value={titleDraft}
+                          onChange={(e) => setTitleDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') saveTitle();
+                            if (e.key === 'Escape') cancelEditTitle();
+                          }}
+                          disabled={savingTitle}
+                          maxLength={200}
+                          className="flex-1 min-w-0 text-2xl lg:text-3xl font-bold text-slate-900 dark:text-text-main leading-tight bg-transparent border-b-2 border-primary focus:outline-none"
+                        />
+                        <button
+                          onClick={saveTitle}
+                          disabled={savingTitle || !titleDraft.trim()}
+                          aria-label="저장"
+                          className="text-primary hover:text-primary/80 disabled:opacity-40 shrink-0"
+                        >
+                          <span className="material-symbols-outlined">check</span>
+                        </button>
+                        <button
+                          onClick={cancelEditTitle}
+                          disabled={savingTitle}
+                          aria-label="취소"
+                          className="text-slate-400 hover:text-slate-600 dark:hover:text-text-secondary shrink-0"
+                        >
+                          <span className="material-symbols-outlined">close</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="group flex items-start gap-2 flex-1 min-w-0">
+                        <h1 className="text-2xl lg:text-3xl font-bold text-slate-900 dark:text-text-main leading-tight">
+                          {(activeContent || research).title || (activeContent || research).topic}
+                        </h1>
+                        <button
+                          onClick={startEditTitle}
+                          aria-label="제목 수정"
+                          className="mt-1 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-primary transition-opacity shrink-0"
+                        >
+                          <span className="material-symbols-outlined text-lg">edit</span>
+                        </button>
+                      </div>
+                    )}
                     {research.status === 'done' && displayContent && (
                       <div className="flex items-center gap-2 flex-shrink-0">
                         {!research.isShared && (
@@ -480,8 +559,9 @@ export default function ResearchDetailPage() {
           </div>
         </div>
 
-        {/* Chat panel — show for deep mode or planning status */}
-        {research && (research.mode === 'deep' || ['planning', 'running', 'approved'].includes(research.status)) && (
+        {/* Chat panel — deep mode, in-progress statuses, or a finished report
+            (any mode) so quick/standard research also gets follow-up chat. */}
+        {research && (research.mode === 'deep' || ['planning', 'running', 'approved', 'done'].includes(research.status)) && (
           <>
             {/* Chat toggle button (desktop, when chat is closed and not planning) */}
             {!chatOpen && ['done', 'error'].includes(research.status) && (

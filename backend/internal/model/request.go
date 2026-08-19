@@ -171,17 +171,17 @@ type SimChartResponse struct {
 // Options are re-parsed from their JSON-string storage form into typed
 // slices for the frontend confirm form.
 type SimRunResponse struct {
-	SimRunID     string          `json:"simRunId"`
-	Status       string          `json:"status"`
-	Requirements []SimRequirement `json:"requirements,omitempty"`
-	Options      []SimOption      `json:"options,omitempty"`
-	Charts       []SimChartResponse `json:"charts,omitempty"`
-	ReportMarkdown string        `json:"reportMarkdown,omitempty"`
-	CodeKey        string        `json:"codeKey,omitempty"`
-	PriceSnapshotAt string       `json:"priceSnapshotAt,omitempty"`
-	ErrorMessage    string       `json:"errorMessage,omitempty"`
-	CreatedAt       string       `json:"createdAt"`
-	UpdatedAt       string       `json:"updatedAt"`
+	SimRunID        string             `json:"simRunId"`
+	Status          string             `json:"status"`
+	Requirements    []SimRequirement   `json:"requirements,omitempty"`
+	Options         []SimOption        `json:"options,omitempty"`
+	Charts          []SimChartResponse `json:"charts,omitempty"`
+	ReportMarkdown  string             `json:"reportMarkdown,omitempty"`
+	CodeKey         string             `json:"codeKey,omitempty"`
+	PriceSnapshotAt string             `json:"priceSnapshotAt,omitempty"`
+	ErrorMessage    string             `json:"errorMessage,omitempty"`
+	CreatedAt       string             `json:"createdAt"`
+	UpdatedAt       string             `json:"updatedAt"`
 }
 
 // CreateSimulationRequest is the body of POST /api/meetings/{id}/sim -- the
@@ -486,6 +486,12 @@ type InsightDetailResponse struct {
 type CreateResearchRequest struct {
 	Topic string `json:"topic"`
 	Mode  string `json:"mode"`
+}
+
+// UpdateResearchRequest represents the request body for renaming a research
+// task's display title. Topic (the original prompt) is not editable here.
+type UpdateResearchRequest struct {
+	Title string `json:"title"`
 }
 
 // ResearchResponse represents a single research task in API responses

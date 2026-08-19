@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Editable research title, distinct from the immutable original research prompt (`PUT /api/research/{researchId}`)
 - Admin user-management panel: list/delete/enable/disable/resend-invite/force-reset-password for Cognito users, with a fail-open PostAuthentication trigger recording last-login timestamps (ADR-030)
 - Meeting-driven cost/sizing simulator: extracts quantitative requirements from a meeting, runs a Sonnet-generated Python computation in AgentCore Code Interpreter to compare architecture options (ADR-031)
 - Zoom/pan and fullscreen lightbox for mermaid diagrams rendered from meeting notes
@@ -74,6 +75,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- 리서치 제목 편집 기능 — 원본 리서치 프롬프트(topic)와 분리된 편집 가능 제목(title) 추가 (`PUT /api/research/{researchId}`)
 - 관리자 사용자 관리 패널 — Cognito 사용자 목록/삭제/활성화/비활성화/초대 재발송/비밀번호 강제 재설정, fail-open PostAuthentication 트리거로 최종 로그인 시각 기록 (ADR-030)
 - 미팅 기반 비용·사이징 시뮬레이터 — 정량 요구사항 추출 후 AgentCore Code Interpreter에서 Sonnet이 생성한 파이썬으로 아키텍처 대안 비교 (ADR-031)
 - 회의록 mermaid 다이어그램 확대·이동 및 전체화면 라이트박스

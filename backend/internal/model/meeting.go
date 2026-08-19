@@ -202,8 +202,14 @@ type CrawlHistory struct {
 // Research represents a deep research task
 // PK: USER#{userId}, SK: RESEARCH#{researchId}
 type Research struct {
-	ResearchID   string `dynamodbav:"researchId" json:"researchId"`
-	UserID       string `dynamodbav:"userId" json:"userId"`
+	ResearchID string `dynamodbav:"researchId" json:"researchId"`
+	UserID     string `dynamodbav:"userId" json:"userId"`
+	// Title is a user-editable display label, defaulting to Topic at
+	// creation. Kept distinct from Topic (the original research prompt,
+	// permanently immutable) so a rename never mutates the prompt that
+	// the agent pipeline (research-worker, research-agent) actually acts
+	// on -- only the UI's display string changes.
+	Title        string `dynamodbav:"title,omitempty" json:"title,omitempty"`
 	Topic        string `dynamodbav:"topic" json:"topic"`
 	Mode         string `dynamodbav:"mode" json:"mode"`
 	Status       string `dynamodbav:"status" json:"status"`

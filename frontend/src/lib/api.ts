@@ -428,6 +428,8 @@ export const researchApi = {
     api.get<{ research: Research[] }>('/api/research'),
   getDetail: (researchId: string) =>
     api.get<ResearchDetail>(`/api/research/${encodeURIComponent(researchId)}`),
+  update: (researchId: string, data: { title: string }) =>
+    api.put<{ researchId: string }>(`/api/research/${encodeURIComponent(researchId)}`, data),
   trash: (researchId: string) =>
     api.delete(`/api/research/${encodeURIComponent(researchId)}`),
   restore: (researchId: string) =>
@@ -446,7 +448,7 @@ export const researchChatApi = {
   listMessages: (researchId: string) =>
     api.get<{ messages: ChatMessage[] }>(`/api/research/${encodeURIComponent(researchId)}/chat`),
   sendMessage: (researchId: string, data: { content: string; action?: string }) =>
-    api.post<{ messageId: string }>(`/api/research/${encodeURIComponent(researchId)}/chat`, data),
+    api.post<{ messageId: string; warning?: string }>(`/api/research/${encodeURIComponent(researchId)}/chat`, data),
   listSubPages: (researchId: string) =>
     api.get<{ subpages: Research[] }>(`/api/research/${encodeURIComponent(researchId)}/subpages`),
 };

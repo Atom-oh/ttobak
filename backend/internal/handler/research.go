@@ -227,6 +227,41 @@ func (h *ResearchHandler) DeleteResearch(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// UpdateResearch handles PUT /api/research/{researchId} -- renames the
+// research's display title. Topic (the original prompt) is immutable.
+func (h *ResearchHandler) UpdateResearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	researchID := chi.URLParam(r, "researchId")
+
+	if strings.Contains(researchID, "..") || strings.Contains(researchID, "/") {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "invalid researchId")
+		return
+	}
+
+	var req model.UpdateResearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	if err := h.researchService.UpdateResearch(ctx, researchID, userID, req.Title); err != nil {
+		switch {
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Research not found")
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+		case errors.Is(err, service.ErrInvalidInput):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "internal error")
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"researchId": researchID})
+}
+
 // RestoreResearch handles POST /api/research/{researchId}/restore
 func (h *ResearchHandler) RestoreResearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

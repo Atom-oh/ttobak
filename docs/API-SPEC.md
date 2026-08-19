@@ -412,6 +412,22 @@ Error: 403 Forbidden (not a member)
 Error: 404 Not Found (account doesn't exist)
 ```
 
+#### Update Research (rename display title)
+
+`Research.Title` is a user-editable display label, defaulting to `Topic` (the original research prompt) at creation. `Topic` itself is permanently immutable — the agent pipeline (research-worker, research-agent) acts on `Topic`, so a rename must never look like it changed what was researched. `AccountResearchRef`/`ProjectResearchRef` (denormalized link snapshots) still carry only `Topic`, not `Title` — a rename does not propagate to those.
+
+```
+PUT /api/research/{researchId}
+{ "title": "새 제목" }
+
+Response: 200 OK
+{ "researchId": "r-uuid" }
+
+Error: 400 Bad Request (title empty or longer than 200 chars)
+Error: 403 Forbidden (not the owner)
+Error: 404 Not Found (research doesn't exist)
+```
+
 #### List Account Research (linked research — members only)
 
 Read path for research tasks linked to an Account (`POST /api/research/{researchId}/accounts`, `DELETE /api/research/{researchId}/accounts/{accountId}` — the rest of research CRUD is existing functionality not yet documented here). On link, `accountIds` is updated with an atomic DynamoDB String Set `ADD`/`DELETE`, so concurrent link requests don't race. Reads re-verify each result's `accountIds` actually contains the target accountId (fail-closed) — a failed reverse-index cleanup after unlinking never leaks a stale entry into the list.

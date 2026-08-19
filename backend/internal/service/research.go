@@ -5,10 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -97,6 +98,7 @@ func (s *ResearchService) CreateResearch(ctx context.Context, userId string, req
 	research := &model.Research{
 		ResearchID: id,
 		UserID:     userId,
+		Title:      req.Topic,
 		Topic:      req.Topic,
 		Mode:       req.Mode,
 		Status:     "planning",
@@ -268,6 +270,35 @@ func (s *ResearchService) GetResearchDetail(ctx context.Context, researchId, use
 	return resp, nil
 }
 
+// UpdateResearch renames a research's display title. Title is intentionally
+// the only editable field here -- Topic (the original research prompt) is
+// permanently immutable, since it's what the agent pipeline actually acted
+// on; renaming must never look like it changed what was researched.
+func (s *ResearchService) UpdateResearch(ctx context.Context, researchId, userId, title string) error {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return fmt.Errorf("title must not be empty: %w", ErrInvalidInput)
+	}
+	if len(title) > 200 {
+		return fmt.Errorf("title must be at most 200 characters: %w", ErrInvalidInput)
+	}
+
+	research, err := s.repo.GetResearch(ctx, researchId)
+	if err != nil {
+		return fmt.Errorf("failed to get research: %w", err)
+	}
+	if research == nil {
+		return ErrNotFound
+	}
+	if research.UserID != userId {
+		return ErrForbidden
+	}
+
+	return s.repo.UpdateResearchFields(ctx, researchId, map[string]interface{}{
+		"title": title,
+	})
+}
+
 func (s *ResearchService) TrashResearch(ctx context.Context, researchId, userId string) error {
 	research, err := s.repo.GetResearch(ctx, researchId)
 	if err != nil {
@@ -418,6 +449,7 @@ func (s *ResearchService) CreateSubPage(ctx context.Context, userId, parentId, t
 	research := &model.Research{
 		ResearchID: id,
 		UserID:     userId,
+		Title:      topic,
 		Topic:      topic,
 		Mode:       "deep",
 		Status:     "running",

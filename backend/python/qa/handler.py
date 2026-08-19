@@ -89,7 +89,9 @@ def create_research_from_chat(user_id, topic, mode):
     - PK: USER#{userId}, SK: RESEARCH#{id}, entityType: RESEARCH_INDEX
     - SFN input keys: researchId, userId, topic, mode, qualityMode, s3Key
     - s3Key format: shared/research/{id}.md
-    Last synced with Go: 2026-04-29 (PR #59)
+    - title defaults to topic at creation (user-editable display label,
+      distinct from the immutable topic/prompt)
+    Last synced with Go: 2026-08-18 (research title field)
 
     TODO: Replace with internal Go API call to eliminate schema duplication.
     """
@@ -113,7 +115,7 @@ def create_research_from_chat(user_id, topic, mode):
                 "PK": {"S": f"RESEARCH#{research_id}"}, "SK": {"S": "CONFIG"},
                 "entityType": {"S": "RESEARCH"},
                 "researchId": {"S": research_id}, "userId": {"S": user_id},
-                "topic": {"S": topic}, "mode": {"S": mode},
+                "title": {"S": topic}, "topic": {"S": topic}, "mode": {"S": mode},
                 "status": {"S": "planning"}, "createdAt": {"S": now}, "s3Key": {"S": s3_key},
             }}},
             {"Put": {"TableName": TABLE_NAME, "Item": {
