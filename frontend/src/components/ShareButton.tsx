@@ -285,7 +285,7 @@ export function ShareButton({
   return (
     <div className="relative">
       <button
-        onClick={() => { setPendingNotice(null); setPendingNoticeEmail(null); setIsOpen(true); }}
+        onClick={() => setIsOpen(true)}
         className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
       >
         <span className="material-symbols-outlined text-lg">share</span>

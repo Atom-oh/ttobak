@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	cognitoidp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
+	cognitoidptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
 )
@@ -1246,7 +1247,10 @@ func TestShareMeetingByEmail_InvitedButNotYetLoggedIn_QueuesPendingShare(t *test
 	svc := newMeetingServiceWithRepo(repo)
 	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
 		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return &cognitoidp.AdminGetUserOutput{Username: aws.String("invitee-sub-1")}, nil
+			return &cognitoidp.AdminGetUserOutput{
+				Username:       aws.String("invitee-username-1"),
+				UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("sub"), Value: aws.String("invitee-sub-1")}},
+			}, nil
 		},
 	}, "pool-1")
 	repo.addMeeting(&model.Meeting{

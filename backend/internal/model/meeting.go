@@ -351,23 +351,32 @@ type PendingShare struct {
 	// otherwise claim someone else's queued grant.
 	InvitedCognitoSub string    `dynamodbav:"invitedCognitoSub,omitempty"`
 	CreatedAt         time.Time `dynamodbav:"createdAt"`
-	// TTL is an epoch-seconds expiry, named to match the uppercase `TTL`
-	// attribute backend/python/qa/handler.py already writes (so the name is
-	// ready to share if the table's TTL is ever turned on), but the table
-	// does NOT have timeToLiveAttribute enabled (see storage-stack.ts's
-	// comment on why -- enabling it would also bulk-delete pre-existing QA
-	// conversation history that was never actually expiring, a decision
-	// this PR isn't making). This field is therefore enforced entirely in
-	// application code: MeetingService.MaterializePendingShares treats
-	// TTL<=0 or TTL<=now as invalid and drops the row itself -- a mis-typed
-	// or stale invite's queued grant is not revocable by its inviter (no
-	// list/cancel API, see docs/superpowers/specs/2026-08-04-pending-
-	// email-invites-design.md's explicit YAGNI), so this bounds how long it
-	// stays claimable instead of granting access at an arbitrary future
-	// point. Rows past their TTL just sit as harmless dead items until
-	// either a future, deliberate decision to enable table TTL sweeps them,
-	// or they're overwritten by a fresh re-invite to the same target.
-	TTL        int64  `dynamodbav:"TTL"`
+	// TTL is an epoch-seconds expiry. It is deliberately NOT named `TTL` at
+	// the DynamoDB attribute level (see the `dynamodbav` tag below) even
+	// though backend/python/qa/handler.py already writes an uppercase `TTL`
+	// field on several unrelated row types -- storage-stack.ts's
+	// timeToLiveAttribute is a single table-wide setting, and pointing it
+	// at the same attribute name QA uses would make turning it on
+	// immediately, irreversibly bulk-delete QA's pre-existing conversation
+	// history too (rate-limit, KB cache, MESSAGES, CHAT_SESSION rows that
+	// have been silently accumulating because table TTL was never on) --
+	// a production-safety decision that deserves its own deliberate PR, not
+	// a side effect of this one. Using a distinct attribute name
+	// (`pendingShareExpiresAt`) lets storage-stack.ts point
+	// timeToLiveAttribute at it directly: DynamoDB's TTL sweep only ever
+	// touches items that actually carry the configured attribute, so QA's
+	// `TTL`-named rows are structurally untouched no matter what this table
+	// enables. The inviter can also revoke a queued grant early (DELETE
+	// .../members/pending, DELETE .../share/pending) by re-submitting the
+	// exact email that was invited; there is still no list endpoint, so the
+	// inviter has to remember (or re-derive from their own UI state) who
+	// they invited rather than discovering pending invites by browsing.
+	// MeetingService.MaterializePendingShares also still enforces this
+	// synchronously in application code (TTL<=0 or TTL<=now is treated as
+	// invalid and the row is dropped on the spot) rather than relying on
+	// the table sweep's timing, since DynamoDB TTL deletion isn't
+	// instantaneous at the expiry second.
+	TTL        int64  `dynamodbav:"pendingShareExpiresAt"`
 	EntityType string `dynamodbav:"entityType"` // "PENDING_SHARE"
 }
 

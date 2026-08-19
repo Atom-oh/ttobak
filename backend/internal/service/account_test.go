@@ -703,6 +703,16 @@ func TestRevokePendingMember_NonOwnerForbidden(t *testing.T) {
 	}
 }
 
+func TestRevokePendingMember_AccountNotFound(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+
+	err := svc.RevokePendingMember(context.Background(), "owner-1", "nonexistent-account", "invited@x.com")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
 func TestRevokePendingMember_NoOpWhenNothingQueued(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
@@ -718,7 +728,10 @@ func TestAddMember_InvitedButNotYetLoggedIn_QueuesPendingShare(t *testing.T) {
 	svc := newAccountServiceWithRepo(repo)
 	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
 		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return &cognitoidp.AdminGetUserOutput{Username: aws.String("invitee-sub-1")}, nil
+			return &cognitoidp.AdminGetUserOutput{
+				Username:       aws.String("invitee-username-1"),
+				UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("sub"), Value: aws.String("invitee-sub-1")}},
+			}, nil
 		},
 	}, "pool-1")
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
@@ -761,14 +774,17 @@ func TestAddMember_UnknownEmail_NotInvited_StillErrUserNotFound(t *testing.T) {
 func TestAddMember_RejectsQueuingWithEmptyCognitoSub(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
-	// AdminGetUserOutput.Username is a required response field per the AWS
-	// API contract and should never actually be empty on a real invited
+	// The `sub` attribute is a required response field per the AWS API
+	// contract and should never actually be missing/empty on a real invited
 	// user, but the authorization gate must fail closed if it somehow is --
 	// queuing an unclaimable grant (no identity to bind it to) would be
 	// worse than just rejecting the invite.
 	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
 		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return &cognitoidp.AdminGetUserOutput{Username: aws.String("")}, nil
+			return &cognitoidp.AdminGetUserOutput{
+				Username:       aws.String("invitee-username-1"),
+				UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("sub"), Value: aws.String("")}},
+			}, nil
 		},
 	}, "pool-1")
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})

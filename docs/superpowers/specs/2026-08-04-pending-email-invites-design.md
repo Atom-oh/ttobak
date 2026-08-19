@@ -13,9 +13,12 @@
 > gaps a PR review raised. See backend/internal/model.PendingShare's doc
 > comment and MeetingService.MaterializePendingShares for the shipped
 > design. This doc's reasoning (the reconciliation hook, the "logged and
-> skipped, not fatal" per-item failure handling, the no-list/no-revoke YAGNI)
-> otherwise still describes the shipped behavior; keeping it as background
-> rather than rewriting it.
+> skipped, not fatal" per-item failure handling) otherwise still describes
+> the shipped behavior; keeping it as background rather than rewriting it.
+> One correction: the "no-list/no-revoke YAGNI" below did NOT ship as
+> written -- two revoke endpoints exist (`DELETE .../members/pending`,
+> `DELETE .../share/pending`), gated on the inviter already knowing the
+> exact email. There is still no list endpoint.
 
 ## Problem
 

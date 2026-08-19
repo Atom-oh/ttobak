@@ -698,7 +698,10 @@ func (s *MeetingService) RevokePendingShare(ctx context.Context, ownerID, meetin
 		return err
 	}
 	if meeting == nil {
-		existing, _ := s.repo.GetMeetingByID(ctx, meetingID)
+		existing, err := s.repo.GetMeetingByID(ctx, meetingID)
+		if err != nil {
+			return err
+		}
 		if existing != nil {
 			return ErrForbidden
 		}
@@ -716,12 +719,16 @@ func (s *MeetingService) RevokePendingShare(ctx context.Context, ownerID, meetin
 // wires one) should treat every unresolvable email as plainly unknown, not
 // make a live AWS call just to decide that.
 //
-// The returned sub (AdminGetUserOutput.Username -- == the Cognito `sub`
-// for this pool specifically because auth-stack.ts's User Pool has no
-// username alias, only signInAliases:{email:true}, so Cognito assigns a
-// generated-UUID username == sub for every user) is stored on the queued
-// PendingShare as InvitedCognitoSub, so materializeOne can later bind the
-// grant to that exact identity rather than to a bare email string.
+// The returned sub is read directly from the `sub` entry in
+// AdminGetUserOutput.UserAttributes -- the actual Cognito contract for a
+// user's identity -- rather than assumed from Username. (For this pool,
+// auth-stack.ts's User Pool has no username alias, only
+// signInAliases:{email:true}, so Username also happens to equal sub today,
+// but that's an implementation detail of this pool's config, not something
+// AWS guarantees; reading the attribute directly doesn't depend on it.) The
+// sub is stored on the queued PendingShare as InvitedCognitoSub, so
+// materializeOne can later bind the grant to that exact identity rather
+// than to a bare email string.
 func emailHasPendingInvite(ctx context.Context, client cognitoAdminAPI, poolID, email string) (bool, string, error) {
 	if client == nil || poolID == "" {
 		return false, "", nil
@@ -737,7 +744,12 @@ func emailHasPendingInvite(ctx context.Context, client cognitoAdminAPI, poolID, 
 		}
 		return false, "", fmt.Errorf("failed to check invite status for %s: %w", email, err)
 	}
-	return true, aws.ToString(out.Username), nil
+	for _, attr := range out.UserAttributes {
+		if aws.ToString(attr.Name) == "sub" {
+			return true, aws.ToString(attr.Value), nil
+		}
+	}
+	return true, "", nil
 }
 
 // MaterializePendingShares turns every PendingShare queued for email into a

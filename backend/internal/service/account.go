@@ -365,6 +365,13 @@ func (s *AccountService) RevokePendingMember(ctx context.Context, requesterUserI
 		return err
 	}
 	if requester == nil || requester.Role != model.RoleOwner {
+		account, err := s.repo.GetAccount(ctx, accountID)
+		if err != nil {
+			return err
+		}
+		if account == nil {
+			return ErrNotFound
+		}
 		return ErrForbidden
 	}
 	return s.repo.DeletePendingShare(ctx, email, model.PrefixPendingAccount+accountID)

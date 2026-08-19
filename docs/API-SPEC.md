@@ -283,7 +283,9 @@ Response: 201 Created
 // backend/internal/model). The queued grant is not listed anywhere
 // (revoke by re-submitting the same email, below, not by finding it in a
 // list) and is un-claimable after a 30-day TTL enforced synchronously in
-// application code, not DynamoDB's own TTL sweep -- see PendingShare's
+// application code; DynamoDB's own table TTL sweep (scoped to a distinct
+// `pendingShareExpiresAt` attribute, not QA's `TTL`) later physically
+// reclaims rows nobody ever revoked or claimed -- see PendingShare's
 // doc comment.
 Response: 201 Created
 {
@@ -894,7 +896,10 @@ Response: 200 OK
 // that email's next ListMeetings/CreateMeeting call after logging in
 // (not listed anywhere -- revoke by re-submitting the same email, below,
 // not by finding it in a list -- and un-claimable after 30 days via a
-// synchronous application-code TTL check, not DynamoDB's own TTL sweep).
+// synchronous application-code TTL check; DynamoDB's own table TTL sweep,
+// scoped to a distinct `pendingShareExpiresAt` attribute so it can't touch
+// QA's unrelated `TTL`-named rows, later physically reclaims rows nobody
+// ever revoked or claimed).
 Response: 200 OK
 {
   "sharedWith": {

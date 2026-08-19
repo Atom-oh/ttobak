@@ -2072,8 +2072,8 @@ func transactionItemFailed(err error, idx, wantLen int) (failed bool, ok bool) {
 // queued PendingShare -- all in one transaction, so nothing can observe
 // "inviter verified as owner" and "membership granted" as two separable
 // steps (AGENTS.md's conditional-write rule; mirrors CreateShareIfMember's
-// existing pattern in this file). The transaction's own Delete is
-// version-conditioned (see pendingShareDeleteCondition) so a concurrent
+// existing pattern in this file). The transaction's own Delete condition
+// is inlined below, keyed on createdAt equality, so a concurrent
 // re-invite (fresher role/permission) can't be silently overwritten by a
 // grant using stale data -- if that condition is what failed, this returns
 // (false, nil) so the caller retries with the fresh row next call.
