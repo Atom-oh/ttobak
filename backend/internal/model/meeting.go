@@ -339,10 +339,12 @@ type PendingShare struct {
 	Permission      string `dynamodbav:"permission,omitempty"` // set when Kind=="meeting"
 	InvitedByUserID string `dynamodbav:"invitedByUserId"`
 	InvitedByEmail  string `dynamodbav:"invitedByEmail,omitempty"`
-	// InvitedCognitoSub is the Cognito `sub` (== Username, verified against
-	// the live pool -- see CLAUDE.md's "Already fixed" note) that
-	// emailHasPendingInvite's AdminGetUser call resolved the target email
-	// to at queue time. MeetingService.materializeOne requires this to
+	// InvitedCognitoSub is the Cognito `sub` (== Username here specifically
+	// because infra/lib/auth-stack.ts's User Pool sets
+	// signInAliases:{email:true} with no username alias, which makes
+	// Cognito assign a generated-UUID username == sub for every user in
+	// this pool) that emailHasPendingInvite's AdminGetUser call resolved
+	// the target email to at queue time. MeetingService.materializeOne requires this to
 	// match the current login's userID before granting: without it, a
 	// PendingShare is bound to nothing but a bare email string, and a user
 	// who later changes their Cognito email to match a stale invite could

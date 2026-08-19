@@ -27,6 +27,11 @@ export default function AccountDetailClient() {
   const [projectsError, setProjectsError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Separate from `error` (which renders as a red error banner) --
+  // matches ShareButton's own pendingNotice pattern for the same
+  // "invited but not yet accepted" state, an informational message, not
+  // a failure.
+  const [pendingNotice, setPendingNotice] = useState<string | null>(null);
   const [uploadingSlide, setUploadingSlide] = useState(false);
 
   const [inviteRole, setInviteRole] = useState('SSA');
@@ -90,11 +95,12 @@ export default function AccountDetailClient() {
   const handlePickMember = async (picked: User) => {
     setInviting(true);
     setError(null);
+    setPendingNotice(null);
     try {
       const result = await accountApi.addMember(accountId, { email: picked.email, role: inviteRole });
       await fetchAll();
       if (result?.pending) {
-        setError(`${picked.email}님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 계정에 추가됩니다.`);
+        setPendingNotice(`${picked.email}님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 계정에 추가됩니다.`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add member');
@@ -203,6 +209,11 @@ export default function AccountDetailClient() {
         {error && (
           <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-lg p-3 mb-4">
             {error}
+          </div>
+        )}
+        {pendingNotice && (
+          <div className="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4">
+            {pendingNotice}
           </div>
         )}
         {loading || !account ? (

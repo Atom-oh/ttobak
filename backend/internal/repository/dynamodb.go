@@ -2017,6 +2017,197 @@ func (r *DynamoDBRepository) DeletePendingShare(ctx context.Context, email, sk s
 	return nil
 }
 
+// MaterializePendingAccountGrant atomically re-verifies that
+// p.InvitedByUserID is still RoleOwner of p.AccountID, grants userID
+// membership (only if they don't already have a row), and clears the
+// queued PendingShare -- all in one transaction, so nothing can observe
+// "inviter verified as owner" and "membership granted" as two separable
+// steps (AGENTS.md's conditional-write rule; mirrors CreateShareIfMember's
+// existing pattern in this file). A failed condition (inviter no longer
+// owner, or userID already a member) returns (false, nil): the caller
+// leaves the PendingShare queued rather than assuming it's safe to drop,
+// since ConditionalCheckFailed alone doesn't distinguish "permanently
+// invalid" from "lost a narrow race."
+func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error) {
+	member := &model.AccountMember{
+		PK:         model.PrefixAccount + p.AccountID,
+		SK:         model.PrefixMember + userID,
+		AccountID:  p.AccountID,
+		UserID:     userID,
+		Email:      email,
+		Role:       p.Role,
+		AddedAt:    time.Now().UTC(),
+		GSI1PK:     model.PrefixUser + userID,
+		GSI1SK:     model.PrefixAccount + p.AccountID,
+		EntityType: model.EntityTypeAccountMember,
+	}
+	item, err := attributevalue.MarshalMap(member)
+	if err != nil {
+		return false, fmt.Errorf("marshal account member: %w", err)
+	}
+
+	inviterExpr, err := expression.NewBuilder().WithCondition(
+		expression.AttributeExists(expression.Name("PK")).And(
+			expression.Name("role").Equal(expression.Value(model.RoleOwner)),
+		),
+	).Build()
+	if err != nil {
+		return false, fmt.Errorf("build inviter-owner condition: %w", err)
+	}
+	notExistsExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeNotExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return false, fmt.Errorf("build not-exists condition: %w", err)
+	}
+
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + p.AccountID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixMember + p.InvitedByUserID},
+					},
+					ConditionExpression:       inviterExpr.Condition(),
+					ExpressionAttributeNames:  inviterExpr.Names(),
+					ExpressionAttributeValues: inviterExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:                 aws.String(r.tableName),
+					Item:                      item,
+					ConditionExpression:       notExistsExpr.Condition(),
+					ExpressionAttributeNames:  notExistsExpr.Names(),
+					ExpressionAttributeValues: notExistsExpr.Values(),
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(r.tableName),
+					Key:       pendingShareKey(email, p.SK),
+				},
+			},
+		},
+	})
+	if err != nil {
+		if isConditionalCheckFailedTransaction(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("materialize pending account grant for %s: %w", p.AccountID, err)
+	}
+	return true, nil
+}
+
+// MaterializePendingMeetingGrant atomically re-verifies that
+// p.InvitedByUserID still owns p.MeetingID, grants userID a direct Share
+// (only if they don't already have one), and clears the queued
+// PendingShare -- all in one transaction. See
+// MaterializePendingAccountGrant's doc comment for why this needs to be
+// one atomic operation rather than separate reads and writes.
+func (r *DynamoDBRepository) MaterializePendingMeetingGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error) {
+	now := time.Now().UTC()
+	shareForRecipient := &model.Share{
+		PK:         model.PrefixUser + userID,
+		SK:         model.PrefixShare + p.MeetingID,
+		MeetingID:  p.MeetingID,
+		OwnerID:    p.InvitedByUserID,
+		OwnerEmail: p.InvitedByEmail,
+		SharedToID: userID,
+		Email:      email,
+		Permission: p.Permission,
+		CreatedAt:  now,
+		EntityType: "SHARE",
+	}
+	item1, err := attributevalue.MarshalMap(shareForRecipient)
+	if err != nil {
+		return false, fmt.Errorf("marshal share (recipient): %w", err)
+	}
+	shareForMeeting := &model.Share{
+		PK:         model.PrefixMeeting + p.MeetingID,
+		SK:         model.PrefixShareTo + userID,
+		MeetingID:  p.MeetingID,
+		OwnerID:    p.InvitedByUserID,
+		OwnerEmail: p.InvitedByEmail,
+		SharedToID: userID,
+		Email:      email,
+		Permission: p.Permission,
+		CreatedAt:  now,
+		EntityType: "SHARE",
+	}
+	item2, err := attributevalue.MarshalMap(shareForMeeting)
+	if err != nil {
+		return false, fmt.Errorf("marshal share (meeting): %w", err)
+	}
+
+	meetingExistsExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return false, fmt.Errorf("build meeting-exists condition: %w", err)
+	}
+	notExistsExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeNotExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return false, fmt.Errorf("build not-exists condition: %w", err)
+	}
+
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				// PK: USER#{ownerId}, SK: MEETING#{meetingId} -- exists only
+				// if InvitedByUserID still owns this exact meeting; covers
+				// both "meeting deleted" and "inviter isn't the owner
+				// anymore" with one condition.
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + p.InvitedByUserID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + p.MeetingID},
+					},
+					ConditionExpression:       meetingExistsExpr.Condition(),
+					ExpressionAttributeNames:  meetingExistsExpr.Names(),
+					ExpressionAttributeValues: meetingExistsExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:                 aws.String(r.tableName),
+					Item:                      item1,
+					ConditionExpression:       notExistsExpr.Condition(),
+					ExpressionAttributeNames:  notExistsExpr.Names(),
+					ExpressionAttributeValues: notExistsExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:                 aws.String(r.tableName),
+					Item:                      item2,
+					ConditionExpression:       notExistsExpr.Condition(),
+					ExpressionAttributeNames:  notExistsExpr.Names(),
+					ExpressionAttributeValues: notExistsExpr.Values(),
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName: aws.String(r.tableName),
+					Key:       pendingShareKey(email, p.SK),
+				},
+			},
+		},
+	})
+	if err != nil {
+		if isConditionalCheckFailedTransaction(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("materialize pending meeting grant for %s: %w", p.MeetingID, err)
+	}
+	return true, nil
+}
+
 // SearchUsersByEmail searches users by email prefix using GSI2
 func (r *DynamoDBRepository) SearchUsersByEmail(ctx context.Context, emailPrefix string) ([]model.User, error) {
 	// GSI2PK = EMAIL#{email}, so we query for prefix match

@@ -211,6 +211,14 @@ func (m *mockHandlerMeetingRepo) PutMember(_ context.Context, _ *model.AccountMe
 	return nil
 }
 
+func (m *mockHandlerMeetingRepo) MaterializePendingAccountGrant(_ context.Context, _ *model.PendingShare, _, _ string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockHandlerMeetingRepo) MaterializePendingMeetingGrant(_ context.Context, _ *model.PendingShare, _, _ string) (bool, error) {
+	return false, nil
+}
+
 func (m *mockHandlerMeetingRepo) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
 	mem, ok := m.members[accountID+"|"+userID]
 	if !ok {

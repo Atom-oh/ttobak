@@ -33,8 +33,8 @@ export class StorageStack extends cdk.Stack {
       // A DynamoDB table allows exactly one TTL attribute, so this MUST
       // stay 'TTL' (uppercase) -- backend/python/qa/handler.py already
       // writes an uppercase `TTL` epoch-seconds field on several row types
-      // (rate-limit, KB cache, conversation, feedback) in anticipation of
-      // this being turned on; PendingShare items
+      // (rate-limit, KB cache, conversation MESSAGES, CHAT_SESSION) in
+      // anticipation of this being turned on; PendingShare items
       // (backend/internal/model.PendingShare) are the newest writer, not
       // the only one. Additive either way: DynamoDB TTL only expires items
       // that actually carry this attribute with a past epoch-seconds

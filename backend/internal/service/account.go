@@ -294,7 +294,12 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 		if err != nil {
 			return nil, err
 		}
-		if !invited {
+		if !invited || sub == "" {
+			// Fail-closed: without a sub, materializeOne has no identity to
+			// bind the grant to. AdminGetUserOutput.Username is a required
+			// response field, so this should never actually be empty --
+			// treat it the same as "not invited" rather than queuing an
+			// unclaimable grant.
 			return nil, ErrUserNotFound
 		}
 		if err := s.repo.PutPendingShare(ctx, &model.PendingShare{

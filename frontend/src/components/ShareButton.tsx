@@ -30,6 +30,11 @@ interface ShareButtonProps {
 // shareApi's return shape varies by entity (meeting share vs. doc share), so
 // this only recognizes the one shape that carries a pending flag (meeting
 // share's `{ sharedWith: { pending } }`, see model.SharedWithResponse) --
+// A loose but sufficient check for "looks like a real email" -- this only
+// gates whether to show the free-text share row below, not any backend
+// validation, so it doesn't need to be a strict RFC 5322 match.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 // anything else (including doc share's response) is treated as a normal,
 // already-materialized share.
 function isPendingShareResult(result: unknown): boolean {
@@ -294,27 +299,54 @@ export function ShareButton({
                   <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent mx-auto" />
                 </div>
               ) : searchResults.length > 0 ? (
-                searchResults.map((user) => (
-                  <button
-                    key={user.userId}
-                    onClick={() => handleShare(user)}
-                    disabled={isSharing}
-                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-bold">
-                      {user.name?.charAt(0) || user.email.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex-1 text-left">
-                      <p className="text-sm font-medium text-slate-900 dark:text-white">
-                        {user.name || user.email}
-                      </p>
-                      {user.name && (
-                        <p className="text-xs text-slate-500">{user.email}</p>
-                      )}
-                    </div>
-                    <span className="material-symbols-outlined text-primary">add</span>
-                  </button>
-                ))
+                <>
+                  {searchResults.map((user) => (
+                    <button
+                      key={user.userId}
+                      onClick={() => handleShare(user)}
+                      disabled={isSharing}
+                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-bold">
+                        {user.name?.charAt(0) || user.email.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="flex-1 text-left">
+                        <p className="text-sm font-medium text-slate-900 dark:text-white">
+                          {user.name || user.email}
+                        </p>
+                        {user.name && (
+                          <p className="text-xs text-slate-500">{user.email}</p>
+                        )}
+                      </div>
+                      <span className="material-symbols-outlined text-primary">add</span>
+                    </button>
+                  ))}
+                  {EMAIL_RE.test(searchQuery.trim()) && !searchResults.some((u) => u.email.toLowerCase() === searchQuery.trim().toLowerCase()) && (
+                    <button
+                      onClick={() => handleShare({ userId: '', email: searchQuery.trim() })}
+                      disabled={isSharing}
+                      className="w-full flex items-center gap-2 px-4 py-3 text-left border-t border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+                    >
+                      <span className="material-symbols-outlined text-primary">mail</span>
+                      <p className="text-sm text-slate-700 dark:text-slate-300 truncate">이 이메일로 공유: {searchQuery.trim()}</p>
+                    </button>
+                  )}
+                </>
+              ) : EMAIL_RE.test(searchQuery.trim()) ? (
+                // usersApi.search only finds PROFILE rows (SearchUsersByEmail
+                // via GSI2) -- an invited-but-never-logged-in email has none
+                // by definition, so it can never show up as a search result.
+                // Without this fallback, the pending-share path this
+                // component's isPendingShareResult/pendingNotice logic
+                // exists for would be unreachable from the UI.
+                <button
+                  onClick={() => handleShare({ userId: '', email: searchQuery.trim() })}
+                  disabled={isSharing}
+                  className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+                >
+                  <span className="material-symbols-outlined text-primary">mail</span>
+                  <p className="text-sm text-slate-700 dark:text-slate-300 truncate">이 이메일로 공유: {searchQuery.trim()}</p>
+                </button>
               ) : (
                 <div className="p-4 text-center text-slate-500 text-sm">
                   No users found

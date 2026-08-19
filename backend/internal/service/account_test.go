@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	cognitoidp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	cognitoidptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -654,7 +655,11 @@ func TestAddMember_UnknownEmail(t *testing.T) {
 func TestAddMember_InvitedButNotYetLoggedIn_QueuesPendingShare(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
-	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{}, "pool-1") // zero-value AdminGetUser response = user exists
+	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
+		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			return &cognitoidp.AdminGetUserOutput{Username: aws.String("invitee-sub-1")}, nil
+		},
+	}, "pool-1")
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 
 	dto, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "invited@x.com", Role: model.RoleSSA})
@@ -668,7 +673,7 @@ func TestAddMember_InvitedButNotYetLoggedIn_QueuesPendingShare(t *testing.T) {
 		t.Fatalf("expected 1 pending share, got %d", len(repo.pendingShares))
 	}
 	p := repo.pendingShares[0]
-	if p.Kind != model.PendingShareKindAccount || p.AccountID != acc.AccountID || p.Role != model.RoleSSA || p.InvitedByUserID != "owner-1" {
+	if p.Kind != model.PendingShareKindAccount || p.AccountID != acc.AccountID || p.Role != model.RoleSSA || p.InvitedByUserID != "owner-1" || p.InvitedCognitoSub != "invitee-sub-1" {
 		t.Errorf("unexpected pending share: %+v", p)
 	}
 }
@@ -689,6 +694,30 @@ func TestAddMember_UnknownEmail_NotInvited_StillErrUserNotFound(t *testing.T) {
 	}
 	if len(repo.pendingShares) != 0 {
 		t.Errorf("expected no pending share for a never-invited email, got %d", len(repo.pendingShares))
+	}
+}
+
+func TestAddMember_RejectsQueuingWithEmptyCognitoSub(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	// AdminGetUserOutput.Username is a required response field per the AWS
+	// API contract and should never actually be empty on a real invited
+	// user, but the authorization gate must fail closed if it somehow is --
+	// queuing an unclaimable grant (no identity to bind it to) would be
+	// worse than just rejecting the invite.
+	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
+		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			return &cognitoidp.AdminGetUserOutput{Username: aws.String("")}, nil
+		},
+	}, "pool-1")
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "invited@x.com", Role: model.RoleSSA})
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("expected ErrUserNotFound when the invite resolves to an empty sub, got %v", err)
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected no pending share to be queued with an empty sub, got %d", len(repo.pendingShares))
 	}
 }
 
