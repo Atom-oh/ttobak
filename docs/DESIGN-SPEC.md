@@ -328,15 +328,22 @@ that motivated catching it before capture starts instead.
 
 Live captions default to AWS Transcribe Streaming on every platform
 (`app/record/page.tsx`'s `liveSttProvider` initial state) — Web Speech is
-purely a fallback for when Transcribe Streaming isn't configured or
-fails, not an equal alternative a user picks between.
+primarily a fallback for when Transcribe Streaming isn't configured or
+fails, not a default. On desktop it's still a real, explicit choice via
+the `LiveSttSelector`'s "Browser" option (disabled only once a recording
+is in progress), and that choice is honored for the rest of the
+recording — `SttManager` tracks what the user actually asked for
+separately from what's currently running, so an available Transcribe
+config can't silently promote an explicit Web Speech choice out from
+under a pause/resume (`SttManager`'s `preferredProvider` vs.
+`activeProvider`).
 
-On top of that global default, browser mic/tab modes on iOS/iPadOS/Android
-(`lib/device.ts`'s `hasMobileMicConflictRisk` — actual UA/touch-capability
-detection, not `isMobile()`'s narrow-viewport heuristic) additionally
-disable the Web Speech fallback outright, and the `LiveSttSelector`'s
-"Browser" option is disabled to match: Web Speech's own
-`SpeechRecognition` capture runs independent of the `MediaStream`
+On mobile, iOS/iPadOS/Android specifically (`lib/device.ts`'s
+`hasMobileMicConflictRisk` — actual UA/touch-capability detection, not
+`isMobile()`'s narrow-viewport heuristic), that choice doesn't exist at
+all: the Web Speech fallback is disabled outright and the
+`LiveSttSelector`'s "Browser" option is disabled to match. Web Speech's
+own `SpeechRecognition` capture runs independent of the `MediaStream`
 `MediaRecorder` is recording from, and on these platforms it can end that
 mic track mid-recording with no other signal. Recording is never
 sacrificed for captions there: if Transcribe Streaming isn't configured or

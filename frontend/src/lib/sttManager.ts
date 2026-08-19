@@ -50,6 +50,15 @@ export class SttManager {
   // fallbackToWebSpeech would still start Web Speech (grabbing the mic
   // again) after the user thinks recording has already stopped.
   private stopped = false;
+  // The provider the user actually asked for at start() -- distinct from
+  // `activeProvider` (what's running right now, which can differ after a
+  // fallback). The provider selector is disabled for the whole recording
+  // once it's started, so this can't go stale mid-session. Both
+  // `resume()`'s promotion branch and `retryWithConfig` gate on this: an
+  // explicit 'web-speech' choice must never get silently upgraded to
+  // Transcribe Streaming just because a config happens to be available by
+  // the time the user pauses/resumes.
+  private preferredProvider: LiveSttProvider = 'web-speech';
 
   // Translation state (shared across providers)
   private translateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -69,6 +78,7 @@ export class SttManager {
     preferredProvider: LiveSttProvider,
   ): Promise<void> {
     this.stream = stream;
+    this.preferredProvider = preferredProvider;
 
     if (preferredProvider === 'transcribe-streaming' && this.config.transcribeStreamingConfig) {
       try {
@@ -98,7 +108,8 @@ export class SttManager {
    * always clears `stream` so this can't fire after the recording ended).
    */
   retryWithConfig(config: TranscribeStreamingConfig | undefined): void {
-    if (!config || this.activeProvider === 'transcribe-streaming' || !this.stream) return;
+    if (!config || this.preferredProvider !== 'transcribe-streaming') return;
+    if (this.activeProvider === 'transcribe-streaming' || !this.stream) return;
     this.config.transcribeStreamingConfig = config;
     // Paused: no audio is being recorded right now, and resume()'s own
     // transcribe-streaming branch has no idea a session was already
@@ -330,8 +341,21 @@ export class SttManager {
     // it but defers starting anything until now to avoid a duplicate
     // session) -- promote in the SAME single restart resume() already
     // does for an active Transcribe Streaming session, rather than
-    // resuming whatever fallback was active before the pause.
-    if (this.activeProvider !== 'transcribe-streaming' && this.config.transcribeStreamingConfig && this.stream) {
+    // resuming whatever fallback was active before the pause. Gated on
+    // `preferredProvider`, NOT just "is a config available" -- a user who
+    // explicitly chose 'web-speech' (the provider selector is disabled for
+    // the rest of the recording once it's started, so this can't have
+    // changed since) must stay on it even though `transcribeStreamingConfig`
+    // is unconditionally present in `config` the moment it loads. Without
+    // this check, ANY pause/resume on an explicit Web Speech session would
+    // get silently upgraded to Transcribe Streaming as soon as the config
+    // fetch resolved -- sending audio to AWS against the user's choice.
+    if (
+      this.preferredProvider === 'transcribe-streaming' &&
+      this.activeProvider !== 'transcribe-streaming' &&
+      this.config.transcribeStreamingConfig &&
+      this.stream
+    ) {
       this.webSpeechClient?.stop();
       this.webSpeechClient = null;
       this.startTranscribeStreaming(this.stream);

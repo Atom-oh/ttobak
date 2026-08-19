@@ -15,8 +15,8 @@
 일이 없었던 문제가 드러났다: 기본 실시간 자막 provider가 `web-speech`(Browser Web Speech API)였고, 모바일
 Safari/Chrome의 `SpeechRecognition`은 `MediaRecorder`가 녹음 중인 `MediaStream`과 무관하게 자체적으로
 마이크를 잡는다 — 그 결과 모바일에서 마이크 트랙이 녹음 도중 강제로 종료되는 경우가 실측됐고
-(`fix/mobile-mic-track-ended`의 `2eac72f`가 이 트랙 종료를 `onended`/`MediaRecorder.onerror`로 감지해
-녹음을 정상 종료시키는 안전장치를 먼저 넣었다), 이 문제의 근본 원인을 이 PR에서 고친다.
+(PR #160의 앞선 커밋이 이 트랙 종료를 `onended`/`MediaRecorder.onerror`로 감지해 녹음을 정상 종료시키는
+안전장치를 먼저 넣었다), 이 문제의 근본 원인을 이 PR에서 고친다.
 
 ## Decision
 
@@ -51,7 +51,15 @@ Safari/Chrome의 `SpeechRecognition`은 `MediaRecorder`가 녹음 중인 `MediaS
   (S3 → Whisper ECS → Bedrock 요약)에서도 이미 전부 AWS로 가므로 새로운 신뢰 경계는 아니지만, 동시 스트림
   수·과금 프로필이 달라진다 — 인프라 변경(CDK)은 필요 없다(Transcribe Streaming은 이미 배포되어 있던
   opt-in 경로였을 뿐이다).
-- `SttManager`에 `paused`/`stopped` 내부 상태가 추가되어 pause/resume/stop과 `retryWithConfig`의 상호작용이
-  더 복잡해졌다 — 대가로 pause 중 config 도착 시 세션 중복 생성, stop 이후 도착하는 비동기 실패가 다시
-  마이크를 여는 문제를 막는다.
+- `SttManager`에 `paused`/`stopped`/`preferredProvider` 내부 상태가 추가되어 pause/resume/stop과
+  `retryWithConfig`의 상호작용이 더 복잡해졌다 — 대가로 pause 중 config 도착 시 세션 중복 생성, stop 이후
+  도착하는 비동기 실패가 다시 마이크를 여는 문제, 그리고 사용자가 데스크톱에서 명시적으로 고른
+  `web-speech` 선택이 pause/resume 중 config 도착만으로 AWS로 무단 전환되는 문제를 막는다.
+- 데스크톱에서 Web Speech가 폴백(또는 명시적 선택)으로 쓰이는 동안에는 회의 오디오가 브라우저 벤더의 음성
+  인식 서비스(Chrome이면 Google)로 나간다 — 이 PR 이전부터의 기본 동작이었고 이 PR은 그 경로를 줄이는
+  방향이지만, 새로 생긴 동작은 아니라는 점을 명시한다.
+- Transcribe Streaming이 기본값이 되면서 동시 스트림 수가 늘어날 수 있다 — 필요 시 사용량/과금 알람 검토
+  대상. 권한은 이미 `infra/lib/auth-stack.ts`의 인증된 identity pool 역할에
+  `transcribe:StartStreamTranscriptionWebSocket` 단일 액션으로 배포되어 있어(최소 권한), 이 결정에 필요한
+  새 IAM/CDK 변경은 없다.
 - 서버측(Go/CDK) 변경 없음 — 프론트엔드 전용 결정.
