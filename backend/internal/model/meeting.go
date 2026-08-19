@@ -351,19 +351,22 @@ type PendingShare struct {
 	// otherwise claim someone else's queued grant.
 	InvitedCognitoSub string    `dynamodbav:"invitedCognitoSub,omitempty"`
 	CreatedAt         time.Time `dynamodbav:"createdAt"`
-	// TTL is a DynamoDB TTL epoch-seconds timestamp. Uses the table's
-	// existing uppercase `TTL` attribute (infra/lib/storage-stack.ts's
-	// `timeToLiveAttribute: 'TTL'`) -- backend/python/qa/handler.py already
-	// writes this same attribute name on several row types, so a second,
-	// differently-cased attribute here would silently fragment DynamoDB's
-	// one-TTL-attribute-per-table limit instead of sharing it. A mis-typed
+	// TTL is an epoch-seconds expiry, named to match the uppercase `TTL`
+	// attribute backend/python/qa/handler.py already writes (so the name is
+	// ready to share if the table's TTL is ever turned on), but the table
+	// does NOT have timeToLiveAttribute enabled (see storage-stack.ts's
+	// comment on why -- enabling it would also bulk-delete pre-existing QA
+	// conversation history that was never actually expiring, a decision
+	// this PR isn't making). This field is therefore enforced entirely in
+	// application code: MeetingService.MaterializePendingShares treats
+	// TTL<=0 or TTL<=now as invalid and drops the row itself -- a mis-typed
 	// or stale invite's queued grant is not revocable by its inviter (no
 	// list/cancel API, see docs/superpowers/specs/2026-08-04-pending-
 	// email-invites-design.md's explicit YAGNI), so this bounds how long it
 	// stays claimable instead of granting access at an arbitrary future
-	// point -- MeetingService.MaterializePendingShares enforces this
-	// synchronously too, since DynamoDB's own TTL sweep is asynchronous and
-	// can lag by hours.
+	// point. Rows past their TTL just sit as harmless dead items until
+	// either a future, deliberate decision to enable table TTL sweeps them,
+	// or they're overwritten by a fresh re-invite to the same target.
 	TTL        int64  `dynamodbav:"TTL"`
 	EntityType string `dynamodbav:"entityType"` // "PENDING_SHARE"
 }

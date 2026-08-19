@@ -77,8 +77,6 @@ type meetingRepo interface {
 	PutPendingShare(ctx context.Context, share *model.PendingShare) error
 	ListPendingShares(ctx context.Context, email string) ([]model.PendingShare, error)
 	DeletePendingShare(ctx context.Context, email, sk string) error
-	GetAccount(ctx context.Context, accountID string) (*model.Account, error)
-	PutMember(ctx context.Context, member *model.AccountMember) error
 	MaterializePendingAccountGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error)
 	MaterializePendingMeetingGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error)
 }

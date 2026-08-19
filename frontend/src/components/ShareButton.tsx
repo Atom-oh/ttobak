@@ -25,16 +25,21 @@ interface ShareButtonProps {
    * offering the toggle would promise an edit permission that never lands.
    */
   readOnly?: boolean;
+  /**
+   * Shows a free-text "share/invite by email" row when a search yields no
+   * match (or none of the matches equal the typed email) and the query
+   * looks like an email. Only meeting share supports this today --
+   * ShareMeetingByEmail queues a PendingShare for an invited-but-not-yet-
+   * logged-in target (see backend/internal/model.PendingShare); doc/
+   * research share have no such path and would just 404. Defaults to
+   * false so those callers get the old search-only behavior unchanged.
+   */
+  allowEmailInvite?: boolean;
 }
 
 // shareApi's return shape varies by entity (meeting share vs. doc share), so
 // this only recognizes the one shape that carries a pending flag (meeting
 // share's `{ sharedWith: { pending } }`, see model.SharedWithResponse) --
-// A loose but sufficient check for "looks like a real email" -- this only
-// gates whether to show the free-text share row below, not any backend
-// validation, so it doesn't need to be a strict RFC 5322 match.
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 // anything else (including doc share's response) is treated as a normal,
 // already-materialized share.
 function isPendingShareResult(result: unknown): boolean {
@@ -43,6 +48,24 @@ function isPendingShareResult(result: unknown): boolean {
   if (!sharedWith || typeof sharedWith !== 'object') return false;
   return (sharedWith as { pending?: unknown }).pending === true;
 }
+
+// Pulls the real userId/email back out of a non-pending share result --
+// needed because a free-text email can resolve to an already-registered
+// user (one usersApi.search just didn't happen to surface), in which case
+// the share succeeds immediately and this is the only place the real
+// userId exists; falling back to the input's own placeholder userId ('')
+// would add an unrevoke-able ghost row to the list.
+function extractSharedWithUser(result: unknown): { userId?: string; email?: string } | null {
+  if (!result || typeof result !== 'object') return null;
+  const sharedWith = (result as { sharedWith?: unknown }).sharedWith;
+  if (!sharedWith || typeof sharedWith !== 'object') return null;
+  return sharedWith as { userId?: string; email?: string };
+}
+
+// A loose but sufficient check for "looks like a real email" -- this only
+// gates whether to show the free-text share row below, not any backend
+// validation, so it doesn't need to be a strict RFC 5322 match.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Backwards-compatible wrapper for meetings
 interface MeetingShareButtonProps {
@@ -70,6 +93,7 @@ export function MeetingShareButton({
       unshareApi={meetingsApi.unshare}
       label="Share meeting"
       extraSection={<NotionPushSection meetingId={meetingId} />}
+      allowEmailInvite
     />
   );
 }
@@ -122,6 +146,7 @@ export function ShareButton({
   label = 'Share',
   extraSection,
   readOnly,
+  allowEmailInvite = false,
 }: ShareButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -192,9 +217,14 @@ export function ShareButton({
         // sharedWith -- it'll appear for real once they sign in.
         setPendingNotice(`${user.email}님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 공유됩니다.`);
       } else {
+        // A free-text email can resolve to an already-registered user
+        // (search just didn't happen to surface them) -- prefer the
+        // response's real userId/email over the input's own placeholder
+        // ('' for a free-text entry) so the row stays unshare-able.
+        const resolved = extractSharedWithUser(result);
         onShare?.({
-          userId: user.userId,
-          email: user.email,
+          userId: resolved?.userId || user.userId,
+          email: resolved?.email || user.email,
           name: user.name,
           permission: readOnly ? 'read' : selectedPermission,
           sharedAt: new Date().toISOString(),
@@ -321,7 +351,7 @@ export function ShareButton({
                       <span className="material-symbols-outlined text-primary">add</span>
                     </button>
                   ))}
-                  {EMAIL_RE.test(searchQuery.trim()) && !searchResults.some((u) => u.email.toLowerCase() === searchQuery.trim().toLowerCase()) && (
+                  {allowEmailInvite && EMAIL_RE.test(searchQuery.trim()) && !searchResults.some((u) => u.email.toLowerCase() === searchQuery.trim().toLowerCase()) && (
                     <button
                       onClick={() => handleShare({ userId: '', email: searchQuery.trim() })}
                       disabled={isSharing}
@@ -332,13 +362,15 @@ export function ShareButton({
                     </button>
                   )}
                 </>
-              ) : EMAIL_RE.test(searchQuery.trim()) ? (
+              ) : allowEmailInvite && EMAIL_RE.test(searchQuery.trim()) ? (
                 // usersApi.search only finds PROFILE rows (SearchUsersByEmail
                 // via GSI2) -- an invited-but-never-logged-in email has none
                 // by definition, so it can never show up as a search result.
                 // Without this fallback, the pending-share path this
                 // component's isPendingShareResult/pendingNotice logic
-                // exists for would be unreachable from the UI.
+                // exists for would be unreachable from the UI. Gated on
+                // allowEmailInvite so doc/research share (no pending
+                // support on the backend) don't show a row that just 404s.
                 <button
                   onClick={() => handleShare({ userId: '', email: searchQuery.trim() })}
                   disabled={isSharing}

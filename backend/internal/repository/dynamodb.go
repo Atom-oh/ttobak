@@ -2017,17 +2017,74 @@ func (r *DynamoDBRepository) DeletePendingShare(ctx context.Context, email, sk s
 	return nil
 }
 
+// deletePendingShareIfVersionMatches drops p's row only if it's still
+// exactly the version that was read (matched by CreatedAt -- PutPendingShare
+// upserts on the same (email, entity) key, so an unconditioned delete could
+// otherwise remove a fresher re-invite that landed in the gap between a
+// caller's read and this delete) --
+// used to drop a PendingShare that a materialize transaction determined is
+// dead (inviter lost authority, or the target already has a grant via
+// another path) without racing a concurrent re-invite of the same target.
+// A condition failure here means someone re-invited in the meantime; that
+// fresh row isn't this call's to delete, so it's treated as a no-op, not
+// an error.
+func (r *DynamoDBRepository) deletePendingShareIfVersionMatches(ctx context.Context, email string, p *model.PendingShare) error {
+	expr, err := expression.NewBuilder().WithCondition(
+		expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)),
+	).Build()
+	if err != nil {
+		return fmt.Errorf("build delete-version condition: %w", err)
+	}
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName:                 aws.String(r.tableName),
+		Key:                       pendingShareKey(email, p.SK),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return nil
+		}
+		return fmt.Errorf("delete versioned pending share %s: %w", p.SK, err)
+	}
+	return nil
+}
+
+// transactionItemFailed reports whether TransactWriteItems item index idx
+// was the (or one of the) items that failed its own condition, given a
+// TransactionCanceledException with exactly wantLen reasons. Returns
+// (failed, ok) -- ok is false if err isn't a TransactionCanceledException
+// with the expected shape, meaning the caller should treat it as an
+// ordinary transient error instead of inspecting cancellation reasons.
+func transactionItemFailed(err error, idx, wantLen int) (failed bool, ok bool) {
+	var tce *types.TransactionCanceledException
+	if !errors.As(err, &tce) || len(tce.CancellationReasons) != wantLen {
+		return false, false
+	}
+	return aws.ToString(tce.CancellationReasons[idx].Code) == "ConditionalCheckFailed", true
+}
+
 // MaterializePendingAccountGrant atomically re-verifies that
 // p.InvitedByUserID is still RoleOwner of p.AccountID, grants userID
 // membership (only if they don't already have a row), and clears the
 // queued PendingShare -- all in one transaction, so nothing can observe
 // "inviter verified as owner" and "membership granted" as two separable
 // steps (AGENTS.md's conditional-write rule; mirrors CreateShareIfMember's
-// existing pattern in this file). A failed condition (inviter no longer
-// owner, or userID already a member) returns (false, nil): the caller
-// leaves the PendingShare queued rather than assuming it's safe to drop,
-// since ConditionalCheckFailed alone doesn't distinguish "permanently
-// invalid" from "lost a narrow race."
+// existing pattern in this file). The transaction's own Delete is
+// version-conditioned (see pendingShareDeleteCondition) so a concurrent
+// re-invite (fresher role/permission) can't be silently overwritten by a
+// grant using stale data -- if that condition is what failed, this returns
+// (false, nil) so the caller retries with the fresh row next call.
+//
+// If instead the inviter-authority check or the membership Put is what
+// failed (inviter lost ownership, or userID already has a grant via
+// another path), the queued row is genuinely dead -- rather than leaving
+// it queued (which could otherwise resurrect a deliberate LATER revocation
+// of that other-path grant, up to PendingShareTTL later), it's dropped
+// immediately via a separate versioned delete, and this still returns
+// (true, nil): "resolved," even though nothing was granted.
 func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error) {
 	member := &model.AccountMember{
 		PK:         model.PrefixAccount + p.AccountID,
@@ -2060,7 +2117,19 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 	if err != nil {
 		return false, fmt.Errorf("build not-exists condition: %w", err)
 	}
+	deleteExpr, err := expression.NewBuilder().WithCondition(
+		expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)),
+	).Build()
+	if err != nil {
+		return false, fmt.Errorf("build delete-version condition: %w", err)
+	}
 
+	const ( // TransactItems indices, for CancellationReasons inspection below
+		idxInviter = 0
+		idxPut     = 1
+		idxDelete  = 2
+		numItems   = 3
+	)
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
@@ -2086,19 +2155,30 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 			},
 			{
 				Delete: &types.Delete{
-					TableName: aws.String(r.tableName),
-					Key:       pendingShareKey(email, p.SK),
+					TableName:                 aws.String(r.tableName),
+					Key:                       pendingShareKey(email, p.SK),
+					ConditionExpression:       deleteExpr.Condition(),
+					ExpressionAttributeNames:  deleteExpr.Names(),
+					ExpressionAttributeValues: deleteExpr.Values(),
 				},
 			},
 		},
 	})
-	if err != nil {
-		if isConditionalCheckFailedTransaction(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("materialize pending account grant for %s: %w", p.AccountID, err)
+	if err == nil {
+		return true, nil
 	}
-	return true, nil
+	if deleteFailed, ok := transactionItemFailed(err, idxDelete, numItems); ok && deleteFailed {
+		return false, nil
+	}
+	inviterFailed, ok1 := transactionItemFailed(err, idxInviter, numItems)
+	putFailed, ok2 := transactionItemFailed(err, idxPut, numItems)
+	if (ok1 && inviterFailed) || (ok2 && putFailed) {
+		if delErr := r.deletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
+			return false, fmt.Errorf("drop dead pending account grant for %s: %w", p.AccountID, delErr)
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("materialize pending account grant for %s: %w", p.AccountID, err)
 }
 
 // MaterializePendingMeetingGrant atomically re-verifies that
@@ -2106,7 +2186,9 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 // (only if they don't already have one), and clears the queued
 // PendingShare -- all in one transaction. See
 // MaterializePendingAccountGrant's doc comment for why this needs to be
-// one atomic operation rather than separate reads and writes.
+// one atomic operation, why the Delete is version-conditioned, and why a
+// dead (not just stale) grant is dropped via a separate delete rather than
+// left queued.
 func (r *DynamoDBRepository) MaterializePendingMeetingGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error) {
 	now := time.Now().UTC()
 	shareForRecipient := &model.Share{
@@ -2154,7 +2236,20 @@ func (r *DynamoDBRepository) MaterializePendingMeetingGrant(ctx context.Context,
 	if err != nil {
 		return false, fmt.Errorf("build not-exists condition: %w", err)
 	}
+	deleteExpr, err := expression.NewBuilder().WithCondition(
+		expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)),
+	).Build()
+	if err != nil {
+		return false, fmt.Errorf("build delete-version condition: %w", err)
+	}
 
+	const ( // TransactItems indices, for CancellationReasons inspection below
+		idxMeeting = 0
+		idxPut1    = 1
+		idxPut2    = 2
+		idxDelete  = 3
+		numItems   = 4
+	)
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
 		TransactItems: []types.TransactWriteItem{
 			{
@@ -2193,19 +2288,31 @@ func (r *DynamoDBRepository) MaterializePendingMeetingGrant(ctx context.Context,
 			},
 			{
 				Delete: &types.Delete{
-					TableName: aws.String(r.tableName),
-					Key:       pendingShareKey(email, p.SK),
+					TableName:                 aws.String(r.tableName),
+					Key:                       pendingShareKey(email, p.SK),
+					ConditionExpression:       deleteExpr.Condition(),
+					ExpressionAttributeNames:  deleteExpr.Names(),
+					ExpressionAttributeValues: deleteExpr.Values(),
 				},
 			},
 		},
 	})
-	if err != nil {
-		if isConditionalCheckFailedTransaction(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("materialize pending meeting grant for %s: %w", p.MeetingID, err)
+	if err == nil {
+		return true, nil
 	}
-	return true, nil
+	if deleteFailed, ok := transactionItemFailed(err, idxDelete, numItems); ok && deleteFailed {
+		return false, nil
+	}
+	meetingFailed, ok1 := transactionItemFailed(err, idxMeeting, numItems)
+	put1Failed, ok2 := transactionItemFailed(err, idxPut1, numItems)
+	put2Failed, ok3 := transactionItemFailed(err, idxPut2, numItems)
+	if (ok1 && meetingFailed) || (ok2 && put1Failed) || (ok3 && put2Failed) {
+		if delErr := r.deletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
+			return false, fmt.Errorf("drop dead pending meeting grant for %s: %w", p.MeetingID, delErr)
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("materialize pending meeting grant for %s: %w", p.MeetingID, err)
 }
 
 // SearchUsersByEmail searches users by email prefix using GSI2
