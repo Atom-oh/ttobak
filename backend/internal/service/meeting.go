@@ -75,6 +75,10 @@ type meetingRepo interface {
 	PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error
 	PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error
 	PutPendingShare(ctx context.Context, share *model.PendingShare) error
+	ListPendingShares(ctx context.Context, email string) ([]model.PendingShare, error)
+	DeletePendingShare(ctx context.Context, email, sk string) error
+	GetAccount(ctx context.Context, accountID string) (*model.Account, error)
+	PutMember(ctx context.Context, member *model.AccountMember) error
 }
 
 // MeetingService handles meeting business logic
@@ -690,6 +694,119 @@ func emailHasPendingInvite(ctx context.Context, client cognitoAdminAPI, poolID, 
 		return false, fmt.Errorf("failed to check invite status for %s: %w", email, err)
 	}
 	return true, nil
+}
+
+// MaterializePendingShares turns every PendingShare queued for email into a
+// real AccountMember or Share row for the now-known userID, then deletes
+// the queued row. Called from handler/meeting.go on every ListMeetings/
+// CreateMeeting request (not gated on GetOrCreateUser's created flag --
+// this is a cheap, idempotent Query that's almost always empty, and gating
+// on "first PROFILE-creating call only" would make a materialization
+// failure permanent: by the time it could be retried, created is already
+// false forever). Business logic (grant issuance policy: re-verify the
+// target and its inviter before granting) belongs here in the service
+// layer, not in the repository -- the repo methods it calls
+// (PutMember/CreateShare/GetAccount/GetMeeting/GetMember) are themselves
+// plain data primitives.
+//
+// A single item's materialization failure is logged and skipped (continue,
+// not abort) so it can't block every other queued grant for the same
+// email -- matching docs/superpowers/specs/2026-08-04-pending-email-
+// invites-design.md's explicit design intent ("logged and skipped, not
+// fatal"). It stays queued and is retried on the next call.
+func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, email string) {
+	pending, err := s.repo.ListPendingShares(ctx, email)
+	if err != nil {
+		log.Printf("MaterializePendingShares: failed to list pending shares for %s: %v", email, err)
+		return
+	}
+	for i := range pending {
+		p := &pending[i]
+		if err := s.materializeOne(ctx, userID, email, p); err != nil {
+			log.Printf("MaterializePendingShares: skipping pending share %s for %s: %v", p.SK, email, err)
+			continue
+		}
+		if err := s.repo.DeletePendingShare(ctx, email, p.SK); err != nil {
+			log.Printf("MaterializePendingShares: failed to clear pending share %s for %s: %v", p.SK, email, err)
+		}
+	}
+}
+
+// materializeOne re-verifies one queued grant's target account/meeting AND
+// its inviter's continued authority to grant it (the inviter may have since
+// been removed from the account, or lost meeting ownership) before writing
+// the real row. Returning an error here means "leave this one queued, try
+// again later" for a transient failure, or effectively "silently drop" for
+// a target/inviter that's genuinely gone -- MaterializePendingShares deletes
+// the queued row on success only, so a permanently-invalid grant harmlessly
+// stays queued until PendingShareTTL expires it rather than being resolved
+// either way here.
+func (s *MeetingService) materializeOne(ctx context.Context, userID, email string, p *model.PendingShare) error {
+	switch p.Kind {
+	case model.PendingShareKindAccount:
+		account, err := s.repo.GetAccount(ctx, p.AccountID)
+		if err != nil {
+			return fmt.Errorf("check account %s: %w", p.AccountID, err)
+		}
+		if account == nil {
+			return nil // target gone -- drop the queued grant
+		}
+		inviter, err := s.repo.GetMember(ctx, p.AccountID, p.InvitedByUserID)
+		if err != nil {
+			return fmt.Errorf("check inviter membership for account %s: %w", p.AccountID, err)
+		}
+		if inviter == nil {
+			return nil // inviter no longer a member -- their grant no longer stands
+		}
+		existing, err := s.repo.GetMember(ctx, p.AccountID, userID)
+		if err != nil {
+			return fmt.Errorf("check existing membership for account %s: %w", p.AccountID, err)
+		}
+		if existing != nil {
+			return nil // already a member via another path
+		}
+		member := &model.AccountMember{
+			PK:         model.PrefixAccount + p.AccountID,
+			SK:         model.PrefixMember + userID,
+			AccountID:  p.AccountID,
+			UserID:     userID,
+			Email:      email,
+			Role:       p.Role,
+			AddedAt:    time.Now().UTC(),
+			GSI1PK:     model.PrefixUser + userID,
+			GSI1SK:     model.PrefixAccount + p.AccountID,
+			EntityType: model.EntityTypeAccountMember,
+		}
+		if err := s.repo.PutMember(ctx, member); err != nil {
+			return fmt.Errorf("put account member %s: %w", p.AccountID, err)
+		}
+		return nil
+	case model.PendingShareKindMeeting:
+		// GetMeeting(ownerID, meetingID) returns nil unless InvitedByUserID
+		// still owns this meeting -- covers both "meeting deleted" and
+		// "inviter isn't the owner anymore" in one call.
+		meeting, err := s.repo.GetMeeting(ctx, p.InvitedByUserID, p.MeetingID)
+		if err != nil {
+			return fmt.Errorf("check meeting %s: %w", p.MeetingID, err)
+		}
+		if meeting == nil {
+			return nil
+		}
+		existing, err := s.repo.GetShare(ctx, userID, p.MeetingID)
+		if err != nil {
+			return fmt.Errorf("check existing share for meeting %s: %w", p.MeetingID, err)
+		}
+		if existing != nil {
+			return nil
+		}
+		if _, err := s.repo.CreateShare(ctx, p.MeetingID, p.InvitedByUserID, p.InvitedByEmail, userID, email, p.Permission, ""); err != nil {
+			return fmt.Errorf("create share for meeting %s: %w", p.MeetingID, err)
+		}
+		return nil
+	default:
+		log.Printf("materializeOne: unknown PendingShare kind %q for %s -- dropping", p.Kind, email)
+		return nil
+	}
 }
 
 // RevokeShare revokes a share (owner only)

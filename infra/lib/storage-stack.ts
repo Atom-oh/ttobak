@@ -30,6 +30,12 @@ export class StorageStack extends cdk.Stack {
         pointInTimeRecoveryEnabled: true,
       },
       stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+      // Only PendingShare items (backend/internal/model.PendingShare) set
+      // this attribute today -- every other item type is untouched, since
+      // DynamoDB TTL only expires items that actually carry the configured
+      // attribute with a past epoch-seconds value. Bounds how long a
+      // mis-typed or stale invite's queued grant stays claimable.
+      timeToLiveAttribute: 'ttl',
     });
 
     // GSI1 for date-based queries and meeting lookups

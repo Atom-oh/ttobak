@@ -19,6 +19,7 @@ type mockMeetingRepo struct {
 	meetingsByID    map[string]*model.Meeting       // meetingID -> meeting (for GSI3 lookup)
 	users           map[string]*model.User          // email -> user
 	members         map[string]*model.AccountMember // "accountID|userID"
+	accounts        map[string]*model.Account       // accountID -> account
 	meetingRefs     map[string][]model.MeetingRef   // accountID -> refs
 	accountInsights []model.AccountInsight
 	pendingShares   []*model.PendingShare // PutPendingShare calls, in order
@@ -49,6 +50,7 @@ func newMockMeetingRepo() *mockMeetingRepo {
 		meetingsByID: make(map[string]*model.Meeting),
 		users:        make(map[string]*model.User),
 		members:      make(map[string]*model.AccountMember),
+		accounts:     make(map[string]*model.Account),
 		meetingRefs:  make(map[string][]model.MeetingRef),
 	}
 }
@@ -244,6 +246,43 @@ func (m *mockMeetingRepo) DeleteShare(_ context.Context, sharedToID, meetingID s
 func (m *mockMeetingRepo) PutPendingShare(_ context.Context, share *model.PendingShare) error {
 	cp := *share
 	m.pendingShares = append(m.pendingShares, &cp)
+	return nil
+}
+
+func (m *mockMeetingRepo) ListPendingShares(_ context.Context, email string) ([]model.PendingShare, error) {
+	var out []model.PendingShare
+	for _, p := range m.pendingShares {
+		if p.Email == email {
+			out = append(out, *p)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockMeetingRepo) DeletePendingShare(_ context.Context, email, sk string) error {
+	kept := m.pendingShares[:0]
+	for _, p := range m.pendingShares {
+		if p.Email == email && p.SK == sk {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	m.pendingShares = kept
+	return nil
+}
+
+func (m *mockMeetingRepo) GetAccount(_ context.Context, accountID string) (*model.Account, error) {
+	acc, ok := m.accounts[accountID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *acc
+	return &cp, nil
+}
+
+func (m *mockMeetingRepo) PutMember(_ context.Context, member *model.AccountMember) error {
+	cp := *member
+	m.members[member.AccountID+"|"+member.UserID] = &cp
 	return nil
 }
 

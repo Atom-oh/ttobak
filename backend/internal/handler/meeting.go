@@ -46,26 +46,21 @@ func NewMeetingHandler(meetingService *service.MeetingService, repo *repository.
 }
 
 // ensureProfileAndMaterializePendingShares ensures the caller's PROFILE row
-// exists and, only on the call that just created it (the invitee's first
-// authenticated request after accepting their invite), materializes any
-// AddMember/ShareMeetingByEmail grants that were queued as PendingShare
-// while no PROFILE row existed for their email yet (see PendingShare's doc
-// comment). Errors are logged, not surfaced -- this must never block
-// ListMeetings/CreateMeeting, and a missed materialization here just leaves
-// the grant queued for the next call that creates the row (it can't have
-// already been created, since this only fires once per user).
+// exists and materializes any AddMember/ShareMeetingByEmail grants that were
+// queued as PendingShare while no PROFILE row existed for their email yet
+// (see PendingShare's doc comment). Deliberately NOT gated on GetOrCreateUser's
+// created flag: materialization is a cheap, idempotent Query that's almost
+// always empty, and gating it to "only the call that just created the
+// PROFILE row" would make a materialization failure permanent (created is
+// false on every later call, so there'd be no way to retry) -- see
+// MeetingService.MaterializePendingShares's doc comment. Errors are logged,
+// not surfaced -- this must never block ListMeetings/CreateMeeting.
 func (h *MeetingHandler) ensureProfileAndMaterializePendingShares(ctx context.Context, userID, email, name string) {
-	_, created, err := h.repo.GetOrCreateUser(ctx, userID, email, name)
-	if err != nil {
+	if _, _, err := h.repo.GetOrCreateUser(ctx, userID, email, name); err != nil {
 		log.Printf("ensureProfileAndMaterializePendingShares: GetOrCreateUser failed for user %s: %v", userID, err)
 		return
 	}
-	if !created {
-		return
-	}
-	if err := h.repo.MaterializePendingShares(ctx, userID, email); err != nil {
-		log.Printf("ensureProfileAndMaterializePendingShares: MaterializePendingShares failed for user %s: %v", userID, err)
-	}
+	h.meetingService.MaterializePendingShares(ctx, userID, email)
 }
 
 // LinkToAccount handles POST /api/meetings/{meetingId}/account.

@@ -195,6 +195,22 @@ func (m *mockHandlerMeetingRepo) PutPendingShare(_ context.Context, _ *model.Pen
 	return nil
 }
 
+func (m *mockHandlerMeetingRepo) ListPendingShares(_ context.Context, _ string) ([]model.PendingShare, error) {
+	return nil, nil
+}
+
+func (m *mockHandlerMeetingRepo) DeletePendingShare(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockHandlerMeetingRepo) GetAccount(_ context.Context, _ string) (*model.Account, error) {
+	return nil, nil
+}
+
+func (m *mockHandlerMeetingRepo) PutMember(_ context.Context, _ *model.AccountMember) error {
+	return nil
+}
+
 func (m *mockHandlerMeetingRepo) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {
 	mem, ok := m.members[accountID+"|"+userID]
 	if !ok {

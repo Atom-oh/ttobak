@@ -1839,10 +1839,14 @@ func (r *DynamoDBRepository) listSharesForMeeting(ctx context.Context, meetingID
 }
 
 // GetOrCreateUser gets or creates a user profile. The returned bool is true
-// only when this call just created the PROFILE row (the invitee's first
-// authenticated request after accepting their invite) -- callers use it to
-// trigger MaterializePendingShares exactly once, not on every subsequent
-// call that finds the row already there.
+// only when this call actually created the PROFILE row -- the Put is
+// conditioned on attribute_not_exists(PK), so two concurrent first requests
+// for the same brand-new userID can't both get created=true (AGENTS.md's
+// conditional-write rule): the loser's condition fails, and it falls back to
+// re-reading the winner's row instead. Callers should NOT treat created=true
+// as a reliable "exactly once, forever" signal for anything beyond this
+// specific PutItem, though -- see MeetingService.MaterializePendingShares,
+// which deliberately does not gate on it.
 func (r *DynamoDBRepository) GetOrCreateUser(ctx context.Context, userID, email, name string) (*model.User, bool, error) {
 	// Try to get existing user
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
@@ -1883,11 +1887,41 @@ func (r *DynamoDBRepository) GetOrCreateUser(ctx context.Context, userID, email,
 		return nil, false, fmt.Errorf("failed to marshal user: %w", err)
 	}
 
+	condExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeNotExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to build condition: %w", err)
+	}
+
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName: aws.String(r.tableName),
-		Item:      item,
+		TableName:                 aws.String(r.tableName),
+		Item:                      item,
+		ConditionExpression:       condExpr.Condition(),
+		ExpressionAttributeNames:  condExpr.Names(),
+		ExpressionAttributeValues: condExpr.Values(),
 	})
 	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			// Lost the race to a concurrent first request -- re-read its
+			// winning row instead of erroring.
+			existing, getErr := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+				TableName: aws.String(r.tableName),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixProfile},
+				},
+			})
+			if getErr != nil {
+				return nil, false, fmt.Errorf("failed to re-get user after lost create race: %w", getErr)
+			}
+			var winner model.User
+			if unmarshalErr := attributevalue.UnmarshalMap(existing.Item, &winner); unmarshalErr != nil {
+				return nil, false, fmt.Errorf("failed to unmarshal user after lost create race: %w", unmarshalErr)
+			}
+			return &winner, false, nil
+		}
 		return nil, false, fmt.Errorf("failed to put user: %w", err)
 	}
 
@@ -1917,7 +1951,9 @@ func (r *DynamoDBRepository) PutPendingShare(ctx context.Context, share *model.P
 	default:
 		return fmt.Errorf("invalid pending share kind %q", share.Kind)
 	}
-	share.CreatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	share.CreatedAt = now
+	share.TTL = now.Add(model.PendingShareTTL).Unix()
 	share.EntityType = "PENDING_SHARE"
 
 	item, err := attributevalue.MarshalMap(share)
@@ -1935,14 +1971,16 @@ func (r *DynamoDBRepository) PutPendingShare(ctx context.Context, share *model.P
 }
 
 // ListPendingShares returns every queued Account/Meeting grant for email,
-// across all inviters.
+// across all inviters. Uses queryAllPages (not a bare single Query) so a
+// heavily-invited email's pending partition is never silently truncated at
+// DynamoDB's 1MB page limit -- same convention as ListAccountMembers etc.
 func (r *DynamoDBRepository) ListPendingShares(ctx context.Context, email string) ([]model.PendingShare, error) {
 	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixPendingShare + strings.ToLower(email)))
 	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -1952,15 +1990,16 @@ func (r *DynamoDBRepository) ListPendingShares(ctx context.Context, email string
 		return nil, fmt.Errorf("failed to list pending shares: %w", err)
 	}
 	var out []model.PendingShare
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &out); err != nil {
+	if err := attributevalue.UnmarshalListOfMaps(items, &out); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal pending shares: %w", err)
 	}
 	return out, nil
 }
 
-// DeletePendingShare removes one queued grant after MaterializePendingShares
-// has turned it into a real AccountMember/Share row (or found its target
-// account/meeting gone and skipped it).
+// DeletePendingShare removes one queued grant after MeetingService.
+// MaterializePendingShares has turned it into a real AccountMember/Share
+// row (or found its target account/meeting gone, or its inviter no longer
+// authorized, and skipped it).
 func (r *DynamoDBRepository) DeletePendingShare(ctx context.Context, email, sk string) error {
 	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
 		TableName: aws.String(r.tableName),
@@ -1968,77 +2007,6 @@ func (r *DynamoDBRepository) DeletePendingShare(ctx context.Context, email, sk s
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete pending share: %w", err)
-	}
-	return nil
-}
-
-// MaterializePendingShares turns every PendingShare queued for email into a
-// real AccountMember or Share row for the now-known userID, then deletes
-// the queued row. Called from handler/meeting.go right after GetOrCreateUser
-// reports it just created email's PROFILE row -- i.e. exactly once, on the
-// invitee's first authenticated request after accepting their invite.
-//
-// Each grant is re-verified against its target before being materialized
-// (the account/meeting may have been deleted, or membership/a share may
-// already exist via another path in the meantime) rather than blindly
-// replayed -- same fail-closed spirit as this repo's other read-triggered
-// reconciliation (see MeetingService's isStuck, SimService.GetSimRun).
-func (r *DynamoDBRepository) MaterializePendingShares(ctx context.Context, userID, email string) error {
-	pending, err := r.ListPendingShares(ctx, email)
-	if err != nil {
-		return fmt.Errorf("failed to list pending shares for %s: %w", email, err)
-	}
-	for i := range pending {
-		p := &pending[i]
-		switch p.Kind {
-		case model.PendingShareKindAccount:
-			account, err := r.GetAccount(ctx, p.AccountID)
-			if err != nil {
-				return fmt.Errorf("failed to check pending account %s: %w", p.AccountID, err)
-			}
-			if account != nil {
-				existing, err := r.GetMember(ctx, p.AccountID, userID)
-				if err != nil {
-					return fmt.Errorf("failed to check existing membership for account %s: %w", p.AccountID, err)
-				}
-				if existing == nil {
-					member := &model.AccountMember{
-						PK:         model.PrefixAccount + p.AccountID,
-						SK:         model.PrefixMember + userID,
-						AccountID:  p.AccountID,
-						UserID:     userID,
-						Email:      email,
-						Role:       p.Role,
-						AddedAt:    time.Now().UTC(),
-						GSI1PK:     model.PrefixUser + userID,
-						GSI1SK:     model.PrefixAccount + p.AccountID,
-						EntityType: model.EntityTypeAccountMember,
-					}
-					if err := r.PutMember(ctx, member); err != nil {
-						return fmt.Errorf("failed to materialize pending account member %s: %w", p.AccountID, err)
-					}
-				}
-			}
-		case model.PendingShareKindMeeting:
-			meeting, err := r.GetMeetingByID(ctx, p.MeetingID)
-			if err != nil {
-				return fmt.Errorf("failed to check pending meeting %s: %w", p.MeetingID, err)
-			}
-			if meeting != nil {
-				existing, err := r.GetShare(ctx, userID, p.MeetingID)
-				if err != nil {
-					return fmt.Errorf("failed to check existing share for meeting %s: %w", p.MeetingID, err)
-				}
-				if existing == nil {
-					if _, err := r.CreateShare(ctx, p.MeetingID, p.InvitedByUserID, p.InvitedByEmail, userID, email, p.Permission, ""); err != nil {
-						return fmt.Errorf("failed to materialize pending meeting share %s: %w", p.MeetingID, err)
-					}
-				}
-			}
-		}
-		if err := r.DeletePendingShare(ctx, email, p.SK); err != nil {
-			return fmt.Errorf("failed to clear pending share %s: %w", p.SK, err)
-		}
 	}
 	return nil
 }

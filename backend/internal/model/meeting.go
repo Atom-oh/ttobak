@@ -338,8 +338,21 @@ type PendingShare struct {
 	InvitedByUserID string    `dynamodbav:"invitedByUserId"`
 	InvitedByEmail  string    `dynamodbav:"invitedByEmail,omitempty"`
 	CreatedAt       time.Time `dynamodbav:"createdAt"`
-	EntityType      string    `dynamodbav:"entityType"` // "PENDING_SHARE"
+	// TTL is a DynamoDB TTL epoch-seconds timestamp (infra/lib/storage-
+	// stack.ts's `timeToLiveAttribute: 'ttl'`) -- a mis-typed or stale
+	// invite's queued grant is not revocable by its inviter (no list/cancel
+	// API, see docs/superpowers/specs/2026-08-04-pending-email-invites-
+	// design.md's explicit YAGNI), so this bounds how long it stays
+	// claimable instead of granting access at an arbitrary future point.
+	TTL        int64  `dynamodbav:"ttl"`
+	EntityType string `dynamodbav:"entityType"` // "PENDING_SHARE"
 }
+
+// PendingShareTTL is how long a queued grant stays claimable before DynamoDB
+// TTL expires it -- long enough that a real invitee who's slow to log in
+// isn't punished, short enough that a mis-typed email doesn't sit as a
+// silent standing grant forever.
+const PendingShareTTL = 30 * 24 * time.Hour
 
 const (
 	PendingShareKindAccount = "account"
