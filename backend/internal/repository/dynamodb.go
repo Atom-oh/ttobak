@@ -1954,7 +1954,7 @@ func (r *DynamoDBRepository) PutPendingShare(ctx context.Context, share *model.P
 	now := time.Now().UTC()
 	share.CreatedAt = now
 	share.TTL = now.Add(model.PendingShareTTL).Unix()
-	share.EntityType = "PENDING_SHARE"
+	share.EntityType = model.EntityTypePendingShare
 
 	item, err := attributevalue.MarshalMap(share)
 	if err != nil {

@@ -81,6 +81,7 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - **Stream**: NEW_AND_OLD_IMAGES (triggers the summarize Lambda)
 - **Point-in-time recovery**: enabled
 - **Removal policy**: RETAIN
+- **TTL**: attribute `ttl` (epoch seconds) -- additive, only expires items that actually set it. Today that's just `PendingShare` (30-day expiry on a queued, not-yet-materialized Account/Meeting invite, see API-SPEC.md's Add Member / Share Meeting sections); every other item type is unaffected.
 
 ### DynamoDB Table (WebSocket Connections)
 - **Table name**: `ttobak-connections`

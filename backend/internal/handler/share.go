@@ -57,17 +57,17 @@ func (h *ShareHandler) ShareMeeting(w http.ResponseWriter, r *http.Request) {
 
 	share, pending, err := h.meetingService.ShareMeetingByEmail(ctx, userID, userEmail, meetingID, req.Email, req.Permission)
 	if err != nil {
-		switch err.Error() {
-		case "forbidden":
+		switch {
+		case errors.Is(err, service.ErrForbidden):
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only owner can share")
 			return
-		case "not found":
+		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
-		case "user not found":
+		case errors.Is(err, service.ErrUserNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "User not found")
 			return
-		case "cannot share with yourself":
+		case errors.Is(err, service.ErrSelfShare):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Cannot share meeting with yourself")
 			return
 		default:

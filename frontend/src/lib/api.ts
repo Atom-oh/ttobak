@@ -167,7 +167,7 @@ export const meetingsApi = {
   delete: (id: string) => api.delete(`/api/meetings/${id}`),
 
   share: (id: string, data: { email: string; permission: 'read' | 'edit' }) =>
-    api.post<{ sharedWith: { userId: string; email: string; permission: string; pending?: boolean } }>(`/api/meetings/${id}/share`, data),
+    api.post<{ sharedWith: { userId?: string; email: string; permission: string; pending?: boolean } }>(`/api/meetings/${id}/share`, data),
 
   unshare: (id: string, userId: string) =>
     api.delete(`/api/meetings/${id}/share/${userId}`),

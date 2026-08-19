@@ -221,7 +221,7 @@ type UserSearchListResponse struct {
 
 // ShareResponse represents a share record in API responses
 type ShareResponse struct {
-	UserID     string     `json:"userId"`
+	UserID     string     `json:"userId,omitempty"`
 	Email      string     `json:"email"`
 	Permission string     `json:"permission"`
 	SharedAt   *time.Time `json:"sharedAt,omitempty"`

@@ -1044,6 +1044,85 @@ func TestShareMeetingByEmail_InvitedButNotYetLoggedIn_QueuesPendingShare(t *test
 	}
 }
 
+func TestMaterializePendingShares_MeetingGrant_CreatesShareAndClearsQueue(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@test.com", Kind: model.PendingShareKindMeeting,
+		MeetingID: "m-1", Permission: model.PermissionEdit,
+		InvitedByUserID: "owner-1", InvitedByEmail: "owner@test.com",
+		SK: model.PrefixPendingMeeting + "m-1",
+	})
+
+	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com")
+
+	share, err := repo.GetShare(context.Background(), "invitee-1", "m-1")
+	if err != nil || share == nil {
+		t.Fatalf("expected share to be materialized, got share=%v err=%v", share, err)
+	}
+	if share.Permission != model.PermissionEdit {
+		t.Errorf("expected edit permission, got %q", share.Permission)
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected pending share to be cleared, got %d remaining", len(repo.pendingShares))
+	}
+}
+
+func TestMaterializePendingShares_SkipsWhenInviterNoLongerOwnsMeeting(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	// The meeting exists, but under a DIFFERENT owner than the one who
+	// queued the pending share -- e.g. the inviter's own access was later
+	// revoked. GetMeeting(InvitedByUserID, meetingID) must return nil here.
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "someone-else", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@test.com", Kind: model.PendingShareKindMeeting,
+		MeetingID: "m-1", Permission: model.PermissionEdit,
+		InvitedByUserID: "owner-1", InvitedByEmail: "owner@test.com",
+		SK: model.PrefixPendingMeeting + "m-1",
+	})
+
+	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com")
+
+	share, err := repo.GetShare(context.Background(), "invitee-1", "m-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if share != nil {
+		t.Errorf("expected no share to be materialized once the inviter lost ownership, got %+v", share)
+	}
+}
+
+func TestMaterializePendingShares_SkipsWhenInviterNoLongerAccountMember(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "Test Account"}
+	// owner-1 queued this grant but is NOT (any longer) a member of acc-1.
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@test.com", Kind: model.PendingShareKindAccount,
+		AccountID: "acc-1", Role: model.RoleSSA,
+		InvitedByUserID: "owner-1",
+		SK:              model.PrefixPendingAccount + "acc-1",
+	})
+
+	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com")
+
+	mem, err := repo.GetMember(context.Background(), "acc-1", "invitee-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mem != nil {
+		t.Errorf("expected no membership to be materialized once the inviter is no longer a member, got %+v", mem)
+	}
+}
+
 func TestSelectTranscript_ReadOnlyForbidden(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)

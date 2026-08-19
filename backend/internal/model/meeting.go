@@ -357,6 +357,8 @@ const PendingShareTTL = 30 * 24 * time.Hour
 const (
 	PendingShareKindAccount = "account"
 	PendingShareKindMeeting = "meeting"
+
+	EntityTypePendingShare = "PENDING_SHARE"
 )
 
 // SKUserLogin is the sort key for the UserLogin item (see UserLogin doc comment).

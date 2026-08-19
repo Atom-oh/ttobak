@@ -278,8 +278,11 @@ Response: 201 Created
 
 // If email belongs to a Cognito user who has been invited (admin-created)
 // but never completed a first login, the grant is queued instead of
-// rejected -- it becomes a real membership automatically the moment they
-// log in for the first time (see PendingShare in backend/internal/model).
+// rejected -- it materializes into a real membership on their first
+// ListMeetings/CreateMeeting call after logging in (not literally "at
+// login" -- see PendingShare in backend/internal/model). The queued grant
+// is not listed anywhere and cannot be cancelled once sent (expires via
+// DynamoDB TTL after 30 days if never claimed).
 Response: 201 Created
 {
   "email": "tam@example.com",
@@ -869,8 +872,10 @@ Response: 200 OK
 }
 
 // email is invited (Cognito account exists) but has never logged in yet --
-// queued as a PendingShare instead of a real Share row; materializes
-// automatically the moment they log in for the first time.
+// queued as a PendingShare instead of a real Share row; materializes on
+// their first ListMeetings/CreateMeeting call after logging in (not
+// listed anywhere, not cancellable, expires via DynamoDB TTL after 30
+// days if never claimed).
 Response: 200 OK
 {
   "sharedWith": {

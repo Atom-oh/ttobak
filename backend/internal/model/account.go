@@ -80,7 +80,7 @@ type UpdateMemberRequest struct {
 }
 
 type AccountMemberDTO struct {
-	UserID string `json:"userId"`
+	UserID string `json:"userId,omitempty"`
 	Email  string `json:"email,omitempty"`
 	Role   string `json:"role"`
 	// Pending is true when this grant was queued as a PendingShare because
