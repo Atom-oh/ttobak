@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +45,29 @@ func NewMeetingHandler(meetingService *service.MeetingService, repo *repository.
 	return h
 }
 
+// ensureProfileAndMaterializePendingShares ensures the caller's PROFILE row
+// exists and, only on the call that just created it (the invitee's first
+// authenticated request after accepting their invite), materializes any
+// AddMember/ShareMeetingByEmail grants that were queued as PendingShare
+// while no PROFILE row existed for their email yet (see PendingShare's doc
+// comment). Errors are logged, not surfaced -- this must never block
+// ListMeetings/CreateMeeting, and a missed materialization here just leaves
+// the grant queued for the next call that creates the row (it can't have
+// already been created, since this only fires once per user).
+func (h *MeetingHandler) ensureProfileAndMaterializePendingShares(ctx context.Context, userID, email, name string) {
+	_, created, err := h.repo.GetOrCreateUser(ctx, userID, email, name)
+	if err != nil {
+		log.Printf("ensureProfileAndMaterializePendingShares: GetOrCreateUser failed for user %s: %v", userID, err)
+		return
+	}
+	if !created {
+		return
+	}
+	if err := h.repo.MaterializePendingShares(ctx, userID, email); err != nil {
+		log.Printf("ensureProfileAndMaterializePendingShares: MaterializePendingShares failed for user %s: %v", userID, err)
+	}
+}
+
 // LinkToAccount handles POST /api/meetings/{meetingId}/account.
 func (h *MeetingHandler) LinkToAccount(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -84,7 +108,7 @@ func (h *MeetingHandler) ListMeetings(w http.ResponseWriter, r *http.Request) {
 	email := middleware.GetUserEmail(ctx)
 	name := middleware.GetUserName(ctx)
 	if email != "" {
-		h.repo.GetOrCreateUser(ctx, userID, email, name)
+		h.ensureProfileAndMaterializePendingShares(ctx, userID, email, name)
 	}
 
 	tab := r.URL.Query().Get("tab")
@@ -138,7 +162,7 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 	email := middleware.GetUserEmail(ctx)
 	name := middleware.GetUserName(ctx)
 	if email != "" {
-		h.repo.GetOrCreateUser(ctx, userID, email, name)
+		h.ensureProfileAndMaterializePendingShares(ctx, userID, email, name)
 	}
 
 	meeting, err := h.meetingService.CreateMeeting(ctx, userID, req.Title, date, req.Participants, req.SttProvider)

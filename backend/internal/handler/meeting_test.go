@@ -168,8 +168,8 @@ func (m *mockHandlerMeetingRepo) ListMeetings(_ context.Context, params reposito
 func (m *mockHandlerMeetingRepo) BatchGetMeetings(_ context.Context, _ []repository.MeetingKey) ([]*model.Meeting, error) {
 	return nil, nil
 }
-func (m *mockHandlerMeetingRepo) GetOrCreateUser(_ context.Context, userID, email, name string) (*model.User, error) {
-	return &model.User{UserID: userID, Email: email}, nil
+func (m *mockHandlerMeetingRepo) GetOrCreateUser(_ context.Context, userID, email, name string) (*model.User, bool, error) {
+	return &model.User{UserID: userID, Email: email}, false, nil
 }
 func (m *mockHandlerMeetingRepo) GetUserByEmail(_ context.Context, email string) (*model.User, error) {
 	u, ok := m.users[email]
@@ -188,6 +188,10 @@ func (m *mockHandlerMeetingRepo) CreateShareIfMember(_ context.Context, meetingI
 	return &model.Share{MeetingID: meetingID, SharedToID: sharedToID, Permission: permission, Origin: model.ShareOriginAccount}, nil
 }
 func (m *mockHandlerMeetingRepo) DeleteShare(_ context.Context, sharedToID, meetingID string) error {
+	return nil
+}
+
+func (m *mockHandlerMeetingRepo) PutPendingShare(_ context.Context, _ *model.PendingShare) error {
 	return nil
 }
 

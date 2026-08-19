@@ -91,8 +91,11 @@ export default function AccountDetailClient() {
     setInviting(true);
     setError(null);
     try {
-      await accountApi.addMember(accountId, { email: picked.email, role: inviteRole });
+      const result = await accountApi.addMember(accountId, { email: picked.email, role: inviteRole });
       await fetchAll();
+      if (result?.pending) {
+        setError(`${picked.email}님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 계정에 추가됩니다.`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add member');
     } finally {

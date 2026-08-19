@@ -306,6 +306,44 @@ const (
 	PrefixHistory    = "HISTORY#"
 	PrefixConfig     = "CONFIG"
 	PrefixResearch   = "RESEARCH#"
+
+	// PrefixPendingShare / PrefixPendingAccount / PrefixPendingMeeting key the
+	// PendingShare item below: PK: PENDINGSHARE#{email}, SK:
+	// PENDING_ACCOUNT#{accountId} or PENDING_MEETING#{meetingId}.
+	PrefixPendingShare   = "PENDINGSHARE#"
+	PrefixPendingAccount = "PENDING_ACCOUNT#"
+	PrefixPendingMeeting = "PENDING_MEETING#"
+)
+
+// PendingShare records an Account- or Meeting-share grant made to an email
+// address that has been invited (a Cognito account exists) but has never
+// completed a first login -- so no PROFILE row exists yet and
+// GetUserByEmail can't resolve it to a userID. AddMember/ShareMeetingByEmail
+// write one of these instead of failing outright when the target is in
+// exactly this state; DynamoDBRepository.MaterializePendingShares turns it
+// into a real AccountMember or Share row the moment GetOrCreateUser creates
+// that email's PROFILE row (its first authenticated request after
+// accepting the invite), so the grant becomes visible immediately on
+// sign-in with no separate "pending invites" step for the invitee.
+// PK: PENDINGSHARE#{email}, SK: PENDING_ACCOUNT#{accountId} | PENDING_MEETING#{meetingId}
+type PendingShare struct {
+	PK              string    `dynamodbav:"PK"`
+	SK              string    `dynamodbav:"SK"`
+	Email           string    `dynamodbav:"email"`
+	Kind            string    `dynamodbav:"kind"` // "account" | "meeting"
+	AccountID       string    `dynamodbav:"accountId,omitempty"`
+	MeetingID       string    `dynamodbav:"meetingId,omitempty"`
+	Role            string    `dynamodbav:"role,omitempty"`       // set when Kind=="account"
+	Permission      string    `dynamodbav:"permission,omitempty"` // set when Kind=="meeting"
+	InvitedByUserID string    `dynamodbav:"invitedByUserId"`
+	InvitedByEmail  string    `dynamodbav:"invitedByEmail,omitempty"`
+	CreatedAt       time.Time `dynamodbav:"createdAt"`
+	EntityType      string    `dynamodbav:"entityType"` // "PENDING_SHARE"
+}
+
+const (
+	PendingShareKindAccount = "account"
+	PendingShareKindMeeting = "meeting"
 )
 
 // SKUserLogin is the sort key for the UserLogin item (see UserLogin doc comment).

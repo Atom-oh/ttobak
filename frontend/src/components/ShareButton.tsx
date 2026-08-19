@@ -27,6 +27,18 @@ interface ShareButtonProps {
   readOnly?: boolean;
 }
 
+// shareApi's return shape varies by entity (meeting share vs. doc share), so
+// this only recognizes the one shape that carries a pending flag (meeting
+// share's `{ sharedWith: { pending } }`, see model.SharedWithResponse) --
+// anything else (including doc share's response) is treated as a normal,
+// already-materialized share.
+function isPendingShareResult(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const sharedWith = (result as { sharedWith?: unknown }).sharedWith;
+  if (!sharedWith || typeof sharedWith !== 'object') return false;
+  return (sharedWith as { pending?: unknown }).pending === true;
+}
+
 // Backwards-compatible wrapper for meetings
 interface MeetingShareButtonProps {
   meetingId: string;
@@ -112,6 +124,7 @@ export function ShareButton({
   const [isSearching, setIsSearching] = useState(false);
   const [selectedPermission, setSelectedPermission] = useState<'read' | 'edit'>('read');
   const [isSharing, setIsSharing] = useState(false);
+  const [pendingNotice, setPendingNotice] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -164,16 +177,24 @@ export function ShareButton({
 
   const handleShare = async (user: User) => {
     setIsSharing(true);
+    setPendingNotice(null);
     try {
       const permission = readOnly ? 'read' : selectedPermission;
-      await shareApi(entityId, { email: user.email, permission });
-      onShare?.({
-        userId: user.userId,
-        email: user.email,
-        name: user.name,
-        permission: readOnly ? 'read' : selectedPermission,
-        sharedAt: new Date().toISOString(),
-      });
+      const result = await shareApi(entityId, { email: user.email, permission });
+      if (isPendingShareResult(result)) {
+        // Invited but not yet logged in: no real Share row exists yet
+        // (see PendingShare), so don't optimistically add a fake entry to
+        // sharedWith -- it'll appear for real once they sign in.
+        setPendingNotice(`${user.email}님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 공유됩니다.`);
+      } else {
+        onShare?.({
+          userId: user.userId,
+          email: user.email,
+          name: user.name,
+          permission: readOnly ? 'read' : selectedPermission,
+          sharedAt: new Date().toISOString(),
+        });
+      }
       setSearchQuery('');
       setSearchResults([]);
     } catch (err) {
@@ -253,6 +274,12 @@ export function ShareButton({
             </div>
             )}
           </div>
+
+          {pendingNotice && (
+            <div className="px-4 py-3 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border-b border-slate-200 dark:border-slate-700">
+              {pendingNotice}
+            </div>
+          )}
 
           {searchQuery.length > 0 && searchQuery.length < 2 && (
             <div className="px-4 py-3 text-center text-slate-400 text-sm">

@@ -225,6 +225,10 @@ type ShareResponse struct {
 	Email      string     `json:"email"`
 	Permission string     `json:"permission"`
 	SharedAt   *time.Time `json:"sharedAt,omitempty"`
+	// Pending is true when the share was queued as a PendingShare because
+	// the target has an invited-but-not-yet-logged-in Cognito account;
+	// UserID is empty in that case.
+	Pending bool `json:"pending,omitempty"`
 }
 
 // SharedWithResponse represents the response for sharing a meeting

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -100,6 +101,7 @@ type accountRepo interface {
 	DeleteDocShare(ctx context.Context, sharedToID, docID string) error
 	ListDocSharesForUser(ctx context.Context, userID string) ([]model.Share, error)
 	ListDocSharesForDoc(ctx context.Context, docID string) ([]model.Share, error)
+	PutPendingShare(ctx context.Context, share *model.PendingShare) error
 }
 
 // AccountRepo is the exported alias for cross-package (handler) tests.
@@ -120,10 +122,31 @@ type AccountService struct {
 	repo       accountRepo
 	s3         s3ObjectDeleter
 	bucketName string
+
+	// cognito/cognitoPoolID back AddMember's PendingShare invited-check (see
+	// emailHasPendingInvite in meeting.go). Left unset, AddMember treats every
+	// unresolved email as plainly unknown -- SetCognitoAdminAPI is what
+	// cmd/api/main.go calls to wire the real client.
+	cognito       cognitoAdminAPI
+	cognitoPoolID string
 }
 
 func NewAccountService(repo *repository.DynamoDBRepository, s3Client *s3.Client, bucketName string) *AccountService {
 	return &AccountService{repo: repo, s3: s3Client, bucketName: bucketName}
+}
+
+// SetCognitoAdminAPI wires a Cognito client for AddMember's PendingShare
+// invited-check to use. Mirrors MeetingService.SetCognitoAdminAPI.
+func (s *AccountService) SetCognitoAdminAPI(client cognitoAdminAPI, poolID string) {
+	s.cognito = client
+	s.cognitoPoolID = poolID
+}
+
+func (s *AccountService) resolveCognitoPoolID() string {
+	if s.cognitoPoolID != "" {
+		return s.cognitoPoolID
+	}
+	return os.Getenv("COGNITO_USER_POOL_ID")
 }
 
 // newAccountServiceWithRepo is for same-package (service) tests. s3 is left
@@ -267,7 +290,24 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 		return nil, err
 	}
 	if user == nil {
-		return nil, ErrUserNotFound
+		invited, err := emailHasPendingInvite(ctx, s.cognito, s.resolveCognitoPoolID(), req.Email)
+		if err != nil {
+			return nil, err
+		}
+		if !invited {
+			return nil, ErrUserNotFound
+		}
+		if err := s.repo.PutPendingShare(ctx, &model.PendingShare{
+			Email:           req.Email,
+			Kind:            model.PendingShareKindAccount,
+			AccountID:       accountID,
+			Role:            req.Role,
+			InvitedByUserID: requesterUserID,
+			InvitedByEmail:  requester.Email,
+		}); err != nil {
+			return nil, err
+		}
+		return &model.AccountMemberDTO{Email: req.Email, Role: req.Role, Pending: true}, nil
 	}
 	existing, err := s.repo.GetMember(ctx, accountID, user.UserID)
 	if err != nil {

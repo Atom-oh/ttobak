@@ -55,7 +55,7 @@ func (h *ShareHandler) ShareMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	share, err := h.meetingService.ShareMeetingByEmail(ctx, userID, userEmail, meetingID, req.Email, req.Permission)
+	share, pending, err := h.meetingService.ShareMeetingByEmail(ctx, userID, userEmail, meetingID, req.Email, req.Permission)
 	if err != nil {
 		switch err.Error() {
 		case "forbidden":
@@ -76,12 +76,23 @@ func (h *ShareHandler) ShareMeeting(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	response := model.SharedWithResponse{
-		SharedWith: model.ShareResponse{
-			UserID:     share.SharedToID,
-			Email:      share.Email,
-			Permission: share.Permission,
-		},
+	var response model.SharedWithResponse
+	if pending {
+		response = model.SharedWithResponse{
+			SharedWith: model.ShareResponse{
+				Email:      req.Email,
+				Permission: req.Permission,
+				Pending:    true,
+			},
+		}
+	} else {
+		response = model.SharedWithResponse{
+			SharedWith: model.ShareResponse{
+				UserID:     share.SharedToID,
+				Email:      share.Email,
+				Permission: share.Permission,
+			},
+		}
 	}
 
 	writeJSON(w, http.StatusOK, response)

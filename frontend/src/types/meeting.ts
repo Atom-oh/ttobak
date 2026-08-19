@@ -313,6 +313,11 @@ export interface AccountMember {
   userId: string;
   email?: string;
   role: string;
+  // true when the invitee has an invited-but-not-yet-logged-in Cognito
+  // account and no DynamoDB profile exists yet -- the grant is queued and
+  // becomes a real membership automatically on their first login. userId
+  // is empty in that case.
+  pending?: boolean;
 }
 
 export interface Account {

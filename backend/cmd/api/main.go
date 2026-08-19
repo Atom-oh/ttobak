@@ -76,6 +76,9 @@ func init() {
 	meetingService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	userAdminService := service.NewUserAdminService(cognitoClient, cognitoPoolID, repo)
 	accountService := service.NewAccountService(repo, s3Client, bucketName)
+	// Reuse the same cold-start Cognito client for AddMember's PendingShare
+	// invited-check (see AccountService.SetCognitoAdminAPI).
+	accountService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	projectService := service.NewProjectService(repo)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)

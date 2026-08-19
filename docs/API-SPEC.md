@@ -265,7 +265,7 @@ Error: 404 Not Found (account doesn't exist)
 POST /api/accounts/{accountId}/members
 Request:
 {
-  "email": "tam@example.com",   // an existing registered user's email
+  "email": "tam@example.com",   // a registered OR invited-but-not-yet-logged-in user's email
   "role": "TAM"                 // AM | TAM | SSA | SA | SA Manager | AM Manager (owner can't be assigned)
 }
 
@@ -276,8 +276,19 @@ Response: 201 Created
   "role": "TAM"
 }
 
+// If email belongs to a Cognito user who has been invited (admin-created)
+// but never completed a first login, the grant is queued instead of
+// rejected -- it becomes a real membership automatically the moment they
+// log in for the first time (see PendingShare in backend/internal/model).
+Response: 201 Created
+{
+  "email": "tam@example.com",
+  "role": "TAM",
+  "pending": true                 // userId omitted -- not yet known
+}
+
 Error: 403 Forbidden (not the owner)
-Error: 404 Not Found (no user with that email)
+Error: 404 Not Found (email has never been invited at all)
 Error: 400 Bad Request (already a member, or invalid role)
 ```
 
@@ -857,8 +868,20 @@ Response: 200 OK
   }
 }
 
+// email is invited (Cognito account exists) but has never logged in yet --
+// queued as a PendingShare instead of a real Share row; materializes
+// automatically the moment they log in for the first time.
+Response: 200 OK
+{
+  "sharedWith": {
+    "email": "bob@example.com",
+    "permission": "read",
+    "pending": true                // userId omitted -- not yet known
+  }
+}
+
 Error: 403 Forbidden (only owner can share)
-Error: 404 User not found
+Error: 404 User not found (email has never been invited at all)
 ```
 
 #### Revoke Share

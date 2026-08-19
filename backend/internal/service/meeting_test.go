@@ -21,6 +21,7 @@ type mockMeetingRepo struct {
 	members         map[string]*model.AccountMember // "accountID|userID"
 	meetingRefs     map[string][]model.MeetingRef   // accountID -> refs
 	accountInsights []model.AccountInsight
+	pendingShares   []*model.PendingShare // PutPendingShare calls, in order
 
 	// forceGetMemberNil simulates a concurrent RemoveMember that completed
 	// between ShareMeetingToAccount's ListAccountMembers snapshot and its
@@ -202,8 +203,8 @@ func (m *mockMeetingRepo) BatchGetMeetings(_ context.Context, keys []repository.
 	return result, nil
 }
 
-func (m *mockMeetingRepo) GetOrCreateUser(_ context.Context, userID, email, name string) (*model.User, error) {
-	return &model.User{UserID: userID, Email: email, Name: name}, nil
+func (m *mockMeetingRepo) GetOrCreateUser(_ context.Context, userID, email, name string) (*model.User, bool, error) {
+	return &model.User{UserID: userID, Email: email, Name: name}, false, nil
 }
 
 func (m *mockMeetingRepo) GetUserByEmail(_ context.Context, email string) (*model.User, error) {
@@ -237,6 +238,12 @@ func (m *mockMeetingRepo) CreateShare(_ context.Context, meetingID, ownerID, own
 
 func (m *mockMeetingRepo) DeleteShare(_ context.Context, sharedToID, meetingID string) error {
 	delete(m.shares, shareKey(sharedToID, meetingID))
+	return nil
+}
+
+func (m *mockMeetingRepo) PutPendingShare(_ context.Context, share *model.PendingShare) error {
+	cp := *share
+	m.pendingShares = append(m.pendingShares, &cp)
 	return nil
 }
 
@@ -947,9 +954,54 @@ func TestShareMeeting_CannotShareWithSelf(t *testing.T) {
 	})
 	repo.users["user@test.com"] = &model.User{UserID: "user-1", Email: "user@test.com"}
 
-	_, err := svc.ShareMeetingByEmail(context.Background(), "user-1", "user@test.com", "m-1", "user@test.com", "read")
+	_, _, err := svc.ShareMeetingByEmail(context.Background(), "user-1", "user@test.com", "m-1", "user@test.com", "read")
 	if err == nil {
 		t.Fatal("expected error for self-share, got nil")
+	}
+}
+
+func TestShareMeetingByEmail_UnknownEmail_NotInvited(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	_, pending, err := svc.ShareMeetingByEmail(context.Background(), "owner-1", "owner@test.com", "m-1", "ghost@test.com", model.PermissionRead)
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("expected ErrUserNotFound, got %v", err)
+	}
+	if pending {
+		t.Error("expected pending=false for a never-invited email")
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected no pending share for a never-invited email, got %d", len(repo.pendingShares))
+	}
+}
+
+func TestShareMeetingByEmail_InvitedButNotYetLoggedIn_QueuesPendingShare(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{}, "pool-1") // zero-value AdminGetUser response = user exists
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	share, pending, err := svc.ShareMeetingByEmail(context.Background(), "owner-1", "owner@test.com", "m-1", "invited@test.com", model.PermissionEdit)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !pending || share != nil {
+		t.Errorf("expected pending=true and nil share, got pending=%v share=%+v", pending, share)
+	}
+	if len(repo.pendingShares) != 1 {
+		t.Fatalf("expected 1 pending share, got %d", len(repo.pendingShares))
+	}
+	p := repo.pendingShares[0]
+	if p.Kind != model.PendingShareKindMeeting || p.MeetingID != "m-1" || p.Permission != model.PermissionEdit || p.InvitedByUserID != "owner-1" {
+		t.Errorf("unexpected pending share: %+v", p)
 	}
 }
 

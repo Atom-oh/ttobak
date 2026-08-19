@@ -65,7 +65,7 @@ type meetingRepo interface {
 	ListSharesForMeeting(ctx context.Context, meetingID string) ([]model.Share, error)
 	ListMeetings(ctx context.Context, params repository.ListMeetingsParams) (*repository.ListMeetingsResult, error)
 	BatchGetMeetings(ctx context.Context, keys []repository.MeetingKey) ([]*model.Meeting, error)
-	GetOrCreateUser(ctx context.Context, userID, email, name string) (*model.User, error)
+	GetOrCreateUser(ctx context.Context, userID, email, name string) (*model.User, bool, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, origin string) (*model.Share, error)
 	CreateShareIfMember(ctx context.Context, meetingID, ownerID, ownerEmail, accountID, sharedToID, email, permission string) (*model.Share, error)
@@ -74,6 +74,7 @@ type meetingRepo interface {
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error
 	PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error
+	PutPendingShare(ctx context.Context, share *model.PendingShare) error
 }
 
 // MeetingService handles meeting business logic
@@ -615,32 +616,80 @@ func (s *MeetingService) SelectTranscript(ctx context.Context, userID, meetingID
 	return s.repo.UpdateMeeting(ctx, meeting)
 }
 
-// ShareMeetingByEmail shares a meeting with a user identified by email
-func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, ownerEmail, meetingID, targetEmail, permission string) (*model.Share, error) {
+// ShareMeetingByEmail shares a meeting with a user identified by email. The
+// returned bool is true when targetEmail has no PROFILE row yet but does
+// have an invited Cognito account -- the grant was queued as a PendingShare
+// (see its doc comment) rather than a real Share, and the returned *Share is
+// nil.
+func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, ownerEmail, meetingID, targetEmail, permission string) (*model.Share, bool, error) {
 	// Verify ownership
 	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if meeting == nil {
-		return nil, ErrNotFound
+		return nil, false, ErrNotFound
 	}
 
 	// Find user by email
 	targetUser, err := s.repo.GetUserByEmail(ctx, targetEmail)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if targetUser == nil {
-		return nil, fmt.Errorf("user not found")
+		invited, err := emailHasPendingInvite(ctx, s.cognito, s.resolveCognitoPoolID(), targetEmail)
+		if err != nil {
+			return nil, false, err
+		}
+		if !invited {
+			return nil, false, ErrUserNotFound
+		}
+		if err := s.repo.PutPendingShare(ctx, &model.PendingShare{
+			Email:           targetEmail,
+			Kind:            model.PendingShareKindMeeting,
+			MeetingID:       meetingID,
+			Permission:      permission,
+			InvitedByUserID: ownerID,
+			InvitedByEmail:  ownerEmail,
+		}); err != nil {
+			return nil, false, err
+		}
+		return nil, true, nil
 	}
 
 	// Cannot share with self
 	if ownerID == targetUser.UserID {
-		return nil, fmt.Errorf("cannot share with yourself")
+		return nil, false, ErrSelfShare
 	}
 
-	return s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, targetUser.UserID, targetEmail, permission, "")
+	share, err := s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, targetUser.UserID, targetEmail, permission, "")
+	return share, false, err
+}
+
+// emailHasPendingInvite reports whether email belongs to a Cognito user who
+// has been invited but hasn't completed a first login yet -- exactly the
+// gap PendingShare exists to bridge. Deliberately requires an explicitly
+// wired client (unlike resolveCognitoClient's other callers, e.g. InviteUser)
+// rather than falling back to building one inline: a service constructed
+// without SetCognitoAdminAPI (unit tests, or any future caller that never
+// wires one) should treat every unresolvable email as plainly unknown, not
+// make a live AWS call just to decide that.
+func emailHasPendingInvite(ctx context.Context, client cognitoAdminAPI, poolID, email string) (bool, error) {
+	if client == nil || poolID == "" {
+		return false, nil
+	}
+	_, err := client.AdminGetUser(ctx, &cognitoidp.AdminGetUserInput{
+		UserPoolId: aws.String(poolID),
+		Username:   aws.String(email),
+	})
+	if err != nil {
+		var notFound *cognitoidptypes.UserNotFoundException
+		if errors.As(err, &notFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check invite status for %s: %w", email, err)
+	}
+	return true, nil
 }
 
 // RevokeShare revokes a share (owner only)
