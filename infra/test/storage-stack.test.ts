@@ -55,6 +55,20 @@ describe('StorageStack', () => {
     expect(JSON.stringify(statement)).not.toContain('transcripts');
   });
 
+  test('table TTL is scoped to pendingShareExpiresAt, not QA handler.py\'s TTL attribute', () => {
+    // The table allows exactly one timeToLiveAttribute. Pointing it at
+    // PendingShare's own distinctly-named attribute (rather than reusing
+    // backend/python/qa/handler.py's uppercase `TTL` field) lets DynamoDB's
+    // sweep auto-clean expired pending invites without also bulk-deleting
+    // QA's pre-existing, never-swept conversation history.
+    template.hasResourceProperties('AWS::DynamoDB::Table', {
+      TimeToLiveSpecification: {
+        AttributeName: 'pendingShareExpiresAt',
+        Enabled: true,
+      },
+    });
+  });
+
   test('OAC SourceArn is resolved from a live deploy-time lookup, not a hardcoded wildcard', () => {
     // The closed-loop fix (ADR-027): AWS:SourceArn must be a token wired to
     // the custom resource that reads FrontendStack's published distribution

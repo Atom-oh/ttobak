@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	cognitoidp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
+	cognitoidptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ttobak/backend/internal/model"
 	"github.com/ttobak/backend/internal/repository"
@@ -24,6 +27,7 @@ type mockAccountRepo struct {
 	meetings          map[string]*model.Meeting          // meetingID -> meeting
 	publicShares      map[string]*model.PublicShare      // token -> share
 	docShares         map[string]*model.Share            // "sharedToID|docID" -> per-user doc share
+	pendingShares     []*model.PendingShare              // PutPendingShare calls, in order
 
 	// shareOpErr, when non-nil, is returned by GetShare/DeleteShare for the
 	// specific meetingID it's keyed to test cleanup-failure handling without
@@ -126,6 +130,24 @@ func (m *mockAccountRepo) GetDocShare(_ context.Context, sharedToID, docID strin
 
 func (m *mockAccountRepo) DeleteDocShare(_ context.Context, sharedToID, docID string) error {
 	delete(m.docShares, docShareKey(sharedToID, docID))
+	return nil
+}
+
+func (m *mockAccountRepo) PutPendingShare(_ context.Context, share *model.PendingShare) error {
+	cp := *share
+	m.pendingShares = append(m.pendingShares, &cp)
+	return nil
+}
+
+func (m *mockAccountRepo) DeletePendingShare(_ context.Context, email, sk string) error {
+	kept := m.pendingShares[:0]
+	for _, p := range m.pendingShares {
+		if p.Email == email && p.SK == sk {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	m.pendingShares = kept
 	return nil
 }
 
@@ -639,6 +661,162 @@ func TestAddMember_UnknownEmail(t *testing.T) {
 	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ghost@x.com", Role: model.RoleSSA})
 	if !errors.Is(err, ErrUserNotFound) {
 		t.Errorf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
+func TestRevokePendingMember_OwnerCanRevoke(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@x.com", Kind: model.PendingShareKindAccount,
+		AccountID: acc.AccountID, Role: model.RoleSSA,
+		SK: model.PrefixPendingAccount + acc.AccountID,
+	})
+
+	if err := svc.RevokePendingMember(context.Background(), "owner-1", acc.AccountID, "invited@x.com"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected the pending share to be revoked, got %d remaining", len(repo.pendingShares))
+	}
+}
+
+func TestRevokePendingMember_NonOwnerForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@x.com", Kind: model.PendingShareKindAccount,
+		AccountID: acc.AccountID, Role: model.RoleSSA,
+		SK: model.PrefixPendingAccount + acc.AccountID,
+	})
+
+	err := svc.RevokePendingMember(context.Background(), "tam-1", acc.AccountID, "invited@x.com")
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+	if len(repo.pendingShares) != 1 {
+		t.Errorf("expected the pending share to survive a non-owner's revoke attempt, got %d remaining", len(repo.pendingShares))
+	}
+}
+
+func TestRevokePendingMember_AccountNotFound(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+
+	err := svc.RevokePendingMember(context.Background(), "owner-1", "nonexistent-account", "invited@x.com")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestRevokePendingMember_NoOpWhenNothingQueued(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	if err := svc.RevokePendingMember(context.Background(), "owner-1", acc.AccountID, "nobody-invited@x.com"); err != nil {
+		t.Errorf("expected a no-op revoke to succeed silently, got %v", err)
+	}
+}
+
+func TestAddMember_InvitedButNotYetLoggedIn_QueuesPendingShare(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
+		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			return &cognitoidp.AdminGetUserOutput{
+				Username:       aws.String("invitee-username-1"),
+				UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("sub"), Value: aws.String("invitee-sub-1")}},
+			}, nil
+		},
+	}, "pool-1")
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	dto, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "invited@x.com", Role: model.RoleSSA})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !dto.Pending || dto.UserID != "" || dto.Email != "invited@x.com" || dto.Role != model.RoleSSA {
+		t.Errorf("unexpected pending dto: %+v", dto)
+	}
+	if len(repo.pendingShares) != 1 {
+		t.Fatalf("expected 1 pending share, got %d", len(repo.pendingShares))
+	}
+	p := repo.pendingShares[0]
+	if p.Kind != model.PendingShareKindAccount || p.AccountID != acc.AccountID || p.Role != model.RoleSSA || p.InvitedByUserID != "owner-1" || p.InvitedCognitoSub != "invitee-sub-1" {
+		t.Errorf("unexpected pending share: %+v", p)
+	}
+}
+
+func TestAddMember_PendingSelfInviteRejected(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
+		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			return &cognitoidp.AdminGetUserOutput{
+				Username:       aws.String("owner-1"),
+				UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("sub"), Value: aws.String("owner-1")}},
+			}, nil
+		},
+	}, "pool-1")
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "not-yet-logged-in@x.com", Role: model.RoleSSA})
+	if !errors.Is(err, ErrSelfShare) {
+		t.Errorf("expected ErrSelfShare, got %v", err)
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected no pending share to be queued for a self-invite, got %d", len(repo.pendingShares))
+	}
+}
+
+func TestAddMember_UnknownEmail_NotInvited_StillErrUserNotFound(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
+		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			return nil, &cognitoidptypes.UserNotFoundException{}
+		},
+	}, "pool-1")
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ghost@x.com", Role: model.RoleSSA})
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("expected ErrUserNotFound, got %v", err)
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected no pending share for a never-invited email, got %d", len(repo.pendingShares))
+	}
+}
+
+func TestAddMember_RejectsQueuingWithEmptyCognitoSub(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	// The `sub` attribute is a required response field per the AWS API
+	// contract and should never actually be missing/empty on a real invited
+	// user, but the authorization gate must fail closed if it somehow is --
+	// queuing an unclaimable grant (no identity to bind it to) would be
+	// worse than just rejecting the invite.
+	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
+		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			return &cognitoidp.AdminGetUserOutput{
+				Username:       aws.String("invitee-username-1"),
+				UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("sub"), Value: aws.String("")}},
+			}, nil
+		},
+	}, "pool-1")
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "invited@x.com", Role: model.RoleSSA})
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("expected ErrUserNotFound when the invite resolves to an empty sub, got %v", err)
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected no pending share to be queued with an empty sub, got %d", len(repo.pendingShares))
 	}
 }
 

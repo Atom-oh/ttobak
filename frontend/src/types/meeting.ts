@@ -312,9 +312,16 @@ export interface AccountSummary {
 }
 
 export interface AccountMember {
-  userId: string;
+  // Omitted (not empty string) on a pending grant -- the backend DTO uses
+  // `json:"userId,omitempty"`.
+  userId?: string;
   email?: string;
   role: string;
+  // true when the invitee has an invited-but-not-yet-logged-in Cognito
+  // account and no DynamoDB profile exists yet -- the grant is queued and
+  // becomes a real membership automatically on their first login. userId
+  // is omitted in that case.
+  pending?: boolean;
 }
 
 export interface Account {

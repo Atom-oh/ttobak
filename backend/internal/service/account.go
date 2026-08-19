@@ -100,6 +100,8 @@ type accountRepo interface {
 	DeleteDocShare(ctx context.Context, sharedToID, docID string) error
 	ListDocSharesForUser(ctx context.Context, userID string) ([]model.Share, error)
 	ListDocSharesForDoc(ctx context.Context, docID string) ([]model.Share, error)
+	PutPendingShare(ctx context.Context, share *model.PendingShare) error
+	DeletePendingShare(ctx context.Context, email, sk string) error
 }
 
 // AccountRepo is the exported alias for cross-package (handler) tests.
@@ -120,10 +122,34 @@ type AccountService struct {
 	repo       accountRepo
 	s3         s3ObjectDeleter
 	bucketName string
+
+	// cognito/cognitoPoolID back AddMember's PendingShare invited-check (see
+	// emailHasPendingInvite in meeting.go). Left unset, AddMember treats every
+	// unresolved email as plainly unknown -- SetCognitoAdminAPI is what
+	// cmd/api/main.go calls to wire the real client.
+	cognito       cognitoAdminAPI
+	cognitoPoolID string
 }
 
 func NewAccountService(repo *repository.DynamoDBRepository, s3Client *s3.Client, bucketName string) *AccountService {
 	return &AccountService{repo: repo, s3: s3Client, bucketName: bucketName}
+}
+
+// SetCognitoAdminAPI wires a Cognito client for AddMember's PendingShare
+// invited-check to use. Mirrors MeetingService.SetCognitoAdminAPI.
+func (s *AccountService) SetCognitoAdminAPI(client cognitoAdminAPI, poolID string) {
+	s.cognito = client
+	s.cognitoPoolID = poolID
+}
+
+// resolveCognitoPoolID intentionally has no os.Getenv fallback, unlike
+// MeetingService's namesake: main.go always calls SetCognitoAdminAPI on
+// this service (there's no legacy caller that constructs it without
+// wiring one), and emailHasPendingInvite's own contract is "explicitly
+// wired or skip the check" -- a silent env-var fallback here would
+// contradict that and was dead code in practice anyway.
+func (s *AccountService) resolveCognitoPoolID() string {
+	return s.cognitoPoolID
 }
 
 // newAccountServiceWithRepo is for same-package (service) tests. s3 is left
@@ -267,7 +293,45 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 		return nil, err
 	}
 	if user == nil {
-		return nil, ErrUserNotFound
+		invited, sub, err := emailHasPendingInvite(ctx, s.cognito, s.resolveCognitoPoolID(), req.Email)
+		if err != nil {
+			return nil, err
+		}
+		if !invited || sub == "" {
+			// Fail-closed: without a sub, materializeOne has no identity to
+			// bind the grant to. AdminGetUserOutput.Username is a required
+			// response field, so this should never actually be empty --
+			// treat it the same as "not invited" rather than queuing an
+			// unclaimable grant.
+			return nil, ErrUserNotFound
+		}
+		// requesterUserID has a PROFILE row (it's already resolved to a
+		// member via GetMember above), so a self-invite here means the
+		// requester is inviting their own not-yet-materialized identity --
+		// possible when they were added as an owner before ever completing
+		// GetOrCreateUser (e.g. via CreateAccount without a prior
+		// ListMeetings/CreateMeeting call). Left unchecked, the eventual
+		// materialize would make MaterializePendingAccountGrant's
+		// ConditionCheck (on InvitedByUserID's membership) and Put (on
+		// userID's membership) target the exact same DynamoDB item, which
+		// DynamoDB rejects outright rather than via a normal conditional
+		// failure -- that error would repeat on every login attempt until
+		// the row's TTL finally drops it.
+		if sub == requesterUserID {
+			return nil, ErrSelfShare
+		}
+		if err := s.repo.PutPendingShare(ctx, &model.PendingShare{
+			Email:             req.Email,
+			Kind:              model.PendingShareKindAccount,
+			AccountID:         accountID,
+			Role:              req.Role,
+			InvitedByUserID:   requesterUserID,
+			InvitedByEmail:    requester.Email,
+			InvitedCognitoSub: sub,
+		}); err != nil {
+			return nil, err
+		}
+		return &model.AccountMemberDTO{Email: req.Email, Role: req.Role, Pending: true}, nil
 	}
 	existing, err := s.repo.GetMember(ctx, accountID, user.UserID)
 	if err != nil {
@@ -292,6 +356,40 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 		return nil, err
 	}
 	return &model.AccountMemberDTO{UserID: user.UserID, Email: user.Email, Role: req.Role}, nil
+}
+
+// RevokePendingMember cancels a queued PendingShare account invite before
+// the target has ever logged in -- there's no membership row to remove
+// yet (that's the whole point of AddMember's pending branch), so this
+// can't go through RemoveMember. Exists because a PendingShare grant is
+// otherwise invisible and un-revocable for up to PendingShareTTL once
+// queued: AGENTS.md's "PII in DynamoDB requires KMS + TTL" mandate expects
+// standing access grants to be cancellable, not just eventually expiring.
+// The pending row's SK already encodes accountID
+// (PENDING_ACCOUNT#{accountId}), so this is safe to call without a
+// separate existence/ownership check on the row itself -- it can only
+// ever address this exact account's queued invite for email, never
+// another account's; requester just needs to currently be this account's
+// owner. A DeleteItem on an already-gone/never-existed row is a silent
+// no-op, so this doesn't distinguish "revoked" from "there was nothing to
+// revoke" -- both look like success to the caller, which matches
+// RemoveMember's own idempotent-delete behavior.
+func (s *AccountService) RevokePendingMember(ctx context.Context, requesterUserID, accountID, email string) error {
+	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
+	if err != nil {
+		return err
+	}
+	if requester == nil || requester.Role != model.RoleOwner {
+		account, err := s.repo.GetAccount(ctx, accountID)
+		if err != nil {
+			return err
+		}
+		if account == nil {
+			return ErrNotFound
+		}
+		return ErrForbidden
+	}
+	return s.repo.DeletePendingShare(ctx, email, model.PrefixPendingAccount+accountID)
 }
 
 // RemoveMemberResult reports the outcome of RemoveMember's best-effort Share

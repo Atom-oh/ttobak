@@ -55,19 +55,19 @@ func (h *ShareHandler) ShareMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	share, err := h.meetingService.ShareMeetingByEmail(ctx, userID, userEmail, meetingID, req.Email, req.Permission)
+	share, pending, err := h.meetingService.ShareMeetingByEmail(ctx, userID, userEmail, meetingID, req.Email, req.Permission)
 	if err != nil {
-		switch err.Error() {
-		case "forbidden":
+		switch {
+		case errors.Is(err, service.ErrForbidden):
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only owner can share")
 			return
-		case "not found":
+		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
-		case "user not found":
+		case errors.Is(err, service.ErrUserNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "User not found")
 			return
-		case "cannot share with yourself":
+		case errors.Is(err, service.ErrSelfShare):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Cannot share meeting with yourself")
 			return
 		default:
@@ -76,12 +76,23 @@ func (h *ShareHandler) ShareMeeting(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	response := model.SharedWithResponse{
-		SharedWith: model.ShareResponse{
-			UserID:     share.SharedToID,
-			Email:      share.Email,
-			Permission: share.Permission,
-		},
+	var response model.SharedWithResponse
+	if pending {
+		response = model.SharedWithResponse{
+			SharedWith: model.ShareResponse{
+				Email:      req.Email,
+				Permission: req.Permission,
+				Pending:    true,
+			},
+		}
+	} else {
+		response = model.SharedWithResponse{
+			SharedWith: model.ShareResponse{
+				UserID:     share.SharedToID,
+				Email:      share.Email,
+				Permission: share.Permission,
+			},
+		}
 	}
 
 	writeJSON(w, http.StatusOK, response)
@@ -147,6 +158,41 @@ func (h *ShareHandler) RevokeShare(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 			return
 		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// RevokePendingShare handles DELETE /api/meetings/{meetingId}/share/pending?email={email} --
+// cancels a queued PendingShare invite before the target has ever logged
+// in (see MeetingService.RevokePendingShare's doc comment for why this is
+// a separate route from RevokeShare rather than reusing its {userId} path:
+// there's no userId yet for a grant that's never been claimed).
+func (h *ShareHandler) RevokePendingShare(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	ownerID := middleware.GetUserID(ctx)
+	meetingID := chi.URLParam(r, "meetingId")
+	email := r.URL.Query().Get("email")
+
+	if meetingID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Meeting ID is required")
+		return
+	}
+	if email == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "email query parameter is required")
+		return
+	}
+
+	if err := h.meetingService.RevokePendingShare(ctx, ownerID, meetingID, email); err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only owner can revoke a pending share")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)

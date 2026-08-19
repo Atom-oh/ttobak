@@ -76,6 +76,9 @@ func init() {
 	meetingService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	userAdminService := service.NewUserAdminService(cognitoClient, cognitoPoolID, repo)
 	accountService := service.NewAccountService(repo, s3Client, bucketName)
+	// Reuse the same cold-start Cognito client for AddMember's PendingShare
+	// invited-check (see AccountService.SetCognitoAdminAPI).
+	accountService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	projectService := service.NewProjectService(repo)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
@@ -188,6 +191,7 @@ func init() {
 		r.Post("/api/accounts", accountHandler.CreateAccount)
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
 		r.Post("/api/accounts/{accountId}/members", accountHandler.AddMember)
+		r.Delete("/api/accounts/{accountId}/members/pending", accountHandler.RevokePendingMember)
 		r.Put("/api/accounts/{accountId}/members/{userId}", accountHandler.UpdateMemberRole)
 		r.Delete("/api/accounts/{accountId}/members/{userId}", accountHandler.RemoveMember)
 		r.Get("/api/accounts/{accountId}/meetings", accountHandler.ListAccountMeetings)
@@ -248,6 +252,7 @@ func init() {
 
 		// Share routes
 		r.Post("/api/meetings/{meetingId}/share", shareHandler.ShareMeeting)
+		r.Delete("/api/meetings/{meetingId}/share/pending", shareHandler.RevokePendingShare)
 		r.Delete("/api/meetings/{meetingId}/share/{userId}", shareHandler.RevokeShare)
 
 		// User search

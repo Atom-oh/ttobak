@@ -78,9 +78,11 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - **Sort Key**: `SK` (String)
 - **GSI1**: PK `GSI1PK` / SK `GSI1SK`, Projection ALL
 - **GSI2**: PK `GSI2PK` (`EMAIL#{email}`, for user search) / SK `GSI2SK` (`USER#{userId}`), Projection ALL
+- **`PendingShare`** (main-table item, no GSI): PK `PENDING_SHARE#{email}` / SK `PENDING_ACCOUNT#{accountId}` or `PENDING_MEETING#{meetingId}` -- see `backend/internal/model.PendingShare`'s doc comment and API-SPEC.md's Add Member / Share Meeting sections.
 - **Stream**: NEW_AND_OLD_IMAGES (triggers the summarize Lambda)
 - **Point-in-time recovery**: enabled
 - **Removal policy**: RETAIN
+- **TTL**: `timeToLiveAttribute: 'pendingShareExpiresAt'` -- scoped to exactly the attribute `PendingShare` writes (`backend/internal/model.PendingShare`'s `TTL` Go field, tagged `dynamodbav:"pendingShareExpiresAt"`), deliberately NOT the uppercase `TTL` attribute `backend/python/qa/handler.py` already writes on rate-limit/KB-cache/conversation-MESSAGES/CHAT_SESSION rows. A table has only one `timeToLiveAttribute`, but DynamoDB's sweep only deletes items that actually carry that exact attribute name, so pointing it at PendingShare's own distinctly-named attribute lets it auto-clean expired pending invites without also bulk-deleting QA's pre-existing, never-swept conversation history -- that separate cleanup remains a deliberate decision for its own PR. `MeetingService.MaterializePendingShares` still enforces the same expiry synchronously in application code (an expired row fails that check and is dropped on the spot the next time that exact email authenticates), since DynamoDB's own sweep can lag real time by up to 48 hours -- the table-level TTL is a physical-reclaim guarantee for rows nothing ever touches again (e.g. a mis-typed email, or an invite the inviter forgets to revoke), not the correctness gate.
 
 ### DynamoDB Table (WebSocket Connections)
 - **Table name**: `ttobak-connections`
@@ -284,7 +286,7 @@ ECS infra for Whisper GPU batch transcription. After a recording completes, `tto
 - **AMI**: ECS-optimized Amazon Linux 2 (GPU)
 - **Spot price**: $1.10
 - **Capacity**: min=0, max=10, desired=0 (zero-scale)
-- **Subnets**: Private with egress (ap-northeast-2a, 2c, 2d)
+- **Subnets**: Private with egress — no explicit AZ filter; spans every AZ the imported VPC (`vpc-04e77172c67f19814`) actually has `PRIVATE_WITH_EGRESS` subnets in (currently 2a + 2b). A prior hardcoded `['ap-northeast-2a', 'ap-northeast-2c', 'ap-northeast-2d']` filter intersected down to 2a alone (this VPC has no subnets in 2c/2d), pinning every Spot request to one AZ and causing repeated `InsufficientInstanceCapacity` cold-start delays even while other AZs had room — fixed 2026-08-19.
 - **Security group**: Egress only (no inbound)
 
 ### ECS Capacity Provider

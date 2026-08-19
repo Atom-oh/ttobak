@@ -65,7 +65,7 @@ type meetingRepo interface {
 	ListSharesForMeeting(ctx context.Context, meetingID string) ([]model.Share, error)
 	ListMeetings(ctx context.Context, params repository.ListMeetingsParams) (*repository.ListMeetingsResult, error)
 	BatchGetMeetings(ctx context.Context, keys []repository.MeetingKey) ([]*model.Meeting, error)
-	GetOrCreateUser(ctx context.Context, userID, email, name string) (*model.User, error)
+	GetOrCreateUser(ctx context.Context, userID, email, name string) (*model.User, bool, error)
 	GetUserByEmail(ctx context.Context, email string) (*model.User, error)
 	CreateShare(ctx context.Context, meetingID, ownerID, ownerEmail, sharedToID, email, permission, origin string) (*model.Share, error)
 	CreateShareIfMember(ctx context.Context, meetingID, ownerID, ownerEmail, accountID, sharedToID, email, permission string) (*model.Share, error)
@@ -74,6 +74,12 @@ type meetingRepo interface {
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
 	PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error
 	PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error
+	PutPendingShare(ctx context.Context, share *model.PendingShare) error
+	ListPendingShares(ctx context.Context, email string) ([]model.PendingShare, error)
+	DeletePendingShare(ctx context.Context, email, sk string) error
+	DeletePendingShareIfVersionMatches(ctx context.Context, email string, p *model.PendingShare) error
+	MaterializePendingAccountGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error)
+	MaterializePendingMeetingGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error)
 }
 
 // MeetingService handles meeting business logic
@@ -615,32 +621,270 @@ func (s *MeetingService) SelectTranscript(ctx context.Context, userID, meetingID
 	return s.repo.UpdateMeeting(ctx, meeting)
 }
 
-// ShareMeetingByEmail shares a meeting with a user identified by email
-func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, ownerEmail, meetingID, targetEmail, permission string) (*model.Share, error) {
+// ShareMeetingByEmail shares a meeting with a user identified by email. The
+// returned bool is true when targetEmail has no PROFILE row yet but does
+// have an invited Cognito account -- the grant was queued as a PendingShare
+// (see its doc comment) rather than a real Share, and the returned *Share is
+// nil.
+func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, ownerEmail, meetingID, targetEmail, permission string) (*model.Share, bool, error) {
 	// Verify ownership
 	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if meeting == nil {
-		return nil, ErrNotFound
+		return nil, false, ErrNotFound
 	}
 
 	// Find user by email
 	targetUser, err := s.repo.GetUserByEmail(ctx, targetEmail)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if targetUser == nil {
-		return nil, fmt.Errorf("user not found")
+		invited, sub, err := emailHasPendingInvite(ctx, s.cognito, s.resolveCognitoPoolID(), targetEmail)
+		if err != nil {
+			return nil, false, err
+		}
+		if !invited || sub == "" {
+			// A fail-closed guard: without a sub, materializeOne would have
+			// no identity to bind the grant to. AdminGetUserOutput.Username
+			// is a required response field, so this should never actually
+			// be empty in practice -- treat it the same as "not invited"
+			// rather than queuing an unclaimable grant.
+			return nil, false, ErrUserNotFound
+		}
+		// The below-the-fold "cannot share with self" check further down
+		// only ever runs when targetUser is non-nil; a self-invite of an
+		// email that hasn't logged in yet (no PROFILE row) would otherwise
+		// sail straight into the pending branch and queue a grant whose
+		// eventual materialize makes MaterializePendingAccountGrant's own
+		// ConditionCheck and Put target the same DynamoDB item -- comparing
+		// the resolved sub here closes that gap before it's ever queued.
+		if sub == ownerID {
+			return nil, false, ErrSelfShare
+		}
+		if err := s.repo.PutPendingShare(ctx, &model.PendingShare{
+			Email:             targetEmail,
+			Kind:              model.PendingShareKindMeeting,
+			MeetingID:         meetingID,
+			Permission:        permission,
+			InvitedByUserID:   ownerID,
+			InvitedByEmail:    ownerEmail,
+			InvitedCognitoSub: sub,
+		}); err != nil {
+			return nil, false, err
+		}
+		return nil, true, nil
 	}
 
 	// Cannot share with self
 	if ownerID == targetUser.UserID {
-		return nil, fmt.Errorf("cannot share with yourself")
+		return nil, false, ErrSelfShare
 	}
 
-	return s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, targetUser.UserID, targetEmail, permission, "")
+	share, err := s.repo.CreateShare(ctx, meetingID, ownerID, ownerEmail, targetUser.UserID, targetEmail, permission, "")
+	return share, false, err
+}
+
+// RevokePendingShare cancels a queued PendingShare meeting invite before
+// the target has ever logged in -- there's no Share row yet (that's the
+// whole point of ShareMeetingByEmail's pending branch), so this can't go
+// through RevokeShare. Exists for the same reason as AccountService.
+// RevokePendingMember: AGENTS.md's "PII in DynamoDB requires KMS + TTL"
+// mandate expects standing access grants to be cancellable, not just
+// eventually expiring, and a PendingShare is otherwise invisible and
+// un-revocable for up to PendingShareTTL once queued.
+//
+// The pending row's SK already encodes meetingID
+// (PENDING_MEETING#{meetingId}), so this can only ever address this exact
+// meeting's queued invite for email, never another meeting's; ownerID
+// just needs to currently own meetingID. A DeleteItem on an already-gone/
+// never-existed row is a silent no-op, matching RevokeShare's own
+// idempotent-delete behavior.
+func (s *MeetingService) RevokePendingShare(ctx context.Context, ownerID, meetingID, email string) error {
+	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+	if err != nil {
+		return err
+	}
+	if meeting == nil {
+		existing, err := s.repo.GetMeetingByID(ctx, meetingID)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			return ErrForbidden
+		}
+		return ErrNotFound
+	}
+	return s.repo.DeletePendingShare(ctx, email, model.PrefixPendingMeeting+meetingID)
+}
+
+// emailHasPendingInvite reports whether email belongs to a Cognito user who
+// has been invited but hasn't completed a first login yet -- exactly the
+// gap PendingShare exists to bridge. Deliberately requires an explicitly
+// wired client (unlike resolveCognitoClient's other callers, e.g. InviteUser)
+// rather than falling back to building one inline: a service constructed
+// without SetCognitoAdminAPI (unit tests, or any future caller that never
+// wires one) should treat every unresolvable email as plainly unknown, not
+// make a live AWS call just to decide that.
+//
+// The returned sub is read directly from the `sub` entry in
+// AdminGetUserOutput.UserAttributes -- the actual Cognito contract for a
+// user's identity -- rather than assumed from Username. (For this pool,
+// auth-stack.ts's User Pool has no username alias, only
+// signInAliases:{email:true}, so Username also happens to equal sub today,
+// but that's an implementation detail of this pool's config, not something
+// AWS guarantees; reading the attribute directly doesn't depend on it.) The
+// sub is stored on the queued PendingShare as InvitedCognitoSub, so
+// materializeOne can later bind the grant to that exact identity rather
+// than to a bare email string.
+func emailHasPendingInvite(ctx context.Context, client cognitoAdminAPI, poolID, email string) (bool, string, error) {
+	if client == nil || poolID == "" {
+		return false, "", nil
+	}
+	out, err := client.AdminGetUser(ctx, &cognitoidp.AdminGetUserInput{
+		UserPoolId: aws.String(poolID),
+		Username:   aws.String(email),
+	})
+	if err != nil {
+		var notFound *cognitoidptypes.UserNotFoundException
+		if errors.As(err, &notFound) {
+			return false, "", nil
+		}
+		return false, "", fmt.Errorf("failed to check invite status for %s: %w", email, err)
+	}
+	for _, attr := range out.UserAttributes {
+		if aws.ToString(attr.Name) == "sub" {
+			return true, aws.ToString(attr.Value), nil
+		}
+	}
+	return true, "", nil
+}
+
+// MaterializePendingShares turns every PendingShare queued for email into a
+// real AccountMember or Share row for the now-known userID, then deletes
+// the queued row. Called from handler/meeting.go on every ListMeetings/
+// CreateMeeting request (not gated on GetOrCreateUser's created flag --
+// this is a cheap, idempotent Query that's almost always empty, and gating
+// on "first PROFILE-creating call only" would make a materialization
+// failure permanent: by the time it could be retried, created is already
+// false forever). Business logic (grant issuance policy: which identity
+// checks must pass before attempting a grant) lives here in the service
+// layer; the transactional re-verify-and-grant primitives it calls
+// (MaterializePendingAccountGrant/MaterializePendingMeetingGrant) are
+// themselves plain data primitives that happen to need a transaction, not
+// policy themselves.
+//
+// emailVerified is the CURRENT login's email_verified claim (see
+// middleware.GetEmailVerified) -- required, not just the pending grant's own
+// Cognito state at queue time, because a PendingShare is otherwise bound to
+// nothing but a plain email string until this call. A false value here
+// means "don't materialize yet," not "drop": the grant stays queued for a
+// later login where the claim is true.
+//
+// A single item's materialization failure is logged and skipped (continue,
+// not abort) so it can't block every other queued grant for the same
+// email -- matching docs/superpowers/specs/2026-08-04-pending-email-
+// invites-design.md's explicit design intent ("logged and skipped, not
+// fatal"). It stays queued and is retried on the next call.
+func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, email string, emailVerified bool) {
+	pending, err := s.repo.ListPendingShares(ctx, email)
+	if err != nil {
+		log.Printf("MaterializePendingShares: failed to list pending shares for %s: %v", email, err)
+		return
+	}
+	now := time.Now().Unix()
+	for i := range pending {
+		p := &pending[i]
+		// Fail-closed identity checks -- these gate whether an attempt is
+		// even made, before any write. TTL<=0 (missing, not just expired)
+		// is treated as invalid rather than "no expiry": every row this
+		// service ever queues sets it (see PutPendingShare), so a zero
+		// value only means corruption or a future caller that forgot to,
+		// and either way it must not be read as "claim never expires."
+		// Likewise InvitedCognitoSub=="" is treated as unbound rather than
+		// "skip the identity check" -- an authorization gate must fail
+		// closed on missing data, not open.
+		if p.TTL <= 0 || p.TTL <= now || p.InvitedCognitoSub == "" || p.InvitedCognitoSub != userID || !emailVerified {
+			if p.TTL <= 0 || p.TTL <= now {
+				// Version-conditioned (not a plain delete): this cleanup
+				// runs off a stale read from ListPendingShares above, and an
+				// unconditioned delete here could otherwise wipe a fresh
+				// re-invite (PutPendingShare upserts the same key) that
+				// landed in the gap -- a real, shipped bug in an earlier
+				// round of this PR.
+				if err := s.repo.DeletePendingShareIfVersionMatches(ctx, email, p); err != nil {
+					log.Printf("MaterializePendingShares: failed to clear expired/invalid pending share %s for %s: %v", p.SK, email, err)
+				}
+			}
+			// Otherwise (sub mismatch, or email not verified this login):
+			// leave queued -- not this call's identity to resolve, but
+			// possibly a later one's.
+			continue
+		}
+		granted, err := s.materializeOne(ctx, userID, email, p)
+		if err != nil {
+			log.Printf("MaterializePendingShares: skipping pending share %s for %s: %v", p.SK, email, err)
+			continue
+		}
+		if !granted {
+			// Condition failed inside the transaction (inviter lost
+			// authority, target gone, or already granted via another
+			// path) -- not an error, but nothing was materialized OR
+			// cleared (the Delete was part of the same failed
+			// transaction). Left queued; PendingShareTTL is what
+			// eventually reclaims a permanently-dead one, since this
+			// service can't cheaply tell "permanently invalid" apart from
+			// "transient" from a bare ConditionalCheckFailed.
+			continue
+		}
+		// Nothing left to do here: materializeOne's transactional
+		// primitives already deleted the pending row as part of their own
+		// successful transaction (or, for the default/unknown-kind branch,
+		// materializeOne cleared it itself via the same versioned delete).
+		// A further unconditioned delete call here was a real, shipped bug
+		// in an earlier round -- it could silently wipe a fresh re-invite
+		// that landed in the gap between that transaction committing and
+		// this call, exactly the race the versioned delete exists to
+		// prevent.
+	}
+}
+
+// materializeOne atomically re-verifies one queued grant's inviter (still
+// owns the account as RoleOwner / still owns the meeting) and the absence
+// of an existing row for userID, then writes the real grant and clears the
+// queued one -- all in a single transaction (MaterializePendingAccountGrant/
+// MaterializePendingMeetingGrant), closing the check-then-write race a
+// separate read-then-write pair would have (AGENTS.md's conditional-write
+// rule) and the non-atomicity between "grant written" and "pending row
+// cleared" a separate Delete call afterward would have. The TTL/sub/
+// emailVerified identity checks happen one level up, in
+// MaterializePendingShares's loop -- this only handles the grant-issuance
+// transaction itself.
+//
+// Returns (granted, err). err means "leave this one queued, retry later"
+// (a transient failure, e.g. a DynamoDB error unrelated to the condition).
+// granted=false, err=nil means the transaction's condition failed --
+// MaterializePendingShares treats that as "leave queued, bounded by TTL"
+// rather than assuming it's safe to drop, since a ConditionalCheckFailed
+// alone doesn't distinguish a permanently dead grant from a transient race.
+func (s *MeetingService) materializeOne(ctx context.Context, userID, email string, p *model.PendingShare) (bool, error) {
+	switch p.Kind {
+	case model.PendingShareKindAccount:
+		return s.repo.MaterializePendingAccountGrant(ctx, p, userID, email)
+	case model.PendingShareKindMeeting:
+		return s.repo.MaterializePendingMeetingGrant(ctx, p, userID, email)
+	default:
+		// Not a transaction (there's no grant to issue), but still must be
+		// a versioned delete: an unconditioned one could wipe a fresh
+		// re-invite that upserted the same key after this row was read.
+		log.Printf("materializeOne: unknown PendingShare kind %q for %s -- dropping", p.Kind, email)
+		if err := s.repo.DeletePendingShareIfVersionMatches(ctx, email, p); err != nil {
+			return false, fmt.Errorf("drop unknown-kind pending share: %w", err)
+		}
+		return false, nil
+	}
 }
 
 // RevokeShare revokes a share (owner only)

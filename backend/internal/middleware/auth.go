@@ -29,6 +29,11 @@ const (
 	UserNameKey ContextKey = "userName"
 	// UserGroupsKey is the context key for Cognito groups (cognito:groups claim)
 	UserGroupsKey ContextKey = "userGroups"
+	// UserEmailVerifiedKey is the context key for the email_verified claim --
+	// backs MeetingService.MaterializePendingShares's check that a
+	// PendingShare grant only materializes for a JWT-verified email (see
+	// GetEmailVerified's doc comment).
+	UserEmailVerifiedKey ContextKey = "userEmailVerified"
 )
 
 // JWKS types for Cognito public key fetching
@@ -135,6 +140,7 @@ func Auth(next http.Handler) http.Handler {
 		ctx = context.WithValue(ctx, UserIDKey, claims.Sub)
 		ctx = context.WithValue(ctx, UserEmailKey, claims.Email)
 		ctx = context.WithValue(ctx, UserGroupsKey, claims.Groups)
+		ctx = context.WithValue(ctx, UserEmailVerifiedKey, claims.EmailVerified)
 
 		// Build user name from available fields
 		name := claims.Name
@@ -432,6 +438,17 @@ func GetUserGroups(ctx context.Context) []string {
 		return groups
 	}
 	return nil
+}
+
+// GetEmailVerified extracts the email_verified claim from the request
+// context. Defaults to false on any missing/malformed value (fail closed) --
+// used by MaterializePendingShares so a PendingShare grant, which was queued
+// against a plain email string with no stronger identity binding until the
+// invitee's first login, only materializes if that login's own token
+// confirms email ownership.
+func GetEmailVerified(ctx context.Context) bool {
+	verified, ok := ctx.Value(UserEmailVerifiedKey).(bool)
+	return ok && verified
 }
 
 // IsAdmin reports whether the authenticated user belongs to the "admins" Cognito group

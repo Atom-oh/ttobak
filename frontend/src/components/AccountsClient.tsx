@@ -148,13 +148,13 @@ export default function AccountsClient() {
             {pendingMembers.length > 0 && (
               <div className="mt-2 space-y-1">
                 {pendingMembers.map((m) => (
-                  <div key={m.userId} className="flex items-center justify-between text-sm px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-white/5">
+                  <div key={m.userId || m.email} className="flex items-center justify-between text-sm px-3 py-1.5 rounded-lg bg-slate-50 dark:bg-white/5">
                     <span className="text-slate-700 dark:text-text-secondary truncate">{m.name || m.email}</span>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary">{m.role}</span>
                       <button
                         type="button"
-                        onClick={() => setPendingMembers((prev) => prev.filter((p) => p.userId !== m.userId))}
+                        onClick={() => setPendingMembers((prev) => prev.filter((p) => (p.userId || p.email) !== (m.userId || m.email)))}
                         className="text-slate-400 hover:text-red-500"
                       >
                         <span className="material-symbols-outlined text-base">close</span>

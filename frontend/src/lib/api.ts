@@ -167,10 +167,16 @@ export const meetingsApi = {
   delete: (id: string) => api.delete(`/api/meetings/${id}`),
 
   share: (id: string, data: { email: string; permission: 'read' | 'edit' }) =>
-    api.post<{ sharedWith: { userId: string; email: string; permission: string } }>(`/api/meetings/${id}/share`, data),
+    api.post<{ sharedWith: { userId?: string; email: string; permission: string; pending?: boolean } }>(`/api/meetings/${id}/share`, data),
 
   unshare: (id: string, userId: string) =>
     api.delete(`/api/meetings/${id}/share/${userId}`),
+
+  // Cancels a queued PendingShare invite (see `share`'s `pending: true`
+  // response) before the target has ever logged in -- there's no userId
+  // yet, so this can't go through `unshare`.
+  revokePendingShare: (id: string, email: string) =>
+    api.delete(`/api/meetings/${id}/share/pending?email=${encodeURIComponent(email)}`),
 
   selectTranscript: (id: string, selected: 'A' | 'B') =>
     api.put(`/api/meetings/${id}/transcript`, { selected }),
@@ -461,6 +467,11 @@ export const accountApi = {
     api.post<Account>('/api/accounts', data),
   addMember: (id: string, data: { email: string; role: string }) =>
     api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/members`, data),
+  // Cancels a queued PendingShare invite (see `addMember`'s `pending: true`
+  // response) before the target has ever logged in -- there's no userId
+  // yet, so this can't go through `removeMember`.
+  revokePendingMember: (id: string, email: string) =>
+    api.delete(`/api/accounts/${encodeURIComponent(id)}/members/pending?email=${encodeURIComponent(email)}`),
   updateMember: (id: string, userId: string, data: { role: string }) =>
     api.put<AccountMember>(
       `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, data),

@@ -86,6 +86,96 @@ func TestIsConditionalCheckFailedTransaction(t *testing.T) {
 	}
 }
 
+// TestTransactionItemFailed covers the per-index cancellation-reason
+// inspection MaterializePendingAccountGrant/MaterializePendingMeetingGrant
+// use to distinguish "this exact item's own condition failed" from "some
+// other item in the same transaction failed" or "not a condition failure
+// at all" -- getting this wrong either drops a live grant it shouldn't
+// (checking the wrong index) or resurrects a dead one (treating an
+// unrelated failure as if this item passed).
+func TestTransactionItemFailed(t *testing.T) {
+	code := func(s string) *string { return &s }
+
+	tests := []struct {
+		name       string
+		err        error
+		idx        int
+		wantLen    int
+		wantFailed bool
+		wantOK     bool
+	}{
+		{
+			name: "index 0 failed, others untouched",
+			err: &types.TransactionCanceledException{
+				CancellationReasons: []types.CancellationReason{
+					{Code: code("ConditionalCheckFailed")},
+					{Code: code("None")},
+					{Code: code("None")},
+				},
+			},
+			idx: 0, wantLen: 3, wantFailed: true, wantOK: true,
+		},
+		{
+			name: "index 1 failed -- asking about index 0 must report false, not the other item's failure",
+			err: &types.TransactionCanceledException{
+				CancellationReasons: []types.CancellationReason{
+					{Code: code("None")},
+					{Code: code("ConditionalCheckFailed")},
+					{Code: code("None")},
+				},
+			},
+			idx: 0, wantLen: 3, wantFailed: false, wantOK: true,
+		},
+		{
+			name: "same case, asking about the index that actually failed",
+			err: &types.TransactionCanceledException{
+				CancellationReasons: []types.CancellationReason{
+					{Code: code("None")},
+					{Code: code("ConditionalCheckFailed")},
+					{Code: code("None")},
+				},
+			},
+			idx: 1, wantLen: 3, wantFailed: true, wantOK: true,
+		},
+		{
+			name: "TransactionConflict (not a condition failure) must not be reported as failed",
+			err: &types.TransactionCanceledException{
+				CancellationReasons: []types.CancellationReason{
+					{Code: code("TransactionConflict")},
+					{Code: code("None")},
+					{Code: code("None")},
+				},
+			},
+			idx: 0, wantLen: 3, wantFailed: false, wantOK: true,
+		},
+		{
+			name: "wrong wantLen -- caller's item count doesn't match the exception's, must not guess",
+			err: &types.TransactionCanceledException{
+				CancellationReasons: []types.CancellationReason{
+					{Code: code("ConditionalCheckFailed")},
+					{Code: code("None")},
+				},
+			},
+			idx: 0, wantLen: 3, wantFailed: false, wantOK: false,
+		},
+		{
+			name: "not a TransactionCanceledException at all",
+			err:  errors.New("some other dynamodb error"),
+			idx:  0, wantLen: 3, wantFailed: false, wantOK: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			failed, ok := transactionItemFailed(tc.err, tc.idx, tc.wantLen)
+			if failed != tc.wantFailed || ok != tc.wantOK {
+				t.Errorf("transactionItemFailed(idx=%d, wantLen=%d) = (%v, %v), want (%v, %v)",
+					tc.idx, tc.wantLen, failed, ok, tc.wantFailed, tc.wantOK)
+			}
+		})
+	}
+}
+
 // errWrap wraps an error for errors.As unwrapping in the "wrapped" test case.
 type errWrap struct{ err error }
 

@@ -9,7 +9,7 @@ import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
 import { ASSIGNABLE_ACCOUNT_ROLES } from '@/types/meeting';
-import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef, ProjectSummary, User } from '@/types/meeting';
+import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef, ProjectSummary, User, AccountMember } from '@/types/meeting';
 
 export default function AccountDetailClient() {
   const pathname = usePathname();
@@ -27,6 +27,15 @@ export default function AccountDetailClient() {
   const [projectsError, setProjectsError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Separate from `error` (which renders as a red error banner) --
+  // matches ShareButton's own pendingNotice pattern for the same
+  // "invited but not yet accepted" state, an informational message, not
+  // a failure.
+  const [pendingNotice, setPendingNotice] = useState<string | null>(null);
+  // The email a pending notice is about, so its Cancel button can call
+  // revokePendingMember without needing a listing feature -- the invite
+  // was just sent in this exact call, so the email is already known here.
+  const [pendingNoticeEmail, setPendingNoticeEmail] = useState<string | null>(null);
   const [uploadingSlide, setUploadingSlide] = useState(false);
 
   const [inviteRole, setInviteRole] = useState('SSA');
@@ -90,13 +99,35 @@ export default function AccountDetailClient() {
   const handlePickMember = async (picked: User) => {
     setInviting(true);
     setError(null);
+    setPendingNotice(null);
+    setPendingNoticeEmail(null);
     try {
-      await accountApi.addMember(accountId, { email: picked.email, role: inviteRole });
+      const result = await accountApi.addMember(accountId, { email: picked.email, role: inviteRole });
+      // Set the notice before fetchAll: addMember itself already succeeded
+      // (the invite is genuinely queued) at this point, so a THIS call
+      // failing afterward must not overwrite that with an unrelated
+      // "Failed to add member" error banner -- fetchAll failing is a
+      // separate, lower-priority problem than the invite itself failing.
+      if (result?.pending) {
+        setPendingNotice(`${picked.email}님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 계정에 추가됩니다.`);
+        setPendingNoticeEmail(picked.email);
+      }
       await fetchAll();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add member');
     } finally {
       setInviting(false);
+    }
+  };
+
+  const handleRevokePendingMember = async () => {
+    if (!pendingNoticeEmail) return;
+    try {
+      await accountApi.revokePendingMember(accountId, pendingNoticeEmail);
+      setPendingNotice(null);
+      setPendingNoticeEmail(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to revoke pending invite');
     }
   };
 
@@ -202,6 +233,18 @@ export default function AccountDetailClient() {
             {error}
           </div>
         )}
+        {pendingNotice && (
+          <div className="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4 flex items-center justify-between gap-3">
+            <span>{pendingNotice}</span>
+            <button
+              type="button"
+              onClick={handleRevokePendingMember}
+              className="shrink-0 font-semibold underline hover:no-underline"
+            >
+              취소
+            </button>
+          </div>
+        )}
         {loading || !account ? (
           <div className="flex items-center justify-center py-16">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" />
@@ -222,7 +265,7 @@ export default function AccountDetailClient() {
             <section className="mb-8">
               <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Members</h3>
               <div className="glass-panel rounded-xl p-4 space-y-2">
-                {account.members.map((m) => {
+                {account.members.filter((m): m is AccountMember & { userId: string } => !!m.userId).map((m) => {
                   const isOwnerRow = m.userId === account.ownerUserId;
                   const isOwner = user?.userId === account.ownerUserId;
                   return (
@@ -259,7 +302,7 @@ export default function AccountDetailClient() {
                   <div className="flex gap-2 pt-2">
                     <div className="flex-1">
                       <MemberPicker
-                        excludeUserIds={account.members.map((m) => m.userId)}
+                        excludeUserIds={account.members.map((m) => m.userId).filter((id): id is string => !!id)}
                         onPick={handlePickMember}
                         placeholder="Search colleague by name or email"
                       />

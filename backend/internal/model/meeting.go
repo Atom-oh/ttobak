@@ -306,6 +306,93 @@ const (
 	PrefixHistory    = "HISTORY#"
 	PrefixConfig     = "CONFIG"
 	PrefixResearch   = "RESEARCH#"
+
+	// PrefixPendingShare / PrefixPendingAccount / PrefixPendingMeeting key the
+	// PendingShare item below: PK: PENDING_SHARE#{email}, SK:
+	// PENDING_ACCOUNT#{accountId} or PENDING_MEETING#{meetingId}.
+	PrefixPendingShare   = "PENDING_SHARE#"
+	PrefixPendingAccount = "PENDING_ACCOUNT#"
+	PrefixPendingMeeting = "PENDING_MEETING#"
+)
+
+// PendingShare records an Account- or Meeting-share grant made to an email
+// address that has been invited (a Cognito account exists) but has never
+// completed a first login -- so no PROFILE row exists yet and
+// GetUserByEmail can't resolve it to a userID. AddMember/ShareMeetingByEmail
+// write one of these instead of failing outright when the target is in
+// exactly this state; MeetingService.MaterializePendingShares turns it into
+// a real AccountMember or Share row on the invitee's first ListMeetings/
+// CreateMeeting call after GetOrCreateUser creates their email's PROFILE
+// row (i.e. their first authenticated request after accepting the invite),
+// so the grant becomes visible on sign-in with no separate "pending
+// invites" step -- subject to the emailVerified/InvitedCognitoSub checks
+// materializeOne applies at that point.
+// PK: PENDING_SHARE#{email}, SK: PENDING_ACCOUNT#{accountId} | PENDING_MEETING#{meetingId}
+type PendingShare struct {
+	PK              string `dynamodbav:"PK"`
+	SK              string `dynamodbav:"SK"`
+	Email           string `dynamodbav:"email"`
+	Kind            string `dynamodbav:"kind"` // "account" | "meeting"
+	AccountID       string `dynamodbav:"accountId,omitempty"`
+	MeetingID       string `dynamodbav:"meetingId,omitempty"`
+	Role            string `dynamodbav:"role,omitempty"`       // set when Kind=="account"
+	Permission      string `dynamodbav:"permission,omitempty"` // set when Kind=="meeting"
+	InvitedByUserID string `dynamodbav:"invitedByUserId"`
+	InvitedByEmail  string `dynamodbav:"invitedByEmail,omitempty"`
+	// InvitedCognitoSub is the Cognito `sub` (== Username here specifically
+	// because infra/lib/auth-stack.ts's User Pool sets
+	// signInAliases:{email:true} with no username alias, which makes
+	// Cognito assign a generated-UUID username == sub for every user in
+	// this pool) that emailHasPendingInvite's AdminGetUser call resolved
+	// the target email to at queue time. MeetingService.materializeOne requires this to
+	// match the current login's userID before granting: without it, a
+	// PendingShare is bound to nothing but a bare email string, and a user
+	// who later changes their Cognito email to match a stale invite could
+	// otherwise claim someone else's queued grant.
+	InvitedCognitoSub string    `dynamodbav:"invitedCognitoSub,omitempty"`
+	CreatedAt         time.Time `dynamodbav:"createdAt"`
+	// TTL is an epoch-seconds expiry. It is deliberately NOT named `TTL` at
+	// the DynamoDB attribute level (see the `dynamodbav` tag below) even
+	// though backend/python/qa/handler.py already writes an uppercase `TTL`
+	// field on several unrelated row types -- storage-stack.ts's
+	// timeToLiveAttribute is a single table-wide setting, and pointing it
+	// at the same attribute name QA uses would make turning it on
+	// immediately, irreversibly bulk-delete QA's pre-existing conversation
+	// history too (rate-limit, KB cache, MESSAGES, CHAT_SESSION rows that
+	// have been silently accumulating because table TTL was never on) --
+	// a production-safety decision that deserves its own deliberate PR, not
+	// a side effect of this one. Using a distinct attribute name
+	// (`pendingShareExpiresAt`) lets storage-stack.ts point
+	// timeToLiveAttribute at it directly: DynamoDB's TTL sweep only ever
+	// touches items that actually carry the configured attribute, so QA's
+	// `TTL`-named rows are structurally untouched no matter what this table
+	// enables. The inviter can also revoke a queued grant early (DELETE
+	// .../members/pending, DELETE .../share/pending) by re-submitting the
+	// exact email that was invited; there is still no list endpoint, so the
+	// inviter has to remember (or re-derive from their own UI state) who
+	// they invited rather than discovering pending invites by browsing.
+	// MeetingService.MaterializePendingShares also still enforces this
+	// synchronously in application code (TTL<=0 or TTL<=now is treated as
+	// invalid and the row is dropped on the spot) rather than relying on
+	// the table sweep's timing, since DynamoDB TTL deletion isn't
+	// instantaneous at the expiry second.
+	TTL        int64  `dynamodbav:"pendingShareExpiresAt"`
+	EntityType string `dynamodbav:"entityType"` // "PENDING_SHARE"
+}
+
+// PendingShareTTL is how long a queued grant stays claimable before
+// MeetingService.MaterializePendingShares's own synchronous check treats it
+// as expired (see the TTL field's doc comment for why this is enforced in
+// application code, not DynamoDB's table-level TTL) -- long enough that a
+// real invitee who's slow to log in isn't punished, short enough that a
+// mis-typed email doesn't sit as a claimable standing grant forever.
+const PendingShareTTL = 30 * 24 * time.Hour
+
+const (
+	PendingShareKindAccount = "account"
+	PendingShareKindMeeting = "meeting"
+
+	EntityTypePendingShare = "PENDING_SHARE"
 )
 
 // SKUserLogin is the sort key for the UserLogin item (see UserLogin doc comment).

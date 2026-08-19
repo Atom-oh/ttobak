@@ -30,6 +30,24 @@ export class StorageStack extends cdk.Stack {
         pointInTimeRecoveryEnabled: true,
       },
       stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+      // Scoped to `pendingShareExpiresAt` specifically, NOT the uppercase
+      // `TTL` attribute backend/python/qa/handler.py already writes on
+      // several pre-existing row types (rate-limit, KB cache, conversation
+      // MESSAGES at 7 days, CHAT_SESSION at 30 days). DynamoDB's TTL sweep
+      // only ever deletes items that carry the exact attribute name
+      // configured here, so pointing it at PendingShare's own attribute
+      // (backend/internal/model.PendingShare's `TTL` Go field, tagged
+      // `dynamodbav:"pendingShareExpiresAt"`) lets it auto-clean expired
+      // pending invites without touching QA's unrelated `TTL`-named rows,
+      // which have been silently accumulating because table-level TTL was
+      // never turned on for them -- that bulk cleanup is still a separate,
+      // deliberate decision this table-wide setting does not make.
+      // MeetingService.MaterializePendingShares still enforces the same
+      // expiry synchronously in application code (an expired row fails
+      // that check and is dropped on the spot), since DynamoDB's sweep can
+      // lag real time by up to 48 hours -- this setting only reclaims the
+      // row physically once nothing needs it, not a correctness gate.
+      timeToLiveAttribute: 'pendingShareExpiresAt',
     });
 
     // GSI1 for date-based queries and meeting lookups
