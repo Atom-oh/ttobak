@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"log"
 	"time"
 )
 
@@ -91,11 +92,15 @@ func ToSimRunResponse(run *SimRun) *SimRunResponse {
 	}
 	var reqs []SimRequirement
 	if run.Requirements != "" {
-		_ = json.Unmarshal([]byte(run.Requirements), &reqs)
+		if err := json.Unmarshal([]byte(run.Requirements), &reqs); err != nil {
+			log.Printf("ToSimRunResponse: failed to parse stored Requirements for sim run %s: %v", run.SimRunID, err)
+		}
 	}
 	var opts []SimOption
 	if run.Options != "" {
-		_ = json.Unmarshal([]byte(run.Options), &opts)
+		if err := json.Unmarshal([]byte(run.Options), &opts); err != nil {
+			log.Printf("ToSimRunResponse: failed to parse stored Options for sim run %s: %v", run.SimRunID, err)
+		}
 	}
 	charts := make([]SimChartResponse, 0, len(run.ChartKeys))
 	for _, k := range run.ChartKeys {

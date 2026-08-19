@@ -228,6 +228,13 @@ func parseSimRequirements(raw string, segments []speakerSegment) []model.SimRequ
 	}
 	var items []rawReq
 	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		// Must not be silent: an empty draft is indistinguishable from "no
+		// quantitative values were mentioned in this meeting" for anyone
+		// looking at the SIMRUN row afterward, unless the extraction
+		// failure itself is visible somewhere (a log line here, since this
+		// is a best-effort draft the user reviews and corrects anyway --
+		// returning an error would just surface as the same empty form).
+		log.Printf("parseSimRequirements: failed to parse Haiku output as JSON: %v", err)
 		return []model.SimRequirement{}
 	}
 

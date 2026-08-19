@@ -1488,7 +1488,9 @@ func (s *BedrockService) ExtractSimRequirements(ctx context.Context, meeting *mo
 
 	var segments []speakerSegment
 	if meeting.TranscriptSegments != "" {
-		_ = json.Unmarshal([]byte(meeting.TranscriptSegments), &segments)
+		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err != nil {
+			log.Printf("ExtractSimRequirements: failed to parse TranscriptSegments for meeting %s: %v", meeting.MeetingID, err)
+		}
 	}
 
 	// Deliberately the raw transcript, not meeting.Content: by the time a
