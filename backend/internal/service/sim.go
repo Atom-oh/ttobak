@@ -155,6 +155,7 @@ func validateSimRequirements(meeting *model.Meeting, userID string, reqs []model
 		return fmt.Errorf("too many requirements (max %d): %w", len(AllowedSimRequirementKeys), ErrInvalidInput)
 	}
 	seenKeys := make(map[string]bool, len(reqs))
+	hasNonEmptyValue := false
 	for _, req := range reqs {
 		bound, ok := AllowedSimRequirementKeys[req.Key]
 		if !ok {
@@ -185,6 +186,7 @@ func validateSimRequirements(meeting *model.Meeting, userID string, reqs []model
 		if value == "" {
 			continue // optional and unset -- fine
 		}
+		hasNonEmptyValue = true
 		if bound.numeric {
 			n, err := strconv.ParseFloat(value, 64)
 			if err != nil {
@@ -211,6 +213,14 @@ func validateSimRequirements(meeting *model.Meeting, userID string, reqs []model
 				return fmt.Errorf("requirement %q value %q not in allowed set: %w", req.Key, value, ErrInvalidInput)
 			}
 		}
+	}
+	// "at least one requirement is needed" above only checked array length,
+	// not content -- a body of nothing but unset optional requirements
+	// (every Value == "") passed that check and would run a simulation
+	// with zero actual quantitative input, just wasting a Code Interpreter
+	// session on nothing.
+	if !hasNonEmptyValue {
+		return fmt.Errorf("at least one requirement must have a value: %w", ErrInvalidInput)
 	}
 	return nil
 }
@@ -308,6 +318,12 @@ func parseSimRequirements(raw string, segments []speakerSegment) []model.SimRequ
 
 // tsMarkerSeconds extracts NNN from a "[TS:NNN]" marker, or -1 if malformed.
 func tsMarkerSeconds(marker string) int {
+	// TrimPrefix/TrimSuffix are no-ops when the prefix/suffix isn't present,
+	// so a bare "10" or a half-formed "[TS:10" would otherwise still parse
+	// -- require the full "[TS:...]" shape before accepting anything inside.
+	if !strings.HasPrefix(marker, "[TS:") || !strings.HasSuffix(marker, "]") {
+		return -1
+	}
 	marker = strings.TrimPrefix(marker, "[TS:")
 	marker = strings.TrimSuffix(marker, "]")
 	n, err := strconv.Atoi(strings.TrimSpace(marker))
@@ -516,6 +532,22 @@ func (s *SimService) CreateSimulation(ctx context.Context, userID, meetingID str
 	}
 
 	return run, nil
+}
+
+// SimAssetPrefixes returns the two S3 key prefixes (images/, files/) that a
+// SimRun's chart/code keys for this meeting must start with. Built from the
+// meeting's OWNER userID -- ttobak-sim always writes assets under the
+// owner's prefix (see CreateSimulation's invoke payload), regardless of
+// which caller is currently viewing the meeting. Passing the *caller's*
+// userID here instead is the exact bug this function exists to prevent: a
+// shared or account-inherited viewer's userID never matches the owner's,
+// which silently breaks every chart/code URL for anyone but the owner
+// (fail-closed, not a leak, but a real functional regression). Pure and
+// side-effect-free so the caller/owner distinction is table-tested here
+// rather than only exercised through a live GetMeeting call.
+func SimAssetPrefixes(ownerUserID, meetingID string) (imagesPrefix, filesPrefix string) {
+	return fmt.Sprintf("images/%s/%s/sim/", ownerUserID, meetingID),
+		fmt.Sprintf("files/%s/%s/sim/", ownerUserID, meetingID)
 }
 
 // GetSimRun fetches the meeting's current simulation state and, if it finds

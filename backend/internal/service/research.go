@@ -11,6 +11,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -279,7 +280,10 @@ func (s *ResearchService) UpdateResearch(ctx context.Context, researchId, userId
 	if title == "" {
 		return fmt.Errorf("title must not be empty: %w", ErrInvalidInput)
 	}
-	if len(title) > 200 {
+	// Rune count, not byte length -- len() would reject a Korean title at
+	// ~66 characters (3 bytes/rune) despite it being well under the
+	// intended 200-character limit.
+	if utf8.RuneCountInString(title) > 200 {
 		return fmt.Errorf("title must be at most 200 characters: %w", ErrInvalidInput)
 	}
 

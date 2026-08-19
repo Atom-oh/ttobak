@@ -248,8 +248,12 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 				// sim prefix before presigning, so a corrupted/mistargeted
 				// row can never turn into a valid signed URL for an
 				// unrelated object (e.g. another user's transcripts/audio).
-				simPrefix := fmt.Sprintf("images/%s/%s/sim/", userID, meetingID)
-				filesSimPrefix := fmt.Sprintf("files/%s/%s/sim/", userID, meetingID)
+				// Built from the meeting OWNER's userID (result.UserID), not
+				// the caller's -- SimRun assets are always written under the
+				// owner's prefix, so using the caller's userID here would
+				// fail this check for every shared/account-inherited viewer.
+				// See SimAssetPrefixes' doc comment.
+				simPrefix, filesSimPrefix := service.SimAssetPrefixes(result.UserID, meetingID)
 				for i := range result.SimRun.Charts {
 					c := &result.SimRun.Charts[i]
 					if !strings.HasPrefix(c.Key, simPrefix) {

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/ttobak/backend/internal/model"
@@ -163,12 +165,26 @@ func TestValidateSimRequirements(t *testing.T) {
 			wantErr: ErrInvalidInput,
 		},
 		{
-			name:    "optional value missing is fine",
+			name:    "optional value missing alongside a real value is fine",
+			meeting: doneMeeting(),
+			userID:  "user-1",
+			reqs: []model.SimRequirement{
+				{Key: "monthlyActiveUsers", Value: "", Required: false, Label: "x"},
+				{Key: "peakRequestsPerSecond", Value: "500", Required: false, Label: "y"},
+			},
+			opts:   validOpts(),
+			wantOK: true,
+		},
+		{
+			// A body of nothing but unset optional requirements has zero
+			// actual quantitative content -- the array-length check alone
+			// would let this run a simulation on nothing.
+			name:    "all requirements unset with no real value is rejected",
 			meeting: doneMeeting(),
 			userID:  "user-1",
 			reqs:    []model.SimRequirement{{Key: "monthlyActiveUsers", Value: "", Required: false, Label: "x"}},
 			opts:    validOpts(),
-			wantOK:  true,
+			wantErr: ErrInvalidInput,
 		},
 		{
 			name:    "non-numeric value for numeric key",
@@ -360,4 +376,37 @@ func TestReconcileStuckSimRun(t *testing.T) {
 			t.Fatal("a done run should never be reported stuck")
 		}
 	})
+}
+
+func TestSimAssetPrefixes(t *testing.T) {
+	// This is the exact scenario the review caught: a shared-meeting
+	// viewer's own userID must never be the one that ends up in the
+	// prefix -- only the meeting owner's userID may, regardless of who is
+	// asking. If a caller ever passes the viewer's ID here by mistake, the
+	// resulting prefix would (correctly, per this test) not match any real
+	// asset key, silently breaking chart/code URLs for that viewer.
+	owner := "owner-1"
+	viewer := "viewer-2"
+	meetingID := "meeting-1"
+
+	imagesPrefix, filesPrefix := SimAssetPrefixes(owner, meetingID)
+
+	wantImages := "images/owner-1/meeting-1/sim/"
+	wantFiles := "files/owner-1/meeting-1/sim/"
+	if imagesPrefix != wantImages {
+		t.Errorf("imagesPrefix = %q, want %q", imagesPrefix, wantImages)
+	}
+	if filesPrefix != wantFiles {
+		t.Errorf("filesPrefix = %q, want %q", filesPrefix, wantFiles)
+	}
+
+	realChartKey := fmt.Sprintf("images/%s/%s/sim/run-1/chart_1.png", owner, meetingID)
+	if !strings.HasPrefix(realChartKey, imagesPrefix) {
+		t.Errorf("a real owner-written chart key %q must match the owner-based prefix %q", realChartKey, imagesPrefix)
+	}
+
+	viewerPrefix, _ := SimAssetPrefixes(viewer, meetingID)
+	if strings.HasPrefix(realChartKey, viewerPrefix) {
+		t.Errorf("a real chart key must NOT match a prefix built from the viewer's own userID (%q) -- that mismatch is exactly the bug being guarded against", viewerPrefix)
+	}
 }

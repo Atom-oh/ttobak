@@ -735,3 +735,24 @@ func TestUpdateResearch_TooLongRejected(t *testing.T) {
 		t.Fatalf("expected ErrInvalidInput for a >200 char title, got %v", err)
 	}
 }
+
+func TestUpdateResearch_KoreanTitleUsesRuneCountNotByteLength(t *testing.T) {
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newTestResearchService(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+
+	// Each 가 is 3 bytes in UTF-8: 150 runes = 450 bytes, comfortably over a
+	// byte-length check's 200 limit but well under the intended
+	// 200-*character* limit -- this must succeed, not be rejected.
+	runes := make([]rune, 150)
+	for i := range runes {
+		runes[i] = '가'
+	}
+	title := string(runes)
+
+	if err := svc.UpdateResearch(context.Background(), "r1", "owner-1", title); err != nil {
+		t.Fatalf("expected a 150-rune (450-byte) Korean title to be accepted, got: %v", err)
+	}
+}
