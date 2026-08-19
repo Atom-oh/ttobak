@@ -18,7 +18,7 @@ import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingC
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
-import { supportsTabAudioCapture } from '@/lib/device';
+import { supportsTabAudioCapture, isMobile } from '@/lib/device';
 import { isTauri } from '@/lib/tauri';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
@@ -49,7 +49,13 @@ function RecordPageInner() {
   const [translationEnabled, setTranslationEnabled] = useState(false);
   const [targetLang, setTargetLang] = useState('en');
   const [attachments, setAttachments] = useState<{ name: string; url: string; s3Key?: string; mimeType?: string; status?: 'uploading' | 'complete' | 'error'; kbStatus?: 'idle' | 'copying' | 'done' | 'error' }[]>([]);
-  const [liveSttProvider, setLiveSttProvider] = useState<LiveSttProvider>('web-speech');
+  // Default to AWS Transcribe Streaming, not Web Speech: useRecordingSession's
+  // createManager() already falls back to 'web-speech' on its own when the
+  // runtime Cognito config isn't available, so this default only matters
+  // once config IS available -- and Web Speech's independent mic capture
+  // can end the recording's mic track on mobile (see SttManager's
+  // fallbackToWebSpeech), so it should never be the default anywhere.
+  const [liveSttProvider, setLiveSttProvider] = useState<LiveSttProvider>('transcribe-streaming');
   const [audioSource, setAudioSource] = useState<'mic' | 'tab' | 'system'>('mic');
   const [tabSharingLabel, setTabSharingLabel] = useState<string | null>(null);
   // Tauri System Audio mode has no MediaStream, so `session.isRecording`
@@ -333,6 +339,14 @@ function RecordPageInner() {
   useEffect(() => {
     if (session.isRecording) return;
     if (audioSource !== 'mic') return;
+    // Skip entirely on mobile: this opens a SECOND getUserMedia mic stream
+    // that only gets torn down once RecordButton's own getUserMedia call
+    // (for the actual recording) has already resolved and MediaRecorder has
+    // started -- see startSession's previewCleanup callback below. The two
+    // overlapping mic streams risk the OS ending one of their tracks on
+    // iOS/Android, which (via RecordButton's onended handler) now stops the
+    // recording outright. Not worth a live level meter on the idle screen.
+    if (isMobile()) return;
 
     const cleanupPreview = () => {
       previewStreamRef.current?.getTracks().forEach((t) => t.stop());

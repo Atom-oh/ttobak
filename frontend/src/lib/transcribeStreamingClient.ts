@@ -64,7 +64,13 @@ export class TranscribeStreamingSession {
 
   /** Start from a browser MediaStream (mic/tab modes). */
   async start(stream: MediaStream): Promise<void> {
-    this.audioContext = new AudioContext({ sampleRate: 48000 });
+    // No sampleRate override: pcm-processor.js downsamples from whatever
+    // the worklet's global `sampleRate` actually is to 16kHz, so forcing
+    // 48000 here is unnecessary -- and on iOS Safari it can make context
+    // creation fail outright when the current audio route's hardware rate
+    // differs (e.g. many Bluetooth headsets negotiate 16/24kHz), especially
+    // with a second AudioContext already open for the RecordButton waveform.
+    this.audioContext = new AudioContext();
     await this.audioContext.audioWorklet.addModule('/pcm-processor.js');
     const source = this.audioContext.createMediaStreamSource(stream);
     this.audioWorkletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor');

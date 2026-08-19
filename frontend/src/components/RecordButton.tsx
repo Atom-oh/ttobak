@@ -606,7 +606,8 @@ export function RecordButton({
     }
   };
 
-  // iOS/Safari: Use native file input with capture
+  // Browsers with no MediaRecorder at all (rare) fall back to a native
+  // file-input recorder app instead of the in-page recording UI below.
   if (useNativeCapture) {
     return (
       <div className="flex flex-col items-center">

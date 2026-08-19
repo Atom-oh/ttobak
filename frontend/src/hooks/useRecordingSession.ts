@@ -38,6 +38,11 @@ const speechErrorMessages: Record<string, string> = {
   // here — unlike the other transcribe-* errors above, this one can't
   // "switch to" anything.
   'transcribe-native-unavailable': '실시간 자막을 사용할 수 없습니다 (AWS 인증/연결 필요). 녹음은 계속되며 종료 후 자동으로 전사됩니다.',
+  // Web Speech's own mic capture can end the recording's mic track on
+  // iOS/Android (see SttManager.fallbackToWebSpeech), so it's never used
+  // as a fallback on mobile while a mic/tab stream is recording. Recording
+  // itself is unaffected — only live captions stop.
+  'web-speech-mobile-unavailable': '이 기기에서는 브라우저 음성 인식을 실시간 자막에 사용할 수 없습니다. 녹음은 계속됩니다.',
 };
 
 interface UseRecordingSessionOptions {

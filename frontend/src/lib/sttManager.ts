@@ -11,6 +11,7 @@
 import { TranscribeFallbackClient, type TranscribeCallbacks } from './transcribeClient';
 import { TranscribeStreamingSession } from './transcribeStreamingClient';
 import { translateApi } from './api';
+import { isMobile } from './device';
 
 export type LiveSttProvider = 'transcribe-streaming' | 'web-speech';
 
@@ -60,12 +61,34 @@ export class SttManager {
         return;
       } catch (err) {
         console.warn('Transcribe Streaming failed, falling back to Web Speech:', err);
-        this.config.onProviderChange?.('web-speech');
+        this.fallbackToWebSpeech(true);
+        return;
       }
     }
 
+    this.fallbackToWebSpeech(false);
+  }
+
+  /**
+   * Fall back to (or start) Web Speech — guarded against a mobile mic
+   * conflict. Web Speech's own SpeechRecognition capture runs independent
+   * of the MediaStream MediaRecorder already holds for the recording
+   * itself; on iOS/Android it can end that mic track out from under a
+   * running recording with no other signal (see RecordButton's `onended`
+   * handler, which now stops the whole recording when that happens).
+   * Recording must never be sacrificed for live captions, so on mobile
+   * with a live mic/tab stream this surfaces an error instead of silently
+   * starting Web Speech — captions become unavailable, but the recording
+   * keeps going untouched.
+   */
+  private fallbackToWebSpeech(notifyChange: boolean): void {
+    if (this.stream && isMobile()) {
+      this.config.callbacks.onError('web-speech-mobile-unavailable');
+      return;
+    }
     this.startWebSpeech('ko-KR');
     this.activeProvider = 'web-speech';
+    if (notifyChange) this.config.onProviderChange?.('web-speech');
   }
 
   /**
@@ -132,9 +155,7 @@ export class SttManager {
         console.error('Transcribe Streaming error, switching to Web Speech:', error);
         this.transcribeSession?.stop();
         this.transcribeSession = null;
-        this.startWebSpeech('ko-KR');
-        this.activeProvider = 'web-speech';
-        this.config.onProviderChange?.('web-speech');
+        this.fallbackToWebSpeech(true);
       },
     });
 
@@ -142,9 +163,7 @@ export class SttManager {
       console.error('Transcribe Streaming start failed:', err);
       this.transcribeSession?.stop();
       this.transcribeSession = null;
-      this.startWebSpeech('ko-KR');
-      this.activeProvider = 'web-speech';
-      this.config.onProviderChange?.('web-speech');
+      this.fallbackToWebSpeech(true);
     });
   }
 
@@ -249,9 +268,7 @@ export class SttManager {
   resume(): void {
     if (this.activeProvider === 'transcribe-streaming' && this.stream) {
       this.startTranscribeStreaming(this.stream).catch(() => {
-        this.startWebSpeech('ko-KR');
-        this.activeProvider = 'web-speech';
-        this.config.onProviderChange?.('web-speech');
+        this.fallbackToWebSpeech(true);
       });
     } else {
       this.webSpeechClient?.resume();

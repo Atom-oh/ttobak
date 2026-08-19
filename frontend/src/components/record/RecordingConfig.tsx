@@ -1,5 +1,7 @@
 'use client';
 
+import { isMobile } from '@/lib/device';
+
 interface RecordingConfigProps {
   summaryInterval: number;
   onSummaryIntervalChange: (val: number) => void;
@@ -104,6 +106,10 @@ export function LiveSttSelector({
   activeProvider: string;
   isRecording: boolean;
 }) {
+  // Web Speech's own mic capture can end the recording's mic track on
+  // iOS/Android mid-recording (SttManager.fallbackToWebSpeech refuses it
+  // for the same reason) -- don't offer it as a choice on mobile at all.
+  const webSpeechDisabled = isRecording || isMobile();
   return (
     <div className="flex items-center gap-2">
       {/* Provider selector (disabled during recording) */}
@@ -121,7 +127,8 @@ export function LiveSttSelector({
         </button>
         <button
           onClick={() => onLiveSttProviderChange('web-speech')}
-          disabled={isRecording}
+          disabled={webSpeechDisabled}
+          title={isMobile() ? '이 기기에서는 브라우저 음성 인식을 사용할 수 없습니다 (녹음 중 마이크 충돌 방지)' : undefined}
           className={`px-3 py-1.5 text-xs font-medium transition-colors border-l border-slate-200 dark:border-slate-700 ${
             liveSttProvider === 'web-speech'
               ? 'bg-primary text-white'
