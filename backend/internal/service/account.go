@@ -305,6 +305,21 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 			// unclaimable grant.
 			return nil, ErrUserNotFound
 		}
+		// requesterUserID has a PROFILE row (it's already resolved to a
+		// member via GetMember above), so a self-invite here means the
+		// requester is inviting their own not-yet-materialized identity --
+		// possible when they were added as an owner before ever completing
+		// GetOrCreateUser (e.g. via CreateAccount without a prior
+		// ListMeetings/CreateMeeting call). Left unchecked, the eventual
+		// materialize would make MaterializePendingAccountGrant's
+		// ConditionCheck (on InvitedByUserID's membership) and Put (on
+		// userID's membership) target the exact same DynamoDB item, which
+		// DynamoDB rejects outright rather than via a normal conditional
+		// failure -- that error would repeat on every login attempt until
+		// the row's TTL finally drops it.
+		if sub == requesterUserID {
+			return nil, ErrSelfShare
+		}
 		if err := s.repo.PutPendingShare(ctx, &model.PendingShare{
 			Email:             req.Email,
 			Kind:              model.PendingShareKindAccount,

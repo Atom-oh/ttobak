@@ -752,6 +752,28 @@ func TestAddMember_InvitedButNotYetLoggedIn_QueuesPendingShare(t *testing.T) {
 	}
 }
 
+func TestAddMember_PendingSelfInviteRejected(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
+		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			return &cognitoidp.AdminGetUserOutput{
+				Username:       aws.String("owner-1"),
+				UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("sub"), Value: aws.String("owner-1")}},
+			}, nil
+		},
+	}, "pool-1")
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "not-yet-logged-in@x.com", Role: model.RoleSSA})
+	if !errors.Is(err, ErrSelfShare) {
+		t.Errorf("expected ErrSelfShare, got %v", err)
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected no pending share to be queued for a self-invite, got %d", len(repo.pendingShares))
+	}
+}
+
 func TestAddMember_UnknownEmail_NotInvited_StillErrUserNotFound(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)

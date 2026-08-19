@@ -654,6 +654,16 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, owner
 			// rather than queuing an unclaimable grant.
 			return nil, false, ErrUserNotFound
 		}
+		// The below-the-fold "cannot share with self" check further down
+		// only ever runs when targetUser is non-nil; a self-invite of an
+		// email that hasn't logged in yet (no PROFILE row) would otherwise
+		// sail straight into the pending branch and queue a grant whose
+		// eventual materialize makes MaterializePendingAccountGrant's own
+		// ConditionCheck and Put target the same DynamoDB item -- comparing
+		// the resolved sub here closes that gap before it's ever queued.
+		if sub == ownerID {
+			return nil, false, ErrSelfShare
+		}
 		if err := s.repo.PutPendingShare(ctx, &model.PendingShare{
 			Email:             targetEmail,
 			Kind:              model.PendingShareKindMeeting,

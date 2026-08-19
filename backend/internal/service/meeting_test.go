@@ -1274,6 +1274,34 @@ func TestShareMeetingByEmail_InvitedButNotYetLoggedIn_QueuesPendingShare(t *test
 	}
 }
 
+func TestShareMeetingByEmail_PendingSelfInviteRejected(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
+		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			return &cognitoidp.AdminGetUserOutput{
+				Username:       aws.String("owner-1"),
+				UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("sub"), Value: aws.String("owner-1")}},
+			}, nil
+		},
+	}, "pool-1")
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+
+	_, pending, err := svc.ShareMeetingByEmail(context.Background(), "owner-1", "owner@test.com", "m-1", "not-yet-logged-in@test.com", model.PermissionEdit)
+	if !errors.Is(err, ErrSelfShare) {
+		t.Errorf("expected ErrSelfShare, got %v", err)
+	}
+	if pending {
+		t.Error("expected pending=false for a rejected self-invite")
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected no pending share to be queued for a self-invite, got %d", len(repo.pendingShares))
+	}
+}
+
 func TestMaterializePendingShares_MeetingGrant_CreatesShareAndClearsQueue(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)

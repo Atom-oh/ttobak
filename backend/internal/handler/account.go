@@ -138,6 +138,8 @@ func (h *AccountHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "User is already a member")
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid role ("+strings.Join(model.AssignableRoles, "/")+")")
+		case errors.Is(err, service.ErrSelfShare):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Cannot add yourself as a member")
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}
