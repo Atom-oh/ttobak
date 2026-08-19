@@ -1905,9 +1905,12 @@ func (r *DynamoDBRepository) GetOrCreateUser(ctx context.Context, userID, email,
 		var ccfe *types.ConditionalCheckFailedException
 		if errors.As(err, &ccfe) {
 			// Lost the race to a concurrent first request -- re-read its
-			// winning row instead of erroring.
+			// winning row instead of erroring. ConsistentRead: the winner's
+			// write may not have propagated to an eventually-consistent
+			// read yet even though it already won the condition check.
 			existing, getErr := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-				TableName: aws.String(r.tableName),
+				TableName:      aws.String(r.tableName),
+				ConsistentRead: aws.Bool(true),
 				Key: map[string]types.AttributeValue{
 					"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
 					"SK": &types.AttributeValueMemberS{Value: model.PrefixProfile},
@@ -1915,6 +1918,9 @@ func (r *DynamoDBRepository) GetOrCreateUser(ctx context.Context, userID, email,
 			})
 			if getErr != nil {
 				return nil, false, fmt.Errorf("failed to re-get user after lost create race: %w", getErr)
+			}
+			if existing.Item == nil {
+				return nil, false, fmt.Errorf("user %s vanished after losing create race (deleted between condition-check failure and re-read)", userID)
 			}
 			var winner model.User
 			if unmarshalErr := attributevalue.UnmarshalMap(existing.Item, &winner); unmarshalErr != nil {

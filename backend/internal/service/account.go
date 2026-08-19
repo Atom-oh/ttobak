@@ -290,7 +290,7 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 		return nil, err
 	}
 	if user == nil {
-		invited, err := emailHasPendingInvite(ctx, s.cognito, s.resolveCognitoPoolID(), req.Email)
+		invited, sub, err := emailHasPendingInvite(ctx, s.cognito, s.resolveCognitoPoolID(), req.Email)
 		if err != nil {
 			return nil, err
 		}
@@ -298,12 +298,13 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 			return nil, ErrUserNotFound
 		}
 		if err := s.repo.PutPendingShare(ctx, &model.PendingShare{
-			Email:           req.Email,
-			Kind:            model.PendingShareKindAccount,
-			AccountID:       accountID,
-			Role:            req.Role,
-			InvitedByUserID: requesterUserID,
-			InvitedByEmail:  requester.Email,
+			Email:             req.Email,
+			Kind:              model.PendingShareKindAccount,
+			AccountID:         accountID,
+			Role:              req.Role,
+			InvitedByUserID:   requesterUserID,
+			InvitedByEmail:    requester.Email,
+			InvitedCognitoSub: sub,
 		}); err != nil {
 			return nil, err
 		}

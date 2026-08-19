@@ -1,5 +1,12 @@
 # Pending Email Invites Implementation Plan
 
+> **Superseded (partially) by the actual PR #157/#158 implementation** --
+> see the matching banner on `docs/superpowers/specs/2026-08-04-pending-
+> email-invites-design.md` for what shipped differently (2 of 5 flows,
+> `PendingShare`/`PENDINGSHARE#{email}` schema instead of `PendingInvite`/
+> `PENDINGINVITE#{email}`, plus a Cognito-invited gate and TTL this doc
+> didn't call for). Kept as background, not rewritten.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Inviting/sharing to an email that hasn't signed up yet succeeds immediately (instead of 404 "user not found") and materializes into a real grant automatically the moment that person's account provisions.

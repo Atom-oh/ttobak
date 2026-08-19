@@ -320,31 +320,49 @@ const (
 // completed a first login -- so no PROFILE row exists yet and
 // GetUserByEmail can't resolve it to a userID. AddMember/ShareMeetingByEmail
 // write one of these instead of failing outright when the target is in
-// exactly this state; DynamoDBRepository.MaterializePendingShares turns it
-// into a real AccountMember or Share row the moment GetOrCreateUser creates
-// that email's PROFILE row (its first authenticated request after
-// accepting the invite), so the grant becomes visible immediately on
-// sign-in with no separate "pending invites" step for the invitee.
+// exactly this state; MeetingService.MaterializePendingShares turns it into
+// a real AccountMember or Share row on the invitee's first ListMeetings/
+// CreateMeeting call after GetOrCreateUser creates their email's PROFILE
+// row (i.e. their first authenticated request after accepting the invite),
+// so the grant becomes visible on sign-in with no separate "pending
+// invites" step -- subject to the emailVerified/InvitedCognitoSub checks
+// materializeOne applies at that point.
 // PK: PENDINGSHARE#{email}, SK: PENDING_ACCOUNT#{accountId} | PENDING_MEETING#{meetingId}
 type PendingShare struct {
-	PK              string    `dynamodbav:"PK"`
-	SK              string    `dynamodbav:"SK"`
-	Email           string    `dynamodbav:"email"`
-	Kind            string    `dynamodbav:"kind"` // "account" | "meeting"
-	AccountID       string    `dynamodbav:"accountId,omitempty"`
-	MeetingID       string    `dynamodbav:"meetingId,omitempty"`
-	Role            string    `dynamodbav:"role,omitempty"`       // set when Kind=="account"
-	Permission      string    `dynamodbav:"permission,omitempty"` // set when Kind=="meeting"
-	InvitedByUserID string    `dynamodbav:"invitedByUserId"`
-	InvitedByEmail  string    `dynamodbav:"invitedByEmail,omitempty"`
-	CreatedAt       time.Time `dynamodbav:"createdAt"`
-	// TTL is a DynamoDB TTL epoch-seconds timestamp (infra/lib/storage-
-	// stack.ts's `timeToLiveAttribute: 'ttl'`) -- a mis-typed or stale
-	// invite's queued grant is not revocable by its inviter (no list/cancel
-	// API, see docs/superpowers/specs/2026-08-04-pending-email-invites-
-	// design.md's explicit YAGNI), so this bounds how long it stays
-	// claimable instead of granting access at an arbitrary future point.
-	TTL        int64  `dynamodbav:"ttl"`
+	PK              string `dynamodbav:"PK"`
+	SK              string `dynamodbav:"SK"`
+	Email           string `dynamodbav:"email"`
+	Kind            string `dynamodbav:"kind"` // "account" | "meeting"
+	AccountID       string `dynamodbav:"accountId,omitempty"`
+	MeetingID       string `dynamodbav:"meetingId,omitempty"`
+	Role            string `dynamodbav:"role,omitempty"`       // set when Kind=="account"
+	Permission      string `dynamodbav:"permission,omitempty"` // set when Kind=="meeting"
+	InvitedByUserID string `dynamodbav:"invitedByUserId"`
+	InvitedByEmail  string `dynamodbav:"invitedByEmail,omitempty"`
+	// InvitedCognitoSub is the Cognito `sub` (== Username, verified against
+	// the live pool -- see CLAUDE.md's "Already fixed" note) that
+	// emailHasPendingInvite's AdminGetUser call resolved the target email
+	// to at queue time. MeetingService.materializeOne requires this to
+	// match the current login's userID before granting: without it, a
+	// PendingShare is bound to nothing but a bare email string, and a user
+	// who later changes their Cognito email to match a stale invite could
+	// otherwise claim someone else's queued grant.
+	InvitedCognitoSub string    `dynamodbav:"invitedCognitoSub,omitempty"`
+	CreatedAt         time.Time `dynamodbav:"createdAt"`
+	// TTL is a DynamoDB TTL epoch-seconds timestamp. Uses the table's
+	// existing uppercase `TTL` attribute (infra/lib/storage-stack.ts's
+	// `timeToLiveAttribute: 'TTL'`) -- backend/python/qa/handler.py already
+	// writes this same attribute name on several row types, so a second,
+	// differently-cased attribute here would silently fragment DynamoDB's
+	// one-TTL-attribute-per-table limit instead of sharing it. A mis-typed
+	// or stale invite's queued grant is not revocable by its inviter (no
+	// list/cancel API, see docs/superpowers/specs/2026-08-04-pending-
+	// email-invites-design.md's explicit YAGNI), so this bounds how long it
+	// stays claimable instead of granting access at an arbitrary future
+	// point -- MeetingService.MaterializePendingShares enforces this
+	// synchronously too, since DynamoDB's own TTL sweep is asynchronous and
+	// can lag by hours.
+	TTL        int64  `dynamodbav:"TTL"`
 	EntityType string `dynamodbav:"entityType"` // "PENDING_SHARE"
 }
 

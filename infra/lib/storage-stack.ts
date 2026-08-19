@@ -30,12 +30,16 @@ export class StorageStack extends cdk.Stack {
         pointInTimeRecoveryEnabled: true,
       },
       stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
-      // Only PendingShare items (backend/internal/model.PendingShare) set
-      // this attribute today -- every other item type is untouched, since
-      // DynamoDB TTL only expires items that actually carry the configured
-      // attribute with a past epoch-seconds value. Bounds how long a
-      // mis-typed or stale invite's queued grant stays claimable.
-      timeToLiveAttribute: 'ttl',
+      // A DynamoDB table allows exactly one TTL attribute, so this MUST
+      // stay 'TTL' (uppercase) -- backend/python/qa/handler.py already
+      // writes an uppercase `TTL` epoch-seconds field on several row types
+      // (rate-limit, KB cache, conversation, feedback) in anticipation of
+      // this being turned on; PendingShare items
+      // (backend/internal/model.PendingShare) are the newest writer, not
+      // the only one. Additive either way: DynamoDB TTL only expires items
+      // that actually carry this attribute with a past epoch-seconds
+      // value, so every other item type stays untouched.
+      timeToLiveAttribute: 'TTL',
     });
 
     // GSI1 for date-based queries and meeting lookups

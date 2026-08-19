@@ -81,7 +81,7 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - **Stream**: NEW_AND_OLD_IMAGES (triggers the summarize Lambda)
 - **Point-in-time recovery**: enabled
 - **Removal policy**: RETAIN
-- **TTL**: attribute `ttl` (epoch seconds) -- additive, only expires items that actually set it. Today that's just `PendingShare` (30-day expiry on a queued, not-yet-materialized Account/Meeting invite, see API-SPEC.md's Add Member / Share Meeting sections); every other item type is unaffected.
+- **TTL**: attribute `TTL` (epoch seconds, uppercase -- a table allows only one TTL attribute, and `backend/python/qa/handler.py` was already writing this exact attribute name on rate-limit/KB-cache/conversation/feedback rows in anticipation of this being turned on, so it wasn't newly claimed by `PendingShare`). Only expires items that actually set it; every other item type is unaffected. `PendingShare` (30-day expiry on a queued, not-yet-materialized Account/Meeting invite, see API-SPEC.md's Add Member / Share Meeting sections) is the newest writer, not the only one -- enabling this attribute also starts sweeping those pre-existing QA rows, which is the intended (if previously dormant) behavior of their own TTL field, not a new side effect.
 
 ### DynamoDB Table (WebSocket Connections)
 - **Table name**: `ttobak-connections`

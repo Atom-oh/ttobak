@@ -60,7 +60,7 @@ func (h *MeetingHandler) ensureProfileAndMaterializePendingShares(ctx context.Co
 		log.Printf("ensureProfileAndMaterializePendingShares: GetOrCreateUser failed for user %s: %v", userID, err)
 		return
 	}
-	h.meetingService.MaterializePendingShares(ctx, userID, email)
+	h.meetingService.MaterializePendingShares(ctx, userID, email, middleware.GetEmailVerified(ctx))
 }
 
 // LinkToAccount handles POST /api/meetings/{meetingId}/account.

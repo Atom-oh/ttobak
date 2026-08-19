@@ -9,7 +9,7 @@ import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
 import { ASSIGNABLE_ACCOUNT_ROLES } from '@/types/meeting';
-import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef, ProjectSummary, User } from '@/types/meeting';
+import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef, ProjectSummary, User, AccountMember } from '@/types/meeting';
 
 export default function AccountDetailClient() {
   const pathname = usePathname();
@@ -225,7 +225,7 @@ export default function AccountDetailClient() {
             <section className="mb-8">
               <h3 className="text-base font-bold mb-3 text-slate-900 dark:text-text-main">Members</h3>
               <div className="glass-panel rounded-xl p-4 space-y-2">
-                {account.members.map((m) => {
+                {account.members.filter((m): m is AccountMember & { userId: string } => !!m.userId).map((m) => {
                   const isOwnerRow = m.userId === account.ownerUserId;
                   const isOwner = user?.userId === account.ownerUserId;
                   return (
@@ -262,7 +262,7 @@ export default function AccountDetailClient() {
                   <div className="flex gap-2 pt-2">
                     <div className="flex-1">
                       <MemberPicker
-                        excludeUserIds={account.members.map((m) => m.userId)}
+                        excludeUserIds={account.members.map((m) => m.userId).filter((id): id is string => !!id)}
                         onPick={handlePickMember}
                         placeholder="Search colleague by name or email"
                       />

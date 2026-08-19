@@ -1058,7 +1058,7 @@ func TestMaterializePendingShares_MeetingGrant_CreatesShareAndClearsQueue(t *tes
 		SK: model.PrefixPendingMeeting + "m-1",
 	})
 
-	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com")
+	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com", true)
 
 	share, err := repo.GetShare(context.Background(), "invitee-1", "m-1")
 	if err != nil || share == nil {
@@ -1089,7 +1089,7 @@ func TestMaterializePendingShares_SkipsWhenInviterNoLongerOwnsMeeting(t *testing
 		SK: model.PrefixPendingMeeting + "m-1",
 	})
 
-	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com")
+	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com", true)
 
 	share, err := repo.GetShare(context.Background(), "invitee-1", "m-1")
 	if err != nil {
@@ -1112,7 +1112,7 @@ func TestMaterializePendingShares_SkipsWhenInviterNoLongerAccountMember(t *testi
 		SK:              model.PrefixPendingAccount + "acc-1",
 	})
 
-	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com")
+	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com", true)
 
 	mem, err := repo.GetMember(context.Background(), "acc-1", "invitee-1")
 	if err != nil {
@@ -1120,6 +1120,119 @@ func TestMaterializePendingShares_SkipsWhenInviterNoLongerAccountMember(t *testi
 	}
 	if mem != nil {
 		t.Errorf("expected no membership to be materialized once the inviter is no longer a member, got %+v", mem)
+	}
+}
+
+func TestMaterializePendingShares_SkipsWhenInviterDemotedFromOwner(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "Test Account"}
+	// owner-1 queued this grant while owner, but is now a regular member --
+	// AddMember requires RoleOwner specifically, not just any membership.
+	repo.members["acc-1|owner-1"] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleSSA}
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@test.com", Kind: model.PendingShareKindAccount,
+		AccountID: "acc-1", Role: model.RoleTAM,
+		InvitedByUserID: "owner-1",
+		SK:              model.PrefixPendingAccount + "acc-1",
+	})
+
+	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com", true)
+
+	mem, err := repo.GetMember(context.Background(), "acc-1", "invitee-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mem != nil {
+		t.Errorf("expected no membership to be materialized once the inviter was demoted from owner, got %+v", mem)
+	}
+}
+
+func TestMaterializePendingShares_ExpiredTTLIsDroppedNotGranted(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@test.com", Kind: model.PendingShareKindMeeting,
+		MeetingID: "m-1", Permission: model.PermissionEdit,
+		InvitedByUserID: "owner-1",
+		SK:              model.PrefixPendingMeeting + "m-1",
+		TTL:             time.Now().Add(-time.Hour).Unix(), // expired 1h ago
+	})
+
+	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com", true)
+
+	share, err := repo.GetShare(context.Background(), "invitee-1", "m-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if share != nil {
+		t.Errorf("expected an expired pending share to never be materialized, got %+v", share)
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected the expired pending share to be cleared, got %d remaining", len(repo.pendingShares))
+	}
+}
+
+func TestMaterializePendingShares_UnverifiedEmailLeavesGrantQueued(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@test.com", Kind: model.PendingShareKindMeeting,
+		MeetingID: "m-1", Permission: model.PermissionEdit,
+		InvitedByUserID: "owner-1",
+		SK:              model.PrefixPendingMeeting + "m-1",
+	})
+
+	svc.MaterializePendingShares(context.Background(), "invitee-1", "invited@test.com", false)
+
+	share, err := repo.GetShare(context.Background(), "invitee-1", "m-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if share != nil {
+		t.Errorf("expected no share to be materialized for an unverified email, got %+v", share)
+	}
+	if len(repo.pendingShares) != 1 {
+		t.Errorf("expected the grant to stay queued (not dropped) for a later verified login, got %d remaining", len(repo.pendingShares))
+	}
+}
+
+func TestMaterializePendingShares_MismatchedCognitoSubLeavesGrantQueued(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@test.com", Kind: model.PendingShareKindMeeting,
+		MeetingID: "m-1", Permission: model.PermissionEdit,
+		InvitedByUserID:   "owner-1",
+		SK:                model.PrefixPendingMeeting + "m-1",
+		InvitedCognitoSub: "the-real-invitee-sub",
+	})
+
+	// A DIFFERENT userID logs in with this email -- e.g. someone who later
+	// changed their own Cognito email to match this stale invite.
+	svc.MaterializePendingShares(context.Background(), "someone-else-sub", "invited@test.com", true)
+
+	share, err := repo.GetShare(context.Background(), "someone-else-sub", "m-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if share != nil {
+		t.Errorf("expected no share to be materialized for a mismatched Cognito sub, got %+v", share)
+	}
+	if len(repo.pendingShares) != 1 {
+		t.Errorf("expected the grant to stay queued for the real invitee, got %d remaining", len(repo.pendingShares))
 	}
 }
 
