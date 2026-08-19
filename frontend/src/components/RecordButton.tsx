@@ -100,6 +100,42 @@ export function RecordButton({
   const nativeLevelRef = useRef(0);
   const nativeUnlistenRef = useRef<(() => void) | null>(null);
   const nativePcmUnlistenRef = useRef<(() => void) | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+  // Screen Wake Lock: without this, mobile OSes dim/lock the screen during a
+  // recording, which suspends the page's AudioContext(s) and (for Web
+  // Speech) kills the mic session outright — the getUserMedia track stays
+  // "live" the whole time, so nothing in the UI shows anything wrong while
+  // audio silently stops being captured. Holding the lock keeps the screen
+  // (and the audio pipeline) awake for as long as the lock survives.
+  const requestWakeLock = useCallback(async () => {
+    if (!('wakeLock' in navigator)) return;
+    try {
+      wakeLockRef.current = await navigator.wakeLock.request('screen');
+    } catch (err) {
+      // Not fatal — recording continues without the lock (e.g. low battery
+      // mode, or the tab lost focus between the click and this await).
+      console.warn('Screen Wake Lock request failed:', err);
+    }
+  }, []);
+
+  const releaseWakeLock = useCallback(() => {
+    wakeLockRef.current?.release().catch(() => {});
+    wakeLockRef.current = null;
+  }, []);
+
+  // The Wake Lock API releases itself whenever the document loses
+  // visibility (spec behavior, not a bug) — re-acquire on return so a
+  // second screen-lock later in the same recording is still guarded.
+  useEffect(() => {
+    const handleReacquire = () => {
+      if (document.visibilityState === 'visible' && isRecordingRef.current && !wakeLockRef.current) {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleReacquire);
+    return () => document.removeEventListener('visibilitychange', handleReacquire);
+  }, [requestWakeLock]);
 
   // iOS Safari has supported MediaRecorder since 14.3 (audio/mp4 output,
   // mapped to .m4a below), so it should take the normal recording path --
@@ -109,6 +145,7 @@ export function RecordButton({
 
   const cleanupAudioResources = useCallback(() => {
     isRecordingRef.current = false;
+    releaseWakeLock();
     if (animationRef.current) {
       cancelAnimationFrame(animationRef.current);
       animationRef.current = null;
@@ -123,7 +160,7 @@ export function RecordButton({
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-  }, [onAnalyserReady]);
+  }, [onAnalyserReady, releaseWakeLock]);
 
   // Save checkpoint immediately when tab becomes hidden (lid close, tab switch)
   useEffect(() => {
@@ -287,6 +324,7 @@ export function RecordButton({
         setRecordingState('recording');
         setElapsedTime(0);
         onPermissionGranted?.();
+        requestWakeLock();
         timerRef.current = setInterval(() => {
           setElapsedTime((prev) => prev + 1);
         }, 1000);
@@ -393,6 +431,7 @@ export function RecordButton({
       setRecordingState('recording');
       setElapsedTime(0);
       onRecordingStart?.(stream);
+      requestWakeLock();
 
       timerRef.current = setInterval(() => {
         setElapsedTime((prev) => prev + 1);
@@ -458,6 +497,7 @@ export function RecordButton({
 
   const stopRecording = async () => {
     isRecordingRef.current = false;
+    releaseWakeLock();
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;

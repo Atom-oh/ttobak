@@ -357,6 +357,14 @@ export class BrowserSpeechRecognition {
     }, this.WATCHDOG_CHECK_INTERVAL_MS);
 
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    // Mobile screen-lock/unlock doesn't reliably bookend with a
+    // visibilitychange "hidden" -> "visible" pair the way desktop tab-switch
+    // does — some mobile browsers restore the page as already "visible" by
+    // the time script resumes, so 'pageshow'/'focus' are the only signals
+    // that actually fire on unlock. Reusing the same handler is safe: by the
+    // time either fires, document.visibilityState is already 'visible'.
+    window.addEventListener('pageshow', this.handleVisibilityChange);
+    window.addEventListener('focus', this.handleVisibilityChange);
 
     try {
       this.recognition.start();
@@ -407,6 +415,8 @@ export class BrowserSpeechRecognition {
     this.shouldRestart = false;
     this.clearWatchdog();
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    window.removeEventListener('pageshow', this.handleVisibilityChange);
+    window.removeEventListener('focus', this.handleVisibilityChange);
     try { this.recognition?.stop(); } catch { /* ignore */ }
     this.recognition = null;
     this.onResult = null;

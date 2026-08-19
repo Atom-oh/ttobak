@@ -60,11 +60,36 @@ export class TranscribeStreamingSession {
   private audioResolve: ((value: IteratorResult<AudioChunkMessage>) => void) | null = null;
   private audioDone = false;
 
+  // Stall watchdog for the browser MediaStream path only (startNative() has
+  // no AudioContext to suspend — Tauri feeds pushChunk directly from Rust).
+  // Mobile OSes suspend a page's AudioContext on screen lock/background to
+  // save power; when that happens the AudioWorklet stops calling process(),
+  // pushChunk() stops firing, and this class's async iterator blocks
+  // forever with no error — the mic indicator/track stays "live" the whole
+  // time, so nothing else in the recording UI notices. This timer is the
+  // only thing that detects that silence and surfaces it.
+  private lastChunkAt = 0;
+  private stallReported = false;
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly STALL_TIMEOUT_MS = 15_000;
+  private readonly STALL_CHECK_INTERVAL_MS = 5_000;
+
   constructor(private config: TranscribeStreamingConfig) {}
 
   /** Start from a browser MediaStream (mic/tab modes). */
   async start(stream: MediaStream): Promise<void> {
     this.audioContext = new AudioContext({ sampleRate: 48000 });
+    // Mirrors RecordButton's tryResumeAudioContext: iOS/mobile browsers can
+    // suspend this context (screen lock, background) independently of the
+    // waveform's own AudioContext, since they're two separate instances.
+    const tryResumeAudioContext = () => {
+      if (this.audioContext && this.audioContext.state === 'suspended' && this.isActive) {
+        this.audioContext.resume().catch((err) => {
+          console.warn('Transcribe Streaming: AudioContext resume failed:', err);
+        });
+      }
+    };
+    this.audioContext.onstatechange = tryResumeAudioContext;
     await this.audioContext.audioWorklet.addModule('/pcm-processor.js');
     const source = this.audioContext.createMediaStreamSource(stream);
     this.audioWorkletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor');
@@ -72,6 +97,23 @@ export class TranscribeStreamingSession {
     this.audioWorkletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
       this.pushChunk(new Uint8Array(event.data));
     };
+
+    this.lastChunkAt = Date.now();
+    this.stallReported = false;
+    this.watchdogTimer = setInterval(() => {
+      if (!this.isActive) return;
+      tryResumeAudioContext();
+      const silentMs = Date.now() - this.lastChunkAt;
+      if (silentMs > this.STALL_TIMEOUT_MS) {
+        if (!this.stallReported) {
+          this.stallReported = true;
+          console.warn(`Transcribe Streaming: no audio chunks for ${silentMs}ms — audio pipeline likely suspended`);
+          this.config.onError('transcribe-stream-stalled');
+        }
+      } else {
+        this.stallReported = false;
+      }
+    }, this.STALL_CHECK_INTERVAL_MS);
 
     await this.connectAndTranscribe();
   }
@@ -92,6 +134,7 @@ export class TranscribeStreamingSession {
    * it directly for every chunk they receive.
    */
   pushChunk(chunk: Uint8Array): void {
+    this.lastChunkAt = Date.now();
     if (this.audioResolve) {
       const resolve = this.audioResolve;
       this.audioResolve = null;
@@ -215,6 +258,11 @@ export class TranscribeStreamingSession {
   stop(): void {
     this.isActive = false;
     this.audioDone = true;
+
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
 
     // Resolve any pending audio queue read
     if (this.audioResolve) {
