@@ -52,6 +52,18 @@ func (r *DynamoDBRepository) GetSimRun(ctx context.Context, meetingID string) (*
 // 중입니다" instead of starting a second Code Interpreter session and Sonnet
 // codegen for the same meeting -- and the same guard keeps a re-extraction
 // from silently resetting a live run's row out from under it.
+//
+// This is a TransactWriteItems, not a bare PutItem, because the SimRun
+// condition alone doesn't check that the meeting itself still exists: a
+// CreateSimulation call that read the meeting via GetMeeting, then raced
+// against a concurrent DeleteMeeting (whose transaction deletes the SIMRUN
+// row too, see DeleteMeeting's item-count comment), could otherwise still
+// pass this Put and resurrect an orphaned SIMRUN row for a meeting that no
+// longer exists -- wasting a full Code Interpreter session + Sonnet codegen
+// on a zombie item, exactly the class of race the repo's own conditional-
+// write convention (see LinkAccountTransactional) exists to close. Bundling
+// a ConditionCheck on the meeting's own row with this Put closes it the
+// same way.
 func (r *DynamoDBRepository) PutSimRunIfNotRunning(ctx context.Context, run *model.SimRun) error {
 	run.PK = model.PrefixMeeting + run.MeetingID
 	run.SK = model.PrefixSimRun
@@ -65,28 +77,67 @@ func (r *DynamoDBRepository) PutSimRunIfNotRunning(ctx context.Context, run *mod
 		return fmt.Errorf("failed to marshal sim run: %w", err)
 	}
 
-	condition := expression.Or(
+	simCondition := expression.Or(
 		expression.AttributeNotExists(expression.Name("SK")),
 		expression.Name("status").Equal(expression.Value(model.SimStatusExtracted)),
 		expression.Name("status").Equal(expression.Value(model.SimStatusDone)),
 		expression.Name("status").Equal(expression.Value(model.SimStatusError)),
 	)
-	expr, err := expression.NewBuilder().WithCondition(condition).Build()
+	simExpr, err := expression.NewBuilder().WithCondition(simCondition).Build()
 	if err != nil {
 		return fmt.Errorf("failed to build condition: %w", err)
 	}
+	meetingExistsExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to build meeting-exists condition: %w", err)
+	}
 
-	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName:                 aws.String(r.tableName),
-		Item:                      item,
-		ConditionExpression:       expr.Condition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + run.UserID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + run.MeetingID},
+					},
+					ConditionExpression:       meetingExistsExpr.Condition(),
+					ExpressionAttributeNames:  meetingExistsExpr.Names(),
+					ExpressionAttributeValues: meetingExistsExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:                 aws.String(r.tableName),
+					Item:                      item,
+					ConditionExpression:       simExpr.Condition(),
+					ExpressionAttributeNames:  simExpr.Names(),
+					ExpressionAttributeValues: simExpr.Values(),
+				},
+			},
+		},
 	})
 	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: meeting %s already has a simulation running", ErrConditionFailed, run.MeetingID)
+		var tce *types.TransactionCanceledException
+		if errors.As(err, &tce) && len(tce.CancellationReasons) == 2 {
+			meetingFailed := aws.ToString(tce.CancellationReasons[0].Code) == "ConditionalCheckFailed"
+			simFailed := aws.ToString(tce.CancellationReasons[1].Code) == "ConditionalCheckFailed"
+			// Both branches map to the same sentinel: the repository package
+			// has no ErrNotFound of its own (that's a service-layer concept),
+			// and this is an edge case narrow enough -- the meeting would
+			// have to be deleted in the moment between the caller's own
+			// GetMeeting check and this transaction -- that collapsing it
+			// into ErrConditionFailed's existing "can't create a run right
+			// now" handling is an acceptable simplification over adding a
+			// new cross-package error just for it.
+			if meetingFailed {
+				return fmt.Errorf("%w: meeting %s no longer exists", ErrConditionFailed, run.MeetingID)
+			}
+			if simFailed {
+				return fmt.Errorf("%w: meeting %s already has a simulation running", ErrConditionFailed, run.MeetingID)
+			}
 		}
 		return fmt.Errorf("failed to put sim run: %w", err)
 	}

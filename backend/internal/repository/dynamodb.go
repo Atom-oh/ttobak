@@ -2082,7 +2082,10 @@ func (r *DynamoDBRepository) DetachDeletedUserProfile(ctx context.Context, userI
 	update := expression.Set(expression.Name("deletedAt"), expression.Value(time.Now().UTC())).
 		Remove(expression.Name("GSI2PK")).
 		Remove(expression.Name("GSI2SK"))
-	expr, err := expression.NewBuilder().WithUpdate(update).Build()
+	expr, err := expression.NewBuilder().
+		WithUpdate(update).
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		Build()
 	if err != nil {
 		return fmt.Errorf("failed to build expression: %w", err)
 	}
@@ -2096,7 +2099,7 @@ func (r *DynamoDBRepository) DetachDeletedUserProfile(ctx context.Context, userI
 		UpdateExpression:          expr.Update(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
-		ConditionExpression:       aws.String("attribute_exists(PK)"),
+		ConditionExpression:       expr.Condition(),
 	})
 	if err != nil {
 		var cce *types.ConditionalCheckFailedException
