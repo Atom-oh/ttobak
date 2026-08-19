@@ -145,11 +145,25 @@ func validateSimRequirements(meeting *model.Meeting, userID string, reqs []model
 	if len(reqs) == 0 {
 		return fmt.Errorf("at least one requirement is needed: %w", ErrInvalidInput)
 	}
+	// Bound the array itself: without this, a POST body naming the same key
+	// (or an unbounded number of distinct keys) thousands of times still
+	// passes every per-item check below and reaches the ttobak-sim invoke
+	// payload and codegen prompt as-is. len(AllowedSimRequirementKeys) is
+	// the real ceiling on distinct keys; a client can never legitimately
+	// need more items than that.
+	if len(reqs) > len(AllowedSimRequirementKeys) {
+		return fmt.Errorf("too many requirements (max %d): %w", len(AllowedSimRequirementKeys), ErrInvalidInput)
+	}
+	seenKeys := make(map[string]bool, len(reqs))
 	for _, req := range reqs {
 		bound, ok := AllowedSimRequirementKeys[req.Key]
 		if !ok {
 			return fmt.Errorf("unknown requirement key %q: %w", req.Key, ErrInvalidInput)
 		}
+		if seenKeys[req.Key] {
+			return fmt.Errorf("duplicate requirement key %q: %w", req.Key, ErrInvalidInput)
+		}
+		seenKeys[req.Key] = true
 		if len(req.Label) > simLabelMaxLen || !labelCharsetRe.valid(req.Label) {
 			return fmt.Errorf("requirement %q label invalid: %w", req.Key, ErrInvalidInput)
 		}

@@ -90,9 +90,16 @@ func NewUserAdminServiceForTest(cognito CognitoAdminAPI, poolID string, repo Use
 	return &UserAdminService{cognito: cognito, poolID: poolID, repo: repo}
 }
 
-// listAdminUserIDs returns the Cognito Username (=sub, see the package doc
-// note in handler/user_admin.go on why Username==sub for this pool) of every
-// member of the "admins" group, paginating up to maxCognitoListPages.
+// listAdminUserIDs returns the Cognito Username of every member of the
+// "admins" group, paginating up to maxCognitoListPages.
+//
+// Username==sub for this pool: verified empirically against the live pool
+// (`aws cognito-idp list-users`, every returned user's Username matches its
+// own `sub` attribute) -- this is a property of email-as-sign-in-alias pools
+// (Username auto-generates as a UUID equal to sub), not an AWS API contract,
+// so re-verify if the pool's sign-in alias configuration ever changes. If
+// this ever breaks, the self-delete/self-disable guard, DetachDeletedUserProfile,
+// and the BatchGetUserLastLogins join all silently stop matching real users.
 func (s *UserAdminService) listAdminUserIDs(ctx context.Context) ([]string, error) {
 	var ids []string
 	var nextToken *string

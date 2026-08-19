@@ -288,7 +288,9 @@ type InviteUserResponse struct {
 
 // AdminUserSummary represents one row of the admin user-management panel
 // (GET /api/settings/users). UserID is the Cognito Username, which for this
-// pool is always the sub (see service.UserAdminService doc notes).
+// pool equals the sub -- verified empirically against the live pool, see
+// service.UserAdminService.listAdminUserIDs' doc comment for the evidence
+// and why it could stop holding.
 type AdminUserSummary struct {
 	UserID      string     `json:"userId"`
 	Email       string     `json:"email"`

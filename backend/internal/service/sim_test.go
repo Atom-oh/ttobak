@@ -122,6 +122,31 @@ func TestValidateSimRequirements(t *testing.T) {
 			wantErr: ErrInvalidInput,
 		},
 		{
+			name:    "duplicate requirement key rejected",
+			meeting: doneMeeting(),
+			userID:  "user-1",
+			reqs: []model.SimRequirement{
+				{Key: "monthlyActiveUsers", Value: "1", Label: "x"},
+				{Key: "monthlyActiveUsers", Value: "2", Label: "x"},
+			},
+			opts:    validOpts(),
+			wantErr: ErrInvalidInput,
+		},
+		{
+			name:    "more requirements than allowed keys exist is rejected",
+			meeting: doneMeeting(),
+			userID:  "user-1",
+			reqs: func() []model.SimRequirement {
+				out := make([]model.SimRequirement, len(AllowedSimRequirementKeys)+1)
+				for i := range out {
+					out[i] = model.SimRequirement{Key: "monthlyActiveUsers", Value: "1", Label: "x"}
+				}
+				return out
+			}(),
+			opts:    validOpts(),
+			wantErr: ErrInvalidInput,
+		},
+		{
 			name:    "unknown requirement key",
 			meeting: doneMeeting(),
 			userID:  "user-1",

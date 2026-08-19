@@ -48,6 +48,7 @@ func (h *UserAdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 	if h.handleActionError(w, "DeleteUser", targetID, err) {
 		return
 	}
+	auditAdminAction(actorID, targetID, "DeleteUser")
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -55,12 +56,14 @@ func (h *UserAdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 // EnableUser handles PUT /api/settings/users/{userId}/enable
 func (h *UserAdminHandler) EnableUser(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	actorID := middleware.GetUserID(ctx)
 	targetID := chi.URLParam(r, "userId")
 
 	resp, err := h.userAdmin.EnableUser(ctx, targetID)
 	if h.handleActionError(w, "EnableUser", targetID, err) {
 		return
 	}
+	auditAdminAction(actorID, targetID, "EnableUser")
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -75,6 +78,7 @@ func (h *UserAdminHandler) DisableUser(w http.ResponseWriter, r *http.Request) {
 	if h.handleActionError(w, "DisableUser", targetID, err) {
 		return
 	}
+	auditAdminAction(actorID, targetID, "DisableUser")
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -82,12 +86,14 @@ func (h *UserAdminHandler) DisableUser(w http.ResponseWriter, r *http.Request) {
 // ResendInvite handles POST /api/settings/users/{userId}/resend-invite
 func (h *UserAdminHandler) ResendInvite(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	actorID := middleware.GetUserID(ctx)
 	targetID := chi.URLParam(r, "userId")
 
 	if err := h.userAdmin.ResendInvite(ctx, targetID); err != nil {
 		h.handleActionError(w, "ResendInvite", targetID, err)
 		return
 	}
+	auditAdminAction(actorID, targetID, "ResendInvite")
 
 	writeJSON(w, http.StatusOK, model.AdminUserActionResponse{UserID: targetID})
 }
@@ -95,14 +101,26 @@ func (h *UserAdminHandler) ResendInvite(w http.ResponseWriter, r *http.Request) 
 // ResetPassword handles POST /api/settings/users/{userId}/reset-password
 func (h *UserAdminHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	actorID := middleware.GetUserID(ctx)
 	targetID := chi.URLParam(r, "userId")
 
 	if err := h.userAdmin.ForceResetPassword(ctx, targetID); err != nil {
 		h.handleActionError(w, "ResetPassword", targetID, err)
 		return
 	}
+	auditAdminAction(actorID, targetID, "ResetPassword")
 
 	writeJSON(w, http.StatusOK, model.AdminUserActionResponse{UserID: targetID})
+}
+
+// auditAdminAction logs a successful destructive/identity-affecting admin
+// action with actor+target+action attribution. CloudTrail already records
+// the underlying Cognito API calls, but only against this Lambda's own
+// execution role -- it cannot attribute WHICH admin performed the action.
+// This is the only place that attribution exists; do not remove without
+// replacing it (e.g. a dedicated audit table).
+func auditAdminAction(actorID, targetID, action string) {
+	log.Printf("admin audit: actor=%s target=%s action=%s", actorID, targetID, action)
 }
 
 // handleActionError maps a UserAdminService error to an HTTP response and
