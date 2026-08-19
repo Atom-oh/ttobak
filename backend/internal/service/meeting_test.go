@@ -273,6 +273,22 @@ func (m *mockMeetingRepo) DeletePendingShare(_ context.Context, email, sk string
 	return nil
 }
 
+// DeletePendingShareIfVersionMatches mirrors the real repo's CreatedAt
+// version check: only removes the row if it's still byte-for-byte the one
+// that was read, so tests can exercise "a fresher re-invite landed in the
+// gap" by mutating m.pendingShares between a read and this call.
+func (m *mockMeetingRepo) DeletePendingShareIfVersionMatches(_ context.Context, email string, p *model.PendingShare) error {
+	kept := m.pendingShares[:0]
+	for _, existing := range m.pendingShares {
+		if existing.Email == email && existing.SK == p.SK && existing.CreatedAt.Equal(p.CreatedAt) {
+			continue
+		}
+		kept = append(kept, existing)
+	}
+	m.pendingShares = kept
+	return nil
+}
+
 func (m *mockMeetingRepo) GetAccount(_ context.Context, accountID string) (*model.Account, error) {
 	acc, ok := m.accounts[accountID]
 	if !ok {
@@ -715,7 +731,7 @@ func TestGetMeetingDetail_ExpiresStuckTranscribing(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)
 
-	old := time.Now().Add(-31 * time.Minute)
+	old := time.Now().Add(-61 * time.Minute)
 	repo.addMeeting(&model.Meeting{
 		MeetingID: "m-1", UserID: "user-1", Title: "Stuck Transcribing",
 		Status: model.StatusTranscribing,
@@ -1126,6 +1142,102 @@ func TestMaterializePendingShares_ZeroTTLIsDroppedNotGranted(t *testing.T) {
 	}
 	if len(repo.pendingShares) != 0 {
 		t.Errorf("expected the zero-TTL pending share to be cleared, got %d remaining", len(repo.pendingShares))
+	}
+}
+
+func TestRevokePendingShare_OwnerCanRevoke(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@test.com", Kind: model.PendingShareKindMeeting,
+		MeetingID: "m-1", Permission: model.PermissionRead,
+		SK: model.PrefixPendingMeeting + "m-1",
+	})
+
+	if err := svc.RevokePendingShare(context.Background(), "owner-1", "m-1", "invited@test.com"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected the pending share to be revoked, got %d remaining", len(repo.pendingShares))
+	}
+}
+
+func TestRevokePendingShare_NonOwnerForbidden(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@test.com", Kind: model.PendingShareKindMeeting,
+		MeetingID: "m-1", Permission: model.PermissionRead,
+		SK: model.PrefixPendingMeeting + "m-1",
+	})
+
+	err := svc.RevokePendingShare(context.Background(), "someone-else", "m-1", "invited@test.com")
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+	if len(repo.pendingShares) != 1 {
+		t.Errorf("expected the pending share to survive a non-owner's revoke attempt, got %d remaining", len(repo.pendingShares))
+	}
+}
+
+func TestRevokePendingShare_MeetingNotFound(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+
+	err := svc.RevokePendingShare(context.Background(), "owner-1", "does-not-exist", "invited@test.com")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestMaterializePendingShares_ExpiredCleanup_DoesNotDeleteFreshReinvite is
+// the regression test for the round-5 MAJOR: the expired/invalid cleanup
+// branch used to call the plain, unconditioned DeletePendingShare off a
+// stale read -- if a fresh re-invite (a new PutPendingShare, which upserts
+// the same (email, SK) key) landed in the gap between that read and the
+// delete, the fresh row got silently wiped along with the stale one. The
+// version-conditioned DeletePendingShareIfVersionMatches must leave a
+// fresh row (different CreatedAt) alone.
+func TestMaterializePendingShares_ExpiredCleanup_DoesNotDeleteFreshReinvite(t *testing.T) {
+	repo := newMockMeetingRepo()
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	staleRead := model.PendingShare{
+		Email: "invited@test.com", Kind: model.PendingShareKindMeeting,
+		MeetingID: "m-1", Permission: model.PermissionRead,
+		SK:        model.PrefixPendingMeeting + "m-1",
+		TTL:       time.Now().Add(-time.Hour).Unix(), // expired
+		CreatedAt: time.Now().Add(-48 * time.Hour),
+	}
+	// Simulate the row having been re-invited (fresh CreatedAt, valid TTL)
+	// in the gap between ListPendingShares reading the stale copy above and
+	// MaterializePendingShares acting on it.
+	fresh := staleRead
+	fresh.TTL = time.Now().Add(time.Hour).Unix()
+	fresh.CreatedAt = time.Now()
+	repo.pendingShares = append(repo.pendingShares, &fresh)
+
+	// Exercise the cleanup path directly with the stale copy, exactly as
+	// MaterializePendingShares's loop would (it read `staleRead` before the
+	// re-invite landed).
+	if err := repo.DeletePendingShareIfVersionMatches(context.Background(), staleRead.Email, &staleRead); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.pendingShares) != 1 {
+		t.Fatalf("expected the fresh re-invite to survive, got %d remaining", len(repo.pendingShares))
+	}
+	if !repo.pendingShares[0].CreatedAt.Equal(fresh.CreatedAt) {
+		t.Errorf("expected the surviving row to be the fresh re-invite, got %+v", repo.pendingShares[0])
 	}
 }
 

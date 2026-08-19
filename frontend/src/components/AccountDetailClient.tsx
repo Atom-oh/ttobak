@@ -32,6 +32,10 @@ export default function AccountDetailClient() {
   // "invited but not yet accepted" state, an informational message, not
   // a failure.
   const [pendingNotice, setPendingNotice] = useState<string | null>(null);
+  // The email a pending notice is about, so its Cancel button can call
+  // revokePendingMember without needing a listing feature -- the invite
+  // was just sent in this exact call, so the email is already known here.
+  const [pendingNoticeEmail, setPendingNoticeEmail] = useState<string | null>(null);
   const [uploadingSlide, setUploadingSlide] = useState(false);
 
   const [inviteRole, setInviteRole] = useState('SSA');
@@ -96,16 +100,34 @@ export default function AccountDetailClient() {
     setInviting(true);
     setError(null);
     setPendingNotice(null);
+    setPendingNoticeEmail(null);
     try {
       const result = await accountApi.addMember(accountId, { email: picked.email, role: inviteRole });
-      await fetchAll();
+      // Set the notice before fetchAll: addMember itself already succeeded
+      // (the invite is genuinely queued) at this point, so a THIS call
+      // failing afterward must not overwrite that with an unrelated
+      // "Failed to add member" error banner -- fetchAll failing is a
+      // separate, lower-priority problem than the invite itself failing.
       if (result?.pending) {
         setPendingNotice(`${picked.email}님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 계정에 추가됩니다.`);
+        setPendingNoticeEmail(picked.email);
       }
+      await fetchAll();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add member');
     } finally {
       setInviting(false);
+    }
+  };
+
+  const handleRevokePendingMember = async () => {
+    if (!pendingNoticeEmail) return;
+    try {
+      await accountApi.revokePendingMember(accountId, pendingNoticeEmail);
+      setPendingNotice(null);
+      setPendingNoticeEmail(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to revoke pending invite');
     }
   };
 
@@ -212,8 +234,15 @@ export default function AccountDetailClient() {
           </div>
         )}
         {pendingNotice && (
-          <div className="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4">
-            {pendingNotice}
+          <div className="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4 flex items-center justify-between gap-3">
+            <span>{pendingNotice}</span>
+            <button
+              type="button"
+              onClick={handleRevokePendingMember}
+              className="shrink-0 font-semibold underline hover:no-underline"
+            >
+              취소
+            </button>
           </div>
         )}
         {loading || !account ? (

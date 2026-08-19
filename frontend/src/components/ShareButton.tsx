@@ -35,6 +35,13 @@ interface ShareButtonProps {
    * false so those callers get the old search-only behavior unchanged.
    */
   allowEmailInvite?: boolean;
+  /**
+   * Cancels a queued PendingShare invite by email (there's no userId yet
+   * for one, so `unshareApi` can't be reused). Only wired when
+   * allowEmailInvite is -- pending's other current caller, doc/research
+   * share, has no such route.
+   */
+  revokePendingApi?: (id: string, email: string) => Promise<unknown>;
 }
 
 // shareApi's return shape varies by entity (meeting share vs. doc share), so
@@ -94,6 +101,7 @@ export function MeetingShareButton({
       label="Share meeting"
       extraSection={<NotionPushSection meetingId={meetingId} />}
       allowEmailInvite
+      revokePendingApi={meetingsApi.revokePendingShare}
     />
   );
 }
@@ -147,6 +155,7 @@ export function ShareButton({
   extraSection,
   readOnly,
   allowEmailInvite = false,
+  revokePendingApi,
 }: ShareButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -155,8 +164,20 @@ export function ShareButton({
   const [selectedPermission, setSelectedPermission] = useState<'read' | 'edit'>('read');
   const [isSharing, setIsSharing] = useState(false);
   const [pendingNotice, setPendingNotice] = useState<string | null>(null);
+  // The email a pending notice is about, so its Cancel button can call
+  // revokePendingApi without needing a listing feature -- the invite was
+  // just sent in this exact call, so the email is already known here.
+  const [pendingNoticeEmail, setPendingNoticeEmail] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // usersApi.search already filters out anyone in `sharedWith` (see the
+  // effect below), so a typed email that's already shared is absent from
+  // searchResults for that reason, not because it's unknown -- the
+  // free-text row must check `sharedWith` directly, not just
+  // searchResults, or it offers to "invite" someone already shared.
+  const isAlreadyShared = (query: string) =>
+    sharedWith.some((s) => s.email.toLowerCase() === query.trim().toLowerCase());
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -208,6 +229,7 @@ export function ShareButton({
   const handleShare = async (user: User) => {
     setIsSharing(true);
     setPendingNotice(null);
+    setPendingNoticeEmail(null);
     try {
       const permission = readOnly ? 'read' : selectedPermission;
       const result = await shareApi(entityId, { email: user.email, permission });
@@ -216,6 +238,7 @@ export function ShareButton({
         // (see PendingShare), so don't optimistically add a fake entry to
         // sharedWith -- it'll appear for real once they sign in.
         setPendingNotice(`${user.email}님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 공유됩니다.`);
+        setPendingNoticeEmail(user.email);
       } else {
         // A free-text email can resolve to an already-registered user
         // (search just didn't happen to surface them) -- prefer the
@@ -248,10 +271,21 @@ export function ShareButton({
     }
   };
 
+  const handleRevokePending = async () => {
+    if (!revokePendingApi || !pendingNoticeEmail) return;
+    try {
+      await revokePendingApi(entityId, pendingNoticeEmail);
+      setPendingNotice(null);
+      setPendingNoticeEmail(null);
+    } catch (err) {
+      console.error('Failed to revoke pending share:', err);
+    }
+  };
+
   return (
     <div className="relative">
       <button
-        onClick={() => { setPendingNotice(null); setIsOpen(true); }}
+        onClick={() => { setPendingNotice(null); setPendingNoticeEmail(null); setIsOpen(true); }}
         className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
       >
         <span className="material-symbols-outlined text-lg">share</span>
@@ -311,8 +345,17 @@ export function ShareButton({
           </div>
 
           {pendingNotice && (
-            <div className="px-4 py-3 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border-b border-slate-200 dark:border-slate-700">
-              {pendingNotice}
+            <div className="px-4 py-3 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+              <span>{pendingNotice}</span>
+              {revokePendingApi && (
+                <button
+                  type="button"
+                  onClick={handleRevokePending}
+                  className="shrink-0 font-semibold underline hover:no-underline"
+                >
+                  취소
+                </button>
+              )}
             </div>
           )}
 
@@ -351,7 +394,7 @@ export function ShareButton({
                       <span className="material-symbols-outlined text-primary">add</span>
                     </button>
                   ))}
-                  {allowEmailInvite && EMAIL_RE.test(searchQuery.trim()) && !searchResults.some((u) => u.email.toLowerCase() === searchQuery.trim().toLowerCase()) && (
+                  {allowEmailInvite && EMAIL_RE.test(searchQuery.trim()) && !isAlreadyShared(searchQuery) && !searchResults.some((u) => u.email.toLowerCase() === searchQuery.trim().toLowerCase()) && (
                     <button
                       onClick={() => handleShare({ userId: '', email: searchQuery.trim() })}
                       disabled={isSharing}
@@ -362,15 +405,20 @@ export function ShareButton({
                     </button>
                   )}
                 </>
-              ) : allowEmailInvite && EMAIL_RE.test(searchQuery.trim()) ? (
+              ) : allowEmailInvite && EMAIL_RE.test(searchQuery.trim()) && !isAlreadyShared(searchQuery) ? (
                 // usersApi.search only finds PROFILE rows (SearchUsersByEmail
                 // via GSI2) -- an invited-but-never-logged-in email has none
-                // by definition, so it can never show up as a search result.
-                // Without this fallback, the pending-share path this
-                // component's isPendingShareResult/pendingNotice logic
-                // exists for would be unreachable from the UI. Gated on
-                // allowEmailInvite so doc/research share (no pending
-                // support on the backend) don't show a row that just 404s.
+                // by definition, so it can never show up as a search result
+                // (searchResults.length is 0 here). Without this fallback,
+                // the pending-share path this component's
+                // isPendingShareResult/pendingNotice logic exists for would
+                // be unreachable from the UI. Gated on allowEmailInvite so
+                // doc/research share (no pending support on the backend)
+                // don't show a row that just 404s -- and on !isAlreadyShared
+                // so typing an email that's already in `sharedWith` (which
+                // is exactly why it's absent from searchResults above, not
+                // because it doesn't exist) doesn't offer to "invite" it a
+                // second time.
                 <button
                   onClick={() => handleShare({ userId: '', email: searchQuery.trim() })}
                   disabled={isSharing}

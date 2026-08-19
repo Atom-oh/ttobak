@@ -78,10 +78,11 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - **Sort Key**: `SK` (String)
 - **GSI1**: PK `GSI1PK` / SK `GSI1SK`, Projection ALL
 - **GSI2**: PK `GSI2PK` (`EMAIL#{email}`, for user search) / SK `GSI2SK` (`USER#{userId}`), Projection ALL
+- **`PendingShare`** (main-table item, no GSI): PK `PENDING_SHARE#{email}` / SK `PENDING_ACCOUNT#{accountId}` or `PENDING_MEETING#{meetingId}` -- see `backend/internal/model.PendingShare`'s doc comment and API-SPEC.md's Add Member / Share Meeting sections.
 - **Stream**: NEW_AND_OLD_IMAGES (triggers the summarize Lambda)
 - **Point-in-time recovery**: enabled
 - **Removal policy**: RETAIN
-- **TTL**: not enabled (`timeToLiveAttribute` unset) -- `backend/python/qa/handler.py` already writes an uppercase `TTL` epoch-seconds field on rate-limit/KB-cache/conversation-MESSAGES/CHAT_SESSION rows, but never actually expires them, since a table allows only one TTL attribute and it's never been turned on. `PendingShare` (see API-SPEC.md's Add Member / Share Meeting sections) reuses that same `TTL` field name to stay ready to share it if the table's TTL is ever deliberately enabled, but does not enable it itself -- doing so would also bulk-delete that pre-existing, never-swept QA conversation history with no scan/notice step, a decision that deserves its own PR. `PendingShare`'s TTL is enforced entirely in application code instead (`MeetingService.MaterializePendingShares` drops any row past its TTL on read).
+- **TTL**: not enabled (`timeToLiveAttribute` unset) -- `backend/python/qa/handler.py` already writes an uppercase `TTL` epoch-seconds field on rate-limit/KB-cache/conversation-MESSAGES/CHAT_SESSION rows, but never actually expires them, since a table allows only one TTL attribute and it's never been turned on. `PendingShare` (see API-SPEC.md's Add Member / Share Meeting sections) reuses that same `TTL` field name to stay ready to share it if the table's TTL is ever deliberately enabled, but does not enable it itself -- doing so would also bulk-delete that pre-existing, never-swept QA conversation history with no scan/notice step, a decision that deserves its own PR. `PendingShare`'s TTL is enforced entirely in application code instead -- `MeetingService.MaterializePendingShares` drops an expired row the next time that exact email authenticates (its own next `ListMeetings`/`CreateMeeting` call), not on any read in general; an invitee who never logs in again leaves the row physically in place past its TTL.
 
 ### DynamoDB Table (WebSocket Connections)
 - **Table name**: `ttobak-connections`
@@ -168,9 +169,10 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - Permissions: Transcribe FullAccess, Bedrock InvokeModelWithBidirectionalStream, S3 read, DynamoDB read/write
 
 #### Summarize Lambda
-- Trigger: DynamoDB Stream (filter: status == "summarizing"), 512MB / 120s
-- Env: `TABLE_NAME`, `BEDROCK_MODEL_ID`
-- Permissions: Bedrock InvokeModel, DynamoDB read/write
+- Trigger: EventBridge — S3 `Object Created` on `transcripts/` prefix, and the custom `ttobak.transcribe` / `AllPartsTranscribed` event for multi-part audio, 512MB / 900s (15 min, the Lambda ceiling; raised from 600s on 2026-08-19 — a ~1,000-1,500 segment meeting's sequential refine step alone could take 8-9 minutes, leaving no room for the Opus 5 summarize call that follows)
+- Env: `TABLE_NAME`, `BUCKET_NAME`, `BEDROCK_MODEL_ID`, `BEDROCK_SONNET_MODEL_ID`, `KB_BUCKET_NAME`, `KB_ID`, `DATA_SOURCE_ID`, `AWS_REGION_NAME`
+- Permissions: Bedrock InvokeModel, DynamoDB read/write, S3 read/write
+- Status guard: only reprocesses a transcript when the meeting is `transcribing`, or `summarizing` but stale past `stuckTranscribingThreshold` (60 min, `service.IsStuck`) — the latter recovers a meeting whose refine succeeded but whose summarize step then timed out mid-flight, which would otherwise be stuck forever since a live `summarizing` retry is otherwise treated as a duplicate in-flight attempt and skipped
 
 #### Process Image Lambda
 - Trigger: S3 Event (prefix `images/`) via EventBridge, 1024MB / 120s
@@ -285,7 +287,7 @@ ECS infra for Whisper GPU batch transcription. After a recording completes, `tto
 - **AMI**: ECS-optimized Amazon Linux 2 (GPU)
 - **Spot price**: $1.10
 - **Capacity**: min=0, max=10, desired=0 (zero-scale)
-- **Subnets**: Private with egress (ap-northeast-2a, 2c, 2d)
+- **Subnets**: Private with egress — no explicit AZ filter; spans every AZ the imported VPC (`vpc-04e77172c67f19814`) actually has `PRIVATE_WITH_EGRESS` subnets in (currently 2a + 2b). A prior hardcoded `['ap-northeast-2a', 'ap-northeast-2c', 'ap-northeast-2d']` filter intersected down to 2a alone (this VPC has no subnets in 2c/2d), pinning every Spot request to one AZ and causing repeated `InsufficientInstanceCapacity` cold-start delays even while other AZs had room — fixed 2026-08-19.
 - **Security group**: Egress only (no inbound)
 
 ### ECS Capacity Provider

@@ -146,6 +146,39 @@ func (h *AccountHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, dto)
 }
 
+// RevokePendingMember handles DELETE /api/accounts/{accountId}/members/pending?email={email} --
+// cancels a queued PendingShare account invite before the target has ever
+// logged in (see AccountService.RevokePendingMember's doc comment for why
+// this is a separate route from RemoveMember rather than reusing its
+// {userId} path: there's no userId yet for a grant that's never been
+// claimed).
+func (h *AccountHandler) RevokePendingMember(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	email := r.URL.Query().Get("email")
+
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID is required")
+		return
+	}
+	if email == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "email query parameter is required")
+		return
+	}
+
+	if err := h.accountService.RevokePendingMember(ctx, userID, accountID, email); err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can revoke a pending invite")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *AccountHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := middleware.GetUserID(ctx)

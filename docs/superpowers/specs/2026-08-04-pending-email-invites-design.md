@@ -4,7 +4,7 @@
 > 2 of the 5 flows below shipped -- Meeting share (`ShareMeetingByEmail`) and
 > Account member invite (`AddMember`); doc share, research share, and
 > project member invite still hard-fail on an unresolved email. The shipped
-> item is also named/keyed differently (`PendingShare`, `PENDINGSHARE#
+> item is also named/keyed differently (`PendingShare`, `PENDING_SHARE#
 > {email}` / `PENDING_ACCOUNT#{id}` | `PENDING_MEETING#{id}`, not
 > `PendingInvite`/`PENDINGINVITE#{email}`/`{TYPE}#{entityId}`), and adds one
 > thing this doc didn't call for: it gates on the target actually having an

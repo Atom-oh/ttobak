@@ -85,6 +85,10 @@ func (m *mockHandlerAccountRepo) PutPendingShare(_ context.Context, _ *model.Pen
 	return nil
 }
 
+func (m *mockHandlerAccountRepo) DeletePendingShare(_ context.Context, _, _ string) error {
+	return nil
+}
+
 func (m *mockHandlerAccountRepo) ListDocSharesForUser(_ context.Context, userID string) ([]model.Share, error) {
 	var out []model.Share
 	for _, sh := range m.docShares {

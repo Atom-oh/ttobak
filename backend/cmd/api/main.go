@@ -191,6 +191,7 @@ func init() {
 		r.Post("/api/accounts", accountHandler.CreateAccount)
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
 		r.Post("/api/accounts/{accountId}/members", accountHandler.AddMember)
+		r.Delete("/api/accounts/{accountId}/members/pending", accountHandler.RevokePendingMember)
 		r.Put("/api/accounts/{accountId}/members/{userId}", accountHandler.UpdateMemberRole)
 		r.Delete("/api/accounts/{accountId}/members/{userId}", accountHandler.RemoveMember)
 		r.Get("/api/accounts/{accountId}/meetings", accountHandler.ListAccountMeetings)
@@ -251,6 +252,7 @@ func init() {
 
 		// Share routes
 		r.Post("/api/meetings/{meetingId}/share", shareHandler.ShareMeeting)
+		r.Delete("/api/meetings/{meetingId}/share/pending", shareHandler.RevokePendingShare)
 		r.Delete("/api/meetings/{meetingId}/share/{userId}", shareHandler.RevokeShare)
 
 		// User search

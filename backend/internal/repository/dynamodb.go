@@ -2017,7 +2017,7 @@ func (r *DynamoDBRepository) DeletePendingShare(ctx context.Context, email, sk s
 	return nil
 }
 
-// deletePendingShareIfVersionMatches drops p's row only if it's still
+// DeletePendingShareIfVersionMatches drops p's row only if it's still
 // exactly the version that was read (matched by CreatedAt -- PutPendingShare
 // upserts on the same (email, entity) key, so an unconditioned delete could
 // otherwise remove a fresher re-invite that landed in the gap between a
@@ -2028,7 +2028,7 @@ func (r *DynamoDBRepository) DeletePendingShare(ctx context.Context, email, sk s
 // A condition failure here means someone re-invited in the meantime; that
 // fresh row isn't this call's to delete, so it's treated as a no-op, not
 // an error.
-func (r *DynamoDBRepository) deletePendingShareIfVersionMatches(ctx context.Context, email string, p *model.PendingShare) error {
+func (r *DynamoDBRepository) DeletePendingShareIfVersionMatches(ctx context.Context, email string, p *model.PendingShare) error {
 	expr, err := expression.NewBuilder().WithCondition(
 		expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)),
 	).Build()
@@ -2173,7 +2173,7 @@ func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context,
 	inviterFailed, ok1 := transactionItemFailed(err, idxInviter, numItems)
 	putFailed, ok2 := transactionItemFailed(err, idxPut, numItems)
 	if (ok1 && inviterFailed) || (ok2 && putFailed) {
-		if delErr := r.deletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
+		if delErr := r.DeletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
 			return false, fmt.Errorf("drop dead pending account grant for %s: %w", p.AccountID, delErr)
 		}
 		return true, nil
@@ -2307,7 +2307,7 @@ func (r *DynamoDBRepository) MaterializePendingMeetingGrant(ctx context.Context,
 	put1Failed, ok2 := transactionItemFailed(err, idxPut1, numItems)
 	put2Failed, ok3 := transactionItemFailed(err, idxPut2, numItems)
 	if (ok1 && meetingFailed) || (ok2 && put1Failed) || (ok3 && put2Failed) {
-		if delErr := r.deletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
+		if delErr := r.DeletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
 			return false, fmt.Errorf("drop dead pending meeting grant for %s: %w", p.MeetingID, delErr)
 		}
 		return true, nil

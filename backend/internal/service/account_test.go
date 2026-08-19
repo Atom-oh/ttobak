@@ -139,6 +139,18 @@ func (m *mockAccountRepo) PutPendingShare(_ context.Context, share *model.Pendin
 	return nil
 }
 
+func (m *mockAccountRepo) DeletePendingShare(_ context.Context, email, sk string) error {
+	kept := m.pendingShares[:0]
+	for _, p := range m.pendingShares {
+		if p.Email == email && p.SK == sk {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	m.pendingShares = kept
+	return nil
+}
+
 func (m *mockAccountRepo) ListDocSharesForUser(_ context.Context, userID string) ([]model.Share, error) {
 	var out []model.Share
 	for _, sh := range m.docShares {
@@ -649,6 +661,55 @@ func TestAddMember_UnknownEmail(t *testing.T) {
 	_, err := svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ghost@x.com", Role: model.RoleSSA})
 	if !errors.Is(err, ErrUserNotFound) {
 		t.Errorf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
+func TestRevokePendingMember_OwnerCanRevoke(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@x.com", Kind: model.PendingShareKindAccount,
+		AccountID: acc.AccountID, Role: model.RoleSSA,
+		SK: model.PrefixPendingAccount + acc.AccountID,
+	})
+
+	if err := svc.RevokePendingMember(context.Background(), "owner-1", acc.AccountID, "invited@x.com"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(repo.pendingShares) != 0 {
+		t.Errorf("expected the pending share to be revoked, got %d remaining", len(repo.pendingShares))
+	}
+}
+
+func TestRevokePendingMember_NonOwnerForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	repo.pendingShares = append(repo.pendingShares, &model.PendingShare{
+		Email: "invited@x.com", Kind: model.PendingShareKindAccount,
+		AccountID: acc.AccountID, Role: model.RoleSSA,
+		SK: model.PrefixPendingAccount + acc.AccountID,
+	})
+
+	err := svc.RevokePendingMember(context.Background(), "tam-1", acc.AccountID, "invited@x.com")
+	if !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+	if len(repo.pendingShares) != 1 {
+		t.Errorf("expected the pending share to survive a non-owner's revoke attempt, got %d remaining", len(repo.pendingShares))
+	}
+}
+
+func TestRevokePendingMember_NoOpWhenNothingQueued(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+
+	if err := svc.RevokePendingMember(context.Background(), "owner-1", acc.AccountID, "nobody-invited@x.com"); err != nil {
+		t.Errorf("expected a no-op revoke to succeed silently, got %v", err)
 	}
 }
 

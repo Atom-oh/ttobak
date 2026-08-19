@@ -278,12 +278,13 @@ Response: 201 Created
 
 // If email belongs to a Cognito user who has been invited (admin-created)
 // but never completed a first login, the grant is queued instead of
-// rejected -- it materializes into a real membership on their first
-// ListMeetings/CreateMeeting call after logging in (not literally "at
-// login" -- see PendingShare in backend/internal/model). The queued grant
-// is not listed anywhere and cannot be cancelled once sent (a 30-day TTL,
-// enforced synchronously in application code rather than DynamoDB's own
-// TTL sweep, makes it un-claimable -- see PendingShare's doc comment).
+// rejected -- it materializes into a real membership on that email's next
+// ListMeetings/CreateMeeting call after logging in (see PendingShare in
+// backend/internal/model). The queued grant is not listed anywhere
+// (revoke by re-submitting the same email, below, not by finding it in a
+// list) and is un-claimable after a 30-day TTL enforced synchronously in
+// application code, not DynamoDB's own TTL sweep -- see PendingShare's
+// doc comment.
 Response: 201 Created
 {
   "email": "tam@example.com",
@@ -294,6 +295,22 @@ Response: 201 Created
 Error: 403 Forbidden (not the owner)
 Error: 404 Not Found (email has never been invited at all)
 Error: 400 Bad Request (already a member, or invalid role)
+```
+
+#### Revoke Pending Member Invite (owner only)
+
+```
+DELETE /api/accounts/{accountId}/members/pending?email={email}
+
+Cancels a queued PendingShare account invite before the target has ever
+logged in (no userId exists yet, so this can't go through DELETE
+.../members/{userId}). A DeleteItem on an already-gone/never-existed row
+is a silent no-op -- this doesn't distinguish "revoked" from "there was
+nothing to revoke," both return 204.
+
+Response: 204 No Content
+Error: 403 Forbidden (not the owner)
+Error: 400 Bad Request (missing email query parameter)
 ```
 
 #### Update Member Role (owner only)
@@ -874,8 +891,9 @@ Response: 200 OK
 
 // email is invited (Cognito account exists) but has never logged in yet --
 // queued as a PendingShare instead of a real Share row; materializes on
-// their first ListMeetings/CreateMeeting call after logging in (not
-// listed anywhere, not cancellable, un-claimable after 30 days via a
+// that email's next ListMeetings/CreateMeeting call after logging in
+// (not listed anywhere -- revoke by re-submitting the same email, below,
+// not by finding it in a list -- and un-claimable after 30 days via a
 // synchronous application-code TTL check, not DynamoDB's own TTL sweep).
 Response: 200 OK
 {
@@ -897,6 +915,23 @@ DELETE /api/meetings/{meetingId}/share/{userId}
 
 Response: 204 No Content
 Error: 403 Forbidden (only owner can revoke)
+```
+
+#### Revoke Pending Share Invite (owner only)
+
+```
+DELETE /api/meetings/{meetingId}/share/pending?email={email}
+
+Cancels a queued PendingShare meeting invite before the target has ever
+logged in (no userId exists yet, so this can't go through DELETE
+.../share/{userId}). A DeleteItem on an already-gone/never-existed row is
+a silent no-op -- this doesn't distinguish "revoked" from "there was
+nothing to revoke," both return 204.
+
+Response: 204 No Content
+Error: 403 Forbidden (not the owner)
+Error: 404 Not Found (meeting doesn't exist)
+Error: 400 Bad Request (missing email query parameter)
 ```
 
 #### Search Users (for sharing)

@@ -203,6 +203,10 @@ func (m *mockHandlerMeetingRepo) DeletePendingShare(_ context.Context, _, _ stri
 	return nil
 }
 
+func (m *mockHandlerMeetingRepo) DeletePendingShareIfVersionMatches(_ context.Context, _ string, _ *model.PendingShare) error {
+	return nil
+}
+
 func (m *mockHandlerMeetingRepo) GetAccount(_ context.Context, _ string) (*model.Account, error) {
 	return nil, nil
 }

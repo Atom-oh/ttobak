@@ -26,13 +26,25 @@ import (
 // to avoid killing an active session — but still short enough to eventually
 // reclaim recordings abandoned by a closed tab or crashed browser.
 const (
-	stuckTranscribingThreshold = 30 * time.Minute
+	// 60 minutes covers observed worst-case pipeline latency: Whisper GPU
+	// Spot cold start (~16 min when the ASG has to provision a fresh
+	// instance) + batch transcription + Bedrock refine/summarize, with
+	// margin. 30 minutes previously left almost no slack past a cold start.
+	stuckTranscribingThreshold = 60 * time.Minute
 	stuckRecordingThreshold    = 6 * time.Hour
 )
 
 // isStuck reports whether a meeting's status has been sitting unchanged past
 // its auto-expiry threshold.
 func isStuck(status string, updatedAt time.Time) bool {
+	return IsStuck(status, updatedAt)
+}
+
+// IsStuck reports whether a meeting's status has been sitting unchanged past
+// its auto-expiry threshold. Exported so cmd/summarize can reuse the same
+// "stale in-progress attempt" check to distinguish a dead attempt (safe to
+// reprocess) from one that's merely still running (must not be raced).
+func IsStuck(status string, updatedAt time.Time) bool {
 	switch status {
 	case model.StatusTranscribing, model.StatusSummarizing:
 		return time.Since(updatedAt) > stuckTranscribingThreshold
@@ -77,6 +89,7 @@ type meetingRepo interface {
 	PutPendingShare(ctx context.Context, share *model.PendingShare) error
 	ListPendingShares(ctx context.Context, email string) ([]model.PendingShare, error)
 	DeletePendingShare(ctx context.Context, email, sk string) error
+	DeletePendingShareIfVersionMatches(ctx context.Context, email string, p *model.PendingShare) error
 	MaterializePendingAccountGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error)
 	MaterializePendingMeetingGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error)
 }
@@ -676,6 +689,36 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, owner
 	return share, false, err
 }
 
+// RevokePendingShare cancels a queued PendingShare meeting invite before
+// the target has ever logged in -- there's no Share row yet (that's the
+// whole point of ShareMeetingByEmail's pending branch), so this can't go
+// through RevokeShare. Exists for the same reason as AccountService.
+// RevokePendingMember: AGENTS.md's "PII in DynamoDB requires KMS + TTL"
+// mandate expects standing access grants to be cancellable, not just
+// eventually expiring, and a PendingShare is otherwise invisible and
+// un-revocable for up to PendingShareTTL once queued.
+//
+// The pending row's SK already encodes meetingID
+// (PENDING_MEETING#{meetingId}), so this can only ever address this exact
+// meeting's queued invite for email, never another meeting's; ownerID
+// just needs to currently own meetingID. A DeleteItem on an already-gone/
+// never-existed row is a silent no-op, matching RevokeShare's own
+// idempotent-delete behavior.
+func (s *MeetingService) RevokePendingShare(ctx context.Context, ownerID, meetingID, email string) error {
+	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
+	if err != nil {
+		return err
+	}
+	if meeting == nil {
+		existing, _ := s.repo.GetMeetingByID(ctx, meetingID)
+		if existing != nil {
+			return ErrForbidden
+		}
+		return ErrNotFound
+	}
+	return s.repo.DeletePendingShare(ctx, email, model.PrefixPendingMeeting+meetingID)
+}
+
 // emailHasPendingInvite reports whether email belongs to a Cognito user who
 // has been invited but hasn't completed a first login yet -- exactly the
 // gap PendingShare exists to bridge. Deliberately requires an explicitly
@@ -755,7 +798,13 @@ func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, e
 		// closed on missing data, not open.
 		if p.TTL <= 0 || p.TTL <= now || p.InvitedCognitoSub == "" || p.InvitedCognitoSub != userID || !emailVerified {
 			if p.TTL <= 0 || p.TTL <= now {
-				if err := s.repo.DeletePendingShare(ctx, email, p.SK); err != nil {
+				// Version-conditioned (not a plain delete): this cleanup
+				// runs off a stale read from ListPendingShares above, and an
+				// unconditioned delete here could otherwise wipe a fresh
+				// re-invite (PutPendingShare upserts the same key) that
+				// landed in the gap -- a real, shipped bug in an earlier
+				// round of this PR.
+				if err := s.repo.DeletePendingShareIfVersionMatches(ctx, email, p); err != nil {
 					log.Printf("MaterializePendingShares: failed to clear expired/invalid pending share %s for %s: %v", p.SK, email, err)
 				}
 			}
@@ -780,12 +829,15 @@ func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, e
 			// "transient" from a bare ConditionalCheckFailed.
 			continue
 		}
-		// The transactional primitives already deleted the pending row as
-		// part of their own successful transaction -- this is a harmless,
-		// idempotent no-op retry of that delete, not a second real one.
-		if err := s.repo.DeletePendingShare(ctx, email, p.SK); err != nil {
-			log.Printf("MaterializePendingShares: failed to clear pending share %s for %s: %v", p.SK, email, err)
-		}
+		// Nothing left to do here: materializeOne's transactional
+		// primitives already deleted the pending row as part of their own
+		// successful transaction (or, for the default/unknown-kind branch,
+		// materializeOne cleared it itself via the same versioned delete).
+		// A further unconditioned delete call here was a real, shipped bug
+		// in an earlier round -- it could silently wipe a fresh re-invite
+		// that landed in the gap between that transaction committing and
+		// this call, exactly the race the versioned delete exists to
+		// prevent.
 	}
 }
 
@@ -796,7 +848,10 @@ func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, e
 // MaterializePendingMeetingGrant), closing the check-then-write race a
 // separate read-then-write pair would have (AGENTS.md's conditional-write
 // rule) and the non-atomicity between "grant written" and "pending row
-// cleared" a separate Delete call afterward would have.
+// cleared" a separate Delete call afterward would have. The TTL/sub/
+// emailVerified identity checks happen one level up, in
+// MaterializePendingShares's loop -- this only handles the grant-issuance
+// transaction itself.
 //
 // Returns (granted, err). err means "leave this one queued, retry later"
 // (a transient failure, e.g. a DynamoDB error unrelated to the condition).
@@ -811,11 +866,14 @@ func (s *MeetingService) materializeOne(ctx context.Context, userID, email strin
 	case model.PendingShareKindMeeting:
 		return s.repo.MaterializePendingMeetingGrant(ctx, p, userID, email)
 	default:
-		// granted=true here (not false) so the outer loop's "already
-		// cleared, redundant no-op delete" path runs -- this row genuinely
-		// has nothing to retry, unlike a real condition failure.
+		// Not a transaction (there's no grant to issue), but still must be
+		// a versioned delete: an unconditioned one could wipe a fresh
+		// re-invite that upserted the same key after this row was read.
 		log.Printf("materializeOne: unknown PendingShare kind %q for %s -- dropping", p.Kind, email)
-		return true, nil
+		if err := s.repo.DeletePendingShareIfVersionMatches(ctx, email, p); err != nil {
+			return false, fmt.Errorf("drop unknown-kind pending share: %w", err)
+		}
+		return false, nil
 	}
 }
 

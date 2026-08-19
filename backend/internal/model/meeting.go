@@ -308,9 +308,9 @@ const (
 	PrefixResearch   = "RESEARCH#"
 
 	// PrefixPendingShare / PrefixPendingAccount / PrefixPendingMeeting key the
-	// PendingShare item below: PK: PENDINGSHARE#{email}, SK:
+	// PendingShare item below: PK: PENDING_SHARE#{email}, SK:
 	// PENDING_ACCOUNT#{accountId} or PENDING_MEETING#{meetingId}.
-	PrefixPendingShare   = "PENDINGSHARE#"
+	PrefixPendingShare   = "PENDING_SHARE#"
 	PrefixPendingAccount = "PENDING_ACCOUNT#"
 	PrefixPendingMeeting = "PENDING_MEETING#"
 )
@@ -327,7 +327,7 @@ const (
 // so the grant becomes visible on sign-in with no separate "pending
 // invites" step -- subject to the emailVerified/InvitedCognitoSub checks
 // materializeOne applies at that point.
-// PK: PENDINGSHARE#{email}, SK: PENDING_ACCOUNT#{accountId} | PENDING_MEETING#{meetingId}
+// PK: PENDING_SHARE#{email}, SK: PENDING_ACCOUNT#{accountId} | PENDING_MEETING#{meetingId}
 type PendingShare struct {
 	PK              string `dynamodbav:"PK"`
 	SK              string `dynamodbav:"SK"`
@@ -371,10 +371,12 @@ type PendingShare struct {
 	EntityType string `dynamodbav:"entityType"` // "PENDING_SHARE"
 }
 
-// PendingShareTTL is how long a queued grant stays claimable before DynamoDB
-// TTL expires it -- long enough that a real invitee who's slow to log in
-// isn't punished, short enough that a mis-typed email doesn't sit as a
-// silent standing grant forever.
+// PendingShareTTL is how long a queued grant stays claimable before
+// MeetingService.MaterializePendingShares's own synchronous check treats it
+// as expired (see the TTL field's doc comment for why this is enforced in
+// application code, not DynamoDB's table-level TTL) -- long enough that a
+// real invitee who's slow to log in isn't punished, short enough that a
+// mis-typed email doesn't sit as a claimable standing grant forever.
 const PendingShareTTL = 30 * 24 * time.Hour
 
 const (

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -102,6 +101,7 @@ type accountRepo interface {
 	ListDocSharesForUser(ctx context.Context, userID string) ([]model.Share, error)
 	ListDocSharesForDoc(ctx context.Context, docID string) ([]model.Share, error)
 	PutPendingShare(ctx context.Context, share *model.PendingShare) error
+	DeletePendingShare(ctx context.Context, email, sk string) error
 }
 
 // AccountRepo is the exported alias for cross-package (handler) tests.
@@ -142,11 +142,14 @@ func (s *AccountService) SetCognitoAdminAPI(client cognitoAdminAPI, poolID strin
 	s.cognitoPoolID = poolID
 }
 
+// resolveCognitoPoolID intentionally has no os.Getenv fallback, unlike
+// MeetingService's namesake: main.go always calls SetCognitoAdminAPI on
+// this service (there's no legacy caller that constructs it without
+// wiring one), and emailHasPendingInvite's own contract is "explicitly
+// wired or skip the check" -- a silent env-var fallback here would
+// contradict that and was dead code in practice anyway.
 func (s *AccountService) resolveCognitoPoolID() string {
-	if s.cognitoPoolID != "" {
-		return s.cognitoPoolID
-	}
-	return os.Getenv("COGNITO_USER_POOL_ID")
+	return s.cognitoPoolID
 }
 
 // newAccountServiceWithRepo is for same-package (service) tests. s3 is left
@@ -338,6 +341,33 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 		return nil, err
 	}
 	return &model.AccountMemberDTO{UserID: user.UserID, Email: user.Email, Role: req.Role}, nil
+}
+
+// RevokePendingMember cancels a queued PendingShare account invite before
+// the target has ever logged in -- there's no membership row to remove
+// yet (that's the whole point of AddMember's pending branch), so this
+// can't go through RemoveMember. Exists because a PendingShare grant is
+// otherwise invisible and un-revocable for up to PendingShareTTL once
+// queued: AGENTS.md's "PII in DynamoDB requires KMS + TTL" mandate expects
+// standing access grants to be cancellable, not just eventually expiring.
+// The pending row's SK already encodes accountID
+// (PENDING_ACCOUNT#{accountId}), so this is safe to call without a
+// separate existence/ownership check on the row itself -- it can only
+// ever address this exact account's queued invite for email, never
+// another account's; requester just needs to currently be this account's
+// owner. A DeleteItem on an already-gone/never-existed row is a silent
+// no-op, so this doesn't distinguish "revoked" from "there was nothing to
+// revoke" -- both look like success to the caller, which matches
+// RemoveMember's own idempotent-delete behavior.
+func (s *AccountService) RevokePendingMember(ctx context.Context, requesterUserID, accountID, email string) error {
+	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
+	if err != nil {
+		return err
+	}
+	if requester == nil || requester.Role != model.RoleOwner {
+		return ErrForbidden
+	}
+	return s.repo.DeletePendingShare(ctx, email, model.PrefixPendingAccount+accountID)
 }
 
 // RemoveMemberResult reports the outcome of RemoveMember's best-effort Share

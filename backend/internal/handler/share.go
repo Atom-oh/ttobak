@@ -163,6 +163,41 @@ func (h *ShareHandler) RevokeShare(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// RevokePendingShare handles DELETE /api/meetings/{meetingId}/share/pending?email={email} --
+// cancels a queued PendingShare invite before the target has ever logged
+// in (see MeetingService.RevokePendingShare's doc comment for why this is
+// a separate route from RevokeShare rather than reusing its {userId} path:
+// there's no userId yet for a grant that's never been claimed).
+func (h *ShareHandler) RevokePendingShare(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	ownerID := middleware.GetUserID(ctx)
+	meetingID := chi.URLParam(r, "meetingId")
+	email := r.URL.Query().Get("email")
+
+	if meetingID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Meeting ID is required")
+		return
+	}
+	if email == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "email query parameter is required")
+		return
+	}
+
+	if err := h.meetingService.RevokePendingShare(ctx, ownerID, meetingID, email); err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only owner can revoke a pending share")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // SearchUsers handles GET /api/users/search?q={email-prefix}
 func (h *ShareHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
