@@ -870,9 +870,7 @@ function RecordPageInner() {
                 // and whatever was captured up to the failure still
                 // finalizes through the normal onstop -> onBlobReady flow.
                 // Surface the failure on the captions/session banner
-                // instead of discarding it -- setSpeechError(null) here
-                // used to silently drop the message once onerror started
-                // calling into this branch (2eac72f/#160 MAJOR-1).
+                // instead of discarding it.
                 postRecording.reset(); // clear any previous banner state
                 session.setSpeechError(error);
               } else {

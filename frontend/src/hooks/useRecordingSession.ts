@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { SttManager, type LiveSttProvider } from '@/lib/sttManager';
+import { SttManager, type LiveSttProvider, type TranscribeStreamingConfig } from '@/lib/sttManager';
 import { countWords } from '@/lib/speechRecognition';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 
@@ -56,13 +56,6 @@ interface UseRecordingSessionOptions {
   onProviderChange?: (provider: LiveSttProvider) => void;
 }
 
-interface TranscribeConfig {
-  region: string;
-  identityPoolId: string;
-  userPoolId: string;
-  vocabularyName?: string;
-}
-
 export function useRecordingSession({
   targetLang,
   translationEnabled,
@@ -86,7 +79,7 @@ export function useRecordingSession({
   const targetLangRef = useRef(targetLang);
   const transcriptsRef = useRef(transcripts);
   const onTranscriptUpdateRef = useRef(onTranscriptUpdate);
-  const transcribeConfigRef = useRef<TranscribeConfig | null>(null);
+  const transcribeConfigRef = useRef<TranscribeStreamingConfig | null>(null);
   // Read inside the config-load effect below, which has an empty dep array
   // (it must only run once, not re-fetch on every liveSttProvider change) --
   // a plain closure over the `liveSttProvider` param would freeze at
@@ -110,7 +103,7 @@ export function useRecordingSession({
         } catch {
           // Dictionary not available — proceed without custom vocabulary
         }
-        const config: TranscribeConfig = {
+        const config: TranscribeStreamingConfig = {
           region: cfg.cognito.region,
           identityPoolId: cfg.cognito.identityPoolId,
           userPoolId: cfg.cognito.userPoolId,
@@ -225,6 +218,16 @@ export function useRecordingSession({
       transcribeStreamingConfig: transcribeConfig ?? undefined,
       onProviderChange: (provider) => {
         setActiveProvider(provider);
+        // The 'web-speech-mobile-unavailable' banner promises captions
+        // resume automatically once Transcribe Streaming becomes
+        // available (SttManager.retryWithConfig) -- clear it once that
+        // actually happens instead of leaving it to sit alongside
+        // captions that are now flowing again.
+        setSpeechError((prev) =>
+          provider === 'transcribe-streaming' && prev === speechErrorMessages['web-speech-mobile-unavailable']
+            ? null
+            : prev,
+        );
         onProviderChange?.(provider);
       },
     });

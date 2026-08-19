@@ -15,16 +15,18 @@ import { hasMobileMicConflictRisk } from './device';
 
 export type LiveSttProvider = 'transcribe-streaming' | 'web-speech';
 
+export interface TranscribeStreamingConfig {
+  region: string;
+  identityPoolId: string;
+  userPoolId: string;
+  vocabularyName?: string;
+}
+
 export interface SttManagerConfig {
   callbacks: TranscribeCallbacks;
   targetLang: string;
   translationEnabled: boolean;
-  transcribeStreamingConfig?: {
-    region: string;
-    identityPoolId: string;
-    userPoolId: string;
-    vocabularyName?: string;
-  };
+  transcribeStreamingConfig?: TranscribeStreamingConfig;
   onProviderChange?: (provider: LiveSttProvider) => void;
 }
 
@@ -34,6 +36,20 @@ export class SttManager {
   private webSpeechClient: TranscribeFallbackClient | null = null;
   private stream: MediaStream | null = null;
   private config: SttManagerConfig;
+  // Recording is paused (MediaRecorder.pause()): the mic/tab track is still
+  // attached but producing nothing MediaRecorder will keep. retryWithConfig
+  // checks this to avoid starting a Transcribe session against a stream
+  // that's momentarily not actually being recorded, and to avoid resume()
+  // starting a SECOND session on top of one retryWithConfig already started
+  // while paused.
+  private paused = false;
+  // Set once by stop() and never unset -- a fresh SttManager instance is
+  // constructed per recording (useRecordingSession's createManager), so
+  // this only needs to catch async work (a late Transcribe failure/success)
+  // that resolves after the user already ended THIS recording. Without it,
+  // fallbackToWebSpeech would still start Web Speech (grabbing the mic
+  // again) after the user thinks recording has already stopped.
+  private stopped = false;
 
   // Translation state (shared across providers)
   private translateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -78,11 +94,21 @@ export class SttManager {
    * fell back to — on mobile, "no captions at all" for the rest of the
    * recording, with no way to ever recover. No-op if Transcribe Streaming
    * is already active, or if there's no browser stream (native/system
-   * mode has no fallback to recover from in the first place).
+   * mode has no fallback to recover from in the first place, and stop()
+   * always clears `stream` so this can't fire after the recording ended).
    */
-  retryWithConfig(config: SttManagerConfig['transcribeStreamingConfig']): void {
+  retryWithConfig(config: TranscribeStreamingConfig | undefined): void {
     if (!config || this.activeProvider === 'transcribe-streaming' || !this.stream) return;
     this.config.transcribeStreamingConfig = config;
+    // Paused: no audio is being recorded right now, and resume()'s own
+    // transcribe-streaming branch has no idea a session was already
+    // started here -- it would start a SECOND one on top of this one,
+    // duplicating captions and leaking the first session's WebSocket.
+    // Just persist the config and let resume() (below) pick up the
+    // promotion as its one and only session start.
+    if (this.paused) return;
+    this.transcribeSession?.stop();
+    this.transcribeSession = null;
     this.webSpeechClient?.stop();
     this.webSpeechClient = null;
     this.startTranscribeStreaming(this.stream);
@@ -101,9 +127,20 @@ export class SttManager {
    * with a live mic/tab stream this surfaces an error instead of silently
    * starting Web Speech — captions become unavailable, but the recording
    * keeps going untouched.
+   *
+   * Also guards against two timing issues around async Transcribe
+   * Streaming failures, which can resolve well after they were triggered:
+   * a `stop()`-after-this-call is a no-op (a late failure must not start
+   * Web Speech, and re-grab the mic, after the user already ended the
+   * recording), and the mobile-guard branch resets `activeProvider` away
+   * from 'transcribe-streaming' so a later `retryWithConfig`/`resume()`
+   * isn't permanently blocked by its own optimistic state from the
+   * attempt that just failed.
    */
   private fallbackToWebSpeech(notifyChange: boolean): void {
+    if (this.stopped) return;
     if (this.stream && hasMobileMicConflictRisk()) {
+      this.activeProvider = 'web-speech';
       this.config.callbacks.onError('web-speech-mobile-unavailable');
       return;
     }
@@ -278,6 +315,7 @@ export class SttManager {
   }
 
   pause(): void {
+    this.paused = true;
     if (this.activeProvider === 'transcribe-streaming') {
       // Transcribe Streaming doesn't support pause — stop and restart on resume
       this.transcribeSession?.stop();
@@ -287,6 +325,20 @@ export class SttManager {
   }
 
   resume(): void {
+    this.paused = false;
+    // A config arrived while paused (see retryWithConfig, which persists
+    // it but defers starting anything until now to avoid a duplicate
+    // session) -- promote in the SAME single restart resume() already
+    // does for an active Transcribe Streaming session, rather than
+    // resuming whatever fallback was active before the pause.
+    if (this.activeProvider !== 'transcribe-streaming' && this.config.transcribeStreamingConfig && this.stream) {
+      this.webSpeechClient?.stop();
+      this.webSpeechClient = null;
+      this.startTranscribeStreaming(this.stream);
+      this.activeProvider = 'transcribe-streaming';
+      this.config.onProviderChange?.('transcribe-streaming');
+      return;
+    }
     if (this.activeProvider === 'transcribe-streaming' && this.stream) {
       this.startTranscribeStreaming(this.stream).catch(() => {
         this.fallbackToWebSpeech(true);
@@ -297,6 +349,7 @@ export class SttManager {
   }
 
   stop(): void {
+    this.stopped = true;
     this.transcribeSession?.stop();
     this.transcribeSession = null;
     this.webSpeechClient?.stop();

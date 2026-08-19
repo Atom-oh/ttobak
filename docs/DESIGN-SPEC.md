@@ -326,17 +326,27 @@ permission prompt. See ADR-024 for the incident (83 minutes of System
 Audio lost to this exact skew, discovered only after the recording ended)
 that motivated catching it before capture starts instead.
 
-Browser mic/tab modes on iOS/Android (`lib/device.ts`'s
-`hasMobileMicConflictRisk`, i.e. actual iOS/Android UA, not just a narrow
-viewport): live captions default to AWS Transcribe Streaming, and the
-`LiveSttSelector`'s "Browser" (Web Speech) option is disabled outright —
-Web Speech's own `SpeechRecognition` capture runs independent of the
-`MediaStream` `MediaRecorder` is recording from, and on these platforms it
-can end that mic track mid-recording with no other signal. Recording is
-never sacrificed for captions: if Transcribe Streaming isn't configured or
+Live captions default to AWS Transcribe Streaming on every platform
+(`app/record/page.tsx`'s `liveSttProvider` initial state) — Web Speech is
+purely a fallback for when Transcribe Streaming isn't configured or
+fails, not an equal alternative a user picks between.
+
+On top of that global default, browser mic/tab modes on iOS/iPadOS/Android
+(`lib/device.ts`'s `hasMobileMicConflictRisk` — actual UA/touch-capability
+detection, not `isMobile()`'s narrow-viewport heuristic) additionally
+disable the Web Speech fallback outright, and the `LiveSttSelector`'s
+"Browser" option is disabled to match: Web Speech's own
+`SpeechRecognition` capture runs independent of the `MediaStream`
+`MediaRecorder` is recording from, and on these platforms it can end that
+mic track mid-recording with no other signal. Recording is never
+sacrificed for captions there: if Transcribe Streaming isn't configured or
 fails, captions become unavailable (amber "speech error" banner) rather
 than silently falling back to Web Speech, and the recording itself keeps
-going untouched (`lib/sttManager.ts`'s `fallbackToWebSpeech`).
+going untouched (`lib/sttManager.ts`'s `fallbackToWebSpeech`). If a
+recording starts before the Transcribe config finishes loading, captions
+promote onto it automatically once it arrives (`SttManager.retryWithConfig`,
+deferred until after a pause/resume completes if one is in progress) — see
+ADR-030.
 
 Once uploading, native mode's `uploadRecordingWithRetry` (`lib/tauri.ts`)
 is network-aware: if the device goes offline mid-upload, it waits for the

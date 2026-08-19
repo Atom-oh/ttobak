@@ -1,6 +1,8 @@
 /**
- * AudioWorklet processor that converts browser audio (48kHz Float32)
- * to 16kHz 16-bit PCM for Amazon Transcribe Streaming.
+ * AudioWorklet processor that converts browser audio (Float32, at
+ * whatever rate the enclosing AudioContext actually runs -- no fixed
+ * rate is assumed or required) to 16kHz 16-bit PCM for Amazon Transcribe
+ * Streaming.
  *
  * Runs on the audio rendering thread — no main-thread blocking.
  * Loaded via: audioContext.audioWorklet.addModule('/pcm-processor.js')
