@@ -214,7 +214,16 @@ export class SttManager {
   private async startTranscribeStreaming(stream: MediaStream): Promise<void> {
     const tsConfig = this.config.transcribeStreamingConfig!;
 
-    this.transcribeSession = new TranscribeStreamingSession({
+    // Captured by this attempt's own callbacks below so they can tell
+    // whether they're still the CURRENT session before touching shared
+    // state. `start()` doesn't await this method (fire-and-forget, so the
+    // caller isn't blocked for the session's whole lifetime), so a second
+    // attempt -- from pause()/resume() or retryWithConfig() -- can
+    // already be running as `this.transcribeSession` by the time this
+    // attempt's connect/stream error resolves. Without this check, that
+    // late failure would stop and null out the NEW, healthy session and
+    // fall back to Web Speech out from under it.
+    const session = new TranscribeStreamingSession({
       region: tsConfig.region,
       identityPoolId: tsConfig.identityPoolId,
       userPoolId: tsConfig.userPoolId,
@@ -223,6 +232,7 @@ export class SttManager {
       preferredLanguage: 'ko-KR',
       vocabularyName: tsConfig.vocabularyName,
       onTranscript: (text, isFinal, detectedLang) => {
+        if (this.transcribeSession !== session) return;
         if (detectedLang) {
           this.lastDetectedLang = detectedLang.substring(0, 2);
         }
@@ -234,16 +244,19 @@ export class SttManager {
         }
       },
       onError: (error) => {
+        if (this.transcribeSession !== session) return;
         console.error('Transcribe Streaming error, switching to Web Speech:', error);
-        this.transcribeSession?.stop();
+        session.stop();
         this.transcribeSession = null;
         this.fallbackToWebSpeech(true);
       },
     });
+    this.transcribeSession = session;
 
-    this.transcribeSession.start(stream).catch((err) => {
+    session.start(stream).catch((err) => {
+      if (this.transcribeSession !== session) return;
       console.error('Transcribe Streaming start failed:', err);
-      this.transcribeSession?.stop();
+      session.stop();
       this.transcribeSession = null;
       this.fallbackToWebSpeech(true);
     });
