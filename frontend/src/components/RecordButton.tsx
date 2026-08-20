@@ -24,7 +24,16 @@ interface RecordButtonProps {
    * Streaming. Not called in mic/tab modes (those feed Transcribe via an
    * AudioWorklet on the MediaStream instead). */
   onNativePcmChunk?: (chunk: Uint8Array) => void;
-  onError?: (error: string) => void;
+  /**
+   * `terminal: true` means no audio was captured at all -- there is no
+   * partial blob in flight and never will be for this recording (used by
+   * finalizeRecordingBlob's 0-byte case). By the time this fires,
+   * onRecordingStop has already run (stopRecording calls it synchronously
+   * before this), so `session.isRecording` reads false and a plain
+   * `onError` would otherwise land on the live-captions error channel
+   * instead of the same terminal-failure banner native mode uses.
+   */
+  onError?: (error: string, opts?: { terminal?: boolean }) => void;
   onRecordingStart?: (stream: MediaStream | null) => void | Promise<void>;
   onRecordingPause?: () => void;
   onRecordingResume?: () => void;
@@ -507,7 +516,7 @@ export function RecordButton({
       // audio and no clear explanation; surface it as a failure instead.
       setRecordingState('idle');
       setElapsedTime(0);
-      onError?.('녹음된 오디오가 없습니다. 다시 시도해주세요.');
+      onError?.('녹음된 오디오가 없습니다. 다시 시도해주세요.', { terminal: true });
       return;
     }
     if (onBlobReady) {

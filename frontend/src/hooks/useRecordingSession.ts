@@ -52,8 +52,6 @@ interface UseRecordingSessionOptions {
   liveSttProvider: LiveSttProvider;
   /** Called each time a final transcript arrives with updated word count and full text */
   onTranscriptUpdate?: (totalWordCount: number, allText: string) => void;
-  /** Called when STT provider changes (e.g., fallback) */
-  onProviderChange?: (provider: LiveSttProvider) => void;
 }
 
 export function useRecordingSession({
@@ -61,7 +59,6 @@ export function useRecordingSession({
   translationEnabled,
   liveSttProvider,
   onTranscriptUpdate,
-  onProviderChange,
 }: UseRecordingSessionOptions) {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -228,7 +225,6 @@ export function useRecordingSession({
             ? null
             : prev,
         );
-        onProviderChange?.(provider);
       },
     });
 
@@ -259,7 +255,7 @@ export function useRecordingSession({
     // ready yet" apart from "user explicitly chose Web Speech" once the
     // config does arrive (see ADR-030).
     return { manager, preferredProvider: liveSttProvider };
-  }, [translationEnabled, liveSttProvider, onProviderChange]);
+  }, [translationEnabled, liveSttProvider]);
 
   const startSession = useCallback((previewCleanup: () => void, stream: MediaStream) => {
     previewCleanup();

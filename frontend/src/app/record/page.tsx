@@ -441,14 +441,31 @@ function RecordPageInner() {
     await postRecording.createDraftMeeting();
     if (stream) {
       setIsNativeRecording(false);
-      // Browser modes (mic/tab): start live STT session with the MediaStream.
-      session.startSession(() => {
+      const cleanupPreview = () => {
         previewStreamRef.current?.getTracks().forEach((t) => t.stop());
         previewStreamRef.current = null;
         previewCtxRef.current?.close().catch(() => {});
         previewCtxRef.current = null;
         setPreviewAnalyser(null);
-      }, stream);
+      };
+      // RecordButton's onRecordingStart(stream) call above is NOT awaited
+      // (unlike the native branch below), so createDraftMeeting's network
+      // round-trip can still be in flight when the mic/tab track dies --
+      // exactly the mobile "OS reclaims the mic right after starting"
+      // scenario this PR targets. If it already has, RecordButton's own
+      // onended/onerror already called (or is about to call)
+      // stopRecording() -> onRecordingStop, tearing down independently of
+      // this handler. Starting the STT session on a dead stream here
+      // would open a Transcribe WebSocket that will never receive audio
+      // and leave session.isRecording stuck true with nothing actually
+      // recording -- skip it instead.
+      const hasLiveAudioTrack = stream.getAudioTracks().some((t) => t.readyState !== 'ended');
+      if (!hasLiveAudioTrack) {
+        cleanupPreview();
+        return;
+      }
+      // Browser modes (mic/tab): start live STT session with the MediaStream.
+      session.startSession(cleanupPreview, stream);
     } else if (isTauri() && audioSource === 'system') {
       // Native (system audio): no MediaStream — capture happens in Rust via
       // ScreenCaptureKit, and RecordButton manages its own timer/state.
@@ -854,8 +871,20 @@ function RecordPageInner() {
             onBlobReady={postRecording.handleBlobReady}
             onNativeFileReady={postRecording.handleNativeFileReady}
             onNativePcmChunk={session.pushNativePcmChunk}
-            onError={(error) => {
-              if (isNativeRecordingRef.current) {
+            onError={(error, opts) => {
+              if (opts?.terminal) {
+                // No audio was captured at all (finalizeRecordingBlob's
+                // 0-byte case) -- by now stopRecording() has already run
+                // onRecordingStop synchronously, so session.isRecording
+                // already reads false and would otherwise fall through to
+                // the live-captions banner below, silently discarding a
+                // total recording loss (and overwriting whatever message
+                // the preceding onerror already showed there). Route it
+                // through the same terminal-failure banner
+                // ([Try Again]/[Home]) the native branch above uses,
+                // instead of the captions channel.
+                postRecording.failWithError(error);
+              } else if (isNativeRecordingRef.current) {
                 // Read the REF, not the state: this closure was created in
                 // the render where the user clicked (state still false) but
                 // fires after handleRecordingStart latched native mode — a

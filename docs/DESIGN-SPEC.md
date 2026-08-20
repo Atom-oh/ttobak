@@ -349,8 +349,14 @@ mic track mid-recording with no other signal. Recording is never
 sacrificed for captions there: if Transcribe Streaming isn't configured or
 fails, captions become unavailable (amber "speech error" banner) rather
 than silently falling back to Web Speech, and the recording itself keeps
-going untouched (`lib/sttManager.ts`'s `fallbackToWebSpeech`). If a
-recording starts before the Transcribe config finishes loading, captions
+going untouched (`lib/sttManager.ts`'s `fallbackToWebSpeech`). That "keeps
+going untouched" guarantee is about the captions-failure path specifically
+-- it doesn't mean the mic track itself is somehow protected. If the mic
+track dies for an unrelated reason (screen lock, an incoming call, the OS
+reclaiming it), `RecordButton`'s `onended`/`onerror` handlers still end
+the recording (gracefully finalizing whatever was captured), exactly as
+on desktop. If a recording starts before the Transcribe config finishes
+loading, captions
 promote onto it automatically once it arrives (`SttManager.retryWithConfig`,
 deferred until after a pause/resume completes if one is in progress) — see
 ADR-030.

@@ -108,6 +108,10 @@ export class SttManager {
    * always clears `stream` so this can't fire after the recording ended).
    */
   retryWithConfig(config: TranscribeStreamingConfig | undefined): void {
+    // stop() already clears `stream` (guarded by the check below), making
+    // this redundant in practice -- kept as cost-0 defense-in-depth in
+    // case that invariant ever changes.
+    if (this.stopped) return;
     if (!config || this.preferredProvider !== 'transcribe-streaming') return;
     if (this.activeProvider === 'transcribe-streaming' || !this.stream) return;
     this.config.transcribeStreamingConfig = config;
@@ -362,6 +366,7 @@ export class SttManager {
   }
 
   resume(): void {
+    if (this.stopped) return;
     this.paused = false;
     // A config arrived while paused (see retryWithConfig, which persists
     // it but defers starting anything until now to avoid a duplicate
