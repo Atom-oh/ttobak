@@ -175,6 +175,8 @@ func (h *AccountHandler) RevokePendingMember(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can revoke a pending invite")
 		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Account not found")
+		case errors.Is(err, service.ErrPendingAlreadyClaimed):
+			writeError(w, http.StatusConflict, "CONFLICT", "This invite was already claimed -- remove the user from Members instead")
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}

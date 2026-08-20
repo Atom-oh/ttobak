@@ -50,6 +50,12 @@ var (
 	ErrStatusMismatch = errors.New("status mismatch")
 	ErrUserNotFound   = errors.New("user not found")
 	ErrSelfShare      = errors.New("cannot share with yourself")
+	// ErrPendingAlreadyClaimed means a revoke-pending call found no queued
+	// PendingShare row because it was already materialized into a real
+	// grant (the invitee logged in and claimed it first) -- distinct from
+	// "there was never anything queued," which stays a silent success to
+	// match RemoveMember's idempotent-delete behavior.
+	ErrPendingAlreadyClaimed = errors.New("pending invite already claimed")
 )
 
 // meetingRepo defines the repository methods used by MeetingService.
@@ -76,7 +82,7 @@ type meetingRepo interface {
 	PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error
 	PutPendingShare(ctx context.Context, share *model.PendingShare) error
 	ListPendingShares(ctx context.Context, email string) ([]model.PendingShare, error)
-	DeletePendingShare(ctx context.Context, email, sk string) error
+	DeletePendingShare(ctx context.Context, email, sk string) (bool, error)
 	DeletePendingShareIfVersionMatches(ctx context.Context, email string, p *model.PendingShare) error
 	MaterializePendingAccountGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error)
 	MaterializePendingMeetingGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error)
@@ -701,7 +707,15 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, owner
 // meeting's queued invite for email, never another meeting's; ownerID
 // just needs to currently own meetingID. A DeleteItem on an already-gone/
 // never-existed row is a silent no-op, matching RevokeShare's own
-// idempotent-delete behavior.
+// idempotent-delete behavior -- UNLESS the row is gone because
+// MaterializePendingShares got there first: the invitee logged in, the
+// grant became a real Share, and the pending row was cleared as part of
+// that same transaction. Without distinguishing the two, this would return
+// a misleading success -- the caller believes access was revoked while a
+// live Share row still grants it. So when the delete finds nothing, this
+// checks whether email now resolves to a user with a Share on meetingID
+// (i.e. materialize won the race) and reports ErrPendingAlreadyClaimed
+// instead of a silent no-op in that case only.
 func (s *MeetingService) RevokePendingShare(ctx context.Context, ownerID, meetingID, email string) error {
 	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
 	if err != nil {
@@ -717,7 +731,28 @@ func (s *MeetingService) RevokePendingShare(ctx context.Context, ownerID, meetin
 		}
 		return ErrNotFound
 	}
-	return s.repo.DeletePendingShare(ctx, email, model.PrefixPendingMeeting+meetingID)
+	deleted, err := s.repo.DeletePendingShare(ctx, email, model.PrefixPendingMeeting+meetingID)
+	if err != nil {
+		return err
+	}
+	if deleted {
+		return nil
+	}
+	user, err := s.repo.GetUserByEmail(ctx, email)
+	if err != nil {
+		return err
+	}
+	if user == nil {
+		return nil
+	}
+	share, err := s.repo.GetShare(ctx, user.UserID, meetingID)
+	if err != nil {
+		return err
+	}
+	if share != nil {
+		return ErrPendingAlreadyClaimed
+	}
+	return nil
 }
 
 // emailHasPendingInvite reports whether email belongs to a Cognito user who

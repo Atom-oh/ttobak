@@ -101,7 +101,7 @@ type accountRepo interface {
 	ListDocSharesForUser(ctx context.Context, userID string) ([]model.Share, error)
 	ListDocSharesForDoc(ctx context.Context, docID string) ([]model.Share, error)
 	PutPendingShare(ctx context.Context, share *model.PendingShare) error
-	DeletePendingShare(ctx context.Context, email, sk string) error
+	DeletePendingShare(ctx context.Context, email, sk string) (bool, error)
 }
 
 // AccountRepo is the exported alias for cross-package (handler) tests.
@@ -371,9 +371,15 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 // ever address this exact account's queued invite for email, never
 // another account's; requester just needs to currently be this account's
 // owner. A DeleteItem on an already-gone/never-existed row is a silent
-// no-op, so this doesn't distinguish "revoked" from "there was nothing to
-// revoke" -- both look like success to the caller, which matches
-// RemoveMember's own idempotent-delete behavior.
+// no-op -- UNLESS the row is gone because MaterializePendingShares got
+// there first (the invitee logged in and the queued grant became a real
+// AccountMember in the same transaction that cleared the pending row). Left
+// unchecked, that would report success to the caller while the invitee's
+// access remains live. So when the delete finds nothing queued, this checks
+// whether email now resolves to a user with membership on accountID and
+// reports ErrPendingAlreadyClaimed in that case; a genuine "nothing was ever
+// queued" still returns nil, matching RemoveMember's own idempotent-delete
+// behavior.
 func (s *AccountService) RevokePendingMember(ctx context.Context, requesterUserID, accountID, email string) error {
 	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
 	if err != nil {
@@ -389,7 +395,28 @@ func (s *AccountService) RevokePendingMember(ctx context.Context, requesterUserI
 		}
 		return ErrForbidden
 	}
-	return s.repo.DeletePendingShare(ctx, email, model.PrefixPendingAccount+accountID)
+	deleted, err := s.repo.DeletePendingShare(ctx, email, model.PrefixPendingAccount+accountID)
+	if err != nil {
+		return err
+	}
+	if deleted {
+		return nil
+	}
+	user, err := s.repo.GetUserByEmail(ctx, email)
+	if err != nil {
+		return err
+	}
+	if user == nil {
+		return nil
+	}
+	member, err := s.repo.GetMember(ctx, accountID, user.UserID)
+	if err != nil {
+		return err
+	}
+	if member != nil {
+		return ErrPendingAlreadyClaimed
+	}
+	return nil
 }
 
 // RemoveMemberResult reports the outcome of RemoveMember's best-effort Share

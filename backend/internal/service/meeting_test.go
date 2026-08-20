@@ -262,16 +262,18 @@ func (m *mockMeetingRepo) ListPendingShares(_ context.Context, email string) ([]
 	return out, nil
 }
 
-func (m *mockMeetingRepo) DeletePendingShare(_ context.Context, email, sk string) error {
+func (m *mockMeetingRepo) DeletePendingShare(_ context.Context, email, sk string) (bool, error) {
+	deleted := false
 	kept := m.pendingShares[:0]
 	for _, p := range m.pendingShares {
 		if p.Email == email && p.SK == sk {
+			deleted = true
 			continue
 		}
 		kept = append(kept, p)
 	}
 	m.pendingShares = kept
-	return nil
+	return deleted, nil
 }
 
 // DeletePendingShareIfVersionMatches mirrors the real repo's CreatedAt
@@ -1196,6 +1198,32 @@ func TestRevokePendingShare_MeetingNotFound(t *testing.T) {
 	err := svc.RevokePendingShare(context.Background(), "owner-1", "does-not-exist", "invited@test.com")
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestRevokePendingShare_AlreadyClaimedByMaterialize covers the race this
+// error exists for: the invitee logged in and MaterializePendingShares
+// turned the queued row into a real Share (clearing the pending row in the
+// same transaction) before the owner's revoke landed. The delete finds
+// nothing, but email now has a live Share -- this must be reported as
+// ErrPendingAlreadyClaimed, not a silent success.
+func TestRevokePendingShare_AlreadyClaimedByMaterialize(t *testing.T) {
+	repo := newMockMeetingRepo()
+	svc := newMeetingServiceWithRepo(repo)
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
+		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	})
+	repo.users["invited@test.com"] = &model.User{UserID: "claimed-1", Email: "invited@test.com"}
+	repo.shares[shareKey("claimed-1", "m-1")] = &model.Share{
+		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "claimed-1",
+		Email: "invited@test.com", Permission: model.PermissionRead,
+	}
+	// No PendingShare row seeded -- materialize already cleared it.
+
+	err := svc.RevokePendingShare(context.Background(), "owner-1", "m-1", "invited@test.com")
+	if !errors.Is(err, ErrPendingAlreadyClaimed) {
+		t.Errorf("expected ErrPendingAlreadyClaimed, got %v", err)
 	}
 }
 

@@ -189,6 +189,8 @@ func (h *ShareHandler) RevokePendingShare(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only owner can revoke a pending share")
 		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
+		case errors.Is(err, service.ErrPendingAlreadyClaimed):
+			writeError(w, http.StatusConflict, "CONFLICT", "This share was already claimed -- revoke direct access instead")
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}

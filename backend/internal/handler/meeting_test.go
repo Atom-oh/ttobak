@@ -199,8 +199,8 @@ func (m *mockHandlerMeetingRepo) ListPendingShares(_ context.Context, _ string) 
 	return nil, nil
 }
 
-func (m *mockHandlerMeetingRepo) DeletePendingShare(_ context.Context, _, _ string) error {
-	return nil
+func (m *mockHandlerMeetingRepo) DeletePendingShare(_ context.Context, _, _ string) (bool, error) {
+	return true, nil
 }
 
 func (m *mockHandlerMeetingRepo) DeletePendingShareIfVersionMatches(_ context.Context, _ string, _ *model.PendingShare) error {

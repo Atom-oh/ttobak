@@ -139,16 +139,18 @@ func (m *mockAccountRepo) PutPendingShare(_ context.Context, share *model.Pendin
 	return nil
 }
 
-func (m *mockAccountRepo) DeletePendingShare(_ context.Context, email, sk string) error {
+func (m *mockAccountRepo) DeletePendingShare(_ context.Context, email, sk string) (bool, error) {
+	deleted := false
 	kept := m.pendingShares[:0]
 	for _, p := range m.pendingShares {
 		if p.Email == email && p.SK == sk {
+			deleted = true
 			continue
 		}
 		kept = append(kept, p)
 	}
 	m.pendingShares = kept
-	return nil
+	return deleted, nil
 }
 
 func (m *mockAccountRepo) ListDocSharesForUser(_ context.Context, userID string) ([]model.Share, error) {
@@ -720,6 +722,26 @@ func TestRevokePendingMember_NoOpWhenNothingQueued(t *testing.T) {
 
 	if err := svc.RevokePendingMember(context.Background(), "owner-1", acc.AccountID, "nobody-invited@x.com"); err != nil {
 		t.Errorf("expected a no-op revoke to succeed silently, got %v", err)
+	}
+}
+
+// TestRevokePendingMember_AlreadyClaimedByMaterialize covers the race this
+// error exists for: the invitee logged in and MaterializePendingShares
+// turned the queued row into a real AccountMember (clearing the pending row
+// in the same transaction) before the owner's revoke landed. The delete
+// finds nothing, but email now has live access -- this must be reported as
+// ErrPendingAlreadyClaimed, not a silent success.
+func TestRevokePendingMember_AlreadyClaimedByMaterialize(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "claimed-1", "invited@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "invited@x.com", Role: model.RoleSSA})
+	// No PendingShare row seeded -- materialize already cleared it.
+
+	err := svc.RevokePendingMember(context.Background(), "owner-1", acc.AccountID, "invited@x.com")
+	if !errors.Is(err, ErrPendingAlreadyClaimed) {
+		t.Errorf("expected ErrPendingAlreadyClaimed, got %v", err)
 	}
 }
 

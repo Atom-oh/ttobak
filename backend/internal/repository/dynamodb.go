@@ -2002,19 +2002,28 @@ func (r *DynamoDBRepository) ListPendingShares(ctx context.Context, email string
 	return out, nil
 }
 
-// DeletePendingShare removes one queued grant after MeetingService.
-// MaterializePendingShares has turned it into a real AccountMember/Share
-// row (or found its target account/meeting gone, or its inviter no longer
-// authorized, and skipped it).
-func (r *DynamoDBRepository) DeletePendingShare(ctx context.Context, email, sk string) error {
-	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(r.tableName),
-		Key:       pendingShareKey(email, sk),
+// DeletePendingShare removes one queued grant, either after
+// MeetingService.MaterializePendingShares has turned it into a real
+// AccountMember/Share row (or found its target account/meeting gone, or its
+// inviter no longer authorized, and skipped it), or via an owner's explicit
+// revoke of a not-yet-claimed invite. Returns deleted=false (not an error)
+// when there was no row to delete -- via ReturnValues=ALL_OLD rather than a
+// separate read, so this can't race a concurrent write between a check and
+// the delete. Callers that need to distinguish "revoked" from "someone else
+// already materialized/cleared this" (RevokePendingMember/RevokePendingShare)
+// use that boolean; the materialize path itself uses
+// DeletePendingShareIfVersionMatches instead, so this return value never
+// matters there.
+func (r *DynamoDBRepository) DeletePendingShare(ctx context.Context, email, sk string) (bool, error) {
+	out, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName:    aws.String(r.tableName),
+		Key:          pendingShareKey(email, sk),
+		ReturnValues: types.ReturnValueAllOld,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to delete pending share: %w", err)
+		return false, fmt.Errorf("failed to delete pending share: %w", err)
 	}
-	return nil
+	return len(out.Attributes) > 0, nil
 }
 
 // DeletePendingShareIfVersionMatches drops p's row only if it's still
