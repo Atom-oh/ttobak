@@ -146,10 +146,10 @@ describe('GatewayStack', () => {
     });
   });
 
-  test('Summarize Lambda has 10 minute timeout', () => {
+  test('Summarize Lambda has 15 minute timeout', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-summarize',
-      Timeout: 600,
+      Timeout: 900,
     });
   });
 
