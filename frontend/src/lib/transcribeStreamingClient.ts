@@ -103,6 +103,17 @@ export class TranscribeStreamingSession {
     this.watchdogTimer = setInterval(() => {
       if (!this.isActive) return;
       tryResumeAudioContext();
+      if (this.audioContext && this.audioContext.state !== 'running') {
+        // resume() above is async and hasn't necessarily landed yet (e.g.
+        // right after an unlock, where lastChunkAt is still stale from
+        // before the suspend) -- without this, the very next tick can see
+        // silentMs already past STALL_TIMEOUT_MS and report a stall before
+        // resume() ever gets a chance to actually restart the chunk flow,
+        // which defeats the resume path entirely. Treat "not running yet"
+        // as one more grace interval rather than accumulated silence.
+        this.lastChunkAt = Date.now();
+        return;
+      }
       const silentMs = Date.now() - this.lastChunkAt;
       if (silentMs > this.STALL_TIMEOUT_MS) {
         if (!this.stallReported) {

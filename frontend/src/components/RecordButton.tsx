@@ -111,7 +111,19 @@ export function RecordButton({
   const requestWakeLock = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
     try {
-      wakeLockRef.current = await navigator.wakeLock.request('screen');
+      const sentinel = await navigator.wakeLock.request('screen');
+      // The Wake Lock API auto-releases the sentinel on visibility loss
+      // (spec behavior) without clearing anything on our side -- without
+      // this listener, wakeLockRef.current stays non-null after that
+      // auto-release, so the re-acquire effect's `!wakeLockRef.current`
+      // guard never fires again and a second screen-lock later in the
+      // same recording goes unprotected. The identity check guards
+      // against this firing after a newer request has already replaced
+      // the ref (e.g. release() called explicitly, then re-acquired).
+      sentinel.addEventListener('release', () => {
+        if (wakeLockRef.current === sentinel) wakeLockRef.current = null;
+      });
+      wakeLockRef.current = sentinel;
     } catch (err) {
       // Not fatal — recording continues without the lock (e.g. low battery
       // mode, or the tab lost focus between the click and this await).

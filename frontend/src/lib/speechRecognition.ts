@@ -80,6 +80,7 @@ export class BrowserSpeechRecognition {
   private lastResultTime = 0;
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
   private isRestarting = false;
+  private visibilityRestartTimer: ReturnType<typeof setTimeout> | null = null;
   private networkRetryCount = 0;
   private readonly MAX_NETWORK_RETRIES = 5;
   private readonly WATCHDOG_TIMEOUT_MS = 15_000;
@@ -181,14 +182,39 @@ export class BrowserSpeechRecognition {
   }
 
   private handleVisibilityChange = () => {
-    if (document.visibilityState === 'visible' && this.isListening && this.shouldRestart) {
-      setTimeout(() => {
-        if (this.isListening && this.shouldRestart) {
-          this.restartRecognition();
-        }
-      }, 300);
-    }
+    if (document.visibilityState !== 'visible' || !this.isListening || !this.shouldRestart) return;
+    // Coalesce visibilitychange/pageshow/focus firing in quick succession
+    // (e.g. mobile unlock can fire all three) into a single scheduled
+    // check -- without this, each event schedules its own independent
+    // setTimeout, and restartRecognition()'s `isRestarting` guard only
+    // blocks re-entrant calls DURING one synchronous call (it's cleared
+    // again before any of these timers fire), so three events in quick
+    // succession would abort+recreate the recognition instance three times.
+    if (this.visibilityRestartTimer) return;
+    this.visibilityRestartTimer = setTimeout(() => {
+      this.visibilityRestartTimer = null;
+      // Only restart if recognition actually looks stalled (no results for
+      // WATCHDOG_TIMEOUT_MS, the same bar the periodic watchdog uses) --
+      // 'focus' fires on ordinary desktop window refocus (alt-tab, devtools)
+      // far more often than recognition ever actually breaks, so restarting
+      // unconditionally here would abort a perfectly healthy session on
+      // every refocus.
+      if (
+        this.isListening &&
+        this.shouldRestart &&
+        Date.now() - this.lastResultTime > this.WATCHDOG_TIMEOUT_MS
+      ) {
+        this.restartRecognition();
+      }
+    }, 300);
   };
+
+  private clearVisibilityRestartTimer(): void {
+    if (this.visibilityRestartTimer) {
+      clearTimeout(this.visibilityRestartTimer);
+      this.visibilityRestartTimer = null;
+    }
+  }
 
   static isSupported(): boolean {
     return !!(
@@ -385,6 +411,7 @@ export class BrowserSpeechRecognition {
     this.isListening = false;
     this.shouldRestart = false;
     this.clearWatchdog();
+    this.clearVisibilityRestartTimer();
     try { this.recognition?.stop(); } catch { /* ignore */ }
   }
 
@@ -414,6 +441,7 @@ export class BrowserSpeechRecognition {
     this.isListening = false;
     this.shouldRestart = false;
     this.clearWatchdog();
+    this.clearVisibilityRestartTimer();
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     window.removeEventListener('pageshow', this.handleVisibilityChange);
     window.removeEventListener('focus', this.handleVisibilityChange);
