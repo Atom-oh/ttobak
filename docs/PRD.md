@@ -115,7 +115,7 @@
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| TRN-01 | Nova Sonic 전사를 Bedrock Claude로 실시간 번역 | P0 | 완료 (REST API 방식, AWS Transcribe Streaming 기반) |
+| TRN-01 | 실시간 전사 결과를 Bedrock Claude로 번역 | P0 | 완료 (REST API 방식, AWS Transcribe Streaming 기반) |
 | TRN-02 | 번역 대상 언어 선택 UI | P0 | 완료 |
 | TRN-03 | 원문 + 번역문 동시 표시 | P0 | 완료 |
 

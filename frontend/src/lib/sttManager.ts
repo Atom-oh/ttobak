@@ -122,7 +122,11 @@ export class SttManager {
     this.transcribeSession = null;
     this.webSpeechClient?.stop();
     this.webSpeechClient = null;
-    this.startTranscribeStreaming(this.stream);
+    // startTranscribeStreaming's own body never rejects (its internal
+    // TranscribeStreamingSession.start().catch() already routes failures
+    // to fallbackToWebSpeech) -- this .catch only guards the rarer case
+    // of the synchronous session construction itself throwing.
+    this.startTranscribeStreaming(this.stream).catch(() => this.fallbackToWebSpeech(true));
     this.activeProvider = 'transcribe-streaming';
     this.config.onProviderChange?.('transcribe-streaming');
   }
@@ -150,8 +154,17 @@ export class SttManager {
    */
   private fallbackToWebSpeech(notifyChange: boolean): void {
     if (this.stopped) return;
+    // A Transcribe Streaming failure can resolve after pause() already
+    // ran (pause() stops the session but the in-flight start/connect
+    // attempt it was racing isn't cancelled). Starting Web Speech now
+    // would open the mic and produce captions while the user believes
+    // recording is paused. No-op instead -- resume() already restarts
+    // Transcribe Streaming fresh when active, and its own failure path
+    // reaches this same function unpaused if that retry also fails.
+    if (this.paused) return;
     if (this.stream && hasMobileMicConflictRisk()) {
       this.activeProvider = 'web-speech';
+      if (notifyChange) this.config.onProviderChange?.('web-speech');
       this.config.callbacks.onError('web-speech-mobile-unavailable');
       return;
     }
@@ -358,7 +371,7 @@ export class SttManager {
     ) {
       this.webSpeechClient?.stop();
       this.webSpeechClient = null;
-      this.startTranscribeStreaming(this.stream);
+      this.startTranscribeStreaming(this.stream).catch(() => this.fallbackToWebSpeech(true));
       this.activeProvider = 'transcribe-streaming';
       this.config.onProviderChange?.('transcribe-streaming');
       return;

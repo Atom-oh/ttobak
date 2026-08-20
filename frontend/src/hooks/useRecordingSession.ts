@@ -257,7 +257,7 @@ export function useRecordingSession({
     // precisely to avoid overriding an explicit 'web-speech' choice. If
     // this were downgraded, there'd be no way to tell "config wasn't
     // ready yet" apart from "user explicitly chose Web Speech" once the
-    // config does arrive (PR #160 review round 3 finding).
+    // config does arrive (see ADR-030).
     return { manager, preferredProvider: liveSttProvider };
   }, [translationEnabled, liveSttProvider, onProviderChange]);
 

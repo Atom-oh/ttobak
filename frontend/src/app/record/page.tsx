@@ -49,12 +49,13 @@ function RecordPageInner() {
   const [translationEnabled, setTranslationEnabled] = useState(false);
   const [targetLang, setTargetLang] = useState('en');
   const [attachments, setAttachments] = useState<{ name: string; url: string; s3Key?: string; mimeType?: string; status?: 'uploading' | 'complete' | 'error'; kbStatus?: 'idle' | 'copying' | 'done' | 'error' }[]>([]);
-  // Default to AWS Transcribe Streaming, not Web Speech: useRecordingSession's
-  // createManager() already falls back to 'web-speech' on its own when the
-  // runtime Cognito config isn't available, so this default only matters
-  // once config IS available -- and Web Speech's independent mic capture
-  // can end the recording's mic track on mobile (see SttManager's
-  // fallbackToWebSpeech), so it should never be the default anywhere.
+  // Default to AWS Transcribe Streaming, not Web Speech: SttManager.start()
+  // already falls back to Web Speech on its own on desktop when the
+  // runtime Cognito config isn't available yet (on mobile there's no
+  // fallback at all -- see SttManager.fallbackToWebSpeech), so this
+  // default only changes behavior once config IS available. Web Speech's
+  // independent mic capture can end the recording's mic track on mobile,
+  // so it should never be the default anywhere (ADR-030).
   const [liveSttProvider, setLiveSttProvider] = useState<LiveSttProvider>('transcribe-streaming');
   const [audioSource, setAudioSource] = useState<'mic' | 'tab' | 'system'>('mic');
   const [tabSharingLabel, setTabSharingLabel] = useState<string | null>(null);
@@ -114,7 +115,18 @@ function RecordPageInner() {
     targetLang,
     translationEnabled,
     liveSttProvider,
-    onProviderChange: setLiveSttProvider,
+    // Deliberately NOT wired to setLiveSttProvider: this fires on every
+    // runtime provider change, including a transient Transcribe Streaming
+    // failure falling back to Web Speech mid-recording. Feeding that into
+    // the persisted preference state would silently downgrade the user's
+    // choice for every FUTURE recording too, not just this one -- and on
+    // mobile, where the fallback branch also calls this to keep the
+    // LiveSttSelector's "active" badge honest, it would poison
+    // SttManager's own preferredProvider tracking and permanently block
+    // retryWithConfig's promotion (see sttManager.ts, ADR-030). The
+    // "active" badge already reads session.activeProvider, which
+    // useRecordingSession updates from this same signal internally --
+    // this prop has no other consumer, so it's simply omitted.
     onTranscriptUpdate: useCallback((totalWordCount: number, allText: string) => {
       const meetingId = postRecording.serverMeetingId || clientMeetingIdBase;
       summary.checkThreshold(totalWordCount, allText, meetingId);

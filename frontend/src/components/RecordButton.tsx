@@ -500,6 +500,16 @@ export function RecordButton({
     cleanupAudioResources();
     const mimeType = mediaRecorderRef.current?.mimeType || getPreferredMimeType();
     const blob = new Blob(chunksRef.current, { type: mimeType });
+    if (blob.size === 0) {
+      // No audio was ever captured -- typically an error struck before
+      // the first `dataavailable`. Sending a 0-byte blob into the normal
+      // upload/transcription pipeline would create a meeting with no
+      // audio and no clear explanation; surface it as a failure instead.
+      setRecordingState('idle');
+      setElapsedTime(0);
+      onError?.('녹음된 오디오가 없습니다. 다시 시도해주세요.');
+      return;
+    }
     if (onBlobReady) {
       setRecordingState('idle');
       setElapsedTime(0);
@@ -604,8 +614,13 @@ export function RecordButton({
         // .stop() here would be a silent no-op, and a 'stop' event isn't
         // guaranteed to still follow in every browser -- finalize
         // directly. finalizeRecordingBlob's guard makes this safe even if
-        // a queued 'stop' event does still fire afterward.
-        finalizeRecordingBlob();
+        // a queued 'stop' event does still fire afterward. Deferred one
+        // tick: this branch runs synchronously from onerror, itself one
+        // queued task in the browser's error-handling sequence -- a final
+        // `dataavailable` carrying the last captured chunk may be a
+        // separately queued task that hasn't run yet, and snapshotting
+        // chunksRef before it lands would silently drop that audio.
+        setTimeout(finalizeRecordingBlob, 0);
       }
     } else {
       cleanupAudioResources();
