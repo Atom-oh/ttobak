@@ -238,13 +238,27 @@ export function useRecordingSession({
     sttManagerRef.current?.stop();
     sttManagerRef.current = manager;
 
-    // Choose provider: use transcribe-streaming only if configured
-    const preferredProvider: LiveSttProvider = liveSttProvider === 'transcribe-streaming' && hasTranscribeConfig
+    // What's actually about to run, for the UI's immediate best guess
+    // before SttManager settles (its own onProviderChange callback fires
+    // once it actually decides/falls back).
+    const initialActiveProvider: LiveSttProvider = liveSttProvider === 'transcribe-streaming' && hasTranscribeConfig
       ? 'transcribe-streaming'
       : 'web-speech';
+    setActiveProvider(initialActiveProvider);
 
-    setActiveProvider(preferredProvider);
-    return { manager, preferredProvider };
+    // What to hand to SttManager.start() as the preferred provider: the
+    // user's actual selection, NOT the config-availability-downgraded
+    // value above. start() already handles a missing config internally
+    // (falls back to Web Speech for now) while still recording the
+    // original ask as `preferredProvider` -- downgrading it here to
+    // 'web-speech' just because the config race hasn't resolved YET would
+    // permanently lock retryWithConfig/resume()'s promotion gate closed
+    // for the rest of the recording, since they check `preferredProvider`
+    // precisely to avoid overriding an explicit 'web-speech' choice. If
+    // this were downgraded, there'd be no way to tell "config wasn't
+    // ready yet" apart from "user explicitly chose Web Speech" once the
+    // config does arrive (PR #160 review round 3 finding).
+    return { manager, preferredProvider: liveSttProvider };
   }, [translationEnabled, liveSttProvider, onProviderChange]);
 
   const startSession = useCallback((previewCleanup: () => void, stream: MediaStream) => {

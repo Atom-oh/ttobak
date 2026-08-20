@@ -84,6 +84,10 @@ export function RecordButton({
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  // Guards mediaRecorder.onstop and stopRecording's already-inactive branch
+  // against BOTH finalizing the same recording's chunks -- see
+  // finalizeRecordingBlob below. Reset per recording.
+  const stopFinalizedRef = useRef(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -375,6 +379,7 @@ export function RecordButton({
       onAnalyserReady?.(analyser);
 
       chunksRef.current = [];
+      stopFinalizedRef.current = false;
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -391,9 +396,10 @@ export function RecordButton({
       // of duplicating its teardown here: that guarantees onRecordingStop
       // fires (tearing down the parent's STT session — a hand-rolled
       // teardown here left it zombied, since only onRecordingStop does
-      // that), and leaves the onstop handler below as the SINGLE place that
-      // finalizes captured chunks, whether or not it happens to still fire
-      // after this error.
+      // that). stopRecording()'s already-inactive branch (below) calls the
+      // SAME finalizeRecordingBlob() the normal onstop path uses, so chunks
+      // still get finalized even in browsers where `stop` doesn't reliably
+      // follow `error`.
       mediaRecorder.onerror = (event) => {
         console.error('MediaRecorder error during recording:', event);
         if (!isRecordingRef.current) return;
@@ -401,16 +407,8 @@ export function RecordButton({
         stopRecording();
       };
 
-      mediaRecorder.onstop = async () => {
-        cleanupAudioResources();
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        if (onBlobReady) {
-          setRecordingState('idle');
-          setElapsedTime(0);
-          onBlobReady(blob, mimeType);
-        } else {
-          await handleUpload(blob);
-        }
+      mediaRecorder.onstop = () => {
+        finalizeRecordingBlob();
       };
 
       mediaRecorder.start(1000);
@@ -479,6 +477,35 @@ export function RecordButton({
         }, 60000);
       }
       onRecordingResume?.();
+    }
+  };
+
+  /**
+   * Turn whatever chunks have been captured so far into a blob and route
+   * it into the normal post-recording flow. The ONLY place that happens --
+   * both `mediaRecorder.onstop` and `stopRecording`'s already-`inactive`
+   * branch call this, guarded by `stopFinalizedRef` so exactly one of them
+   * actually runs it per recording. That second caller exists because
+   * MediaRecorder sets `state` to `'inactive'` synchronously as part of
+   * firing `error` -- by the time `onerror` (which calls `stopRecording`)
+   * runs, `mediaRecorderRef.current.state` already reads `'inactive'`, so
+   * calling `.stop()` again is a silent no-op and a `stop` event isn't
+   * guaranteed to still follow in every browser. Without this, that exact
+   * scenario -- the one the `onerror` handler exists to catch -- left
+   * captured chunks never finalized and the UI stuck reading "recording".
+   */
+  const finalizeRecordingBlob = () => {
+    if (stopFinalizedRef.current) return;
+    stopFinalizedRef.current = true;
+    cleanupAudioResources();
+    const mimeType = mediaRecorderRef.current?.mimeType || getPreferredMimeType();
+    const blob = new Blob(chunksRef.current, { type: mimeType });
+    if (onBlobReady) {
+      setRecordingState('idle');
+      setElapsedTime(0);
+      onBlobReady(blob, mimeType);
+    } else {
+      void handleUpload(blob);
     }
   };
 
@@ -567,8 +594,19 @@ export function RecordButton({
       return;
     }
 
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
+    if (mediaRecorderRef.current) {
+      if (mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      } else {
+        // Already inactive -- typically because onerror already ran
+        // (MediaRecorder transitions to 'inactive' synchronously as part
+        // of firing 'error', before onerror's handler even executes).
+        // .stop() here would be a silent no-op, and a 'stop' event isn't
+        // guaranteed to still follow in every browser -- finalize
+        // directly. finalizeRecordingBlob's guard makes this safe even if
+        // a queued 'stop' event does still fire afterward.
+        finalizeRecordingBlob();
+      }
     } else {
       cleanupAudioResources();
     }
