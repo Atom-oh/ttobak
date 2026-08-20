@@ -205,7 +205,12 @@ export class GatewayStack extends cdk.Stack {
         DATA_SOURCE_ID: props.dataSourceId || '',
         AWS_REGION_NAME: cdk.Aws.REGION,
       },
-      timeout: cdk.Duration.minutes(10),
+      // 15 minutes is the Lambda ceiling. Bumped from 10: a ~50-80 min
+      // meeting's refine step alone can take 8-9 minutes on the sequential
+      // path (see BedrockService.RefineTranscript), leaving no room for the
+      // Opus 5 summarize call that follows and timing the function out
+      // before it ever runs.
+      timeout: cdk.Duration.minutes(15),
       memorySize: 512,
     });
 

@@ -201,11 +201,12 @@ CfnGatewayTarget `name` + `configurations[0].name`을 게이트웨이가 `{targe
 - **Permissions**: Transcribe FullAccess, Bedrock InvokeModelWithBidirectionalStream, S3 read, DynamoDB read/write
 
 #### Summarize Lambda
-- **Trigger**: DynamoDB Stream (filter: status == "summarizing")
+- **Trigger**: EventBridge — S3 `Object Created` on the `transcripts/` prefix, and the custom `ttobak.transcribe` / `AllPartsTranscribed` event for multi-part audio (not a DynamoDB Stream)
 - **Memory**: 512MB
-- **Timeout**: 120s
-- **Environment**: `TABLE_NAME`, `BEDROCK_MODEL_ID`
-- **Permissions**: Bedrock InvokeModel, DynamoDB read/write
+- **Timeout**: 900s (15 min, the Lambda ceiling; raised from 600s on 2026-08-19 — a ~1,000-1,500 segment meeting's sequential refine step alone could take 8-9 minutes, leaving no room for the Opus 5 summarize call that follows)
+- **Environment**: `TABLE_NAME`, `BUCKET_NAME`, `BEDROCK_MODEL_ID`, `BEDROCK_SONNET_MODEL_ID`, `KB_BUCKET_NAME`, `KB_ID`, `DATA_SOURCE_ID`, `AWS_REGION_NAME`
+- **Permissions**: Bedrock InvokeModel, DynamoDB read/write, S3 read/write
+- **Status guard**: only reprocesses a transcript when the meeting is `transcribing`, or `summarizing` but stale past `stuckTranscribingThreshold` (60 min, `service.IsStuck`) — the latter recovers a meeting whose refine succeeded but whose summarize step then timed out mid-flight, which would otherwise be stuck forever since a live `summarizing` retry is otherwise treated as a duplicate in-flight attempt and skipped
 
 #### Process Image Lambda
 - **Trigger**: S3 Event Notification (prefix: `images/`) via EventBridge
@@ -343,7 +344,7 @@ Whisper GPU 배치 전사를 위한 ECS 인프라. 녹음 완료 후 `ttobak-tra
 - **AMI**: ECS-optimized Amazon Linux 2 (GPU)
 - **Spot price**: $1.10
 - **Capacity**: min=0, max=10, desired=0 (zero-scale)
-- **Subnets**: Private with egress (ap-northeast-2a, 2c, 2d)
+- **Subnets**: Private with egress — no explicit AZ filter; spans every AZ the imported VPC (`vpc-04e77172c67f19814`) actually has `PRIVATE_WITH_EGRESS` subnets in (currently 2a + 2b). A prior hardcoded `['ap-northeast-2a', 'ap-northeast-2c', 'ap-northeast-2d']` filter intersected down to 2a alone (this VPC has no subnets in 2c/2d), pinning every Spot request to one AZ and causing repeated `InsufficientInstanceCapacity` cold-start delays even while other AZs had room — fixed 2026-08-19.
 - **Security group**: Egress only (no inbound)
 
 ### ECS Capacity Provider

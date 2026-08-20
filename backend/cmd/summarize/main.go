@@ -218,13 +218,21 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 	// Status guard: skip if already processed (prevents re-trigger after merged transcript write)
 	meeting, err := repo.GetMeetingByID(ctx, meetingID)
 	if err == nil && meeting != nil {
-		// Whitelist guard — only process when status is `transcribing`.
-		// Matches `handleAllPartsTranscribed` for consistency and avoids
-		// re-running Bedrock on S3 redelivery when the meeting is already
-		// `done`/`summarizing`/`error` or has been recovered.
-		if meeting.Status != model.StatusTranscribing {
+		// Whitelist guard — process when status is `transcribing`, or when
+		// it's `summarizing` but stuck (a previous attempt refined/saved the
+		// transcript and then died mid-summarize, e.g. a Lambda timeout,
+		// without ever reaching `done`/`error`). Without the stuck carve-out,
+		// a dead attempt is stuck here forever: EventBridge's retry sees
+		// `summarizing` and skips, and nothing else ever re-drives it.
+		// A `summarizing` meeting that is NOT stuck is still being actively
+		// processed by another invocation and must not be raced.
+		if meeting.Status != model.StatusTranscribing &&
+			!(meeting.Status == model.StatusSummarizing && service.IsStuck(meeting.Status, meeting.UpdatedAt)) {
 			log.Printf("Skipping transcript for meeting %s (status=%s, expected=transcribing)", meetingID, meeting.Status)
 			return nil
+		}
+		if meeting.Status == model.StatusSummarizing {
+			log.Printf("Reprocessing stuck meeting %s (status=summarizing since %s)", meetingID, meeting.UpdatedAt)
 		}
 	}
 
@@ -409,15 +417,20 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		return nil
 	}
 
-	// Whitelist guard — only process when the meeting is still in the
-	// `transcribing` state. `EventBridge` is at-least-once: if the same
-	// `AllPartsTranscribed` event re-invokes after the first call has
-	// flipped the status to `summarizing`, the second invoke would
-	// otherwise run a duplicate Bedrock summary + KB export + DynamoDB
-	// write. Matches `handlePartTranscript`'s guard for consistency.
-	if meeting.Status != model.StatusTranscribing {
+	// Whitelist guard — process when the meeting is still `transcribing`,
+	// or when it's `summarizing` but stuck (see handleSingleTranscript's
+	// matching comment: a prior attempt died mid-summarize and nothing else
+	// re-drives it). `EventBridge` is at-least-once: if the same
+	// `AllPartsTranscribed` event re-invokes while the first call is still
+	// actively running (`summarizing`, not stuck), this guard still blocks
+	// the duplicate Bedrock summary + KB export + DynamoDB write.
+	if meeting.Status != model.StatusTranscribing &&
+		!(meeting.Status == model.StatusSummarizing && service.IsStuck(meeting.Status, meeting.UpdatedAt)) {
 		log.Printf("Skipping merge for meeting %s (status=%s, expected=transcribing)", meetingID, meeting.Status)
 		return nil
+	}
+	if meeting.Status == model.StatusSummarizing {
+		log.Printf("Reprocessing stuck meeting %s (status=summarizing since %s)", meetingID, meeting.UpdatedAt)
 	}
 
 	transcript, segments, totalDuration, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)

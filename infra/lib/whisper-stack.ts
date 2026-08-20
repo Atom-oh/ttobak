@@ -54,9 +54,17 @@ export class WhisperStack extends cdk.Stack {
     const asg = new autoscaling.AutoScalingGroup(this, 'WhisperAsg', {
       autoScalingGroupName: 'ttobak-whisper-asg',
       vpc,
+      // Deliberately no `availabilityZones` filter: the imported VPC
+      // (`vpc-04e77172c67f19814`, an externally-owned FsiDemoVpc) only has
+      // PRIVATE_WITH_EGRESS subnets in 2a/2b. A hardcoded AZ allowlist that
+      // doesn't match the VPC's actual AZs silently collapses to whichever
+      // AZs DO intersect -- here just 2a -- pinning every Spot request to a
+      // single AZ's g5.xlarge capacity and causing repeated
+      // InsufficientInstanceCapacity retries (~7 min cold-start delay
+      // observed) even while capacity was available in 2c/2d. Take every
+      // AZ the VPC actually offers instead.
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-        availabilityZones: ['ap-northeast-2a', 'ap-northeast-2c', 'ap-northeast-2d'],
       },
       instanceType: new ec2.InstanceType('g5.xlarge'),
       machineImage: ecs.EcsOptimizedImage.amazonLinux2(
