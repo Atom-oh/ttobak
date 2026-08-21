@@ -59,6 +59,12 @@ export class SttManager {
   // Transcribe Streaming just because a config happens to be available by
   // the time the user pauses/resumes.
   private preferredProvider: LiveSttProvider = 'web-speech';
+  // Grants exactly one reconnect attempt for a 'transcribe-stream-stalled'
+  // error before falling back for real -- see the onError handler below
+  // for why a stall specifically can't go straight to fallbackToWebSpeech
+  // on mobile. Never reset once consumed: this is a one-shot grace for the
+  // whole recording, not a retry-per-stall loop.
+  private stalledReconnectAttempted = false;
 
   // Translation state (shared across providers)
   private translateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -249,9 +255,24 @@ export class SttManager {
       },
       onError: (error) => {
         if (this.transcribeSession !== session) return;
-        console.error('Transcribe Streaming error, switching to Web Speech:', error);
         session.stop();
         this.transcribeSession = null;
+        // A stall (AudioContext suspended -- screen lock, background) is
+        // recoverable in a way other Transcribe errors aren't: the mic
+        // track is still live, resume() may simply have lost the race
+        // against the watchdog's grace window. fallbackToWebSpeech is a
+        // NO-OP on mobile whenever a live stream is held
+        // (hasMobileMicConflictRisk) -- treating a stall as immediately
+        // fatal there would permanently kill captions for the rest of the
+        // recording with no way back, on exactly the platform this
+        // watchdog exists to protect. Give it one reconnect attempt first.
+        if (error === 'transcribe-stream-stalled' && !this.stalledReconnectAttempted) {
+          this.stalledReconnectAttempted = true;
+          console.warn('Transcribe Streaming stalled -- attempting one reconnect before falling back to Web Speech');
+          this.startTranscribeStreaming(stream).catch(() => this.fallbackToWebSpeech(true));
+          return;
+        }
+        console.error('Transcribe Streaming error, switching to Web Speech:', error);
         this.fallbackToWebSpeech(true);
       },
     });
