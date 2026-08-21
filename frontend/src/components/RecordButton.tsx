@@ -101,6 +101,7 @@ export function RecordButton({
   const nativeUnlistenRef = useRef<(() => void) | null>(null);
   const nativePcmUnlistenRef = useRef<(() => void) | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const wakeLockRequestInFlightRef = useRef(false);
 
   // Screen Wake Lock: without this, mobile OSes dim/lock the screen during a
   // recording, which suspends the page's AudioContext(s) and (for Web
@@ -110,8 +111,26 @@ export function RecordButton({
   // (and the audio pipeline) awake for as long as the lock survives.
   const requestWakeLock = useCallback(async () => {
     if (!('wakeLock' in navigator)) return;
+    // Serializes concurrent calls (e.g. the re-acquire effect firing
+    // again before a prior request has resolved) -- without this, both
+    // requests' sentinels would independently try to land in
+    // wakeLockRef.current, and only the last one to resolve would end up
+    // referenced (the other leaks, held awake with nothing to release it).
+    if (wakeLockRequestInFlightRef.current) return;
+    wakeLockRequestInFlightRef.current = true;
     try {
       const sentinel = await navigator.wakeLock.request('screen');
+      if (!isRecordingRef.current) {
+        // Recording already stopped while this await was in flight --
+        // stopRecording's cleanupAudioResources ran and called
+        // releaseWakeLock while wakeLockRef.current was still null (this
+        // request hadn't resolved yet), so there's no other release path
+        // for this now-stale sentinel. Release it immediately instead of
+        // storing it, or the screen would stay held awake indefinitely
+        // for as long as the tab remains open and visible.
+        sentinel.release().catch(() => {});
+        return;
+      }
       // The Wake Lock API auto-releases the sentinel on visibility loss
       // (spec behavior) without clearing anything on our side -- without
       // this listener, wakeLockRef.current stays non-null after that
@@ -128,6 +147,8 @@ export function RecordButton({
       // Not fatal — recording continues without the lock (e.g. low battery
       // mode, or the tab lost focus between the click and this await).
       console.warn('Screen Wake Lock request failed:', err);
+    } finally {
+      wakeLockRequestInFlightRef.current = false;
     }
   }, []);
 

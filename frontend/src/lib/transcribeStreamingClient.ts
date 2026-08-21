@@ -71,8 +71,16 @@ export class TranscribeStreamingSession {
   private lastChunkAt = 0;
   private stallReported = false;
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private notRunningTicks = 0;
   private readonly STALL_TIMEOUT_MS = 15_000;
   private readonly STALL_CHECK_INTERVAL_MS = 5_000;
+  // Caps the "AudioContext not running yet" resume grace (see the tick
+  // logic below) to 2 checks (~10s) -- resume() can keep failing
+  // indefinitely (e.g. iOS Safari refusing resume() without a fresh user
+  // gesture after an unlock), and an unbounded grace would silence the
+  // stall watchdog for as long as that persists, permanently blocking the
+  // Web Speech fallback this class exists to trigger.
+  private readonly MAX_NOT_RUNNING_GRACE_TICKS = 2;
 
   constructor(private config: TranscribeStreamingConfig) {}
 
@@ -100,6 +108,7 @@ export class TranscribeStreamingSession {
 
     this.lastChunkAt = Date.now();
     this.stallReported = false;
+    this.notRunningTicks = 0;
     this.watchdogTimer = setInterval(() => {
       if (!this.isActive) return;
       tryResumeAudioContext();
@@ -110,9 +119,17 @@ export class TranscribeStreamingSession {
         // silentMs already past STALL_TIMEOUT_MS and report a stall before
         // resume() ever gets a chance to actually restart the chunk flow,
         // which defeats the resume path entirely. Treat "not running yet"
-        // as one more grace interval rather than accumulated silence.
-        this.lastChunkAt = Date.now();
-        return;
+        // as one more grace interval rather than accumulated silence, but
+        // only for a bounded number of ticks -- see
+        // MAX_NOT_RUNNING_GRACE_TICKS's doc comment for why this can't be
+        // unbounded.
+        if (this.notRunningTicks < this.MAX_NOT_RUNNING_GRACE_TICKS) {
+          this.notRunningTicks++;
+          this.lastChunkAt = Date.now();
+          return;
+        }
+      } else {
+        this.notRunningTicks = 0;
       }
       const silentMs = Date.now() - this.lastChunkAt;
       if (silentMs > this.STALL_TIMEOUT_MS) {
