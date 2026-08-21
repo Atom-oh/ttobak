@@ -271,7 +271,18 @@ export class SttManager {
         // fatal there would permanently kill captions for the rest of the
         // recording with no way back, on exactly the platform this
         // watchdog exists to protect. Give it one reconnect attempt first.
-        if (error === 'transcribe-stream-stalled' && !this.stalledReconnectAttempted) {
+        //
+        // 'transcribe-stream-error' gets the same treatment: AWS closes a
+        // Transcribe Streaming connection server-side after ~15s of no
+        // audio, which races the client watchdog's own 15s threshold (plus
+        // grace ticks and 5s poll granularity, worst case ~25-30s) and
+        // usually wins -- so a suspended-AudioContext lock most often
+        // surfaces as this error, not 'transcribe-stream-stalled', despite
+        // having the identical recoverable cause.
+        if (
+          (error === 'transcribe-stream-stalled' || error === 'transcribe-stream-error') &&
+          !this.stalledReconnectAttempted
+        ) {
           this.stalledReconnectAttempted = true;
           if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
             // The lock/backgrounding that caused this stall is still in
@@ -289,6 +300,24 @@ export class SttManager {
               // case).
               if (this.stopped) return;
               if (this.paused || document.visibilityState !== 'visible') return;
+              if (this.transcribeSession) {
+                // resume() (or anything else) already started a session
+                // independently while this was pending -- most commonly:
+                // stall -> pause -> resume() restarts Transcribe Streaming
+                // on its own -> a later focus/visibilitychange fires this.
+                // Reconnecting on top of it wouldn't duplicate captions
+                // (the identity check in startTranscribeStreaming's own
+                // callbacks guards that), but it WOULD orphan a second
+                // live session -- AudioContext, AudioWorklet, and the
+                // Transcribe connection all left running unstopped until
+                // the recording ends. Nothing to do here; clean up and
+                // never retry.
+                this.pendingStallReconnect = null;
+                document.removeEventListener('visibilitychange', tryReconnect);
+                window.removeEventListener('pageshow', tryReconnect);
+                window.removeEventListener('focus', tryReconnect);
+                return;
+              }
               this.pendingStallReconnect = null;
               document.removeEventListener('visibilitychange', tryReconnect);
               window.removeEventListener('pageshow', tryReconnect);
