@@ -375,11 +375,14 @@ func (s *AccountService) AddMember(ctx context.Context, requesterUserID, account
 // there first (the invitee logged in and the queued grant became a real
 // AccountMember in the same transaction that cleared the pending row). Left
 // unchecked, that would report success to the caller while the invitee's
-// access remains live. So when the delete finds nothing queued, this checks
-// whether email now resolves to a user with membership on accountID and
-// reports ErrPendingAlreadyClaimed in that case; a genuine "nothing was ever
-// queued" still returns nil, matching RemoveMember's own idempotent-delete
-// behavior.
+// access remains live. So when the delete finds nothing queued, this
+// resolves email to a userID via Cognito's AdminGetUser (not
+// GetUserByEmail's GSI2 -- a GSI query can lag a key materialize's
+// transaction just wrote, right when this check needs it consistent) and
+// checks for a live membership by that userID with a strongly consistent
+// GetItem, reporting ErrPendingAlreadyClaimed in that case. A genuine
+// "nothing was ever queued" still returns nil, matching RemoveMember's own
+// idempotent-delete behavior.
 func (s *AccountService) RevokePendingMember(ctx context.Context, requesterUserID, accountID, email string) error {
 	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
 	if err != nil {
@@ -402,14 +405,23 @@ func (s *AccountService) RevokePendingMember(ctx context.Context, requesterUserI
 	if deleted {
 		return nil
 	}
-	user, err := s.repo.GetUserByEmail(ctx, email)
+	// Nothing queued to delete -- resolve email to a userID via Cognito
+	// directly (AdminGetUser), not GetUserByEmail's GSI2 Query: the
+	// invitee's Cognito user has existed since the original invite, well
+	// before any of this, so AdminGetUser is immediately reliable here --
+	// unlike GSI2, which can still be catching up on a key materialize's
+	// transaction just wrote, right when this call needs it. Then check
+	// for a live grant by that sub with a strongly consistent GetItem
+	// (GetMember), so the whole check is free of DynamoDB eventual
+	// consistency end to end.
+	_, sub, err := emailHasPendingInvite(ctx, s.cognito, s.resolveCognitoPoolID(), email)
 	if err != nil {
 		return err
 	}
-	if user == nil {
+	if sub == "" {
 		return nil
 	}
-	member, err := s.repo.GetMember(ctx, accountID, user.UserID)
+	member, err := s.repo.GetMember(ctx, accountID, sub)
 	if err != nil {
 		return err
 	}

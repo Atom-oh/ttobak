@@ -713,9 +713,12 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, owner
 // that same transaction. Without distinguishing the two, this would return
 // a misleading success -- the caller believes access was revoked while a
 // live Share row still grants it. So when the delete finds nothing, this
-// checks whether email now resolves to a user with a Share on meetingID
-// (i.e. materialize won the race) and reports ErrPendingAlreadyClaimed
-// instead of a silent no-op in that case only.
+// resolves email to a userID via Cognito's AdminGetUser (not
+// GetUserByEmail's GSI2 -- a GSI query can lag a key materialize's
+// transaction just wrote, right when this check needs it consistent) and
+// checks for a live Share by that userID with a strongly consistent
+// GetItem, reporting ErrPendingAlreadyClaimed instead of a silent no-op in
+// that case only.
 func (s *MeetingService) RevokePendingShare(ctx context.Context, ownerID, meetingID, email string) error {
 	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
 	if err != nil {
@@ -738,14 +741,22 @@ func (s *MeetingService) RevokePendingShare(ctx context.Context, ownerID, meetin
 	if deleted {
 		return nil
 	}
-	user, err := s.repo.GetUserByEmail(ctx, email)
+	// Nothing queued to delete -- resolve email to a userID via Cognito
+	// directly (AdminGetUser), not GetUserByEmail's GSI2 Query: the
+	// invitee's Cognito user has existed since the original invite, well
+	// before any of this, so AdminGetUser is immediately reliable here --
+	// unlike GSI2, which can still be catching up on a key materialize's
+	// transaction just wrote, right when this call needs it. Then check
+	// for a live Share by that sub with a strongly consistent GetItem, so
+	// the whole check is free of DynamoDB eventual consistency end to end.
+	_, sub, err := emailHasPendingInvite(ctx, s.cognito, s.resolveCognitoPoolID(), email)
 	if err != nil {
 		return err
 	}
-	if user == nil {
+	if sub == "" {
 		return nil
 	}
-	share, err := s.repo.GetShare(ctx, user.UserID, meetingID)
+	share, err := s.repo.GetShare(ctx, sub, meetingID)
 	if err != nil {
 		return err
 	}

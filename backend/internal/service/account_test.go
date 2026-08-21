@@ -734,10 +734,20 @@ func TestRevokePendingMember_NoOpWhenNothingQueued(t *testing.T) {
 func TestRevokePendingMember_AlreadyClaimedByMaterialize(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
+	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
+		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			return &cognitoidp.AdminGetUserOutput{
+				Username:       aws.String("claimed-1"),
+				UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("sub"), Value: aws.String("claimed-1")}},
+			}, nil
+		},
+	}, "pool-1")
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
 	seedUser(repo, "claimed-1", "invited@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "invited@x.com", Role: model.RoleSSA})
-	// No PendingShare row seeded -- materialize already cleared it.
+	// No PendingShare row seeded -- materialize already cleared it. The
+	// revoke's already-claimed check must resolve email -> userID via
+	// Cognito (the fake above), not GetUserByEmail's GSI2 mock.
 
 	err := svc.RevokePendingMember(context.Background(), "owner-1", acc.AccountID, "invited@x.com")
 	if !errors.Is(err, ErrPendingAlreadyClaimed) {

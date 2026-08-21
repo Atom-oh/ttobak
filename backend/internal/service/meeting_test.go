@@ -1210,6 +1210,14 @@ func TestRevokePendingShare_MeetingNotFound(t *testing.T) {
 func TestRevokePendingShare_AlreadyClaimedByMaterialize(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)
+	svc.SetCognitoAdminAPI(&fakeCognitoAdminAPI{
+		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			return &cognitoidp.AdminGetUserOutput{
+				Username:       aws.String("claimed-1"),
+				UserAttributes: []cognitoidptypes.AttributeType{{Name: aws.String("sub"), Value: aws.String("claimed-1")}},
+			}, nil
+		},
+	}, "pool-1")
 	repo.addMeeting(&model.Meeting{
 		MeetingID: "m-1", UserID: "owner-1", Title: "Meeting",
 		Status: model.StatusDone, Date: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now(),
@@ -1219,7 +1227,9 @@ func TestRevokePendingShare_AlreadyClaimedByMaterialize(t *testing.T) {
 		MeetingID: "m-1", OwnerID: "owner-1", SharedToID: "claimed-1",
 		Email: "invited@test.com", Permission: model.PermissionRead,
 	}
-	// No PendingShare row seeded -- materialize already cleared it.
+	// No PendingShare row seeded -- materialize already cleared it. The
+	// revoke's already-claimed check must resolve email -> userID via
+	// Cognito (the fake above), not GetUserByEmail's GSI2 mock.
 
 	err := svc.RevokePendingShare(context.Background(), "owner-1", "m-1", "invited@test.com")
 	if !errors.Is(err, ErrPendingAlreadyClaimed) {

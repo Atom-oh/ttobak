@@ -1638,10 +1638,16 @@ func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, accountID,
 	return nil
 }
 
-// GetShare retrieves a share record
+// GetShare retrieves a share record. ConsistentRead is required here (not
+// just the repository default) -- RevokePendingShare's already-claimed
+// check calls this immediately after a materialize race may have just
+// written the Share row, and a plain eventually-consistent GetItem could
+// still miss it, defeating that check the same way an eventually
+// consistent GSI query would (see GetPendingShare's doc comment).
 func (r *DynamoDBRepository) GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error) {
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(r.tableName),
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixShare + meetingID},
