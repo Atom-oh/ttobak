@@ -52,6 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CloudFront SPA router fixed for `/insights/research/*` route conflict
 
 ### Fixed
+- Mobile recording silently dying on screen lock (mic indicator stayed "live" but no audio captured) — Screen Wake Lock during recording, `AudioContext` resume guard + stall watchdog in Transcribe Streaming client, `pageshow`/`focus` restart triggers in Web Speech fallback
 - CloudFront SPA router wrongly rewriting `/insights/research/*` to `/insights/_/_`
 - Bedrock ReadTimeoutError in deep research (read_timeout 120s to 300s)
 - AWS CLI install on non-root ARC runners (`$HOME/.local/bin`)
@@ -112,6 +113,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CloudFront SPA router `/insights/research/*` 라우트 충돌 수정
 
 ### Fixed
+- 모바일 화면 잠금 시 녹음이 조용히 멈추는 문제 (마이크 표시는 계속 "켜짐"이지만 오디오는 캡처되지 않음) — 녹음 중 Screen Wake Lock 유지, Transcribe Streaming 클라이언트에 AudioContext resume 가드 + stall watchdog 추가, Web Speech 폴백에 `pageshow`/`focus` 재시작 트리거 추가
 - CloudFront SPA router `/insights/research/*`를 `/insights/_/_`로 잘못 rewrite하는 문제
 - Deep research Bedrock ReadTimeoutError (read_timeout 120초 → 300초)
 - Non-root ARC runner AWS CLI 설치 경로 (`$HOME/.local/bin`)

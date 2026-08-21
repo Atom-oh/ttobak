@@ -113,6 +113,87 @@ export function RecordButton({
   const nativeLevelRef = useRef(0);
   const nativeUnlistenRef = useRef<(() => void) | null>(null);
   const nativePcmUnlistenRef = useRef<(() => void) | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const wakeLockRequestInFlightRef = useRef(false);
+
+  // Screen Wake Lock: without this, mobile OSes dim/lock the screen during a
+  // recording, which suspends the page's AudioContext(s) and (for Web
+  // Speech) kills the mic session outright — the getUserMedia track stays
+  // "live" the whole time, so nothing in the UI shows anything wrong while
+  // audio silently stops being captured. Holding the lock keeps the screen
+  // (and the audio pipeline) awake for as long as the lock survives.
+  const requestWakeLock = useCallback(async () => {
+    if (!('wakeLock' in navigator)) return;
+    // Serializes concurrent calls (e.g. the re-acquire effect firing
+    // again before a prior request has resolved) -- without this, both
+    // requests' sentinels would independently try to land in
+    // wakeLockRef.current, and only the last one to resolve would end up
+    // referenced (the other leaks, held awake with nothing to release it).
+    if (wakeLockRequestInFlightRef.current) return;
+    wakeLockRequestInFlightRef.current = true;
+    try {
+      const sentinel = await navigator.wakeLock.request('screen');
+      if (!isRecordingRef.current) {
+        // Recording already stopped while this await was in flight --
+        // stopRecording's cleanupAudioResources ran and called
+        // releaseWakeLock while wakeLockRef.current was still null (this
+        // request hadn't resolved yet), so there's no other release path
+        // for this now-stale sentinel. Release it immediately instead of
+        // storing it, or the screen would stay held awake indefinitely
+        // for as long as the tab remains open and visible.
+        sentinel.release().catch(() => {});
+        return;
+      }
+      // The Wake Lock API auto-releases the sentinel on visibility loss
+      // (spec behavior) without clearing anything on our side -- without
+      // this listener, wakeLockRef.current stays non-null after that
+      // auto-release, so the re-acquire effect's `!wakeLockRef.current`
+      // guard never fires again and a second screen-lock later in the
+      // same recording goes unprotected. The identity check guards
+      // against this firing after a newer request has already replaced
+      // the ref (e.g. release() called explicitly, then re-acquired).
+      sentinel.addEventListener('release', () => {
+        if (wakeLockRef.current === sentinel) wakeLockRef.current = null;
+      });
+      wakeLockRef.current = sentinel;
+    } catch (err) {
+      // Not fatal — recording continues without the lock (e.g. low battery
+      // mode, or the tab lost focus between the click and this await).
+      console.warn('Screen Wake Lock request failed:', err);
+    } finally {
+      wakeLockRequestInFlightRef.current = false;
+    }
+  }, []);
+
+  const releaseWakeLock = useCallback(() => {
+    wakeLockRef.current?.release().catch(() => {});
+    wakeLockRef.current = null;
+  }, []);
+
+  // The Wake Lock API releases itself whenever the document loses
+  // visibility (spec behavior, not a bug) — re-acquire on return so a
+  // second screen-lock later in the same recording is still guarded.
+  // Mobile unlock doesn't reliably fire a visibilitychange "hidden"->
+  // "visible" pair the way desktop tab-switch does (see
+  // speechRecognition.ts's restart-on-visible logic for the same premise)
+  // -- listening to only visibilitychange here would leave every screen
+  // lock after the first one unprotected on exactly the platform this
+  // effect exists for, so pageshow/focus are wired to the same handler.
+  useEffect(() => {
+    const handleReacquire = () => {
+      if (document.visibilityState === 'visible' && isRecordingRef.current && !wakeLockRef.current) {
+        requestWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', handleReacquire);
+    window.addEventListener('pageshow', handleReacquire);
+    window.addEventListener('focus', handleReacquire);
+    return () => {
+      document.removeEventListener('visibilitychange', handleReacquire);
+      window.removeEventListener('pageshow', handleReacquire);
+      window.removeEventListener('focus', handleReacquire);
+    };
+  }, [requestWakeLock]);
 
   // iOS Safari has supported MediaRecorder since 14.3 (audio/mp4 output,
   // mapped to .m4a below), so it should take the normal recording path --
@@ -122,6 +203,7 @@ export function RecordButton({
 
   const cleanupAudioResources = useCallback(() => {
     isRecordingRef.current = false;
+    releaseWakeLock();
     if (animationRef.current) {
       cancelAnimationFrame(animationRef.current);
       animationRef.current = null;
@@ -136,7 +218,7 @@ export function RecordButton({
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-  }, [onAnalyserReady]);
+  }, [onAnalyserReady, releaseWakeLock]);
 
   // Save checkpoint immediately when tab becomes hidden (lid close, tab switch)
   useEffect(() => {
@@ -300,6 +382,7 @@ export function RecordButton({
         setRecordingState('recording');
         setElapsedTime(0);
         onPermissionGranted?.();
+        requestWakeLock();
         timerRef.current = setInterval(() => {
           setElapsedTime((prev) => prev + 1);
         }, 1000);
@@ -426,6 +509,7 @@ export function RecordButton({
       setRecordingState('recording');
       setElapsedTime(0);
       onRecordingStart?.(stream);
+      requestWakeLock();
 
       timerRef.current = setInterval(() => {
         setElapsedTime((prev) => prev + 1);
@@ -530,6 +614,7 @@ export function RecordButton({
 
   const stopRecording = async () => {
     isRecordingRef.current = false;
+    releaseWakeLock();
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;

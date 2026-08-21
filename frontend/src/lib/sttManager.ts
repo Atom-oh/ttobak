@@ -59,6 +59,17 @@ export class SttManager {
   // Transcribe Streaming just because a config happens to be available by
   // the time the user pauses/resumes.
   private preferredProvider: LiveSttProvider = 'web-speech';
+  // Grants exactly one reconnect attempt for a 'transcribe-stream-stalled'
+  // error before falling back for real -- see the onError handler below
+  // for why a stall specifically can't go straight to fallbackToWebSpeech
+  // on mobile. Never reset once consumed: this is a one-shot grace for the
+  // whole recording, not a retry-per-stall loop.
+  private stalledReconnectAttempted = false;
+  // Set while a stall reconnect is deferred waiting for the tab/screen to
+  // become visible again (see onError's handling of
+  // 'transcribe-stream-stalled') -- cleared by stop() so a manager that's
+  // already torn down never fires a reconnect it has no business making.
+  private pendingStallReconnect: (() => void) | null = null;
 
   // Translation state (shared across providers)
   private translateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -249,9 +260,87 @@ export class SttManager {
       },
       onError: (error) => {
         if (this.transcribeSession !== session) return;
-        console.error('Transcribe Streaming error, switching to Web Speech:', error);
         session.stop();
         this.transcribeSession = null;
+        // A stall (AudioContext suspended -- screen lock, background) is
+        // recoverable in a way other Transcribe errors aren't: the mic
+        // track is still live, resume() may simply have lost the race
+        // against the watchdog's grace window. fallbackToWebSpeech is a
+        // NO-OP on mobile whenever a live stream is held
+        // (hasMobileMicConflictRisk) -- treating a stall as immediately
+        // fatal there would permanently kill captions for the rest of the
+        // recording with no way back, on exactly the platform this
+        // watchdog exists to protect. Give it one reconnect attempt first.
+        //
+        // 'transcribe-stream-error' gets the same treatment: AWS closes a
+        // Transcribe Streaming connection server-side after ~15s of no
+        // audio, which races the client watchdog's own 15s threshold (plus
+        // grace ticks and 5s poll granularity, worst case ~25-30s) and
+        // usually wins -- so a suspended-AudioContext lock most often
+        // surfaces as this error, not 'transcribe-stream-stalled', despite
+        // having the identical recoverable cause.
+        if (
+          (error === 'transcribe-stream-stalled' || error === 'transcribe-stream-error') &&
+          !this.stalledReconnectAttempted
+        ) {
+          this.stalledReconnectAttempted = true;
+          if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+            // The lock/backgrounding that caused this stall is still in
+            // effect -- reconnecting right now would just start a second
+            // session whose AudioContext is ALSO suspended immediately,
+            // burning the one-shot grace before the user has any chance
+            // to actually return. Defer until visibility comes back.
+            const tryReconnect = () => {
+              // Only unregister once actually proceeding to reconnect --
+              // NOT on every firing. `pageshow` in particular can fire
+              // while still hidden (bfcache restore), and paused defers to
+              // resume()'s own restart -- removing listeners here on
+              // either would strand the one-shot grace with nothing left
+              // to ever retry it (stop() removes them for the terminal
+              // case).
+              if (this.stopped) return;
+              if (this.paused || document.visibilityState !== 'visible') return;
+              if (this.transcribeSession) {
+                // resume() (or anything else) already started a session
+                // independently while this was pending -- most commonly:
+                // stall -> pause -> resume() restarts Transcribe Streaming
+                // on its own -> a later focus/visibilitychange fires this.
+                // Reconnecting on top of it wouldn't duplicate captions
+                // (the identity check in startTranscribeStreaming's own
+                // callbacks guards that), but it WOULD orphan a second
+                // live session -- AudioContext, AudioWorklet, and the
+                // Transcribe connection all left running unstopped until
+                // the recording ends. Nothing to do here; clean up and
+                // never retry.
+                this.pendingStallReconnect = null;
+                document.removeEventListener('visibilitychange', tryReconnect);
+                window.removeEventListener('pageshow', tryReconnect);
+                window.removeEventListener('focus', tryReconnect);
+                return;
+              }
+              this.pendingStallReconnect = null;
+              document.removeEventListener('visibilitychange', tryReconnect);
+              window.removeEventListener('pageshow', tryReconnect);
+              window.removeEventListener('focus', tryReconnect);
+              console.warn('Transcribe Streaming stalled -- reconnecting now that the tab is visible again');
+              this.startTranscribeStreaming(stream).catch(() => this.fallbackToWebSpeech(true));
+            };
+            this.pendingStallReconnect = tryReconnect;
+            document.addEventListener('visibilitychange', tryReconnect);
+            window.addEventListener('pageshow', tryReconnect);
+            // Mobile unlock's actually-firing signal varies by platform --
+            // RecordButton's wake-lock re-acquire and speechRecognition.ts's
+            // restart-on-visible both wire visibilitychange/pageshow/focus
+            // for the same reason; matching that set here so this doesn't
+            // wait forever on a platform where only 'focus' fires.
+            window.addEventListener('focus', tryReconnect);
+            return;
+          }
+          console.warn('Transcribe Streaming stalled -- attempting one reconnect before falling back to Web Speech');
+          this.startTranscribeStreaming(stream).catch(() => this.fallbackToWebSpeech(true));
+          return;
+        }
+        console.error('Transcribe Streaming error, switching to Web Speech:', error);
         this.fallbackToWebSpeech(true);
       },
     });
@@ -405,6 +494,12 @@ export class SttManager {
 
   stop(): void {
     this.stopped = true;
+    if (this.pendingStallReconnect) {
+      document.removeEventListener('visibilitychange', this.pendingStallReconnect);
+      window.removeEventListener('pageshow', this.pendingStallReconnect);
+      window.removeEventListener('focus', this.pendingStallReconnect);
+      this.pendingStallReconnect = null;
+    }
     this.transcribeSession?.stop();
     this.transcribeSession = null;
     this.webSpeechClient?.stop();
