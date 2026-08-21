@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 964fa12680cc · generated-at: 2026-08-21 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d2808472a5de · generated-at: 2026-08-21 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -49,7 +49,7 @@ cd infra && npx cdk synth && npm test
 - **One deliberate unauthenticated-route exception**: `GET /api/public/docs/{token}` (ADR-022) skips both the Lambda@Edge JWT check and the API Gateway authorizer, by design — it's a bearer-token public share link, not a missing-auth bug. It's still fail-closed: the handler re-validates the token against the doc's own `PublicShareToken` field rather than trusting the route bypass alone, and the presigned URL it hands out uses a dedicated 5-minute TTL (not the 1-hour default elsewhere) so a revoke closes most of the exposure window. **A *new* unauthenticated route anywhere else is a real CRITICAL finding** — this exception does not generalize.
 - **Security Groups**: never `0.0.0.0/0` inbound; SGs managed via CDK/Terraform only (no CLI mutation). Public ALB only behind CloudFront prefix list.
 - **IAM**: minimize `Resource: "*"` (require a `Condition` if used); no Lambda resource policy `Principal: "*"`.
-- **Secrets**: never in env vars or code — use Secrets Manager / SSM. PII in DynamoDB requires KMS encryption + an enforced expiry (table TTL sweep, or synchronous application-code expiry as PendingShare does).
+- **Secrets**: never in env vars or code — use Secrets Manager / SSM. PII in DynamoDB requires KMS encryption + TTL (PendingShare's `pendingShareExpiresAt` is what the table's TTL sweep is actually pointed at -- distinct attribute name from QA's own unrelated `TTL` rows, not a carve-out).
 - **Trust boundary is the API, not the client.** Validate client-supplied identifiers server-side (e.g. an S3 `sourceKey` must be proven to belong to the caller before use — ownership is encoded in the key's `{prefix}/{userID}/` segment). Reject path traversal (`..`).
 - **Route53** must not point directly at ALB/EC2 — always via CloudFront.
 
