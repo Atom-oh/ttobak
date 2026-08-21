@@ -138,12 +138,51 @@ func (h *AccountHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "User is already a member")
 		case errors.Is(err, service.ErrInvalidInput):
 			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid role ("+strings.Join(model.AssignableRoles, "/")+")")
+		case errors.Is(err, service.ErrSelfShare):
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Cannot add yourself as a member")
 		default:
 			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		}
 		return
 	}
 	writeJSON(w, http.StatusCreated, dto)
+}
+
+// RevokePendingMember handles DELETE /api/accounts/{accountId}/members/pending?email={email} --
+// cancels a queued PendingShare account invite before the target has ever
+// logged in (see AccountService.RevokePendingMember's doc comment for why
+// this is a separate route from RemoveMember rather than reusing its
+// {userId} path: there's no userId yet for a grant that's never been
+// claimed).
+func (h *AccountHandler) RevokePendingMember(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
+	accountID := chi.URLParam(r, "accountId")
+	email := r.URL.Query().Get("email")
+
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID is required")
+		return
+	}
+	if email == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "email query parameter is required")
+		return
+	}
+
+	if err := h.accountService.RevokePendingMember(ctx, userID, accountID, email); err != nil {
+		switch {
+		case errors.Is(err, service.ErrForbidden):
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can revoke a pending invite")
+		case errors.Is(err, service.ErrNotFound):
+			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Account not found")
+		case errors.Is(err, service.ErrPendingAlreadyClaimed):
+			writeError(w, http.StatusConflict, model.ErrCodeConflict, "This invite was already claimed -- remove the user from Members instead")
+		default:
+			writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *AccountHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request) {

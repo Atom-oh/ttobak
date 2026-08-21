@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,6 +21,16 @@ type MeetingHandler struct {
 	meetingService *service.MeetingService
 	uploadService  *service.UploadService
 	repo           *repository.DynamoDBRepository
+	// simService is optional (see SetSimService) so GetMeeting can attach
+	// the meeting's SimRun (ADR-033) without every existing NewMeetingHandler
+	// call site needing to change.
+	simService *service.SimService
+}
+
+// SetSimService injects the cost/sizing simulator service (ADR-033) so
+// GetMeeting can attach the meeting's current SimRun to its response.
+func (h *MeetingHandler) SetSimService(s *service.SimService) {
+	h.simService = s
 }
 
 // NewMeetingHandler creates a new meeting handler
@@ -74,7 +85,12 @@ func (h *MeetingHandler) ListMeetings(w http.ResponseWriter, r *http.Request) {
 	email := middleware.GetUserEmail(ctx)
 	name := middleware.GetUserName(ctx)
 	if email != "" {
-		h.repo.GetOrCreateUser(ctx, userID, email, name)
+		// Void by design (see its doc comment) -- errors from this call are
+		// not swallowed silently: GetOrCreateUser failures are logged
+		// inside it, and MaterializePendingShares logs per-item failures
+		// of its own as it iterates. Nothing here needs to check a return
+		// value because there isn't one to check.
+		h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
 	}
 
 	tab := r.URL.Query().Get("tab")
@@ -128,7 +144,12 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 	email := middleware.GetUserEmail(ctx)
 	name := middleware.GetUserName(ctx)
 	if email != "" {
-		h.repo.GetOrCreateUser(ctx, userID, email, name)
+		// Void by design (see its doc comment) -- errors from this call are
+		// not swallowed silently: GetOrCreateUser failures are logged
+		// inside it, and MaterializePendingShares logs per-item failures
+		// of its own as it iterates. Nothing here needs to check a return
+		// value because there isn't one to check.
+		h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
 	}
 
 	meeting, err := h.meetingService.CreateMeeting(ctx, userID, req.Title, date, req.Participants, req.SttProvider)
@@ -205,6 +226,64 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 			if att.OriginalKey != "" {
 				if url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, att.OriginalKey); err == nil {
 					att.URL = url
+				}
+			}
+		}
+	}
+
+	// Attach the meeting's cost/sizing simulation state, if any (ADR-033).
+	// A stuck run (Lambda died mid-write) is detected AND persisted as
+	// errored inside SimService.GetSimRun itself now (mirrors isStuck's
+	// read-triggered write for transcribing/summarizing meetings) --
+	// ReconcileStuckSimRun here is just a defensive fallback for this one
+	// response in case that persist failed, not the primary reconciliation
+	// path anymore.
+	if h.simService != nil {
+		run, err := h.simService.GetSimRun(ctx, meetingID)
+		if err != nil {
+			// Best-effort attach: simRun is a secondary field on GetMeeting,
+			// not worth failing the whole request over -- but a silent
+			// swallow here previously gave no signal at all when this broke.
+			log.Printf("GetMeeting: failed to get sim run for meeting %s: %v", meetingID, err)
+		} else if run != nil {
+			if service.ReconcileStuckSimRun(run) {
+				run.Status = model.SimStatusError
+				run.ErrorMessage = "시뮬레이션이 응답하지 않아 시간 초과로 처리되었습니다"
+			}
+			result.SimRun = model.ToSimRunResponse(run)
+			if h.uploadService != nil {
+				// SimRun.ChartKeys/CodeKey are read straight out of the
+				// DynamoDB row and handed to a bucket-wide presigner --
+				// assert each key actually belongs to this meeting's own
+				// sim prefix before presigning, so a corrupted/mistargeted
+				// row can never turn into a valid signed URL for an
+				// unrelated object (e.g. another user's transcripts/audio).
+				// Built from the meeting OWNER's userID (result.UserID), not
+				// the caller's -- SimRun assets are always written under the
+				// owner's prefix, so using the caller's userID here would
+				// fail this check for every shared/account-inherited viewer.
+				// See SimAssetPrefixes' doc comment.
+				simPrefix, filesSimPrefix := service.SimAssetPrefixes(result.UserID, meetingID)
+				for i := range result.SimRun.Charts {
+					c := &result.SimRun.Charts[i]
+					if !strings.HasPrefix(c.Key, simPrefix) {
+						log.Printf("GetMeeting: sim chart key %q for meeting %s does not match expected prefix %q, skipping presign", c.Key, meetingID, simPrefix)
+						continue
+					}
+					if url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, c.Key); err == nil {
+						c.URL = url
+					} else {
+						log.Printf("GetMeeting: failed to presign sim chart %s for meeting %s: %v", c.Key, meetingID, err)
+					}
+				}
+				if result.SimRun.CodeKey != "" {
+					if !strings.HasPrefix(result.SimRun.CodeKey, filesSimPrefix) {
+						log.Printf("GetMeeting: sim code key %q for meeting %s does not match expected prefix %q, skipping presign", result.SimRun.CodeKey, meetingID, filesSimPrefix)
+					} else if url, err := h.uploadService.GeneratePresignedDownloadURL(ctx, result.SimRun.CodeKey); err == nil {
+						result.SimRun.CodeURL = url
+					} else {
+						log.Printf("GetMeeting: failed to presign sim code %s for meeting %s: %v", result.SimRun.CodeKey, meetingID, err)
+					}
 				}
 			}
 		}

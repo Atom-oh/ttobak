@@ -44,6 +44,34 @@ export class AuthStack extends cdk.Stack {
       }));
     }
 
+    // Post Authentication Lambda — records a lastLoginAt timestamp for the
+    // admin user-management panel. See infra/lambda/post-authentication for
+    // why it's written to fail open (a throwing/timing-out trigger here
+    // would block every login, not just this feature).
+    const postAuthFn = new lambda.Function(this, 'PostAuthenticationFunction', {
+      functionName: 'ttobak-post-authentication',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/post-authentication')),
+      environment: {
+        TABLE_NAME: props?.table?.tableName || 'ttobak-main',
+      },
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 128,
+      // Deliberately no reservedConcurrentExecutions -- a concurrency cap
+      // would turn a login spike into throttled/blocked logins.
+    });
+
+    if (props?.table) {
+      props.table.grantWriteData(postAuthFn);
+    } else {
+      postAuthFn.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['dynamodb:PutItem'],
+        resources: [`arn:aws:dynamodb:${this.region}:${this.account}:table/ttobak-main`],
+      }));
+    }
+
     // Cognito User Pool with email/password sign-up/sign-in
     this.userPool = new cognito.UserPool(this, 'TtobakUserPool', {
       userPoolName: 'ttobak-user-pool',
@@ -76,6 +104,7 @@ export class AuthStack extends cdk.Stack {
       },
       lambdaTriggers: {
         preSignUp: preSignUpFn,
+        postAuthentication: postAuthFn,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: cdk.RemovalPolicy.DESTROY,

@@ -14,7 +14,7 @@ npm run lint      # ESLint
 
 - `src/app/` — App Router pages (record, meeting/[id], accounts, accounts/[id], chat, insights, kb, files, settings, profile)
 - `src/components/` — React components
-  - `auth/` — LoginForm, AuthProvider (Cognito). No sign-up form: self sign-up is forbidden by company security policy, so an invited user logs in with the temporary password and completes the `NEW_PASSWORD_REQUIRED` challenge inside `LoginForm`.
+  - `auth/` — LoginForm, AuthProvider (Cognito), ForgotPasswordForm (self-service code-based reset, wired via `LoginForm`'s `onForgotPassword`; also the only UI that can consume an admin-triggered `AdminResetUserPassword`, ADR-032). No sign-up form: self sign-up is forbidden by company security policy, so an invited user logs in with the temporary password and completes the `NEW_PASSWORD_REQUIRED` challenge inside `LoginForm`.
   - `layout/` — Sidebar (incl. Accounts nav entry), DesktopHeader, MobileNav, AppLayout
   - `meeting/` — MeetingHeader, AISummaryCard, ActionItemsCard, TranscriptSection, ProcessingStatus, AccountSection (link/share-to-team)
   - `qa/` — QAChatMessage, QAEmptyState, QASuggestedQuestions

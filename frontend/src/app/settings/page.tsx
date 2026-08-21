@@ -7,6 +7,7 @@ import { CrawlerSettings } from '@/components/CrawlerSettings';
 import { McpGuide } from '@/components/McpGuide';
 import { CustomDictionary } from '@/components/CustomDictionary';
 import { InviteUser } from '@/components/InviteUser';
+import { UserManagement } from '@/components/UserManagement';
 
 export default function SettingsPage() {
   const { user, isLoading, isAuthenticated, isAdmin } = useAuth();
@@ -83,6 +84,16 @@ export default function SettingsPage() {
             </section>
           )}
 
+          {/* User Management Section — admin only. isAdmin here is a display
+              gate only; the backend's middleware.RequireAdmin is what
+              actually enforces access on every /api/settings/users* route. */}
+          {isAdmin && (
+            <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
+              <h3 className="section-header mb-4">사용자 관리</h3>
+              <UserManagement />
+            </section>
+          )}
+
           {/* Custom Dictionary Section */}
           <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
             <h3 className="section-header mb-4">Custom Dictionary</h3>
@@ -93,12 +104,6 @@ export default function SettingsPage() {
           <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
             <h3 className="section-header mb-4">Crawler Sources</h3>
             <CrawlerSettings />
-          </section>
-
-          {/* Custom Dictionary Section */}
-          <section className="lg:pb-8 lg:border-b lg:border-slate-200 dark:lg:border-white/10">
-            <h3 className="section-header mb-4">Custom Dictionary</h3>
-            <CustomDictionary />
           </section>
 
           {/* Claude Code MCP Section */}

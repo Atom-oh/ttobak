@@ -74,9 +74,7 @@ export function ResearchPageTree({
         >
           <span className="material-symbols-outlined text-base">monitoring</span>
           <span className="text-sm font-semibold truncate flex-1">
-            {mainResearch.topic.length > 30
-              ? mainResearch.topic.slice(0, 30) + '...'
-              : mainResearch.topic}
+            {(() => { const label = mainResearch.title || mainResearch.topic; return label.length > 30 ? label.slice(0, 30) + '...' : label; })()}
           </span>
         </button>
 
@@ -86,6 +84,7 @@ export function ResearchPageTree({
             {subpages.map((sp) => {
               const isActive = activePageId === sp.researchId;
               const sc = statusColors[sp.status] || statusColors.running;
+              const spLabel = sp.title || sp.topic;
               return (
                 <button
                   key={sp.researchId}
@@ -97,10 +96,10 @@ export function ResearchPageTree({
                   }`}
                 >
                   <span className="material-symbols-outlined text-sm">
-                    {getPageIcon(sp.topic)}
+                    {getPageIcon(spLabel)}
                   </span>
                   <span className="text-xs truncate flex-1">
-                    {sp.topic.length > 30 ? sp.topic.slice(0, 30) + '...' : sp.topic}
+                    {spLabel.length > 30 ? spLabel.slice(0, 30) + '...' : spLabel}
                   </span>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${sc}`}>
                     {sp.status}

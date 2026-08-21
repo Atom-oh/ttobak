@@ -525,8 +525,8 @@ ADR-013 — 트랜스크립트 딥 링크:
 		AnthropicVersion: "bedrock-2023-05-31",
 		// 16000 (not 8192): Opus 5 is asked for more detail per-section, which
 		// needs more room than the previous Opus 4.8 prompt did.
-		MaxTokens:        16000,
-		System:           systemPrompt,
+		MaxTokens: 16000,
+		System:    systemPrompt,
 		Messages: []ClaudeMessage{
 			{
 				Role: "user",
@@ -1464,6 +1464,121 @@ tsMarker는 입력에 정확한 [TS:NNN] 표식이 있을 때만 그대로 복�
 		return "[]", nil
 	}
 	return string(result), nil
+}
+
+// ExtractSimRequirements drafts a quantitative requirement set (users, TPS,
+// data volume, SLO, ...) for the cost/sizing simulator (ADR-033), from the
+// meeting's own content -- the caller already has the meeting loaded (this
+// runs inline in the api Lambda's extract handler, not the batch summarize
+// pipeline), so it takes *model.Meeting directly rather than re-fetching by
+// ID the way ExtractInsights/ExtractTags do.
+//
+// The model is told to emit [TS:NNN] markers exactly like SummarizeTranscript
+// does, and parseSimRequirements resolves those into transcript://{segmentId}
+// evidence links -- but critically, this function's OUTPUT is not itself the
+// trust boundary. parseSimRequirements re-validates every key/value against
+// AllowedSimRequirementKeys before it's shown to the user, and
+// validateSimRequirements re-validates again when the confirmed form is
+// submitted. A transcript can influence what this call proposes, but it can
+// never make an out-of-allowlist value survive to the codegen prompt.
+func (s *BedrockService) ExtractSimRequirements(ctx context.Context, meeting *model.Meeting) ([]model.SimRequirement, error) {
+	if meeting == nil {
+		return nil, fmt.Errorf("meeting is required")
+	}
+
+	var segments []speakerSegment
+	if meeting.TranscriptSegments != "" {
+		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err != nil {
+			log.Printf("ExtractSimRequirements: failed to parse TranscriptSegments for meeting %s: %v", meeting.MeetingID, err)
+		}
+	}
+
+	// Deliberately the raw transcript, not meeting.Content: by the time a
+	// note is stored, resolveTranscriptAnchors has already rewritten every
+	// [TS:NNN] marker into a `transcript://{id}` link, and the note's prose
+	// can paraphrase away an exact number a speaker actually said. The raw
+	// transcript is also where a [TS:NNN] marker can still be *added*
+	// against real segment start times below.
+	transcript := meeting.TranscriptA
+	usingSelectedB := false
+	if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
+		transcript = meeting.TranscriptB
+		usingSelectedB = true
+	} else if transcript == "" && meeting.TranscriptB != "" {
+		transcript = meeting.TranscriptB
+		usingSelectedB = true
+	}
+	if transcript == "" && meeting.Content != "" {
+		// No raw transcript at all (e.g. a manually-created meeting) --
+		// fall back to the note body with no TS-marker expectation.
+		transcript = meeting.Content
+		segments = nil
+	}
+	if transcript == "" {
+		return []model.SimRequirement{}, nil
+	}
+	// TranscriptSegments is produced against TranscriptA (the batch STT
+	// merge/diarization pipeline) -- it has no relationship to TranscriptB
+	// (Nova Sonic). If the user explicitly selected B, using segments here
+	// would silently extract from the wrong transcript entirely, defeating
+	// the point of SelectTranscript. Only trust segments when we're
+	// actually using A.
+	if usingSelectedB {
+		segments = nil
+	}
+
+	var sourceText string
+	if len(segments) > 0 {
+		var sb strings.Builder
+		for _, seg := range segments {
+			fmt.Fprintf(&sb, "[TS:%.0f] %s: %s\n", seg.StartTime, seg.Speaker, seg.Text)
+		}
+		sourceText = sb.String()
+	} else {
+		sourceText = transcript
+	}
+
+	var allowedKeys strings.Builder
+	for k, b := range AllowedSimRequirementKeys {
+		if b.numeric {
+			fmt.Fprintf(&allowedKeys, "- %s (%s): 숫자, %.0f~%.0f 범위\n", k, b.label, b.min, b.max)
+		} else {
+			fmt.Fprintf(&allowedKeys, "- %s (%s): 다음 중 하나 [%s]\n", k, b.label, strings.Join(b.enum, ", "))
+		}
+	}
+
+	systemPrompt := fmt.Sprintf(`회의 내용에서 아래 허용 목록에 있는 정량적 요구사항만 추출하세요. 목록에 없는 항목은 절대 만들지 마세요.
+
+허용 키 목록:
+%s
+각 항목을 다음 구조의 JSON 배열로 반환하세요:
+{
+  "key": <위 허용 키 중 하나>,
+  "value": <추출된 값, 문자열>,
+  "required": <이 시뮬레이션에 반드시 필요한 값이면 true>,
+  "tsMarker": <원문에 존재하는 정확한 [TS:NNN] 표식, 없으면 빈 문자열>
+}
+회의에서 명확히 언급되지 않은 값은 포함하지 마세요. 추측하거나 지어내지 마세요.
+입력의 각 줄은 [TS:NNN] 표식으로 시작합니다. 값이 언급된 줄의 표식을 tsMarker에 그대로 복사하세요 (표식이 없는 입력이면 빈 문자열).
+유효한 JSON 배열만 반환하고, 아무것도 없으면 [] 를 반환하세요.`, allowedKeys.String())
+
+	userPrompt := fmt.Sprintf("다음 회의 내용에서 정량적 요구사항을 추출하세요:\n\n%s", sourceText)
+
+	request := ClaudeRequest{
+		AnthropicVersion: "bedrock-2023-05-31",
+		MaxTokens:        2000,
+		System:           systemPrompt,
+		Messages: []ClaudeMessage{
+			{Role: "user", Content: []ContentBlock{{Type: "text", Text: userPrompt}}},
+		},
+	}
+
+	response, err := s.invokeClaudeModelWithID(ctx, request, ClaudeHaikuModelID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract sim requirements: %w", err)
+	}
+
+	return parseSimRequirements(response, segments), nil
 }
 
 // ExtractTags extracts topic tags from a meeting transcript using Claude Haiku.

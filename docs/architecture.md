@@ -122,6 +122,9 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 4. **Whisper GPU on ECS Spot (Zero-Scale)**: 벤치마크 결과 AWS Transcribe(3.5/10) 대비 Whisper GPU(7.5/10)가 품질 2배, 비용 36배 저렴.
    - *이유*: 한영 혼용 기술 회의에서 영어 약어/서비스명 인식이 압도적으로 우수. ASG min=0으로 유휴 비용 $0.
 
+5. **비용·사이징 시뮬레이터 (ADR-033)**: 사용자 버튼 → Go api Lambda가 Haiku로 정량 요구사항 추출 → 사용자 확인·보정 → `ttobak-sim`(Python) 비동기 실행 → AgentCore Code Interpreter(SANDBOX 네트워크, 빈 실행역할)에서 Sonnet이 생성한 파이썬이 실제로 계산 → 차트·리포트·코드가 S3에 저장, 프론트엔드가 5초 폴링으로 결과 확인.
+   - *이유*: LLM 추정치가 아닌 실행된 코드로 감사 가능한 비용 비교. 미팅 트랜스크립트는 코드 생성 프롬프트에 절대 도달하지 않아 인젝션 폭발 반경이 샌드박스 CPU로 제한됨.
+
 ### 아키텍처 결정 기록 (ADR)
 
 - [ADR-001: 원격 회의 시스템 오디오 캡처](decisions/ADR-001-system-audio-capture-for-remote-meetings.md) — `getDisplayMedia` + `AudioContext` 믹싱 (제안됨)
@@ -154,6 +157,8 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-028: QA 웹 검색 도구와 선제 질문 검색](decisions/ADR-028-qa-web-search-and-proactive-question-search.md) (승인됨)
 - [ADR-029: 개인 문서의 사용자 단위 공유 — 복제가 아닌 참조, 읽기 전용](decisions/ADR-029-per-user-document-sharing-by-reference.md) (승인됨)
 - [ADR-030: 모바일 실시간 자막은 녹음을 희생하지 않는다](decisions/ADR-030-mobile-live-captions-never-sacrifice-recording.md) (승인됨)
+- [ADR-032: 관리자 사용자 관리 패널](decisions/ADR-032-admin-user-management-panel.md) (승인됨)
+- [ADR-033: 미팅 기반 비용·사이징 시뮬레이터 — AgentCore Code Interpreter](decisions/ADR-033-meeting-cost-sizing-simulator-code-interpreter.md) (승인됨)
 
 ### 운영
 
@@ -225,6 +230,9 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 4. **Whisper GPU on ECS Spot (Zero-Scale)**: Per benchmarks, Whisper GPU (7.5/10) outperforms AWS Transcribe (3.5/10) — 2× quality, 36× cheaper for Korean/English mixed technical meetings. ASG min=0 means $0 idle cost. AWS Transcribe is retained as a fallback engine.
    - *Why*: Superior recognition of English acronyms/AWS service names in mixed-language meetings; cost optimization via Spot + zero-scale.
 
+5. **Cost/Sizing Simulator (ADR-033)**: User button → Go api Lambda extracts quantitative requirements via Haiku → user confirms/corrects → async `ttobak-sim` (Python) → Sonnet-generated Python actually runs inside AgentCore Code Interpreter (SANDBOX network, empty execution role) → charts/report/code land in S3, frontend polls every 5s for the result.
+   - *Why*: An auditable, actually-executed computation instead of an LLM estimate. The meeting transcript never reaches the codegen prompt, so an injection's blast radius is bounded to wasted sandbox CPU.
+
 ### Architecture Decision Records (ADR)
 
 - [ADR-001: System Audio Capture for Remote Meetings](decisions/ADR-001-system-audio-capture-for-remote-meetings.md) — `getDisplayMedia` + `AudioContext` mixing (Proposed)
@@ -257,6 +265,8 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-028: QA Web Search Tool and Proactive Question Search](decisions/ADR-028-qa-web-search-and-proactive-question-search.md) (Accepted)
 - [ADR-029: Per-User Document Sharing by Reference, Read-Only](decisions/ADR-029-per-user-document-sharing-by-reference.md) (Accepted)
 - [ADR-030: Mobile Live Captions Never Sacrifice the Recording](decisions/ADR-030-mobile-live-captions-never-sacrifice-recording.md) (Accepted)
+- [ADR-032: Admin User-Management Panel](decisions/ADR-032-admin-user-management-panel.md) (Accepted)
+- [ADR-033: Meeting-Driven Cost/Sizing Simulator — AgentCore Code Interpreter](decisions/ADR-033-meeting-cost-sizing-simulator-code-interpreter.md) (Accepted)
 
 ### Operations
 

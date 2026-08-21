@@ -125,6 +125,8 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   agentCoreRuntimeArn,
   researchWorkerRole: aiStack.researchWorkerRole,
   convertDocRole: aiStack.convertDocRole,
+  simRole: aiStack.simRole,
+  simCodeInterpreterId: aiStack.simCodeInterpreter.codeInterpreterId,
   // Same pre-existing VPC WhisperStack uses (ec2.Vpc.fromLookup) --
   // convert-doc's PRIVATE_ISOLATED placement below is a GatewayStack
   // resource, not a WhisperStack dependency.

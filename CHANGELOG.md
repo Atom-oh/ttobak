@@ -16,6 +16,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Editable research title, distinct from the immutable original research prompt (`PUT /api/research/{researchId}`)
+- Admin user-management panel: list/delete/enable/disable/resend-invite/force-reset-password for Cognito users, with a fail-open PostAuthentication trigger recording last-login timestamps (ADR-032)
+- Meeting-driven cost/sizing simulator: extracts quantitative requirements from a meeting, runs a Sonnet-generated Python computation in AgentCore Code Interpreter to compare architecture options (ADR-033)
+- PendingShare queue: Account/Meeting shares to an invited-but-not-yet-logged-in email are queued instead of failing, then materialized into a real AccountMember/Share row on the invitee's first authenticated request after accepting the invite (`DELETE /api/accounts/{accountId}/members/pending`, `DELETE /api/meetings/{meetingId}/share/pending`)
+- Zoom/pan and fullscreen lightbox for mermaid diagrams rendered from meeting notes
 - Export button on Research Detail page (Copy Markdown, Download .md, Notion)
 - AI Code Review workflow with Bedrock Claude Opus 4.7 on PR open/sync
 - Insights tab URL sync (`/insights?tab=research`) for back/forward navigation
@@ -72,6 +77,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- 리서치 제목 편집 기능 — 원본 리서치 프롬프트(topic)와 분리된 편집 가능 제목(title) 추가 (`PUT /api/research/{researchId}`)
+- 관리자 사용자 관리 패널 — Cognito 사용자 목록/삭제/활성화/비활성화/초대 재발송/비밀번호 강제 재설정, fail-open PostAuthentication 트리거로 최종 로그인 시각 기록 (ADR-032)
+- 미팅 기반 비용·사이징 시뮬레이터 — 정량 요구사항 추출 후 AgentCore Code Interpreter에서 Sonnet이 생성한 파이썬으로 아키텍처 대안 비교 (ADR-033)
+- PendingShare 큐 — 아직 로그인하지 않은(초대만 된) 이메일에 대한 Account/Meeting 공유를 실패시키지 않고 대기열에 넣고, 초대받은 사용자의 첫 인증 요청에서 실제 AccountMember/Share로 전환 (`DELETE /api/accounts/{accountId}/members/pending`, `DELETE /api/meetings/{meetingId}/share/pending`)
+- 회의록 mermaid 다이어그램 확대·이동 및 전체화면 라이트박스
 - Research Detail 페이지 Export 버튼 (Markdown 복사, .md 다운로드, Notion)
 - Bedrock Claude Opus 4.7 기반 AI 코드 리뷰 워크플로우 (PR 오픈/동기화 시)
 - Insights 탭 URL 동기화 (`/insights?tab=research`) — 뒤로가기/북마크 지원

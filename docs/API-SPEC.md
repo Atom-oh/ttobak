@@ -1,6 +1,6 @@
 # TTOBAK - API Specification
 
-> Backend REST API 상세 명세
+> Backend REST API detailed specification
 
 ## Base URL
 
@@ -11,26 +11,23 @@ Local Dev:  http://localhost:8080/api
 
 ## Authentication
 
-모든 API 요청은 Cognito JWT를 필요로 합니다.
+Every API request requires a Cognito JWT.
 
-- Lambda@Edge가 CloudFront Viewer Request에서 JWT 검증
-- API Gateway HTTP API: Lambda@Edge 통과 후 Lambda 직접 호출
-- API Gateway WebSocket API: Cognito Authorizer로 $connect 시 인증
-- Backend Lambda는 요청 컨텍스트에서 `sub` (userId)를 추출하여 사용
-- 프론트엔드에서 직접 호출 시: `Authorization: Bearer {idToken}` 헤더 사용
+- Lambda@Edge verifies the JWT on the CloudFront Viewer Request
+- API Gateway HTTP API: Lambda invoked directly after Lambda@Edge passes
+- API Gateway WebSocket API: Cognito Authorizer verifies at `$connect`
+- The backend Lambda extracts `sub` (userId) from the request context
+- Direct frontend calls use `Authorization: Bearer {idToken}`
 
-## Download URL 형태 (ADR-027)
+## Download URL shape (ADR-027)
 
-API가 반환하는 모든 다운로드 URL(`downloadUrl`, `previewUrl`, `audioUrl`/
-`audioUrls[]`, 첨부 `url`, 공개 공유 302 Location)은 CloudFront 서명 URL이다:
+All download URLs the API returns (`downloadUrl`, `previewUrl`, `audioUrl`/`audioUrls[]`, attachment `url`, the public-share 302 Location) are CloudFront-signed URLs:
 
 ```
 https://{domain}/media/{s3Key}?Expires=...&Signature=...&Key-Pair-Id=...
 ```
 
-TTL 시맨틱은 이전 S3 presign과 동일(기본 1시간, 공개 공유 5분). 업로드
-(`uploadUrl`, PUT)는 여전히 raw S3 presigned URL이다. 백엔드가 CloudFront
-서명 키를 못 읽으면(로컬 개발 등) S3 presigned GET URL로 폴백한다.
+TTL semantics match the previous S3 presign scheme (1 hour default, 5 minutes for public shares). Uploads (`uploadUrl`, PUT) still use raw S3 presigned URLs. If the backend can't read the CloudFront signing key (local dev, etc.), it falls back to an S3 presigned GET URL.
 
 ## Endpoints
 
@@ -62,7 +59,7 @@ Response: 200 OK
       "title": "Product Strategy Sync",
       "date": "2026-03-05T10:00:00Z",
       "status": "done",           // recording | transcribing | summarizing | done | error
-      "summary": "AI 요약 미리보기 (첫 200자)...",
+      "summary": "AI summary preview (first 200 chars)...",
       "participants": ["Alice", "Bob"],
       "tags": ["Internal"],
       "sentiment": "positive",    // positive | neutral | negative, omitted until analyzed
@@ -114,10 +111,10 @@ Response: 200 OK
   "date": "2026-03-05T10:00:00Z",
   "status": "done",
   "participants": ["Alice", "Bob", "Charlie"],
-  "content": "# 회의록\n\n## 안건\n...",     // Markdown
-  "liveSummary": "## 실시간 요약\n...",       // Markdown incl. mermaid, built during recording (omitted if never saved)
-  "transcriptA": "Transcribe 결과 전체 텍스트...",
-  "transcriptB": "Nova 2 Sonic 결과 전체 텍스트...",
+  "content": "# Meeting Notes\n\n## Agenda\n...",     // Markdown
+  "liveSummary": "## Live Summary\n...",              // Markdown incl. mermaid, built during recording (omitted if never saved)
+  "transcriptA": "Full text of Transcribe result...",
+  "transcriptB": "Full text of Nova 2 Sonic result...",
   "selectedTranscript": "A",                    // "A" | "B" | null
   "audioKey": "audio/user-uuid/meeting-uuid.webm",
   "notionPageId": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d", // owner only, omitted for shared users; set once exported to Notion, re-export updates this page in place
@@ -129,7 +126,7 @@ Response: 200 OK
       "processedKey": "processed/user-uuid/photo1-mermaid.md",
       "type": "diagram",                        // photo | screenshot | diagram | whiteboard
       "status": "done",                         // uploaded | processing | done
-      "description": "시스템 아키텍처 다이어그램",
+      "description": "System architecture diagram",
       "processedContent": "```mermaid\ngraph TD\n...\n```"
     }
   ],
@@ -157,7 +154,7 @@ Request:
   "title": "Updated Title",                     // optional
   "content": "# Updated markdown...",           // optional
   "notes": "In-meeting notes...",               // optional, see semantics below
-  "liveSummary": "## 실시간 요약\n...",          // optional, same omit-vs-empty semantics as notes
+  "liveSummary": "## Live Summary\n...",        // optional, same omit-vs-empty semantics as notes
   "selectedTranscript": "B",                    // optional
   "participants": ["Alice", "Bob", "David"],    // optional
   "status": "done"                              // optional
@@ -186,9 +183,9 @@ Error: 403 Forbidden (only owner can delete)
 
 ### Accounts
 
-고객사(Account)는 팀이 공유하는 1급 엔티티다. 생성자는 자동으로 `owner` 멤버가 되며, owner만 멤버를 추가할 수 있다. 멤버십(역할 owner/AM/TAM/SSA/SA/SA Manager/AM Manager — 지정 가능 목록은 `model.AssignableRoles`)이 곧 접근 권한이다. 모든 엔드포인트는 인증 필요.
+An Account (customer) is a first-class entity shared by a team. Its creator automatically becomes the `owner` member, and only the owner can add members. Membership (role: owner/AM/TAM/SSA/SA/SA Manager/AM Manager — the assignable list is `model.AssignableRoles`) is the access control mechanism. All endpoints require auth.
 
-#### List Accounts (내 Account 목록)
+#### List Accounts (my accounts)
 
 ```
 GET /api/accounts
@@ -198,14 +195,14 @@ Response: 200 OK
   "accounts": [
     {
       "accountId": "uuid",
-      "name": "하나은행",
+      "name": "Acme Bank",
       "role": "owner"            // owner | AM | TAM | SSA | SA | SA Manager | AM Manager
     }
   ]
 }
 ```
 
-내가 멤버인 Account만 반환한다(GSI1 역조회).
+Returns only accounts I'm a member of (GSI1 reverse lookup).
 
 #### Create Account
 
@@ -213,18 +210,18 @@ Response: 200 OK
 POST /api/accounts
 Request:
 {
-  "name": "하나은행",
-  "aliases": ["Hana Bank"],     // optional, 태그 별칭 매핑
-  "domains": ["hanafn.com"],    // optional
-  "industry": "Finance"         // optional
+  "name": "Acme Bank",
+  "aliases": ["Acme Financial"], // optional, tag-alias mapping
+  "domains": ["acmebank.com"],   // optional
+  "industry": "Finance"          // optional
 }
 
 Response: 201 Created
 {
   "accountId": "uuid",
-  "name": "하나은행",
-  "aliases": ["Hana Bank"],
-  "domains": ["hanafn.com"],
+  "name": "Acme Bank",
+  "aliases": ["Acme Financial"],
+  "domains": ["acmebank.com"],
   "industry": "Finance",
   "ownerUserId": "owner-uuid",
   "members": [
@@ -233,10 +230,10 @@ Response: 201 Created
   "createdAt": "2026-05-30T10:00:00Z"
 }
 
-Error: 400 Bad Request (name이 비어있음)
+Error: 400 Bad Request (empty name)
 ```
 
-생성자는 자동으로 `owner` 역할의 멤버가 된다.
+The creator automatically becomes an `owner` member.
 
 #### Get Account Detail
 
@@ -246,9 +243,9 @@ GET /api/accounts/{accountId}
 Response: 200 OK
 {
   "accountId": "uuid",
-  "name": "하나은행",
-  "aliases": ["Hana Bank"],
-  "domains": ["hanafn.com"],
+  "name": "Acme Bank",
+  "aliases": ["Acme Financial"],
+  "domains": ["acmebank.com"],
   "industry": "Finance",
   "ownerUserId": "owner-uuid",
   "members": [
@@ -258,18 +255,18 @@ Response: 200 OK
   "createdAt": "2026-05-30T10:00:00Z"
 }
 
-Error: 403 Forbidden (멤버가 아님)
-Error: 404 Not Found (Account 없음)
+Error: 403 Forbidden (not a member)
+Error: 404 Not Found (account doesn't exist)
 ```
 
-#### Add Member (owner 전용)
+#### Add Member (owner only)
 
 ```
 POST /api/accounts/{accountId}/members
 Request:
 {
-  "email": "tam@example.com",   // 기존 등록 사용자의 이메일
-  "role": "TAM"                 // AM | TAM | SSA | SA | SA Manager | AM Manager (owner는 지정 불가)
+  "email": "tam@example.com",   // a registered OR invited-but-not-yet-logged-in user's email
+  "role": "TAM"                 // AM | TAM | SSA | SA | SA Manager | AM Manager (owner can't be assigned)
 }
 
 Response: 201 Created
@@ -279,18 +276,56 @@ Response: 201 Created
   "role": "TAM"
 }
 
-Error: 403 Forbidden (owner가 아님)
-Error: 404 Not Found (해당 이메일의 사용자 없음)
-Error: 400 Bad Request (이미 멤버이거나 잘못된 역할)
+// If email belongs to a Cognito user who has been invited (admin-created)
+// but never completed a first login, the grant is queued instead of
+// rejected -- it materializes into a real membership on that email's next
+// ListMeetings/CreateMeeting call after logging in (see PendingShare in
+// backend/internal/model). The queued grant is not listed anywhere
+// (revoke by re-submitting the same email, below, not by finding it in a
+// list) and is un-claimable after a 30-day TTL enforced synchronously in
+// application code; DynamoDB's own table TTL sweep (scoped to a distinct
+// `pendingShareExpiresAt` attribute, not QA's `TTL`) later physically
+// reclaims rows nobody ever revoked or claimed -- see PendingShare's
+// doc comment.
+Response: 201 Created
+{
+  "email": "tam@example.com",
+  "role": "TAM",
+  "pending": true                 // userId omitted -- not yet known
+}
+
+Error: 403 Forbidden (not the owner)
+Error: 404 Not Found (email has never been invited at all)
+Error: 400 Bad Request (already a member, or invalid role)
 ```
 
-#### Update Member Role (owner 전용)
+#### Revoke Pending Member Invite (owner only)
+
+```
+DELETE /api/accounts/{accountId}/members/pending?email={email}
+
+Cancels a queued PendingShare account invite before the target has ever
+logged in (no userId exists yet, so this can't go through DELETE
+.../members/{userId}). A DeleteItem on an already-gone/never-existed row
+that never resolves to a live member is a silent no-op -- "revoked" and
+"there was nothing to revoke" both return 204. If the row is gone because
+MaterializePendingShares won the race (the invitee logged in and claimed
+the grant first), this returns 409 instead of a silent success -- the
+caller would otherwise believe access was revoked while it's still live.
+
+Response: 204 No Content
+Error: 403 Forbidden (not the owner)
+Error: 400 Bad Request (missing email query parameter)
+Error: 409 Conflict (already claimed by materialize -- remove via Members instead)
+```
+
+#### Update Member Role (owner only)
 
 ```
 PUT /api/accounts/{accountId}/members/{userId}
 Request:
 {
-  "role": "AM"                  // AM | TAM | SSA | SA | SA Manager | AM Manager (owner로는 변경 불가)
+  "role": "AM"                  // AM | TAM | SSA | SA | SA Manager | AM Manager (cannot change to owner)
 }
 
 Response: 200 OK
@@ -300,44 +335,44 @@ Response: 200 OK
   "role": "AM"
 }
 
-Error: 403 Forbidden (owner가 아님)
-Error: 404 Not Found (해당 멤버 없음)
-Error: 400 Bad Request (잘못된 역할이거나 대상이 owner)
+Error: 403 Forbidden (not the owner)
+Error: 404 Not Found (member doesn't exist)
+Error: 400 Bad Request (invalid role, or target is the owner)
 ```
 
-#### Remove Member (owner 전용)
+#### Remove Member (owner only)
 
 ```
 DELETE /api/accounts/{accountId}/members/{userId}[?force=true]
 
-Response: 204 No Content (모든 미팅의 Share cleanup까지 완전히 성공한 경우)
-Response: 200 OK (force=true였고, 멤버십 삭제는 성공했으나 일부 미팅의 Share cleanup이 실패했거나 origin 태그가 없는 모호한 Share가 발견된 경우)
+Response: 204 No Content (membership deleted and Share cleanup for all meetings fully succeeded)
+Response: 200 OK (force=true; membership deleted, but Share cleanup failed for some meetings, or an ambiguous untagged Share was found)
 {
   "removed": true,
   "cleanupFailedForMeetings": ["meeting-id-1", "meeting-id-2"],
   "ambiguousUntaggedMeetingIDs": ["meeting-id-3"]
 }
 
-Error: 403 Forbidden (owner가 아님)
-Error: 404 Not Found (해당 멤버 없음)
-Error: 400 Bad Request (owner는 제거 불가)
-Error: 400 Bad Request (force=true 없이 호출했는데 대상이 origin=="account"가 아닌 — 즉 모호한 — Share를 이 account와 연결된 미팅에 하나라도 보유. 멤버십은 삭제되지 않고 그대로 유지됨. ?force=true로 재시도하면 진행되며, 그 경우 응답은 위 200 분기와 동일한 바디를 가짐)
-Error: 500 Internal Server Error (cleanup 대상 미팅 목록 조회 자체가 실패 — 멤버십은 삭제되지 않고 그대로 유지되므로 안전하게 재시도 가능)
+Error: 403 Forbidden (not the owner)
+Error: 404 Not Found (member doesn't exist)
+Error: 400 Bad Request (owner can't be removed)
+Error: 400 Bad Request (called without force=true, and the target holds at least one Share on an account-linked meeting whose origin isn't tagged "account" — i.e. ambiguous. Membership is NOT deleted; retry with ?force=true, which returns the same body as the 200 case above)
+Error: 500 Internal Server Error (failed to list meetings to check for cleanup — membership is untouched, safe to retry)
 ```
 
-> 멤버십 삭제는 per-user Share 레코드가 없는 미팅에 대한 새 접근을 즉시 차단합니다. 기존 Share 레코드가 있는 미팅은 같은 `RemoveMember` 요청 안에서 account의 전체 MeetingRef 목록을 순회하는 best-effort cleanup이 account-origin Share만 회수합니다. 이 처리는 N개 미팅 전체에 대해 즉시 완료되는 작업이 아니며 멤버십 삭제와 트랜잭션으로 묶이지 않습니다. 소유자가 별도로 부여한 direct Share는 삭제하지 않습니다.
+> Removing membership immediately blocks new access to meetings that have no per-user Share record. For meetings that do have a Share record, the same `RemoveMember` request does a best-effort cleanup across the account's meeting refs, but only reclaims Shares tagged `origin=="account"`. This isn't atomic with the membership delete, and doesn't touch direct Shares the owner granted separately.
 >
-> **`force` 파라미터 (fail-closed 기본값)**: `Origin != "account"`인 Share(실질적으로 `Origin==""`)는 owner가 명시적으로 부여한 direct grant일 수도, `Origin` 필드 도입 이전에 쓰인 legacy account-share일 수도 있으며 이 시스템은 둘을 구분할 수 없습니다(자세한 내용은 [ADR-023](decisions/ADR-023-share-origin-provenance-and-legacy-migration.md)). `force`가 없으면 `RemoveMember`는 대상이 이런 모호한 Share를 하나라도 보유한 순간 **멤버십 삭제 자체를 거부**합니다(400, 멤버십은 그대로 유지) — 이전 라운드처럼 멤버십을 삭제하고 나서야 모호성을 응답에 보고하는 fail-open 방식이 아닙니다. `?force=true`를 넘기면 이 precheck를 건너뛰고 멤버십을 삭제하며, 모호한 Share는 그대로 두고 `ambiguousUntaggedMeetingIDs`에 보고합니다. precheck 도중 발생하는 조회 오류(일시적 DynamoDB 오류 포함)는 **500으로 응답하고 멤버십을 그대로 유지**합니다(재시도 가능) — 이 precheck 자체가 접근-잔존 갭을 닫는 보안 게이트이므로 일시 오류를 관대하게 넘기면 그 갭이 다시 열리기 때문입니다. 이 판정은 `SharedToAccount`가 true인 미팅만 대상으로 합니다 — `AccountID`만 설정되고 `SharedToAccount`가 false인 Link-only 미팅의 Share는 team-share grant와 무관하므로 차단 대상이 아니며 그대로 둡니다.
+> **`force` parameter (fail-closed default)**: a Share whose `Origin != "account"` (effectively `Origin==""`) could be either an owner-granted direct grant or a legacy account-share predating the `Origin` field — the system can't tell which (see [ADR-023](decisions/ADR-023-share-origin-provenance-and-legacy-migration.md)). Without `force`, `RemoveMember` refuses the membership delete outright (400, membership untouched) the moment the target holds any such ambiguous Share — it does not fail-open by deleting membership first and reporting ambiguity after the fact. `?force=true` skips this precheck, deletes membership, leaves ambiguous Shares alone, and reports them in `ambiguousUntaggedMeetingIDs`. A lookup error during the precheck (including transient DynamoDB errors) returns 500 and leaves membership intact (safe to retry) — the precheck itself is a security gate, so tolerating transient errors here would reopen the gap it closes. This check only applies to meetings with `SharedToAccount == true`; link-only meetings (`AccountID` set, `SharedToAccount` false) are unaffected.
 >
-> **미팅 목록 조회 자체의 실패**: cleanup 대상을 정하기 위한 `ListMeetingRefsForAccount` 호출은 멤버십 삭제 **이전**에 실행됩니다 — 이 호출이 실패하면 멤버십은 삭제되지 않은 채 500으로 응답하므로, 호출자는 동일 요청을 안전하게 재시도할 수 있습니다(멤버십이 이미 지워진 뒤라면 재시도가 404가 되어버려 재시도할 방법이 없었던 이전 동작을 수정).
+> **Meeting-list lookup failure**: the `ListMeetingRefsForAccount` call used to determine cleanup targets runs *before* the membership delete — if it fails, membership stays intact and the caller gets 500, so the same request is safely retryable.
 >
-> **Cleanup 실패가 접근을 잔존시키지 않음**: 특정 미팅의 cleanup(Share 조회/삭제)이 실패하는 경우는 로그뿐 아니라 응답 바디의 `cleanupFailedForMeetings`로도 노출됩니다 — 하지만 이 cleanup은 접근 통제의 유일한 수단이 아닙니다. `origin=="account"` Share row를 무조건 신뢰하지 않고 **현재 account membership을 읽기 시점에 즉시 재검증**하는 로직이 이 row를 보는 모든 read path에 적용됩니다: 미팅 상세(`checkAccess`), 미팅 목록(`ListMeetings` — 제목/요약 같은 메타데이터도 상세 뷰와 동일하게 차단), KB Q&A(`KnowledgeService.Ask` — 현재 어떤 Lambda 라우트에도 연결되지 않은 미사용 코드지만 향후 재사용 대비 동일 로직 적용), Python Q&A Lambda(`backend/python/qa/handler.py`의 `_list_shared_meetings`). Python 경로에서 `SHARED_MEETINGS_CACHE_TTL_SECONDS`(기본 300초) 동안 캐싱되는 것은 어느 미팅이 공유돼 있는지의 **불변 식별자(meetingId/ownerId)뿐**이며, 각 share가 여전히 존재하는지·현재 origin이 무엇인지·미팅의 `sharedToAccount` 상태·account membership은 모두 매 호출마다 캐시 없이 재조회합니다 — 제거는 그 TTL과 무관하게 다음 QA 요청부터 즉시 반영됩니다. KB 검색결과 캐시(`KB_CACHE_TTL_SECONDS`, 기본 600초)도 조회 시점에 이 live 재검증으로 만든 접근 서명(access signature)을 함께 저장·대조하므로, 캐시된 이후 접근이 바뀌면(제거, un-share 등) 같은 질문을 다시 물어도 stale 결과가 나가지 않고 캐시 미스로 처리돼 새로 조회합니다. 따라서 cleanup 삭제 자체가 실패해 stale Share row가 남아 있어도 제거된 멤버는 다음 읽기부터 즉시 접근을 잃습니다. `cleanupFailedForMeetings`는 여전히 유용한 시그널이지만(운영자가 stale row를 정리하고 싶을 때), 접근을 즉시 차단하기 위해 필요한 것은 아닙니다.
+> **A cleanup failure never leaves access behind**: per-meeting cleanup failures surface in the response's `cleanupFailedForMeetings`, but cleanup isn't the only access control. Every read path re-verifies current account membership live rather than trusting an `origin=="account"` Share row: meeting detail (`checkAccess`), meeting list (`ListMeetings`), KB Q&A (`KnowledgeService.Ask`, currently unused/unwired but kept consistent for future reuse), and the Python QA Lambda (`_list_shared_meetings`). The Python path caches only the immutable identifiers of which meetings are shared (`SHARED_MEETINGS_CACHE_TTL_SECONDS`, default 300s) — live membership/origin/`sharedToAccount` are re-checked on every call, so removal takes effect on the next QA request regardless of that TTL. The KB search cache (`KB_CACHE_TTL_SECONDS`, default 600s) stores an access signature alongside cached results and treats an access change as a cache miss. So a stale Share row alone can't restore access even if cleanup itself failed; `cleanupFailedForMeetings` is a useful signal for tidying stale rows, not a security requirement.
 >
-> **이 보장이 적용되지 않는 경우**: `Origin` 필드 도입 이전에 쓰인 legacy share(`origin==""`)는 direct grant와 구분 불가능하므로 이 재검증 대상이 아니며 무조건 신뢰됩니다 — backfill CLI로 `origin=account` 태그를 소급 부여하기 전까지는 멤버 제거로 회수되지 않습니다. 아래 Known limitation 참고.
+> **Where this guarantee doesn't apply**: legacy shares predating the `Origin` field (`origin==""`) are indistinguishable from direct grants and are trusted unconditionally until backfilled via the CLI below.
 >
-> **Known limitation & remediation**: 이 수정 배포 전에 `share-account`가 생성한 Share 레코드는 origin 태그가 없어 direct grant로 취급되므로, `RemoveMember`의 cleanup이 자동으로 회수하지 못합니다. `force`를 넘기지 않으면 이제 이 경우 제거 자체가 차단되므로(위 참고), 조용히 접근이 잔존하는 케이스는 owner가 `force=true`를 명시적으로 선택한 경우로 좁혀집니다 — 그 경우 응답의 `ambiguousUntaggedMeetingIDs`로 어떤 미팅이 영향받는지 확인 가능합니다. 이 목록은 정밀한 legacy 판정이 아니라 **거친(coarse) 시그널**입니다: 제거된 멤버가 account와 연결된 미팅에 별도의 direct Share도 보유한 경우에는 legacy account-share의 실제 존재 여부와 무관하게 그 미팅도 목록에 포함되므로, 항목이 있다는 사실만으로 반드시 backfill이 필요한 legacy share라고 판단해서는 안 됩니다. `backend/cmd/backfill-share-origin` CLI(운영자가 `--account-id` 단위로 직접 실행, 기본 dry-run·`--apply`로 확정)가 이런 과거 레코드에 `origin=account`(및 `accountId`) 태그를 소급 부여해 이후 `RemoveMember` cleanup 대상이 되도록(그리고 force 없이도 제거가 차단되지 않도록) 만드는 remediation 경로다. **주의**: 이 CLI는 태깅 여부가 모호한 후보(같은 미팅이 account와 direct 양쪽으로 공유된 경우 두 origin이 구분되지 않음)를 자동으로 구별하지 못한다 — `--apply` 실행 시 dry-run에서 출력된 CANDIDATE 전부가 예외 없이 태깅되므로, 신뢰할 수 없는 후보는 `--apply` 전에 반드시 `--exclude userId1:meetingId1,userId2:meetingId2,...`로 명시적으로 제외해야 한다(그렇지 않으면 direct grant가 `origin=account`로 오태깅되고, 이후 `RemoveMember`가 owner가 명시적으로 부여한 공유를 자동 회수할 수 있다). 이 CLI는 미팅 기준으로 Share row를 직접 열거하므로(현재 멤버십을 거치지 않음) 이미 계정에서 제거된 사용자의 legacy share도 후보로 찾아 태깅할 수 있습니다 — 다만 backfill을 멤버 제거보다 먼저 실행하는 쪽이 여전히 마찰 없는 경로입니다. **한 가지는 이 CLI로도 태깅할 수 없습니다**: 미팅이 이후 이 account에서 un-share되거나 다른 account로 재공유된 경우, 그 미팅의 legacy share는 `ORPHANED`로만 보고되고 절대 태깅되지 않습니다(어느 account 소속으로 태깅해야 할지 안전하게 추론할 수 없기 때문) — 이 경우는 미팅 owner에게 확인 후 owner가 직접 `RevokeShare`로 정리해야 하는, 의도적으로 수동인 remediation 경로입니다. 전체 설계 배경과 검토한 대안은 [ADR-023](decisions/ADR-023-share-origin-provenance-and-legacy-migration.md) 참고.
+> **Known limitation & remediation**: Share records created by `share-account` before this fix has no origin tag and is treated as a direct grant, so `RemoveMember`'s cleanup can't auto-reclaim it. Since removal without `force` is now blocked in that case, silent lingering access is now confined to cases where the owner explicitly passes `force=true` — `ambiguousUntaggedMeetingIDs` in the response identifies affected meetings, though as a coarse signal (a meeting also appears there if the removed member holds a separate direct Share, regardless of whether a legacy account-share actually exists). `backend/cmd/backfill-share-origin` (operator-run per `--account-id`, dry-run by default, `--apply` to commit) retroactively tags such records with `origin=account` so they become subject to cleanup. This CLI can't distinguish an ambiguous candidate automatically (same meeting shared both via account and directly) — untrustworthy candidates must be excluded via `--exclude userId1:meetingId1,...` before `--apply`, or a direct grant risks being mistagged as account-origin and later auto-reclaimed. It enumerates by meeting rather than current membership, so it can also tag legacy shares for users already removed — running backfill before removing a member is still the friction-free path. One case it can never tag: a meeting later un-shared from this account or re-shared to another — that share is reported `ORPHANED` and left for the meeting owner to clean up manually via `RevokeShare`. Full design background: [ADR-023](decisions/ADR-023-share-origin-provenance-and-legacy-migration.md).
 
-#### List Account Meetings (공유된 미팅 목록 — 멤버 전용)
+#### List Account Meetings (shared meetings — members only)
 
 ```
 GET /api/accounts/{accountId}/meetings
@@ -348,23 +383,21 @@ Response: 200 OK
     {
       "meetingId": "uuid",
       "ownerUserId": "owner-uuid",
-      "title": "ROSA 리뷰",
+      "title": "ROSA Review",
       "date": "2026-05-30T10:00:00Z"
     }
   ]
 }
 
-Error: 403 Forbidden (멤버가 아님)
-Error: 404 Not Found (Account 없음)
+Error: 403 Forbidden (not a member)
+Error: 404 Not Found (account doesn't exist)
 ```
 
-#### List Account Insights (인사이트 raw material — 멤버 전용)
+#### List Account Insights (raw insight material — members only)
 
-미팅에서 추출되어 Account 파티션에 팬아웃된 8유형 인사이트를 조회한다.
-`from`/`to`는 선택적 기간 필터(RFC3339), `types`는 선택적 유형 필터(콤마 구분).
-기간·유형 필터는 서비스 레이어에서 client-side로 적용된다(spec §6.3).
+Returns the 8 insight types extracted from meetings and fanned out to the Account's partition. `from`/`to` are optional RFC3339 time-range filters; `types` is an optional comma-separated type filter — both applied client-side in the service layer (§6.3).
 
-유형(type) 8종: `trend`, `need`, `competitive`, `risk`, `opportunity`, `tech`, `stakeholder`, `action`
+8 insight types: `trend`, `need`, `competitive`, `risk`, `opportunity`, `tech`, `stakeholder`, `action`
 
 ```
 GET /api/accounts/{accountId}/insights?from=<RFC3339>&to=<RFC3339>&types=risk,opportunity
@@ -374,9 +407,9 @@ Response: 200 OK
   "insights": [
     {
       "type": "risk",
-      "text": "PoC 일정 2개월 지연 가능",
-      "implication": "Q3 갱신 협상 전 PoC 결과가 나오지 않을 위험",
-      "nextAction": "인프라 승인 상태를 TAM이 이번 주 확인",
+      "text": "PoC schedule may slip by 2 months",
+      "implication": "Risk that PoC results won't be ready before Q3 renewal negotiation",
+      "nextAction": "TAM to confirm infra approval status this week",
       "sourceType": "meeting",
       "sourceId": "meeting-uuid",
       "occurredAt": "2026-05-12T09:00:00Z",
@@ -387,37 +420,24 @@ Response: 200 OK
 }
 ```
 
-`implication`(함의)/`nextAction`(권장 조치)은 모두 선택 필드로,
-`ExtractInsights`(Bedrock Haiku)가 구조화된 근거를 함께 생성할 때 채워진다 —
-이전에는 `type`/`text`만 있었다. `ExtractInsights`는 `evidence`(발언
-준-verbatim 인용)도 함께 생성하지만, account/project 파티션으로 팬아웃되는
-이 응답에는 **의도적으로 포함되지 않는다** — 미팅 접근권 없는 account/project
-멤버가 원본 발언 인용을 읽게 되는 노출을 막기 위함(`BuildAccountInsights`,
-`meeting.go`). `evidence`는 미팅 자체의 `Insights` JSON을 통해 미팅 접근권이
-있는 사용자에게만 노출된다. `Project.Insights`
-(`GET /api/projects/{projectId}/insights`, `GET /api/projects/{projectId}/brief`)도
-같은 스키마(프론트엔드 타입 `FieldInsight`, `frontend/src/types/meeting.ts` — 백엔드는 `MeetingInsight`/`ProjectInsightDTO`)와 같은 팬아웃 정책을 공유한다.
+`implication`/`nextAction` are optional fields, populated when `ExtractInsights` (Bedrock Haiku) generates structured reasoning alongside the insight — earlier versions only had `type`/`text`. `ExtractInsights` also generates `evidence` (a near-verbatim quote), but it is **deliberately excluded** from this fanned-out response, to avoid exposing raw quotes to account/project members without access to the source meeting (`BuildAccountInsights`, `meeting.go`). `evidence` is only exposed via the meeting's own `Insights` JSON, to users with meeting access. `Project.Insights` (`GET /api/projects/{projectId}/insights`, `GET /api/projects/{projectId}/brief`) shares the same schema (frontend type `FieldInsight`; backend `MeetingInsight`/`ProjectInsightDTO`) and the same fan-out policy.
 
 ```
-Error: 400 Bad Request (잘못된 from/to — RFC3339 아님)
-Error: 403 Forbidden (멤버가 아님)
-Error: 404 Not Found (Account 없음)
+Error: 400 Bad Request (invalid from/to — not RFC3339)
+Error: 403 Forbidden (not a member)
+Error: 404 Not Found (account doesn't exist)
 ```
 
-#### Get Account Brief (묶음 원재료 — 멤버 전용)
+#### Get Account Brief (bundled raw material — members only)
 
-Account 한 곳의 원재료(메타 + 유형별 인사이트 + 공유 미팅)를 한 번의 호출로
-묶어서 반환한다. 개인 맥북 에이전트가 SFDC/SIFT/2by2/Player Card 준비에 쓰는
-"일괄 소비"용. 기존 `GetAccount`+`ListAccountMeetings`+`ListAccountInsights`를
-서비스 레이어에서 합성하며, 멤버 게이트를 그대로 상속한다. `from`/`to`/`types`
-필터는 insights 엔드포인트와 동일하게 동작한다.
+Bundles one account's raw material (metadata + insights by type + shared meetings) into a single call — the "batch consumption" endpoint used by a local agent preparing SFDC/SIFT/2by2/Player Card material. Composes the existing `GetAccount`+`ListAccountMeetings`+`ListAccountInsights` in the service layer, inheriting the same member gate. `from`/`to`/`types` filters behave the same as the insights endpoint.
 
 ```
 GET /api/accounts/{accountId}/brief?from=<RFC3339>&to=<RFC3339>&types=risk,opportunity
 
 Response: 200 OK
 {
-  "account": { "accountId": "acc-uuid", "name": "하나은행", "members": [ ... ], ... },
+  "account": { "accountId": "acc-uuid", "name": "Acme Bank", "members": [ ... ], ... },
   "insightsByType": {
     "risk": [ { "type": "risk", "text": "...", "occurredAt": "2026-05-12T09:00:00Z", ... } ],
     "opportunity": [ ... ]
@@ -425,21 +445,30 @@ Response: 200 OK
   "meetings": [ { "meetingId": "meeting-uuid", "title": "ROSA PoC", "ownerUserId": "...", "date": "2026-05-12T09:00:00Z" } ]
 }
 
-Error: 400 Bad Request (잘못된 from/to — RFC3339 아님)
-Error: 403 Forbidden (멤버가 아님)
-Error: 404 Not Found (Account 없음)
+Error: 400 Bad Request (invalid from/to — not RFC3339)
+Error: 403 Forbidden (not a member)
+Error: 404 Not Found (account doesn't exist)
 ```
 
-#### List Account Research (연동된 리서치 목록 — 멤버 전용)
+#### Update Research (rename display title)
 
-리서치를 Account에 연동(`POST /api/research/{researchId}/accounts`,
-`DELETE /api/research/{researchId}/accounts/{accountId}` — 리서치 CRUD
-자체의 나머지 엔드포인트는 이 문서에 아직 반영되지 않은 기존 기능)한 뒤
-Account 쪽에서 조회하는 read 경로. 연동 시 `accountIds`는 DynamoDB String
-Set에 원자적 `ADD`/`DELETE`로 갱신되어 동시 연동 요청 간 write race가 없다.
-조회 시 각 항목의 `accountIds`가 실제로 대상 accountId를 포함하는지
-재검증한다(fail-closed) — 연동 해제 후 역참조(`ACCOUNT#{id}/RESEARCH_REF#`)
-정리가 실패해도 목록에는 노출되지 않는다.
+`Research.Title` is a user-editable display label, defaulting to `Topic` (the original research prompt) at creation. `Topic` itself is permanently immutable — the agent pipeline (research-worker, research-agent) acts on `Topic`, so a rename must never look like it changed what was researched. `AccountResearchRef`/`ProjectResearchRef` (denormalized link snapshots) still carry only `Topic`, not `Title` — a rename does not propagate to those.
+
+```
+PUT /api/research/{researchId}
+{ "title": "새 제목" }
+
+Response: 200 OK
+{ "researchId": "r-uuid" }
+
+Error: 400 Bad Request (title empty or longer than 200 chars)
+Error: 403 Forbidden (not the owner)
+Error: 404 Not Found (research doesn't exist)
+```
+
+#### List Account Research (linked research — members only)
+
+Read path for research tasks linked to an Account (`POST /api/research/{researchId}/accounts`, `DELETE /api/research/{researchId}/accounts/{accountId}` — the rest of research CRUD is existing functionality not yet documented here). On link, `accountIds` is updated with an atomic DynamoDB String Set `ADD`/`DELETE`, so concurrent link requests don't race. Reads re-verify each result's `accountIds` actually contains the target accountId (fail-closed) — a failed reverse-index cleanup after unlinking never leaks a stale entry into the list.
 
 ```
 GET /api/accounts/{accountId}/research
@@ -447,87 +476,66 @@ GET /api/accounts/{accountId}/research
 Response: 200 OK
 { "research": [ { "researchId": "r-uuid", "topic": "...", "summary": "...", "status": "done", "ownerUserId": "...", "createdAt": "..." } ] }
 
-Error: 403 Forbidden (멤버가 아님)
+Error: 403 Forbidden (not a member)
 ```
 
-#### Put Account Document (로컬 문서 인제스트 — 멤버 전용)
+#### Put Account Document (ingest a local document — members only)
 
-로컬에서 작성한 문서(이메일/캘린더/prep 노트 등)를 Account에 인라인 마크다운
-(≤300KB)으로 저장해 비-Obsidian 팀원도 TTOBAK에서 열람한다. 출처 규칙 루프 차단:
-`ttobak_id` frontmatter가 있는 TTOBAK-원본 문서는 거부한다.
+Stores a locally-authored document (email notes, calendar, prep notes, etc.) into an Account as inline markdown (≤300KB), so non-Obsidian teammates can read it in TTOBAK. A loop-guard rejects any TTOBAK-originated document (identified by `ttobak_id` frontmatter).
 
-`docType`은 자유 문자열이다 (`"prep"`/`"reference"` 등 기존 값과 문서 허브 v2가
-UI에 노출하는 `"note"`/`"blog"`/`"slide"`가 모두 동일 필드를 공유하며, 서버는
-enum 검증을 하지 않는다). `markdown`에 포함된 `[[문서명]]`, `[[문서명|별칭]]`,
-`[[문서명#절]]` 형태의 위키링크는 저장 시 서버가 파싱해 정규화된 제목 목록을
-`links`에 저장한다 (그래프 뷰 등 향후 기능의 데이터 소스). 슬라이드(PPTX/PDF)는
-`markdown` 대신 `fileKey`(사전 발급된 presigned PUT로 업로드한 S3 키, 반드시
-`docs/{내 userId}/` 접두어)를 전달한다 — 이 put 호출 자체가 업로드 완료 기록이며
-별도의 `/api/upload/complete` 단계는 없다.
+`docType` is a free string (existing values like `"prep"`/`"reference"` and the Document Hub v2 UI's `"note"`/`"blog"`/`"slide"` all share this field; the server does no enum validation). Wikilinks in `markdown` (`[[Doc Name]]`, `[[Doc Name|Alias]]`, `[[Doc Name#Section]]`) are parsed on save into a normalized title list stored in `links` (data source for a future graph view). Slides (PPTX/PDF) pass `fileKey` instead of `markdown` (an S3 key from a presigned PUT, must be prefixed `docs/{my userId}/`) — this put call itself is the upload-complete record; there's no separate `/api/upload/complete` step.
 
 ```
 POST /api/accounts/{accountId}/documents
-{ "title": "Email notes", "markdown": "# Prep\n\n[[하나은행]] 미팅 준비...", "docType": "prep", "path": "Accounts/하나은행/prep.md" }
-{ "title": "발표자료", "docType": "slide", "fileKey": "docs/user-uuid/1234567890_deck.pdf", "fileName": "deck.pdf", "mimeType": "application/pdf", "fileSize": 123456 }
+{ "title": "Email notes", "markdown": "# Prep\n\n[[Acme Bank]] meeting prep...", "docType": "prep", "path": "Accounts/Acme Bank/prep.md" }
+{ "title": "Slide Deck", "docType": "slide", "fileKey": "docs/user-uuid/1234567890_deck.pdf", "fileName": "deck.pdf", "mimeType": "application/pdf", "fileSize": 123456 }
 
 Response: 201 Created
-{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "Accounts/하나은행/prep.md", "links": ["하나은행"], "sourceUserId": "user-uuid", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" }
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "Accounts/Acme Bank/prep.md", "links": ["Acme Bank"], "sourceUserId": "user-uuid", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" }
 
-Error: 400 Bad Request (title 누락, markdown/fileKey 둘 다 없음, 또는 markdown >300KB)
-Error: 400 Bad Request (TTOBAK 원본 — loop guard)
-Error: 403 Forbidden (멤버가 아님, 또는 fileKey가 내 userId 접두어가 아님)
-Error: 404 Not Found (Account 없음)
+Error: 400 Bad Request (missing title, neither markdown nor fileKey, or markdown >300KB)
+Error: 400 Bad Request (TTOBAK-originated — loop guard)
+Error: 403 Forbidden (not a member, or fileKey doesn't have my userId prefix)
+Error: 404 Not Found (account doesn't exist)
 ```
 
-#### List Account Documents (인제스트 문서 목록 — 멤버 전용)
+#### List Account Documents (ingested documents — members only)
 
 ```
 GET /api/accounts/{accountId}/documents?docType=prep
 
 Response: 200 OK
 { "documents": [ { "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z" } ] }
-
-`links`/`fileName`은 값이 있을 때만 나타난다(`omitempty`) — 위키링크나
-파일이 없는 문서는 필드 자체가 응답에서 생략된다(빈 배열/`null`이 아님).
-
-Error: 403 Forbidden (멤버가 아님)
-Error: 404 Not Found (Account 없음)
 ```
 
-목록은 `content`를 포함하지 않는다 (본문은 Get으로 개별 조회).
+`links`/`fileName` appear only when non-empty (`omitempty`) — a document with no wikilinks or file omits the field entirely (not an empty array/`null`).
 
-#### Get Account Document (전체 내용 — 멤버 전용)
+```
+Error: 403 Forbidden (not a member)
+Error: 404 Not Found (account doesn't exist)
+```
+
+The list omits `content` (fetch the full body via Get).
+
+#### Get Account Document (full content — members only)
 
 ```
 GET /api/accounts/{accountId}/documents/{docId}
 
 Response: 200 OK
-{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": ["하나은행"], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n\n[[하나은행]] 미팅 준비..." }
-
-슬라이드(`fileName` 있는 문서)는 `content`가 빈 문자열이고 `downloadUrl`(원본
-파일, 1시간 유효 GET URL)이 채워진다. PPTX/PPT는 추가로 `previewUrl`
-(PDF 사이드카, 변환이 끝난 뒤에만 존재 — ADR-022)이 함께 채워질 수 있다;
-`downloadUrl`은 항상 원본을 가리키고 사이드카로 바뀌지 않는다. 둘 다 값이
-없으면 필드 자체가 응답에서 생략된다.
-
-Error: 403 Forbidden (멤버가 아님)
-Error: 404 Not Found (문서 없음)
+{ "docId": "doc-uuid", "title": "Email notes", "docType": "prep", "path": "...", "links": ["Acme Bank"], "sourceUserId": "...", "createdAt": "2026-05-30T09:00:00Z", "updatedAt": "2026-05-30T09:00:00Z", "content": "# Prep\n\n[[Acme Bank]] meeting prep..." }
 ```
 
-#### Update / Delete Account Document (멤버 전용)
+A slide (a document with `fileName`) has empty `content` and a populated `downloadUrl` (the original file, 1h TTL). PPTX/PPT additionally gets `previewUrl` (PDF sidecar, present only once conversion finishes — ADR-022); `downloadUrl` always points at the original, never the sidecar. Both fields are omitted entirely when absent.
 
-Update는 필드별 "생략 시 기존 값 보존" 방식이다 — `docId`/`sourceUserId`/
-`createdAt`은 항상 보존된다. `title`만 필수(빈 문자열이면 거부); `docType`/
-`path`는 생략(빈 문자열)하면 기존 값 유지, 값을 보내면 그 값으로 교체된다.
-`markdown`은 JSON 키 자체를 생략하면 본문이 보존되고, 명시적으로 빈 문자열을
-보내면 본문이 지워진다(`*string` — nil=생략, non-nil pointer to ""=명시적
-삭제). `markdown`과 `fileKey`를 둘 다 생략하면 기존 본문/파일이 그대로
-보존된다(더 이상 오류가 아님); 둘 다 값이 있으면 거부된다(노트/블로그이거나
-슬라이드이거나, 둘 다일 수 없음). 값이 있는 `markdown`을 보내면 링크 재파싱과
-loop guard가 적용된다; 값이 있는 `fileKey`가 기존과 다르면 소유권(내 userId
-접두어)이 재검증된다. 슬라이드→노트 전환은 `markdown`만 보내면 되고(기존
-파일 필드가 함께 지워진다); 노트→슬라이드 전환은 `fileKey`만 보내면 된다
-(기존 본문이 함께 지워진다).
+```
+Error: 403 Forbidden (not a member)
+Error: 404 Not Found (document doesn't exist)
+```
+
+#### Update / Delete Account Document (members only)
+
+Update follows field-level "omit to preserve" semantics — `docId`/`sourceUserId`/`createdAt` are always preserved. `title` is required (rejected if empty); `docType`/`path` keep their existing value if omitted, or get replaced if sent. `markdown` uses `*string`: omitting the JSON key preserves the body, sending an explicit empty string clears it. Omitting both `markdown` and `fileKey` preserves whichever is currently set (no longer an error); sending both is rejected (a doc is note/blog OR slide, never both). A non-empty `markdown` re-runs link parsing and the loop guard; a changed non-empty `fileKey` re-verifies ownership (my userId prefix). Slide→note conversion: send only `markdown` (clears the file fields). Note→slide: send only `fileKey` (clears the body).
 
 ```
 PUT /api/accounts/{accountId}/documents/{docId}
@@ -539,16 +547,14 @@ Response: 200 OK
 DELETE /api/accounts/{accountId}/documents/{docId}
 Response: 204 No Content
 
-Error: 400 Bad Request (title 누락, markdown과 fileKey가 둘 다 값이 있음, markdown >300KB, 또는 TTOBAK 원본)
-Error: 403 Forbidden (멤버가 아님, 또는 fileKey가 내 userId 접두어가 아님)
-Error: 404 Not Found (문서 없음)
+Error: 400 Bad Request (missing title, both markdown and fileKey set, markdown >300KB, or TTOBAK-originated)
+Error: 403 Forbidden (not a member, or fileKey doesn't have my userId prefix)
+Error: 404 Not Found (document doesn't exist)
 ```
 
-#### Personal Documents (Account 미소속 — 소유자 전용)
+#### Personal Documents (not account-scoped — owner only)
 
-`ttobak_ask`/문서 허브 v2의 개인 노트/블로그/슬라이드. `PK: USER#{내 userId}`로
-저장되므로 소유권이 키에 내재해 있고 Account 멤버십 확인이 필요 없다. 요청/응답
-스키마는 Account 문서와 동일 (accountId 경로 세그먼트만 없음).
+Personal notes/blogs/slides for `ttobak_ask`/Document Hub v2. Stored under `PK: USER#{my userId}`, so ownership is inherent in the key and no account-membership check is needed. Request/response schemas match Account documents (just without the accountId path segment).
 
 ```
 POST   /api/documents                 { "title": "...", "markdown": "...", "docType": "note" }
@@ -557,19 +563,14 @@ GET    /api/documents/{docId}         → AccountDocumentDetail
 PUT    /api/documents/{docId}         { "title": "...", "markdown": "..." }
 DELETE /api/documents/{docId}         → 204 No Content
 
-Error: 400 Bad Request / 404 Not Found — 위 Account 문서 엔드포인트와 동일한 의미
-(멤버십 확인 자체가 없어 "멤버가 아님" 403은 없지만, foreign fileKey는 여전히
-403 Forbidden — PK가 소유권 증명일 뿐, fileKey 접두어 검증은 별도로 적용됨)
+Error: 400 Bad Request / 404 Not Found — same semantics as the Account document endpoints above
+(no membership check, so no "not a member" 403; a foreign fileKey still gets 403 —
+the PK proves ownership, fileKey-prefix validation is a separate check)
 ```
 
-#### Slide Upload (문서용 presigned URL)
+#### Slide Upload (presigned URL for documents)
 
-기존 presigned 업로드 엔드포인트(`POST /api/upload/presigned`)의 `category`에
-`"doc"`가 추가되었다. `fileType`은 `application/pdf` 또는 PowerPoint MIME(
-`application/vnd.openxmlformats-officedocument.presentationml.presentation`,
-`application/vnd.ms-powerpoint`)만 허용된다. `meetingId`는 필요 없다 (문서는
-미팅에 종속되지 않음). S3 키는 `docs/{내 userId}/{타임스탬프}_{파일명}` 형태이며, 위
-Put Document 호출의 `fileKey`로 그대로 전달한다.
+The existing presigned upload endpoint (`POST /api/upload/presigned`) gained a `"doc"` category. `fileType` only allows `application/pdf` or PowerPoint MIME types (`application/vnd.openxmlformats-officedocument.presentationml.presentation`, `application/vnd.ms-powerpoint`). `meetingId` isn't needed (documents aren't tied to a meeting). The S3 key is `docs/{my userId}/{timestamp}_{fileName}`, passed straight through as `fileKey` to Put Document.
 
 ```
 POST /api/upload/presigned
@@ -578,73 +579,38 @@ POST /api/upload/presigned
 Response: 200 OK
 { "uploadUrl": "https://...presigned-put-url...", "key": "docs/user-uuid/1234567890_deck.pdf", "expiresIn": 3600 }
 
-Error: 400 Bad Request (fileType이 pdf/PowerPoint MIME이 아님)
+Error: 400 Bad Request (fileType is not pdf/PowerPoint MIME)
 ```
 
-이후 `uploadUrl`로 파일을 직접 PUT하고, 응답의 `key`를 Put Document의
-`fileKey`로 전달한다 — `/api/upload/complete` 호출은 없다.
+PUT the file directly to `uploadUrl`, then pass the response's `key` as `fileKey` to Put Document — there's no `/api/upload/complete` call.
 
-#### Slide Preview (PPTX → PDF 변환, ADR-022)
+#### Slide Preview (PPTX → PDF conversion, ADR-022)
 
-`docs/` 접두어에 업로드된 PPTX/PPT는 별도 컨테이너 Lambda(`cmd/convert-doc`)가
-EventBridge S3 이벤트로 트리거되어 headless LibreOffice로 PDF 사이드카를
-생성한다(결정론적 키, DynamoDB 쓰기 없음 — 문서 레코드가 아직 없을 수 있기
-때문). Get Account/Personal Document 응답에서 `downloadUrl`은 **항상 원본**
-파일을 가리키고, PPTX/PPT면 변환이 끝난 뒤 `previewUrl`(PDF 사이드카)이
-별도 필드로 함께 채워진다 — `downloadUrl`이 사이드카로 바뀌는 일은 없다.
-변환이 아직 끝나지 않았으면 `previewUrl`이 생략된다(폴링해서 재조회). 별도의
-공개 REST 엔드포인트는 없다. 이 "`downloadUrl`은 절대 사이드카가 아님" 규칙은
-**JSON 응답의 필드 이름에 대한 규칙**이다 — 아래 Public Share Link의
-`GET /api/public/docs/{token}`은 필드가 아니라 302 리다이렉트 자체이고, 그
-리다이렉트 타겟은 (PPTX/PPT면) 의도적으로 사이드카를 향한다: 무인증
-방문자에게 미리보기가 목적이므로, 다른 곳과 반대로 여기서는 사이드카가
-있으면 사이드카로, 없으면 원본으로 리다이렉트한다.
+A PPTX/PPT uploaded under the `docs/` prefix triggers a separate container Lambda (`cmd/convert-doc`) via an EventBridge S3 event, which generates a PDF sidecar with headless LibreOffice (deterministic key, no DynamoDB write — the document record may not exist yet). In Get Account/Personal Document responses, `downloadUrl` **always** points at the original file; for a PPTX/PPT, `previewUrl` (the PDF sidecar) is populated separately once conversion finishes — `downloadUrl` never switches to the sidecar. `previewUrl` is omitted while conversion is still in progress (poll and re-fetch). There's no separate public REST endpoint for this. This "`downloadUrl` is never the sidecar" rule is about **JSON field names** — the Public Share Link's `GET /api/public/docs/{token}` below is a 302 redirect rather than a field, and its redirect target deliberately goes to the sidecar when one exists (an unauthenticated visitor wants a preview, so unlike everywhere else, sidecar-if-present takes priority there, falling back to the original otherwise).
 
-#### Share Document to Account (개인 문서 → 팀 복제)
+#### Share Document to Account (personal document → team copy)
 
-개인 문서를 Account 팀에 공유한다. 슬라이드/노트 모두 가능하다(코드에
-슬라이드 전용 검증은 없음 — 마크다운 문서는 본문을 그대로 복제). 슬라이드는
-참조가 아니라 **복제** — S3 `CopyObject`로 별도 키
-(`docs/{내 userId}/{ms}_{랜덤ID}_{파일명}`)에 복사하고 새 `AccountDocumentDTO`를
-만든다(원본을 덮어쓰지 않으므로 이후 원본을 바꿔도 공유본은 그대로). 위 Slide
-Upload 절의 `docs/{내 userId}/{타임스탬프}_{파일명}`과 레이아웃이 다른 것처럼
-보이지만 같은 규칙이다 — 업로드는 `{타임스탬프}_{파일명}`, 공유 복제는
-충돌 방지를 위해 `generateID()`가 끼어든 `{ms}_{랜덤ID}_{파일명}`일 뿐, 둘
-다 `docs/{userId}/` 접두어와 파일명 보존 규칙은 동일하다.
+Shares a personal document with an Account's team. Works for both slides and notes (no slide-only check in code — markdown documents copy their body as-is). A slide is **copied**, not referenced — an S3 `CopyObject` to a new key (`docs/{my userId}/{ms}_{randomId}_{fileName}`) backs a new `AccountDocumentDTO` (the original isn't overwritten, so later edits to it don't affect the shared copy). This looks like a different key layout from Slide Upload's `docs/{my userId}/{timestamp}_{fileName}`, but it's the same rule — upload uses `{timestamp}_{fileName}`, share-copy inserts a `generateID()` to avoid collisions (`{ms}_{randomId}_{fileName}`); both keep the `docs/{userId}/` prefix and preserve the filename.
 
 ```
 POST /api/documents/{docId}/share-account
 { "accountId": "acc-uuid" }
 
 Response: 201 Created
-{ "docId": "new-doc-uuid", "title": "발표자료", "docType": "slide", "fileName": "deck.pdf", ... }  (AccountDocumentDTO)
+{ "docId": "new-doc-uuid", "title": "Slide Deck", "docType": "slide", "fileName": "deck.pdf", ... }  (AccountDocumentDTO)
 
-Error: 400 Bad Request (accountId 누락)
-Error: 403 Forbidden (문서 소유자가 아님, 또는 accountId 멤버가 아님)
-Error: 404 Not Found (문서 없음)
+Error: 400 Bad Request (missing accountId)
+Error: 403 Forbidden (not the document owner, or not a member of accountId)
+Error: 404 Not Found (document doesn't exist)
 ```
 
-#### Share Document with a User (개인 문서 → 특정 사람, 참조·읽기 전용)
+#### Share Document with a User (personal document → one person, by reference, read-only)
 
-개인 문서를 다른 사용자 **한 명**에게 이메일로 공유한다. 위 Share to Account가
-S3 객체를 복제하는 것과 달리 이쪽은 **참조** — 원본 한 부만 존재하고 수신자는
-소유자가 수정한 내용을 그대로 보게 되며, 철회하면 즉시 사라진다. 항상
-**읽기 전용**이다: 리포지토리가 `permission`을 `read`로 하드코딩하고 요청
-바디에 `permission` 필드가 아예 없다(미팅 공유와 다른 점). 소유자만 발급/철회/
-목록 조회가 가능하며, 소유자가 아닌 호출자는 문서가 자기 파티션에 없으므로
-403이 아니라 404를 받는다(권한 여부를 드러내지 않는 fail-closed).
+Shares a personal document with exactly one other user by email. Unlike Share to Account (which copies the S3 object), this shares **by reference** — only one copy exists, the recipient always sees the owner's current edits, and revoking makes it disappear immediately. Always **read-only**: the repository hardcodes `permission` to `read` and the request body has no `permission` field at all (unlike meeting sharing). Only the owner can issue/revoke/list shares; a non-owner caller gets 404 rather than 403, since the document isn't in their partition (fail-closed, doesn't reveal whether the doc exists).
 
-수신자 쪽에서는 `GET /api/documents`(목록)와 `GET /api/documents/{docId}`(상세)
-응답에 소유자 이메일이 담긴 `sharedBy` 필드가 붙어 함께 반환된다 — 프론트엔드는
-이 필드를 "읽기 전용" 표시로 쓴다(`ShareButton`의 `readOnly` prop). 수신자의
-상세 응답에는 `publicShareToken`이 의도적으로 포함되지 않는다(공개 링크
-발급/철회는 소유자 고유 권한). 소유자가 문서를 삭제하면 공유 레코드는
-캐스케이드되지 않고 남지만, 목록 조회 시 조용히 건너뛴다.
+On the recipient's side, `GET /api/documents` (list) and `GET /api/documents/{docId}` (detail) both include a `sharedBy` field (owner's email) — the frontend uses it as the read-only indicator (`ShareButton`'s `readOnly` prop). The recipient's detail response deliberately omits `publicShareToken` (issuing/revoking a public link is owner-only). If the owner deletes the document, share records aren't cascaded but are silently skipped on list.
 
-내부적으로 공유 레코드는 미팅/리서치 공유와 **다른** DynamoDB 접두어
-(`SHAREDDOC#` / `DOCSHARE_TO#`, `EntityType=DOC_SHARE`)를 쓴다 — `SHARED#`를
-재사용하면 `begins_with(SK, "SHARED#")`로 읽는 공유 미팅 목록에 문서 공유가
-섞여 들어가 그쪽 페이지네이션을 오염시킨다(ADR-029).
+Internally these share records use dedicated DynamoDB prefixes (`SHAREDDOC#` / `DOCSHARE_TO#`, `EntityType=DOC_SHARE`) distinct from meeting/research sharing — reusing `SHARED#` would mix document shares into the shared-meetings list (which reads via `begins_with(SK, "SHARED#")`) and corrupt its pagination (ADR-029).
 
 ```
 POST /api/documents/{docId}/share
@@ -660,71 +626,53 @@ Response: 200 OK
 DELETE /api/documents/{docId}/share/{userId}
 Response: 204 No Content
 
-Error: 400 Bad Request (email 누락, 또는 자기 자신에게 공유 시도)
-Error: 404 Not Found (문서 없음, 호출자가 소유자가 아님 — 403 대신 404로 존재
-                       자체를 숨김 — 또는 대상 이메일의 사용자가 없음)
+Error: 400 Bad Request (missing email, or sharing with yourself)
+Error: 404 Not Found (document doesn't exist, caller isn't the owner — 404 instead of 403 to hide
+                       existence — or no user with that email)
 ```
-#### Public Share Link (개인 파일 문서 무인증 공개 링크)
 
-128비트 랜덤 토큰(`crypto/rand`)을 발급해 인증 없이 접근 가능한 링크를
-만든다. `fileKey`가 있는 문서(슬라이드/PDF 등 — 마크다운 노트는 제외)에만
-허용된다. 발급/철회는 인증된 소유자만 가능하지만, 링크 자체
-(`GET /api/public/docs/{token}`)는 CloudFront `/api/public/*` behavior에
-등록되어 있어 API Gateway JWT authorizer와 Lambda@Edge JWT 체크를 둘 다
-건너뛴다 — `/api/*`의 다른 모든 라우트가 이 두 계층을 모두 통과해야 하는 것과
-다르다(자세한 내용은
-[ADR-022](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md)).
-핸들러는 문서 내용을 직접 반환하지 않고 항상 302로 서명된 GET URL
-(`https://{domain}/media/...`, ADR-027 — 또는 PDF 사이드카가 있으면
-그쪽)로 리다이렉트한다. 발급은 동시 요청 간 원자적
-(`SetPublicShareTokenIfAbsent` 조건부 쓰기)이라 더블클릭으로 토큰 두 개가
-발급돼 한쪽이 깨지는 경우가 없다.
+#### Public Share Link (unauthenticated public link for a personal file document)
+
+Issues a 128-bit random token (`crypto/rand`) for unauthenticated access. Only allowed for documents with a `fileKey` (slides/PDFs — markdown notes are excluded). Only the authenticated owner can issue/revoke, but the link itself (`GET /api/public/docs/{token}`) is registered under the CloudFront `/api/public/*` behavior, skipping both the API Gateway JWT authorizer and the Lambda@Edge JWT check — unlike every other route under `/api/*`, which passes through both layers (see [ADR-022](decisions/ADR-022-slide-preview-conversion-and-public-share-links.md)). The handler never returns document content directly — it always 302-redirects to a signed GET URL (`https://{domain}/media/...`, ADR-027 — or the PDF sidecar if one exists). Issuing is atomic across concurrent requests (`SetPublicShareTokenIfAbsent` conditional write), so a double-click can't mint two tokens and orphan one.
 
 ```
 POST /api/documents/{docId}/public-share
 Response: 200 OK
-{ "token": "8f2c...랜덤128비트..." }
+{ "token": "8f2c...128-bit-random..." }
 
 DELETE /api/documents/{docId}/public-share
 Response: 204 No Content
 
-GET /api/public/docs/{token}   (인증 헤더 없음)
-Response: 302 Found → Location: <5분 유효 서명 GET URL (https://{domain}/media/...)>
+GET /api/public/docs/{token}   (no auth header)
+Response: 302 Found → Location: <signed GET URL, 5-minute TTL (https://{domain}/media/...)>
 
-Error: 400 Bad Request (대상 문서에 fileKey가 없음 — 마크다운 노트는 공개 공유 불가)
-Error: 403 Forbidden (문서 소유자가 아님 — public-share 발급/철회 시에만)
-Error: 404 Not Found (문서 없음, 또는 토큰이 철회/만료됨)
+Error: 400 Bad Request (target document has no fileKey — markdown notes can't be publicly shared)
+Error: 403 Forbidden (not the document owner — issue/revoke only)
+Error: 404 Not Found (document doesn't exist, or token revoked/expired)
 ```
 
-이 라우트가 발급하는 서명 URL은 5분 TTL(`PublicShareURLTTL`)로, 다른
-모든 곳(1시간)보다 짧다 — 철회 후 이미 발급된 URL이 살아있는 창을 좁히기
-위한 의도적 단축(ADR-022). 5분도 0은 아니므로 철회 즉시 완전히 막히는 것은
-아니라는 점은 여전히 알려진 한계다.
+This route's signed URL uses a 5-minute TTL (`PublicShareURLTTL`), shorter than the 1-hour default elsewhere — a deliberate shortening (ADR-022) to narrow the window a URL stays live after revocation. 5 minutes is still not zero, so revocation isn't instantly airtight — a known, accepted limitation.
 
-#### Export Vault (Obsidian 마크다운 내보내기)
+#### Export Vault (Obsidian markdown export)
 
-본인 소유 미팅과 문서를 Obsidian 친화 마크다운(YAML frontmatter)으로 렌더링해
-파일 목록으로 반환한다. MCP 클라이언트가 각 파일을 로컬 vault에 기록한다.
+Renders the caller's own meetings and documents as Obsidian-friendly markdown (YAML frontmatter) and returns them as a file list; an MCP client writes each file into a local vault.
 
-- 미팅: `Accounts/{name}/`(Account 공유) 또는 `_Private/Meetings/`(비공개)
-- 문서(마크다운 본문이 있는 것만 — 슬라이드는 제외): `Accounts/{name}/Docs/`
-  (계정 멤버십별) 또는 `_Private/Docs/`(개인 문서). frontmatter에 `doc_type`,
-  `links`, `ttobak_id`를 포함(ADR-020 참조) — 재인제스트 시 ADR-017과 동일한
-  loop guard가 적용된다.
+- Meetings: `Accounts/{name}/` (account-shared) or `_Private/Meetings/` (private)
+- Documents with a markdown body (slides excluded): `Accounts/{name}/Docs/` (by account membership) or `_Private/Docs/` (personal). Frontmatter includes `doc_type`, `links`, `ttobak_id` (ADR-020) — re-ingestion applies the same loop guard as ADR-017.
 
 ```
 GET /api/vault/export
 
 Response: 200 OK
 { "files": [
-  { "path": "Accounts/하나은행/2026-05-12 ROSA 리뷰.md", "markdown": "---\naccount: \"[[하나은행]]\"\n...\n---\n\n# ROSA 리뷰\n..." },
-  { "path": "Accounts/하나은행/Docs/회의 준비.md", "markdown": "---\ndoc_type: note\nttobak_id: doc-uuid\n---\n\n준비 내용..." }
+  { "path": "Accounts/Acme Bank/2026-05-12 ROSA Review.md", "markdown": "---\naccount: \"[[Acme Bank]]\"\n...\n---\n\n# ROSA Review\n..." },
+  { "path": "Accounts/Acme Bank/Docs/Meeting Prep.md", "markdown": "---\ndoc_type: note\nttobak_id: doc-uuid\n---\n\nPrep content..." }
 ] }
 
 Error: 403 Forbidden
 ```
 
-#### Link Meeting to Account (분류만 — owner+멤버 전용)
+#### Link Meeting to Account (classification only — owner+member only)
 
 ```
 POST /api/meetings/{meetingId}/account
@@ -738,15 +686,13 @@ Response: 200 OK
   "accountId": "acc-uuid"
 }
 
-Error: 403 Forbidden (owner가 아니거나 해당 Account 멤버가 아님)
-Error: 404 Not Found (미팅 없음)
+Error: 403 Forbidden (not owner, or not a member of that account)
+Error: 404 Not Found (meeting doesn't exist)
 ```
 
-#### Share Meeting to Account (팀 공유 — owner+멤버 전용)
+#### Share Meeting to Account (team share — owner+member only)
 
-미팅을 Account 팀에 공유한다: `accountId`+`sharedToAccount`를 설정하고,
-owner를 제외한 모든 Account 멤버에게 read 권한 Share를 부여하며, Account
-파티션에 MeetingRef를 적립한다.
+Shares a meeting with an Account's team: sets `accountId`+`sharedToAccount`, grants a `read` Share to every account member except the owner, and adds a MeetingRef to the Account partition.
 
 ```
 POST /api/meetings/{meetingId}/share-account
@@ -758,29 +704,20 @@ Request:
 Response: 200 OK
 {
   "accountId": "acc-uuid",
-  "sharedWith": 2          // read 권한을 부여받은 멤버 수 (owner 제외)
+  "sharedWith": 2          // number of members granted read access (excluding owner)
 }
 
-Error: 403 Forbidden (owner가 아니거나 해당 Account 멤버가 아님)
-Error: 404 Not Found (미팅 없음)
+Error: 403 Forbidden (not owner, or not a member of that account)
+Error: 404 Not Found (meeting doesn't exist)
 ```
 
 ---
 
 ### Projects
 
-Project(SFDC Opportunity)는 미팅노트·리서치·인사이트를 영업 기회 단위로 묶는
-1급 엔티티다. Account와 달리 **다대다 그래프**로 여러 Account에 동시에 연결될
-수 있다(파트너사+엔드고객 등). Research↔Account 연동과 동일한 그래프 레퍼런스
-패턴(문자열 집합 + 역참조 아이템 + fail-closed 재검증)을 재사용한다 — 자세한
-내부 데이터 모델은 ADR-025 참고.
+A Project (SFDC Opportunity) is a first-class entity that groups meeting notes, research, and insights by sales opportunity. Unlike Account, it's a **many-to-many graph** — it can link to multiple accounts at once (e.g. a partner plus the end customer). It reuses the same graph-reference pattern as Research↔Account linking (string set + reverse-index item + fail-closed reverification) — see ADR-025 for the data model.
 
-**접근 권한**은 하이브리드: project owner, 직접 초대된 멤버(`POST .../members`),
-또는 **연결된 Account 중 하나의 멤버**면 통과한다. 즉 Account를 프로젝트에
-연동하면 그 Account의 팀 전체가 자동으로 프로젝트 열람 권한을 얻는다(추가
-멤버 초대 없이). SFDC 연동은 메타데이터 필드(`sfdcOpptyId`/`sfdcUrl`)만
-저장하며, 실제 SFDC 값을 읽어오는 것은 외부 MCP 클라이언트(SFDC MCP →
-`ttobak_create_project`)가 담당한다 — 서버 쪽 SFDC API 연동은 없다.
+**Access** is hybrid: project owner, a directly-invited member (`POST .../members`), or **a member of any linked Account**. Linking an Account to a project auto-extends viewing access to that Account's whole team (no separate invite needed). SFDC integration is metadata-only (`sfdcOpptyId`/`sfdcUrl`) — an external MCP client (SFDC MCP → `ttobak_create_project`) is responsible for the real SFDC data; there's no server-side SFDC API integration.
 
 #### List My Projects
 
@@ -791,12 +728,7 @@ Response: 200 OK
 { "projects": [ { "projectId": "uuid", "name": "...", "stage": "...", "sfdcOpptyId": "..." } ] }
 ```
 
-내가 owner이거나 직접 멤버이거나, 내가 속한 Account에 연결된 프로젝트를
-모두 반환한다(owner 인덱스 + GSI1 멤버 역조회 + 내 Account 멤버십을 거쳐
-연결된 프로젝트 목록, 셋 다 canonical 상태로 재검증 — `requireProjectAccess`의
-하이브리드 접근 권한과 정확히 같은 3가지 경로). Account 쪽에서도 동일한
-프로젝트를 `GET /api/accounts/{accountId}/projects`로 볼 수 있다 — 이 둘은
-서로를 대체하는 두 개의 발견 경로다.
+Returns projects where I'm owner, a direct member, or a member of a linked Account (owner index + GSI1 member reverse-lookup + my Account memberships cross-referenced against each candidate — all three canonically reverified, mirroring `requireProjectAccess`'s hybrid access check). The same projects are also discoverable via `GET /api/accounts/{accountId}/projects` — the two are alternative discovery paths.
 
 #### Create Project
 
@@ -804,7 +736,7 @@ Response: 200 OK
 POST /api/projects
 Request:
 {
-  "name": "하나은행 클라우드 마이그레이션",
+  "name": "Acme Bank Cloud Migration",
   "description": "...",          // optional
   "sfdcOpptyId": "006XX...",      // optional
   "sfdcUrl": "https://...",       // optional
@@ -819,56 +751,50 @@ Response: 201 Created
   "createdAt": "2026-07-21T00:00:00Z", "updatedAt": "2026-07-21T00:00:00Z"
 }
 
-Error: 400 Bad Request (name이 비어있음)
+Error: 400 Bad Request (empty name)
 ```
 
 #### Get / Update / Delete Project
 
 ```
 GET /api/projects/{projectId}
-PUT /api/projects/{projectId}      (owner 전용, Create와 동일한 필드)
-DELETE /api/projects/{projectId}   (owner 전용)
+PUT /api/projects/{projectId}      (owner only, same fields as Create)
+DELETE /api/projects/{projectId}   (owner only)
 
-Error: 403 Forbidden — GET: owner/직접 멤버/연결된 Account 멤버 아님
-Error: 403 Forbidden — PUT/DELETE: owner 아님 (직접 멤버·연결된 Account 멤버여도 거부)
+Error: 403 Forbidden — GET: not owner/direct member/linked-Account member
+Error: 403 Forbidden — PUT/DELETE: not owner (direct/linked-Account membership doesn't count)
 Error: 404 Not Found
-Error: 400 Bad Request (DELETE: 연결된 Account/미팅/리서치/멤버가 하나라도
-       남아있으면 거부 — 고아 관계 데이터를 남기지 않기 위해 전부 해제 후
-       삭제해야 한다)
+Error: 400 Bad Request (DELETE: rejected while any account/meeting/research/member
+       relation still exists — all must be unlinked first, to avoid orphaned relations)
 ```
 
-#### Members (owner 전용)
+#### Members (owner only)
 
 ```
 POST   /api/projects/{projectId}/members
 Request: { "email": "user@example.com" }
 Response: 201 Created — { "userId": "uuid", "email": "user@example.com" }
-Error: 400 Bad Request (이미 멤버) · 404 Not Found (해당 email 유저 없음)
+Error: 400 Bad Request (already a member) · 404 Not Found (no user with that email)
 
 DELETE /api/projects/{projectId}/members/{userId}
 Response: 204 No Content
 ```
 
-멤버는 Account처럼 역할(owner/AM/TAM/SSA/SA/SA Manager/AM Manager) 구분이 없다 — 있으면(owner) 있고
-없으면(member) 없는 이진 상태.
+Unlike Account, membership has no role distinction — it's binary (owner, or member).
 
 #### Link / Unlink Account
 
 ```
-POST   /api/projects/{projectId}/accounts        (owner 전용, 대상 Account 멤버여야 함)
+POST   /api/projects/{projectId}/accounts        (owner only, must be a member of the target Account)
 Request: { "accountId": "uuid" }
 Response: 200 OK — { "accountIds": ["uuid", ...] }
-Error: 403 Forbidden (owner 아님 또는 대상 Account 멤버 아님)
+Error: 403 Forbidden (not owner, or not a member of the target Account)
 
-DELETE /api/projects/{projectId}/accounts/{accountId}   (owner 전용)
+DELETE /api/projects/{projectId}/accounts/{accountId}   (owner only)
 Response: 204 No Content
 ```
 
-연동/해제 모두 `Project.accountIds`(String Set)와 역참조
-(`ACCOUNT#{accountId}/PROJECTREF#{projectId}`)를 **단일 `TransactWriteItems`
-로 원자적으로** 갱신한다(ADR-025) — 해제 시 owner가 그 Account의 현재
-멤버가 아니어도 된다(해제는 project ownership만으로 충분 — 그렇지 않으면
-owner가 Account에서 제거된 뒤 영구히 연동을 못 푸는 상황이 생긴다).
+Both link and unlink atomically update `Project.accountIds` (String Set) and the reverse index (`ACCOUNT#{accountId}/PROJECTREF#{projectId}`) via a single `TransactWriteItems` call (ADR-025). Unlinking only requires project ownership, not current membership in that Account — otherwise an owner removed from the Account could never unlink it.
 
 #### Link / Unlink Meeting, Research
 
@@ -878,26 +804,18 @@ DELETE /api/projects/{projectId}/meetings/{meetingId}
 POST   /api/projects/{projectId}/research          Request: { "researchId": "uuid" }
 DELETE /api/projects/{projectId}/research/{researchId}
 
-Error: 404 Not Found — Link(POST) Meeting: 대상 미팅이 호출자 소유가 아님(호출자
-       자신의 파티션에서만 조회하므로 타인 미팅은 "없음"과 구분되지 않음) 또는
-       미팅/프로젝트 자체가 없음
-Error: 403 Forbidden — Link(POST) Research: 대상 리서치가 호출자 소유가 아님
-       (Research는 조회 자체는 owner 무관하게 되므로 소유 여부를 직접 검사)
-Error: 403 Forbidden — Link(POST) 공통: 위 소유권 검사를 통과해도 프로젝트
-       접근 권한(owner/직접 멤버/연결된 Account 멤버) 없으면 거부
-Error: 403 Forbidden — Unlink(DELETE): 대상의 owner도 아니고 프로젝트 owner도 아님 (아래 비대칭 설명 참고)
-Error: 404 Not Found (리서치/프로젝트 없음)
+Error: 404 Not Found — Link(POST) Meeting: target meeting isn't owned by the caller (looked up
+       only in the caller's own partition, so someone else's meeting is indistinguishable from
+       nonexistent) or the meeting/project doesn't exist
+Error: 403 Forbidden — Link(POST) Research: target research isn't owned by the caller
+       (research lookup itself isn't owner-gated, so ownership is checked explicitly)
+Error: 403 Forbidden — Link(POST), either case: passes the ownership check above but still lacks
+       project access (owner/direct member/linked-Account member)
+Error: 403 Forbidden — Unlink(DELETE): caller is neither the target's owner nor the project owner (see asymmetry below)
+Error: 404 Not Found (research/project doesn't exist)
 ```
 
-`Meeting.projectIds`/`Research.projectIds`도 동일하게 String Set + 원자적
-`TransactWriteItems`로 연동한다. **링크**는 대상 미팅/리서치의 owner일 것을
-요구하지만, **언링크**는 그 owner이거나 **프로젝트 owner**면 충분하다 —
-링크한 멤버가 이후 `RemoveMember`로 제거되면 본인도(프로젝트 접근권 상실),
-프로젝트 owner도(그 미팅/리서치의 owner가 아님) 언링크를 못 하게 되는
-데드락을 막기 위한 비대칭이다(ADR-025). `SharedToAccount`(계정 공유 게이트)
-와는 별개다 — 프로젝트에 링크된 미팅의 제목/인사이트는 프로젝트 접근 권한이
-있는 사람 모두에게 노출된다(ADR-025 참고, `SharedToAccount`를 의도적으로
-우회하는 별도 공유 채널).
+`Meeting.projectIds`/`Research.projectIds` link the same way — String Set + atomic `TransactWriteItems`. **Linking** requires being the target meeting/research's owner, but **unlinking** only requires being that owner *or* the **project owner** — this asymmetry (ADR-025) prevents a deadlock where a member who linked something, then got removed via `RemoveMember`, could no longer unlink it (having lost project access), and the project owner couldn't either (not owning the meeting/research). This is independent of `SharedToAccount` (the account-sharing gate) — a meeting's title/insights, once linked to a project, are visible to everyone with project access regardless (ADR-025), a separate sharing channel that deliberately bypasses `SharedToAccount`.
 
 #### List Project Meetings / Research
 
@@ -908,15 +826,10 @@ Response: 200 OK — { "meetings": [ { "meetingId", "ownerUserId", "title", "dat
 GET /api/projects/{projectId}/research
 Response: 200 OK — { "research": [ { "researchId", "topic", "summary", "status", "ownerUserId", "createdAt" } ] }
 
-Error: 403 Forbidden (프로젝트 접근 권한 없음)
+Error: 403 Forbidden (no project access)
 ```
 
-두 목록 모두 역참조 아이템을 후보로 삼고 canonical `projectIds` 집합에
-여전히 포함되는지 재검증한다(fail-closed) — 링크된 미팅이 이 API가 모르는
-경로(기존 미팅 삭제 등)로 지워져 역참조만 고아로 남는 경우처럼, 트랜잭션
-경계 밖의 다른 실패 모드로 생긴 stale ref도 조회 결과에는 절대 노출되지
-않는다. `meetingId` 기준으로도 중복 제거한다(ADR-025의 mutable-Date
-레퍼런스 SK 이슈에 대한 방어).
+Both lists reverify each reverse-index candidate against the canonical `projectIds` set (fail-closed) — a stale ref left behind by a failure outside the link/unlink transaction (e.g. the underlying meeting deleted through some other path) never surfaces in results. Also deduplicated by `meetingId` (defends against ADR-025's mutable-Date reference SK issue).
 
 #### Get Project Insights
 
@@ -926,14 +839,11 @@ GET /api/projects/{projectId}/insights?from=RFC3339&to=RFC3339&types=risk,tech
 Response: 200 OK
 { "insights": [ { "type": "risk", "text": "...", "sourceId": "meeting-uuid", "occurredAt": "...", "tsMarker": "[TS:120]", "entities": [] } ] }
 
-Error: 400 Bad Request (from/to가 RFC3339 아님, 또는 유효하지 않은 insight type)
-Error: 403 Forbidden (프로젝트 접근 권한 없음)
+Error: 400 Bad Request (from/to not RFC3339, or invalid insight type)
+Error: 403 Forbidden (no project access)
 ```
 
-**저장하지 않고 읽기 시점에 집계한다** — 링크된 미팅들의 `Insights` JSON을
-매번 파싱해 반환하므로, 미팅이 재요약되어 인사이트가 갱신되면 다음 조회에
-자동 반영된다(Account 인사이트처럼 공유 시점에 스냅샷을 떠서 저장하지
-않음 — 동기화 드리프트 자체가 존재하지 않는다).
+**Aggregated at read time, never persisted** — parses linked meetings' `Insights` JSON on every call, so a re-summarized meeting's updated insights show up on the next fetch automatically (unlike Account insights, which snapshot at share time — there's no sync-drift possible here at all).
 
 #### Get Project Brief
 
@@ -949,20 +859,18 @@ Response: 200 OK
 }
 ```
 
-Get Project + List Meetings + List Research + Get Insights를 한 번에
-묶은 편의 엔드포인트.
+A convenience endpoint bundling Get Project + List Meetings + List Research + Get Insights in one call.
 
 #### List Account's Projects
 
 ```
-GET /api/accounts/{accountId}/projects   (해당 Account 멤버 전용)
+GET /api/accounts/{accountId}/projects   (members of that account only)
 
 Response: 200 OK
 { "projects": [ { "projectId", "name", "stage", "sfdcOpptyId" } ] }
 ```
 
-Account 쪽에서 "이 Account에 연동된 프로젝트" 역참조를 조회하는 read 경로
-(Research의 `GET /api/accounts/{accountId}/research`와 동일한 패턴).
+The Account-side read path for "projects linked to this account" (same pattern as Research's `GET /api/accounts/{accountId}/research`).
 
 ---
 
@@ -987,8 +895,26 @@ Response: 200 OK
   }
 }
 
+// email is invited (Cognito account exists) but has never logged in yet --
+// queued as a PendingShare instead of a real Share row; materializes on
+// that email's next ListMeetings/CreateMeeting call after logging in
+// (not listed anywhere -- revoke by re-submitting the same email, below,
+// not by finding it in a list -- and un-claimable after 30 days via a
+// synchronous application-code TTL check; DynamoDB's own table TTL sweep,
+// scoped to a distinct `pendingShareExpiresAt` attribute so it can't touch
+// QA's unrelated `TTL`-named rows, later physically reclaims rows nobody
+// ever revoked or claimed).
+Response: 200 OK
+{
+  "sharedWith": {
+    "email": "bob@example.com",
+    "permission": "read",
+    "pending": true                // userId omitted -- not yet known
+  }
+}
+
 Error: 403 Forbidden (only owner can share)
-Error: 404 User not found
+Error: 404 User not found (email has never been invited at all)
 ```
 
 #### Revoke Share
@@ -998,6 +924,27 @@ DELETE /api/meetings/{meetingId}/share/{userId}
 
 Response: 204 No Content
 Error: 403 Forbidden (only owner can revoke)
+```
+
+#### Revoke Pending Share Invite (owner only)
+
+```
+DELETE /api/meetings/{meetingId}/share/pending?email={email}
+
+Cancels a queued PendingShare meeting invite before the target has ever
+logged in (no userId exists yet, so this can't go through DELETE
+.../share/{userId}). A DeleteItem on an already-gone/never-existed row
+that never resolves to a live share is a silent no-op -- "revoked" and
+"there was nothing to revoke" both return 204. If the row is gone because
+MaterializePendingShares won the race (the invitee logged in and claimed
+the grant first), this returns 409 instead of a silent success -- the
+caller would otherwise believe access was revoked while it's still live.
+
+Response: 204 No Content
+Error: 403 Forbidden (not the owner)
+Error: 404 Not Found (meeting doesn't exist)
+Error: 400 Bad Request (missing email query parameter)
+Error: 409 Conflict (already claimed by materialize -- revoke direct access instead)
 ```
 
 #### Search Users (for sharing)
@@ -1061,7 +1008,7 @@ Response: 200 OK
 
 ### Real-time Translation (REST)
 
-> 현재 구현: WebSocket 대신 Browser Speech API + REST 호출 방식으로 실시간 전사/번역 구현
+> Current implementation: real-time transcription/translation uses the Browser Speech API + REST calls, not WebSocket.
 
 #### Translate Text
 
@@ -1069,7 +1016,7 @@ Response: 200 OK
 POST /api/translate
 Request:
 {
-  "text": "번역할 텍스트",
+  "text": "Text to translate",
   "sourceLang": "ko",
   "targetLang": "en"
 }
@@ -1082,20 +1029,20 @@ Response: 200 OK
 }
 ```
 
-#### Live Summary (200단어마다 호출)
+#### Live Summary (called every ~200 words)
 
 ```
 POST /api/summarize-live
 Request:
 {
   "meetingId": "client-meeting-id",
-  "text": "전체 전사 텍스트...",
-  "previousSummary": "이전 요약 (optional)"
+  "text": "Full transcript text so far...",
+  "previousSummary": "Previous summary (optional)"
 }
 
 Response: 200 OK
 {
-  "summary": "현재까지 요약된 내용..."
+  "summary": "Summary so far..."
 }
 ```
 
@@ -1115,16 +1062,9 @@ Request:
 Response: 200 OK
 ```
 
-#### Re-diarize (화자 수 재지정 후 재분석, ADR-019)
+#### Re-diarize (re-analyze with a corrected speaker count, ADR-019)
 
-acoustic diarization(pyannote)이 화자 수를 실제보다 적게 감지했을 때, 사용자가
-지정한 화자 수 힌트로 같은 오디오를 다시 분석한다. Whisper 트랜스크립션 미팅에만
-가능(AWS Transcribe 폴백 미팅은 acoustic diarization 자체가 없어 대상 아님),
-단일 파트 오디오만 지원(v1 스코프 — 멀티파트는 파트별 ECS 재트리거 +
-`AudioPartsReady` 리셋이 추가로 필요). ECS `RunTask`를 직접 호출하지 않고
-기존 오디오 S3 객체를 새 키(`audio/{userId}/{meetingId}/rediarize_{uuid}_...`)로
-`CopyObject`해서 기존 EventBridge S3 이벤트 → `ttobak-transcribe` 파이프라인을
-그대로 재사용한다 — `api` Lambda에 새 IAM 권한이 필요 없다.
+When acoustic diarization (pyannote) detects fewer speakers than actually present, re-runs the same audio with a user-supplied speaker-count hint. Whisper-transcribed meetings only (AWS Transcribe fallback meetings have no acoustic diarization to redo), single-part audio only (v1 scope — multi-part would need per-part ECS re-trigger + resetting `AudioPartsReady`). Rather than calling ECS `RunTask` directly, it `CopyObject`s the existing audio to a new key (`audio/{userId}/{meetingId}/rediarize_{uuid}_...`), reusing the existing EventBridge S3 event → `ttobak-transcribe` pipeline — no new IAM permission needed on the `api` Lambda.
 
 ```
 POST /api/meetings/{meetingId}/rediarize
@@ -1133,33 +1073,66 @@ POST /api/meetings/{meetingId}/rediarize
 Response: 200 OK
 { "meetingId": "uuid", "status": "transcribing" }
 
-Error: 400 Bad Request (speakerCount가 2-20 범위 밖, whisper가 아닌 미팅, 멀티파트 오디오,
-                         오디오 없음, 또는 이미 처리 중인 미팅)
-Error: 403 Forbidden (본인 미팅 아님)
-Error: 404 Not Found (미팅 없음)
+Error: 400 Bad Request (speakerCount out of 2-20 range, non-whisper meeting, multi-part audio,
+                         no audio, or meeting already processing)
+Error: 403 Forbidden (not my meeting)
+Error: 404 Not Found (meeting doesn't exist)
 ```
 
-호출 즉시 미팅의 `speakerMap`을 비우고(재분석 후 `spk_N` 인덱스가 처음부터 다시
-매겨지므로 이전 이름 매핑은 무의미해짐) `status`를 `transcribing`으로 되돌리며,
-지정한 `speakerCount`를 `Meeting.DiarizationSpeakerHint`에 저장한다 —
-`cmd/transcribe/main.go`가 이 값을 `len(Participants)` 대신 pyannote의
-`max_speakers` 힌트로 사용한다. 이 힌트는 **sticky**: 한 번 설정되면 이후
-일반 재전사에도 계속 적용된다(등록된 참석자 수 대신). `speakerMap`을 비우는
-쓰기는 미팅을 다시 읽어 얻은 현재 `status`와 일치할 때만 성공하는 조건부
-쓰기(`UpdateMeetingFieldsIfMatch`)로 나가— 동시에 두 번 호출되면 하나만
-성공하고 나머지는 400(`meeting is already being processed`)을 받는다. `CopyObject`
-자체가 실패하면(모호한 SDK 에러 포함) 별도 복구 없이 기존 30분
-stuck-transcribing 자동 만료(`GetMeeting` 핸들러)에 정리를 위임한다 — 이미
-`transcribing`으로 넘어간 상태를 롤백하려는 별도 쓰기가 그 사이 실제로 픽업된
-재트리거 파이프라인의 상태 전이와 경합할 수 있기 때문이다.
+On call, immediately clears the meeting's `speakerMap` (re-analysis re-numbers `spk_N` from scratch, so old name mappings are meaningless) and resets `status` to `transcribing`, storing the requested `speakerCount` in `Meeting.DiarizationSpeakerHint` — `cmd/transcribe/main.go` uses this as pyannote's `max_speakers` hint instead of `len(Participants)`. This hint is **sticky**: once set, it applies to future re-transcriptions too (instead of the registered participant count). Clearing `speakerMap` is a conditional write (`UpdateMeetingFieldsIfMatch`) gated on the freshly-read current `status` — a double call only lets one succeed, the other gets 400 (`meeting is already being processed`). A `CopyObject` failure (including ambiguous SDK errors) has no dedicated recovery — it's left to the existing 30-minute stuck-transcribing auto-expiry (`GetMeeting` handler), since a separate rollback write could race with the re-trigger pipeline's own state transition.
+
+#### Cost/sizing simulator (ADR-033, AgentCore Code Interpreter)
+
+Extracts quantitative requirements (users, TPS, data volume, SLO...) from a done meeting, lets the user confirm/correct them, then runs a real Python computation in AgentCore Code Interpreter comparing 2-3 architecture options (TCO, chart PNGs, markdown report). `SimRun` is a singleton per meeting (`SIMRUN` sort key) — a fresh extraction overwrites any prior draft/result; running is gated behind `PutSimRunIfNotRunning`'s conditional write (no two concurrent runs per meeting). The generated code never receives the meeting transcript — only the server-validated requirements/options JSON — so a transcript can influence extracted *values* but never the *code itself* (see ADR-033's trust-boundary section).
+
+```
+POST /api/meetings/{meetingId}/sim/extract
+
+Response: 200 OK
+{
+  "simRunId": "uuid", "status": "extracted",
+  "requirements": [
+    { "key": "monthlyActiveUsers", "label": "월간 활성 사용자", "value": "100000",
+      "required": true, "source": "extracted", "evidence": "transcript://seg-12" }
+  ],
+  "createdAt": "...", "updatedAt": "..."
+}
+
+Error: 400 Bad Request (meeting not done yet)
+Error: 403 Forbidden (not my meeting)
+Error: 404 Not Found (meeting doesn't exist)
+```
+
+```
+POST /api/meetings/{meetingId}/sim
+{
+  "requirements": [ { "key": "monthlyActiveUsers", "label": "...", "value": "100000",
+                       "required": true, "source": "user" } ],
+  "options": [ { "name": "서버리스", "description": "Lambda + API Gateway" },
+               { "name": "컨테이너", "description": "ECS Fargate" } ]   // 2-3 required
+}
+
+Response: 202 Accepted
+{ "simRunId": "uuid", "status": "queued", ... }
+
+Error: 400 Bad Request (unknown requirement key, value out of range/not in allowlist,
+                         missing required value, wrong option count 2-3, meeting not
+                         done, or a simulation is already running for this meeting)
+Error: 403 Forbidden (not my meeting)
+Error: 404 Not Found (meeting doesn't exist)
+```
+
+Every field is re-validated server-side against a fixed allowlist (`AllowedSimRequirementKeys`) regardless of what the confirm form submits — the form is a UX gate, not the trust boundary. Async hand-off to `ttobak-sim` (`InvocationType=Event`); the frontend polls `GET /api/meetings/{meetingId}` for `simRun.status` (see below), not a new WebSocket channel — this is a 1-3 minute job, not a token stream. A `queued`/`running` run older than 20 minutes is reported as `error` at read time (mirrors the existing 30-minute `isStuck` reconciliation for transcribing/summarizing meetings) without being persisted that way.
+
+`GetMeeting`'s response gains a `simRun` field (same shape as the extract response, plus `charts: [{key, url}]` with presigned CloudFront URLs, `reportMarkdown`, `codeKey`, `priceSnapshotAt`, `errorMessage` once `status` reaches `done`/`error`). Generated chart PNGs land under the existing `images/` prefix and the report/code/price-snapshot under `files/` (both already in the OAC allowlist — no new CloudFront behavior needed, see ADR-027's "Download URLs" note above and ADR-033).
 
 ---
 
-### WebSocket (API Gateway) — 미구현
+### WebSocket (API Gateway) — not implemented
 
 > **현재 상태**: 실시간 전사는 클라이언트에서 처리하며, 기본 엔진은 AWS Transcribe Streaming (`@aws-sdk/client-transcribe-streaming`, 브라우저→AWS 직결) — Browser Web Speech API (`BrowserSpeechRecognition`)는 Transcribe Streaming이 설정되지 않았거나 실패했을 때만 쓰이는 폴백이다. 모바일(iOS/iPadOS/Android)에서 마이크/탭 스트림으로 녹음 중일 때는 mic 트랙 충돌 위험 때문에 이 폴백이 막혀 있고(`SttManager.fallbackToWebSpeech`, ADR-030), 사용자가 데스크톱에서 명시적으로 Browser를 선택한 경우는 (모바일이 아니므로) 계속 지원된다. 번역/요약은 REST API 호출. WebSocket 기반 Nova Sonic 스트리밍은 v2 목표.
 
-실시간 전사 및 번역을 위한 WebSocket API입니다.
+WebSocket API for real-time transcription and translation.
 
 ```
 Endpoint: wss://{apigw-domain}/realtime
@@ -1192,7 +1165,7 @@ Server → Client Messages:
 1. Transcript Result
 {
   "type": "transcript",
-  "text": "전사된 텍스트",
+  "text": "Transcribed text",
   "isFinal": true,                  // false for interim results
   "timestamp": "2026-03-05T10:00:00Z",
   "speaker": "Speaker 1"            // optional speaker diarization
@@ -1224,19 +1197,19 @@ Server → Client Messages:
 POST /api/meetings/{meetingId}/ask
 Request:
 {
-  "question": "이 회의에서 결정된 마감일은 언제인가요?",
-  "includeKB": true                 // true: global KB 포함, false: 현재 회의만
+  "question": "What deadline was decided in this meeting?",
+  "includeKB": true                 // true: also search the global KB, false: this meeting only
 }
 
 Response: 200 OK
 {
-  "answer": "마감일은 3월 15일로 결정되었습니다.",
+  "answer": "The deadline was set for March 15.",
   "sources": [
     {
       "type": "meeting",            // "meeting" | "kb"
       "meetingId": "uuid",
       "title": "Product Strategy Sync",
-      "excerpt": "...마감일을 3월 15일로 확정...",
+      "excerpt": "...confirmed the deadline as March 15...",
       "relevanceScore": 0.95
     },
     {
@@ -1253,46 +1226,32 @@ Response: 200 OK
 
 #### Agentic Q&A (Python QA Lambda)
 
-`POST /api/qa/ask`, `POST /api/qa/meeting/{meetingId}`, WebSocket `ask_live` — Bedrock Converse 에이전틱 루프.
-사용 가능 도구: `search_knowledge_base`, `search_aws_docs`, `search_transcript`, `get_aws_recommendation`,
-`search_web`, `list_meetings`, `get_meeting_detail`, `start_research`, account 도구들.
-스트리밍(`ask_live`) 경로도 비스트리밍과 동일하게 실시간 트랜스크립트 tail(2000자)을 시스템 프롬프트에 포함한다.
-대화 연속성: `sessionId`별 히스토리를 DynamoDB에 저장(7일 TTL), 같은 세션의 후속 질문은 이전 문답 맥락을 이어받는다.
+`POST /api/qa/ask`, `POST /api/qa/meeting/{meetingId}`, WebSocket `ask_live` — a Bedrock Converse agentic loop. Available tools: `search_knowledge_base`, `search_aws_docs`, `search_transcript`, `get_aws_recommendation`, `search_web`, `list_meetings`, `get_meeting_detail`, `start_research`, and account tools. The streaming path (`ask_live`) includes the same live transcript tail (2000 chars) in the system prompt as the non-streaming path. Conversation continuity: history per `sessionId` is stored in DynamoDB (7-day TTL), so follow-up questions in the same session carry prior Q&A context.
 
-**`search_web` 데이터 전송 고지**: 이 도구는 us-east-1 AgentCore Web Search Gateway를 SigV4 크로스리전으로
-호출하며, 모델이 만든 검색 쿼리(최대 200자 — 회의 대화에서 파생된 키워드가 포함될 수 있음)가 **외부 웹 검색
-제공자로 전송**된다. 이 전송은 **사용자가 직접 입력한 질문 경로에서도 일어난다** — 아래 선제 검색 opt-in
-토글이 제어하는 것은 '자동 발화'뿐이다. 수동 경로의 완화책은 시스템 프롬프트/도구 설명의 쿼리 구성 제약
-(고객사·참석자 실명, 내부 코드명, 회의 수치 금지 — 일반화 키워드만)이며, 트랜스크립트 속 문장을 지시로
-취급하지 않는 인젝션 가드가 함께 적용된다. 쿼리 원문은 CloudWatch에 로깅하지 않는다 — `web_search.py` 자체
-로그와 에이전틱 루프의 tool-call 로그(`redact_tool_input_for_log`) 모두 해시+길이만 남긴다.
-`WEB_SEARCH_GATEWAY_URL` 미설정 시 도구는 계속 노출되되 호출하면 "web search not configured" 실패 사유가
-모델에 전달된다(도구 라운드 1회 소비 — 완전 비활성이 아님). 서버측 per-user rate limit은 아직 없다
-(CLAUDE.md Known Issues / ADR-028 follow-up).
+**`search_web` data-transmission notice**: this tool makes a cross-region SigV4 call to the us-east-1 AgentCore Web Search Gateway, and the model-composed search query (up to 200 chars, which may include keywords derived from meeting conversation) **is sent to an external web search provider**. This happens **on the manual question path too**, not just proactive auto-fire — the opt-in toggle below only gates auto-fired questions. The manual path's mitigation is query-construction constraints in the system prompt/tool description (no customer/attendee names, internal codenames, or meeting figures — generalized keywords only), plus an injection guard that never treats transcript text as an instruction. Query text is never logged in plaintext — both `web_search.py`'s own logs and the agentic loop's tool-call log (`redact_tool_input_for_log`) keep only a hash + length. If `WEB_SEARCH_GATEWAY_URL` is unset, the tool stays exposed but calling it returns a "web search not configured" failure to the model (consumes one tool round, isn't fully disabled). No server-side per-user rate limit yet (CLAUDE.md Known Issues / ADR-028 follow-up).
 
-#### Detect Questions (실시간 질문 감지 + 선제 검색 플래그)
+#### Detect Questions (live question detection + proactive-search flag)
 
 ```
 POST /api/qa/detect-questions
 Request:
 {
-  "transcript": "최근 대화 내용...",
-  "summary": "현재 미팅 요약 (선택)",
-  "previousQuestions": ["이미 제안된 질문"]
+  "transcript": "Recent conversation...",
+  "summary": "Current meeting summary (optional)",
+  "previousQuestions": ["Already-suggested question"]
 }
 
 Response: 200 OK
 {
-  "questions": ["EKS 1.31 지원 종료일은?", "어느 팀이 마이그레이션을 맡을까요?"],
-  "proactive": ["EKS 1.31 지원 종료일은?"]   // questions의 부분집합 — 검색으로 즉시 사실 확인
-                                              // 가능한 질문. 프론트(LiveQAPanel)가 배치당 1건을
-                                              // 자동 발화해 답을 미리 띄운다 (선제 검색)
+  "questions": ["When does EKS 1.31 support end?", "Which team will own the migration?"],
+  "proactive": ["When does EKS 1.31 support end?"]   // a subset of `questions` — ones a search can
+                                                      // fact-check immediately. The frontend
+                                                      // (LiveQAPanel) auto-fires one per batch to
+                                                      // surface an answer ahead of time.
 }
 ```
 
-선제 검색 자동 발화는 **기본 꺼짐(opt-in)**: 회의 대화에서 파생된 질문이 사용자 조작 없이 외부 웹 검색까지
-이어질 수 있으므로, LiveQAPanel 헤더의 "선제 검색" 토글(localStorage `ttobak.proactiveSearchEnabled`)을 켠
-사용자에게만 동작한다. 꺼져 있으면 `proactive` 질문도 일반 추천 칩으로만 표시된다.
+Proactive auto-fire is **opt-in, default off**: since a question derived from meeting conversation could reach external web search without explicit user action, it only fires for users who've enabled LiveQAPanel's "Proactive Search" toggle (localStorage `ttobak.proactiveSearchEnabled`). When off, `proactive` questions still show up, just as ordinary suggestion chips.
 
 ---
 
@@ -1507,6 +1466,79 @@ Response: 201 Created
 
 **Partial success:** if `admin: true` but adding the user to the `admins` group fails after the account was already created and invited, the response is still `201 Created` with `addedToAdmins: false` rather than an error — the invite itself succeeded.
 
+#### Admin User Management (admin-only)
+
+Backs the Settings page's "사용자 관리" panel. All six routes require the caller's JWT `cognito:groups` claim to contain `admins` (same `middleware.RequireAdmin` gate as Invite User above). Implemented in `service.UserAdminService` (`backend/internal/service/user_admin.go`) behind a Cognito-SDK-shaped interface, so these operations are unit-tested without a live AWS account.
+
+```
+GET /api/settings/users
+
+Response: 200 OK
+{
+  "users": [
+    {
+      "userId": "04f86dfc-30b1-7059-896c-55801dacccda",  // Cognito Username == sub for this pool
+      "email": "admin@example.com",
+      "name": "Admin",
+      "status": "CONFIRMED",           // Cognito UserStatus
+      "enabled": true,
+      "isAdmin": true,
+      "createdAt": "2026-04-21T09:01:32Z",
+      "lastLoginAt": "2026-08-15T02:11:04Z",  // null if never recorded (see dormancy note below)
+      "dormant": false
+    }
+  ],
+  "lastLoginUnavailable": false,  // true if the DynamoDB last-login join failed; users are still returned
+  "truncated": false              // true if the pool exceeds the internal pagination safety cap (~1200 users)
+}
+```
+
+Last-login tracking is written by a Cognito `PostAuthentication` Lambda trigger (`infra/lambda/post-authentication`) to a dedicated `USER#{userId}/LOGIN` DynamoDB item (never onto `USER#{userId}/PROFILE`, to avoid ever creating a stub profile missing its email-search GSI keys). Dormancy has three states, not two — `lastLoginAt` absent is **not** the same as dormant:
+- `lastLoginAt` present and older than 90 days → `dormant: true`
+- `lastLoginAt` absent and `status: "FORCE_CHANGE_PASSWORD"` → still awaiting first login, not dormant
+- `lastLoginAt` absent and `status: "CONFIRMED"` → no record yet (e.g. pre-dates this feature, or last login was via a refresh token, which does not re-fire the trigger), not dormant
+
+```
+DELETE /api/settings/users/{userId}
+
+Response: 200 OK
+{ "userId": "...", "warning": "" }
+```
+Deletes the Cognito account only — DynamoDB data (meetings, documents) is preserved. Before deleting, the profile's `GSI2PK`/`GSI2SK` email-search keys are detached (not the whole item) so a later re-invite of the same email can't resolve back to the deleted user's dead ID. `AdminUserGlobalSignOut` runs **before** the delete (a deleted user can no longer be signed out) to close the window where an already-issued access/ID token would otherwise stay valid until it naturally expires.
+
+```
+PUT /api/settings/users/{userId}/enable
+PUT /api/settings/users/{userId}/disable
+
+Response: 200 OK
+{ "userId": "...", "warning": "" }
+```
+Toggles the Cognito `Enabled` flag. Disable also calls `AdminUserGlobalSignOut` immediately afterward, for the same already-issued-token reason as delete.
+
+```
+POST /api/settings/users/{userId}/resend-invite
+
+Response: 200 OK
+{ "userId": "..." }
+```
+Only valid when the target's Cognito status is `FORCE_CHANGE_PASSWORD` (never completed first login) — re-sends the invite email with a fresh temporary password (`AdminCreateUser` with `MessageAction=RESEND`). `400 BAD_REQUEST` otherwise.
+
+```
+POST /api/settings/users/{userId}/reset-password
+
+Response: 200 OK
+{ "userId": "..." }
+```
+Only valid when the target's status is `CONFIRMED` — calls `AdminResetUserPassword`, which emails the user a reset code. The user completes the reset via the login screen's "비밀번호를 잊으셨나요?" flow (`ForgotPasswordForm.tsx`, using the previously-unwired `forgotPassword`/`confirmForgotPassword` in `lib/auth.ts`). Deliberately rejected with `400 BAD_REQUEST` for a `FORCE_CHANGE_PASSWORD` user — that state has no code-entry screen, so calling this on them would lock the account out instead of helping.
+
+**Guards on delete/disable:** both reject with `400 BAD_REQUEST` if the target is the caller's own account, or the sole remaining member of the `admins` group (`"마지막 관리자 계정은 삭제할 수 없습니다..."`-style Korean message, since the frontend only surfaces the error `message`, not a code). A same-instant concurrent removal by two admins can theoretically both pass this check (TOCTOU); the service re-checks after acting and returns a `warning` field (not an error, since the primary action already succeeded) if the group is found empty. Recovery in that case is `aws cognito-idp admin-add-user-to-group` from an operator shell.
+
+**Errors (all six routes):**
+- `400 BAD_REQUEST` — self-delete/disable, last-admin delete/disable, or wrong status for resend-invite/reset-password
+- `403 FORBIDDEN` — caller is not in the `admins` group
+- `404 NOT_FOUND` — target user does not exist
+- `500 INTERNAL_ERROR` — Cognito/DynamoDB failure
+
 ---
 
 ## Insights (Crawler)
@@ -1549,122 +1581,83 @@ Manually curates a single crawled **news** document — e.g. a search result the
 
 | HTTP Status | Code | Description |
 |-------------|------|-------------|
-| 400 | BAD_REQUEST | 잘못된 요청 파라미터 |
-| 401 | UNAUTHORIZED | 인증 필요 |
-| 403 | FORBIDDEN | 권한 없음 (소유권/공유 권한) |
-| 404 | NOT_FOUND | 리소스 없음 |
-| 500 | INTERNAL_ERROR | 서버 내부 오류 |
+| 400 | BAD_REQUEST | Invalid request parameters |
+| 401 | UNAUTHORIZED | Authentication required |
+| 403 | FORBIDDEN | No permission (ownership/sharing) |
+| 404 | NOT_FOUND | Resource doesn't exist |
+| 500 | INTERNAL_ERROR | Internal server error |
 
 ---
 
 ## Lambda Functions
 
 ### 1. API Lambda (cmd/api)
-- **트리거**: API Gateway HTTP API
-- **역할**: 모든 REST API 처리
-- **라우팅**: Chi Router
-- **환경변수**: TABLE_NAME, BUCKET_NAME, COGNITO_USER_POOL_ID, KB_ID
+- **Trigger**: API Gateway HTTP API
+- **Role**: handles all REST API requests
+- **Routing**: Chi Router
+- **Env vars**: TABLE_NAME, BUCKET_NAME, COGNITO_USER_POOL_ID, KB_ID
 
 ### 2. Transcribe Lambda (cmd/transcribe)
-- **트리거**: S3 Event (audio/ prefix) via EventBridge
-- **역할**: STT A/B 파이프라인 시작 (오프라인 녹음용)
-- **처리**:
-  1. S3 이벤트에서 오디오 키 추출
-  2. Transcribe StartTranscriptionJob 호출 (결과 A)
-  3. Nova 2 Sonic Bidirectional Streaming API 호출 (결과 B)
-  4. 결과를 DynamoDB에 저장
-  5. 회의 상태를 "transcribing" → "summarizing"으로 업데이트
-- **환경변수**: TABLE_NAME, BUCKET_NAME, OUTPUT_BUCKET
+- **Trigger**: S3 Event (audio/ prefix) via EventBridge
+- **Role**: kicks off the STT A/B pipeline (offline recordings)
+- **Steps**: (1) extract audio key from the S3 event → (2) call Transcribe StartTranscriptionJob (result A) → (3) call Nova 2 Sonic Bidirectional Streaming API (result B) → (4) store both results in DynamoDB → (5) update meeting status "transcribing" → "summarizing"
+- **Env vars**: TABLE_NAME, BUCKET_NAME, OUTPUT_BUCKET
 
 ### 3. Summarize Lambda (cmd/summarize)
-- **트리거**: DynamoDB Stream (status가 "summarizing"으로 변경 시) 또는 직접 호출
-- **역할**: Bedrock Claude로 회의록 요약
-- **처리**:
-  1. 선택된 전사 텍스트 로드
-  2. 첨부 컨텍스트 구성: 이미지 분석 결과(다이어그램 첨부는 `첨부 다이어그램`으로 라벨링되어 mermaid 코드가 신뢰 소스로 전달) + 문서 첨부(PPTX/PDF 등, 본문 미추출) 파일명 목록
-  3. Bedrock Claude Opus 5 호출 — 회의록에 조건부 `## 아키텍처 다이어그램` 섹션 포함 (첨부 다이어그램 mermaid가 있거나 아키텍처 논의가 구체적일 때만; 아니면 섹션 생략)
-  4. 구조화된 마크다운 회의록 생성 (+ 하단에 `## 첨부 이미지`/`## 첨부 문서` — `attachment://{id}` 링크, 프론트엔드가 presigned URL로 해석)
-  5. DynamoDB에 content 저장
-  6. 상태를 "done"으로 업데이트
-- **환경변수**: TABLE_NAME, BEDROCK_MODEL_ID
+- **Trigger**: DynamoDB Stream (status changes to "summarizing") or direct invocation
+- **Role**: summarizes the meeting via Bedrock Claude
+- **Steps**: (1) load the selected transcript → (2) build attachment context: image analysis results (a diagram attachment is labeled "Attached Diagram" and its mermaid code passed as a trusted source) + document attachment (PPTX/PDF etc., body not extracted) filenames → (3) call Bedrock Claude Opus 5 — the note conditionally includes an `## Architecture Diagram` section (only when a diagram attachment's mermaid exists or the discussion is concretely architectural; otherwise the section is omitted) → (4) generate the structured markdown note (+ trailing `## Attached Images`/`## Attached Documents` sections using `attachment://{id}` links, resolved to presigned URLs by the frontend) → (5) save content to DynamoDB → (6) set status to "done"
+- **Env vars**: TABLE_NAME, BEDROCK_MODEL_ID
 
 ### 4. Process Image Lambda (cmd/process-image)
-- **트리거**: S3 Event (images/ prefix) via EventBridge
-- **역할**: 이미지 분석 + 다이어그램 재생성
-- **처리**:
-  1. S3에서 이미지 다운로드
-  2. Bedrock Claude Vision으로 분류 (architecture/table/whiteboard/photo)
-  3. 분류별 처리:
-     - architecture → Mermaid 다이어그램 코드
-     - table → 마크다운 테이블
-     - whiteboard → 텍스트 추출 + 구조화
-     - photo → 설명 텍스트
-  4. 결과를 S3 (processed/) + DynamoDB에 저장
-- **환경변수**: TABLE_NAME, BUCKET_NAME, BEDROCK_MODEL_ID
+- **Trigger**: S3 Event (images/ prefix) via EventBridge
+- **Role**: image analysis + diagram regeneration
+- **Steps**: (1) download image from S3 → (2) classify via Bedrock Claude Vision (architecture/table/whiteboard/photo) → (3) per-category processing: architecture → Mermaid diagram code, table → markdown table, whiteboard → extracted/structured text, photo → description text → (4) store results in S3 (processed/) + DynamoDB
+- **Env vars**: TABLE_NAME, BUCKET_NAME, BEDROCK_MODEL_ID
 
 ### 5. WebSocket Lambda (cmd/realtime)
-- **트리거**: API Gateway WebSocket API ($connect, $disconnect, $default)
-- **역할**: 실시간 전사 + 번역 스트리밍
-- **처리**:
-  1. $connect: Cognito JWT 검증, 연결 정보 DynamoDB 저장
-  2. start: Nova Sonic v2 스트리밍 세션 시작
-  3. audio: 오디오 청크를 Nova Sonic으로 전달
-  4. Nova Sonic 결과 수신 → 클라이언트로 transcript 전송
-  5. 번역 요청 시 Bedrock Claude로 실시간 번역 → translation 전송
-  6. stop/$disconnect: 세션 종료, 전체 전사본 저장
-- **환경변수**: TABLE_NAME, CONNECTIONS_TABLE_NAME, NOVA_SONIC_MODEL_ID, BEDROCK_MODEL_ID
+- **Trigger**: API Gateway WebSocket API ($connect, $disconnect, $default)
+- **Role**: real-time transcription + translation streaming
+- **Steps**: (1) $connect: verify Cognito JWT, store connection info in DynamoDB → (2) start: begin a Nova Sonic v2 streaming session → (3) audio: forward audio chunks to Nova Sonic → (4) receive Nova Sonic results → send transcript to client → (5) on translation request, real-time translate via Bedrock Claude → send translation → (6) stop/$disconnect: end session, save the full transcript
+- **Env vars**: TABLE_NAME, CONNECTIONS_TABLE_NAME, NOVA_SONIC_MODEL_ID, BEDROCK_MODEL_ID
 
 ### 6. KB Lambda (cmd/kb)
-- **트리거**: S3 Event (kb/ prefix) via EventBridge + API Gateway (sync 요청)
-- **역할**: Knowledge Base 파일 인덱싱
-- **처리**:
-  1. S3에서 파일 다운로드 (pdf/md/pptx/docx)
-  2. Bedrock Knowledge Base에 문서 추가/업데이트
-  3. OpenSearch Serverless 인덱스 업데이트
-  4. DynamoDB에 인덱싱 상태 저장
-- **환경변수**: TABLE_NAME, BUCKET_NAME, KB_ID, AOSS_ENDPOINT
+- **Trigger**: S3 Event (kb/ prefix) via EventBridge + API Gateway (sync requests)
+- **Role**: Knowledge Base file indexing
+- **Steps**: (1) download file from S3 (pdf/md/pptx/docx) → (2) add/update the document in the Bedrock Knowledge Base → (3) update the OpenSearch Serverless index → (4) store indexing status in DynamoDB
+- **Env vars**: TABLE_NAME, BUCKET_NAME, KB_ID, AOSS_ENDPOINT
 
 ### 7. Lambda@Edge (cmd/edge-auth, us-east-1)
-- **트리거**: CloudFront Viewer Request
-- **역할**: Cognito JWT 검증
-- **처리**:
-  1. Authorization 헤더에서 JWT 추출
-  2. Cognito JWKS로 서명 검증
-  3. 유효하면 요청 통과, userId를 헤더에 추가
-  4. 무효하면 401 응답 또는 로그인 리다이렉트
-- **환경변수**: COGNITO_USER_POOL_ID, COGNITO_REGION (us-east-1 배포)
+- **Trigger**: CloudFront Viewer Request
+- **Role**: Cognito JWT verification
+- **Steps**: (1) extract JWT from the Authorization header → (2) verify signature via Cognito JWKS → (3) valid: pass the request through, add userId to a header → (4) invalid: 401 response or login redirect
+- **Env vars**: COGNITO_USER_POOL_ID, COGNITO_REGION (deployed to us-east-1)
 
-### 8. Convert-Doc Lambda (cmd/convert-doc, 컨테이너 이미지, ADR-022)
-- **트리거**: S3 Event (docs/ prefix, .ppt/.pptx만) via EventBridge
-- **역할**: 업로드된 PPTX/PPT를 headless LibreOffice로 PDF 사이드카로 변환
-  (in-browser 미리보기용, 기존 PDF `<iframe>` 뷰어 재사용)
-- **처리**:
-  1. S3에서 PPTX/PPT 다운로드
-  2. `soffice --headless --convert-to pdf` 실행 (AWS_* 환경변수 제거 후
-     exec — 신뢰 불가 입력 파싱 시 자격증명 유출 방지)
-  3. 결정론적 사이드카 키로 PDF 업로드 (DynamoDB 쓰기 없음)
-- **IAM**: `docs/*` 읽기 + `docs-pdf/*` 쓰기로 스코프(다른 업로드 카테고리의
-  버킷 전체 `grantReadWrite`보다 좁음)
-- **환경변수**: BUCKET_NAME (미설정 시 콜드스타트에서 즉시 `log.Fatal`)
+### 8. Convert-Doc Lambda (cmd/convert-doc, container image, ADR-022)
+- **Trigger**: S3 Event (docs/ prefix, .ppt/.pptx only) via EventBridge
+- **Role**: converts an uploaded PPTX/PPT to a PDF sidecar via headless LibreOffice (for in-browser preview, reusing the existing PDF `<iframe>` viewer)
+- **Steps**: (1) download the PPTX/PPT from S3 → (2) run `soffice --headless --convert-to pdf` (with `AWS_*` env vars stripped before exec, to prevent credential leakage while parsing untrusted input) → (3) upload the PDF to a deterministic sidecar key (no DynamoDB write)
+- **IAM**: scoped to `docs/*` read + `docs-pdf/*` write (narrower than other upload categories' bucket-wide `grantReadWrite`)
+- **Env vars**: BUCKET_NAME (calls `log.Fatal` immediately at cold start if unset)
 
 ---
 
 ## DynamoDB Access Patterns
 
-| 접근 패턴 | Key Condition | Filter |
+| Access Pattern | Key Condition | Filter |
 |-----------|---------------|--------|
-| 내 회의 목록 | PK=USER#{userId}, SK begins_with MEETING# | entityType=MEETING |
-| 내 회의 날짜순 | GSI1: PK=MEETING#{meetingId}, SK=USER#{userId} | - |
-| 회의 상세 | PK=USER#{userId}, SK=MEETING#{meetingId} | - |
-| 공유받은 목록 | PK=USER#{userId}, SK begins_with SHARED# | - |
-| 첨부파일 목록 | PK=MEETING#{meetingId}, SK begins_with ATTACH# | - |
-| 공유 대상 목록 | GSI1: PK=MEETING#{meetingId}, SK begins_with SHARED# | - |
-| 사용자 이메일 검색 | GSI2: PK begins_with EMAIL#{emailPrefix} | - |
-| 사용자 프로필 | PK=USER#{userId}, SK=PROFILE | - |
+| My meeting list | PK=USER#{userId}, SK begins_with MEETING# | entityType=MEETING |
+| My meetings by date | GSI1: PK=MEETING#{meetingId}, SK=USER#{userId} | - |
+| Meeting detail | PK=USER#{userId}, SK=MEETING#{meetingId} | - |
+| Shared-with-me list | PK=USER#{userId}, SK begins_with SHARED# | - |
+| Attachment list | PK=MEETING#{meetingId}, SK begins_with ATTACH# | - |
+| Share target list | GSI1: PK=MEETING#{meetingId}, SK begins_with SHARED# | - |
+| Search users by email | GSI2: PK begins_with EMAIL#{emailPrefix} | - |
+| User profile | PK=USER#{userId}, SK=PROFILE | - |
 
-### 공유 확인 로직 (meeting detail 접근 시)
+### Share-check logic (on meeting-detail access)
 ```
-1. PK=USER#{userId}, SK=MEETING#{meetingId} 조회 → 소유자인 경우 OK
-2. 실패 시 PK=USER#{userId}, SK=SHARED#{meetingId} 조회 → 공유 받은 경우 permission 확인
-3. 둘 다 실패 → 403 Forbidden
+1. Look up PK=USER#{userId}, SK=MEETING#{meetingId} → owner, OK
+2. On failure, look up PK=USER#{userId}, SK=SHARED#{meetingId} → shared, check permission
+3. Both fail → 403 Forbidden
 ```

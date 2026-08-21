@@ -1,5 +1,25 @@
 # Pending invites for not-yet-registered emails
 
+> **Superseded (partially) by the actual PR #157/#158 implementation.** Only
+> 2 of the 5 flows below shipped -- Meeting share (`ShareMeetingByEmail`) and
+> Account member invite (`AddMember`); doc share, research share, and
+> project member invite still hard-fail on an unresolved email. The shipped
+> item is also named/keyed differently (`PendingShare`, `PENDING_SHARE#
+> {email}` / `PENDING_ACCOUNT#{id}` | `PENDING_MEETING#{id}`, not
+> `PendingInvite`/`PENDINGINVITE#{email}`/`{TYPE}#{entityId}`), and adds one
+> thing this doc didn't call for: it gates on the target actually having an
+> invited Cognito account (`AdminGetUser`) rather than queuing for any
+> unresolved email, plus a 30-day TTL on the queued item -- both closing
+> gaps a PR review raised. See backend/internal/model.PendingShare's doc
+> comment and MeetingService.MaterializePendingShares for the shipped
+> design. This doc's reasoning (the reconciliation hook, the "logged and
+> skipped, not fatal" per-item failure handling) otherwise still describes
+> the shipped behavior; keeping it as background rather than rewriting it.
+> One correction: the "no-list/no-revoke YAGNI" below did NOT ship as
+> written -- two revoke endpoints exist (`DELETE .../members/pending`,
+> `DELETE .../share/pending`), gated on the inviter already knowing the
+> exact email. There is still no list endpoint.
+
 ## Problem
 
 Five email-based grant flows all require the target email to already belong to a

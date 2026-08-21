@@ -4,3 +4,4 @@ export { ActionItemsCard } from './ActionItemsCard';
 export { ProcessingStatus } from './ProcessingStatus';
 export { TranscriptSection } from './TranscriptSection';
 export { SpeakerMapEditor } from './SpeakerMapEditor';
+export { SimCard } from './SimCard';

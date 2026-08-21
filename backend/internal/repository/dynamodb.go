@@ -468,8 +468,8 @@ func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUser
 		return nil, fmt.Errorf("build projectIds projection: %w", err)
 	}
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName:                aws.String(r.tableName),
-		ConsistentRead:           aws.Bool(true),
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + ownerUserID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
@@ -892,6 +892,21 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 		})
 	}
 
+	// 4. Sim run (ADR-033) -- unconditional delete; a Delete against a
+	// nonexistent key is a no-op, not an error, so this is safe whether or
+	// not a simulation was ever run for this meeting. Exactly +1 item
+	// regardless of how many times the meeting was re-simulated, because
+	// SimRun is a singleton (SK=SIMRUN), not a history.
+	transactItems = append(transactItems, types.TransactWriteItem{
+		Delete: &types.Delete{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixSimRun},
+			},
+		},
+	})
+
 	// Execute in batches of 100 (TransactWriteItems limit)
 	for i := 0; i < len(transactItems); i += 100 {
 		end := i + 100
@@ -911,10 +926,10 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 
 // ListMeetingsParams contains parameters for listing meetings
 type ListMeetingsParams struct {
-	UserID     string
-	Tab        string // "all" or "shared"
-	Cursor     string // base64-encoded LastEvaluatedKey
-	Limit      int32
+	UserID string
+	Tab    string // "all" or "shared"
+	Cursor string // base64-encoded LastEvaluatedKey
+	Limit  int32
 }
 
 // ListMeetingsResult contains the result of listing meetings
@@ -1623,10 +1638,16 @@ func (r *DynamoDBRepository) BackfillShareOrigin(ctx context.Context, accountID,
 	return nil
 }
 
-// GetShare retrieves a share record
+// GetShare retrieves a share record. ConsistentRead is required here (not
+// just the repository default) -- RevokePendingShare's already-claimed
+// check calls this immediately after a materialize race may have just
+// written the Share row, and a plain eventually-consistent GetItem could
+// still miss it, defeating that check the same way an eventually
+// consistent GSI query would (see GetPendingShare's doc comment).
 func (r *DynamoDBRepository) GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error) {
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(r.tableName),
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + sharedToID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixShare + meetingID},
@@ -1823,8 +1844,16 @@ func (r *DynamoDBRepository) listSharesForMeeting(ctx context.Context, meetingID
 	return shares, nil
 }
 
-// GetOrCreateUser gets or creates a user profile
-func (r *DynamoDBRepository) GetOrCreateUser(ctx context.Context, userID, email, name string) (*model.User, error) {
+// GetOrCreateUser gets or creates a user profile. The returned bool is true
+// only when this call actually created the PROFILE row -- the Put is
+// conditioned on attribute_not_exists(PK), so two concurrent first requests
+// for the same brand-new userID can't both get created=true (AGENTS.md's
+// conditional-write rule): the loser's condition fails, and it falls back to
+// re-reading the winner's row instead. Callers should NOT treat created=true
+// as a reliable "exactly once, forever" signal for anything beyond this
+// specific PutItem, though -- see MeetingService.MaterializePendingShares,
+// which deliberately does not gate on it.
+func (r *DynamoDBRepository) GetOrCreateUser(ctx context.Context, userID, email, name string) (*model.User, bool, error) {
 	// Try to get existing user
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(r.tableName),
@@ -1834,15 +1863,15 @@ func (r *DynamoDBRepository) GetOrCreateUser(ctx context.Context, userID, email,
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get user: %w", err)
+		return nil, false, fmt.Errorf("failed to get user: %w", err)
 	}
 
 	if result.Item != nil {
 		var user model.User
 		if err := attributevalue.UnmarshalMap(result.Item, &user); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal user: %w", err)
+			return nil, false, fmt.Errorf("failed to unmarshal user: %w", err)
 		}
-		return &user, nil
+		return &user, false, nil
 	}
 
 	// Create new user
@@ -1861,18 +1890,471 @@ func (r *DynamoDBRepository) GetOrCreateUser(ctx context.Context, userID, email,
 
 	item, err := attributevalue.MarshalMap(user)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal user: %w", err)
+		return nil, false, fmt.Errorf("failed to marshal user: %w", err)
 	}
 
+	condExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeNotExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to build condition: %w", err)
+	}
+
+	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:                 aws.String(r.tableName),
+		Item:                      item,
+		ConditionExpression:       condExpr.Condition(),
+		ExpressionAttributeNames:  condExpr.Names(),
+		ExpressionAttributeValues: condExpr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			// Lost the race to a concurrent first request -- re-read its
+			// winning row instead of erroring. ConsistentRead: the winner's
+			// write may not have propagated to an eventually-consistent
+			// read yet even though it already won the condition check.
+			existing, getErr := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+				TableName:      aws.String(r.tableName),
+				ConsistentRead: aws.Bool(true),
+				Key: map[string]types.AttributeValue{
+					"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+					"SK": &types.AttributeValueMemberS{Value: model.PrefixProfile},
+				},
+			})
+			if getErr != nil {
+				return nil, false, fmt.Errorf("failed to re-get user after lost create race: %w", getErr)
+			}
+			if existing.Item == nil {
+				return nil, false, fmt.Errorf("user %s vanished after losing create race (deleted between condition-check failure and re-read)", userID)
+			}
+			var winner model.User
+			if unmarshalErr := attributevalue.UnmarshalMap(existing.Item, &winner); unmarshalErr != nil {
+				return nil, false, fmt.Errorf("failed to unmarshal user after lost create race: %w", unmarshalErr)
+			}
+			return &winner, false, nil
+		}
+		return nil, false, fmt.Errorf("failed to put user: %w", err)
+	}
+
+	return user, true, nil
+}
+
+func pendingShareKey(email, sk string) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{
+		"PK": &types.AttributeValueMemberS{Value: model.PrefixPendingShare + strings.ToLower(email)},
+		"SK": &types.AttributeValueMemberS{Value: sk},
+	}
+}
+
+// PutPendingShare queues an Account- or Meeting-share grant for an email
+// that AddMember/ShareMeetingByEmail couldn't resolve via GetUserByEmail
+// (see PendingShare's doc comment). Upserts on the (email, accountId) or
+// (email, meetingId) pair -- a repeat invite to the same target simply
+// refreshes the queued role/permission rather than erroring.
+func (r *DynamoDBRepository) PutPendingShare(ctx context.Context, share *model.PendingShare) error {
+	share.Email = strings.ToLower(share.Email)
+	share.PK = model.PrefixPendingShare + share.Email
+	switch share.Kind {
+	case model.PendingShareKindAccount:
+		share.SK = model.PrefixPendingAccount + share.AccountID
+	case model.PendingShareKindMeeting:
+		share.SK = model.PrefixPendingMeeting + share.MeetingID
+	default:
+		return fmt.Errorf("invalid pending share kind %q", share.Kind)
+	}
+	now := time.Now().UTC()
+	share.CreatedAt = now
+	share.TTL = now.Add(model.PendingShareTTL).Unix()
+	share.EntityType = model.EntityTypePendingShare
+
+	item, err := attributevalue.MarshalMap(share)
+	if err != nil {
+		return fmt.Errorf("failed to marshal pending share: %w", err)
+	}
 	_, err = r.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(r.tableName),
 		Item:      item,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to put user: %w", err)
+		return fmt.Errorf("failed to put pending share: %w", err)
+	}
+	return nil
+}
+
+// ListPendingShares returns every queued Account/Meeting grant for email,
+// across all inviters. Uses queryAllPages (not a bare single Query) so a
+// heavily-invited email's pending partition is never silently truncated at
+// DynamoDB's 1MB page limit -- same convention as ListAccountMembers etc.
+func (r *DynamoDBRepository) ListPendingShares(ctx context.Context, email string) ([]model.PendingShare, error) {
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixPendingShare + strings.ToLower(email)))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build expression: %w", err)
+	}
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pending shares: %w", err)
+	}
+	var out []model.PendingShare
+	if err := attributevalue.UnmarshalListOfMaps(items, &out); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal pending shares: %w", err)
+	}
+	return out, nil
+}
+
+// GetPendingShare reads one queued grant with a strongly consistent GetItem
+// (not a Query, so no GSI involved). RevokePendingMember/RevokePendingShare
+// call this BEFORE attempting the delete to capture the row's
+// InvitedCognitoSub while it's still there -- narrowing the window in
+// which materialize can complete the transaction (write the grant, delete
+// this row) between this read and the delete attempt that follows, without
+// this call having any way to observe it happening. Returns nil (not an
+// error) when no such row exists.
+func (r *DynamoDBRepository) GetPendingShare(ctx context.Context, email, sk string) (*model.PendingShare, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
+		Key:            pendingShareKey(email, sk),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pending share: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+	var p model.PendingShare
+	if err := attributevalue.UnmarshalMap(result.Item, &p); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal pending share: %w", err)
+	}
+	return &p, nil
+}
+
+// DeletePendingShare removes one queued grant, either after
+// MeetingService.MaterializePendingShares has turned it into a real
+// AccountMember/Share row (or found its target account/meeting gone, or its
+// inviter no longer authorized, and skipped it), or via an owner's explicit
+// revoke of a not-yet-claimed invite. Returns deleted=false (not an error)
+// when there was no row to delete -- via ReturnValues=ALL_OLD rather than a
+// separate read, so this can't race a concurrent write between a check and
+// the delete. Callers that need to distinguish "revoked" from "someone else
+// already materialized/cleared this" (RevokePendingMember/RevokePendingShare)
+// use that boolean; the materialize path itself uses
+// DeletePendingShareIfVersionMatches instead, so this return value never
+// matters there.
+func (r *DynamoDBRepository) DeletePendingShare(ctx context.Context, email, sk string) (bool, error) {
+	out, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName:    aws.String(r.tableName),
+		Key:          pendingShareKey(email, sk),
+		ReturnValues: types.ReturnValueAllOld,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to delete pending share: %w", err)
+	}
+	return len(out.Attributes) > 0, nil
+}
+
+// DeletePendingShareIfVersionMatches drops p's row only if it's still
+// exactly the version that was read (matched by CreatedAt -- PutPendingShare
+// upserts on the same (email, entity) key, so an unconditioned delete could
+// otherwise remove a fresher re-invite that landed in the gap between a
+// caller's read and this delete) --
+// used to drop a PendingShare that a materialize transaction determined is
+// dead (inviter lost authority, or the target already has a grant via
+// another path) without racing a concurrent re-invite of the same target.
+// A condition failure here means someone re-invited in the meantime; that
+// fresh row isn't this call's to delete, so it's treated as a no-op, not
+// an error.
+func (r *DynamoDBRepository) DeletePendingShareIfVersionMatches(ctx context.Context, email string, p *model.PendingShare) error {
+	expr, err := expression.NewBuilder().WithCondition(
+		expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)),
+	).Build()
+	if err != nil {
+		return fmt.Errorf("build delete-version condition: %w", err)
+	}
+	_, err = r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName:                 aws.String(r.tableName),
+		Key:                       pendingShareKey(email, p.SK),
+		ConditionExpression:       expr.Condition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			return nil
+		}
+		return fmt.Errorf("delete versioned pending share %s: %w", p.SK, err)
+	}
+	return nil
+}
+
+// transactionItemFailed reports whether TransactWriteItems item index idx
+// was the (or one of the) items that failed its own condition, given a
+// TransactionCanceledException with exactly wantLen reasons. Returns
+// (failed, ok) -- ok is false if err isn't a TransactionCanceledException
+// with the expected shape, meaning the caller should treat it as an
+// ordinary transient error instead of inspecting cancellation reasons.
+func transactionItemFailed(err error, idx, wantLen int) (failed bool, ok bool) {
+	var tce *types.TransactionCanceledException
+	if !errors.As(err, &tce) || len(tce.CancellationReasons) != wantLen {
+		return false, false
+	}
+	return aws.ToString(tce.CancellationReasons[idx].Code) == "ConditionalCheckFailed", true
+}
+
+// MaterializePendingAccountGrant atomically re-verifies that
+// p.InvitedByUserID is still RoleOwner of p.AccountID, grants userID
+// membership (only if they don't already have a row), and clears the
+// queued PendingShare -- all in one transaction, so nothing can observe
+// "inviter verified as owner" and "membership granted" as two separable
+// steps (AGENTS.md's conditional-write rule; mirrors CreateShareIfMember's
+// existing pattern in this file). The transaction's own Delete condition
+// is inlined below, keyed on createdAt equality, so a concurrent
+// re-invite (fresher role/permission) can't be silently overwritten by a
+// grant using stale data -- if that condition is what failed, this returns
+// (false, nil) so the caller retries with the fresh row next call.
+//
+// If instead the inviter-authority check or the membership Put is what
+// failed (inviter lost ownership, or userID already has a grant via
+// another path), the queued row is genuinely dead -- rather than leaving
+// it queued (which could otherwise resurrect a deliberate LATER revocation
+// of that other-path grant, up to PendingShareTTL later), it's dropped
+// immediately via a separate versioned delete, and this still returns
+// (true, nil): "resolved," even though nothing was granted.
+func (r *DynamoDBRepository) MaterializePendingAccountGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error) {
+	member := &model.AccountMember{
+		PK:         model.PrefixAccount + p.AccountID,
+		SK:         model.PrefixMember + userID,
+		AccountID:  p.AccountID,
+		UserID:     userID,
+		Email:      email,
+		Role:       p.Role,
+		AddedAt:    time.Now().UTC(),
+		GSI1PK:     model.PrefixUser + userID,
+		GSI1SK:     model.PrefixAccount + p.AccountID,
+		EntityType: model.EntityTypeAccountMember,
+	}
+	item, err := attributevalue.MarshalMap(member)
+	if err != nil {
+		return false, fmt.Errorf("marshal account member: %w", err)
 	}
 
-	return user, nil
+	inviterExpr, err := expression.NewBuilder().WithCondition(
+		expression.AttributeExists(expression.Name("PK")).And(
+			expression.Name("role").Equal(expression.Value(model.RoleOwner)),
+		),
+	).Build()
+	if err != nil {
+		return false, fmt.Errorf("build inviter-owner condition: %w", err)
+	}
+	notExistsExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeNotExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return false, fmt.Errorf("build not-exists condition: %w", err)
+	}
+	deleteExpr, err := expression.NewBuilder().WithCondition(
+		expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)),
+	).Build()
+	if err != nil {
+		return false, fmt.Errorf("build delete-version condition: %w", err)
+	}
+
+	const ( // TransactItems indices, for CancellationReasons inspection below
+		idxInviter = 0
+		idxPut     = 1
+		idxDelete  = 2
+		numItems   = 3
+	)
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixAccount + p.AccountID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixMember + p.InvitedByUserID},
+					},
+					ConditionExpression:       inviterExpr.Condition(),
+					ExpressionAttributeNames:  inviterExpr.Names(),
+					ExpressionAttributeValues: inviterExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:                 aws.String(r.tableName),
+					Item:                      item,
+					ConditionExpression:       notExistsExpr.Condition(),
+					ExpressionAttributeNames:  notExistsExpr.Names(),
+					ExpressionAttributeValues: notExistsExpr.Values(),
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName:                 aws.String(r.tableName),
+					Key:                       pendingShareKey(email, p.SK),
+					ConditionExpression:       deleteExpr.Condition(),
+					ExpressionAttributeNames:  deleteExpr.Names(),
+					ExpressionAttributeValues: deleteExpr.Values(),
+				},
+			},
+		},
+	})
+	if err == nil {
+		return true, nil
+	}
+	if deleteFailed, ok := transactionItemFailed(err, idxDelete, numItems); ok && deleteFailed {
+		return false, nil
+	}
+	inviterFailed, ok1 := transactionItemFailed(err, idxInviter, numItems)
+	putFailed, ok2 := transactionItemFailed(err, idxPut, numItems)
+	if (ok1 && inviterFailed) || (ok2 && putFailed) {
+		if delErr := r.DeletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
+			return false, fmt.Errorf("drop dead pending account grant for %s: %w", p.AccountID, delErr)
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("materialize pending account grant for %s: %w", p.AccountID, err)
+}
+
+// MaterializePendingMeetingGrant atomically re-verifies that
+// p.InvitedByUserID still owns p.MeetingID, grants userID a direct Share
+// (only if they don't already have one), and clears the queued
+// PendingShare -- all in one transaction. See
+// MaterializePendingAccountGrant's doc comment for why this needs to be
+// one atomic operation, why the Delete is version-conditioned, and why a
+// dead (not just stale) grant is dropped via a separate delete rather than
+// left queued.
+func (r *DynamoDBRepository) MaterializePendingMeetingGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error) {
+	now := time.Now().UTC()
+	shareForRecipient := &model.Share{
+		PK:         model.PrefixUser + userID,
+		SK:         model.PrefixShare + p.MeetingID,
+		MeetingID:  p.MeetingID,
+		OwnerID:    p.InvitedByUserID,
+		OwnerEmail: p.InvitedByEmail,
+		SharedToID: userID,
+		Email:      email,
+		Permission: p.Permission,
+		CreatedAt:  now,
+		EntityType: "SHARE",
+	}
+	item1, err := attributevalue.MarshalMap(shareForRecipient)
+	if err != nil {
+		return false, fmt.Errorf("marshal share (recipient): %w", err)
+	}
+	shareForMeeting := &model.Share{
+		PK:         model.PrefixMeeting + p.MeetingID,
+		SK:         model.PrefixShareTo + userID,
+		MeetingID:  p.MeetingID,
+		OwnerID:    p.InvitedByUserID,
+		OwnerEmail: p.InvitedByEmail,
+		SharedToID: userID,
+		Email:      email,
+		Permission: p.Permission,
+		CreatedAt:  now,
+		EntityType: "SHARE",
+	}
+	item2, err := attributevalue.MarshalMap(shareForMeeting)
+	if err != nil {
+		return false, fmt.Errorf("marshal share (meeting): %w", err)
+	}
+
+	meetingExistsExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return false, fmt.Errorf("build meeting-exists condition: %w", err)
+	}
+	notExistsExpr, err := expression.NewBuilder().
+		WithCondition(expression.AttributeNotExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return false, fmt.Errorf("build not-exists condition: %w", err)
+	}
+	deleteExpr, err := expression.NewBuilder().WithCondition(
+		expression.Name("createdAt").Equal(expression.Value(p.CreatedAt)),
+	).Build()
+	if err != nil {
+		return false, fmt.Errorf("build delete-version condition: %w", err)
+	}
+
+	const ( // TransactItems indices, for CancellationReasons inspection below
+		idxMeeting = 0
+		idxPut1    = 1
+		idxPut2    = 2
+		idxDelete  = 3
+		numItems   = 4
+	)
+	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{
+				// PK: USER#{ownerId}, SK: MEETING#{meetingId} -- exists only
+				// if InvitedByUserID still owns this exact meeting; covers
+				// both "meeting deleted" and "inviter isn't the owner
+				// anymore" with one condition.
+				ConditionCheck: &types.ConditionCheck{
+					TableName: aws.String(r.tableName),
+					Key: map[string]types.AttributeValue{
+						"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + p.InvitedByUserID},
+						"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + p.MeetingID},
+					},
+					ConditionExpression:       meetingExistsExpr.Condition(),
+					ExpressionAttributeNames:  meetingExistsExpr.Names(),
+					ExpressionAttributeValues: meetingExistsExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:                 aws.String(r.tableName),
+					Item:                      item1,
+					ConditionExpression:       notExistsExpr.Condition(),
+					ExpressionAttributeNames:  notExistsExpr.Names(),
+					ExpressionAttributeValues: notExistsExpr.Values(),
+				},
+			},
+			{
+				Put: &types.Put{
+					TableName:                 aws.String(r.tableName),
+					Item:                      item2,
+					ConditionExpression:       notExistsExpr.Condition(),
+					ExpressionAttributeNames:  notExistsExpr.Names(),
+					ExpressionAttributeValues: notExistsExpr.Values(),
+				},
+			},
+			{
+				Delete: &types.Delete{
+					TableName:                 aws.String(r.tableName),
+					Key:                       pendingShareKey(email, p.SK),
+					ConditionExpression:       deleteExpr.Condition(),
+					ExpressionAttributeNames:  deleteExpr.Names(),
+					ExpressionAttributeValues: deleteExpr.Values(),
+				},
+			},
+		},
+	})
+	if err == nil {
+		return true, nil
+	}
+	if deleteFailed, ok := transactionItemFailed(err, idxDelete, numItems); ok && deleteFailed {
+		return false, nil
+	}
+	meetingFailed, ok1 := transactionItemFailed(err, idxMeeting, numItems)
+	put1Failed, ok2 := transactionItemFailed(err, idxPut1, numItems)
+	put2Failed, ok3 := transactionItemFailed(err, idxPut2, numItems)
+	if (ok1 && meetingFailed) || (ok2 && put1Failed) || (ok3 && put2Failed) {
+		if delErr := r.DeletePendingShareIfVersionMatches(ctx, email, p); delErr != nil {
+			return false, fmt.Errorf("drop dead pending meeting grant for %s: %w", p.MeetingID, delErr)
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("materialize pending meeting grant for %s: %w", p.MeetingID, err)
 }
 
 // SearchUsersByEmail searches users by email prefix using GSI2
@@ -1959,6 +2441,141 @@ func (r *DynamoDBRepository) GetUserByEmail(ctx context.Context, email string) (
 	}
 
 	return &user, nil
+}
+
+// batchGetMaxRetries/batchGetRetryBackoff bound BatchGetUserLastLogins'
+// UnprocessedKeys retry against sustained throttling.
+const (
+	batchGetMaxRetries   = 5
+	batchGetRetryBackoff = 100 * time.Millisecond
+)
+
+// BatchGetUserLastLogins retrieves lastLoginAt for a set of user IDs from
+// their USER#{userId}/LOGIN items (written by the PostAuthentication
+// trigger, see model.UserLogin). Users who have never logged in simply have
+// no entry in the returned map -- callers must treat that as "unknown", not
+// as a signal to zero-value it, since a zero time.Time would incorrectly
+// read as "logged in at the Unix epoch" rather than "no record".
+func (r *DynamoDBRepository) BatchGetUserLastLogins(ctx context.Context, userIDs []string) (map[string]time.Time, error) {
+	if len(userIDs) == 0 {
+		return map[string]time.Time{}, nil
+	}
+
+	result := make(map[string]time.Time, len(userIDs))
+
+	// Process in chunks of 100 (BatchGetItem limit)
+	for i := 0; i < len(userIDs); i += 100 {
+		end := i + 100
+		if end > len(userIDs) {
+			end = len(userIDs)
+		}
+		chunk := userIDs[i:end]
+
+		ddbKeys := make([]map[string]types.AttributeValue, len(chunk))
+		for j, id := range chunk {
+			ddbKeys[j] = map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + id},
+				"SK": &types.AttributeValueMemberS{Value: model.SKUserLogin},
+			}
+		}
+
+		requestItems := map[string]types.KeysAndAttributes{
+			r.tableName: {Keys: ddbKeys},
+		}
+
+		// Bounded retry with backoff on UnprocessedKeys (throttling) -- an
+		// unconditional retry loop would tight-spin against DynamoDB if the
+		// table stays throttled. (Other BatchGetItem call sites in this file
+		// retry UnprocessedKeys unconditionally too; not touched here --
+		// keep this fix scoped to what the review flagged.)
+		for attempt := 0; len(requestItems) > 0 && attempt < batchGetMaxRetries; attempt++ {
+			if attempt > 0 {
+				time.Sleep(batchGetRetryBackoff * time.Duration(attempt))
+			}
+			out, err := r.client.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
+				RequestItems: requestItems,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to batch get user logins: %w", err)
+			}
+
+			for _, item := range out.Responses[r.tableName] {
+				var login model.UserLogin
+				if err := attributevalue.UnmarshalMap(item, &login); err != nil {
+					return nil, fmt.Errorf("failed to unmarshal user login: %w", err)
+				}
+				// A zero LastLoginAt (missing/malformed attribute -- should
+				// not happen since the PostAuthentication trigger always
+				// writes it, but defensively) must never be stored: callers
+				// treat "present in this map" as "has a real login record",
+				// and a zero time.Time reads as 1970 -- old enough to flip
+				// Dormant=true for a user who may simply have no login yet.
+				if login.LastLoginAt.IsZero() {
+					continue
+				}
+				userID := strings.TrimPrefix(login.PK, model.PrefixUser)
+				result[userID] = login.LastLoginAt
+			}
+
+			if len(out.UnprocessedKeys) > 0 {
+				requestItems = out.UnprocessedKeys
+			} else {
+				requestItems = nil
+			}
+		}
+
+		// Retry budget exhausted with keys still unprocessed (sustained
+		// throttling) -- returning the partial result with a nil error
+		// would let those users' absence from the map read as "no login
+		// record" (not dormant) instead of "unknown", which is a different
+		// and misleading claim. Surface it as an error so ListUsers can
+		// degrade to LastLoginUnavailable=true instead.
+		if len(requestItems) > 0 {
+			return nil, fmt.Errorf("failed to batch get user logins: exhausted %d retries with unprocessed keys remaining", batchGetMaxRetries)
+		}
+	}
+
+	return result, nil
+}
+
+// DetachDeletedUserProfile removes the GSI2 email-search keys from a user's
+// PROFILE item after their Cognito account is deleted, without deleting the
+// profile itself (meeting/document data referencing this userID must keep
+// resolving). Without this, re-inviting the same email creates a second
+// PROFILE item with the same GSI2PK, and GetUserByEmail could non-
+// deterministically resolve to the dead userID instead of the new one. A
+// missing profile (nothing to detach) is not an error.
+func (r *DynamoDBRepository) DetachDeletedUserProfile(ctx context.Context, userID string) error {
+	update := expression.Set(expression.Name("deletedAt"), expression.Value(time.Now().UTC())).
+		Remove(expression.Name("GSI2PK")).
+		Remove(expression.Name("GSI2SK"))
+	expr, err := expression.NewBuilder().
+		WithUpdate(update).
+		WithCondition(expression.AttributeExists(expression.Name("PK"))).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to build expression: %w", err)
+	}
+
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixProfile},
+		},
+		UpdateExpression:          expr.Update(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ConditionExpression:       expr.Condition(),
+	})
+	if err != nil {
+		var cce *types.ConditionalCheckFailedException
+		if errors.As(err, &cce) {
+			return nil // no profile to detach -- not an error
+		}
+		return fmt.Errorf("failed to detach deleted user profile: %w", err)
+	}
+	return nil
 }
 
 // GetIntegration retrieves an integration by userID and service

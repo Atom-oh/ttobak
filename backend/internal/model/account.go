@@ -80,9 +80,13 @@ type UpdateMemberRequest struct {
 }
 
 type AccountMemberDTO struct {
-	UserID string `json:"userId"`
+	UserID string `json:"userId,omitempty"`
 	Email  string `json:"email,omitempty"`
 	Role   string `json:"role"`
+	// Pending is true when this grant was queued as a PendingShare because
+	// the invitee has an invited-but-not-yet-logged-in Cognito account and
+	// no DynamoDB PROFILE row exists yet; UserID is empty in that case.
+	Pending bool `json:"pending,omitempty"`
 }
 
 type AccountResponse struct {

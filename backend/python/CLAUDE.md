@@ -7,6 +7,7 @@ Python Lambda functions for specialized AI workloads.
 - `crawler/` — Step Functions pipeline: orchestrator, news-crawler, tech-crawler, ingest-trigger
 - `research-agent/` — AgentCore Runtime container (FastAPI + Strands Agents)
 - `research-tools/` — Tool Lambdas for Bedrock Agent (save-report, fetch-page)
+- `sim/` — Cost/sizing simulator worker (`ttobak-sim`, ADR-033): fetches AWS Price List data, drives an AgentCore Code Interpreter session (SANDBOX network, empty execution role) through a Sonnet codegen/execute/repair loop, writes chart PNGs + report + generated code to S3. Invoked async by the Go `api` Lambda; never receives the meeting transcript.
 
 ## Conventions
 - Runtime: Python 3.12 (Lambda managed runtime)

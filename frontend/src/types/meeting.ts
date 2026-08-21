@@ -24,6 +24,47 @@ export interface Meeting {
   audioKeys?: string[];
   /** Per ADR-014 Phase 6: ordered predecessor meeting IDs whose summaries are prepended to this meeting's prompt. */
   linkedMeetingIds?: string[];
+  /** ADR-033 cost/sizing simulator, singleton per meeting. */
+  simRun?: SimRun;
+}
+
+/** Mirrors backend/internal/model.SimRequirement's JSON shape exactly. */
+export interface SimRequirement {
+  key: string;
+  label: string;
+  value: string;
+  unit?: string;
+  required: boolean;
+  source: 'extracted' | 'user';
+  /** transcript://{segmentId} deep link (ADR-013), empty when user-entered. */
+  evidence?: string;
+}
+
+export interface SimOption {
+  name: string;
+  description?: string;
+}
+
+export interface SimChart {
+  key: string;
+  url?: string;
+}
+
+/** Mirrors backend/internal/model.SimRunResponse's JSON shape (ADR-033). */
+export interface SimRun {
+  simRunId: string;
+  status: 'extracted' | 'queued' | 'running' | 'done' | 'error';
+  requirements?: SimRequirement[];
+  options?: SimOption[];
+  charts?: SimChart[];
+  reportMarkdown?: string;
+  codeKey?: string;
+  /** Presigned download URL for codeKey (generated.py) -- codeKey alone is a raw S3 key, unreachable from the browser post-ADR-027. */
+  codeUrl?: string;
+  priceSnapshotAt?: string;
+  errorMessage?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Participant {
@@ -227,6 +268,8 @@ export interface ChatMessage {
 export interface Research {
   researchId: string;
   userId?: string;
+  /** User-editable display label, defaults to `topic` at creation. `topic` (the original prompt) stays immutable. */
+  title?: string;
   topic: string;
   mode: 'quick' | 'standard' | 'deep';
   status: 'planning' | 'approved' | 'running' | 'done' | 'error';
@@ -269,9 +312,16 @@ export interface AccountSummary {
 }
 
 export interface AccountMember {
-  userId: string;
+  // Omitted (not empty string) on a pending grant -- the backend DTO uses
+  // `json:"userId,omitempty"`.
+  userId?: string;
   email?: string;
   role: string;
+  // true when the invitee has an invited-but-not-yet-logged-in Cognito
+  // account and no DynamoDB profile exists yet -- the grant is queued and
+  // becomes a real membership automatically on their first login. userId
+  // is omitted in that case.
+  pending?: boolean;
 }
 
 export interface Account {

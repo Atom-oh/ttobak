@@ -19,6 +19,7 @@ import { ProcessingStatus } from '@/components/meeting/ProcessingStatus';
 import { TranscriptSection } from '@/components/meeting/TranscriptSection';
 import { SpeakerMapEditor } from '@/components/meeting/SpeakerMapEditor';
 import AccountSection from '@/components/meeting/AccountSection';
+import { SimCard } from '@/components/meeting/SimCard';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { meetingsApi } from '@/lib/api';
 import type { Meeting, MeetingDetail, ActionItem, SharedUser } from '@/types/meeting';
@@ -587,6 +588,17 @@ function MeetingDetailContent() {
                 </p>
               </div>
             </section>
+          )}
+
+          {/* Cost/sizing simulator (ADR-033) — only once the note itself is
+              done; simRun has its own lifecycle independent of meeting.status
+              (see useSimulation's doc comment), never written back onto it. */}
+          {meeting.status === 'done' && (
+            <SimCard
+              meetingId={meeting.meetingId}
+              simRun={meeting.simRun}
+              onUpdate={(simRun) => setMeeting((prev) => (prev ? { ...prev, simRun } : prev))}
+            />
           )}
 
           {/* Attachments Gallery */}

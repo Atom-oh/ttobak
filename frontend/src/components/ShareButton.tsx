@@ -25,7 +25,54 @@ interface ShareButtonProps {
    * offering the toggle would promise an edit permission that never lands.
    */
   readOnly?: boolean;
+  /**
+   * Shows a free-text "share/invite by email" row when a search yields no
+   * match (or none of the matches equal the typed email) and the query
+   * looks like an email. Only meeting share supports this today --
+   * ShareMeetingByEmail queues a PendingShare for an invited-but-not-yet-
+   * logged-in target (see backend/internal/model.PendingShare); doc/
+   * research share have no such path and would just 404. Defaults to
+   * false so those callers get the old search-only behavior unchanged.
+   */
+  allowEmailInvite?: boolean;
+  /**
+   * Cancels a queued PendingShare invite by email (there's no userId yet
+   * for one, so `unshareApi` can't be reused). Only wired when
+   * allowEmailInvite is -- pending's other current caller, doc/research
+   * share, has no such route.
+   */
+  revokePendingApi?: (id: string, email: string) => Promise<unknown>;
 }
+
+// shareApi's return shape varies by entity (meeting share vs. doc share), so
+// this only recognizes the one shape that carries a pending flag (meeting
+// share's `{ sharedWith: { pending } }`, see model.SharedWithResponse) --
+// anything else (including doc share's response) is treated as a normal,
+// already-materialized share.
+function isPendingShareResult(result: unknown): boolean {
+  if (!result || typeof result !== 'object') return false;
+  const sharedWith = (result as { sharedWith?: unknown }).sharedWith;
+  if (!sharedWith || typeof sharedWith !== 'object') return false;
+  return (sharedWith as { pending?: unknown }).pending === true;
+}
+
+// Pulls the real userId/email back out of a non-pending share result --
+// needed because a free-text email can resolve to an already-registered
+// user (one usersApi.search just didn't happen to surface), in which case
+// the share succeeds immediately and this is the only place the real
+// userId exists; falling back to the input's own placeholder userId ('')
+// would add an unrevoke-able ghost row to the list.
+function extractSharedWithUser(result: unknown): { userId?: string; email?: string } | null {
+  if (!result || typeof result !== 'object') return null;
+  const sharedWith = (result as { sharedWith?: unknown }).sharedWith;
+  if (!sharedWith || typeof sharedWith !== 'object') return null;
+  return sharedWith as { userId?: string; email?: string };
+}
+
+// A loose but sufficient check for "looks like a real email" -- this only
+// gates whether to show the free-text share row below, not any backend
+// validation, so it doesn't need to be a strict RFC 5322 match.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Backwards-compatible wrapper for meetings
 interface MeetingShareButtonProps {
@@ -53,6 +100,8 @@ export function MeetingShareButton({
       unshareApi={meetingsApi.unshare}
       label="Share meeting"
       extraSection={<NotionPushSection meetingId={meetingId} />}
+      allowEmailInvite
+      revokePendingApi={meetingsApi.revokePendingShare}
     />
   );
 }
@@ -105,6 +154,8 @@ export function ShareButton({
   label = 'Share',
   extraSection,
   readOnly,
+  allowEmailInvite = false,
+  revokePendingApi,
 }: ShareButtonProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -112,8 +163,21 @@ export function ShareButton({
   const [isSearching, setIsSearching] = useState(false);
   const [selectedPermission, setSelectedPermission] = useState<'read' | 'edit'>('read');
   const [isSharing, setIsSharing] = useState(false);
+  const [pendingNotice, setPendingNotice] = useState<string | null>(null);
+  // The email a pending notice is about, so its Cancel button can call
+  // revokePendingApi without needing a listing feature -- the invite was
+  // just sent in this exact call, so the email is already known here.
+  const [pendingNoticeEmail, setPendingNoticeEmail] = useState<string | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // usersApi.search already filters out anyone in `sharedWith` (see the
+  // effect below), so a typed email that's already shared is absent from
+  // searchResults for that reason, not because it's unknown -- the
+  // free-text row must check `sharedWith` directly, not just
+  // searchResults, or it offers to "invite" someone already shared.
+  const isAlreadyShared = (query: string) =>
+    sharedWith.some((s) => s.email.toLowerCase() === query.trim().toLowerCase());
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -164,16 +228,31 @@ export function ShareButton({
 
   const handleShare = async (user: User) => {
     setIsSharing(true);
+    setPendingNotice(null);
+    setPendingNoticeEmail(null);
     try {
       const permission = readOnly ? 'read' : selectedPermission;
-      await shareApi(entityId, { email: user.email, permission });
-      onShare?.({
-        userId: user.userId,
-        email: user.email,
-        name: user.name,
-        permission: readOnly ? 'read' : selectedPermission,
-        sharedAt: new Date().toISOString(),
-      });
+      const result = await shareApi(entityId, { email: user.email, permission });
+      if (isPendingShareResult(result)) {
+        // Invited but not yet logged in: no real Share row exists yet
+        // (see PendingShare), so don't optimistically add a fake entry to
+        // sharedWith -- it'll appear for real once they sign in.
+        setPendingNotice(`${user.email}님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 공유됩니다.`);
+        setPendingNoticeEmail(user.email);
+      } else {
+        // A free-text email can resolve to an already-registered user
+        // (search just didn't happen to surface them) -- prefer the
+        // response's real userId/email over the input's own placeholder
+        // ('' for a free-text entry) so the row stays unshare-able.
+        const resolved = extractSharedWithUser(result);
+        onShare?.({
+          userId: resolved?.userId || user.userId,
+          email: resolved?.email || user.email,
+          name: user.name,
+          permission: readOnly ? 'read' : selectedPermission,
+          sharedAt: new Date().toISOString(),
+        });
+      }
       setSearchQuery('');
       setSearchResults([]);
     } catch (err) {
@@ -189,6 +268,17 @@ export function ShareButton({
       onUnshare?.(userId);
     } catch (err) {
       console.error('Failed to unshare:', err);
+    }
+  };
+
+  const handleRevokePending = async () => {
+    if (!revokePendingApi || !pendingNoticeEmail) return;
+    try {
+      await revokePendingApi(entityId, pendingNoticeEmail);
+      setPendingNotice(null);
+      setPendingNoticeEmail(null);
+    } catch (err) {
+      console.error('Failed to revoke pending share:', err);
     }
   };
 
@@ -254,6 +344,21 @@ export function ShareButton({
             )}
           </div>
 
+          {pendingNotice && (
+            <div className="px-4 py-3 text-sm text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
+              <span>{pendingNotice}</span>
+              {revokePendingApi && (
+                <button
+                  type="button"
+                  onClick={handleRevokePending}
+                  className="shrink-0 font-semibold underline hover:no-underline"
+                >
+                  취소
+                </button>
+              )}
+            </div>
+          )}
+
           {searchQuery.length > 0 && searchQuery.length < 2 && (
             <div className="px-4 py-3 text-center text-slate-400 text-sm">
               2글자 이상 입력해주세요
@@ -267,27 +372,61 @@ export function ShareButton({
                   <div className="animate-spin rounded-full h-5 w-5 border-2 border-primary border-t-transparent mx-auto" />
                 </div>
               ) : searchResults.length > 0 ? (
-                searchResults.map((user) => (
-                  <button
-                    key={user.userId}
-                    onClick={() => handleShare(user)}
-                    disabled={isSharing}
-                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-bold">
-                      {user.name?.charAt(0) || user.email.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex-1 text-left">
-                      <p className="text-sm font-medium text-slate-900 dark:text-white">
-                        {user.name || user.email}
-                      </p>
-                      {user.name && (
-                        <p className="text-xs text-slate-500">{user.email}</p>
-                      )}
-                    </div>
-                    <span className="material-symbols-outlined text-primary">add</span>
-                  </button>
-                ))
+                <>
+                  {searchResults.map((user) => (
+                    <button
+                      key={user.userId}
+                      onClick={() => handleShare(user)}
+                      disabled={isSharing}
+                      className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-bold">
+                        {user.name?.charAt(0) || user.email.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="flex-1 text-left">
+                        <p className="text-sm font-medium text-slate-900 dark:text-white">
+                          {user.name || user.email}
+                        </p>
+                        {user.name && (
+                          <p className="text-xs text-slate-500">{user.email}</p>
+                        )}
+                      </div>
+                      <span className="material-symbols-outlined text-primary">add</span>
+                    </button>
+                  ))}
+                  {allowEmailInvite && EMAIL_RE.test(searchQuery.trim()) && !isAlreadyShared(searchQuery) && !searchResults.some((u) => u.email.toLowerCase() === searchQuery.trim().toLowerCase()) && (
+                    <button
+                      onClick={() => handleShare({ userId: '', email: searchQuery.trim() })}
+                      disabled={isSharing}
+                      className="w-full flex items-center gap-2 px-4 py-3 text-left border-t border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+                    >
+                      <span className="material-symbols-outlined text-primary">mail</span>
+                      <p className="text-sm text-slate-700 dark:text-slate-300 truncate">이 이메일로 공유: {searchQuery.trim()}</p>
+                    </button>
+                  )}
+                </>
+              ) : allowEmailInvite && EMAIL_RE.test(searchQuery.trim()) && !isAlreadyShared(searchQuery) ? (
+                // usersApi.search only finds PROFILE rows (SearchUsersByEmail
+                // via GSI2) -- an invited-but-never-logged-in email has none
+                // by definition, so it can never show up as a search result
+                // (searchResults.length is 0 here). Without this fallback,
+                // the pending-share path this component's
+                // isPendingShareResult/pendingNotice logic exists for would
+                // be unreachable from the UI. Gated on allowEmailInvite so
+                // doc/research share (no pending support on the backend)
+                // don't show a row that just 404s -- and on !isAlreadyShared
+                // so typing an email that's already in `sharedWith` (which
+                // is exactly why it's absent from searchResults above, not
+                // because it doesn't exist) doesn't offer to "invite" it a
+                // second time.
+                <button
+                  onClick={() => handleShare({ userId: '', email: searchQuery.trim() })}
+                  disabled={isSharing}
+                  className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors disabled:opacity-50"
+                >
+                  <span className="material-symbols-outlined text-primary">mail</span>
+                  <p className="text-sm text-slate-700 dark:text-slate-300 truncate">이 이메일로 공유: {searchQuery.trim()}</p>
+                </button>
               ) : (
                 <div className="p-4 text-center text-slate-500 text-sm">
                   No users found
