@@ -60,6 +60,28 @@ export class TranscribeStreamingSession {
   private audioResolve: ((value: IteratorResult<AudioChunkMessage>) => void) | null = null;
   private audioDone = false;
 
+  // Stall watchdog for the browser MediaStream path only (startNative() has
+  // no AudioContext to suspend — Tauri feeds pushChunk directly from Rust).
+  // Mobile OSes suspend a page's AudioContext on screen lock/background to
+  // save power; when that happens the AudioWorklet stops calling process(),
+  // pushChunk() stops firing, and this class's async iterator blocks
+  // forever with no error — the mic indicator/track stays "live" the whole
+  // time, so nothing else in the recording UI notices. This timer is the
+  // only thing that detects that silence and surfaces it.
+  private lastChunkAt = 0;
+  private stallReported = false;
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private notRunningTicks = 0;
+  private readonly STALL_TIMEOUT_MS = 15_000;
+  private readonly STALL_CHECK_INTERVAL_MS = 5_000;
+  // Caps the "AudioContext not running yet" resume grace (see the tick
+  // logic below) to 2 checks (~10s) -- resume() can keep failing
+  // indefinitely (e.g. iOS Safari refusing resume() without a fresh user
+  // gesture after an unlock), and an unbounded grace would silence the
+  // stall watchdog for as long as that persists, permanently blocking the
+  // Web Speech fallback this class exists to trigger.
+  private readonly MAX_NOT_RUNNING_GRACE_TICKS = 2;
+
   constructor(private config: TranscribeStreamingConfig) {}
 
   /** Start from a browser MediaStream (mic/tab modes). */
@@ -71,6 +93,17 @@ export class TranscribeStreamingSession {
     // differs (e.g. many Bluetooth headsets negotiate 16/24kHz), especially
     // with a second AudioContext already open for the RecordButton waveform.
     this.audioContext = new AudioContext();
+    // Mirrors RecordButton's tryResumeAudioContext: iOS/mobile browsers can
+    // suspend this context (screen lock, background) independently of the
+    // waveform's own AudioContext, since they're two separate instances.
+    const tryResumeAudioContext = () => {
+      if (this.audioContext && this.audioContext.state === 'suspended' && this.isActive) {
+        this.audioContext.resume().catch((err) => {
+          console.warn('Transcribe Streaming: AudioContext resume failed:', err);
+        });
+      }
+    };
+    this.audioContext.onstatechange = tryResumeAudioContext;
     await this.audioContext.audioWorklet.addModule('/pcm-processor.js');
     const source = this.audioContext.createMediaStreamSource(stream);
     this.audioWorkletNode = new AudioWorkletNode(this.audioContext, 'pcm-processor');
@@ -78,6 +111,43 @@ export class TranscribeStreamingSession {
     this.audioWorkletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
       this.pushChunk(new Uint8Array(event.data));
     };
+
+    this.lastChunkAt = Date.now();
+    this.stallReported = false;
+    this.notRunningTicks = 0;
+    this.watchdogTimer = setInterval(() => {
+      if (!this.isActive) return;
+      tryResumeAudioContext();
+      if (this.audioContext && this.audioContext.state !== 'running') {
+        // resume() above is async and hasn't necessarily landed yet (e.g.
+        // right after an unlock, where lastChunkAt is still stale from
+        // before the suspend) -- without this, the very next tick can see
+        // silentMs already past STALL_TIMEOUT_MS and report a stall before
+        // resume() ever gets a chance to actually restart the chunk flow,
+        // which defeats the resume path entirely. Treat "not running yet"
+        // as one more grace interval rather than accumulated silence, but
+        // only for a bounded number of ticks -- see
+        // MAX_NOT_RUNNING_GRACE_TICKS's doc comment for why this can't be
+        // unbounded.
+        if (this.notRunningTicks < this.MAX_NOT_RUNNING_GRACE_TICKS) {
+          this.notRunningTicks++;
+          this.lastChunkAt = Date.now();
+          return;
+        }
+      } else {
+        this.notRunningTicks = 0;
+      }
+      const silentMs = Date.now() - this.lastChunkAt;
+      if (silentMs > this.STALL_TIMEOUT_MS) {
+        if (!this.stallReported) {
+          this.stallReported = true;
+          console.warn(`Transcribe Streaming: no audio chunks for ${silentMs}ms — audio pipeline likely suspended`);
+          this.config.onError('transcribe-stream-stalled');
+        }
+      } else {
+        this.stallReported = false;
+      }
+    }, this.STALL_CHECK_INTERVAL_MS);
 
     await this.connectAndTranscribe();
   }
@@ -98,6 +168,7 @@ export class TranscribeStreamingSession {
    * it directly for every chunk they receive.
    */
   pushChunk(chunk: Uint8Array): void {
+    this.lastChunkAt = Date.now();
     if (this.audioResolve) {
       const resolve = this.audioResolve;
       this.audioResolve = null;
@@ -221,6 +292,11 @@ export class TranscribeStreamingSession {
   stop(): void {
     this.isActive = false;
     this.audioDone = true;
+
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
 
     // Resolve any pending audio queue read
     if (this.audioResolve) {
