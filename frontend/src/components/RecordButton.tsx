@@ -24,7 +24,16 @@ interface RecordButtonProps {
    * Streaming. Not called in mic/tab modes (those feed Transcribe via an
    * AudioWorklet on the MediaStream instead). */
   onNativePcmChunk?: (chunk: Uint8Array) => void;
-  onError?: (error: string) => void;
+  /**
+   * `terminal: true` means no audio was captured at all -- there is no
+   * partial blob in flight and never will be for this recording (used by
+   * finalizeRecordingBlob's 0-byte case). By the time this fires,
+   * onRecordingStop has already run (stopRecording calls it synchronously
+   * before this), so `session.isRecording` reads false and a plain
+   * `onError` would otherwise land on the live-captions error channel
+   * instead of the same terminal-failure banner native mode uses.
+   */
+  onError?: (error: string, opts?: { terminal?: boolean }) => void;
   onRecordingStart?: (stream: MediaStream | null) => void | Promise<void>;
   onRecordingPause?: () => void;
   onRecordingResume?: () => void;
@@ -84,6 +93,10 @@ export function RecordButton({
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  // Guards mediaRecorder.onstop and stopRecording's already-inactive branch
+  // against BOTH finalizing the same recording's chunks -- see
+  // finalizeRecordingBlob below. Reset per recording.
+  const stopFinalizedRef = useRef(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -330,13 +343,20 @@ export function RecordButton({
       streamRef.current = stream;
       isRecordingRef.current = true;
 
-      if (audioSource === 'tab') {
-        stream.getAudioTracks()[0].onended = () => {
-          if (isRecordingRef.current) {
-            stopRecording();
-          }
-        };
-      }
+      // Mobile Safari/Chrome can kill the mic track out from under a running
+      // recording (screen lock, phone call, another app grabbing the mic,
+      // OS memory pressure on a backgrounded tab) with no visible signal
+      // otherwise -- MediaRecorder just silently stops receiving data, so
+      // the UI still reads "recording" while the resulting blob ends up
+      // empty or truncated. Route it through the same graceful stopRecording
+      // path the 'tab' source already used only for its own end event, so
+      // whatever was captured up to that point still gets finalized/
+      // uploaded instead of the session hanging in an unrecoverable state.
+      stream.getAudioTracks()[0].onended = () => {
+        if (isRecordingRef.current) {
+          stopRecording();
+        }
+      };
 
       const mimeType = getPreferredMimeType();
       const mediaRecorder = new MediaRecorder(stream, { mimeType });
@@ -368,6 +388,7 @@ export function RecordButton({
       onAnalyserReady?.(analyser);
 
       chunksRef.current = [];
+      stopFinalizedRef.current = false;
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -375,16 +396,28 @@ export function RecordButton({
         }
       };
 
-      mediaRecorder.onstop = async () => {
-        cleanupAudioResources();
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        if (onBlobReady) {
-          setRecordingState('idle');
-          setElapsedTime(0);
-          onBlobReady(blob, mimeType);
-        } else {
-          await handleUpload(blob);
-        }
+      // Without this, a mid-recording MediaRecorder failure (seen on mobile
+      // Safari/Chrome when the OS reclaims the mic under memory pressure, or
+      // an unsupported codec edge case) fires no onstop -- the UI is left
+      // reading "recording" forever with no chunks ever finalized, and
+      // nothing tells the user their audio wasn't captured. Route through
+      // stopRecording() (same as the mic/tab onended handler above) instead
+      // of duplicating its teardown here: that guarantees onRecordingStop
+      // fires (tearing down the parent's STT session — a hand-rolled
+      // teardown here left it zombied, since only onRecordingStop does
+      // that). stopRecording()'s already-inactive branch (below) calls the
+      // SAME finalizeRecordingBlob() the normal onstop path uses, so chunks
+      // still get finalized even in browsers where `stop` doesn't reliably
+      // follow `error`.
+      mediaRecorder.onerror = (event) => {
+        console.error('MediaRecorder error during recording:', event);
+        if (!isRecordingRef.current) return;
+        onError?.('녹음 중 오류가 발생했습니다. 다시 시도해주세요.');
+        stopRecording();
+      };
+
+      mediaRecorder.onstop = () => {
+        finalizeRecordingBlob();
       };
 
       mediaRecorder.start(1000);
@@ -453,6 +486,45 @@ export function RecordButton({
         }, 60000);
       }
       onRecordingResume?.();
+    }
+  };
+
+  /**
+   * Turn whatever chunks have been captured so far into a blob and route
+   * it into the normal post-recording flow. The ONLY place that happens --
+   * both `mediaRecorder.onstop` and `stopRecording`'s already-`inactive`
+   * branch call this, guarded by `stopFinalizedRef` so exactly one of them
+   * actually runs it per recording. That second caller exists because
+   * MediaRecorder sets `state` to `'inactive'` synchronously as part of
+   * firing `error` -- by the time `onerror` (which calls `stopRecording`)
+   * runs, `mediaRecorderRef.current.state` already reads `'inactive'`, so
+   * calling `.stop()` again is a silent no-op and a `stop` event isn't
+   * guaranteed to still follow in every browser. Without this, that exact
+   * scenario -- the one the `onerror` handler exists to catch -- left
+   * captured chunks never finalized and the UI stuck reading "recording".
+   */
+  const finalizeRecordingBlob = () => {
+    if (stopFinalizedRef.current) return;
+    stopFinalizedRef.current = true;
+    cleanupAudioResources();
+    const mimeType = mediaRecorderRef.current?.mimeType || getPreferredMimeType();
+    const blob = new Blob(chunksRef.current, { type: mimeType });
+    if (blob.size === 0) {
+      // No audio was ever captured -- typically an error struck before
+      // the first `dataavailable`. Sending a 0-byte blob into the normal
+      // upload/transcription pipeline would create a meeting with no
+      // audio and no clear explanation; surface it as a failure instead.
+      setRecordingState('idle');
+      setElapsedTime(0);
+      onError?.('녹음된 오디오가 없습니다. 다시 시도해주세요.', { terminal: true });
+      return;
+    }
+    if (onBlobReady) {
+      setRecordingState('idle');
+      setElapsedTime(0);
+      onBlobReady(blob, mimeType);
+    } else {
+      void handleUpload(blob);
     }
   };
 
@@ -541,8 +613,24 @@ export function RecordButton({
       return;
     }
 
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
+    if (mediaRecorderRef.current) {
+      if (mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      } else {
+        // Already inactive -- typically because onerror already ran
+        // (MediaRecorder transitions to 'inactive' synchronously as part
+        // of firing 'error', before onerror's handler even executes).
+        // .stop() here would be a silent no-op, and a 'stop' event isn't
+        // guaranteed to still follow in every browser -- finalize
+        // directly. finalizeRecordingBlob's guard makes this safe even if
+        // a queued 'stop' event does still fire afterward. Deferred one
+        // tick: this branch runs synchronously from onerror, itself one
+        // queued task in the browser's error-handling sequence -- a final
+        // `dataavailable` carrying the last captured chunk may be a
+        // separately queued task that hasn't run yet, and snapshotting
+        // chunksRef before it lands would silently drop that audio.
+        setTimeout(finalizeRecordingBlob, 0);
+      }
     } else {
       cleanupAudioResources();
     }
@@ -582,7 +670,8 @@ export function RecordButton({
     }
   };
 
-  // iOS/Safari: Use native file input with capture
+  // Browsers with no MediaRecorder at all (rare) fall back to a native
+  // file-input recorder app instead of the in-page recording UI below.
   if (useNativeCapture) {
     return (
       <div className="flex flex-col items-center">

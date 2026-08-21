@@ -305,7 +305,73 @@ In Tauri desktop System Audio mode (`audioSource === 'system'`, `isTauri()`), bo
 
 Before that, the native start path runs a **preflight** check (`assertUploadRecordingAvailable`, `frontend/src/lib/tauri.ts`) that fails the start outright — an instant rejection, not a timed check — if the installed app predates the `upload_recording` command; the amber "speech error" banner shows an update prompt with no draft meeting created (see ADR-024, motivated by an incident where this version skew silently lost 83 minutes of System Audio recording).
 
-Once uploading, native mode's `uploadRecordingWithRetry` (`lib/tauri.ts`) is network-aware: on going offline mid-upload it waits for the browser's `online` event rather than failing, then re-presigns before every retry (uploads use a 1h presign TTL). This wait/retry cycle is bounded by a cumulative 45-minute budget (not reset per offline/online cycle); non-network failures instead get a small bounded retry (2 retries, linear backoff). Both the wait and its enclosing flow are cancelled on reset/unmount via an `AbortController` plus a generation counter (`flowGenerationRef`) — the counter is what actually gates the flow, since abort alone can't retroactively cancel a PUT already in flight. An abandoned-but-completed PUT still triggers the server-side transcribe/summarize pipeline regardless (tracked as a known orphan-cleanup gap in ADR-024's Consequences); the WAV itself is never at risk, since `cleanupRecording` only runs after the backend confirms upload-complete.
+Live captions default to AWS Transcribe Streaming on every platform
+(`app/record/page.tsx`'s `liveSttProvider` initial state) — Web Speech is
+primarily a fallback for when Transcribe Streaming isn't configured or
+fails, not a default. On desktop it's still a real, explicit choice via
+the `LiveSttSelector`'s "Browser" option (disabled only once a recording
+is in progress), and that choice is honored for the rest of the
+recording — `SttManager` tracks what the user actually asked for
+separately from what's currently running, so an available Transcribe
+config can't silently promote an explicit Web Speech choice out from
+under a pause/resume (`SttManager`'s `preferredProvider` vs.
+`activeProvider`).
+
+On mobile, iOS/iPadOS/Android specifically (`lib/device.ts`'s
+`hasMobileMicConflictRisk` — actual UA/touch-capability detection, not
+`isMobile()`'s narrow-viewport heuristic), that choice doesn't exist at
+all: the Web Speech fallback is disabled outright and the
+`LiveSttSelector`'s "Browser" option is disabled to match. Web Speech's
+own `SpeechRecognition` capture runs independent of the `MediaStream`
+`MediaRecorder` is recording from, and on these platforms it can end that
+mic track mid-recording with no other signal. Recording is never
+sacrificed for captions there: if Transcribe Streaming isn't configured or
+fails, captions become unavailable (amber "speech error" banner) rather
+than silently falling back to Web Speech, and the recording itself keeps
+going untouched (`lib/sttManager.ts`'s `fallbackToWebSpeech`). That "keeps
+going untouched" guarantee is about the captions-failure path specifically
+-- it doesn't mean the mic track itself is somehow protected. If the mic
+track dies for an unrelated reason (screen lock, an incoming call, the OS
+reclaiming it), `RecordButton`'s `onended`/`onerror` handlers still end
+the recording (gracefully finalizing whatever was captured), exactly as
+on desktop. If a recording starts before the Transcribe config finishes
+loading, captions
+promote onto it automatically once it arrives (`SttManager.retryWithConfig`,
+deferred until after a pause/resume completes if one is in progress) — see
+ADR-030.
+
+Once uploading, native mode's `uploadRecordingWithRetry` (`lib/tauri.ts`)
+is network-aware: if the device goes offline mid-upload, it waits for the
+browser's `online` event rather than failing immediately, then re-presigns
+before every retry — a fresh presigned URL, not the one that may have
+expired during the wait (the backend's presigned PUT TTL is 1h,
+`backend/internal/service/upload.go`'s `GeneratePresignedUploadURL`). The
+offline-wait/retry-backoff cycle is bounded by a **cumulative** 45-minute
+wall-clock budget (not reset on every offline→online→offline cycle — a
+flapping connection still eventually gives up), and each re-entry into the
+wait backs off briefly instead of tight-looping the presign endpoint. This
+budget does not preempt a presign call or PUT already in flight — those
+run to completion (or to Rust's own stall watchdog) regardless. A
+non-network failure (bad URL, server error) instead gets a small bounded
+retry (2 retries beyond the first attempt, linear backoff).
+
+Both the offline wait and the flow it's part of are cancelled when the
+post-recording flow is reset (Home / new recording) or the component
+unmounts — via an `AbortController` (stops the in-progress wait, re-checked
+right after every presign call too, since that's its own multi-second
+await) AND a generation counter (`flowGenerationRef` in
+`usePostRecording.ts`, bumped by `reset()`/`createDraftMeeting()`/unmount).
+The counter is what actually gates the flow: abort alone can't retroactively
+cancel a PUT already past the wait, so without the counter a PUT that
+finishes successfully after the user walks away would still fire
+`notifyComplete`/`cleanupRecording`/redirect. Even with the counter, an
+abandoned PUT that reaches S3 still triggers the server-side
+transcribe/summarize pipeline (EventBridge on the `audio/` prefix doesn't
+know the SPA gave up) — the counter only stops this hook's own follow-on
+calls, not that pipeline; see ADR-024's Consequences for the tracked
+orphan-cleanup gap this leaves. The WAV itself is never at risk from the
+upload side either way — `cleanupRecording` only runs after the backend's
+upload-complete notification succeeds.
 
 ### 2.7 Meeting Detail (Mobile)
 

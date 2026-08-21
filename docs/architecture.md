@@ -156,7 +156,9 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-027: CloudFront 서명 URL로 다운로드 도메인 통일 (S3 버킷 주소 은닉)](decisions/ADR-027-cloudfront-signed-media-urls.md) (승인됨)
 - [ADR-028: QA 웹 검색 도구와 선제 질문 검색](decisions/ADR-028-qa-web-search-and-proactive-question-search.md) (승인됨)
 - [ADR-029: 개인 문서의 사용자 단위 공유 — 복제가 아닌 참조, 읽기 전용](decisions/ADR-029-per-user-document-sharing-by-reference.md) (승인됨)
-- [ADR-031: 미팅 기반 비용·사이징 시뮬레이터 — AgentCore Code Interpreter](decisions/ADR-031-meeting-cost-sizing-simulator-code-interpreter.md) (승인됨)
+- [ADR-030: 모바일 실시간 자막은 녹음을 희생하지 않는다](decisions/ADR-030-mobile-live-captions-never-sacrifice-recording.md) (승인됨)
+- [ADR-032: 관리자 사용자 관리 패널](decisions/ADR-032-admin-user-management-panel.md) (승인됨)
+- [ADR-033: 미팅 기반 비용·사이징 시뮬레이터 — AgentCore Code Interpreter](decisions/ADR-033-meeting-cost-sizing-simulator-code-interpreter.md) (승인됨)
 
 ### 운영
 
@@ -262,7 +264,9 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-027: CloudFront Signed URLs for All Download Domains (S3 Bucket Address Hidden)](decisions/ADR-027-cloudfront-signed-media-urls.md) (Accepted)
 - [ADR-028: QA Web Search Tool and Proactive Question Search](decisions/ADR-028-qa-web-search-and-proactive-question-search.md) (Accepted)
 - [ADR-029: Per-User Document Sharing by Reference, Read-Only](decisions/ADR-029-per-user-document-sharing-by-reference.md) (Accepted)
-- [ADR-031: Meeting-Driven Cost/Sizing Simulator — AgentCore Code Interpreter](decisions/ADR-031-meeting-cost-sizing-simulator-code-interpreter.md) (Accepted)
+- [ADR-030: Mobile Live Captions Never Sacrifice the Recording](decisions/ADR-030-mobile-live-captions-never-sacrifice-recording.md) (Accepted)
+- [ADR-032: Admin User-Management Panel](decisions/ADR-032-admin-user-management-panel.md) (Accepted)
+- [ADR-033: Meeting-Driven Cost/Sizing Simulator — AgentCore Code Interpreter](decisions/ADR-033-meeting-cost-sizing-simulator-code-interpreter.md) (Accepted)
 
 ### Operations
 

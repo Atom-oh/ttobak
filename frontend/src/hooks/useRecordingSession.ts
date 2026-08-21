@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { SttManager, type LiveSttProvider } from '@/lib/sttManager';
+import { SttManager, type LiveSttProvider, type TranscribeStreamingConfig } from '@/lib/sttManager';
 import { countWords } from '@/lib/speechRecognition';
 import { getRuntimeConfig } from '@/lib/runtimeConfig';
 
@@ -38,6 +38,11 @@ const speechErrorMessages: Record<string, string> = {
   // here — unlike the other transcribe-* errors above, this one can't
   // "switch to" anything.
   'transcribe-native-unavailable': '실시간 자막을 사용할 수 없습니다 (AWS 인증/연결 필요). 녹음은 계속되며 종료 후 자동으로 전사됩니다.',
+  // Web Speech's own mic capture can end the recording's mic track on
+  // iOS/Android (see SttManager.fallbackToWebSpeech), so it's never used
+  // as a fallback on mobile while a mic/tab stream is recording. Recording
+  // itself is unaffected — only live captions stop.
+  'web-speech-mobile-unavailable': '이 기기에서는 브라우저 음성 인식을 실시간 자막에 사용할 수 없습니다. 녹음은 계속되며, AWS 자막 연결이 준비되면 자동으로 다시 시작됩니다.',
 };
 
 interface UseRecordingSessionOptions {
@@ -47,15 +52,6 @@ interface UseRecordingSessionOptions {
   liveSttProvider: LiveSttProvider;
   /** Called each time a final transcript arrives with updated word count and full text */
   onTranscriptUpdate?: (totalWordCount: number, allText: string) => void;
-  /** Called when STT provider changes (e.g., fallback) */
-  onProviderChange?: (provider: LiveSttProvider) => void;
-}
-
-interface TranscribeConfig {
-  region: string;
-  identityPoolId: string;
-  userPoolId: string;
-  vocabularyName?: string;
 }
 
 export function useRecordingSession({
@@ -63,7 +59,6 @@ export function useRecordingSession({
   translationEnabled,
   liveSttProvider,
   onTranscriptUpdate,
-  onProviderChange,
 }: UseRecordingSessionOptions) {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -81,7 +76,13 @@ export function useRecordingSession({
   const targetLangRef = useRef(targetLang);
   const transcriptsRef = useRef(transcripts);
   const onTranscriptUpdateRef = useRef(onTranscriptUpdate);
-  const transcribeConfigRef = useRef<TranscribeConfig | null>(null);
+  const transcribeConfigRef = useRef<TranscribeStreamingConfig | null>(null);
+  // Read inside the config-load effect below, which has an empty dep array
+  // (it must only run once, not re-fetch on every liveSttProvider change) --
+  // a plain closure over the `liveSttProvider` param would freeze at
+  // whatever it was on mount.
+  const liveSttProviderRef = useRef(liveSttProvider);
+  useEffect(() => { liveSttProviderRef.current = liveSttProvider; }, [liveSttProvider]);
 
   // Load runtime Cognito config once (fetched from /config.json at startup)
   useEffect(() => {
@@ -99,12 +100,24 @@ export function useRecordingSession({
         } catch {
           // Dictionary not available — proceed without custom vocabulary
         }
-        transcribeConfigRef.current = {
+        const config: TranscribeStreamingConfig = {
           region: cfg.cognito.region,
           identityPoolId: cfg.cognito.identityPoolId,
           userPoolId: cfg.cognito.userPoolId,
           vocabularyName,
         };
+        transcribeConfigRef.current = config;
+        // A recording that started (createManager, below) before this fetch
+        // resolved was permanently forced onto Web Speech -- or, on mobile,
+        // blocked from live captions entirely (SttManager.fallbackToWebSpeech)
+        // -- for the rest of that recording, with no way to ever pick
+        // Transcribe Streaming back up. Promote it now that a config is
+        // actually available, but only if the live preference genuinely
+        // wants Transcribe Streaming -- never override a user's explicit
+        // 'web-speech' choice.
+        if (liveSttProviderRef.current === 'transcribe-streaming') {
+          sttManagerRef.current?.retryWithConfig(config);
+        }
       }
     });
     return () => { cancelled = true; };
@@ -202,7 +215,16 @@ export function useRecordingSession({
       transcribeStreamingConfig: transcribeConfig ?? undefined,
       onProviderChange: (provider) => {
         setActiveProvider(provider);
-        onProviderChange?.(provider);
+        // The 'web-speech-mobile-unavailable' banner promises captions
+        // resume automatically once Transcribe Streaming becomes
+        // available (SttManager.retryWithConfig) -- clear it once that
+        // actually happens instead of leaving it to sit alongside
+        // captions that are now flowing again.
+        setSpeechError((prev) =>
+          provider === 'transcribe-streaming' && prev === speechErrorMessages['web-speech-mobile-unavailable']
+            ? null
+            : prev,
+        );
       },
     });
 
@@ -212,14 +234,28 @@ export function useRecordingSession({
     sttManagerRef.current?.stop();
     sttManagerRef.current = manager;
 
-    // Choose provider: use transcribe-streaming only if configured
-    const preferredProvider: LiveSttProvider = liveSttProvider === 'transcribe-streaming' && hasTranscribeConfig
+    // What's actually about to run, for the UI's immediate best guess
+    // before SttManager settles (its own onProviderChange callback fires
+    // once it actually decides/falls back).
+    const initialActiveProvider: LiveSttProvider = liveSttProvider === 'transcribe-streaming' && hasTranscribeConfig
       ? 'transcribe-streaming'
       : 'web-speech';
+    setActiveProvider(initialActiveProvider);
 
-    setActiveProvider(preferredProvider);
-    return { manager, preferredProvider };
-  }, [translationEnabled, liveSttProvider, onProviderChange]);
+    // What to hand to SttManager.start() as the preferred provider: the
+    // user's actual selection, NOT the config-availability-downgraded
+    // value above. start() already handles a missing config internally
+    // (falls back to Web Speech for now) while still recording the
+    // original ask as `preferredProvider` -- downgrading it here to
+    // 'web-speech' just because the config race hasn't resolved YET would
+    // permanently lock retryWithConfig/resume()'s promotion gate closed
+    // for the rest of the recording, since they check `preferredProvider`
+    // precisely to avoid overriding an explicit 'web-speech' choice. If
+    // this were downgraded, there'd be no way to tell "config wasn't
+    // ready yet" apart from "user explicitly chose Web Speech" once the
+    // config does arrive (see ADR-030).
+    return { manager, preferredProvider: liveSttProvider };
+  }, [translationEnabled, liveSttProvider]);
 
   const startSession = useCallback((previewCleanup: () => void, stream: MediaStream) => {
     previewCleanup();
