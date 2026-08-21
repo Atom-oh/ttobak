@@ -1,5 +1,8 @@
 'use client';
 
+import { useEffect, useState } from 'react';
+import { hasMobileMicConflictRisk } from '@/lib/device';
+
 interface RecordingConfigProps {
   summaryInterval: number;
   onSummaryIntervalChange: (val: number) => void;
@@ -104,6 +107,25 @@ export function LiveSttSelector({
   activeProvider: string;
   isRecording: boolean;
 }) {
+  // Computed post-mount, not inline in render: hasMobileMicConflictRisk()
+  // reads navigator/window, so it's always false during the static-export
+  // prerender (no window there) -- calling it directly in render would
+  // read false again on the client's first paint too (SSR/hydration must
+  // match) and only flip true on a later re-render, briefly showing this
+  // as enabled on mobile before the mismatch settles.
+  const [mobileMicConflictRisk, setMobileMicConflictRisk] = useState(false);
+  useEffect(() => {
+    // Reading a browser-only API (UA/touch points) to correct the value
+    // AFTER the SSR-matching first paint is exactly what this effect is
+    // for -- not a derived-state anti-pattern the lint rule usually
+    // guards against.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMobileMicConflictRisk(hasMobileMicConflictRisk());
+  }, []);
+  // Web Speech's own mic capture can end the recording's mic track on
+  // iOS/Android mid-recording (SttManager.fallbackToWebSpeech refuses it
+  // for the same reason) -- don't offer it as a choice on mobile at all.
+  const webSpeechDisabled = isRecording || mobileMicConflictRisk;
   return (
     <div className="flex items-center gap-2">
       {/* Provider selector (disabled during recording) */}
@@ -121,7 +143,8 @@ export function LiveSttSelector({
         </button>
         <button
           onClick={() => onLiveSttProviderChange('web-speech')}
-          disabled={isRecording}
+          disabled={webSpeechDisabled}
+          title={mobileMicConflictRisk ? '이 기기에서는 브라우저 음성 인식을 사용할 수 없습니다 (녹음 중 마이크 충돌 방지)' : undefined}
           className={`px-3 py-1.5 text-xs font-medium transition-colors border-l border-slate-200 dark:border-slate-700 ${
             liveSttProvider === 'web-speech'
               ? 'bg-primary text-white'

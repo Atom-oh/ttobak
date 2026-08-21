@@ -44,9 +44,9 @@
 | REC-06 | 녹음 완료 시 자동 S3 업로드 (presigned URL) | P0 | 완료 |
 | REC-07 | 오디오 포맷: WebM (Chrome), M4A (Safari) | P0 | 완료 |
 | REC-08 | 녹음 중 웨이브폼 시각화 | P1 | 완료 (FFT 이퀄라이저) |
-| REC-09 | 오프라인/온라인 모드 토글 체크박스 | P0 | 완료 (Browser Speech API 방식) |
-| REC-10 | 온라인 모드 — Nova Sonic v2 WebSocket 실시간 스트리밍 | P0 | 미구현 (Browser Speech API로 대체) |
-| REC-11 | 온라인 모드 — 실시간 전사 결과 화면 표시 | P0 | 완료 (Browser Speech API 기반) |
+| REC-09 | 오프라인/온라인 모드 토글 체크박스 | P0 | 완료 (기본 AWS Transcribe Streaming, Browser Speech API는 미설정/실패 시 폴백 — ADR-030) |
+| REC-10 | 온라인 모드 — Nova Sonic v2 WebSocket 실시간 스트리밍 | P0 | 미구현 (AWS Transcribe Streaming으로 대체) |
+| REC-11 | 온라인 모드 — 실시간 전사 결과 화면 표시 | P0 | 완료 (AWS Transcribe Streaming 기반, 모바일은 Browser Speech API 폴백 자체를 차단 — ADR-030) |
 | REC-12 | 번역 언어 선택 체크박스 (한→영, 영→한, 일→한 등) | P1 | 완료 |
 
 ### 2.3 STT (Speech-to-Text)
@@ -115,7 +115,7 @@
 
 | ID | 요구사항 | 우선순위 | 상태 |
 |----|----------|----------|------|
-| TRN-01 | Nova Sonic 전사를 Bedrock Claude로 실시간 번역 | P0 | 완료 (REST API 방식, Browser Speech 기반) |
+| TRN-01 | 실시간 전사 결과를 Amazon Translate로 번역 | P0 | 완료 (REST API 방식, AWS Transcribe Streaming 기반) |
 | TRN-02 | 번역 대상 언어 선택 UI | P0 | 완료 |
 | TRN-03 | 원문 + 번역문 동시 표시 | P0 | 완료 |
 
