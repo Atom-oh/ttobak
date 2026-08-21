@@ -280,16 +280,31 @@ export class SttManager {
             // burning the one-shot grace before the user has any chance
             // to actually return. Defer until visibility comes back.
             const tryReconnect = () => {
+              // Only unregister once actually proceeding to reconnect --
+              // NOT on every firing. `pageshow` in particular can fire
+              // while still hidden (bfcache restore), and paused defers to
+              // resume()'s own restart -- removing listeners here on
+              // either would strand the one-shot grace with nothing left
+              // to ever retry it (stop() removes them for the terminal
+              // case).
+              if (this.stopped) return;
+              if (this.paused || document.visibilityState !== 'visible') return;
               this.pendingStallReconnect = null;
               document.removeEventListener('visibilitychange', tryReconnect);
               window.removeEventListener('pageshow', tryReconnect);
-              if (this.stopped || this.paused || document.visibilityState !== 'visible') return;
+              window.removeEventListener('focus', tryReconnect);
               console.warn('Transcribe Streaming stalled -- reconnecting now that the tab is visible again');
               this.startTranscribeStreaming(stream).catch(() => this.fallbackToWebSpeech(true));
             };
             this.pendingStallReconnect = tryReconnect;
             document.addEventListener('visibilitychange', tryReconnect);
             window.addEventListener('pageshow', tryReconnect);
+            // Mobile unlock's actually-firing signal varies by platform --
+            // RecordButton's wake-lock re-acquire and speechRecognition.ts's
+            // restart-on-visible both wire visibilitychange/pageshow/focus
+            // for the same reason; matching that set here so this doesn't
+            // wait forever on a platform where only 'focus' fires.
+            window.addEventListener('focus', tryReconnect);
             return;
           }
           console.warn('Transcribe Streaming stalled -- attempting one reconnect before falling back to Web Speech');
@@ -453,6 +468,7 @@ export class SttManager {
     if (this.pendingStallReconnect) {
       document.removeEventListener('visibilitychange', this.pendingStallReconnect);
       window.removeEventListener('pageshow', this.pendingStallReconnect);
+      window.removeEventListener('focus', this.pendingStallReconnect);
       this.pendingStallReconnect = null;
     }
     this.transcribeSession?.stop();
