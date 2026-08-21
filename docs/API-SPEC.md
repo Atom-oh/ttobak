@@ -1157,7 +1157,7 @@ stuck-transcribing 자동 만료(`GetMeeting` 핸들러)에 정리를 위임한�
 
 ### WebSocket (API Gateway) — 미구현
 
-> **현재 상태**: 실시간 전사는 Browser Web Speech API (`BrowserSpeechRecognition`)로 클라이언트에서 처리하고, 번역/요약은 REST API 호출. WebSocket 기반 Nova Sonic 스트리밍은 v2 목표.
+> **현재 상태**: 실시간 전사는 클라이언트에서 처리하며, 기본 엔진은 AWS Transcribe Streaming (`@aws-sdk/client-transcribe-streaming`, 브라우저→AWS 직결) — Browser Web Speech API (`BrowserSpeechRecognition`)는 Transcribe Streaming이 설정되지 않았거나 실패했을 때만 쓰이는 폴백이다. 모바일(iOS/iPadOS/Android)에서 마이크/탭 스트림으로 녹음 중일 때는 mic 트랙 충돌 위험 때문에 이 폴백이 막혀 있고(`SttManager.fallbackToWebSpeech`, ADR-030), 사용자가 데스크톱에서 명시적으로 Browser를 선택한 경우는 (모바일이 아니므로) 계속 지원된다. 번역/요약은 REST API 호출. WebSocket 기반 Nova Sonic 스트리밍은 v2 목표.
 
 실시간 전사 및 번역을 위한 WebSocket API입니다.
 
