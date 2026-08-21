@@ -65,6 +65,11 @@ export class SttManager {
   // on mobile. Never reset once consumed: this is a one-shot grace for the
   // whole recording, not a retry-per-stall loop.
   private stalledReconnectAttempted = false;
+  // Set while a stall reconnect is deferred waiting for the tab/screen to
+  // become visible again (see onError's handling of
+  // 'transcribe-stream-stalled') -- cleared by stop() so a manager that's
+  // already torn down never fires a reconnect it has no business making.
+  private pendingStallReconnect: (() => void) | null = null;
 
   // Translation state (shared across providers)
   private translateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -268,6 +273,25 @@ export class SttManager {
         // watchdog exists to protect. Give it one reconnect attempt first.
         if (error === 'transcribe-stream-stalled' && !this.stalledReconnectAttempted) {
           this.stalledReconnectAttempted = true;
+          if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+            // The lock/backgrounding that caused this stall is still in
+            // effect -- reconnecting right now would just start a second
+            // session whose AudioContext is ALSO suspended immediately,
+            // burning the one-shot grace before the user has any chance
+            // to actually return. Defer until visibility comes back.
+            const tryReconnect = () => {
+              this.pendingStallReconnect = null;
+              document.removeEventListener('visibilitychange', tryReconnect);
+              window.removeEventListener('pageshow', tryReconnect);
+              if (this.stopped || this.paused || document.visibilityState !== 'visible') return;
+              console.warn('Transcribe Streaming stalled -- reconnecting now that the tab is visible again');
+              this.startTranscribeStreaming(stream).catch(() => this.fallbackToWebSpeech(true));
+            };
+            this.pendingStallReconnect = tryReconnect;
+            document.addEventListener('visibilitychange', tryReconnect);
+            window.addEventListener('pageshow', tryReconnect);
+            return;
+          }
           console.warn('Transcribe Streaming stalled -- attempting one reconnect before falling back to Web Speech');
           this.startTranscribeStreaming(stream).catch(() => this.fallbackToWebSpeech(true));
           return;
@@ -426,6 +450,11 @@ export class SttManager {
 
   stop(): void {
     this.stopped = true;
+    if (this.pendingStallReconnect) {
+      document.removeEventListener('visibilitychange', this.pendingStallReconnect);
+      window.removeEventListener('pageshow', this.pendingStallReconnect);
+      this.pendingStallReconnect = null;
+    }
     this.transcribeSession?.stop();
     this.transcribeSession = null;
     this.webSpeechClient?.stop();
