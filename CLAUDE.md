@@ -131,7 +131,7 @@ Detailed specs in `docs/`: PRD.md, API-SPEC.md, INFRA-SPEC.md, DESIGN-SPEC.md, C
 ```json
 { "error": { "code": "UNAUTHORIZED", "message": "Authentication required" } }
 ```
-Error codes: `BAD_REQUEST` (400), `UNAUTHORIZED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `INTERNAL_ERROR` (500). Full endpoint specs in `docs/API-SPEC.md`.
+Error codes: `BAD_REQUEST` (400), `UNAUTHORIZED` (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `CONFLICT` (409, e.g. `DELETE .../members/pending`/`.../share/pending` when a materialize won the race — see PendingShare above), `INTERNAL_ERROR` (500). Full endpoint specs in `docs/API-SPEC.md`.
 
 ## Lambda Environment Variables
 

@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,24 +45,6 @@ func NewMeetingHandler(meetingService *service.MeetingService, repo *repository.
 	return h
 }
 
-// ensureProfileAndMaterializePendingShares ensures the caller's PROFILE row
-// exists and materializes any AddMember/ShareMeetingByEmail grants that were
-// queued as PendingShare while no PROFILE row existed for their email yet
-// (see PendingShare's doc comment). Deliberately NOT gated on GetOrCreateUser's
-// created flag: materialization is a cheap, idempotent Query that's almost
-// always empty, and gating it to "only the call that just created the
-// PROFILE row" would make a materialization failure permanent (created is
-// false on every later call, so there'd be no way to retry) -- see
-// MeetingService.MaterializePendingShares's doc comment. Errors are logged,
-// not surfaced -- this must never block ListMeetings/CreateMeeting.
-func (h *MeetingHandler) ensureProfileAndMaterializePendingShares(ctx context.Context, userID, email, name string) {
-	if _, _, err := h.repo.GetOrCreateUser(ctx, userID, email, name); err != nil {
-		log.Printf("ensureProfileAndMaterializePendingShares: GetOrCreateUser failed for user %s: %v", userID, err)
-		return
-	}
-	h.meetingService.MaterializePendingShares(ctx, userID, email, middleware.GetEmailVerified(ctx))
-}
-
 // LinkToAccount handles POST /api/meetings/{meetingId}/account.
 func (h *MeetingHandler) LinkToAccount(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -104,7 +85,7 @@ func (h *MeetingHandler) ListMeetings(w http.ResponseWriter, r *http.Request) {
 	email := middleware.GetUserEmail(ctx)
 	name := middleware.GetUserName(ctx)
 	if email != "" {
-		h.ensureProfileAndMaterializePendingShares(ctx, userID, email, name)
+		h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
 	}
 
 	tab := r.URL.Query().Get("tab")
@@ -158,7 +139,7 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 	email := middleware.GetUserEmail(ctx)
 	name := middleware.GetUserName(ctx)
 	if email != "" {
-		h.ensureProfileAndMaterializePendingShares(ctx, userID, email, name)
+		h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
 	}
 
 	meeting, err := h.meetingService.CreateMeeting(ctx, userID, req.Title, date, req.Participants, req.SttProvider)

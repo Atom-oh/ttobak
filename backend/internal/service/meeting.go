@@ -797,6 +797,22 @@ func emailHasPendingInvite(ctx context.Context, client cognitoAdminAPI, poolID, 
 	return true, "", nil
 }
 
+// EnsureProfileAndMaterializePendingShares ensures the caller's PROFILE row
+// exists and materializes any AddMember/ShareMeetingByEmail grants that were
+// queued as PendingShare while no PROFILE row existed for their email yet
+// (see PendingShare's doc comment). Deliberately NOT gated on
+// GetOrCreateUser's created flag -- see MaterializePendingShares' doc
+// comment below for why. Errors from GetOrCreateUser are logged, not
+// surfaced -- called from handler/meeting.go's ListMeetings/CreateMeeting,
+// which this must never block.
+func (s *MeetingService) EnsureProfileAndMaterializePendingShares(ctx context.Context, userID, email, name string, emailVerified bool) {
+	if _, _, err := s.repo.GetOrCreateUser(ctx, userID, email, name); err != nil {
+		log.Printf("EnsureProfileAndMaterializePendingShares: GetOrCreateUser failed for user %s: %v", userID, err)
+		return
+	}
+	s.MaterializePendingShares(ctx, userID, email, emailVerified)
+}
+
 // MaterializePendingShares turns every PendingShare queued for email into a
 // real AccountMember or Share row for the now-known userID, then deletes
 // the queued row. Called from handler/meeting.go on every ListMeetings/

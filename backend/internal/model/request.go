@@ -351,6 +351,7 @@ const (
 	ErrCodeUnauthorized  = "UNAUTHORIZED"
 	ErrCodeForbidden     = "FORBIDDEN"
 	ErrCodeNotFound      = "NOT_FOUND"
+	ErrCodeConflict      = "CONFLICT"
 	ErrCodeInternalError = "INTERNAL_ERROR"
 )
 

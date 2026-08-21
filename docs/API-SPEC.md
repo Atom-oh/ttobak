@@ -307,12 +307,16 @@ DELETE /api/accounts/{accountId}/members/pending?email={email}
 Cancels a queued PendingShare account invite before the target has ever
 logged in (no userId exists yet, so this can't go through DELETE
 .../members/{userId}). A DeleteItem on an already-gone/never-existed row
-is a silent no-op -- this doesn't distinguish "revoked" from "there was
-nothing to revoke," both return 204.
+that never resolves to a live member is a silent no-op -- "revoked" and
+"there was nothing to revoke" both return 204. If the row is gone because
+MaterializePendingShares won the race (the invitee logged in and claimed
+the grant first), this returns 409 instead of a silent success -- the
+caller would otherwise believe access was revoked while it's still live.
 
 Response: 204 No Content
 Error: 403 Forbidden (not the owner)
 Error: 400 Bad Request (missing email query parameter)
+Error: 409 Conflict (already claimed by materialize -- remove via Members instead)
 ```
 
 #### Update Member Role (owner only)
@@ -929,14 +933,18 @@ DELETE /api/meetings/{meetingId}/share/pending?email={email}
 
 Cancels a queued PendingShare meeting invite before the target has ever
 logged in (no userId exists yet, so this can't go through DELETE
-.../share/{userId}). A DeleteItem on an already-gone/never-existed row is
-a silent no-op -- this doesn't distinguish "revoked" from "there was
-nothing to revoke," both return 204.
+.../share/{userId}). A DeleteItem on an already-gone/never-existed row
+that never resolves to a live share is a silent no-op -- "revoked" and
+"there was nothing to revoke" both return 204. If the row is gone because
+MaterializePendingShares won the race (the invitee logged in and claimed
+the grant first), this returns 409 instead of a silent success -- the
+caller would otherwise believe access was revoked while it's still live.
 
 Response: 204 No Content
 Error: 403 Forbidden (not the owner)
 Error: 404 Not Found (meeting doesn't exist)
 Error: 400 Bad Request (missing email query parameter)
+Error: 409 Conflict (already claimed by materialize -- revoke direct access instead)
 ```
 
 #### Search Users (for sharing)
