@@ -160,6 +160,12 @@ export function RecordButton({
   // The Wake Lock API releases itself whenever the document loses
   // visibility (spec behavior, not a bug) — re-acquire on return so a
   // second screen-lock later in the same recording is still guarded.
+  // Mobile unlock doesn't reliably fire a visibilitychange "hidden"->
+  // "visible" pair the way desktop tab-switch does (see
+  // speechRecognition.ts's restart-on-visible logic for the same premise)
+  // -- listening to only visibilitychange here would leave every screen
+  // lock after the first one unprotected on exactly the platform this
+  // effect exists for, so pageshow/focus are wired to the same handler.
   useEffect(() => {
     const handleReacquire = () => {
       if (document.visibilityState === 'visible' && isRecordingRef.current && !wakeLockRef.current) {
@@ -167,7 +173,13 @@ export function RecordButton({
       }
     };
     document.addEventListener('visibilitychange', handleReacquire);
-    return () => document.removeEventListener('visibilitychange', handleReacquire);
+    window.addEventListener('pageshow', handleReacquire);
+    window.addEventListener('focus', handleReacquire);
+    return () => {
+      document.removeEventListener('visibilitychange', handleReacquire);
+      window.removeEventListener('pageshow', handleReacquire);
+      window.removeEventListener('focus', handleReacquire);
+    };
   }, [requestWakeLock]);
 
   // iOS Safari has supported MediaRecorder since 14.3 (audio/mp4 output,
