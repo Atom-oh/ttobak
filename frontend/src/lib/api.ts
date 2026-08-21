@@ -152,7 +152,7 @@ export const meetingsApi = {
   rediarize: (meetingId: string, speakerCount: number) =>
     api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/rediarize`, { speakerCount }),
 
-  // ADR-031 cost/sizing simulator
+  // ADR-033 cost/sizing simulator
   extractSimRequirements: (meetingId: string) =>
     api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim/extract`, {}),
 

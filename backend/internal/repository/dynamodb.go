@@ -892,7 +892,7 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 		})
 	}
 
-	// 4. Sim run (ADR-031) -- unconditional delete; a Delete against a
+	// 4. Sim run (ADR-033) -- unconditional delete; a Delete against a
 	// nonexistent key is a no-op, not an error, so this is safe whether or
 	// not a simulation was ever run for this meeting. Exactly +1 item
 	// regardless of how many times the meeting was re-simulated, because
@@ -2006,6 +2006,33 @@ func (r *DynamoDBRepository) ListPendingShares(ctx context.Context, email string
 		return nil, fmt.Errorf("failed to unmarshal pending shares: %w", err)
 	}
 	return out, nil
+}
+
+// GetPendingShare reads one queued grant with a strongly consistent GetItem
+// (not a Query, so no GSI involved). RevokePendingMember/RevokePendingShare
+// call this BEFORE attempting the delete to capture the row's
+// InvitedCognitoSub while it's still there -- narrowing the window in
+// which materialize can complete the transaction (write the grant, delete
+// this row) between this read and the delete attempt that follows, without
+// this call having any way to observe it happening. Returns nil (not an
+// error) when no such row exists.
+func (r *DynamoDBRepository) GetPendingShare(ctx context.Context, email, sk string) (*model.PendingShare, error) {
+	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
+		Key:            pendingShareKey(email, sk),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pending share: %w", err)
+	}
+	if result.Item == nil {
+		return nil, nil
+	}
+	var p model.PendingShare
+	if err := attributevalue.UnmarshalMap(result.Item, &p); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal pending share: %w", err)
+	}
+	return &p, nil
 }
 
 // DeletePendingShare removes one queued grant, either after

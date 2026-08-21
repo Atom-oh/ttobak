@@ -1467,7 +1467,7 @@ tsMarker는 입력에 정확한 [TS:NNN] 표식이 있을 때만 그대로 복�
 }
 
 // ExtractSimRequirements drafts a quantitative requirement set (users, TPS,
-// data volume, SLO, ...) for the cost/sizing simulator (ADR-031), from the
+// data volume, SLO, ...) for the cost/sizing simulator (ADR-033), from the
 // meeting's own content -- the caller already has the meeting loaded (this
 // runs inline in the api Lambda's extract handler, not the batch summarize
 // pipeline), so it takes *model.Meeting directly rather than re-fetching by

@@ -1,4 +1,4 @@
-"""AWS Price List API lookups for the cost/sizing simulator (ADR-031).
+"""AWS Price List API lookups for the cost/sizing simulator (ADR-033).
 
 Scoped to 또박's own stack (v1 service-range decision): Lambda, API Gateway,
 DynamoDB, S3, CloudFront. Anything outside this allowlist is out of scope

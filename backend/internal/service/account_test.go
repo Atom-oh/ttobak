@@ -139,6 +139,16 @@ func (m *mockAccountRepo) PutPendingShare(_ context.Context, share *model.Pendin
 	return nil
 }
 
+func (m *mockAccountRepo) GetPendingShare(_ context.Context, email, sk string) (*model.PendingShare, error) {
+	for _, p := range m.pendingShares {
+		if p.Email == email && p.SK == sk {
+			cp := *p
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockAccountRepo) DeletePendingShare(_ context.Context, email, sk string) (bool, error) {
 	deleted := false
 	kept := m.pendingShares[:0]

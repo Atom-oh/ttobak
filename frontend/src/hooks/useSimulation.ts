@@ -17,7 +17,7 @@ interface UseSimulationOptions {
 }
 
 /**
- * Owns the cost/sizing simulator's (ADR-031) client-side lifecycle:
+ * Owns the cost/sizing simulator's (ADR-033) client-side lifecycle:
  * extract -> confirm -> run -> poll. Polling is a plain 5s interval against
  * GetMeeting, matching ResearchDetailClient's existing job-poll pattern --
  * this is a minutes-long job, not a token stream, so it gets a poll rather

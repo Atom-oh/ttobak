@@ -85,6 +85,10 @@ func (m *mockHandlerAccountRepo) PutPendingShare(_ context.Context, _ *model.Pen
 	return nil
 }
 
+func (m *mockHandlerAccountRepo) GetPendingShare(_ context.Context, _, _ string) (*model.PendingShare, error) {
+	return nil, nil
+}
+
 func (m *mockHandlerAccountRepo) DeletePendingShare(_ context.Context, _, _ string) (bool, error) {
 	return true, nil
 }

@@ -1,5 +1,5 @@
 """Prompt building and output parsing for the cost/sizing simulator's
-generated Python (ADR-031).
+generated Python (ADR-033).
 
 Injection boundary: the ONLY inputs to build_codegen_prompt are the
 server-validated requirements/options (already passed through Go's
@@ -15,7 +15,7 @@ import re
 MAX_EXECUTE_ATTEMPTS = 3  # initial + 2 repairs
 
 # Defense-in-depth, not the trust boundary (that's the empty Code
-# Interpreter execution role + SANDBOX network mode -- see ADR-031). This
+# Interpreter execution role + SANDBOX network mode -- see ADR-033). This
 # scan exists for log signal and an extra speed bump, and must never be
 # treated as a reason to loosen the sandbox itself.
 BANNED_IMPORT_RE = re.compile(

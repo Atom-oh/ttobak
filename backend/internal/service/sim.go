@@ -25,7 +25,7 @@ import (
 // the actual trust boundary between the untrusted meeting transcript and
 // the codegen prompt: only keys/values that pass this allowlist ever reach
 // ExtractSimRequirements's output or a POST /sim body, so free text from a
-// transcript can never shape the generated Python (see ADR-031).
+// transcript can never shape the generated Python (see ADR-033).
 type simRequirementBound struct {
 	label   string
 	numeric bool
@@ -90,7 +90,7 @@ func regexpMustCompileSimLabel() *simCharsetChecker {
 // NOT reject a bare "system:" substring -- legitimate text ("distributed
 // system: microservices") can contain it, and this is explicitly
 // defense-in-depth, not the actual trust boundary (that's the empty Code
-// Interpreter execution role + SANDBOX network mode, see ADR-031).
+// Interpreter execution role + SANDBOX network mode, see ADR-033).
 type simCharsetChecker struct{}
 
 func (simCharsetChecker) valid(s string) bool {
@@ -368,7 +368,7 @@ type simRepo interface {
 }
 
 // SimService owns the eligibility/validation core and the async hand-off
-// to ttobak-sim (ADR-031). Extraction (which needs the transcript-anchor
+// to ttobak-sim (ADR-033). Extraction (which needs the transcript-anchor
 // resolver, Go-only per ADR-013) lives on BedrockService; SimService only
 // validates the user-confirmed requirements and kicks off the run.
 type SimService struct {

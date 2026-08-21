@@ -262,6 +262,16 @@ func (m *mockMeetingRepo) ListPendingShares(_ context.Context, email string) ([]
 	return out, nil
 }
 
+func (m *mockMeetingRepo) GetPendingShare(_ context.Context, email, sk string) (*model.PendingShare, error) {
+	for _, p := range m.pendingShares {
+		if p.Email == email && p.SK == sk {
+			cp := *p
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *mockMeetingRepo) DeletePendingShare(_ context.Context, email, sk string) (bool, error) {
 	deleted := false
 	kept := m.pendingShares[:0]

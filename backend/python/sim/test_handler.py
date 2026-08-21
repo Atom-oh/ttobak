@@ -1,4 +1,4 @@
-"""Unit tests for the ttobak-sim Lambda (ADR-031).
+"""Unit tests for the ttobak-sim Lambda (ADR-033).
 
 Run: cd backend/python/sim && python3 -m unittest test_handler -v
 Same stdlib-unittest + boto3-patched-at-import-time pattern as

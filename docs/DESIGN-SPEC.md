@@ -851,12 +851,12 @@ Checkbox group for selecting real-time translation target languages.
 </div>
 ```
 
-### 2.16 Cost/Sizing Simulator Card (`SimCard`, ADR-031)
+### 2.16 Cost/Sizing Simulator Card (`SimCard`, ADR-033)
 
 Appears on the meeting detail page only once the meeting note itself is `done`. Five states driven by `SimRun.status`, one card, no separate page:
 
 - **idle** (no `SimRun` yet): one-line explainer + a single "시뮬레이션 실행" button (`query_stats` icon in the section header)
-- **extracted**: confirm/correct form — one row per extracted `SimRequirement` (label, required-marker, an editable value input, and a "녹취록에서 확인" link when `evidence` is present) + 2–3 architecture-option name/description input pairs. "실행" is disabled until every required requirement has a value and at least 2 options have a name — this is a UX convenience only, the server re-validates everything (ADR-031)
+- **extracted**: confirm/correct form — one row per extracted `SimRequirement` (label, required-marker, an editable value input, and a "녹취록에서 확인" link when `evidence` is present) + 2–3 architecture-option name/description input pairs. "실행" is disabled until every required requirement has a value and at least 2 options have a name — this is a UX convenience only, the server re-validates everything (ADR-033)
 - **queued / running**: spinner + "1~3분 소요, 다른 작업을 계속하셔도 됩니다" — no page-blocking modal, since this is a background job
 - **done**: an amber "추정치 — 검증 필요" banner with the price-snapshot timestamp, then the generated `report.md` rendered through the same `MarkdownRenderer` every other markdown surface uses, with `sim://chart_N` rewritten to each chart's presigned URL before render (same rewrite-before-render shape as `resolveAttachmentUrls`) — charts inherit `ZoomPanViewport` for free through `MermaidBlock`'s sibling markdown image handling
 - **error**: `errorMessage` + "다시 시도" (re-runs extraction)
@@ -989,4 +989,4 @@ No dedicated color token — reuses the existing primary/amber/red palette (ambe
 | Zoom out | zoom_out | Diagram zoom/pan controls |
 | Fit to screen | fit_screen | Diagram zoom/pan reset |
 | Fullscreen | fullscreen | Diagram lightbox (`DiagramLightbox`) |
-| Cost simulator | query_stats | Cost/sizing simulator card (`SimCard`, ADR-031) |
+| Cost simulator | query_stats | Cost/sizing simulator card (`SimCard`, ADR-033) |

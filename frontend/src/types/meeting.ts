@@ -24,7 +24,7 @@ export interface Meeting {
   audioKeys?: string[];
   /** Per ADR-014 Phase 6: ordered predecessor meeting IDs whose summaries are prepended to this meeting's prompt. */
   linkedMeetingIds?: string[];
-  /** ADR-031 cost/sizing simulator, singleton per meeting. */
+  /** ADR-033 cost/sizing simulator, singleton per meeting. */
   simRun?: SimRun;
 }
 
@@ -50,7 +50,7 @@ export interface SimChart {
   url?: string;
 }
 
-/** Mirrors backend/internal/model.SimRunResponse's JSON shape (ADR-031). */
+/** Mirrors backend/internal/model.SimRunResponse's JSON shape (ADR-033). */
 export interface SimRun {
   simRunId: string;
   status: 'extracted' | 'queued' | 'running' | 'done' | 'error';

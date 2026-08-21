@@ -22,12 +22,12 @@ type MeetingHandler struct {
 	uploadService  *service.UploadService
 	repo           *repository.DynamoDBRepository
 	// simService is optional (see SetSimService) so GetMeeting can attach
-	// the meeting's SimRun (ADR-031) without every existing NewMeetingHandler
+	// the meeting's SimRun (ADR-033) without every existing NewMeetingHandler
 	// call site needing to change.
 	simService *service.SimService
 }
 
-// SetSimService injects the cost/sizing simulator service (ADR-031) so
+// SetSimService injects the cost/sizing simulator service (ADR-033) so
 // GetMeeting can attach the meeting's current SimRun to its response.
 func (h *MeetingHandler) SetSimService(s *service.SimService) {
 	h.simService = s
@@ -85,6 +85,11 @@ func (h *MeetingHandler) ListMeetings(w http.ResponseWriter, r *http.Request) {
 	email := middleware.GetUserEmail(ctx)
 	name := middleware.GetUserName(ctx)
 	if email != "" {
+		// Void by design (see its doc comment) -- errors from this call are
+		// not swallowed silently: GetOrCreateUser failures are logged
+		// inside it, and MaterializePendingShares logs per-item failures
+		// of its own as it iterates. Nothing here needs to check a return
+		// value because there isn't one to check.
 		h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
 	}
 
@@ -139,6 +144,11 @@ func (h *MeetingHandler) CreateMeeting(w http.ResponseWriter, r *http.Request) {
 	email := middleware.GetUserEmail(ctx)
 	name := middleware.GetUserName(ctx)
 	if email != "" {
+		// Void by design (see its doc comment) -- errors from this call are
+		// not swallowed silently: GetOrCreateUser failures are logged
+		// inside it, and MaterializePendingShares logs per-item failures
+		// of its own as it iterates. Nothing here needs to check a return
+		// value because there isn't one to check.
 		h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
 	}
 
@@ -221,7 +231,7 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Attach the meeting's cost/sizing simulation state, if any (ADR-031).
+	// Attach the meeting's cost/sizing simulation state, if any (ADR-033).
 	// A stuck run (Lambda died mid-write) is detected AND persisted as
 	// errored inside SimService.GetSimRun itself now (mirrors isStuck's
 	// read-triggered write for transcribing/summarizing meetings) --

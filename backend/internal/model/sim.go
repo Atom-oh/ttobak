@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// SimRun is the singleton cost/sizing simulation run for a meeting (ADR-031).
+// SimRun is the singleton cost/sizing simulation run for a meeting (ADR-033).
 // PK: MEETING#{meetingId}, SK: SIMRUN -- singleton (one current answer per
 // meeting, not a history) so the DeleteMeeting transaction only ever gains
 // one extra item regardless of how many times a meeting is re-simulated,

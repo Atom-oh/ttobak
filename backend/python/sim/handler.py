@@ -1,4 +1,4 @@
-"""ttobak-sim: the cost/sizing simulator's async worker (ADR-031).
+"""ttobak-sim: the cost/sizing simulator's async worker (ADR-033).
 
 Invoked fire-and-forget (InvocationType=Event) by the Go api Lambda's
 SimService.CreateSimulation once a run has been recorded as "queued" via

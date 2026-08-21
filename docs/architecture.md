@@ -122,7 +122,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 4. **Whisper GPU on ECS Spot (Zero-Scale)**: 벤치마크 결과 AWS Transcribe(3.5/10) 대비 Whisper GPU(7.5/10)가 품질 2배, 비용 36배 저렴.
    - *이유*: 한영 혼용 기술 회의에서 영어 약어/서비스명 인식이 압도적으로 우수. ASG min=0으로 유휴 비용 $0.
 
-5. **비용·사이징 시뮬레이터 (ADR-031)**: 사용자 버튼 → Go api Lambda가 Haiku로 정량 요구사항 추출 → 사용자 확인·보정 → `ttobak-sim`(Python) 비동기 실행 → AgentCore Code Interpreter(SANDBOX 네트워크, 빈 실행역할)에서 Sonnet이 생성한 파이썬이 실제로 계산 → 차트·리포트·코드가 S3에 저장, 프론트엔드가 5초 폴링으로 결과 확인.
+5. **비용·사이징 시뮬레이터 (ADR-033)**: 사용자 버튼 → Go api Lambda가 Haiku로 정량 요구사항 추출 → 사용자 확인·보정 → `ttobak-sim`(Python) 비동기 실행 → AgentCore Code Interpreter(SANDBOX 네트워크, 빈 실행역할)에서 Sonnet이 생성한 파이썬이 실제로 계산 → 차트·리포트·코드가 S3에 저장, 프론트엔드가 5초 폴링으로 결과 확인.
    - *이유*: LLM 추정치가 아닌 실행된 코드로 감사 가능한 비용 비교. 미팅 트랜스크립트는 코드 생성 프롬프트에 절대 도달하지 않아 인젝션 폭발 반경이 샌드박스 CPU로 제한됨.
 
 ### 아키텍처 결정 기록 (ADR)
@@ -230,7 +230,7 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 4. **Whisper GPU on ECS Spot (Zero-Scale)**: Per benchmarks, Whisper GPU (7.5/10) outperforms AWS Transcribe (3.5/10) — 2× quality, 36× cheaper for Korean/English mixed technical meetings. ASG min=0 means $0 idle cost. AWS Transcribe is retained as a fallback engine.
    - *Why*: Superior recognition of English acronyms/AWS service names in mixed-language meetings; cost optimization via Spot + zero-scale.
 
-5. **Cost/Sizing Simulator (ADR-031)**: User button → Go api Lambda extracts quantitative requirements via Haiku → user confirms/corrects → async `ttobak-sim` (Python) → Sonnet-generated Python actually runs inside AgentCore Code Interpreter (SANDBOX network, empty execution role) → charts/report/code land in S3, frontend polls every 5s for the result.
+5. **Cost/Sizing Simulator (ADR-033)**: User button → Go api Lambda extracts quantitative requirements via Haiku → user confirms/corrects → async `ttobak-sim` (Python) → Sonnet-generated Python actually runs inside AgentCore Code Interpreter (SANDBOX network, empty execution role) → charts/report/code land in S3, frontend polls every 5s for the result.
    - *Why*: An auditable, actually-executed computation instead of an LLM estimate. The meeting transcript never reaches the codegen prompt, so an injection's blast radius is bounded to wasted sandbox CPU.
 
 ### Architecture Decision Records (ADR)

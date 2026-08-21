@@ -144,7 +144,7 @@ func init() {
 	researchChatRepo := repository.NewChatRepository(dynamoClient, tableName)
 	researchChatHandler := handler.NewResearchChatHandler(researchChatRepo, researchService)
 
-	// Cost/sizing simulator (ADR-031). bedrockService reuses the api
+	// Cost/sizing simulator (ADR-033). bedrockService reuses the api
 	// Lambda's own Bedrock client (bedrockRuntimeClient2) for the
 	// synchronous Haiku extraction call; the async run itself is handed off
 	// to the ttobak-sim Lambda, not run inline here.
@@ -237,7 +237,7 @@ func init() {
 		// Re-run speaker diarization with an updated speaker-count hint
 		r.Post("/api/meetings/{meetingId}/rediarize", meetingHandler.RediarizeMeeting)
 
-		// Cost/sizing simulator (ADR-031)
+		// Cost/sizing simulator (ADR-033)
 		r.Post("/api/meetings/{meetingId}/sim/extract", simHandler.ExtractRequirements)
 		r.Post("/api/meetings/{meetingId}/sim", simHandler.CreateSimulation)
 

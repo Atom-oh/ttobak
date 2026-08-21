@@ -82,6 +82,7 @@ type meetingRepo interface {
 	PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error
 	PutPendingShare(ctx context.Context, share *model.PendingShare) error
 	ListPendingShares(ctx context.Context, email string) ([]model.PendingShare, error)
+	GetPendingShare(ctx context.Context, email, sk string) (*model.PendingShare, error)
 	DeletePendingShare(ctx context.Context, email, sk string) (bool, error)
 	DeletePendingShareIfVersionMatches(ctx context.Context, email string, p *model.PendingShare) error
 	MaterializePendingAccountGrant(ctx context.Context, p *model.PendingShare, userID, email string) (bool, error)
@@ -712,13 +713,15 @@ func (s *MeetingService) ShareMeetingByEmail(ctx context.Context, ownerID, owner
 // grant became a real Share, and the pending row was cleared as part of
 // that same transaction. Without distinguishing the two, this would return
 // a misleading success -- the caller believes access was revoked while a
-// live Share row still grants it. So when the delete finds nothing, this
-// resolves email to a userID via Cognito's AdminGetUser (not
-// GetUserByEmail's GSI2 -- a GSI query can lag a key materialize's
-// transaction just wrote, right when this check needs it consistent) and
-// checks for a live Share by that userID with a strongly consistent
-// GetItem, reporting ErrPendingAlreadyClaimed instead of a silent no-op in
-// that case only.
+// live Share row still grants it. So this reads the pending row
+// (GetPendingShare, a strongly consistent GetItem) BEFORE attempting the
+// delete to capture its InvitedCognitoSub while it's still there,
+// narrowing the window against that race; if the delete still finds
+// nothing, it checks for a live Share by that sub (falling back to a
+// fresh Cognito AdminGetUser lookup only if the row was already gone
+// before this call's own read -- see GetPendingShare's doc comment),
+// reporting ErrPendingAlreadyClaimed instead of a silent no-op in that
+// case only.
 func (s *MeetingService) RevokePendingShare(ctx context.Context, ownerID, meetingID, email string) error {
 	meeting, err := s.repo.GetMeeting(ctx, ownerID, meetingID)
 	if err != nil {
@@ -734,28 +737,46 @@ func (s *MeetingService) RevokePendingShare(ctx context.Context, ownerID, meetin
 		}
 		return ErrNotFound
 	}
-	deleted, err := s.repo.DeletePendingShare(ctx, email, model.PrefixPendingMeeting+meetingID)
+	sk := model.PrefixPendingMeeting + meetingID
+	// Captured BEFORE the delete attempt: narrows the window in which
+	// MaterializePendingShares' transaction (write the grant, delete this
+	// row) can complete between this read and the delete below, with no
+	// way for this call to otherwise observe it happening.
+	pending, err := s.repo.GetPendingShare(ctx, email, sk)
+	if err != nil {
+		return err
+	}
+	deleted, err := s.repo.DeletePendingShare(ctx, email, sk)
 	if err != nil {
 		return err
 	}
 	if deleted {
 		return nil
 	}
-	// Nothing queued to delete -- resolve email to a userID via Cognito
-	// directly (AdminGetUser), not GetUserByEmail's GSI2 Query: the
-	// invitee's Cognito user has existed since the original invite, well
-	// before any of this, so AdminGetUser is immediately reliable here --
-	// unlike GSI2, which can still be catching up on a key materialize's
-	// transaction just wrote, right when this call needs it. Then check
-	// for a live Share by that sub with a strongly consistent GetItem, so
-	// the whole check is free of DynamoDB eventual consistency end to end.
-	_, sub, err := emailHasPendingInvite(ctx, s.cognito, s.resolveCognitoPoolID(), email)
-	if err != nil {
-		return err
+	// Nothing left to delete. Prefer the sub this call's own pre-read just
+	// saw over resolving email again now -- that's exactly the sub
+	// materialize would have granted to, and stays correct even if the
+	// invitee has since changed their Cognito email or been deleted, which
+	// a fresh by-email lookup could miss. Only fall back to Cognito's
+	// AdminGetUser (immediately reliable, unlike GetUserByEmail's GSI2
+	// Query, which can still be catching up right when a revoke lands
+	// moments after materialize's write) if the row was already gone
+	// before this call even read it.
+	sub := ""
+	if pending != nil {
+		sub = pending.InvitedCognitoSub
+	} else {
+		_, cognitoSub, err := emailHasPendingInvite(ctx, s.cognito, s.resolveCognitoPoolID(), email)
+		if err != nil {
+			return err
+		}
+		sub = cognitoSub
 	}
 	if sub == "" {
 		return nil
 	}
+	// Strongly consistent GetItem either way, so this check is free of
+	// DynamoDB eventual consistency end to end.
 	share, err := s.repo.GetShare(ctx, sub, meetingID)
 	if err != nil {
 		return err

@@ -1,4 +1,4 @@
-# ADR-031: 미팅 기반 비용·사이징 시뮬레이터 — AgentCore Code Interpreter
+# ADR-033: 미팅 기반 비용·사이징 시뮬레이터 — AgentCore Code Interpreter
 
 - Status: 승인됨 (Accepted)
 - Date: 2026-08-18
