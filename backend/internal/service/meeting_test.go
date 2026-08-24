@@ -771,9 +771,9 @@ func TestIsStuck_TranscribingThresholdBoundary(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := IsStuck(model.StatusSummarizing, time.Now().Add(-tc.age))
+			got := isStuck(model.StatusSummarizing, time.Now().Add(-tc.age))
 			if got != tc.want {
-				t.Errorf("IsStuck(summarizing, now-%s) = %v, want %v", tc.age, got, tc.want)
+				t.Errorf("isStuck(summarizing, now-%s) = %v, want %v", tc.age, got, tc.want)
 			}
 		})
 	}
@@ -808,7 +808,7 @@ func TestSummarizeRetryEligibleShorterThanStuck(t *testing.T) {
 	if !IsSummarizeRetryEligible(updatedAt) {
 		t.Fatalf("expected retry-eligible at age %s", age)
 	}
-	if IsStuck(model.StatusSummarizing, updatedAt) {
+	if isStuck(model.StatusSummarizing, updatedAt) {
 		t.Fatalf("expected NOT auto-expired at age %s -- retry window already closed", age)
 	}
 }

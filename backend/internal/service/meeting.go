@@ -47,9 +47,9 @@ const (
 	summarizeRetryEligibleThreshold = 20 * time.Minute
 )
 
-// IsStuck reports whether a meeting's status has been sitting unchanged past
+// isStuck reports whether a meeting's status has been sitting unchanged past
 // its auto-expiry threshold.
-func IsStuck(status string, updatedAt time.Time) bool {
+func isStuck(status string, updatedAt time.Time) bool {
 	switch status {
 	case model.StatusTranscribing, model.StatusSummarizing:
 		return time.Since(updatedAt) > stuckTranscribingThreshold
@@ -65,7 +65,7 @@ func IsStuck(status string, updatedAt time.Time) bool {
 // manually re-triggered invocation as recovering a dead attempt, rather
 // than skipping it as a still-in-flight duplicate. See
 // summarizeRetryEligibleThreshold for why this is a separate, shorter
-// window than IsStuck's auto-expiry threshold.
+// window than isStuck's auto-expiry threshold.
 func IsSummarizeRetryEligible(updatedAt time.Time) bool {
 	return time.Since(updatedAt) > summarizeRetryEligibleThreshold
 }
@@ -388,7 +388,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		return nil, ErrNotFound
 	}
 
-	if IsStuck(meeting.Status, meeting.UpdatedAt) {
+	if isStuck(meeting.Status, meeting.UpdatedAt) {
 		meeting.Status = model.StatusError
 		s.repo.UpdateMeeting(ctx, meeting)
 	}

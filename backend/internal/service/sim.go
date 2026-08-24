@@ -585,7 +585,7 @@ func (s *SimService) GetSimRun(ctx context.Context, meetingID string) (*model.Si
 	return run, nil
 }
 
-// simRunStuckThreshold mirrors meeting.go's 30-minute isStuck window, but
+// simRunStuckThreshold mirrors meeting.go's 60-minute IsStuck window, but
 // shorter: a sim run has no long-running external process analogous to
 // Whisper ECS, so 20 minutes past Lambda's own 15-minute timeout is already
 // generous slack for a Lambda that died without writing "error".

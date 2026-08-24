@@ -849,6 +849,15 @@ const SummarizeRetryClaimTTL = 16 * time.Minute
 // same meeting. Returns (false, err) on real DynamoDB errors — the caller
 // should skip on error too, since it can't tell whether the write actually
 // landed.
+//
+// Also bumps `updatedAt` to now as part of the same write. Without this, a
+// meeting that's been `summarizing` for close to stuckTranscribingThreshold
+// (60 min) when reprocessing starts could get auto-expired to `error` by
+// GetMeeting mid-reprocess (reprocessing itself can take up to the Lambda's
+// 15-minute budget) -- and since the guard only accepts
+// `transcribing`/`summarizing`, that kills the in-flight attempt and, via
+// GetMeeting's whole-item write, wipes this very claim. Bumping updatedAt
+// here buys reprocessing a fresh 60-minute window.
 func (r *DynamoDBRepository) ClaimSummarizeRetry(ctx context.Context, userID, meetingID string) (bool, error) {
 	now := time.Now().UTC()
 	staleBefore := now.Add(-SummarizeRetryClaimTTL).Format(time.RFC3339Nano)
@@ -858,7 +867,7 @@ func (r *DynamoDBRepository) ClaimSummarizeRetry(ctx context.Context, userID, me
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 		},
-		UpdateExpression: aws.String("SET summarizeRetryClaimedAt = :now"),
+		UpdateExpression: aws.String("SET summarizeRetryClaimedAt = :now, updatedAt = :now"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":now":         &types.AttributeValueMemberS{Value: now.Format(time.RFC3339Nano)},
 			":staleBefore": &types.AttributeValueMemberS{Value: staleBefore},

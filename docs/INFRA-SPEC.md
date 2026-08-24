@@ -169,7 +169,7 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - Permissions: Transcribe FullAccess, Bedrock InvokeModelWithBidirectionalStream, S3 read, DynamoDB read/write
 
 #### Summarize Lambda
-- Trigger: EventBridge — S3 `Object Created` on the `transcripts/` prefix, and the custom `ttobak.transcribe` / `AllPartsTranscribed` event for multi-part audio (not a DynamoDB Stream), 512MB / 900s (15 min, the Lambda ceiling; raised from 600s on 2026-08-19 — a ~1,000-1,500 segment meeting's sequential refine step alone could take 8-9 minutes, leaving no room for the Opus 5 summarize call that follows)
+- Trigger: EventBridge — S3 `Object Created` on the `transcripts/` prefix, and the custom `ttobak.transcribe` / `AllPartsTranscribed` event for multi-part audio (not a DynamoDB Stream), 512MB / 900s (15 min, the Lambda ceiling; raised from 600s on 2026-08-19 — a ~1,000-1,500 segment / 50-80 minute meeting's refine step, already on the parallel path (batches of 4, not sequential — see ADR-031), could take 8-9 minutes on its own, leaving no room for the Opus 5 summarize call that follows)
 - Env: `TABLE_NAME`, `BUCKET_NAME`, `BEDROCK_MODEL_ID`, `BEDROCK_SONNET_MODEL_ID`, `KB_BUCKET_NAME`, `KB_ID`, `DATA_SOURCE_ID`, `AWS_REGION_NAME`
 - Permissions: Bedrock InvokeModel, DynamoDB read/write, S3 read/write
 - Status guard: only reprocesses a transcript when the meeting is `transcribing`, or `summarizing` but stale past `IsSummarizeRetryEligible` (20 min — deliberately shorter than the 60-min auto-expiry-to-`error` threshold, so a redelivery has a real window before `GetMeeting` marks it `error` and closes the recovery path). Reprocessing first wins an atomic claim (`repository.ClaimSummarizeRetry`, a conditional `UpdateItem` on `summarizeRetryClaimedAt`, TTL 16 min) so a second concurrent redelivery can't double-run Bedrock summarize + KB export against the same meeting. This does not generate new redeliveries on its own — it only lets an EventBridge retry or manual re-trigger that actually arrives get past the guard instead of being skipped forever (ADR-031).
@@ -380,8 +380,7 @@ AuthStack.userPool → GatewayStack (WebSocket Authorizer)
 AuthStack.spaClient.userPoolClientId → EdgeAuthStack (JWT verification, SPA Client ID)
 StorageStack.table → GatewayStack (Lambda env vars)
 StorageStack.connectionsTable → GatewayStack (Realtime Lambda)
-StorageStack.bucket → GatewayStack (Lambda env vars, S3 events)
-StorageStack.tableStreamArn → GatewayStack (Summarize Lambda trigger)
+StorageStack.bucket → GatewayStack (Lambda env vars, S3 events; also the Summarize Lambda's EventBridge trigger on the `transcripts/` prefix — not the DynamoDB stream)
 EdgeAuthStack.functionVersionArn → FrontendStack (Lambda@Edge association)
 GatewayStack.httpApiEndpoint → FrontendStack (CloudFront API origin)
 GatewayStack.webSocketApiEndpoint → FrontendStack (CloudFront WebSocket origin)

@@ -447,7 +447,7 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 			return nil
 		}
 		// Atomic claim — see handleSingleTranscript's matching comment.
-		claimed, claimErr := repo.ClaimSummarizeRetry(ctx, userID, meetingID)
+		claimed, claimErr := repo.ClaimSummarizeRetry(ctx, meeting.UserID, meetingID)
 		if claimErr != nil {
 			log.Printf("Failed to claim summarize retry for meeting %s: %v", meetingID, claimErr)
 			return nil
