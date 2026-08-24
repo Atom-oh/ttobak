@@ -152,16 +152,31 @@ export const meetingsApi = {
   rediarize: (meetingId: string, speakerCount: number) =>
     api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/rediarize`, { speakerCount }),
 
+  // ADR-033 cost/sizing simulator
+  extractSimRequirements: (meetingId: string) =>
+    api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim/extract`, {}),
+
+  createSimulation: (
+    meetingId: string,
+    data: { requirements: import('@/types/meeting').SimRequirement[]; options: import('@/types/meeting').SimOption[] }
+  ) => api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim`, data),
+
   update: (id: string, data: { title?: string; content?: string; notes?: string; liveSummary?: string; transcriptA?: string; selectedTranscript?: 'A' | 'B'; participants?: string[]; status?: string }, options?: { signal?: AbortSignal }) =>
     api.put<{ meetingId: string; updatedAt: string }>(`/api/meetings/${id}`, data, options),
 
   delete: (id: string) => api.delete(`/api/meetings/${id}`),
 
   share: (id: string, data: { email: string; permission: 'read' | 'edit' }) =>
-    api.post<{ sharedWith: { userId: string; email: string; permission: string } }>(`/api/meetings/${id}/share`, data),
+    api.post<{ sharedWith: { userId?: string; email: string; permission: string; pending?: boolean } }>(`/api/meetings/${id}/share`, data),
 
   unshare: (id: string, userId: string) =>
     api.delete(`/api/meetings/${id}/share/${userId}`),
+
+  // Cancels a queued PendingShare invite (see `share`'s `pending: true`
+  // response) before the target has ever logged in -- there's no userId
+  // yet, so this can't go through `unshare`.
+  revokePendingShare: (id: string, email: string) =>
+    api.delete(`/api/meetings/${id}/share/pending?email=${encodeURIComponent(email)}`),
 
   selectTranscript: (id: string, selected: 'A' | 'B') =>
     api.put(`/api/meetings/${id}/transcript`, { selected }),
@@ -286,6 +301,51 @@ export interface InviteUserResponse {
   addedToAdmins: boolean;
 }
 
+// Admin user-management API (Settings › 사용자 관리). All routes are
+// admin-only server-side (middleware.RequireAdmin) -- the frontend's isAdmin
+// check only controls whether the section renders.
+export const adminUsersApi = {
+  list: () => api.get<AdminUserListResponse>('/api/settings/users'),
+
+  delete: (userId: string) =>
+    api.delete<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}`),
+
+  enable: (userId: string) =>
+    api.put<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}/enable`),
+
+  disable: (userId: string) =>
+    api.put<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}/disable`),
+
+  resendInvite: (userId: string) =>
+    api.post<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}/resend-invite`),
+
+  resetPassword: (userId: string) =>
+    api.post<AdminUserActionResponse>(`/api/settings/users/${encodeURIComponent(userId)}/reset-password`),
+};
+
+export interface AdminUserSummary {
+  userId: string;
+  email: string;
+  name?: string;
+  status: string;
+  enabled: boolean;
+  isAdmin: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+  dormant: boolean;
+}
+
+export interface AdminUserListResponse {
+  users: AdminUserSummary[];
+  lastLoginUnavailable?: boolean;
+  truncated?: boolean;
+}
+
+export interface AdminUserActionResponse {
+  userId: string;
+  warning?: string;
+}
+
 // Translation API
 export const translateApi = {
   translate: (text: string, sourceLang: string, targetLang: string) =>
@@ -374,6 +434,8 @@ export const researchApi = {
     api.get<{ research: Research[] }>('/api/research'),
   getDetail: (researchId: string) =>
     api.get<ResearchDetail>(`/api/research/${encodeURIComponent(researchId)}`),
+  update: (researchId: string, data: { title: string }) =>
+    api.put<{ researchId: string }>(`/api/research/${encodeURIComponent(researchId)}`, data),
   trash: (researchId: string) =>
     api.delete(`/api/research/${encodeURIComponent(researchId)}`),
   restore: (researchId: string) =>
@@ -392,7 +454,7 @@ export const researchChatApi = {
   listMessages: (researchId: string) =>
     api.get<{ messages: ChatMessage[] }>(`/api/research/${encodeURIComponent(researchId)}/chat`),
   sendMessage: (researchId: string, data: { content: string; action?: string }) =>
-    api.post<{ messageId: string }>(`/api/research/${encodeURIComponent(researchId)}/chat`, data),
+    api.post<{ messageId: string; warning?: string }>(`/api/research/${encodeURIComponent(researchId)}/chat`, data),
   listSubPages: (researchId: string) =>
     api.get<{ subpages: Research[] }>(`/api/research/${encodeURIComponent(researchId)}/subpages`),
 };
@@ -405,6 +467,11 @@ export const accountApi = {
     api.post<Account>('/api/accounts', data),
   addMember: (id: string, data: { email: string; role: string }) =>
     api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/members`, data),
+  // Cancels a queued PendingShare invite (see `addMember`'s `pending: true`
+  // response) before the target has ever logged in -- there's no userId
+  // yet, so this can't go through `removeMember`.
+  revokePendingMember: (id: string, email: string) =>
+    api.delete(`/api/accounts/${encodeURIComponent(id)}/members/pending?email=${encodeURIComponent(email)}`),
   updateMember: (id: string, userId: string, data: { role: string }) =>
     api.put<AccountMember>(
       `/api/accounts/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, data),

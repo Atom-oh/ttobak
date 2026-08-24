@@ -48,6 +48,9 @@ export interface GatewayStackProps extends cdk.StackProps {
   originVerifySecret?: string;
   /** AgentCore Web Search Gateway MCP endpoint (us-east-1) for the QA Lambda's search_web tool */
   webSearchGatewayUrl?: string;
+  /** ADR-033 cost/sizing simulator */
+  simRole?: iam.IRole;
+  simCodeInterpreterId?: string;
 }
 
 export class GatewayStack extends cdk.Stack {
@@ -58,6 +61,7 @@ export class GatewayStack extends cdk.Stack {
   public readonly processImageFunction: lambda.Function;
   public readonly kbFunction: lambda.Function;
   public readonly qaFunction: lambda.Function;
+  public readonly simFunction: lambda.Function;
   public readonly websocketApi: apigatewayv2.WebSocketApi;
   public readonly websocketFunction: lambda.Function;
   public convertDocFunction?: lambda.DockerImageFunction;
@@ -286,6 +290,34 @@ export class GatewayStack extends cdk.Stack {
     // default 2 async retries would replay a failed/timed-out run minutes later,
     // delivering stale duplicate answer deltas to an already-finished WS session.
     this.qaFunction.configureAsyncInvoke({ retryAttempts: 0 });
+
+    // Cost/sizing simulator worker (ADR-033) — invoked async by the api
+    // Lambda (InvocationType=Event) once a run is recorded as "queued".
+    // 15-minute timeout budgets for a Code Interpreter session (10-minute
+    // sessionTimeoutSeconds in the handler) plus up to 3 codegen/execute
+    // rounds.
+    this.simFunction = new lambda.Function(this, 'SimFunction', {
+      functionName: 'ttobak-sim',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'handler.lambda_handler',
+      code: lambda.Code.fromAsset('../backend/python/sim'),
+      role: (props.simRole ?? props.apiRole) as iam.Role,
+      environment: {
+        TABLE_NAME: props.table.tableName,
+        BUCKET_NAME: props.bucket.bucketName,
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-5',
+        CODE_INTERPRETER_ID: props.simCodeInterpreterId || 'ttobak_sim',
+        DAILY_SIM_LIMIT: '3',
+      },
+      timeout: cdk.Duration.minutes(15),
+      memorySize: 1024,
+    });
+    // A retried async invoke would start a second, redundant Code
+    // Interpreter session and Sonnet codegen for the same run -- same
+    // reasoning as qaFunction's retryAttempts: 0 above.
+    this.simFunction.configureAsyncInvoke({ retryAttempts: 0 });
+    this.apiFunction.addEnvironment('SIM_FUNCTION_NAME', this.simFunction.functionName);
 
     // JWT Authorizer for Cognito
     const jwtAuthorizer = new apigatewayv2Authorizers.HttpJwtAuthorizer(

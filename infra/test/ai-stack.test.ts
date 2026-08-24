@@ -50,6 +50,35 @@ describe('AiStack', () => {
     });
   });
 
+  test('api role CognitoAdminUserManagement grant includes the admin user-management actions, scoped to the pool ARN', () => {
+    // Admin panel (list/delete/enable/disable/resend-invite/reset-password)
+    // additions to the pre-existing invite-only statement -- must stay
+    // scoped to the specific pool ARN, never a wildcard (AGENTS.md IAM
+    // mandate), and AdminUserGlobalSignOut must be present since disable/
+    // delete rely on it to close the already-issued-token window.
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Sid: 'CognitoAdminUserManagement',
+            Action: Match.arrayWith([
+              'cognito-idp:AdminCreateUser',
+              'cognito-idp:AdminAddUserToGroup',
+              'cognito-idp:AdminDeleteUser',
+              'cognito-idp:AdminDisableUser',
+              'cognito-idp:AdminEnableUser',
+              'cognito-idp:AdminResetUserPassword',
+              'cognito-idp:AdminUserGlobalSignOut',
+              'cognito-idp:AdminGetUser',
+              'cognito-idp:ListUsersInGroup',
+            ]),
+            Resource: 'arn:aws:cognito-idp:ap-northeast-2:111111111111:userpool/test-pool',
+          }),
+        ]),
+      },
+    });
+  });
+
   test('api role StartIngestionJob grant is scoped to the KB ARN, not a wildcard', () => {
     // AGENTS.md IAM mandate: no new unconditioned Resource:"*" statements.
     template.hasResourceProperties('AWS::IAM::Policy', {

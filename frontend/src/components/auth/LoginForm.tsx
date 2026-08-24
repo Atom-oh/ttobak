@@ -194,7 +194,7 @@ export function LoginForm({ onForgotPassword }: LoginFormProps) {
                 onClick={onForgotPassword}
                 className="text-sm text-primary hover:underline"
               >
-                Forgot Password?
+                비밀번호를 잊으셨나요?
               </button>
             )}
           </div>

@@ -168,8 +168,8 @@ func (m *mockHandlerMeetingRepo) ListMeetings(_ context.Context, params reposito
 func (m *mockHandlerMeetingRepo) BatchGetMeetings(_ context.Context, _ []repository.MeetingKey) ([]*model.Meeting, error) {
 	return nil, nil
 }
-func (m *mockHandlerMeetingRepo) GetOrCreateUser(_ context.Context, userID, email, name string) (*model.User, error) {
-	return &model.User{UserID: userID, Email: email}, nil
+func (m *mockHandlerMeetingRepo) GetOrCreateUser(_ context.Context, userID, email, name string) (*model.User, bool, error) {
+	return &model.User{UserID: userID, Email: email}, false, nil
 }
 func (m *mockHandlerMeetingRepo) GetUserByEmail(_ context.Context, email string) (*model.User, error) {
 	u, ok := m.users[email]
@@ -189,6 +189,42 @@ func (m *mockHandlerMeetingRepo) CreateShareIfMember(_ context.Context, meetingI
 }
 func (m *mockHandlerMeetingRepo) DeleteShare(_ context.Context, sharedToID, meetingID string) error {
 	return nil
+}
+
+func (m *mockHandlerMeetingRepo) PutPendingShare(_ context.Context, _ *model.PendingShare) error {
+	return nil
+}
+
+func (m *mockHandlerMeetingRepo) ListPendingShares(_ context.Context, _ string) ([]model.PendingShare, error) {
+	return nil, nil
+}
+
+func (m *mockHandlerMeetingRepo) GetPendingShare(_ context.Context, _, _ string) (*model.PendingShare, error) {
+	return nil, nil
+}
+
+func (m *mockHandlerMeetingRepo) DeletePendingShare(_ context.Context, _, _ string) (bool, error) {
+	return true, nil
+}
+
+func (m *mockHandlerMeetingRepo) DeletePendingShareIfVersionMatches(_ context.Context, _ string, _ *model.PendingShare) error {
+	return nil
+}
+
+func (m *mockHandlerMeetingRepo) GetAccount(_ context.Context, _ string) (*model.Account, error) {
+	return nil, nil
+}
+
+func (m *mockHandlerMeetingRepo) PutMember(_ context.Context, _ *model.AccountMember) error {
+	return nil
+}
+
+func (m *mockHandlerMeetingRepo) MaterializePendingAccountGrant(_ context.Context, _ *model.PendingShare, _, _ string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockHandlerMeetingRepo) MaterializePendingMeetingGrant(_ context.Context, _ *model.PendingShare, _, _ string) (bool, error) {
+	return false, nil
 }
 
 func (m *mockHandlerMeetingRepo) GetMember(_ context.Context, accountID, userID string) (*model.AccountMember, error) {

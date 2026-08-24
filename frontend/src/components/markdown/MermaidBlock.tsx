@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef, useId } from 'react';
+import { ZoomPanViewport } from './ZoomPanViewport';
+import { DiagramLightbox } from './DiagramLightbox';
 
 interface MermaidBlockProps {
   code: string;
@@ -9,6 +11,7 @@ interface MermaidBlockProps {
 export function MermaidBlock({ code }: MermaidBlockProps) {
   const [svg, setSvg] = useState<string>('');
   const [error, setError] = useState<string>('');
+  const [fullscreen, setFullscreen] = useState(false);
   const uniqueId = useId().replace(/:/g, '-');
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -68,10 +71,26 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="my-4 rounded-xl border border-white/[0.06] bg-[#0a0a0f] p-4 overflow-x-auto [&>svg]:mx-auto [&>svg]:max-w-full"
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
+    <div ref={containerRef} className="my-4 rounded-xl border border-white/[0.06] bg-[#0a0a0f]">
+      {/*
+        [&>svg]:max-w-full only bounds the INITIAL fit — it must not apply
+        inside the zoom transform, or scaling up re-clamps the SVG back to
+        the container width and zoom has no visible effect. That clamp was
+        the actual reason diagrams were unreadable before this component
+        gained pan/zoom: nodes just got proportionally smaller as the
+        diagram grew, with no way to see them at full size.
+      */}
+      <ZoomPanViewport resetKey={code} onFullscreen={() => setFullscreen(true)}>
+        <div
+          className="p-4 [&>svg]:mx-auto"
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      </ZoomPanViewport>
+      {fullscreen && (
+        <DiagramLightbox resetKey={code} onClose={() => setFullscreen(false)}>
+          <div className="p-4" dangerouslySetInnerHTML={{ __html: svg }} />
+        </DiagramLightbox>
+      )}
+    </div>
   );
 }

@@ -18,7 +18,7 @@ import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingC
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
-import { supportsTabAudioCapture } from '@/lib/device';
+import { supportsTabAudioCapture, hasMobileMicConflictRisk } from '@/lib/device';
 import { isTauri } from '@/lib/tauri';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
@@ -49,7 +49,14 @@ function RecordPageInner() {
   const [translationEnabled, setTranslationEnabled] = useState(false);
   const [targetLang, setTargetLang] = useState('en');
   const [attachments, setAttachments] = useState<{ name: string; url: string; s3Key?: string; mimeType?: string; status?: 'uploading' | 'complete' | 'error'; kbStatus?: 'idle' | 'copying' | 'done' | 'error' }[]>([]);
-  const [liveSttProvider, setLiveSttProvider] = useState<LiveSttProvider>('web-speech');
+  // Default to AWS Transcribe Streaming, not Web Speech: SttManager.start()
+  // already falls back to Web Speech on its own on desktop when the
+  // runtime Cognito config isn't available yet (on mobile there's no
+  // fallback at all -- see SttManager.fallbackToWebSpeech), so this
+  // default only changes behavior once config IS available. Web Speech's
+  // independent mic capture can end the recording's mic track on mobile,
+  // so it should never be the default anywhere (ADR-030).
+  const [liveSttProvider, setLiveSttProvider] = useState<LiveSttProvider>('transcribe-streaming');
   const [audioSource, setAudioSource] = useState<'mic' | 'tab' | 'system'>('mic');
   const [tabSharingLabel, setTabSharingLabel] = useState<string | null>(null);
   // Tauri System Audio mode has no MediaStream, so `session.isRecording`
@@ -108,7 +115,18 @@ function RecordPageInner() {
     targetLang,
     translationEnabled,
     liveSttProvider,
-    onProviderChange: setLiveSttProvider,
+    // Deliberately NOT wired to setLiveSttProvider: this fires on every
+    // runtime provider change, including a transient Transcribe Streaming
+    // failure falling back to Web Speech mid-recording. Feeding that into
+    // the persisted preference state would silently downgrade the user's
+    // choice for every FUTURE recording too, not just this one -- and on
+    // mobile, where the fallback branch also calls this to keep the
+    // LiveSttSelector's "active" badge honest, it would poison
+    // SttManager's own preferredProvider tracking and permanently block
+    // retryWithConfig's promotion (see sttManager.ts, ADR-030). The
+    // "active" badge already reads session.activeProvider, which
+    // useRecordingSession updates from this same signal internally --
+    // this prop has no other consumer, so it's simply omitted.
     onTranscriptUpdate: useCallback((totalWordCount: number, allText: string) => {
       const meetingId = postRecording.serverMeetingId || clientMeetingIdBase;
       summary.checkThreshold(totalWordCount, allText, meetingId);
@@ -333,6 +351,14 @@ function RecordPageInner() {
   useEffect(() => {
     if (session.isRecording) return;
     if (audioSource !== 'mic') return;
+    // Skip entirely on mobile: this opens a SECOND getUserMedia mic stream
+    // that only gets torn down once RecordButton's own getUserMedia call
+    // (for the actual recording) has already resolved and MediaRecorder has
+    // started -- see startSession's previewCleanup callback below. The two
+    // overlapping mic streams risk the OS ending one of their tracks on
+    // iOS/Android, which (via RecordButton's onended handler) now stops the
+    // recording outright. Not worth a live level meter on the idle screen.
+    if (hasMobileMicConflictRisk()) return;
 
     const cleanupPreview = () => {
       previewStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -415,14 +441,31 @@ function RecordPageInner() {
     await postRecording.createDraftMeeting();
     if (stream) {
       setIsNativeRecording(false);
-      // Browser modes (mic/tab): start live STT session with the MediaStream.
-      session.startSession(() => {
+      const cleanupPreview = () => {
         previewStreamRef.current?.getTracks().forEach((t) => t.stop());
         previewStreamRef.current = null;
         previewCtxRef.current?.close().catch(() => {});
         previewCtxRef.current = null;
         setPreviewAnalyser(null);
-      }, stream);
+      };
+      // RecordButton's onRecordingStart(stream) call above is NOT awaited
+      // (unlike the native branch below), so createDraftMeeting's network
+      // round-trip can still be in flight when the mic/tab track dies --
+      // exactly the mobile "OS reclaims the mic right after starting"
+      // scenario this PR targets. If it already has, RecordButton's own
+      // onended/onerror already called (or is about to call)
+      // stopRecording() -> onRecordingStop, tearing down independently of
+      // this handler. Starting the STT session on a dead stream here
+      // would open a Transcribe WebSocket that will never receive audio
+      // and leave session.isRecording stuck true with nothing actually
+      // recording -- skip it instead.
+      const hasLiveAudioTrack = stream.getAudioTracks().some((t) => t.readyState !== 'ended');
+      if (!hasLiveAudioTrack) {
+        cleanupPreview();
+        return;
+      }
+      // Browser modes (mic/tab): start live STT session with the MediaStream.
+      session.startSession(cleanupPreview, stream);
     } else if (isTauri() && audioSource === 'system') {
       // Native (system audio): no MediaStream — capture happens in Rust via
       // ScreenCaptureKit, and RecordButton manages its own timer/state.
@@ -828,8 +871,20 @@ function RecordPageInner() {
             onBlobReady={postRecording.handleBlobReady}
             onNativeFileReady={postRecording.handleNativeFileReady}
             onNativePcmChunk={session.pushNativePcmChunk}
-            onError={(error) => {
-              if (isNativeRecordingRef.current) {
+            onError={(error, opts) => {
+              if (opts?.terminal) {
+                // No audio was captured at all (finalizeRecordingBlob's
+                // 0-byte case) -- by now stopRecording() has already run
+                // onRecordingStop synchronously, so session.isRecording
+                // already reads false and would otherwise fall through to
+                // the live-captions banner below, silently discarding a
+                // total recording loss (and overwriting whatever message
+                // the preceding onerror already showed there). Route it
+                // through the same terminal-failure banner
+                // ([Try Again]/[Home]) the native branch above uses,
+                // instead of the captions channel.
+                postRecording.failWithError(error);
+              } else if (isNativeRecordingRef.current) {
                 // Read the REF, not the state: this closure was created in
                 // the render where the user clicked (state still false) but
                 // fires after handleRecordingStart latched native mode — a
@@ -848,11 +903,17 @@ function RecordPageInner() {
                 session.stopSession();
                 postRecording.failWithError(error);
               } else if (session.isRecording) {
+                // A mid-recording MediaRecorder failure (RecordButton's
+                // onerror). Its stopRecording() call already tore the
+                // session down via onRecordingStop above (this closure's
+                // `session.isRecording` still reads stale/true here — it's
+                // a state var snapshotted at render time, not flushed yet)
+                // and whatever was captured up to the failure still
+                // finalizes through the normal onstop -> onBlobReady flow.
+                // Surface the failure on the captions/session banner
+                // instead of discarding it.
                 postRecording.reset(); // clear any previous banner state
-                // setStep and errorMessage handled by handleBlobReady on
-                // real post-recording errors. For recording errors, show
-                // blocking overlay instead.
-                session.setSpeechError(null);
+                session.setSpeechError(error);
               } else {
                 session.setSpeechError(error);
               }

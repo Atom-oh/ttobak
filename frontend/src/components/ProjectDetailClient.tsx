@@ -327,7 +327,7 @@ export default function ProjectDetailClient() {
                         <button
                           onClick={() => handleUnlinkAccount(linkedAccountId)}
                           className="text-slate-400 hover:text-red-500 shrink-0"
-                          title="Unlink account"
+                          title="계정 연결 해제"
                         >
                           <span className="material-symbols-outlined text-lg">link_off</span>
                         </button>
@@ -336,13 +336,13 @@ export default function ProjectDetailClient() {
                   ))
                 )}
                 {isOwner && accountsLoading && (
-                  <p className="pt-2 text-sm text-slate-400 dark:text-text-muted">Loading accounts…</p>
+                  <p className="pt-2 text-sm text-slate-400 dark:text-text-muted">계정 목록을 불러오는 중…</p>
                 )}
                 {isOwner && !accountsLoading && accountsError && (
                   <div className="flex items-center gap-2 pt-2 text-sm text-red-500">
-                    <span>Failed to load accounts.</span>
+                    <span>계정 목록을 불러오지 못했습니다.</span>
                     <button onClick={fetchAccounts} className="font-semibold hover:underline">
-                      Retry
+                      다시 시도
                     </button>
                   </div>
                 )}
@@ -359,7 +359,7 @@ export default function ProjectDetailClient() {
                         className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm"
                       >
                         <option value="" disabled>
-                          {linkableAccounts.length === 0 ? 'No accounts available to link' : 'Select an account…'}
+                          {linkableAccounts.length === 0 ? '연결 가능한 계정이 없습니다' : '계정 선택…'}
                         </option>
                         {linkableAccounts.map((a) => (
                           <option key={a.accountId} value={a.accountId}>
@@ -372,7 +372,7 @@ export default function ProjectDetailClient() {
                         disabled={linkingAccount || linkableAccounts.length === 0}
                         className="px-3 py-2 rounded-lg bg-primary hover:bg-primary-hover text-white text-sm disabled:opacity-50"
                       >
-                        {linkingAccount ? 'Linking…' : 'Link'}
+                        {linkingAccount ? '연결 중…' : '연결'}
                       </button>
                     </form>
                   );

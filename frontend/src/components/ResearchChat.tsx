@@ -121,6 +121,33 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
     setAutoScroll(isAtBottom);
   };
 
+  // Bounded poll after sending a message on a `done` research: the agent's
+  // reply (TriggerAgentRespond -> SFN -> research-worker -> AgentCore) can
+  // take anywhere from a few seconds (plain chat) to over a minute (a
+  // follow-up that uses web_search), and the continuous poll above only
+  // runs for planning/running/approved -- without this, a message sent on
+  // a finished research would show only the user's own bubble until the
+  // next unrelated re-render.
+  const pollAfterSend = useCallback((baselineCount: number) => {
+    let attempts = 0;
+    const MAX_ATTEMPTS = 20; // 20 * 3s = 60s
+    const interval = setInterval(async () => {
+      attempts += 1;
+      try {
+        const data = await researchChatApi.listMessages(researchId);
+        const msgs = data.messages || [];
+        if (msgs.length > baselineCount) {
+          setMessages(msgs);
+          clearInterval(interval);
+          return;
+        }
+      } catch {
+        // keep trying until the attempt budget runs out
+      }
+      if (attempts >= MAX_ATTEMPTS) clearInterval(interval);
+    }, 3000);
+  }, [researchId]);
+
   const handleSend = async () => {
     if (!input.trim() || sending) return;
     const text = input.trim();
@@ -128,6 +155,7 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
     setSending(true);
     setAutoScroll(true);
 
+    const baselineCount = messages.length + 1; // +1 for the optimistic user bubble below
     setMessages(prev => [...prev, {
       msgId: `temp-${Date.now()}`,
       role: 'user',
@@ -136,8 +164,17 @@ export function ResearchChat({ researchId, status, onApprove, onSubPageCreated }
     }]);
 
     try {
-      await researchChatApi.sendMessage(researchId, { content: text });
+      const resp = await researchChatApi.sendMessage(researchId, { content: text });
+      if (resp.warning) {
+        setMessages(prev => [...prev, {
+          msgId: `warn-${Date.now()}`,
+          role: 'agent',
+          content: '요청을 접수했지만 처리 시작에 실패했습니다. 잠시 후 다시 시도해주세요.',
+          createdAt: new Date().toISOString(),
+        }]);
+      }
       setTimeout(fetchMessages, 1000);
+      if (status === 'done') pollAfterSend(baselineCount);
     } catch {
       setMessages(prev => prev.filter(m => !m.msgId.startsWith('temp-')));
     } finally {

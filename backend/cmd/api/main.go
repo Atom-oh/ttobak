@@ -10,9 +10,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
+	lambdasdk "github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -45,6 +47,8 @@ func init() {
 	bedrockRuntimeClient2 := bedrockruntime.NewFromConfig(cfg)
 	transcribeClient := transcribe.NewFromConfig(cfg)
 	kmsClient := kms.NewFromConfig(cfg)
+	cognitoClient := cognitoidentityprovider.NewFromConfig(cfg)
+	cognitoPoolID := os.Getenv("COGNITO_USER_POOL_ID")
 	// Get environment variables (per API spec: TABLE_NAME, BUCKET_NAME)
 	tableName := os.Getenv("TABLE_NAME")
 	if tableName == "" {
@@ -67,7 +71,14 @@ func init() {
 
 	// Initialize services
 	meetingService := service.NewMeetingService(repo)
+	// Reuse the cold-start Cognito client for InviteUser/SearchUsers instead
+	// of building one per call (see MeetingService.SetCognitoAdminAPI).
+	meetingService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
+	userAdminService := service.NewUserAdminService(cognitoClient, cognitoPoolID, repo)
 	accountService := service.NewAccountService(repo, s3Client, bucketName)
+	// Reuse the same cold-start Cognito client for AddMember's PendingShare
+	// invited-check (see AccountService.SetCognitoAdminAPI).
+	accountService.SetCognitoAdminAPI(cognitoClient, cognitoPoolID)
 	projectService := service.NewProjectService(repo)
 	vaultService := service.NewVaultService(repo)
 	uploadService := service.NewUploadService(s3Client, repo, bucketName, ebClient)
@@ -113,6 +124,7 @@ func init() {
 	}
 	exportHandler := handler.NewExportHandler(meetingService, notionService, repo, cryptoService, frontendBaseURL)
 	settingsHandler := handler.NewSettingsHandler(repo, cryptoService, notionService, meetingService)
+	userAdminHandler := handler.NewUserAdminHandler(userAdminService)
 	dictRepo := repository.NewDictionaryRepository(dynamoClient, tableName)
 	dictService := service.NewDictionaryService(dictRepo, transcribeClient)
 	dictHandler := handler.NewDictionaryHandler(dictService)
@@ -131,6 +143,20 @@ func init() {
 	chatHandler := handler.NewChatHandler(repo)
 	researchChatRepo := repository.NewChatRepository(dynamoClient, tableName)
 	researchChatHandler := handler.NewResearchChatHandler(researchChatRepo, researchService)
+
+	// Cost/sizing simulator (ADR-033). bedrockService reuses the api
+	// Lambda's own Bedrock client (bedrockRuntimeClient2) for the
+	// synchronous Haiku extraction call; the async run itself is handed off
+	// to the ttobak-sim Lambda, not run inline here.
+	bedrockService := service.NewBedrockService(bedrockRuntimeClient2, s3Client, repo)
+	lambdaClient := lambdasdk.NewFromConfig(cfg)
+	simFunctionName := os.Getenv("SIM_FUNCTION_NAME")
+	if simFunctionName == "" {
+		simFunctionName = "ttobak-sim"
+	}
+	simService := service.NewSimService(repo, bedrockService, lambdaClient, simFunctionName)
+	simHandler := handler.NewSimHandler(simService)
+	meetingHandler.SetSimService(simService)
 	// Setup router
 	r := chi.NewRouter()
 
@@ -165,6 +191,7 @@ func init() {
 		r.Post("/api/accounts", accountHandler.CreateAccount)
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
 		r.Post("/api/accounts/{accountId}/members", accountHandler.AddMember)
+		r.Delete("/api/accounts/{accountId}/members/pending", accountHandler.RevokePendingMember)
 		r.Put("/api/accounts/{accountId}/members/{userId}", accountHandler.UpdateMemberRole)
 		r.Delete("/api/accounts/{accountId}/members/{userId}", accountHandler.RemoveMember)
 		r.Get("/api/accounts/{accountId}/meetings", accountHandler.ListAccountMeetings)
@@ -210,6 +237,10 @@ func init() {
 		// Re-run speaker diarization with an updated speaker-count hint
 		r.Post("/api/meetings/{meetingId}/rediarize", meetingHandler.RediarizeMeeting)
 
+		// Cost/sizing simulator (ADR-033)
+		r.Post("/api/meetings/{meetingId}/sim/extract", simHandler.ExtractRequirements)
+		r.Post("/api/meetings/{meetingId}/sim", simHandler.CreateSimulation)
+
 		// Transcript selection
 		r.Put("/api/meetings/{meetingId}/transcript", meetingHandler.SelectTranscript)
 
@@ -221,6 +252,7 @@ func init() {
 
 		// Share routes
 		r.Post("/api/meetings/{meetingId}/share", shareHandler.ShareMeeting)
+		r.Delete("/api/meetings/{meetingId}/share/pending", shareHandler.RevokePendingShare)
 		r.Delete("/api/meetings/{meetingId}/share/{userId}", shareHandler.RevokeShare)
 
 		// User search
@@ -255,6 +287,14 @@ func init() {
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireAdmin)
 			r.Post("/api/settings/invite-user", settingsHandler.InviteUser)
+
+			// Admin user-management panel (list/delete/enable/disable/resend-invite/reset-password)
+			r.Get("/api/settings/users", userAdminHandler.ListUsers)
+			r.Delete("/api/settings/users/{userId}", userAdminHandler.DeleteUser)
+			r.Put("/api/settings/users/{userId}/enable", userAdminHandler.EnableUser)
+			r.Put("/api/settings/users/{userId}/disable", userAdminHandler.DisableUser)
+			r.Post("/api/settings/users/{userId}/resend-invite", userAdminHandler.ResendInvite)
+			r.Post("/api/settings/users/{userId}/reset-password", userAdminHandler.ResetPassword)
 		})
 
 		// Dictionary routes
@@ -284,6 +324,7 @@ func init() {
 		r.Post("/api/research", researchHandler.CreateResearch)
 		r.Get("/api/research", researchHandler.ListResearch)
 		r.Get("/api/research/{researchId}", researchHandler.GetResearchDetail)
+		r.Put("/api/research/{researchId}", researchHandler.UpdateResearch)
 		r.Delete("/api/research/{researchId}", researchHandler.DeleteResearch)
 		r.Post("/api/research/{researchId}/restore", researchHandler.RestoreResearch)
 		r.Post("/api/research/{researchId}/export", researchHandler.ExportResearch)

@@ -150,6 +150,9 @@ func (m *mockResearchRepo) applyFields(id string, fields map[string]interface{})
 	if v, ok := fields["status"]; ok {
 		r.Status = v.(string)
 	}
+	if v, ok := fields["title"]; ok {
+		r.Title = v.(string)
+	}
 	return nil
 }
 
@@ -656,5 +659,100 @@ func TestListAccountResearch_PreservesRefOrderAfterBatchGet(t *testing.T) {
 		if items[i].ResearchID != id {
 			t.Fatalf("expected newest-first refs order %v, got %v", want, items)
 		}
+	}
+}
+
+func TestUpdateResearch_RenamesTitleWithoutTouchingTopic(t *testing.T) {
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newTestResearchService(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+
+	if err := svc.UpdateResearch(context.Background(), "r1", "owner-1", "  My Renamed Title  "); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	updated, _ := repo.GetResearch(context.Background(), "r1")
+	if updated.Title != "My Renamed Title" {
+		t.Fatalf("expected trimmed title to persist, got %q", updated.Title)
+	}
+	if updated.Topic != "topic-r1" {
+		t.Fatalf("rename must never touch the original topic, got %q", updated.Topic)
+	}
+}
+
+func TestUpdateResearch_NonOwner_Forbidden(t *testing.T) {
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newTestResearchService(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+
+	err := svc.UpdateResearch(context.Background(), "r1", "someone-else", "hijacked title")
+	if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestUpdateResearch_NotFound(t *testing.T) {
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newTestResearchService(repo, mainRepo)
+
+	err := svc.UpdateResearch(context.Background(), "does-not-exist", "owner-1", "new title")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestUpdateResearch_EmptyTitleRejected(t *testing.T) {
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newTestResearchService(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+
+	err := svc.UpdateResearch(context.Background(), "r1", "owner-1", "   ")
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for blank title, got %v", err)
+	}
+}
+
+func TestUpdateResearch_TooLongRejected(t *testing.T) {
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newTestResearchService(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+
+	long := make([]byte, 201)
+	for i := range long {
+		long[i] = 'a'
+	}
+	err := svc.UpdateResearch(context.Background(), "r1", "owner-1", string(long))
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for a >200 char title, got %v", err)
+	}
+}
+
+func TestUpdateResearch_KoreanTitleUsesRuneCountNotByteLength(t *testing.T) {
+	repo := newMockResearchRepo()
+	mainRepo := newMockResearchMainRepo()
+	svc := newTestResearchService(repo, mainRepo)
+
+	seedResearch(repo, "r1", "owner-1")
+
+	// Each 가 is 3 bytes in UTF-8: 150 runes = 450 bytes, comfortably over a
+	// byte-length check's 200 limit but well under the intended
+	// 200-*character* limit -- this must succeed, not be rejected.
+	runes := make([]rune, 150)
+	for i := range runes {
+		runes[i] = '가'
+	}
+	title := string(runes)
+
+	if err := svc.UpdateResearch(context.Background(), "r1", "owner-1", title); err != nil {
+		t.Fatalf("expected a 150-rune (450-byte) Korean title to be accepted, got: %v", err)
 	}
 }
