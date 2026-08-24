@@ -619,16 +619,16 @@ type RefinedSegment struct {
 
 // RefineTranscript takes raw Whisper segments and uses Sonnet to clean up:
 // merge fragmented sentences, fix misrecognized words, remove hallucinations, infer speaker turns.
-// Short meetings (≤2 chunks) run sequentially with speaker context for label consistency.
-// Longer meetings (>2 chunks) run in parallel batches of 4 to stay within Lambda timeout.
+// chunkWhisperSegments splits by *time* (300 seconds of audio per chunk, not
+// segment count) — so short meetings (≤25 min, ≤5 chunks) run sequentially
+// with speaker context for label consistency, and anything longer already
+// runs in parallel batches of 4 (see refineParallel) to stay within the
+// Lambda timeout. A ~1,000-1,500 segment / 50-80 minute meeting lands at
+// 10-16 chunks and was therefore always on the parallel path -- the actual
+// ttobak-summarize timeout on meetings that size (ADR-031) was the Lambda's
+// 10-minute budget being too tight for refine (however many waves that
+// takes) plus the Opus 5 summarize call that follows, not this threshold.
 // Per-chunk failures fall back to raw segments rather than discarding the entire result.
-//
-// The threshold used to be ≤5, but a chunk takes ~2 minutes and the Lambda
-// budget is 15 minutes total (refine + summarize): 4-5 chunks run
-// sequentially took 8-9 minutes on their own, leaving no room for the
-// summarize step and timing out meetings in the ~1,000-1,500 segment range
-// (roughly 50-80 minutes of audio) even though shorter *and* longer meetings
-// both completed fine.
 func (s *BedrockService) RefineTranscript(ctx context.Context, segments []WhisperSegment) (string, []RefinedSegment, error) {
 	if len(segments) == 0 {
 		return "", nil, fmt.Errorf("no segments to refine")
@@ -637,7 +637,7 @@ func (s *BedrockService) RefineTranscript(ctx context.Context, segments []Whispe
 	chunks := chunkWhisperSegments(segments, 300)
 
 	var allRefined []RefinedSegment
-	if len(chunks) <= 2 {
+	if len(chunks) <= 5 {
 		allRefined = s.refineSequential(ctx, chunks)
 	} else {
 		allRefined = s.refineParallel(ctx, chunks)

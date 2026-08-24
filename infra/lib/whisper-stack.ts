@@ -61,8 +61,10 @@ export class WhisperStack extends cdk.Stack {
       // AZs DO intersect -- here just 2a -- pinning every Spot request to a
       // single AZ's g5.xlarge capacity and causing repeated
       // InsufficientInstanceCapacity retries (~7 min cold-start delay
-      // observed) even while capacity was available in 2c/2d. Take every
-      // AZ the VPC actually offers instead.
+      // observed) even while capacity was available in 2c/2d (per AWS's own
+      // error message). Take every AZ the VPC actually offers instead --
+      // today that's still only 2a+2b, since this VPC has no subnets in
+      // 2c/2d; getting there would need a VPC/subnet change, not this one.
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },

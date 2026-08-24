@@ -31,18 +31,24 @@ const (
 	// margin. 30 minutes previously left almost no slack past a cold start.
 	stuckTranscribingThreshold = 60 * time.Minute
 	stuckRecordingThreshold    = 6 * time.Hour
+
+	// summarizeRetryEligibleThreshold is how long a `summarizing` meeting
+	// must sit unchanged before cmd/summarize treats a redelivered/retried
+	// invocation as a dead attempt worth reprocessing, rather than skipping
+	// it as a still-in-flight duplicate. Deliberately shorter than
+	// stuckTranscribingThreshold, the auto-expiry threshold GetMeeting uses
+	// to flip a stuck meeting to `error`: reusing the same threshold for
+	// both would mean a redelivery landing between "eligible" and "expired"
+	// has to win a race against GetMeeting's own auto-expiry, and once that
+	// flip to `error` happens the recovery window is gone for good (the
+	// summarize status guard only accepts `transcribing`/`summarizing`, not
+	// `error`). A separate, shorter threshold gives the recovery path room
+	// to actually fire before that happens.
+	summarizeRetryEligibleThreshold = 20 * time.Minute
 )
 
-// isStuck reports whether a meeting's status has been sitting unchanged past
-// its auto-expiry threshold.
-func isStuck(status string, updatedAt time.Time) bool {
-	return IsStuck(status, updatedAt)
-}
-
 // IsStuck reports whether a meeting's status has been sitting unchanged past
-// its auto-expiry threshold. Exported so cmd/summarize can reuse the same
-// "stale in-progress attempt" check to distinguish a dead attempt (safe to
-// reprocess) from one that's merely still running (must not be raced).
+// its auto-expiry threshold.
 func IsStuck(status string, updatedAt time.Time) bool {
 	switch status {
 	case model.StatusTranscribing, model.StatusSummarizing:
@@ -52,6 +58,16 @@ func IsStuck(status string, updatedAt time.Time) bool {
 	default:
 		return false
 	}
+}
+
+// IsSummarizeRetryEligible reports whether a `summarizing` meeting has sat
+// unchanged long enough that cmd/summarize should treat a redelivered or
+// manually re-triggered invocation as recovering a dead attempt, rather
+// than skipping it as a still-in-flight duplicate. See
+// summarizeRetryEligibleThreshold for why this is a separate, shorter
+// window than IsStuck's auto-expiry threshold.
+func IsSummarizeRetryEligible(updatedAt time.Time) bool {
+	return time.Since(updatedAt) > summarizeRetryEligibleThreshold
 }
 
 // Sentinel errors for meeting operations
@@ -372,7 +388,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		return nil, ErrNotFound
 	}
 
-	if isStuck(meeting.Status, meeting.UpdatedAt) {
+	if IsStuck(meeting.Status, meeting.UpdatedAt) {
 		meeting.Status = model.StatusError
 		s.repo.UpdateMeeting(ctx, meeting)
 	}
