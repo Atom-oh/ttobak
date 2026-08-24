@@ -241,8 +241,13 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 			// + KB export against the same meeting.
 			claimed, claimErr := repo.ClaimSummarizeRetry(ctx, meeting.UserID, meetingID)
 			if claimErr != nil {
+				// The claim is a conditional write, so returning the error
+				// (triggering a Lambda retry) can't cause a duplicate
+				// reprocess -- unlike swallowing it here, which would burn
+				// this rare stale-recovery redelivery on what's likely a
+				// transient DynamoDB error.
 				log.Printf("Failed to claim summarize retry for meeting %s: %v", meetingID, claimErr)
-				return nil
+				return fmt.Errorf("claim summarize retry failed (retrying): %w", claimErr)
 			}
 			if !claimed {
 				log.Printf("Skipping transcript for meeting %s (summarize retry already claimed)", meetingID)
@@ -450,7 +455,7 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		claimed, claimErr := repo.ClaimSummarizeRetry(ctx, meeting.UserID, meetingID)
 		if claimErr != nil {
 			log.Printf("Failed to claim summarize retry for meeting %s: %v", meetingID, claimErr)
-			return nil
+			return fmt.Errorf("claim summarize retry failed (retrying): %w", claimErr)
 		}
 		if !claimed {
 			log.Printf("Skipping merge for meeting %s (summarize retry already claimed)", meetingID)

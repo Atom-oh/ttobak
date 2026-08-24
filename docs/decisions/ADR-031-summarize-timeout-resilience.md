@@ -68,16 +68,16 @@ S3 객체를 재발화(self-`CopyObject`)시켜야 실제로 통과한다. 이 A
 
 ### 2. 재시도 가드를 "진행 중" vs "정체됨"으로 분리하고, 재처리를 원자적으로 클레임한다
 
-`GetMeeting`의 자동 만료 판정과 같은 계열의 로직을 `MeetingService.IsStuck`으로
-공개(export)해 두되, `cmd/summarize`의 재시도 자격 판정에는 **별도의 더 짧은
-임계값**(`summarizeRetryEligibleThreshold`, 20분, `IsSummarizeRetryEligible`)을
-새로 둔다. `IsStuck`이 쓰는 `stuckTranscribingThreshold`(60분)를 그대로
-재사용하지 않는 이유: 그 값은 `GetMeeting`이 정체된 미팅을 `error`로 오인
-마킹하는 문턱과 동일하다. 재시도 자격 문턱을 여기 맞추면, 사용자가 60분 이후
-미팅을 한 번이라도 열어 `error`로 마킹된 순간 — 화이트리스트 밖이라 —
-수동 재발화조차 거부되어 복구 가능 구간이 "60분 경과 후 & 아무도 안 열어본
-사이"로 좁아진다. 재시도 문턱(20분)을 만료 문턱(60분)보다 짧게 둬 그 사이에
-실제 복구 창을 확보한다.
+`GetMeeting`의 자동 만료 판정(`isStuck`, 패키지 내부에만 쓰이므로 export하지
+않는다)과 같은 계열이지만, `cmd/summarize`의 재시도 자격 판정에는 **별도의 공개
+함수와 더 짧은 임계값**(`service.IsSummarizeRetryEligible`,
+`summarizeRetryEligibleThreshold` 20분)을 새로 둔다. `isStuck`이 쓰는
+`stuckTranscribingThreshold`(60분)를 그대로 재사용하지 않는 이유: 그 값은
+`GetMeeting`이 정체된 미팅을 `error`로 오인 마킹하는 문턱과 동일하다. 재시도
+자격 문턱을 여기 맞추면, 사용자가 60분 이후 미팅을 한 번이라도 열어 `error`로
+마킹된 순간 — 화이트리스트 밖이라 — 수동 재발화조차 거부되어 복구 가능 구간이
+"60분 경과 후 & 아무도 안 열어본 사이"로 좁아진다. 재시도 문턱(20분)을 만료
+문턱(60분)보다 짧게 둬 그 사이에 실제 복구 창을 확보한다.
 
 가드를 다음과 같이 넓힌다:
 

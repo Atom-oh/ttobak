@@ -1079,7 +1079,7 @@ Error: 403 Forbidden (not my meeting)
 Error: 404 Not Found (meeting doesn't exist)
 ```
 
-On call, immediately clears the meeting's `speakerMap` (re-analysis re-numbers `spk_N` from scratch, so old name mappings are meaningless) and resets `status` to `transcribing`, storing the requested `speakerCount` in `Meeting.DiarizationSpeakerHint` — `cmd/transcribe/main.go` uses this as pyannote's `max_speakers` hint instead of `len(Participants)`. This hint is **sticky**: once set, it applies to future re-transcriptions too (instead of the registered participant count). Clearing `speakerMap` is a conditional write (`UpdateMeetingFieldsIfMatch`) gated on the freshly-read current `status` — a double call only lets one succeed, the other gets 400 (`meeting is already being processed`). A `CopyObject` failure (including ambiguous SDK errors) has no dedicated recovery — it's left to the existing 30-minute stuck-transcribing auto-expiry (`GetMeeting` handler), since a separate rollback write could race with the re-trigger pipeline's own state transition.
+On call, immediately clears the meeting's `speakerMap` (re-analysis re-numbers `spk_N` from scratch, so old name mappings are meaningless) and resets `status` to `transcribing`, storing the requested `speakerCount` in `Meeting.DiarizationSpeakerHint` — `cmd/transcribe/main.go` uses this as pyannote's `max_speakers` hint instead of `len(Participants)`. This hint is **sticky**: once set, it applies to future re-transcriptions too (instead of the registered participant count). Clearing `speakerMap` is a conditional write (`UpdateMeetingFieldsIfMatch`) gated on the freshly-read current `status` — a double call only lets one succeed, the other gets 400 (`meeting is already being processed`). A `CopyObject` failure (including ambiguous SDK errors) has no dedicated recovery — it's left to the existing 60-minute stuck-transcribing auto-expiry (`GetMeeting` handler), since a separate rollback write could race with the re-trigger pipeline's own state transition.
 
 #### Cost/sizing simulator (ADR-033, AgentCore Code Interpreter)
 
@@ -1122,7 +1122,7 @@ Error: 403 Forbidden (not my meeting)
 Error: 404 Not Found (meeting doesn't exist)
 ```
 
-Every field is re-validated server-side against a fixed allowlist (`AllowedSimRequirementKeys`) regardless of what the confirm form submits — the form is a UX gate, not the trust boundary. Async hand-off to `ttobak-sim` (`InvocationType=Event`); the frontend polls `GET /api/meetings/{meetingId}` for `simRun.status` (see below), not a new WebSocket channel — this is a 1-3 minute job, not a token stream. A `queued`/`running` run older than 20 minutes is reported as `error` at read time (mirrors the existing 30-minute `isStuck` reconciliation for transcribing/summarizing meetings) without being persisted that way.
+Every field is re-validated server-side against a fixed allowlist (`AllowedSimRequirementKeys`) regardless of what the confirm form submits — the form is a UX gate, not the trust boundary. Async hand-off to `ttobak-sim` (`InvocationType=Event`); the frontend polls `GET /api/meetings/{meetingId}` for `simRun.status` (see below), not a new WebSocket channel — this is a 1-3 minute job, not a token stream. A `queued`/`running` run older than 20 minutes is reported as `error` at read time (mirrors the existing 60-minute `isStuck` reconciliation for transcribing/summarizing meetings) without being persisted that way.
 
 `GetMeeting`'s response gains a `simRun` field (same shape as the extract response, plus `charts: [{key, url}]` with presigned CloudFront URLs, `reportMarkdown`, `codeKey`, `priceSnapshotAt`, `errorMessage` once `status` reaches `done`/`error`). Generated chart PNGs land under the existing `images/` prefix and the report/code/price-snapshot under `files/` (both already in the OAC allowlist — no new CloudFront behavior needed, see ADR-027's "Download URLs" note above and ADR-033).
 
@@ -1604,7 +1604,7 @@ Manually curates a single crawled **news** document — e.g. a search result the
 - **Env vars**: TABLE_NAME, BUCKET_NAME, OUTPUT_BUCKET
 
 ### 3. Summarize Lambda (cmd/summarize)
-- **Trigger**: DynamoDB Stream (status changes to "summarizing") or direct invocation
+- **Trigger**: EventBridge — S3 `Object Created` on the `transcripts/` prefix, and the custom `AllPartsTranscribed` event for multi-part audio (not a DynamoDB Stream — see INFRA-SPEC.md and ADR-031)
 - **Role**: summarizes the meeting via Bedrock Claude
 - **Steps**: (1) load the selected transcript → (2) build attachment context: image analysis results (a diagram attachment is labeled "Attached Diagram" and its mermaid code passed as a trusted source) + document attachment (PPTX/PDF etc., body not extracted) filenames → (3) call Bedrock Claude Opus 5 — the note conditionally includes an `## Architecture Diagram` section (only when a diagram attachment's mermaid exists or the discussion is concretely architectural; otherwise the section is omitted) → (4) generate the structured markdown note (+ trailing `## Attached Images`/`## Attached Documents` sections using `attachment://{id}` links, resolved to presigned URLs by the frontend) → (5) save content to DynamoDB → (6) set status to "done"
 - **Env vars**: TABLE_NAME, BEDROCK_MODEL_ID
