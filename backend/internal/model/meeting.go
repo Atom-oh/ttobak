@@ -25,13 +25,21 @@ type Meeting struct {
 	// once-only lock so EventBridge at-least-once re-deliveries of part
 	// transcripts don't republish duplicate events. Populated via
 	// conditional update `SET allPartsEmittedAt = :now WHERE attribute_not_exists(...)`.
-	AllPartsEmittedAt  string            `dynamodbav:"allPartsEmittedAt,omitempty"`
-	SttProvider        string            `dynamodbav:"sttProvider,omitempty"`        // "transcribe" or "nova-sonic"
-	TranscriptSegments string            `dynamodbav:"transcriptSegments,omitempty"` // JSON string of speaker-labeled segments
-	ActionItems        string            `dynamodbav:"actionItems,omitempty"`        // JSON string of extracted action items
-	Notes              string            `dynamodbav:"notes,omitempty"`              // User-written meeting notes (post-recording)
-	LiveSummary        string            `dynamodbav:"liveSummary,omitempty"`        // Real-time summary built during recording (markdown incl. mermaid)
-	SpeakerMap         map[string]string `dynamodbav:"speakerMap,omitempty"`         // spk_0 -> "김팀장" mapping
+	AllPartsEmittedAt string `dynamodbav:"allPartsEmittedAt,omitempty"`
+	// SummarizeRetryClaimedAt is the atomic-claim lock for reprocessing a
+	// stale `summarizing` meeting (see repository.ClaimSummarizeRetry,
+	// ADR-031) -- must round-trip through this struct exactly like
+	// AllPartsEmittedAt above: without a field here, a whole-item
+	// UpdateMeeting (PutItem) write during reprocessing would silently drop
+	// the claim, letting a second concurrent redelivery re-claim and
+	// double-run Bedrock summarize + KB export.
+	SummarizeRetryClaimedAt string            `dynamodbav:"summarizeRetryClaimedAt,omitempty"`
+	SttProvider             string            `dynamodbav:"sttProvider,omitempty"`        // "transcribe" or "nova-sonic"
+	TranscriptSegments      string            `dynamodbav:"transcriptSegments,omitempty"` // JSON string of speaker-labeled segments
+	ActionItems             string            `dynamodbav:"actionItems,omitempty"`        // JSON string of extracted action items
+	Notes                   string            `dynamodbav:"notes,omitempty"`              // User-written meeting notes (post-recording)
+	LiveSummary             string            `dynamodbav:"liveSummary,omitempty"`        // Real-time summary built during recording (markdown incl. mermaid)
+	SpeakerMap              map[string]string `dynamodbav:"speakerMap,omitempty"`         // spk_0 -> "김팀장" mapping
 	// DiarizationSpeakerHint overrides len(Participants) as pyannote's
 	// max_speakers bound when re-diarizing a meeting on demand (see
 	// RediarizeMeeting) — set once a user-supplied headcount is known to be

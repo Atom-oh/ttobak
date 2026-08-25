@@ -20,14 +20,31 @@ import (
 )
 
 // Auto-expiry thresholds for meetings stuck in an in-progress status with no
-// further updates. Transcribing/summarizing are bounded backend processes, so
-// 30 minutes is generous. Recording is user-controlled and open-ended (a
+// further updates. Recording is user-controlled and open-ended (a
 // legitimate meeting can run for hours), so it needs a much longer threshold
 // to avoid killing an active session — but still short enough to eventually
 // reclaim recordings abandoned by a closed tab or crashed browser.
 const (
-	stuckTranscribingThreshold = 30 * time.Minute
+	// 60 minutes covers observed worst-case pipeline latency: Whisper GPU
+	// Spot cold start (~16 min when the ASG has to provision a fresh
+	// instance) + batch transcription + Bedrock refine/summarize, with
+	// margin. 30 minutes previously left almost no slack past a cold start.
+	stuckTranscribingThreshold = 60 * time.Minute
 	stuckRecordingThreshold    = 6 * time.Hour
+
+	// summarizeRetryEligibleThreshold is how long a `summarizing` meeting
+	// must sit unchanged before cmd/summarize treats a redelivered/retried
+	// invocation as a dead attempt worth reprocessing, rather than skipping
+	// it as a still-in-flight duplicate. Deliberately shorter than
+	// stuckTranscribingThreshold, the auto-expiry threshold GetMeeting uses
+	// to flip a stuck meeting to `error`: reusing the same threshold for
+	// both would mean a redelivery landing between "eligible" and "expired"
+	// has to win a race against GetMeeting's own auto-expiry, and once that
+	// flip to `error` happens the recovery window is gone for good (the
+	// summarize status guard only accepts `transcribing`/`summarizing`, not
+	// `error`). A separate, shorter threshold gives the recovery path room
+	// to actually fire before that happens.
+	summarizeRetryEligibleThreshold = 20 * time.Minute
 )
 
 // isStuck reports whether a meeting's status has been sitting unchanged past
@@ -41,6 +58,16 @@ func isStuck(status string, updatedAt time.Time) bool {
 	default:
 		return false
 	}
+}
+
+// IsSummarizeRetryEligible reports whether a `summarizing` meeting has sat
+// unchanged long enough that cmd/summarize should treat a redelivered or
+// manually re-triggered invocation as recovering a dead attempt, rather
+// than skipping it as a still-in-flight duplicate. See
+// summarizeRetryEligibleThreshold for why this is a separate, shorter
+// window than isStuck's auto-expiry threshold.
+func IsSummarizeRetryEligible(updatedAt time.Time) bool {
+	return time.Since(updatedAt) > summarizeRetryEligibleThreshold
 }
 
 // Sentinel errors for meeting operations

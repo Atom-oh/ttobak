@@ -16,7 +16,7 @@
    ```bash
    aws logs tail /ecs/whisper --since 1h --region ap-northeast-2
    ```
-4. Auto-expiry: GetMeeting handler marks stuck status as `error` after 30 minutes.
+4. Auto-expiry: GetMeeting handler marks stuck status as `error` after 60 minutes (ADR-031).
 
 ### ECS task not starting (zero-scale cold start)
 1. Check ASG desired capacity:

@@ -744,7 +744,7 @@ func TestGetMeetingDetail_ExpiresStuckTranscribing(t *testing.T) {
 	repo := newMockMeetingRepo()
 	svc := newMeetingServiceWithRepo(repo)
 
-	old := time.Now().Add(-31 * time.Minute)
+	old := time.Now().Add(-61 * time.Minute)
 	repo.addMeeting(&model.Meeting{
 		MeetingID: "m-1", UserID: "user-1", Title: "Stuck Transcribing",
 		Status: model.StatusTranscribing,
@@ -757,6 +757,59 @@ func TestGetMeetingDetail_ExpiresStuckTranscribing(t *testing.T) {
 	}
 	if detail.Status != model.StatusError {
 		t.Errorf("expected status %q, got %q", model.StatusError, detail.Status)
+	}
+}
+
+func TestIsStuck_TranscribingThresholdBoundary(t *testing.T) {
+	cases := []struct {
+		name string
+		age  time.Duration
+		want bool
+	}{
+		{"just under threshold", 59*time.Minute + 59*time.Second, false},
+		{"just over threshold", 60*time.Minute + 1*time.Second, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isStuck(model.StatusSummarizing, time.Now().Add(-tc.age))
+			if got != tc.want {
+				t.Errorf("isStuck(summarizing, now-%s) = %v, want %v", tc.age, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsSummarizeRetryEligible_ThresholdBoundary(t *testing.T) {
+	cases := []struct {
+		name string
+		age  time.Duration
+		want bool
+	}{
+		{"just under threshold", 19*time.Minute + 59*time.Second, false},
+		{"just over threshold", 20*time.Minute + 1*time.Second, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsSummarizeRetryEligible(time.Now().Add(-tc.age))
+			if got != tc.want {
+				t.Errorf("IsSummarizeRetryEligible(now-%s) = %v, want %v", tc.age, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSummarizeRetryEligibleShorterThanStuck locks in the invariant ADR-031
+// depends on: the retry-eligibility window must open strictly before the
+// auto-expiry-to-error window closes it, or a redelivery landing between
+// them can never actually recover a dead summarize attempt.
+func TestSummarizeRetryEligibleShorterThanStuck(t *testing.T) {
+	age := 25 * time.Minute // eligible for retry, but not yet auto-expired
+	updatedAt := time.Now().Add(-age)
+	if !IsSummarizeRetryEligible(updatedAt) {
+		t.Fatalf("expected retry-eligible at age %s", age)
+	}
+	if isStuck(model.StatusSummarizing, updatedAt) {
+		t.Fatalf("expected NOT auto-expired at age %s -- retry window already closed", age)
 	}
 }
 

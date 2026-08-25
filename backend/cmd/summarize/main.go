@@ -218,13 +218,42 @@ func handleSingleTranscript(ctx context.Context, bucket, key string) error {
 	// Status guard: skip if already processed (prevents re-trigger after merged transcript write)
 	meeting, err := repo.GetMeetingByID(ctx, meetingID)
 	if err == nil && meeting != nil {
-		// Whitelist guard — only process when status is `transcribing`.
-		// Matches `handleAllPartsTranscribed` for consistency and avoids
-		// re-running Bedrock on S3 redelivery when the meeting is already
-		// `done`/`summarizing`/`error` or has been recovered.
+		// Whitelist guard — process when status is `transcribing`, or when
+		// it's `summarizing` but eligible for retry (a previous attempt
+		// refined/saved the transcript and then died mid-summarize, e.g. a
+		// Lambda timeout, without ever reaching `done`/`error`). Without
+		// this carve-out, a dead attempt sits here until *something* redelivers
+		// or manually re-triggers the transcript event, since nothing here
+		// generates a new delivery on its own -- see IsSummarizeRetryEligible.
+		// A `summarizing` meeting that is NOT retry-eligible is still being
+		// actively processed by another invocation and must not be raced.
 		if meeting.Status != model.StatusTranscribing {
-			log.Printf("Skipping transcript for meeting %s (status=%s, expected=transcribing)", meetingID, meeting.Status)
-			return nil
+			if meeting.Status != model.StatusSummarizing || !service.IsSummarizeRetryEligible(meeting.UpdatedAt) {
+				log.Printf("Skipping transcript for meeting %s (status=%s, expected=transcribing)", meetingID, meeting.Status)
+				return nil
+			}
+			// Atomic claim: GetMeetingByID above and this redelivery are not
+			// the only possible concurrent reader of this stale meeting --
+			// a second redelivery (or a manual re-trigger racing a genuine
+			// one) could pass the same eligibility check off the same read.
+			// Only the winner of this conditional write actually reprocesses;
+			// everyone else skips instead of double-running Bedrock summarize
+			// + KB export against the same meeting.
+			claimed, claimErr := repo.ClaimSummarizeRetry(ctx, meeting.UserID, meetingID)
+			if claimErr != nil {
+				// The claim is a conditional write, so returning the error
+				// (triggering a Lambda retry) can't cause a duplicate
+				// reprocess -- unlike swallowing it here, which would burn
+				// this rare stale-recovery redelivery on what's likely a
+				// transient DynamoDB error.
+				log.Printf("Failed to claim summarize retry for meeting %s: %v", meetingID, claimErr)
+				return fmt.Errorf("claim summarize retry failed (retrying): %w", claimErr)
+			}
+			if !claimed {
+				log.Printf("Skipping transcript for meeting %s (summarize retry already claimed)", meetingID)
+				return nil
+			}
+			log.Printf("Reprocessing stuck meeting %s (status=summarizing since %s)", meetingID, meeting.UpdatedAt)
 		}
 	}
 
@@ -409,15 +438,30 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 		return nil
 	}
 
-	// Whitelist guard — only process when the meeting is still in the
-	// `transcribing` state. `EventBridge` is at-least-once: if the same
-	// `AllPartsTranscribed` event re-invokes after the first call has
-	// flipped the status to `summarizing`, the second invoke would
-	// otherwise run a duplicate Bedrock summary + KB export + DynamoDB
-	// write. Matches `handlePartTranscript`'s guard for consistency.
+	// Whitelist guard — process when the meeting is still `transcribing`,
+	// or when it's `summarizing` but eligible for retry (see
+	// handleSingleTranscript's matching comment: a prior attempt died
+	// mid-summarize and nothing else re-drives it). `EventBridge` is
+	// at-least-once: if the same `AllPartsTranscribed` event re-invokes
+	// while the first call is still actively running (`summarizing`, not
+	// retry-eligible), this guard still blocks the duplicate Bedrock
+	// summary + KB export + DynamoDB write.
 	if meeting.Status != model.StatusTranscribing {
-		log.Printf("Skipping merge for meeting %s (status=%s, expected=transcribing)", meetingID, meeting.Status)
-		return nil
+		if meeting.Status != model.StatusSummarizing || !service.IsSummarizeRetryEligible(meeting.UpdatedAt) {
+			log.Printf("Skipping merge for meeting %s (status=%s, expected=transcribing)", meetingID, meeting.Status)
+			return nil
+		}
+		// Atomic claim — see handleSingleTranscript's matching comment.
+		claimed, claimErr := repo.ClaimSummarizeRetry(ctx, meeting.UserID, meetingID)
+		if claimErr != nil {
+			log.Printf("Failed to claim summarize retry for meeting %s: %v", meetingID, claimErr)
+			return fmt.Errorf("claim summarize retry failed (retrying): %w", claimErr)
+		}
+		if !claimed {
+			log.Printf("Skipping merge for meeting %s (summarize retry already claimed)", meetingID)
+			return nil
+		}
+		log.Printf("Reprocessing stuck meeting %s (status=summarizing since %s)", meetingID, meeting.UpdatedAt)
 	}
 
 	transcript, segments, totalDuration, err := mergePartTranscripts(ctx, detail.Bucket, meetingID, detail.PartCount)

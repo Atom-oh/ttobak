@@ -830,6 +830,65 @@ func (r *DynamoDBRepository) ClaimAllPartsEmit(ctx context.Context, userID, meet
 	return true, nil
 }
 
+// SummarizeRetryClaimTTL is the maximum age of a stale `summarizeRetryClaimedAt`
+// claim before another invocation can reclaim it. Set just past the
+// `ttobak-summarize` Lambda's own 15-minute timeout so a claim holder that
+// legitimately died mid-attempt (the exact scenario this recovery path
+// exists for) releases automatically for the next redelivery, without
+// needing an explicit release call.
+const SummarizeRetryClaimTTL = 16 * time.Minute
+
+// ClaimSummarizeRetry attempts to atomically claim the right to reprocess a
+// `summarizing` meeting whose previous attempt appears dead (see
+// service.IsSummarizeRetryEligible). Returns (true, nil) for the first
+// caller that wins the conditional write; (false, nil) for every subsequent
+// caller within the TTL window (lost race, or a fresh claim already holds
+// it) — the guard this exists for otherwise has no way to tell "reprocess
+// this dead attempt" apart from "a concurrent redelivery is also mid-reprocess",
+// and two winners would double-run Bedrock summarize + KB export against the
+// same meeting. Returns (false, err) on real DynamoDB errors — the caller
+// should skip on error too, since it can't tell whether the write actually
+// landed.
+//
+// Also bumps `updatedAt` to now as part of the same write. Without this, a
+// meeting that's been `summarizing` for close to stuckTranscribingThreshold
+// (60 min) when reprocessing starts could get auto-expired to `error` by
+// GetMeeting mid-reprocess (reprocessing itself can take up to the Lambda's
+// 15-minute budget) -- and since the guard only accepts
+// `transcribing`/`summarizing`, that kills the in-flight attempt and, via
+// GetMeeting's whole-item write, wipes this very claim. Bumping updatedAt
+// here buys reprocessing a fresh 60-minute window.
+func (r *DynamoDBRepository) ClaimSummarizeRetry(ctx context.Context, userID, meetingID string) (bool, error) {
+	now := time.Now().UTC()
+	staleBefore := now.Add(-SummarizeRetryClaimTTL).Format(time.RFC3339Nano)
+	_, err := r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		UpdateExpression: aws.String("SET summarizeRetryClaimedAt = :now, updatedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":now":         &types.AttributeValueMemberS{Value: now.Format(time.RFC3339Nano)},
+			":staleBefore": &types.AttributeValueMemberS{Value: staleBefore},
+			":summarizing": &types.AttributeValueMemberS{Value: model.StatusSummarizing},
+		},
+		ConditionExpression: aws.String(
+			"attribute_exists(PK) AND #status = :summarizing AND (attribute_not_exists(summarizeRetryClaimedAt) OR summarizeRetryClaimedAt < :staleBefore)",
+		),
+		ExpressionAttributeNames: map[string]string{"#status": "status"},
+	})
+	if err != nil {
+		var ccfe *types.ConditionalCheckFailedException
+		if errors.As(err, &ccfe) {
+			// Lost the race, status moved on, or a fresh claim holds it.
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to claim summarize retry lock: %w", err)
+	}
+	return true, nil
+}
+
 // DeleteMeeting deletes a meeting and all related items atomically using TransactWriteItems.
 // DynamoDB TransactWriteItems supports up to 100 items per transaction.
 func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingID string) error {
