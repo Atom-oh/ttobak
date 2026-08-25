@@ -899,10 +899,72 @@ No dedicated color token — reuses the existing primary/amber/red palette (ambe
 </form>
 ```
 
-**참고**: Account/Project 페이지 전반(`AccountsClient`, `AccountDetailClient`,
-`ProjectDetailClient`)은 이 문서에 아직 별도 섹션이 없다 — 이 항목은 이번에
-새로 만든 패턴만 다루며, 나머지 페이지 전체를 다루는 문서화는 이 변경의
-범위 밖이다 (별도 후속 작업으로 남김).
+### 2.18 Account Detail — Members Panel (`AccountDetailClient.tsx`, ADR-034)
+
+Account 상세 페이지의 Members 섹션. 로그인한 사용자와 각 행의 관계에 따라
+행마다 다른 컨트롤을 보여준다 — owner 여부가 아니라 "이 account의 멤버인지"가
+역할 select 노출의 기준이고(ADR-034: 추가/역할변경은 owner 전용에서 멤버
+전체로 개방), 삭제 버튼만 owner에게 한정된다. 세 가지 행 상태:
+
+- **owner 행**: 이름/이메일 뒤에 정적 `owner` pill만 표시, 컨트롤 없음 — owner
+  자신의 역할은 이 화면에서 절대 바뀌지 않는다.
+- **일반 멤버 행 (열람자가 이 account의 멤버일 때)**: 역할 `<select>`가 항상
+  노출(멤버라면 누구나 다른 멤버의 역할을 바꿀 수 있음). 삭제(❌) 아이콘
+  버튼은 열람자가 owner일 때만 같은 줄에 추가로 노출 — owner가 아니면 select만
+  보이고 삭제 버튼 자체가 렌더링되지 않는다(비활성화가 아니라 부재).
+- **일반 멤버 행 (열람자가 이 account의 멤버가 아닐 때)**: 정적 role pill만
+  표시 — 이 케이스는 사실상 발생하지 않는다(멤버가 아니면 `GetAccount` 자체가
+  403을 내므로 페이지에 도달할 수 없다는 뜻이지만, 컴포넌트 레벨에서도
+  fail-closed로 방어).
+
+멤버 추가 컨트롤(`MemberPicker` + 역할 select)도 같은 기준으로 노출된다 —
+owner 전용이 아니라 "열람자가 이 account의 멤버인가". 추가한 이메일이 아직
+로그인하지 않은 초대 상태(Cognito 계정은 있지만 첫 로그인 전)면 추가 직후
+amber 배너가 뜬다 — "OO님은 아직 초대를 수락하지 않았습니다. 로그인하면
+자동으로 계정에 추가됩니다." + "취소" 링크(해당 큐를 즉시 취소, 이 취소만은
+owner 전용 API를 호출한다). 이 배너는 `error` 배너(빨강)와 별도 상태로,
+실패가 아니라 "성공했지만 아직 확정되지 않음"이라는 정보성 메시지임을
+색으로도 구분한다.
+
+```html
+<!-- Pending-invite notice (amber, informational -- not an error) -->
+<div class="bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 text-sm rounded-lg p-3 mb-4 flex items-center justify-between gap-3">
+  <span>tam@example.com님은 아직 초대를 수락하지 않았습니다. 로그인하면 자동으로 계정에 추가됩니다.</span>
+  <button class="shrink-0 font-semibold underline hover:no-underline">취소</button>
+</div>
+
+<!-- Member row: owner (no controls) -->
+<div class="flex items-center justify-between text-sm gap-2">
+  <span class="text-slate-700 dark:text-text-secondary truncate">owner@example.com</span>
+  <span class="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary shrink-0">owner</span>
+</div>
+
+<!-- Member row: viewer is a member -- role select always shown, remove button only if viewer is owner -->
+<div class="flex items-center justify-between text-sm gap-2">
+  <span class="text-slate-700 dark:text-text-secondary truncate">tam@example.com</span>
+  <div class="flex items-center gap-1 shrink-0">
+    <select class="text-xs px-2 py-1 rounded-full border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-primary font-semibold">
+      <option>TAM</option>
+    </select>
+    <!-- present only when the viewer is the owner -->
+    <button class="text-slate-400 hover:text-red-500" title="Remove member">
+      <span class="material-symbols-outlined text-lg">close</span>
+    </button>
+  </div>
+</div>
+
+<!-- Add-member row: shown to any member, not just owner -->
+<div class="flex gap-2 pt-2">
+  <div class="flex-1"><!-- MemberPicker: search input --></div>
+  <select class="px-3 py-2 rounded-lg border border-slate-200 dark:border-white/10 bg-white dark:bg-surface-lowest text-sm h-fit">
+    <option>SSA</option>
+  </select>
+</div>
+```
+
+**참고**: `AccountsClient`(목록)와 `ProjectDetailClient`는 이 문서에 아직
+별도 섹션이 없다 — 이 항목은 Members 패널만 다루며, 나머지 Account/Project
+페이지 전체를 다루는 문서화는 이 변경의 범위 밖이다 (별도 후속 작업으로 남김).
 
 ## 3. Interaction Patterns
 
