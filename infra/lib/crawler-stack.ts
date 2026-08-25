@@ -7,6 +7,7 @@ import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
 export interface CrawlerStackProps extends cdk.StackProps {
@@ -67,6 +68,16 @@ export class CrawlerStack extends cdk.Stack {
       environment: commonEnv,
       timeout: cdk.Duration.minutes(14),
       memorySize: 512,
+      // The app-wide `useCdkManagedLogGroup` feature flag makes CDK create an
+      // explicit AWS::Logs::LogGroup for every Function by default -- but
+      // /aws/lambda/ttobak-crawler-news already exists in AWS (auto-created
+      // by the Lambda service before this stack ever declared the resource),
+      // so letting CDK try to CREATE it collides (CREATE_FAILED: AlreadyExists,
+      // rolling back the whole stack). Reference the existing log group
+      // instead of creating a duplicate; it isn't imported into this stack's
+      // management (no retention/removal-policy control here), but that
+      // matches every other Lambda in this app before the flag was enabled.
+      logGroup: logs.LogGroup.fromLogGroupName(this, 'NewsCrawlerFunctionExistingLogGroup', '/aws/lambda/ttobak-crawler-news'),
     });
 
     const ingestTrigger = new lambda.Function(this, 'IngestTriggerFunction', {
