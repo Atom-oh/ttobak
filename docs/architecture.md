@@ -159,6 +159,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 - [ADR-030: 모바일 실시간 자막은 녹음을 희생하지 않는다](decisions/ADR-030-mobile-live-captions-never-sacrifice-recording.md) (승인됨)
 - [ADR-032: 관리자 사용자 관리 패널](decisions/ADR-032-admin-user-management-panel.md) (승인됨)
 - [ADR-033: 미팅 기반 비용·사이징 시뮬레이터 — AgentCore Code Interpreter](decisions/ADR-033-meeting-cost-sizing-simulator-code-interpreter.md) (승인됨)
+- [ADR-034: Account 멤버 추가/역할변경 권한을 owner 전용에서 멤버 전체로 개방](decisions/ADR-034-account-member-permission-democratization.md) (승인됨)
 
 ### 운영
 
@@ -267,6 +268,7 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 - [ADR-030: Mobile Live Captions Never Sacrifice the Recording](decisions/ADR-030-mobile-live-captions-never-sacrifice-recording.md) (Accepted)
 - [ADR-032: Admin User-Management Panel](decisions/ADR-032-admin-user-management-panel.md) (Accepted)
 - [ADR-033: Meeting-Driven Cost/Sizing Simulator — AgentCore Code Interpreter](decisions/ADR-033-meeting-cost-sizing-simulator-code-interpreter.md) (Accepted)
+- [ADR-034: Open Account Member Add/Role-Change from Owner-Only to Any Member](decisions/ADR-034-account-member-permission-democratization.md) (Accepted)
 
 ### Operations
 

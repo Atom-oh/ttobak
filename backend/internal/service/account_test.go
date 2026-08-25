@@ -651,7 +651,7 @@ func TestAddMember_OwnerAddsTAM(t *testing.T) {
 	}
 }
 
-// TestAddMember_MemberCanAddMember pins ADR-033: adding a member is no
+// TestAddMember_MemberCanAddMember pins ADR-034: adding a member is no
 // longer owner-only -- any existing (non-owner) member may add another.
 func TestAddMember_MemberCanAddMember(t *testing.T) {
 	repo := newMockAccountRepo()
@@ -686,7 +686,7 @@ func TestAddMember_NonMemberForbidden(t *testing.T) {
 }
 
 // TestRemoveMember_NonOwnerMemberForbidden pins that removal, unlike add/
-// update-role, stays owner-only (ADR-033).
+// update-role, stays owner-only (ADR-034).
 func TestRemoveMember_NonOwnerMemberForbidden(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
@@ -1345,7 +1345,7 @@ func TestUpdateMemberRole_OwnerTargetRejected(t *testing.T) {
 	}
 }
 
-// TestUpdateMemberRole_MemberCanChangeAnotherMembersRole pins ADR-033: role
+// TestUpdateMemberRole_MemberCanChangeAnotherMembersRole pins ADR-034: role
 // changes are no longer owner-only either.
 func TestUpdateMemberRole_MemberCanChangeAnotherMembersRole(t *testing.T) {
 	repo := newMockAccountRepo()

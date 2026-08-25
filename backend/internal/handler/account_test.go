@@ -638,7 +638,7 @@ func TestHandlerUpdateMemberRole_OK(t *testing.T) {
 	}
 }
 
-// TestHandlerUpdateMemberRole_NonOwnerMemberAllowed pins ADR-033: a
+// TestHandlerUpdateMemberRole_NonOwnerMemberAllowed pins ADR-034: a
 // non-owner member changing another member's role is no longer forbidden.
 func TestHandlerUpdateMemberRole_NonOwnerMemberAllowed(t *testing.T) {
 	h, repo := newStubAccountHandler()

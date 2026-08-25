@@ -259,7 +259,7 @@ Error: 403 Forbidden (not a member)
 Error: 404 Not Found (account doesn't exist)
 ```
 
-#### Add Member (any account member — ADR-033)
+#### Add Member (any account member — ADR-034)
 
 ```
 POST /api/accounts/{accountId}/members
@@ -294,12 +294,12 @@ Response: 201 Created
   "pending": true                 // userId omitted -- not yet known
 }
 
-Error: 403 Forbidden (not a member of this account -- owner status is not required, ADR-033)
+Error: 403 Forbidden (not a member of this account -- owner status is not required, ADR-034)
 Error: 404 Not Found (email has never been invited at all)
 Error: 400 Bad Request (already a member, or invalid role)
 ```
 
-> Since ADR-033, any existing member of the account may add another -- not just the owner. The role allowlist (`owner` excluded) is unchanged, so no member can grant owner-level standing this way.
+> Since ADR-034, any existing member of the account may add another -- not just the owner. The role allowlist (`owner` excluded) is unchanged, so no member can grant owner-level standing this way.
 
 #### Revoke Pending Member Invite (owner only)
 
@@ -321,7 +321,7 @@ Error: 400 Bad Request (missing email query parameter)
 Error: 409 Conflict (already claimed by materialize -- remove via Members instead)
 ```
 
-#### Update Member Role (any account member — ADR-033)
+#### Update Member Role (any account member — ADR-034)
 
 ```
 PUT /api/accounts/{accountId}/members/{userId}
@@ -337,12 +337,12 @@ Response: 200 OK
   "role": "AM"
 }
 
-Error: 403 Forbidden (not a member of this account -- owner status is not required, ADR-033)
+Error: 403 Forbidden (not a member of this account -- owner status is not required, ADR-034)
 Error: 404 Not Found (member doesn't exist)
 Error: 400 Bad Request (invalid role, or target is the owner)
 ```
 
-> Since ADR-033, any existing member may change another member's role -- not just the owner. The owner's own role can never be changed via this path, and the role allowlist still excludes `owner`.
+> Since ADR-034, any existing member may change another member's role -- not just the owner. The owner's own role can never be changed via this path, and the role allowlist still excludes `owner`.
 
 #### Remove Member (owner only)
 
@@ -364,7 +364,7 @@ Error: 400 Bad Request (called without force=true, and the target holds at least
 Error: 500 Internal Server Error (failed to list meetings to check for cleanup — membership is untouched, safe to retry)
 ```
 
-> Unlike Add Member and Update Member Role (opened to any member, ADR-033), removal deliberately stays owner-only: it's destructive (revokes access, can cascade into meeting-share cleanup below) where a bad add/role-change is cheap to reverse.
+> Unlike Add Member and Update Member Role (opened to any member, ADR-034), removal deliberately stays owner-only: it's destructive (revokes access, can cascade into meeting-share cleanup below) where a bad add/role-change is cheap to reverse.
 >
 > Removing membership immediately blocks new access to meetings that have no per-user Share record. For meetings that do have a Share record, the same `RemoveMember` request does a best-effort cleanup across the account's meeting refs, but only reclaims Shares tagged `origin=="account"`. This isn't atomic with the membership delete, and doesn't touch direct Shares the owner granted separately.
 >

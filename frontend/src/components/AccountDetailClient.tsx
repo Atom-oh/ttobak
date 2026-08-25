@@ -269,7 +269,7 @@ export default function AccountDetailClient() {
                   const isOwnerRow = m.userId === account.ownerUserId;
                   const isOwner = user?.userId === account.ownerUserId;
                   // Any member (not just the owner) may change another
-                  // member's role -- removal stays owner-only (ADR-033).
+                  // member's role -- removal stays owner-only (ADR-034).
                   const isMember = account.members.some((mm) => mm.userId === user?.userId);
                   return (
                     <div key={m.userId} className="flex items-center justify-between text-sm gap-2">
