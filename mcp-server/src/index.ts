@@ -349,7 +349,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'ttobak_add_account_member',
-      description: 'Add a teammate to an account by email. Only the account owner can do this. role must be AM, TAM, SSA, SA, SA Manager, or AM Manager.',
+      description: 'Add a teammate to an account by email. Any existing account member can do this (ADR-034), not just the owner. If the email belongs to an invited-but-not-yet-logged-in user, the grant is queued and applies automatically on their first login. role must be AM, TAM, SSA, SA, SA Manager, or AM Manager.',
       inputSchema: {
         type: 'object' as const,
         properties: {

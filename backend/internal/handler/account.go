@@ -131,7 +131,7 @@ func (h *AccountHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrForbidden):
-			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can add members")
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only account members can add members")
 		case errors.Is(err, service.ErrUserNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "No user with that email")
 		case errors.Is(err, service.ErrMemberExists):
@@ -203,7 +203,7 @@ func (h *AccountHandler) UpdateMemberRole(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrForbidden):
-			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only the owner can change member roles")
+			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Only account members can change member roles")
 		case errors.Is(err, service.ErrNotFound):
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Member not found")
 		case errors.Is(err, service.ErrInvalidInput):

@@ -268,12 +268,15 @@ export default function AccountDetailClient() {
                 {account.members.filter((m): m is AccountMember & { userId: string } => !!m.userId).map((m) => {
                   const isOwnerRow = m.userId === account.ownerUserId;
                   const isOwner = user?.userId === account.ownerUserId;
+                  // Any member (not just the owner) may change another
+                  // member's role -- removal stays owner-only (ADR-034).
+                  const isMember = account.members.some((mm) => mm.userId === user?.userId);
                   return (
                     <div key={m.userId} className="flex items-center justify-between text-sm gap-2">
                       <span className="text-slate-700 dark:text-text-secondary truncate">{m.email || m.userId}</span>
                       {isOwnerRow ? (
                         <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary shrink-0">owner</span>
-                      ) : isOwner ? (
+                      ) : isMember ? (
                         <div className="flex items-center gap-1 shrink-0">
                           <select
                             value={m.role}
@@ -284,13 +287,15 @@ export default function AccountDetailClient() {
                               <option key={r} value={r}>{r}</option>
                             ))}
                           </select>
-                          <button
-                            onClick={() => handleRemoveMember(m.userId)}
-                            className="text-slate-400 hover:text-red-500"
-                            title="Remove member"
-                          >
-                            <span className="material-symbols-outlined text-lg">close</span>
-                          </button>
+                          {isOwner && (
+                            <button
+                              onClick={() => handleRemoveMember(m.userId)}
+                              className="text-slate-400 hover:text-red-500"
+                              title="Remove member"
+                            >
+                              <span className="material-symbols-outlined text-lg">close</span>
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/10 text-primary shrink-0">{m.role}</span>
@@ -298,7 +303,7 @@ export default function AccountDetailClient() {
                     </div>
                   );
                 })}
-                {user?.userId === account.ownerUserId && (
+                {account.members.some((m) => m.userId === user?.userId) && (
                   <div className="flex gap-2 pt-2">
                     <div className="flex-1">
                       <MemberPicker

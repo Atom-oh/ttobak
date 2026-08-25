@@ -638,7 +638,9 @@ func TestHandlerUpdateMemberRole_OK(t *testing.T) {
 	}
 }
 
-func TestHandlerUpdateMemberRole_NonOwnerForbidden(t *testing.T) {
+// TestHandlerUpdateMemberRole_NonOwnerMemberAllowed pins ADR-034: a
+// non-owner member changing another member's role is no longer forbidden.
+func TestHandlerUpdateMemberRole_NonOwnerMemberAllowed(t *testing.T) {
 	h, repo := newStubAccountHandler()
 	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
 	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
@@ -647,6 +649,28 @@ func TestHandlerUpdateMemberRole_NonOwnerForbidden(t *testing.T) {
 	body, _ := json.Marshal(model.UpdateMemberRequest{Role: model.RoleSSA})
 	r := httptest.NewRequest(http.MethodPut, "/api/accounts/acc-1/members/tam-1", bytes.NewReader(body))
 	r = withUserEmailCtx(r, "tam-1", "tam@x.com")
+	r = withChiParam(r, "accountId", "acc-1")
+	r = withChiParam(r, "userId", "tam-1")
+	w := httptest.NewRecorder()
+
+	h.UpdateMemberRole(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// TestHandlerUpdateMemberRole_NonMemberForbidden: a caller with no
+// membership on the account at all is still forbidden.
+func TestHandlerUpdateMemberRole_NonMemberForbidden(t *testing.T) {
+	h, repo := newStubAccountHandler()
+	repo.accounts["acc-1"] = &model.Account{AccountID: "acc-1", Name: "하나은행", OwnerUserID: "owner-1"}
+	repo.members[acctMemberKey("acc-1", "owner-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "owner-1", Role: model.RoleOwner}
+	repo.members[acctMemberKey("acc-1", "tam-1")] = &model.AccountMember{AccountID: "acc-1", UserID: "tam-1", Role: model.RoleTAM}
+
+	body, _ := json.Marshal(model.UpdateMemberRequest{Role: model.RoleSSA})
+	r := httptest.NewRequest(http.MethodPut, "/api/accounts/acc-1/members/tam-1", bytes.NewReader(body))
+	r = withUserEmailCtx(r, "stranger-1", "stranger@x.com")
 	r = withChiParam(r, "accountId", "acc-1")
 	r = withChiParam(r, "userId", "tam-1")
 	w := httptest.NewRecorder()

@@ -651,7 +651,9 @@ func TestAddMember_OwnerAddsTAM(t *testing.T) {
 	}
 }
 
-func TestAddMember_NonOwnerForbidden(t *testing.T) {
+// TestAddMember_MemberCanAddMember pins ADR-034: adding a member is no
+// longer owner-only -- any existing (non-owner) member may add another.
+func TestAddMember_MemberCanAddMember(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
@@ -660,9 +662,42 @@ func TestAddMember_NonOwnerForbidden(t *testing.T) {
 	_, _ = svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
 	seedUser(repo, "ssa-1", "ssa@x.com")
 
-	_, err := svc.AddMember(context.Background(), "tam-1", acc.AccountID, &model.AddMemberRequest{Email: "ssa@x.com", Role: model.RoleSSA})
+	dto, err := svc.AddMember(context.Background(), "tam-1", acc.AccountID, &model.AddMemberRequest{Email: "ssa@x.com", Role: model.RoleSSA})
+	if err != nil {
+		t.Fatalf("expected non-owner member to be able to add another member, got %v", err)
+	}
+	if dto.UserID != "ssa-1" || dto.Role != model.RoleSSA {
+		t.Errorf("unexpected dto: %+v", dto)
+	}
+}
+
+// TestAddMember_NonMemberForbidden: someone with no membership at all on
+// this account still cannot add members.
+func TestAddMember_NonMemberForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "ssa-1", "ssa@x.com")
+
+	_, err := svc.AddMember(context.Background(), "stranger-1", acc.AccountID, &model.AddMemberRequest{Email: "ssa@x.com", Role: model.RoleSSA})
 	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+// TestRemoveMember_NonOwnerMemberForbidden pins that removal, unlike add/
+// update-role, stays owner-only (ADR-034).
+func TestRemoveMember_NonOwnerMemberForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	seedUser(repo, "ssa-1", "ssa@x.com")
+	_, _ = svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+	_, _ = svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ssa@x.com", Role: model.RoleSSA})
+
+	if _, err := svc.RemoveMember(context.Background(), "tam-1", acc.AccountID, "ssa-1", false); !errors.Is(err, ErrForbidden) {
+		t.Errorf("expected ErrForbidden for non-owner member removal, got %v", err)
 	}
 }
 
@@ -1310,7 +1345,9 @@ func TestUpdateMemberRole_OwnerTargetRejected(t *testing.T) {
 	}
 }
 
-func TestUpdateMemberRole_NonOwnerForbidden(t *testing.T) {
+// TestUpdateMemberRole_MemberCanChangeAnotherMembersRole pins ADR-034: role
+// changes are no longer owner-only either.
+func TestUpdateMemberRole_MemberCanChangeAnotherMembersRole(t *testing.T) {
 	repo := newMockAccountRepo()
 	svc := newAccountServiceWithRepo(repo)
 	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
@@ -1319,9 +1356,42 @@ func TestUpdateMemberRole_NonOwnerForbidden(t *testing.T) {
 	seedUser(repo, "ssa-1", "ssa@x.com")
 	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "ssa@x.com", Role: model.RoleSSA})
 
-	_, err := svc.UpdateMemberRole(context.Background(), "tam-1", acc.AccountID, "ssa-1", &model.UpdateMemberRequest{Role: model.RoleAM})
+	dto, err := svc.UpdateMemberRole(context.Background(), "tam-1", acc.AccountID, "ssa-1", &model.UpdateMemberRequest{Role: model.RoleAM})
+	if err != nil {
+		t.Fatalf("expected a non-owner member to be able to change another member's role, got %v", err)
+	}
+	if dto.Role != model.RoleAM {
+		t.Errorf("expected role AM, got %+v", dto)
+	}
+}
+
+// TestUpdateMemberRole_NonMemberForbidden: someone with no membership at all
+// on this account still cannot change roles.
+func TestUpdateMemberRole_NonMemberForbidden(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+
+	_, err := svc.UpdateMemberRole(context.Background(), "stranger-1", acc.AccountID, "tam-1", &model.UpdateMemberRequest{Role: model.RoleSSA})
 	if !errors.Is(err, ErrForbidden) {
 		t.Errorf("expected ErrForbidden, got %v", err)
+	}
+}
+
+// TestUpdateMemberRole_MemberCannotSetOwnerRole: the role allowlist still
+// excludes "owner", regardless of who the requester is.
+func TestUpdateMemberRole_MemberCannotSetOwnerRole(t *testing.T) {
+	repo := newMockAccountRepo()
+	svc := newAccountServiceWithRepo(repo)
+	acc, _ := svc.CreateAccount(context.Background(), "owner-1", "o@x.com", &model.CreateAccountRequest{Name: "하나은행"})
+	seedUser(repo, "tam-1", "tam@x.com")
+	svc.AddMember(context.Background(), "owner-1", acc.AccountID, &model.AddMemberRequest{Email: "tam@x.com", Role: model.RoleTAM})
+
+	_, err := svc.UpdateMemberRole(context.Background(), "tam-1", acc.AccountID, "tam-1", &model.UpdateMemberRequest{Role: model.RoleOwner})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput, got %v", err)
 	}
 }
 

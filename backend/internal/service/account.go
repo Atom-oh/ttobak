@@ -278,12 +278,24 @@ func (s *AccountService) ListAccounts(ctx context.Context, userID string) ([]mod
 	return out, nil
 }
 
+// AddMember adds a new member to the account (queuing a PendingShare
+// instead if the email hasn't logged in yet -- see below). Any existing
+// member may call this, not just the owner (ADR-034); the role allowlist
+// (isAssignableRole) still excludes "owner", so no member can grant
+// owner-level standing this way.
 func (s *AccountService) AddMember(ctx context.Context, requesterUserID, accountID string, req *model.AddMemberRequest) (*model.AccountMemberDTO, error) {
 	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
 	if err != nil {
 		return nil, err
 	}
-	if requester == nil || requester.Role != model.RoleOwner {
+	if requester == nil {
+		account, err := s.repo.GetAccount(ctx, accountID)
+		if err != nil {
+			return nil, err
+		}
+		if account == nil {
+			return nil, ErrNotFound
+		}
 		return nil, ErrForbidden
 	}
 	if !isAssignableRole(req.Role) {
@@ -508,8 +520,12 @@ func (s *AccountService) checkNoAmbiguousShares(ctx context.Context, accountID, 
 }
 
 // RemoveMember deletes a non-owner member. Only the account owner may call
-// this; the owner member itself can never be removed (an account must never
-// exist without an owner -- see CreateAccount's transactional invariant).
+// this -- deliberately NOT opened up to any member the way AddMember and
+// UpdateMemberRole were (ADR-034): removal is destructive (revokes access,
+// can cascade into meeting-share cleanup) and reversing a bad add/role
+// change is cheap, while a bad removal is not. The owner member itself can
+// never be removed (an account must never exist without an owner -- see
+// CreateAccount's transactional invariant).
 // If the target holds any ambiguous untagged share (see RemoveMemberResult)
 // on a meeting still linked to this account, membership is NOT deleted and
 // ErrAmbiguousShareBlocksRemoval is returned instead -- unless force is
@@ -626,15 +642,13 @@ func (s *AccountService) RemoveMember(ctx context.Context, requesterUserID, acco
 	return result, nil
 }
 
-// UpdateMemberRole changes a non-owner member's role. Only the account owner
-// may call this; the owner's own role can never be changed via this path.
+// UpdateMemberRole changes a non-owner member's role. Any existing member
+// may call this (ADR-034); the owner's own role can never be changed via
+// this path, and the role allowlist still excludes "owner", so no member
+// can promote anyone (including themselves) to owner.
 func (s *AccountService) UpdateMemberRole(ctx context.Context, requesterUserID, accountID, targetUserID string, req *model.UpdateMemberRequest) (*model.AccountMemberDTO, error) {
-	requester, err := s.repo.GetMember(ctx, accountID, requesterUserID)
-	if err != nil {
+	if err := s.requireMember(ctx, requesterUserID, accountID); err != nil {
 		return nil, err
-	}
-	if requester == nil || requester.Role != model.RoleOwner {
-		return nil, ErrForbidden
 	}
 	if !isAssignableRole(req.Role) {
 		return nil, ErrInvalidInput
