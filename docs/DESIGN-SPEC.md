@@ -998,6 +998,7 @@ owner 전용 API를 호출한다). 이 배너는 `error` 배너(빨강)와 별�
 - Zoom controls (`zoom_in`/`zoom_out`/`fit_screen`/`fullscreen`) fade in on hover (desktop) or stay visible (touch, `group-focus-within`)
 - Fullscreen opens `DiagramLightbox`, reusing `AttachmentGallery`'s image-modal visual language (`fixed inset-0 z-50 bg-black/80 backdrop-blur-sm`, backdrop-click or `Esc` to close, top-right close button) rather than a new one
 - Applied to every mermaid diagram via `MermaidBlock` — since `MarkdownRenderer` is the single markdown surface, this covers meeting notes, live summary, docs, insights, and research uniformly
+- The markdown surface (`MermaidBlock`, `CodeBlock`/`InlineCode`, `DataTable`, `DiagramLightbox`) is theme-aware, not dark-only: each reads `useTheme()` (`src/hooks/useTheme.ts`, tracks `<html>`'s `.dark` class via `MutationObserver` since the sidebar's toggle emits no event) and re-renders on theme change — mermaid re-initializes with a light/dark `themeVariables` pair mirroring `globals.css`'s tokens, shiki switches between `github-dark-default`/`github-light-default`, and card chrome uses the same `border-slate-200 dark:border-white/[…]` pairing `MarkdownRenderer` already used elsewhere in this file
 
 ## 4. Icon Mapping
 

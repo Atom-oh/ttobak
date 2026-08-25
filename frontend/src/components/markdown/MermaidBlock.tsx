@@ -3,10 +3,47 @@
 import { useState, useEffect, useRef, useId } from 'react';
 import { ZoomPanViewport } from './ZoomPanViewport';
 import { DiagramLightbox } from './DiagramLightbox';
+import { useTheme } from '@/hooks/useTheme';
 
 interface MermaidBlockProps {
   code: string;
 }
+
+// Mirrors globals.css's dark-mode tokens (`.dark { ... }`) -- kept as an
+// explicit palette rather than read via getComputedStyle because mermaid
+// needs keys (mainBkg, clusterBkg, edgeLabelBackground) with no 1:1 token,
+// so a derivation would be needed either way, and this avoids any paint
+// timing risk.
+const DARK_THEME_VARIABLES = {
+  primaryColor: '#8b85f7',
+  primaryTextColor: '#e4e1e9',
+  primaryBorderColor: '#8b85f7',
+  lineColor: '#8a8f98',
+  secondaryColor: '#1a1a24',
+  tertiaryColor: '#0e0e13',
+  background: '#131022',
+  mainBkg: '#1a1a24',
+  nodeBorder: '#8b85f7',
+  clusterBkg: '#0e0e13',
+  titleColor: '#e4e1e9',
+  edgeLabelBackground: '#131022',
+};
+
+// Mirrors globals.css's :root tokens (light mode).
+const LIGHT_THEME_VARIABLES = {
+  primaryColor: '#3211d4',
+  primaryTextColor: '#0f172a',
+  primaryBorderColor: '#3211d4',
+  lineColor: '#64748b',
+  secondaryColor: '#f1f5f9',
+  tertiaryColor: '#e2e8f0',
+  background: '#ffffff',
+  mainBkg: '#f8fafc',
+  nodeBorder: '#3211d4',
+  clusterBkg: '#f1f5f9',
+  titleColor: '#0f172a',
+  edgeLabelBackground: '#ffffff',
+};
 
 export function MermaidBlock({ code }: MermaidBlockProps) {
   const [svg, setSvg] = useState<string>('');
@@ -14,6 +51,7 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
   const [fullscreen, setFullscreen] = useState(false);
   const uniqueId = useId().replace(/:/g, '-');
   const containerRef = useRef<HTMLDivElement>(null);
+  const { theme } = useTheme();
 
   useEffect(() => {
     let cancelled = false;
@@ -27,21 +65,8 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
           // future mermaid upgrade or config merge must never silently
           // enable click handlers / script in rendered SVG.
           securityLevel: 'strict',
-          theme: 'dark',
-          themeVariables: {
-            primaryColor: '#8b85f7',
-            primaryTextColor: '#e4e1e9',
-            primaryBorderColor: '#8b85f7',
-            lineColor: '#8a8f98',
-            secondaryColor: '#1a1a24',
-            tertiaryColor: '#0e0e13',
-            background: '#131022',
-            mainBkg: '#1a1a24',
-            nodeBorder: '#8b85f7',
-            clusterBkg: '#0e0e13',
-            titleColor: '#e4e1e9',
-            edgeLabelBackground: '#131022',
-          },
+          theme: theme === 'dark' ? 'dark' : 'default',
+          themeVariables: theme === 'dark' ? DARK_THEME_VARIABLES : LIGHT_THEME_VARIABLES,
           fontFamily: 'Inter, sans-serif',
         });
         const { svg: renderedSvg } = await mermaid.render(`mermaid-${uniqueId}`, code.trim());
@@ -51,7 +76,7 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
       }
     })();
     return () => { cancelled = true; };
-  }, [code, uniqueId]);
+  }, [code, uniqueId, theme]);
 
   if (error) {
     return (
@@ -64,14 +89,14 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
 
   if (!svg) {
     return (
-      <div className="my-4 rounded-xl border border-white/[0.06] bg-[#0a0a0f] p-8 flex items-center justify-center">
+      <div className="my-4 rounded-xl border border-slate-200 dark:border-white/[0.06] bg-white dark:bg-[#0a0a0f] p-8 flex items-center justify-center">
         <div className="animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div ref={containerRef} className="my-4 rounded-xl border border-white/[0.06] bg-[#0a0a0f]">
+    <div ref={containerRef} className="my-4 rounded-xl border border-slate-200 dark:border-white/[0.06] bg-white dark:bg-[#0a0a0f]">
       {/*
         [&>svg]:max-w-full only bounds the INITIAL fit — it must not apply
         inside the zoom transform, or scaling up re-clamps the SVG back to

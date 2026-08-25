@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
+import { useTheme } from '@/hooks/useTheme';
 
 interface CodeBlockProps {
   className?: string;
@@ -13,16 +14,17 @@ export function CodeBlock({ className, children }: CodeBlockProps) {
   const [html, setHtml] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { theme } = useTheme();
 
   useEffect(() => {
     let cancelled = false;
     import('shiki').then(({ codeToHtml }) =>
-      codeToHtml(code, { lang: language || 'text', theme: 'github-dark-default' })
+      codeToHtml(code, { lang: language || 'text', theme: theme === 'dark' ? 'github-dark-default' : 'github-light-default' })
     ).then((result) => {
       if (!cancelled) setHtml(result);
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [code, language]);
+  }, [code, language, theme]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(code);
@@ -33,10 +35,10 @@ export function CodeBlock({ className, children }: CodeBlockProps) {
 
   // Shiki output is trusted (generated from code string, not user HTML input)
   return (
-    <div className="my-4 rounded-xl border border-white/[0.08] bg-[#0a0a0f] overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-white/[0.08]">
+    <div className="my-4 rounded-xl border border-slate-200 dark:border-white/[0.08] bg-white dark:bg-[#0a0a0f] overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 dark:border-white/[0.08]">
         {language ? (
-          <span className="bg-white/[0.06] px-2 py-0.5 rounded text-[12px] text-text-muted font-mono">
+          <span className="bg-slate-100 dark:bg-white/[0.06] px-2 py-0.5 rounded text-[12px] text-text-muted font-mono">
             {language}
           </span>
         ) : (
@@ -62,7 +64,7 @@ export function CodeBlock({ className, children }: CodeBlockProps) {
 
 export function InlineCode({ children }: { children?: React.ReactNode }) {
   return (
-    <code className="bg-white/[0.05] text-text-main px-1.5 py-0.5 rounded text-[13px] font-mono">
+    <code className="bg-slate-100 dark:bg-white/[0.05] text-text-main px-1.5 py-0.5 rounded text-[13px] font-mono">
       {children}
     </code>
   );
