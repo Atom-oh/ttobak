@@ -35,14 +35,18 @@ def _ensure_model() -> str:
 
     print(f"Downloading model from s3://{BUCKET}/{MODEL_S3_KEY}")
     start = time.time()
-    archive = "/tmp/model.tar.gz"
-    s3.download_file(BUCKET, MODEL_S3_KEY, archive)
     os.makedirs(MODEL_LOCAL_DIR, exist_ok=True)
 
     import tarfile
-    with tarfile.open(archive) as tar:
-        tar.extractall(MODEL_LOCAL_DIR)
-    os.remove(archive)
+    # Stream-extract directly from the S3 response body instead of
+    # downloading the tarball to disk first -- the model archive is 2.85GB,
+    # and holding both the compressed archive and its extracted contents at
+    # once was contributing to the GPU instance's root volume filling up
+    # (see infra/lib/whisper-stack.ts blockDevices comment). mode="r|gz" is
+    # the streaming (non-seekable) tar mode required for a StreamingBody.
+    obj = s3.get_object(Bucket=BUCKET, Key=MODEL_S3_KEY)
+    with tarfile.open(fileobj=obj["Body"], mode="r|gz") as tar:
+        tar.extractall(MODEL_LOCAL_DIR, filter="data")
     elapsed = time.time() - start
     print(f"Model ready ({elapsed:.0f}s)")
     return MODEL_LOCAL_DIR
@@ -60,18 +64,19 @@ def _ensure_diarization_model() -> str | None:
     print(f"Downloading diarization model from s3://{BUCKET}/{DIARIZATION_S3_KEY}")
     try:
         start = time.time()
-        archive = "/tmp/diarization-model.tar.gz"
-        s3.download_file(BUCKET, DIARIZATION_S3_KEY, archive)
         os.makedirs(DIARIZATION_LOCAL_DIR, exist_ok=True)
 
         import tarfile
-        with tarfile.open(archive) as tar:
+        # Stream-extract directly from the S3 response body (see _ensure_model's
+        # comment) to avoid holding the compressed archive and its extracted
+        # contents on disk at the same time.
+        obj = s3.get_object(Bucket=BUCKET, Key=DIARIZATION_S3_KEY)
+        with tarfile.open(fileobj=obj["Body"], mode="r|gz") as tar:
             # filter="data" (PEP 706, stdlib since Python 3.12/3.8.17+) rejects
             # tar members that would escape DIARIZATION_LOCAL_DIR via ../ paths
             # or symlinks -- the container's Ubuntu 24.04 base ships Python
             # 3.12, so this is always available here.
             tar.extractall(DIARIZATION_LOCAL_DIR, filter="data")
-        os.remove(archive)
         elapsed = time.time() - start
         print(f"Diarization model ready ({elapsed:.0f}s)")
         return config_path
