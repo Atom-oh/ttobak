@@ -50,11 +50,25 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
   const [error, setError] = useState<string>('');
   const [fullscreen, setFullscreen] = useState(false);
   const uniqueId = useId().replace(/:/g, '-');
+  // Bumped on every effect run and folded into the render id below -- a
+  // theme toggle re-render can start a new render while a previous one is
+  // still in flight (mermaid.render is async), and two calls sharing the
+  // same DOM id can collide. `cancelled` alone only suppresses this
+  // component's OWN stale setState, not mermaid's in-flight render call.
+  const renderGenerationRef = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const { theme } = useTheme();
 
   useEffect(() => {
     let cancelled = false;
+    const generation = ++renderGenerationRef.current;
+    // Clear any error from a previous run of this effect -- without this,
+    // a transient failure (e.g. a theme toggle re-render racing a prior
+    // in-flight render onto the same DOM id) leaves `error` set forever:
+    // the early `if (error) return` below never sees this run's success
+    // even after `setSvg` fires, and the diagram is stuck on the error
+    // card for the rest of the component's life.
+    setError('');
     (async () => {
       try {
         const mermaid = (await import('mermaid')).default;
@@ -69,7 +83,7 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
           themeVariables: theme === 'dark' ? DARK_THEME_VARIABLES : LIGHT_THEME_VARIABLES,
           fontFamily: 'Inter, sans-serif',
         });
-        const { svg: renderedSvg } = await mermaid.render(`mermaid-${uniqueId}`, code.trim());
+        const { svg: renderedSvg } = await mermaid.render(`mermaid-${uniqueId}-${generation}`, code.trim());
         if (!cancelled) setSvg(renderedSvg);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Mermaid render failed');

@@ -52,7 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CloudFront SPA router fixed for `/insights/research/*` route conflict
 
 ### Fixed
-- Mermaid diagrams, code blocks, and tables rendering as a hardcoded dark card in light mode — the markdown surface now reads the sidebar's theme toggle via a new `useTheme` hook and re-renders mermaid/shiki with a matching light or dark palette
+- Mermaid diagrams, code blocks, and tables rendering as a hardcoded dark card in light mode — the markdown surface now observes `<html>`'s `.dark` class via a new `useTheme` hook (the sidebar's theme toggle moved to this hook too) and re-renders mermaid/shiki with a matching light or dark palette
 - Mobile recording silently dying on screen lock (mic indicator stayed "live" but no audio captured) — Screen Wake Lock during recording, `AudioContext` resume guard + stall watchdog in Transcribe Streaming client, `pageshow`/`focus` restart triggers in Web Speech fallback
 - CloudFront SPA router wrongly rewriting `/insights/research/*` to `/insights/_/_`
 - Bedrock ReadTimeoutError in deep research (read_timeout 120s to 300s)
@@ -114,7 +114,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CloudFront SPA router `/insights/research/*` 라우트 충돌 수정
 
 ### Fixed
-- 라이트 모드에서 mermaid 다이어그램·코드블록·표가 다크 전용 카드로 렌더되던 문제 — 마크다운 표면이 새 `useTheme` 훅으로 사이드바의 테마 토글을 읽어 mermaid/shiki를 라이트·다크에 맞는 팔레트로 재렌더
+- 라이트 모드에서 mermaid 다이어그램·코드블록·표가 다크 전용 카드로 렌더되던 문제 — 마크다운 표면이 새 `useTheme` 훅으로 `<html>`의 `.dark` 클래스를 관찰해(사이드바 테마 토글도 이 훅으로 이동) mermaid/shiki를 라이트·다크에 맞는 팔레트로 재렌더
 - 모바일 화면 잠금 시 녹음이 조용히 멈추는 문제 (마이크 표시는 계속 "켜짐"이지만 오디오는 캡처되지 않음) — 녹음 중 Screen Wake Lock 유지, Transcribe Streaming 클라이언트에 AudioContext resume 가드 + stall watchdog 추가, Web Speech 폴백에 `pageshow`/`focus` 재시작 트리거 추가
 - CloudFront SPA router `/insights/research/*`를 `/insights/_/_`로 잘못 rewrite하는 문제
 - Deep research Bedrock ReadTimeoutError (read_timeout 120초 → 300초)
