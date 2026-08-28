@@ -50,6 +50,7 @@ Purely additive — no existing resource is modified:
 2. For each, `aws ecs run-task` against **both** task definitions with the same source audio, routing output to distinct S3 keys via `OUTPUT_KEY` override (e.g. `transcripts/{meetingId}_bench_legacy.json` / `_bench_whisperx.json`) — never overwrites the meeting's real transcript.
 3. Compare `whisper_metadata.segments` between the two outputs: speaker count, turn-boundary placement, qualitative correctness on known multi-speaker stretches.
 4. **Scope is qualitative diarization comparison, not WER.** No reference transcripts exist to compute WER against, and building that harness is out of scope for this spec — if a numeric quality bar becomes necessary later, that's a separate follow-up.
+5. Capture peak GPU VRAM (`nvidia-smi --query-gpu=memory.used --format=csv -l 5` or similar, sampled during the WhisperX run) and container CPU/memory (ECS/CloudWatch container insights) for each WhisperX benchmark run — resolves the VRAM/instance-sizing unknown above with real numbers instead of estimates before any Phase 2 cutover decision.
 
 ## Explicitly out of scope (Phase 2, future spec)
 
@@ -64,6 +65,7 @@ Purely additive — no existing resource is modified:
 - Exact HF repo ID(s) for pyannote 4.x diarization — confirm before writing `upload-whisperx-diarization-model.sh`.
 - Korean wav2vec2 alignment model availability — degrades gracefully (see above) but unconfirmed either way.
 - Whether `whisperx`'s pip dependency set (torch 2.8/CUDA 12.8 per the DLC's known-good combo) works cleanly on the existing ECS GPU AMI (`ecs.EcsOptimizedImage.amazonLinux2(GPU)`) driver version — check at Dockerfile build/deploy time, not assumed.
+- **VRAM headroom on g5.xlarge (single A10G, 24GB)**: model footprint itself is roughly unchanged (large-v3 CT2 weights reused, pyannote 4.x diarization models comparable in size to the current 3.x bundle), but WhisperX's batched transcription (default `batch_size=16`, multiple audio chunks processed on-GPU concurrently instead of faster-whisper's sequential one-chunk-at-a-time) can push peak VRAM meaningfully higher than today's usage. Should still fit in 24GB with `batch_size` tuned down if needed — but this needs measuring (peak `nvidia-smi` VRAM during a real transcription run), not assuming, before deciding whether the instance type itself needs to change. CPU/RAM (4 vCPU/16GB) headroom for the added VAD/alignment work is a smaller, same-category unknown. Disk is already covered by the unrelated 200GB root-volume bump (`9615ad1`). Add VRAM/CPU/RAM peak measurement to the benchmark procedure's per-run checklist.
 
 ## Testing / verification
 
