@@ -148,13 +148,16 @@ this runbook) is recognized and the `status=error` write is skipped entirely
 — a failed WhisperX bench run only ever surfaces in the ECS task log, never
 on the real meeting row.
 
-The **legacy `ttobak-whisper` engine** (`transcribe.py`) has no such guard: if
-that task fails (unstaged model bundle, VRAM OOM, dependency crash, etc.), its
-fatal-error handler unconditionally calls `whisper_common.mark_meeting_error`,
-which writes `status=error` to the **real meeting's DynamoDB row** — even
-though the `OUTPUT_KEY` was bench-scoped. This is visible to users in the UI
-as a corrupted done meeting. So the risk below applies specifically to the
-`ttobak-whisper` half of each benchmark pair.
+The **legacy `ttobak-whisper` engine** (`transcribe.py`) has no such guard.
+It does not import `whisper_common` at all -- Phase 1 gave it its own inline,
+private copy of the error-marking logic (a plain `dynamodb.Table(...).
+update_item(...)` in its `__main__` handler, not a call to
+`whisper_common.mark_meeting_error`) -- but that inline copy still runs
+unconditionally on any fatal failure (unstaged model bundle, VRAM OOM,
+dependency crash, etc.), writing `status=error` to the **real meeting's
+DynamoDB row** even though the `OUTPUT_KEY` was bench-scoped. This is visible
+to users in the UI as a corrupted done meeting. So the risk below applies
+specifically to the `ttobak-whisper` half of each benchmark pair.
 
 **Recovery**: After any failed bench run, verify the meeting's status:
 
@@ -183,6 +186,14 @@ Repeat for each selected meeting.
 ## 4. Resource measurement per WhisperX run
 
 This resolves the design doc's open VRAM/instance-sizing question.
+
+**IAM 확대 없는 대안:** before reaching for the SSM approach below, check whether
+CloudWatch agent GPU metrics (the `nvidia_smi` plugin) are already configured
+on the ASG, or whether the engine ever logs VRAM figures to its own
+CloudWatch log group — either would answer the VRAM question with zero IAM
+change. Neither is set up on `ttobak-whisper-asg` today, so the SSM attach
+below is the fallback: a deliberate, temporary elevation for this one
+benchmark, not the default path.
 
 **Prerequisite: the ASG's EC2 instance role has no SSM permissions today.**
 `infra/lib/whisper-stack.ts` scopes the ASG's EC2 instance role to
@@ -256,13 +267,18 @@ aws ssm send-command --instance-ids <IID> --document-name AWS-RunShellScript \
 
 ## 5. Comparing outputs
 
+Transcript contents are meeting PII -- download into a throwaway directory,
+not a fixed `/tmp/*.json` path, so a leftover copy doesn't sit around with a
+guessable name:
+
 ```bash
+WORKDIR=$(mktemp -d)
 for S in legacy whisperx; do
-  aws s3 cp "s3://ttobak-assets-180294183052/bench-transcripts/${MEETING_ID}_bench_${S}.json" "/tmp/${S}.json"
+  aws s3 cp "s3://ttobak-assets-180294183052/bench-transcripts/${MEETING_ID}_bench_${S}.json" "$WORKDIR/${S}.json"
   echo "== $S: speakers =="
-  jq '[.whisper_metadata.segments[].speaker] | unique' "/tmp/${S}.json"
+  jq '[.whisper_metadata.segments[].speaker] | unique' "$WORKDIR/${S}.json"
   echo "== $S: turn timeline =="
-  jq -r '.whisper_metadata.segments[] | "\(.start)\t\(.end)\t\(.speaker // "-")\t\(.text)"' "/tmp/${S}.json" | head -80
+  jq -r '.whisper_metadata.segments[] | "\(.start)\t\(.end)\t\(.speaker // "-")\t\(.text)"' "$WORKDIR/${S}.json" | head -80
 done
 ```
 
@@ -282,9 +298,13 @@ Build one table row per meeting:
 | Meeting ID | Duration | Participants | Legacy speakers detected | WhisperX speakers detected | Peak VRAM (WhisperX) | Wall-clock (legacy / whisperx) | Qualitative verdict |
 |---|---|---|---|---|---|---|---|
 
-This table is the primary input to the Phase 2 go/no-go decision and the ADR
-that records it — don't discard the raw per-meeting jq output until that ADR
-is written, in case a reviewer wants to re-check a specific turn boundary.
+Keep only this table -- the aggregate metrics -- beyond the current session;
+it is the primary input to the Phase 2 go/no-go decision and the ADR that
+records it. The raw per-meeting transcripts (`$WORKDIR/*.json` from §5) still
+contain PII and must not be retained past the session: if a reviewer needs to
+re-check a specific turn boundary before the ADR is written, re-run the
+comparison in §5 against the bench S3 objects (not yet deleted at that
+point, see §7) rather than keeping a local copy around.
 
 ## 7. Cleanup
 
@@ -296,12 +316,22 @@ Checklist:
   aws s3 rm "s3://ttobak-assets-180294183052/bench-transcripts/" --recursive
   ```
 
-- [ ] Delete local `/tmp` copies of downloaded bench transcripts on the
-  operator machine (the `/tmp/legacy.json` / `/tmp/whisperx.json` files
-  fetched in §5):
+  This bucket is versioned: `aws s3 rm --recursive` only writes delete
+  markers, it does not purge the prior object versions. The underlying
+  versions (still containing the PII transcript content) persist until the
+  bucket's lifecycle rule expires them -- current-version expiration at 30
+  days plus noncurrent-version expiration 30 days after that, so worst-case
+  effective retention before the data is actually gone is ~60 days (see
+  `docs/INFRA-SPEC.md`'s `bench-transcripts/` lifecycle entry). If a bench
+  object must be purged sooner, delete its specific versions with
+  `aws s3api delete-object --version-id`, not a bare `s3 rm`.
+
+- [ ] Delete local copies of downloaded bench transcripts on the operator
+  machine -- the `$WORKDIR/legacy.json` / `$WORKDIR/whisperx.json` files
+  fetched in §5:
 
   ```bash
-  rm -f /tmp/legacy.json /tmp/whisperx.json
+  rm -rf "$WORKDIR"
   ```
 
 - [ ] Detach the one-time SSM permission granted in §4 (if it was added for
@@ -311,6 +341,17 @@ Checklist:
   aws iam detach-role-policy \
     --role-name <ROLE_NAME_FROM_INSTANCE_PROFILE> \
     --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  ```
+
+  Verify the detach actually took -- while this policy stays attached,
+  anyone with `ssm:SendCommand` against this account can run arbitrary
+  (including root) commands on a host that processes real meeting
+  audio/credentials, so don't leave it attached on the strength of having
+  run the command above:
+
+  ```bash
+  aws iam list-attached-role-policies --role-name <ROLE_NAME_FROM_INSTANCE_PROFILE>
+  # expect: AmazonSSMManagedInstanceCore absent from the output
   ```
 
 No ASG scale-down step is needed — `ttobak-whisper-spot` scales the cluster

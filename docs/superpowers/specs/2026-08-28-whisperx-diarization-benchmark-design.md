@@ -33,7 +33,7 @@ As long as a new engine emits this same shape, **no Go/API changes are required*
 
 1. `whisperx.load_model(...)` + `transcribe()` — VAD-batched inference, replaces `faster_whisper.WhisperModel.transcribe()`.
 2. Forced alignment (`whisperx.load_align_model` + `align()`) is **attempted but not required**: Korean wav2vec2 alignment model availability in whisperx's registry is unconfirmed. Wrap in try/except — on failure, log and continue with segment-level timestamps only (matches the existing script's segment granularity; nothing downstream reads word-level timestamps today, so this is a safe degradation, not a partial failure).
-3. `whisperx.diarize.DiarizationPipeline` (pyannote 4.x under the hood) + `assign_word_speakers()`.
+3. As shipped: `pyannote.audio.Pipeline.from_pretrained()` used directly (not `whisperx.diarize.DiarizationPipeline`) + `whisper_common.assign_speakers` for the word/segment-to-speaker mapping (not `assign_word_speakers()`). The original intent above was to route diarization through whisperx's own wrapper; the shipped code calls pyannote 4.x directly and reuses the shared assignment helper `whisper_common` already provides, so both engines assign speakers the same way.
 4. Segment-level speaker: majority vote over the segment's assigned word speakers (or, if alignment was skipped, treat the whole segment as one unit assigned by the diarization pipeline's own turn/segment overlap — same time-overlap logic `_assign_speakers` uses today). Normalize via `whisper_common.normalize_speakers` — **same `spk_N` first-appearance convention**, so output is structurally identical to the existing engine's.
 5. `whisper_metadata.engine = "whisperx-large-v3-gpu"` — distinguishes benchmark output from the legacy engine's `"whisper-large-v3-gpu"` when comparing JSON side-by-side.
 
@@ -47,7 +47,7 @@ Purely additive — no existing resource is modified:
 ### Benchmark procedure (manual, no product code touched)
 
 1. Pick N real meetings spanning different speaker counts/durations.
-2. For each, `aws ecs run-task` against **both** task definitions with the same source audio, routing output to distinct S3 keys via `OUTPUT_KEY` override (e.g. `transcripts/{meetingId}_bench_legacy.json` / `_bench_whisperx.json`) — never overwrites the meeting's real transcript.
+2. For each, `aws ecs run-task` against **both** task definitions with the same source audio, routing output to distinct S3 keys via `OUTPUT_KEY` override (e.g. `bench-transcripts/{meetingId}_legacy.json` / `bench-transcripts/{meetingId}_whisperx.json`) — never overwrites the meeting's real transcript. (As shipped, the runbook's exact naming is `bench-transcripts/{meetingId}_bench_{legacy|whisperx}.json`; either shape lives under the dedicated `bench-transcripts/` prefix, never `transcripts/`.)
 3. Compare `whisper_metadata.segments` between the two outputs: speaker count, turn-boundary placement, qualitative correctness on known multi-speaker stretches.
 4. **Scope is qualitative diarization comparison, not WER.** No reference transcripts exist to compute WER against, and building that harness is out of scope for this spec — if a numeric quality bar becomes necessary later, that's a separate follow-up.
 5. Capture peak GPU VRAM (`nvidia-smi --query-gpu=memory.used --format=csv -l 5` or similar, sampled during the WhisperX run) and container CPU/memory (ECS/CloudWatch container insights) for each WhisperX benchmark run — resolves the VRAM/instance-sizing unknown above with real numbers instead of estimates before any Phase 2 cutover decision.

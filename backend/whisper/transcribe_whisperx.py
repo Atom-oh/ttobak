@@ -175,10 +175,45 @@ def should_mark_meeting_error(output_key: str) -> bool:
     return key == "" or key.startswith("transcripts/")
 
 
+def validate_output_key(output_key: str, meeting_id: str) -> str:
+    """Resolves and validates the transcript destination. Only two shapes are
+    legal: a benchmark key under bench-transcripts/, or the real pipeline's
+    own key transcripts/{meeting_id}.json (also the default when OUTPUT_KEY
+    is unset) -- including multi-part variants transcripts/{meeting_id}_part_NNN.json.
+    Anything else (another meeting's transcripts/ key, an arbitrary prefix)
+    raises ValueError before a single byte is written, mirroring
+    should_mark_meeting_error's bench/real split on the S3 side."""
+    key = (output_key or "").strip()
+    default_key = f"transcripts/{meeting_id}.json"
+    if not key:
+        return default_key
+    if key.startswith("bench-transcripts/"):
+        return key
+    if key == default_key or key.startswith(f"transcripts/{meeting_id}_"):
+        return key
+    raise ValueError(
+        f"OUTPUT_KEY {key!r} is not a valid bench-transcripts/ key or this "
+        f"meeting's own transcripts/{meeting_id}(.json|_*) key")
+
+
+def validate_audio_key(audio_key: str, user_id: str, meeting_id: str) -> str:
+    """AUDIO_KEY may only point inside this meeting's own audio prefix
+    audio/{user_id}/{meeting_id}/ -- rejects cross-meeting/cross-user reads
+    (the task role is bucket-wide, so IAM does not enforce this)."""
+    prefix = f"audio/{user_id}/{meeting_id}/"
+    if not audio_key.startswith(prefix):
+        raise ValueError(
+            f"AUDIO_KEY {audio_key!r} is not under this meeting's own audio "
+            f"prefix {prefix!r}")
+    return audio_key
+
+
 def main():
     meeting_id = os.environ["MEETING_ID"]
     user_id = os.environ["USER_ID"]
     audio_key = os.environ.get("AUDIO_KEY")
+    if audio_key:
+        audio_key = validate_audio_key(audio_key, user_id, meeting_id)
     if audio_key and not common.audio_key_exists(s3, BUCKET, audio_key):
         print(f"AUDIO_KEY {audio_key!r} not found in S3; falling back to prefix scan")
         audio_key = None
@@ -255,7 +290,7 @@ def main():
         num_speakers_detected=num_speakers_detected,
         alignment_enabled=alignment_enabled)
 
-    output_key = os.environ.get("OUTPUT_KEY", "").strip() or f"transcripts/{meeting_id}.json"
+    output_key = validate_output_key(os.environ.get("OUTPUT_KEY", ""), meeting_id)
     common.upload_transcript(s3, BUCKET, output_key, result)
     print(f"Uploaded s3://{BUCKET}/{output_key}")
 

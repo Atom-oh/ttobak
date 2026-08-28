@@ -87,6 +87,63 @@ class TestTurnsFromDiarization(unittest.TestCase):
         self.assertEqual(turns, [(0.0, 1.5, 'SPEAKER_00')])
 
 
+class TestValidateOutputKey(unittest.TestCase):
+    def test_empty_defaults_to_real_pipeline_key(self):
+        self.assertEqual(
+            transcribe_whisperx.validate_output_key('', 'm123'),
+            'transcripts/m123.json')
+
+    def test_whitespace_defaults_to_real_pipeline_key(self):
+        self.assertEqual(
+            transcribe_whisperx.validate_output_key('   ', 'm123'),
+            'transcripts/m123.json')
+
+    def test_bench_transcripts_key_passes_through(self):
+        self.assertEqual(
+            transcribe_whisperx.validate_output_key(
+                'bench-transcripts/m123_bench_whisperx.json', 'm123'),
+            'bench-transcripts/m123_bench_whisperx.json')
+
+    def test_own_meeting_key_passes_through(self):
+        self.assertEqual(
+            transcribe_whisperx.validate_output_key(
+                'transcripts/m123.json', 'm123'),
+            'transcripts/m123.json')
+
+    def test_own_meeting_multipart_key_passes_through(self):
+        self.assertEqual(
+            transcribe_whisperx.validate_output_key(
+                'transcripts/m123_part_001.json', 'm123'),
+            'transcripts/m123_part_001.json')
+
+    def test_other_meetings_transcripts_key_rejected(self):
+        with self.assertRaises(ValueError):
+            transcribe_whisperx.validate_output_key(
+                'transcripts/OTHER.json', 'm123')
+
+    def test_arbitrary_prefix_rejected(self):
+        with self.assertRaises(ValueError):
+            transcribe_whisperx.validate_output_key('files/x', 'm123')
+
+
+class TestValidateAudioKey(unittest.TestCase):
+    def test_key_under_own_meeting_prefix_passes(self):
+        self.assertEqual(
+            transcribe_whisperx.validate_audio_key(
+                'audio/u1/m123/rec.mp3', 'u1', 'm123'),
+            'audio/u1/m123/rec.mp3')
+
+    def test_other_users_audio_key_rejected(self):
+        with self.assertRaises(ValueError):
+            transcribe_whisperx.validate_audio_key(
+                'audio/u2/m123/rec.mp3', 'u1', 'm123')
+
+    def test_other_meetings_audio_key_rejected(self):
+        with self.assertRaises(ValueError):
+            transcribe_whisperx.validate_audio_key(
+                'audio/u1/OTHER/rec.mp3', 'u1', 'm123')
+
+
 class TestShouldMarkMeetingError(unittest.TestCase):
     def test_empty_output_key_defaults_to_real_pipeline(self):
         self.assertTrue(transcribe_whisperx.should_mark_meeting_error(''))
