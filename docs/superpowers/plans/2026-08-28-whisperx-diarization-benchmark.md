@@ -16,7 +16,7 @@
 - Output JSON contract (consumed by `cmd/summarize`): `results.transcripts[0].transcript`; `whisper_metadata.{engine, language, language_probability, duration_seconds, transcription_duration_seconds, segments, diarization}`; each segment `{start, end, text, speaker}` with `speaker` = `spk_N` normalized in first-appearance order (omitted when diarization unavailable).
 - Same env-var contract as the legacy container: `MEETING_ID`, `USER_ID`, `AUDIO_KEY`, `OUTPUT_KEY`, `NUM_SPEAKERS`, `INITIAL_PROMPT`, `BUCKET_NAME`, `TABLE_NAME`, `VOCAB_KEY`, `MODEL_S3_KEY`.
 - New engine string: `"whisperx-large-v3-gpu"` (legacy is `"whisper-large-v3-gpu"`).
-- Diarization and alignment are **best-effort**: any failure logs and degrades (unlabeled segments / segment-level timestamps), never aborts transcription. On fatal error the container sets the meeting's DynamoDB `status=error` exactly like `transcribe.py` does.
+- Diarization and alignment are **best-effort**: any failure logs and degrades (unlabeled segments / segment-level timestamps), never aborts transcription. On fatal error the container sets the meeting's DynamoDB `status=error` exactly like `transcribe.py` does. [As shipped: this is gated by `should_mark_meeting_error`, not unconditional — the real meeting row is only ever marked `error` for an explicit real-pipeline `OUTPUT_KEY` (exactly `transcripts/{meetingId}.json` or its `_part_NNN.json` variant); benchmark keys (`bench-transcripts/...`) and an empty/unset `OUTPUT_KEY` never mark the real meeting — an empty key is in fact now rejected outright by `validate_output_key` before any work happens, precisely so it can't reach this fatal-error path at all.]
 - Python tests use stdlib `unittest` + `unittest.mock` only, stubbing heavy deps (`whisperx`, `boto3`) before import — follow `backend/whisper/test_transcribe.py`'s existing pattern exactly.
 - Non-ASCII in tool/JSON parameters written as literal UTF-8 (project rule).
 - Deploy note: merging files under `backend/whisper/**` will trigger `deploy-whisper.yml`, which rebuilds only the *legacy* Dockerfile (it copies just `transcribe.py`) — a harmless no-op rebuild. The new image is built/pushed manually per the runbook (Task 7); CI is not touched in Phase 1. [As shipped: during review, `deploy-whisper.yml`'s paths filter was narrowed to `transcribe.py`+`Dockerfile` specifically, so new whisperx files (`transcribe_whisperx.py`, `Dockerfile.whisperx`, etc.) do NOT trigger the legacy rebuild at all — this is stricter than the "harmless no-op" behavior described above, not a contradiction of the "CI not touched" claim.]
@@ -37,6 +37,10 @@ infra/lib/whisper-stack.ts        (modify, additive only) new ECR repo + new tas
 infra/test/whisper-stack.test.ts  (new) jest assertions for the additive resources
 docs/runbooks/whisperx-benchmark.md  (new) manual benchmark procedure incl. VRAM/CPU measurement
 docs/superpowers/specs/2026-08-28-whisperx-diarization-benchmark-design.md  (modify: one wording fix)
+infra/lib/storage-stack.ts             [Added during review] bench-transcripts/ lifecycle rule
+infra/test/storage-stack.test.ts       [Added during review] jest assertions for the lifecycle rule
+docs/architecture.md                   [Added during review] benchmark pipeline noted in architecture docs
+.github/workflows/deploy-whisper.yml   [Added during review] paths filter narrowed to transcribe.py+Dockerfile
 ```
 
 ---

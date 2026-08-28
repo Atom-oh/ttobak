@@ -76,6 +76,15 @@ unavailable/failed" (or an equivalent pyannote load error), pull the staged
 `config.yaml` back down and inspect its rewritten paths first, before
 suspecting the WhisperX code itself.
 
+### Verify the host NVIDIA driver supports CUDA 12.8 wheels (first run only)
+
+On the very first bench run, confirm the ECS GPU AL2 AMI's host NVIDIA
+driver is new enough for the CUDA 12.8 torch wheels this image bundles:
+check `nvidia-smi`'s output in the task log (or via an SSM session per §4)
+and read the reported driver version -- torch cu128 requires driver
+>= 525. If it's older, the container will fail at model-load time rather
+than at task launch.
+
 ## 2. Selecting meetings
 
 Pick 3–5 meetings already in `done` status, spanning a range of speaker counts
@@ -154,6 +163,13 @@ this runbook) is recognized and the `status=error` write is skipped entirely
 — a failed WhisperX bench run only ever surfaces in the ECS task log, never
 on the real meeting row.
 
+**`OUTPUT_KEY` is MANDATORY for the `ttobak-whisperx` task -- there is no
+default.** Unlike the legacy engine, `transcribe_whisperx.py` raises before
+any download/GPU work if `OUTPUT_KEY` is unset or blank; it never falls back
+to the real pipeline's `transcripts/{meetingId}.json` key. The run-task
+command above already always passes `OUTPUT_KEY` explicitly -- just don't
+omit it if you adapt this command by hand.
+
 The **legacy `ttobak-whisper` engine** (`transcribe.py`) has no such guard.
 It does not import `whisper_common` at all -- Phase 1 gave it its own inline,
 private copy of the error-marking logic (a plain `dynamodb.Table(...).
@@ -209,19 +225,24 @@ the SSM attach below is the **fallback** — a deliberate, temporary elevation
 for this one benchmark, not the default path, and one that carries real risk
 to production STT (see the mandatory precondition below).
 
-### FALLBACK: SSM attach (carries production risk — read the precondition first)
+### FALLBACK: SSM attach (attach-before-bench, never cycle the ASG)
 
-**⚠️ This path can kill a real user's in-flight transcription.** The ASG
-(`infra/lib/whisper-stack.ts`) has `enableManagedTerminationProtection: false`
-and step 3 below tells you to cycle it (scale to 0, then back up) to force a
-freshly-launched, SSM-registered instance. With termination protection off,
-cycling the ASG terminates *every* instance in it immediately, including one
-mid-task on a real (non-benchmark) transcription — that meeting gets stuck in
-`transcribing` until the 60-minute auto-expiry marks it `error`. Never cycle
-the ASG without first confirming no task is running (below), and treat the
-whole SSM elevation as time-boxed to this benchmark session — attach, take
-your measurements, detach the same day (see §7's detach checklist; don't let
-this policy sit attached across sessions or overnight).
+**Never scale/cycle `ttobak-whisper-asg` to force a fresh instance.** This
+ASG (`infra/lib/whisper-stack.ts`) has `enableManagedTerminationProtection:
+false`, so scaling it to 0 and back terminates *every* instance immediately,
+including one mid-task on a real (non-benchmark) transcription — that
+meeting gets stuck in `transcribing` until the 60-minute auto-expiry marks it
+`error`. Do not suggest or perform an ASG scale-to-0/back-up cycle for this
+runbook, ever, under any circumstance.
+
+**The safe procedure relies on the ASG's own zero-scale-by-default
+behavior, not on cycling it.** `ttobak-whisper-asg` normally runs at desired
+capacity 0 (real transcriptions launch it on demand), and instances it does
+launch are short-lived — roughly 16–27 minutes observed — so a benchmark run
+started with `aws ecs run-task` (step 3 above) already launches a fresh
+instance almost every time; you don't need to manufacture one. The
+procedure is simply: **attach the SSM policy first, then start the
+benchmark run.**
 
 **Prerequisite: the ASG's EC2 instance role has no SSM permissions today.**
 `infra/lib/whisper-stack.ts` scopes the ASG's EC2 instance role to
@@ -244,35 +265,21 @@ aws ec2 describe-launch-template-versions \
   --launch-template-id <LAUNCH_TEMPLATE_ID> --region ap-northeast-2 \
   --query 'LaunchTemplateVersions[0].LaunchTemplateData.IamInstanceProfile'
 
-# 2. Resolve the instance profile to its role, then attach the managed policy.
-#    The SSM agent is preinstalled on the ECS-optimized AL2 GPU AMI already in
-#    use, so it registers on its own as soon as the role allows it -- no AMI
+# 2. Resolve the instance profile to its role, then attach the managed policy
+#    BEFORE starting the benchmark run in step 3 above. The SSM agent is
+#    preinstalled on the ECS-optimized AL2 GPU AMI already in use, so it
+#    registers on its own at boot as soon as the role allows it -- no AMI
 #    change needed.
 aws iam attach-role-policy \
   --role-name <ROLE_NAME_FROM_INSTANCE_PROFILE> \
   --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-
-# 3. Only instances launched AFTER the policy is attached pick up SSM
-#    registration. If the currently-running task's instance predates the
-#    attach, you may need to cycle the ASG (scale to 0, then back up) so the
-#    next benchmark run lands on a freshly-launched, SSM-registered instance
-#    -- but see the MANDATORY precondition immediately below before doing so.
 ```
 
-**MANDATORY precondition before cycling the ASG (scale to 0, then back up):**
-
-```bash
-aws ecs list-tasks --cluster ttobak-whisper --desired-status RUNNING --region ap-northeast-2
-```
-
-This MUST return an empty task list. If it returns any task ARN, **do not
-cycle the ASG — wait** and re-check until it's empty. `enableManagedTerminationProtection`
-is `false` on this ASG, so scaling to 0 terminates every instance immediately,
-including one that is mid-task on a real (non-benchmark) transcription; that
-meeting gets stuck in `transcribing` until the 60-minute auto-expiry marks it
-`error`. There is no way to selectively terminate only the idle instance
-while termination protection is off — cycling the ASG at all is only safe
-when the cluster has zero running tasks.
+Only instances launched *after* the policy is attached register with SSM.
+If an already-running instance (one that predates the attach) doesn't show
+up in SSM, **just wait for natural turnover** — instances in this ASG are
+short-lived (~16–27 min) and get replaced on their own; never terminate or
+cycle one manually to speed this up.
 
 Revert once benchmarking is done — see the SSM detach checklist item in §7
 Cleanup. Keep the whole SSM elevation time-boxed to this benchmark session:

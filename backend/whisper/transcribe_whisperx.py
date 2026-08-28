@@ -2,8 +2,13 @@
 
 Benchmark twin of transcribe.py (Phase 1, ADR-019 follow-up): same env-var
 and output-JSON contract, different engine. Never wired into cmd/transcribe;
-operators invoke it via `aws ecs run-task` with OUTPUT_KEY overridden (see
-docs/runbooks/whisperx-benchmark.md).
+operators invoke it via `aws ecs run-task` with OUTPUT_KEY REQUIRED and
+explicitly set (see docs/runbooks/whisperx-benchmark.md). Unlike
+transcribe.py, an unset/empty OUTPUT_KEY is NOT accepted and does NOT
+default into the production transcripts/{meeting_id}.json key -- a single
+forgotten env var must never write into the real pipeline's namespace or
+mark a real meeting errored (see validate_output_key /
+should_mark_meeting_error).
 
 Differences from transcribe.py:
 - whisperx VAD-batched inference instead of sequential faster-whisper
@@ -123,6 +128,12 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
             language_code=language, device="cuda")
         aligned = whisperx.align(segments, align_model, metadata, audio, "cuda")
         aligned_segments = aligned["segments"]
+        if len(aligned_segments) != len(segments):
+            print(f"Alignment returned {len(aligned_segments)} segment(s), "
+                  f"expected {len(segments)}; discarding aligned result "
+                  f"(would skew the benchmark), using segment-level "
+                  f"timestamps")
+            return segments, False
         bad = sum(
             1 for seg in aligned_segments
             if seg.get("start") is None or seg.get("end") is None)
@@ -177,19 +188,23 @@ def build_result(segments: list[dict], language: str, language_probability: floa
 
 def _is_real_pipeline_key(key: str, meeting_id: str) -> bool:
     """Shared real/bench judgment: True only for the exact shapes
-    validate_output_key accepts for the real pipeline (empty, the default
-    transcripts/{meeting_id}.json, or the ONE legitimate multi-part variant
-    transcripts/{meeting_id}_part_NNN.json) -- kept as a single helper so
-    should_mark_meeting_error and validate_output_key cannot drift apart on
-    what counts as "real". The multipart branch is an exact fullmatch, not a
-    startswith prefix: a startswith(f"transcripts/{meeting_id}_") check would
-    also match an operator's mistyped bench key like
+    validate_output_key accepts as an explicit Phase-2 drop-in escape hatch
+    into the real pipeline -- exactly transcripts/{meeting_id}.json, or the
+    ONE legitimate multi-part variant transcripts/{meeting_id}_part_NNN.json.
+    An EMPTY key is deliberately NOT "real" here (see validate_output_key /
+    should_mark_meeting_error): OUTPUT_KEY is now required, so an empty key
+    means the run should fail fast, not silently fall into the production
+    transcripts/ namespace. Kept as a single helper so should_mark_meeting_error
+    and validate_output_key cannot drift apart on what counts as "real". The
+    multipart branch is an exact fullmatch, not a startswith prefix: a
+    startswith(f"transcripts/{meeting_id}_") check would also match an
+    operator's mistyped bench key like
     transcripts/{meeting_id}_bench_whisperx.json (dropping the required
     "bench-" prefix/directory), letting it dodge fail-fast, land in the
     production transcripts/ namespace, and mark the real meeting errored on
     task failure."""
     if not key:
-        return True
+        return False
     default_key = f"transcripts/{meeting_id}.json"
     if key == default_key:
         return True
@@ -199,29 +214,41 @@ def _is_real_pipeline_key(key: str, meeting_id: str) -> bool:
 
 def should_mark_meeting_error(output_key: str, meeting_id: str) -> bool:
     """A fatal failure should surface on the real meeting row only when this
-    run feeds the real pipeline for THIS meeting_id (OUTPUT_KEY empty, or
-    exactly transcripts/{meeting_id}.json / transcripts/{meeting_id}_*).
-    Benchmark runs (bench-transcripts/) and any other/mistyped key (e.g. a
-    typo'd transcripts/OTHER.json) must never touch production meeting state
-    -- the operator reads the task log instead."""
+    run feeds the real pipeline for THIS meeting_id via an EXPLICIT real
+    key (exactly transcripts/{meeting_id}.json / transcripts/{meeting_id}_*
+    -- the Phase-2 drop-in escape hatch). An EMPTY OUTPUT_KEY returns False:
+    validate_output_key now rejects an empty key before any real work
+    happens, so a run that reaches this handler with an empty key failed
+    fast and must never mark the real meeting as errored. Benchmark runs
+    (bench-transcripts/) and any other/mistyped key (e.g. a typo'd
+    transcripts/OTHER.json) also return False -- the operator reads the
+    task log instead."""
     key = (output_key or "").strip()
     return _is_real_pipeline_key(key, meeting_id)
 
 
 def validate_output_key(output_key: str, meeting_id: str) -> str:
-    """Resolves and validates the transcript destination. Only two shapes are
-    legal: a benchmark key under bench-transcripts/, or the real pipeline's
-    own key transcripts/{meeting_id}.json (also the default when OUTPUT_KEY
-    is unset) -- including the multi-part variant
+    """Resolves and validates the transcript destination. OUTPUT_KEY is now
+    REQUIRED: this is a Phase-1 benchmark-only engine that nothing invokes
+    automatically, so a forgotten env var must never silently default into
+    the production transcripts/{meeting_id}.json key and fire the summarize
+    pipeline. An empty/whitespace-only key raises ValueError immediately.
+    Only two shapes are legal beyond that: a benchmark key under
+    bench-transcripts/, or the real pipeline's own key
+    transcripts/{meeting_id}.json -- including the multi-part variant
     transcripts/{meeting_id}_part_NNN.json (exact 3-digit fullmatch only, see
-    _is_real_pipeline_key). Anything else (another meeting's transcripts/
+    _is_real_pipeline_key) -- kept on purpose as a deliberate Phase-2
+    drop-in escape hatch so this engine can be pointed at the real pipeline
+    key once it's promoted. Anything else (another meeting's transcripts/
     key, a mistyped bench key missing the bench-transcripts/ prefix, an
     arbitrary prefix) raises ValueError before a single byte is written,
     mirroring should_mark_meeting_error's bench/real split on the S3 side."""
     key = (output_key or "").strip()
-    default_key = f"transcripts/{meeting_id}.json"
     if not key:
-        return default_key
+        raise ValueError(
+            "Phase 1 benchmark engine requires an explicit OUTPUT_KEY (use "
+            "bench-transcripts/...); refusing to default to the production "
+            "transcripts/ key")
     if key.startswith("bench-transcripts/"):
         return key
     if _is_real_pipeline_key(key, meeting_id):

@@ -117,6 +117,34 @@ class TestTryAlign(unittest.TestCase):
         self.assertEqual(result_segments, input_segments)
         self.assertFalse(alignment_enabled)
 
+    def test_segment_count_mismatch_discards_aligned_result(self):
+        # Regression for FINDING 3: whisperx.align() may silently drop a
+        # segment (e.g. one it couldn't align at all). Returning a
+        # shorter/longer segment list than the input would skew the
+        # benchmark, so treat a length mismatch the same as any other
+        # alignment failure: discard and fall back to the original input
+        # segments with alignment_enabled=False.
+        input_segments = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': 1.0, 'end': 2.0, 'text': 'b'},
+        ]
+        aligned_segments = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+        ]
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            object(), object())
+        fake_whisperx.align = lambda segments, model, metadata, audio, device: {
+            'segments': aligned_segments}
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            result_segments, alignment_enabled = transcribe_whisperx._try_align(
+                input_segments, audio=object(), language='ko')
+
+        self.assertEqual(result_segments, input_segments)
+        self.assertFalse(alignment_enabled)
+
     def test_all_numeric_timestamps_returns_aligned_result(self):
         input_segments = [{'start': 0.0, 'end': 1.0, 'text': 'a'}]
         aligned_segments = [{'start': 0.0, 'end': 1.0, 'text': 'a', 'words': []}]
@@ -136,15 +164,16 @@ class TestTryAlign(unittest.TestCase):
 
 
 class TestValidateOutputKey(unittest.TestCase):
-    def test_empty_defaults_to_real_pipeline_key(self):
-        self.assertEqual(
-            transcribe_whisperx.validate_output_key('', 'm123'),
-            'transcripts/m123.json')
+    def test_empty_raises(self):
+        # Regression for FINDING 1: OUTPUT_KEY is now REQUIRED for this
+        # Phase-1 benchmark engine -- an empty key must never silently
+        # default into the production transcripts/{meeting_id}.json key.
+        with self.assertRaises(ValueError):
+            transcribe_whisperx.validate_output_key('', 'm123')
 
-    def test_whitespace_defaults_to_real_pipeline_key(self):
-        self.assertEqual(
-            transcribe_whisperx.validate_output_key('   ', 'm123'),
-            'transcripts/m123.json')
+    def test_whitespace_raises(self):
+        with self.assertRaises(ValueError):
+            transcribe_whisperx.validate_output_key('   ', 'm123')
 
     def test_bench_transcripts_key_passes_through(self):
         self.assertEqual(
@@ -212,8 +241,11 @@ class TestValidateAudioKey(unittest.TestCase):
 
 
 class TestShouldMarkMeetingError(unittest.TestCase):
-    def test_empty_output_key_defaults_to_real_pipeline(self):
-        self.assertTrue(
+    def test_empty_output_key_is_never_marked(self):
+        # Regression for FINDING 1: an empty OUTPUT_KEY now fails fast in
+        # validate_output_key before any real work happens, so it must
+        # never mark the real meeting as errored.
+        self.assertFalse(
             transcribe_whisperx.should_mark_meeting_error('', 'm123'))
 
     def test_own_meeting_key_is_real_pipeline(self):
@@ -251,8 +283,6 @@ class TestValidateOutputKeyAndShouldMarkMeetingErrorAgree(unittest.TestCase):
     def test_real_pipeline_shapes_agree(self):
         meeting_id = 'm123'
         real_keys = [
-            '',
-            '   ',
             f'transcripts/{meeting_id}.json',
             f'transcripts/{meeting_id}_part_001.json',
             f'transcripts/{meeting_id}_part_042.json',
@@ -271,6 +301,20 @@ class TestValidateOutputKeyAndShouldMarkMeetingErrorAgree(unittest.TestCase):
                 self.assertTrue(
                     transcribe_whisperx.should_mark_meeting_error(
                         resolved, meeting_id))
+
+    def test_empty_key_agrees_as_non_real(self):
+        # Regression for FINDING 1: an empty/whitespace OUTPUT_KEY is
+        # rejected outright by validate_output_key (fail fast, no default),
+        # and must also never be treated as "real" by
+        # should_mark_meeting_error.
+        meeting_id = 'm123'
+        for key in ['', '   ']:
+            with self.subTest(key=key):
+                with self.assertRaises(ValueError):
+                    transcribe_whisperx.validate_output_key(key, meeting_id)
+                self.assertFalse(
+                    transcribe_whisperx.should_mark_meeting_error(
+                        key, meeting_id))
 
     def test_bench_and_rejected_shapes_agree_as_non_real(self):
         meeting_id = 'm123'

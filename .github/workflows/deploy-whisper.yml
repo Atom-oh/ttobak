@@ -9,6 +9,9 @@ on:
     # whisperx benchmark engine files) could silently produce a different
     # production image. The whisperx image is built manually per
     # docs/runbooks/whisperx-benchmark.md, not by this workflow.
+    # Phase-2 tripwire: once transcribe.py starts importing whisper_common.py
+    # (the Phase 2 cutover), add whisper_common.py to these paths too, or
+    # shared-module changes will stop triggering this production rebuild.
     paths: ['backend/whisper/transcribe.py', 'backend/whisper/Dockerfile']
   workflow_dispatch:
 
