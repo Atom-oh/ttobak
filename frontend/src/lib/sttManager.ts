@@ -197,14 +197,18 @@ export class SttManager {
    * while its underlying AudioContext is silently stuck, which is exactly
    * the state this exists to escape.
    */
-  manualStallRecovery(): void {
-    if (this.stopped || !this.stream) return;
-    if (this.preferredProvider !== 'transcribe-streaming' || !this.config.transcribeStreamingConfig) return;
+  // Returns whether a reconnect attempt was actually started, so the
+  // caller can surface feedback instead of the button silently doing
+  // nothing on a dead end (no config, paused, stopped) -- see
+  // useRecordingSession's retryLiveCaptions.
+  manualStallRecovery(): boolean {
+    if (this.stopped || !this.stream) return false;
+    if (this.preferredProvider !== 'transcribe-streaming' || !this.config.transcribeStreamingConfig) return false;
     // Paused: nothing to reconnect right now -- resume() already restarts
     // Transcribe Streaming fresh when the recording itself resumes, and
     // starting a session against a stream that isn't being recorded would
     // just leak it the same way retryWithConfig's own paused guard avoids.
-    if (this.paused) return;
+    if (this.paused) return false;
     if (this.pendingStallReconnect) {
       document.removeEventListener('visibilitychange', this.pendingStallReconnect);
       window.removeEventListener('pageshow', this.pendingStallReconnect);
@@ -230,6 +234,7 @@ export class SttManager {
     this.startTranscribeStreaming(this.stream).catch(() => this.fallbackToWebSpeech(true));
     this.activeProvider = 'transcribe-streaming';
     this.config.onProviderChange?.('transcribe-streaming');
+    return true;
   }
 
   /**

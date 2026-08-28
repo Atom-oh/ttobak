@@ -141,6 +141,19 @@ func (s *UploadService) GeneratePresignedUploadURL(
 				return nil, fmt.Errorf("partIndex %d out of range [0, %d)", req.PartIndex, req.TotalParts)
 			}
 			s3Key = fmt.Sprintf("audio/%s/%s/part_%03d_%s", userID, meetingID, req.PartIndex, s.sanitizeFileName(req.FileName))
+		} else if isCheckpointFileName(req.FileName) {
+			// Mid-recording checkpoint (RecordButton's onCheckpoint via
+			// handleCheckpoint in frontend/src/app/record/page.tsx) --
+			// deliberately skips sanitizeFileName's timestamp-uniqueifying
+			// step so this upload genuinely overwrites the SAME S3 key on
+			// every tick, matching the frontend's "fixed name -> S3
+			// overwrite" intent. Without this, every checkpoint accumulated
+			// as its own object and findProgressFile's prefix search below
+			// could never match any of them (the bug this fix addresses).
+			// Safe to skip sanitization here because the filename is a
+			// fixed, code-controlled constant on the frontend, never
+			// derived from arbitrary user input.
+			s3Key = fmt.Sprintf("audio/%s/%s/%s", userID, meetingID, req.FileName)
 		} else {
 			s3Key = fmt.Sprintf("audio/%s/%s/%s", userID, meetingID, s.sanitizeFileName(req.FileName))
 		}
@@ -381,6 +394,31 @@ func inferAttachTypeFromMime(mimeType string) string {
 	}
 }
 
+// recordingCheckpointExtensions is the set of extensions RecordButton's
+// checkpoint upload can ever send (frontend/src/app/record/page.tsx's
+// handleCheckpoint derives it from MediaRecorder's mimeType: webm on
+// desktop/Android, m4a on iOS Safari which has no webm encoder, ogg as a
+// Firefox fallback). Used both to recognize a checkpoint filename in
+// GeneratePresignedUploadURL and to validate the extension findProgressFile
+// hands back below.
+var recordingCheckpointExtensions = map[string]bool{
+	"webm": true,
+	"m4a":  true,
+	"ogg":  true,
+}
+
+// isCheckpointFileName reports whether fileName is RecordButton's
+// fixed mid-recording checkpoint filename (recording_progress.{ext}) --
+// see the "audio" case in GeneratePresignedUploadURL and findProgressFile
+// below for the two halves of this checkpoint-recovery mechanism.
+func isCheckpointFileName(fileName string) bool {
+	const prefix = "recording_progress."
+	if !strings.HasPrefix(fileName, prefix) {
+		return false
+	}
+	return recordingCheckpointExtensions[strings.TrimPrefix(fileName, prefix)]
+}
+
 // sanitizeFileName removes or replaces invalid characters from filenames
 func (s *UploadService) sanitizeFileName(fileName string) string {
 	// Replace spaces with underscores
@@ -467,9 +505,11 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 // audio/{userID}/{meetingID}/recording_progress.* by prefix rather than a
 // fixed extension, and returns its key plus the bare extension (no dot) for
 // the caller to preserve on the recovered copy. There is exactly one
-// checkpoint per meeting (RecordButton always writes the same fixed
-// filename, overwriting the previous checkpoint each time), so the first
-// match is unambiguous.
+// checkpoint per meeting: GeneratePresignedUploadURL's isCheckpointFileName
+// branch makes every checkpoint upload write the SAME key
+// (recording_progress.{ext}), overwriting the previous checkpoint each
+// time rather than accumulating one object per tick, so the first match
+// is unambiguous and MaxKeys:1 is safe.
 func (s *UploadService) findProgressFile(ctx context.Context, userID, meetingID string) (key string, ext string, err error) {
 	prefix := fmt.Sprintf("audio/%s/%s/recording_progress.", userID, meetingID)
 	out, err := s.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
@@ -485,8 +525,8 @@ func (s *UploadService) findProgressFile(ctx context.Context, userID, meetingID 
 	}
 	key = *out.Contents[0].Key
 	ext = strings.TrimPrefix(path.Ext(key), ".")
-	if ext == "" {
-		return "", "", fmt.Errorf("progress file %s has no extension", key)
+	if !recordingCheckpointExtensions[ext] {
+		return "", "", fmt.Errorf("progress file %s has unrecognized extension", key)
 	}
 	return key, ext, nil
 }

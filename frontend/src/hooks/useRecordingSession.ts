@@ -55,6 +55,11 @@ const speechErrorMessages: Record<string, string> = {
   // attempt frequently succeeds on its own, this just stops the wait from
   // being completely silent.
   'transcribe-stream-reconnecting': '실시간 자막 연결이 불안정합니다. 자동으로 재연결을 시도합니다 — 바로 다시 연결하려면 아래 버튼을 누르세요.',
+  // manualStallRecovery() returned false -- there is genuinely nothing to
+  // retry into right now (e.g. Transcribe Streaming was never configured
+  // for this session, or the session already stopped/paused). Replaces
+  // the previous silent no-op so the button always gives real feedback.
+  'live-caption-retry-unavailable': '지금은 자막 연결을 다시 시도할 수 없습니다. 녹음은 계속됩니다.',
 };
 
 // speechError values that manualStallRecovery's retry button can actually
@@ -180,7 +185,10 @@ export function useRecordingSession({
    * real click, and that's the actual reason it's stuck.
    */
   const retryLiveCaptions = useCallback(() => {
-    sttManagerRef.current?.manualStallRecovery();
+    const started = sttManagerRef.current?.manualStallRecovery();
+    if (started === false) {
+      setSpeechError(speechErrorMessages['live-caption-retry-unavailable']);
+    }
   }, []);
 
   const handleRestartStt = useCallback(() => {
