@@ -17,6 +17,7 @@ Differences from transcribe.py:
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 
@@ -121,8 +122,17 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
         align_model, metadata = whisperx.load_align_model(
             language_code=language, device="cuda")
         aligned = whisperx.align(segments, align_model, metadata, audio, "cuda")
+        aligned_segments = aligned["segments"]
+        bad = sum(
+            1 for seg in aligned_segments
+            if seg.get("start") is None or seg.get("end") is None)
+        if bad:
+            print(f"Alignment produced {bad} segment(s) with missing "
+                  f"start/end; discarding aligned result, using "
+                  f"segment-level timestamps")
+            return segments, False
         print("Alignment succeeded (word-level timestamps available)")
-        return aligned["segments"], True
+        return aligned_segments, True
     except Exception as e:
         print(f"Alignment unavailable, using segment-level timestamps: {e}")
         return segments, False
@@ -168,13 +178,23 @@ def build_result(segments: list[dict], language: str, language_probability: floa
 def _is_real_pipeline_key(key: str, meeting_id: str) -> bool:
     """Shared real/bench judgment: True only for the exact shapes
     validate_output_key accepts for the real pipeline (empty, the default
-    transcripts/{meeting_id}.json, or a multi-part transcripts/{meeting_id}_*
-    key) -- kept as a single helper so should_mark_meeting_error and
-    validate_output_key cannot drift apart on what counts as "real"."""
+    transcripts/{meeting_id}.json, or the ONE legitimate multi-part variant
+    transcripts/{meeting_id}_part_NNN.json) -- kept as a single helper so
+    should_mark_meeting_error and validate_output_key cannot drift apart on
+    what counts as "real". The multipart branch is an exact fullmatch, not a
+    startswith prefix: a startswith(f"transcripts/{meeting_id}_") check would
+    also match an operator's mistyped bench key like
+    transcripts/{meeting_id}_bench_whisperx.json (dropping the required
+    "bench-" prefix/directory), letting it dodge fail-fast, land in the
+    production transcripts/ namespace, and mark the real meeting errored on
+    task failure."""
     if not key:
         return True
     default_key = f"transcripts/{meeting_id}.json"
-    return key == default_key or key.startswith(f"transcripts/{meeting_id}_")
+    if key == default_key:
+        return True
+    return bool(re.fullmatch(
+        rf"transcripts/{re.escape(meeting_id)}_part_\d{{3}}\.json", key))
 
 
 def should_mark_meeting_error(output_key: str, meeting_id: str) -> bool:
@@ -192,10 +212,12 @@ def validate_output_key(output_key: str, meeting_id: str) -> str:
     """Resolves and validates the transcript destination. Only two shapes are
     legal: a benchmark key under bench-transcripts/, or the real pipeline's
     own key transcripts/{meeting_id}.json (also the default when OUTPUT_KEY
-    is unset) -- including multi-part variants transcripts/{meeting_id}_part_NNN.json.
-    Anything else (another meeting's transcripts/ key, an arbitrary prefix)
-    raises ValueError before a single byte is written, mirroring
-    should_mark_meeting_error's bench/real split on the S3 side."""
+    is unset) -- including the multi-part variant
+    transcripts/{meeting_id}_part_NNN.json (exact 3-digit fullmatch only, see
+    _is_real_pipeline_key). Anything else (another meeting's transcripts/
+    key, a mistyped bench key missing the bench-transcripts/ prefix, an
+    arbitrary prefix) raises ValueError before a single byte is written,
+    mirroring should_mark_meeting_error's bench/real split on the S3 side."""
     key = (output_key or "").strip()
     default_key = f"transcripts/{meeting_id}.json"
     if not key:
@@ -206,7 +228,7 @@ def validate_output_key(output_key: str, meeting_id: str) -> str:
         return key
     raise ValueError(
         f"OUTPUT_KEY {key!r} is not a valid bench-transcripts/ key or this "
-        f"meeting's own transcripts/{meeting_id}(.json|_*) key")
+        f"meeting's own transcripts/{meeting_id}(.json|_part_NNN.json) key")
 
 
 def validate_audio_key(audio_key: str, user_id: str, meeting_id: str) -> str:

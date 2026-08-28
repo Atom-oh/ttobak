@@ -57,9 +57,11 @@ def raw_speaker_by_overlap(start: float, end: float, turns: list[tuple]) -> str 
 
 
 def _raw_speaker_by_word_majority(seg: dict, turns: list[tuple]) -> str | None:
-    """Majority vote over the segment's timed words (each word assigned by
-    its own midpoint overlap). Returns None when the segment has no usable
-    timed words, signalling the caller to fall back to segment overlap."""
+    """Majority vote over the segment's timed words (each word assigned via
+    raw_speaker_by_overlap -- max interval overlap against the diarization
+    turns, falling back to nearest-midpoint only on zero overlap). Returns
+    None when the segment has no usable timed words, signalling the caller
+    to fall back to segment overlap."""
     votes: dict[str, int] = {}
     for word in seg.get("words") or []:
         w_start, w_end = word.get("start"), word.get("end")

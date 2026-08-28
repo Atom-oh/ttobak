@@ -57,6 +57,12 @@ accept the gated-model terms for that repo on huggingface.co with the account
 whose token you're about to export, then:
 
 ```bash
+# Recommended (shell-history-safe -- avoids the token landing in
+# ~/.bash_history or .zsh_history via the inline VAR=... assignment form):
+read -rs HF_TOKEN && export HF_TOKEN
+./upload-whisperx-diarization-model.sh
+
+# Equivalent but leaves the token in shell history:
 HF_TOKEN=... ./upload-whisperx-diarization-model.sh
 ```
 

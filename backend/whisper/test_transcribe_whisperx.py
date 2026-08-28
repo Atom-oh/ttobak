@@ -87,6 +87,54 @@ class TestTurnsFromDiarization(unittest.TestCase):
         self.assertEqual(turns, [(0.0, 1.5, 'SPEAKER_00')])
 
 
+class TestTryAlign(unittest.TestCase):
+    def test_any_none_timestamp_discards_aligned_result(self):
+        # Regression for FINDING 2: whisperx.align() may emit a segment with
+        # a missing/None start or end (partial alignment failure). Returning
+        # such a segment would crash build_result's round(seg["start"], 2).
+        # The all-or-nothing best-effort rule: if ANY aligned segment lacks
+        # a numeric start/end, discard the whole aligned result and fall
+        # back to the original input segments with alignment_enabled=False.
+        input_segments = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': 1.0, 'end': 2.0, 'text': 'b'},
+        ]
+        aligned_segments = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': None, 'end': None, 'text': 'b'},
+        ]
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            object(), object())
+        fake_whisperx.align = lambda segments, model, metadata, audio, device: {
+            'segments': aligned_segments}
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            result_segments, alignment_enabled = transcribe_whisperx._try_align(
+                input_segments, audio=object(), language='ko')
+
+        self.assertEqual(result_segments, input_segments)
+        self.assertFalse(alignment_enabled)
+
+    def test_all_numeric_timestamps_returns_aligned_result(self):
+        input_segments = [{'start': 0.0, 'end': 1.0, 'text': 'a'}]
+        aligned_segments = [{'start': 0.0, 'end': 1.0, 'text': 'a', 'words': []}]
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            object(), object())
+        fake_whisperx.align = lambda segments, model, metadata, audio, device: {
+            'segments': aligned_segments}
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            result_segments, alignment_enabled = transcribe_whisperx._try_align(
+                input_segments, audio=object(), language='ko')
+
+        self.assertEqual(result_segments, aligned_segments)
+        self.assertTrue(alignment_enabled)
+
+
 class TestValidateOutputKey(unittest.TestCase):
     def test_empty_defaults_to_real_pipeline_key(self):
         self.assertEqual(
@@ -124,6 +172,25 @@ class TestValidateOutputKey(unittest.TestCase):
     def test_arbitrary_prefix_rejected(self):
         with self.assertRaises(ValueError):
             transcribe_whisperx.validate_output_key('files/x', 'm123')
+
+    def test_mistyped_bench_key_missing_bench_dash_rejected(self):
+        # Regression for FINDING 1: an operator typo that drops the
+        # "bench-" prefix (e.g. transcripts/m123_bench_whisperx.json instead
+        # of bench-transcripts/m123_bench_whisperx.json) must NOT pass as a
+        # legitimate multi-part real-pipeline key.
+        with self.assertRaises(ValueError):
+            transcribe_whisperx.validate_output_key(
+                'transcripts/m123_bench_whisperx.json', 'm123')
+
+    def test_multipart_key_wrong_digit_count_rejected(self):
+        with self.assertRaises(ValueError):
+            transcribe_whisperx.validate_output_key(
+                'transcripts/m123_part_2.json', 'm123')
+
+    def test_multipart_key_trailing_suffix_rejected(self):
+        with self.assertRaises(ValueError):
+            transcribe_whisperx.validate_output_key(
+                'transcripts/m123_part_002.json.bak', 'm123')
 
 
 class TestValidateAudioKey(unittest.TestCase):
@@ -168,6 +235,12 @@ class TestShouldMarkMeetingError(unittest.TestCase):
         # meeting row as errored.
         self.assertFalse(transcribe_whisperx.should_mark_meeting_error(
             'transcripts/OTHER.json', 'm123'))
+
+    def test_mistyped_bench_key_missing_bench_dash_is_never_marked(self):
+        # Regression for FINDING 1: same typo'd key as above, checked on the
+        # should_mark_meeting_error path.
+        self.assertFalse(transcribe_whisperx.should_mark_meeting_error(
+            'transcripts/m123_bench_whisperx.json', 'm123'))
 
 
 class TestValidateOutputKeyAndShouldMarkMeetingErrorAgree(unittest.TestCase):
