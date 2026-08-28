@@ -63,6 +63,10 @@ def _ensure_diarization_config() -> str | None:
     try:
         start = time.time()
         common.stream_extract_tar(s3, BUCKET, DIARIZATION_S3_KEY, DIARIZATION_LOCAL_DIR)
+        if not os.path.isfile(config_path):
+            print(f"Diarization bundle extracted but {config_path} is missing, "
+                  f"skipping diarization")
+            return None
         print(f"Diarization model ready ({time.time() - start:.0f}s)")
         return config_path
     except Exception as e:
@@ -223,6 +227,7 @@ def main():
 
     diarization_config = _ensure_diarization_config()
     num_speakers_detected = 0
+    turns = []
     if diarization_config and segments:
         print("Diarizing (pyannote 4.x)...")
         diarize_start = time.time()
@@ -235,13 +240,18 @@ def main():
         else:
             print("Diarization produced no turns; segments left unlabeled")
 
+    # diarization_enabled reflects whether turns were actually produced, not
+    # merely whether the config bundle was available -- a staged-but-empty
+    # diarization run (e.g. pyannote failure) must not report enabled:true.
+    diarization_enabled = bool(turns)
+
     result = build_result(
         segments=segments, language=language,
         # whisperx's batched pipeline doesn't expose a language probability;
         # 0.0 keeps the field present for schema parity without faking confidence.
         language_probability=0.0,
         duration_seconds=duration_seconds, transcription_seconds=elapsed,
-        diarization_enabled=bool(diarization_config),
+        diarization_enabled=diarization_enabled,
         num_speakers_detected=num_speakers_detected,
         alignment_enabled=alignment_enabled)
 

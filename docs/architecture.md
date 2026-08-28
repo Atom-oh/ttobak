@@ -92,6 +92,8 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 → EventBridge → Summarize Lambda → Bedrock Claude → DynamoDB → 프론트엔드 표시
 ```
 
+같은 GPU 클러스터에 기존 파이프라인을 건드리지 않는 additive(추가적) 방식으로 `ttobak-whisperx` ECS 태스크 정의(WhisperX + pyannote 4.x)가 추가되었습니다 — 어떤 파이프라인도 자동으로 호출하지 않는 Phase 1 벤치마크 전용이며 운영자가 수동으로만 실행합니다. 절차는 `docs/runbooks/whisperx-benchmark.md` 참고.
+
 ### CDK 스택 구성
 
 | 스택 | 리소스 | 의존성 |
@@ -201,6 +203,8 @@ TTOBAK is a Korean AI meeting assistant. It records audio in the browser, extrac
 Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whisper GPU (ECS Spot) → pyannote Speaker Diarization → S3 Transcript
 → EventBridge → Summarize Lambda → Bedrock Claude → DynamoDB → Frontend Display
 ```
+
+An additive `ttobak-whisperx` ECS task definition (WhisperX + pyannote 4.x) shares the same GPU cluster without touching the production pipeline above — it is Phase 1 benchmark-only, never invoked automatically, and run manually by operators only. See `docs/runbooks/whisperx-benchmark.md` for the procedure.
 
 ### CDK Stack Composition
 

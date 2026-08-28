@@ -35,8 +35,10 @@ fi
 
 echo "Downloading ${PIPELINE_REPO} (pyannote.audio 4.x pipeline)..."
 pip3 install -q huggingface_hub pyyaml
-# Export only after the pip install above, so the token isn't sitting in the
-# environment during package installation.
+# HF_TOKEN is already in this shell's env (the runbook invokes this script as
+# `HF_TOKEN=... ./upload-whisperx-diarization-model.sh`). This export only
+# controls propagation into the child python3 process below -- it does not
+# change whether/when the token entered the environment.
 export PIPELINE_REPO HF_TOKEN
 
 STAGE_DIR=$(python3 - <<'EOF'

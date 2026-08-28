@@ -12,6 +12,12 @@ Results feed the Phase 2 go/no-go decision and its ADR (see
 
 ## 1. One-time setup
 
+The `bench-transcripts/` lifecycle rule this PR adds lives in
+`TtobakStorageStack` (see `docs/INFRA-SPEC.md`), not `TtobakWhisperStack` — a
+manual deploy also needs `cd infra && npx cdk deploy TtobakStorageStack --exclusively`.
+`deploy-infra.yml` covers this automatically on merge, so this step is only
+needed for a manual/out-of-band setup.
+
 ### Deploy the stack
 
 Deploy this first: the `ttobak-whisperx` ECR repository is *created* by this
@@ -179,9 +185,11 @@ Repeat for each selected meeting.
 This resolves the design doc's open VRAM/instance-sizing question.
 
 **Prerequisite: the ASG's EC2 instance role has no SSM permissions today.**
-`infra/lib/whisper-stack.ts` grants the ASG's instance role S3/DynamoDB/ECR
-access for the task, but no `ssm:*`/`AmazonSSMManagedInstanceCore` policy —
-so a `ttobak-whisper-asg` instance never registers with SSM, and
+`infra/lib/whisper-stack.ts` scopes the ASG's EC2 instance role to
+ECS-agent/ECR-pull access only (S3/DynamoDB access belongs to the task role
+used by the container, not this instance role) — no `ssm:*`/
+`AmazonSSMManagedInstanceCore` policy is attached, so a `ttobak-whisper-asg`
+instance never registers with SSM, and
 `aws ssm send-command` below fails with `InvalidInstanceId`. This is a
 one-time, reversible, out-of-band operator step (not a CDK change — do not
 add this permission to `whisper-stack.ts` for a one-off benchmark):
@@ -211,13 +219,8 @@ aws iam attach-role-policy \
 #    run lands on a freshly-launched, SSM-registered instance.
 ```
 
-Revert once benchmarking is done:
-
-```bash
-aws iam detach-role-policy \
-  --role-name <ROLE_NAME_FROM_INSTANCE_PROFILE> \
-  --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-```
+Revert once benchmarking is done — see the SSM detach checklist item in §7
+Cleanup.
 
 Find the container instance running the task:
 
@@ -285,11 +288,30 @@ is written, in case a reviewer wants to re-check a specific turn boundary.
 
 ## 7. Cleanup
 
-Delete the bench S3 objects once the comparison table is recorded:
+Checklist:
 
-```bash
-aws s3 rm "s3://ttobak-assets-180294183052/bench-transcripts/" --recursive
-```
+- [ ] Delete the bench S3 objects once the comparison table is recorded:
+
+  ```bash
+  aws s3 rm "s3://ttobak-assets-180294183052/bench-transcripts/" --recursive
+  ```
+
+- [ ] Delete local `/tmp` copies of downloaded bench transcripts on the
+  operator machine (the `/tmp/legacy.json` / `/tmp/whisperx.json` files
+  fetched in §5):
+
+  ```bash
+  rm -f /tmp/legacy.json /tmp/whisperx.json
+  ```
+
+- [ ] Detach the one-time SSM permission granted in §4 (if it was added for
+  this benchmark run):
+
+  ```bash
+  aws iam detach-role-policy \
+    --role-name <ROLE_NAME_FROM_INSTANCE_PROFILE> \
+    --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  ```
 
 No ASG scale-down step is needed — `ttobak-whisper-spot` scales the cluster
 back to 0 on its own once no tasks are running (same behavior as the

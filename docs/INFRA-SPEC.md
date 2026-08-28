@@ -105,7 +105,7 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
     "MaxAge": 3600
   }
   ```
-- **Lifecycle**: `audio/` → IA after 90 days; `processed/` → IA after 180 days; `bench-transcripts/` (whisperx benchmark output, PII) → expire (current + noncurrent versions) after 30 days
+- **Lifecycle**: `audio/` → IA after 90 days; `processed/` → IA after 180 days; `bench-transcripts/` (whisperx benchmark output, PII) → current-version expiration at 30 days (on this versioned bucket, this creates a delete marker rather than deleting the object outright) + noncurrent-version expiration 30 days after that, so worst-case effective retention before the underlying data is actually gone is ~60 days
 - **Block public access**: ALL blocked
 - **Removal policy**: RETAIN
 

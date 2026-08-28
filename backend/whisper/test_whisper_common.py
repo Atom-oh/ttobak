@@ -7,7 +7,6 @@ needed to import the module itself.
 
 import datetime
 import io
-import json
 import tarfile
 import tempfile
 import unittest
@@ -66,33 +65,76 @@ class TestAssignSpeakers(unittest.TestCase):
         self.assertEqual(result[1]['speaker'], 'spk_1')
 
     def test_word_majority_path(self):
+        # Anchor segment fully inside SPEAKER_01's turn, no words -> overlap
+        # fallback labels it SPEAKER_01, which becomes spk_0 (first seen).
+        anchor = {'start': 3.0, 'end': 6.0, 'text': 'anchor'}
         # 2 of 3 words fall in SPEAKER_00's turn: majority wins even though
-        # the segment's own span overlaps SPEAKER_01 more.
-        segments = [{
+        # the segment's own span overlaps SPEAKER_01 more (7s vs 3s overlap).
+        majority_seg = {
             'start': 0.0, 'end': 10.0, 'text': 'a b c',
             'words': [
                 {'start': 0.5, 'end': 1.0, 'word': 'a'},
                 {'start': 1.5, 'end': 2.0, 'word': 'b'},
                 {'start': 8.0, 'end': 8.5, 'word': 'c'},
             ],
-        }]
+        }
         turns = [(0.0, 3.0, 'SPEAKER_00'), (3.0, 10.0, 'SPEAKER_01')]
-        result = whisper_common.assign_speakers(segments, turns)
-        self.assertEqual(result[0]['speaker'], 'spk_0')
+        result = whisper_common.assign_speakers([anchor, majority_seg], turns)
+        self.assertEqual(result[0]['speaker'], 'spk_0')  # anchor: SPEAKER_01 (overlap)
+        # Word-majority picks SPEAKER_00, a NEW raw label -> spk_1. If
+        # word-majority regressed to segment overlap instead, this segment
+        # would get SPEAKER_01 (span overlap 7 > 3) -> spk_0, colliding with
+        # the anchor and failing this assertion.
+        self.assertEqual(result[1]['speaker'], 'spk_1')
 
     def test_segment_without_words_falls_back_to_overlap(self):
-        segments = [{'start': 3.0, 'end': 10.0, 'text': 'x', 'words': []}]
+        # Anchor establishes spk_0 = SPEAKER_00 via first-appearance order.
+        anchor = {'start': 0.0, 'end': 3.0, 'text': 'anchor'}
+        segments = [anchor, {'start': 3.0, 'end': 10.0, 'text': 'x', 'words': []}]
         turns = [(0.0, 3.0, 'SPEAKER_00'), (3.0, 10.0, 'SPEAKER_01')]
         result = whisper_common.assign_speakers(segments, turns)
-        self.assertEqual(result[0]['speaker'], 'spk_0')  # only label seen -> spk_0
+        self.assertEqual(result[0]['speaker'], 'spk_0')  # anchor: SPEAKER_00
+        # Empty words -> word-majority returns None -> overlap fallback picks
+        # SPEAKER_01, a NEW raw label -> spk_1. A regression that let the
+        # empty-words case fall through to a word-vote result (e.g. defaulting
+        # to some turn's label without checking for votes) risks colliding
+        # with the anchor's spk_0 instead.
+        self.assertEqual(result[1]['speaker'], 'spk_1')
 
     def test_words_without_timestamps_fall_back_to_overlap(self):
-        # whisperx emits words without start/end when alignment partially fails
-        segments = [{'start': 3.0, 'end': 10.0, 'text': 'x',
-                     'words': [{'word': 'x'}]}]
+        # whisperx emits words without start/end when alignment partially fails.
+        anchor = {'start': 0.0, 'end': 3.0, 'text': 'anchor'}
+        segments = [anchor, {'start': 3.0, 'end': 10.0, 'text': 'x',
+                              'words': [{'word': 'x'}]}]
         turns = [(0.0, 3.0, 'SPEAKER_00'), (3.0, 10.0, 'SPEAKER_01')]
         result = whisper_common.assign_speakers(segments, turns)
-        self.assertEqual(result[0]['speaker'], 'spk_0')
+        self.assertEqual(result[0]['speaker'], 'spk_0')  # anchor: SPEAKER_00
+        # Word without timestamps -> word-majority returns None -> overlap
+        # fallback picks SPEAKER_01, a NEW raw label -> spk_1.
+        self.assertEqual(result[1]['speaker'], 'spk_1')
+
+
+class TestRawSpeakerByWordMajority(unittest.TestCase):
+    def test_majority_wins(self):
+        seg = {'words': [
+            {'start': 0.5, 'end': 1.0, 'word': 'a'},
+            {'start': 1.5, 'end': 2.0, 'word': 'b'},
+            {'start': 8.0, 'end': 8.5, 'word': 'c'},
+        ]}
+        turns = [(0.0, 3.0, 'SPEAKER_00'), (3.0, 10.0, 'SPEAKER_01')]
+        self.assertEqual(
+            whisper_common._raw_speaker_by_word_majority(seg, turns), 'SPEAKER_00')
+
+    def test_empty_words_returns_none(self):
+        turns = [(0.0, 3.0, 'SPEAKER_00'), (3.0, 10.0, 'SPEAKER_01')]
+        self.assertIsNone(
+            whisper_common._raw_speaker_by_word_majority({'words': []}, turns))
+
+    def test_words_without_timestamps_returns_none(self):
+        turns = [(0.0, 3.0, 'SPEAKER_00'), (3.0, 10.0, 'SPEAKER_01')]
+        seg = {'words': [{'word': 'x'}]}
+        self.assertIsNone(
+            whisper_common._raw_speaker_by_word_majority(seg, turns))
 
 
 class TestAudioKeyExists(unittest.TestCase):
