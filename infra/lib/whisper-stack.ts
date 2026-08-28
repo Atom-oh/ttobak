@@ -230,14 +230,18 @@ export class WhisperStack extends cdk.Stack {
     props.bucket.grantRead(whisperxTaskRole, 'audio/*');
     props.bucket.grantRead(whisperxTaskRole, 'models/*');
     props.bucket.grantRead(whisperxTaskRole, 'config/*');
-    // Write: bench-transcripts/* is the benchmark's own output prefix.
-    // transcripts/* is a deliberate Phase-2 escape hatch -- validate_output_key
-    // (transcribe_whisperx.py) gates any real-pipeline write to strictly the
-    // calling meeting's own transcripts/{meetingId}[...].json key, but that's
-    // an application-level gate, not an IAM one, so the grant itself has to
-    // cover the whole prefix.
+    // Write: bench-transcripts/* is the benchmark's own output prefix, and
+    // the ONLY write grant this role gets (round-11 review finding: Phase 1
+    // never legitimately writes to transcripts/*, so that grant was pure
+    // unused blast radius). validate_output_key (transcribe_whisperx.py)
+    // still ACCEPTS this meeting's own transcripts/{meetingId}[...].json key
+    // as a deliberate Phase-2 drop-in escape hatch at the application layer,
+    // but with no matching IAM grant here, actually pointing OUTPUT_KEY at
+    // it in Phase 1 now also fails at the IAM layer (S3 PutObject
+    // AccessDenied) -- correct defense-in-depth, not a bug. Phase 2's
+    // cutover to real-pipeline runs must add the transcripts/* write grant
+    // back (or reuse the legacy task role) for that escape hatch to work.
     props.bucket.grantPut(whisperxTaskRole, 'bench-transcripts/*');
-    props.bucket.grantPut(whisperxTaskRole, 'transcripts/*');
     // Deliberately NO DynamoDB grant: mark_meeting_error (whisper_common.py)
     // is best-effort and just logs the AccessDenied when a bench run's error
     // path tries to write meeting status. Phase 2's cutover to this task

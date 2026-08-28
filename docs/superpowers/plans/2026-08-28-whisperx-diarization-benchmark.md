@@ -1008,7 +1008,7 @@ git commit -m "feat(whisper): pyannote 4.x pipeline staging script for whisperx 
 - Test: `infra/test/whisper-stack.test.ts` (new)
 
 **Interfaces:**
-- Consumes: the existing `executionRole`, `taskRole`, cluster/ASG (already in the stack's scope).
+- Consumes: the existing `executionRole`, `taskRole`, cluster/ASG (already in the stack's scope). [As shipped: dedicated `ttobak-whisperx-task-role`, not the reused legacy `taskRole` — round-10 review found reusing it gave every bench run full bucket read/write + table read/write; round-11 further scoped its S3 write grant down to `bench-transcripts/*` only, dropping the `transcripts/*` write it originally also carried.]
 - Produces: exported consts `WHISPERX_TASK_FAMILY = 'ttobak-whisperx'`, `WHISPERX_CONTAINER_NAME = 'whisperx'`; public props `whisperxTaskDefinition`, `whisperxEcrRepository`; CFN outputs `WhisperXTaskDefArn` (export `TtobakWhisperXTaskDefArn`), `WhisperXEcrRepoUri` (export `TtobakWhisperXEcrUri`). The runbook (Task 8) uses these names verbatim.
 
 - [ ] **Step 1: Write the failing jest test**

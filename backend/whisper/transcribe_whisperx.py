@@ -131,35 +131,87 @@ def _diarize(config_path: str, audio_path: str, num_speakers: int | None) -> lis
         # unwrap defensively so both shapes work.
         return _turns_from_diarization(diarization)
     except Exception as e:
-        detail = str(e)
+        # Never print raw ffmpeg stderr or the exception message text here:
+        # ffmpeg's stderr on failure includes container/file metadata (and a
+        # library exception's str() can otherwise embed transcript
+        # fragments) -- both are meeting PII and the task log group retains
+        # them for 30 days (FINDING 2(b), round 11). Log only the exception
+        # type plus, for a subprocess failure, the returncode and stderr
+        # BYTE LENGTH (not content).
+        returncode = getattr(e, "returncode", None)
         stderr = getattr(e, "stderr", None)
-        if stderr:
-            # subprocess.CalledProcessError.stderr may be bytes (capture_output=True
-            # above returns text, but be defensive for any other subprocess call
-            # this except also catches) -- decode defensively, never raise here.
-            if isinstance(stderr, bytes):
-                stderr = stderr.decode("utf-8", errors="replace")
-            detail = f"{detail} | stderr: {stderr.strip()}"
-        print(f"Diarization failed, falling back to unlabeled segments: {detail}")
+        # subprocess.run above is called WITHOUT text=True, so
+        # CalledProcessError.stderr is bytes, not str -- len() on it counts
+        # bytes either way, but guard for a str from any other subprocess
+        # call this broad except also catches.
+        stderr_len = len(stderr) if stderr is not None else 0
+        if returncode is not None:
+            print(f"Diarization failed, falling back to unlabeled segments: "
+                  f"{type(e).__name__} (ffmpeg rc={returncode}, stderr "
+                  f"{stderr_len} bytes suppressed -- PII hygiene)")
+        else:
+            print(f"Diarization failed, falling back to unlabeled segments: "
+                  f"{type(e).__name__}")
         return []
 
 
-def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], bool]:
+def _free_align_model(align_model) -> None:
+    """Frees the wav2vec2 align model's GPU residency (FINDING 1, round 11):
+    without this, the model stays resident for the rest of the run, so the
+    GPU[aligned]/GPU[diarized] samples in §4 would include its memory even
+    though those stages don't use it -- contradicting the per-stage-
+    residency claim in _log_gpu_memory's caller and the runbook. Best-effort:
+    lazy torch import, never raises (mirrors the `del model` +
+    empty_cache() pattern already used for the ASR model in main())."""
+    try:
+        del align_model
+    except Exception:
+        pass
+    try:
+        import torch
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], bool, int]:
     """Best-effort wav2vec2 forced alignment for word timestamps. Korean
     model availability in whisperx's registry is unconfirmed (see design
-    spec) -- on ANY failure return the input segments unchanged and False."""
+    spec) -- on ANY failure return the input segments unchanged and False.
+
+    whisperx.align() may print warnings to stdout/stderr that embed
+    per-segment TRANSCRIPT TEXT on partial-alignment failures (e.g. 'Failed
+    to align segment ("...")') -- that text is meeting PII and the task log
+    group retains it for 30 days (FINDING 2(a), round 11). Both
+    load_align_model and align are called with stdout/stderr redirected into
+    a buffer that is inspected but never printed or logged verbatim -- only
+    derived facts (line count, exception type) reach the task log.
+
+    Returns (segments, alignment_enabled, repaired_count)."""
+    import contextlib
+    import io
+    stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
+    align_model = None
     try:
         import whisperx
-        align_model, metadata = whisperx.load_align_model(
-            language_code=language, device="cuda")
-        aligned = whisperx.align(segments, align_model, metadata, audio, "cuda")
+        with contextlib.redirect_stdout(stdout_buf), \
+                contextlib.redirect_stderr(stderr_buf):
+            align_model, metadata = whisperx.load_align_model(
+                language_code=language, device="cuda")
+            aligned = whisperx.align(segments, align_model, metadata, audio, "cuda")
+        captured_lines = sum(
+            1 for buf in (stdout_buf, stderr_buf)
+            for line in buf.getvalue().splitlines() if line.strip())
+        if captured_lines:
+            print(f"Alignment emitted {captured_lines} warning line(s) "
+                  f"(suppressed -- may contain transcript text)")
         aligned_segments = aligned["segments"]
         if len(aligned_segments) != len(segments):
             print(f"Alignment returned {len(aligned_segments)} segment(s), "
                   f"expected {len(segments)}; discarding aligned result "
                   f"(would skew the benchmark), using segment-level "
                   f"timestamps")
-            return segments, False
+            return segments, False, 0
         repaired = 0
         for i, seg in enumerate(aligned_segments):
             if seg.get("start") is None or seg.get("end") is None:
@@ -181,19 +233,32 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
                   f"words for the rest")
         else:
             print("Alignment succeeded (word-level timestamps available)")
-        return aligned_segments, True
+        return aligned_segments, True, repaired
     except Exception as e:
-        print(f"Alignment unavailable, using segment-level timestamps: {e}")
-        return segments, False
+        # Exception message text (not just captured print output) can also
+        # embed transcript fragments from library internals -- log only the
+        # type, never str(e), for this specific path (FINDING 2(a)/(c)).
+        print(f"Alignment unavailable, using segment-level timestamps: "
+              f"{type(e).__name__}")
+        return segments, False, 0
+    finally:
+        # Free the align model's GPU residency on every path (keep, discard,
+        # exception) -- see _free_align_model.
+        if align_model is not None:
+            _free_align_model(align_model)
 
 
 def build_result(segments: list[dict], language: str, language_probability: float,
                  duration_seconds: float, transcription_seconds: float,
                  diarization_enabled: bool, num_speakers_detected: int,
-                 alignment_enabled: bool) -> dict:
+                 alignment_enabled: bool, alignment_repaired: int = 0) -> dict:
     """Pure: renders the exact transcript JSON cmd/summarize consumes
-    (same shape as transcribe.py's output; engine string differs, plus an
-    additive alignment_enabled flag Go ignores)."""
+    (same shape as transcribe.py's output; engine string differs, plus
+    additive alignment_enabled/alignment_repaired fields Go ignores).
+    alignment_repaired is the count of segments _try_align had to repair
+    from segment-level timestamps (partial alignment failure) -- surfaced
+    so a §6 benchmark table can distinguish a full-alignment run from a
+    partial-repair one instead of both collapsing to alignment_enabled=true."""
     out_segments = []
     for seg in segments:
         out = {
@@ -220,6 +285,7 @@ def build_result(segments: list[dict], language: str, language_probability: floa
                 "num_speakers_detected": num_speakers_detected,
             },
             "alignment_enabled": alignment_enabled,
+            "alignment_repaired": alignment_repaired,
         },
     }
 
@@ -280,7 +346,19 @@ def validate_output_key(output_key: str, meeting_id: str) -> str:
     key once it's promoted. Anything else (another meeting's transcripts/
     key, a mistyped bench key missing the bench-transcripts/ prefix, an
     arbitrary prefix) raises ValueError before a single byte is written,
-    mirroring should_mark_meeting_error's bench/real split on the S3 side."""
+    mirroring should_mark_meeting_error's bench/real split on the S3 side.
+
+    NOTE (round-11 review, FINDING 3): as of this PR, ttobak-whisperx-task-role
+    (infra/lib/whisper-stack.ts) no longer grants write on transcripts/* --
+    only bench-transcripts/*. This function still ACCEPTS the real-pipeline
+    key shape (the app-level escape hatch stays coded for Phase 2), but
+    actually pointing OUTPUT_KEY at it in Phase 1 now also fails at the IAM
+    layer (S3 PutObject AccessDenied) after passing this validation -- a
+    second, independent layer of defense-in-depth on top of this being an
+    operator-driven runbook procedure that should never target a real key.
+    Phase 2's cutover to real-pipeline runs must add the transcripts/* write
+    grant back to this role (or reuse the legacy task role) for this escape
+    hatch to actually work."""
     key = (output_key or "").strip()
     if not key:
         raise ValueError(
@@ -374,7 +452,7 @@ def main():
     except Exception:
         pass
 
-    segments, alignment_enabled = _try_align(segments, audio, language)
+    segments, alignment_enabled, alignment_repaired = _try_align(segments, audio, language)
     _log_gpu_memory("aligned")
 
     num_speakers_env = os.environ.get("NUM_SPEAKERS", "").strip()
@@ -409,7 +487,8 @@ def main():
         duration_seconds=duration_seconds, transcription_seconds=elapsed,
         diarization_enabled=diarization_enabled,
         num_speakers_detected=num_speakers_detected,
-        alignment_enabled=alignment_enabled)
+        alignment_enabled=alignment_enabled,
+        alignment_repaired=alignment_repaired)
 
     common.upload_transcript(s3, BUCKET, output_key, result)
     print(f"Uploaded s3://{BUCKET}/{output_key}")
@@ -419,7 +498,11 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+        # A bare str(e) can embed transcript fragments raised from library
+        # internals (whisperx/pyannote), which is meeting PII the task log
+        # group would then retain for 30 days (FINDING 2(c), round 11) --
+        # log the exception type plus a length-capped message instead.
+        print(f"ERROR: {type(e).__name__}: {str(e)[:300]}", file=sys.stderr)
         meeting_id = os.environ.get("MEETING_ID", "")
         user_id = os.environ.get("USER_ID", "")
         if meeting_id and user_id and should_mark_meeting_error(

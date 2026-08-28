@@ -4,6 +4,8 @@ Same stubbing convention as test_transcribe.py: whisperx/torch are
 container-only deps, and the module reads required env vars at import time,
 so both are stubbed before import."""
 
+import contextlib
+import io
 import os
 import sys
 import types
@@ -32,7 +34,7 @@ class TestBuildResult(unittest.TestCase):
             segments=segments, language='ko', language_probability=0.0,
             duration_seconds=4.0, transcription_seconds=1.5,
             diarization_enabled=True, num_speakers_detected=1,
-            alignment_enabled=True)
+            alignment_enabled=True, alignment_repaired=2)
 
         self.assertEqual(result['status'], 'COMPLETED')
         self.assertEqual(result['results']['transcripts'][0]['transcript'],
@@ -44,6 +46,7 @@ class TestBuildResult(unittest.TestCase):
         self.assertEqual(meta['diarization'],
                          {'enabled': True, 'num_speakers_detected': 1})
         self.assertTrue(meta['alignment_enabled'])
+        self.assertEqual(meta['alignment_repaired'], 2)
         # words are an internal alignment artifact -- stripped from output,
         # and start/end rounded like the legacy engine's segments
         self.assertEqual(meta['segments'][0],
@@ -51,6 +54,15 @@ class TestBuildResult(unittest.TestCase):
                           'speaker': 'spk_0'})
         self.assertEqual(meta['segments'][1],
                          {'start': 2.0, 'end': 4.0, 'text': '반갑습니다'})
+
+    def test_alignment_repaired_defaults_to_zero(self):
+        segments = [{'start': 0.0, 'end': 1.0, 'text': 'a'}]
+        result = transcribe_whisperx.build_result(
+            segments=segments, language='ko', language_probability=0.0,
+            duration_seconds=1.0, transcription_seconds=0.5,
+            diarization_enabled=False, num_speakers_detected=0,
+            alignment_enabled=False)
+        self.assertEqual(result['whisper_metadata']['alignment_repaired'], 0)
 
 
 class TestLogGpuMemory(unittest.TestCase):
@@ -137,10 +149,11 @@ class TestTryAlign(unittest.TestCase):
             'segments': aligned_segments}
 
         with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
-            result_segments, alignment_enabled = transcribe_whisperx._try_align(
+            result_segments, alignment_enabled, repaired = transcribe_whisperx._try_align(
                 input_segments, audio=object(), language='ko')
 
         self.assertTrue(alignment_enabled)
+        self.assertEqual(repaired, 1)
         # First segment untouched, with words intact.
         self.assertEqual(result_segments[0]['start'], 0.0)
         self.assertEqual(result_segments[0]['end'], 1.0)
@@ -173,7 +186,7 @@ class TestTryAlign(unittest.TestCase):
             'segments': aligned_segments}
 
         with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
-            result_segments, alignment_enabled = transcribe_whisperx._try_align(
+            result_segments, alignment_enabled, _ = transcribe_whisperx._try_align(
                 input_segments, audio=object(), language='ko')
 
         self.assertEqual(result_segments, input_segments)
@@ -190,7 +203,7 @@ class TestTryAlign(unittest.TestCase):
             'segments': aligned_segments}
 
         with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
-            result_segments, alignment_enabled = transcribe_whisperx._try_align(
+            result_segments, alignment_enabled, _ = transcribe_whisperx._try_align(
                 input_segments, audio=object(), language='ko')
 
         self.assertEqual(result_segments, aligned_segments)
@@ -219,7 +232,7 @@ class TestTryAlign(unittest.TestCase):
             'segments': aligned_segments}
 
         with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
-            result_segments, alignment_enabled = transcribe_whisperx._try_align(
+            result_segments, alignment_enabled, _ = transcribe_whisperx._try_align(
                 input_segments, audio=object(), language='ko')
 
         self.assertIn('words', result_segments[0])
@@ -231,6 +244,100 @@ class TestTryAlign(unittest.TestCase):
 
         self.assertEqual(out[0]['speaker'], 'spk_0')
         self.assertEqual(out[1]['speaker'], 'spk_1')
+
+    def test_align_warnings_containing_segment_text_are_not_printed(self):
+        # FINDING 2(a) (round 11): whisperx.align() may print warnings that
+        # embed per-segment TRANSCRIPT TEXT to stdout/stderr on partial
+        # alignment failures (e.g. 'Failed to align segment ("...")'). That
+        # text is meeting PII the task log group would otherwise retain for
+        # 30 days. _try_align must capture and suppress it -- only a derived
+        # line count may reach the real stdout.
+        input_segments = [{'start': 0.0, 'end': 1.0, 'text': 'a'}]
+        aligned_segments = [{'start': 0.0, 'end': 1.0, 'text': 'a', 'words': []}]
+
+        SECRET_TEXT = 'SECRET_MEETING_TRANSCRIPT_FRAGMENT_XYZ'
+
+        def fake_align(segments, model, metadata, audio, device):
+            print(f'Failed to align segment ("{SECRET_TEXT}")')
+            return {'segments': aligned_segments}
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            object(), object())
+        fake_whisperx.align = fake_align
+
+        outer_stdout = io.StringIO()
+        with contextlib.redirect_stdout(outer_stdout), \
+                mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            transcribe_whisperx._try_align(
+                input_segments, audio=object(), language='ko')
+
+        printed = outer_stdout.getvalue()
+        self.assertNotIn(SECRET_TEXT, printed)
+        self.assertIn('warning line(s)', printed)
+
+    def test_exception_message_text_not_printed_on_failure(self):
+        # FINDING 2(a)/(c): an exception's str() can also carry transcript
+        # fragments from library internals -- only the exception type name
+        # may reach the log on this path, never str(e).
+        SECRET_TEXT = 'SECRET_EXCEPTION_TEXT_ABC'
+
+        def raising_load_align_model(language_code, device):
+            raise RuntimeError(SECRET_TEXT)
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = raising_load_align_model
+
+        outer_stdout = io.StringIO()
+        with contextlib.redirect_stdout(outer_stdout), \
+                mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            result_segments, alignment_enabled, repaired = transcribe_whisperx._try_align(
+                [{'start': 0.0, 'end': 1.0, 'text': 'a'}], audio=object(),
+                language='ko')
+
+        self.assertFalse(alignment_enabled)
+        self.assertEqual(repaired, 0)
+        printed = outer_stdout.getvalue()
+        self.assertNotIn(SECRET_TEXT, printed)
+        self.assertIn('RuntimeError', printed)
+
+    def test_align_model_freed_after_successful_alignment(self):
+        # FINDING 1 (round 11): the align model must not stay GPU-resident
+        # past _try_align's own call -- _free_align_model must be invoked
+        # exactly once on the successful path.
+        aligned_segments = [{'start': 0.0, 'end': 1.0, 'text': 'a', 'words': []}]
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            'align-model-sentinel', object())
+        fake_whisperx.align = lambda segments, model, metadata, audio, device: {
+            'segments': aligned_segments}
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}), \
+                mock.patch.object(transcribe_whisperx, '_free_align_model') as mock_free:
+            transcribe_whisperx._try_align(
+                [{'start': 0.0, 'end': 1.0, 'text': 'a'}], audio=object(),
+                language='ko')
+
+        mock_free.assert_called_once()
+
+    def test_align_model_freed_after_exception(self):
+        # Same as above, but on the exception path -- the model must still
+        # be freed even though alignment failed.
+        def raising_align(segments, model, metadata, audio, device):
+            raise RuntimeError('boom')
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            'align-model-sentinel', object())
+        fake_whisperx.align = raising_align
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}), \
+                mock.patch.object(transcribe_whisperx, '_free_align_model') as mock_free:
+            transcribe_whisperx._try_align(
+                [{'start': 0.0, 'end': 1.0, 'text': 'a'}], audio=object(),
+                language='ko')
+
+        mock_free.assert_called_once()
 
 
 class TestValidateOutputKey(unittest.TestCase):

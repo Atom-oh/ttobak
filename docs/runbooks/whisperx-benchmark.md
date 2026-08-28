@@ -13,29 +13,40 @@ to a real meeting's DynamoDB row even on a bench-scoped `OUTPUT_KEY` (see §3's
 warning), and `transcribe_whisperx.py`'s own real-pipeline escape hatch
 (`transcripts/*`, guarded by `validate_output_key`) exists for the Phase 2
 cutover, not for this benchmark procedure — never point `OUTPUT_KEY` at a real
-meeting's key while following this runbook. Account 180294183052, region
-ap-northeast-2 throughout.
+meeting's key while following this runbook. As of this PR,
+`ttobak-whisperx-task-role` (`infra/lib/whisper-stack.ts`) no longer grants
+S3 write on `transcripts/*` at all — only `bench-transcripts/*` — so
+`validate_output_key`'s Phase-2 escape hatch is now also IAM-blocked in
+Phase 1: pointing `OUTPUT_KEY` at a real meeting's key would fail with S3
+`AccessDenied` even if it passed application-level validation. Account
+180294183052, region ap-northeast-2 throughout.
 
-Results feed the Phase 2 go/no-go decision and its ADR (see
-`docs/decisions/ADR-006` sibling ADRs for the format).
+Results feed the Phase 2 go/no-go decision and its ADR (see ADR-019 — the
+speaker-diarization ADR this benchmark follows up on — for the format sibling
+ADRs in this project use).
 
 ## 1. One-time setup
 
-The `bench-transcripts/` lifecycle rule this PR adds lives in
-`TtobakStorageStack` (see `docs/INFRA-SPEC.md`), not `TtobakWhisperStack` — a
-manual deploy also needs `cd infra && npx cdk deploy TtobakStorageStack --exclusively`.
-`deploy-infra.yml` covers this automatically on merge, so this step is only
-needed for a manual/out-of-band setup.
+Deploy both stacks this benchmark needs, in this order:
 
-### Deploy the stack
+1. **`TtobakWhisperStack`** — creates the `ttobak-whisperx` ECR repository
+   and task definition. Deploy this first: a fresh setup that tries to
+   `docker push` before this deploy fails with `RepositoryNotFoundException`.
 
-Deploy this first: the `ttobak-whisperx` ECR repository is *created* by this
-CDK deploy, so a fresh setup that tries to `docker push` before deploying
-fails with `RepositoryNotFoundException`.
+   ```bash
+   cd infra && npx cdk deploy TtobakWhisperStack --exclusively
+   ```
 
-```bash
-cd infra && npx cdk deploy TtobakWhisperStack --exclusively
-```
+2. **`TtobakStorageStack`** — adds the `bench-transcripts/` lifecycle rule
+   (see `docs/INFRA-SPEC.md`). This is a separate stack from
+   `TtobakWhisperStack`, so it needs its own deploy:
+
+   ```bash
+   cd infra && npx cdk deploy TtobakStorageStack --exclusively
+   ```
+
+`deploy-infra.yml` covers both of these automatically on merge, so this
+two-step sequence is only needed for a manual/out-of-band setup.
 
 Never `cdk deploy --all` (see root `CLAUDE.md` Known Issues) — always a single
 changed stack with `--exclusively`.
@@ -256,31 +267,59 @@ This resolves the design doc's open VRAM/instance-sizing question.
 ### PRIMARY (and default): read the `GPU[...]` lines from the task's CloudWatch logs
 
 `transcribe_whisperx.py` self-reports one `nvidia-smi` sample to stdout at
-each of four points in a run (`model-loaded`, `transcribed`, `aligned`,
-`diarized`), printed as `GPU[<stage>]: <memory.used>, <memory.total>,
-<utilization.gpu>`. This answers the peak-VRAM question directly from the
-task's own CloudWatch log group — **no IAM change, no elevation of the
-shared production instance role, and no ASG involvement at all.** This is
-the primary path and requires no setup; just read the log after (or during)
-a run.
+up to four points in a run (`model-loaded`, `transcribed`, `aligned`,
+`diarized` — diarization is best-effort and is skipped entirely when the
+model bundle isn't staged, in which case only the first three lines appear),
+printed as `GPU[<stage>]: <memory.used>, <memory.total>, <utilization.gpu>`.
+This answers the peak-VRAM question directly from the task's own CloudWatch
+log group — **no IAM change, no elevation of the shared production instance
+role, and no ASG involvement at all.** This is the primary path and requires
+no setup; just read the log after (or during) a run.
 
 Also note: after transcription, the engine frees the ASR model
-(`del model` + `torch.cuda.empty_cache()`) before loading the alignment/
-diarization models, so each `GPU[...]` sample reflects only the model(s)
-actually resident for that stage, not a cumulative all-models-resident
-figure — take the **max across all four samples** as the run's peak VRAM,
-not just the last one.
+(`del model` + `torch.cuda.empty_cache()`), and after alignment it likewise
+frees the wav2vec2 align model, before loading the next stage's model, so
+each `GPU[...]` sample reflects only the model(s) actually resident for that
+stage, not a cumulative all-models-resident figure — take the **max across
+all (up to four) samples** as the run's peak VRAM, not just the last one.
+One honest caveat: these are still four point-in-time samples taken right
+after each stage's own work completes, not a continuous trace — a stage
+could still transiently peak higher mid-computation than what its sample
+captures (see the CloudWatch agent aside below if that gap matters for a
+specific run).
 
-Find the task's log stream and filter for the GPU lines:
+Find the task's own log stream and filter for the GPU lines — **scope to
+this run's stream, not the whole log group**: the log group's 30-day
+retention means a plain `filter-log-events` over the whole group mixes GPU
+lines from other runs, which silently corrupts the peak-VRAM reading for the
+run you actually care about. The awslogs driver composes the stream name as
+`<streamPrefix>/<containerName>/<task-id>`; for this task definition that's
+always `whisperx/whisperx/<task-id>` (`streamPrefix: 'whisperx'` and
+container name `whisperx`, both from `infra/lib/whisper-stack.ts`):
 
 ```bash
 aws ecs list-tasks --cluster ttobak-whisper --region ap-northeast-2
-aws ecs describe-tasks --cluster ttobak-whisper --tasks <TASK_ARN> --region ap-northeast-2 \
-  --query 'tasks[0].containers[0].name'  # confirms the log stream prefix (whisperx)
+TASK_ID=$(aws ecs describe-tasks --cluster ttobak-whisper --tasks <TASK_ARN> \
+  --region ap-northeast-2 --query 'tasks[0].taskArn' --output text | awk -F/ '{print $NF}')
 
+aws logs get-log-events \
+  --log-group-name /ttobak/whisperx \
+  --log-stream-name "whisperx/whisperx/${TASK_ID}" \
+  --region ap-northeast-2 \
+  --query 'events[*].message' --output text | grep 'GPU\['
+```
+
+If you must use `filter-log-events` instead (e.g. across a short list of
+known task ids), pass `--log-stream-names` to keep the scoping and quote the
+filter pattern's literal `[` (CloudWatch filter-pattern syntax treats a bare
+`[` as the start of a structured/space-delimited pattern, so an unquoted
+`--filter-pattern "GPU["` does not match literally):
+
+```bash
 aws logs filter-log-events \
   --log-group-name /ttobak/whisperx \
-  --filter-pattern "GPU[" \
+  --log-stream-names "whisperx/whisperx/${TASK_ID}" \
+  --filter-pattern '"GPU["' \
   --region ap-northeast-2 \
   --query 'events[*].message'
 ```
@@ -340,8 +379,14 @@ Judge qualitatively, per meeting:
 
 Build one table row per meeting:
 
-| Meeting ID | Duration | Participants | Legacy speakers detected | WhisperX speakers detected | Peak VRAM (WhisperX) | Wall-clock (legacy / whisperx) | Qualitative verdict |
-|---|---|---|---|---|---|---|---|
+| Meeting ID | Duration | Participants | Legacy speakers detected | WhisperX speakers detected | Peak VRAM (WhisperX) | Wall-clock (legacy / whisperx) | Alignment repaired segments | Qualitative verdict |
+|---|---|---|---|---|---|---|---|---|
+
+"Alignment repaired segments" is `whisper_metadata.alignment_repaired` from
+the WhisperX transcript JSON (§5) — the count of segments `_try_align` had
+to repair from segment-level timestamps after a partial alignment failure.
+A nonzero value flags a partial-repair run so it isn't silently read as
+equivalent to a clean, fully-aligned one.
 
 Keep only this table -- the aggregate metrics -- beyond the current session;
 it is the primary input to the Phase 2 go/no-go decision and the ADR that

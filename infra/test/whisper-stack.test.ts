@@ -89,4 +89,52 @@ describe('WhisperStack whisperx benchmark additions', () => {
       RetentionInDays: 30,
     });
   });
+
+  test('whisperx task role gets a bench-transcripts/* write grant but NOT transcripts/*', () => {
+    // Round-11 review finding: Phase 1 never legitimately writes to
+    // transcripts/* (validate_output_key's real-key escape hatch is
+    // Phase-2-only), so that write grant must not be present -- IAM should
+    // deny it even if an operator mistakenly points OUTPUT_KEY there.
+    const template = synth();
+    const whisperxRoleLogicalIds = Object.keys(
+      template.findResources('AWS::IAM::Role', {
+        Properties: Match.objectLike({ RoleName: 'ttobak-whisperx-task-role' }),
+      }),
+    );
+    expect(whisperxRoleLogicalIds).toHaveLength(1);
+    const [whisperxRoleLogicalId] = whisperxRoleLogicalIds;
+
+    const policies = template.findResources('AWS::IAM::Policy', {
+      Properties: Match.objectLike({
+        Roles: Match.arrayWith([
+          Match.objectLike({ Ref: whisperxRoleLogicalId }),
+        ]),
+      }),
+    });
+    const statements = Object.values(policies).flatMap(
+      (p: any) => p.Properties.PolicyDocument.Statement,
+    );
+    const putStatements = statements.filter(
+      (s: any) =>
+        s.Effect === 'Allow' &&
+        [].concat(s.Action).some((a: string) => a === 's3:PutObject'),
+    );
+    expect(putStatements.length).toBeGreaterThan(0);
+
+    const resourceContainsSuffix = (stmt: any, suffix: string): boolean =>
+      [].concat(stmt.Resource).some((r: any) => {
+        if (typeof r === 'string') return r.endsWith(suffix);
+        const fnJoin = r?.['Fn::Join'];
+        if (!fnJoin) return false;
+        const parts = fnJoin[1] as any[];
+        return parts.some((part) => typeof part === 'string' && part.endsWith(suffix));
+      });
+
+    expect(
+      putStatements.some((s: any) => resourceContainsSuffix(s, '/bench-transcripts/*')),
+    ).toBe(true);
+    expect(
+      putStatements.some((s: any) => resourceContainsSuffix(s, '/transcripts/*')),
+    ).toBe(false);
+  });
 });
