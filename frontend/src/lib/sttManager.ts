@@ -40,6 +40,18 @@ export interface SttManagerConfig {
    * silence, with `manualStallRecovery()` wired to the retry button.
    */
   onReconnecting?: () => void;
+  /**
+   * Fired once the automatic (or manual) reconnect attempt started after
+   * `onReconnecting` actually proves itself alive -- the first transcript
+   * the reconnected session receives, not just the moment the reconnect
+   * attempt was *initiated*. `activeProvider` never changes across a
+   * stall/reconnect (it's 'transcribe-streaming' before and after), so
+   * `onProviderChange` -- the only other "clear this banner" signal
+   * `useRecordingSession` had -- never fires here, and the banner
+   * `onReconnecting` raised was otherwise permanently stuck up on the
+   * single most common outcome (the automatic retry succeeding).
+   */
+  onReconnected?: () => void;
 }
 
 export class SttManager {
@@ -82,6 +94,13 @@ export class SttManager {
   // 'transcribe-stream-stalled') -- cleared by stop() so a manager that's
   // already torn down never fires a reconnect it has no business making.
   private pendingStallReconnect: (() => void) | null = null;
+  // True from the moment onReconnecting fires until the reconnected
+  // session's first transcript proves it's actually alive -- gates the
+  // one-shot onReconnected call (see SttManagerConfig's doc comment).
+  // Not reset on a session that ultimately fails; that path always
+  // overwrites the reconnecting banner with a different failure message
+  // anyway, so a stale `true` here has nothing left to consume it.
+  private awaitingReconnectConfirmation = false;
 
   // Translation state (shared across providers)
   private translateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -202,6 +221,12 @@ export class SttManager {
     // and this button would be the only path back, silently more load-
     // bearing than its automatic counterpart was ever designed to be.
     this.stalledReconnectAttempted = false;
+    // Same real-signal gate the automatic reconnect uses (see
+    // onTranscript above) -- if this manual attempt is currently showing
+    // the reconnecting banner, only its first actual transcript should
+    // clear it, not this call's optimistic activeProvider flip below
+    // (which reflects a decision made now, not a connection proven now).
+    this.awaitingReconnectConfirmation = true;
     this.startTranscribeStreaming(this.stream).catch(() => this.fallbackToWebSpeech(true));
     this.activeProvider = 'transcribe-streaming';
     this.config.onProviderChange?.('transcribe-streaming');
@@ -309,6 +334,15 @@ export class SttManager {
       vocabularyName: tsConfig.vocabularyName,
       onTranscript: (text, isFinal, detectedLang) => {
         if (this.transcribeSession !== session) return;
+        if (this.awaitingReconnectConfirmation) {
+          // This session receiving ANY transcript (even interim) is the
+          // real "we're back" signal -- unlike onReconnecting (fired the
+          // instant the retry is merely initiated) or the optimistic
+          // onProviderChange calls elsewhere, this proves the WebSocket
+          // actually opened and is receiving audio results.
+          this.awaitingReconnectConfirmation = false;
+          this.config.onReconnected?.();
+        }
         if (detectedLang) {
           this.lastDetectedLang = detectedLang.substring(0, 2);
         }
@@ -345,6 +379,7 @@ export class SttManager {
           !this.stalledReconnectAttempted
         ) {
           this.stalledReconnectAttempted = true;
+          this.awaitingReconnectConfirmation = true;
           // Notify the page NOW, not only if this automatic attempt also
           // fails -- see onReconnecting's doc comment on SttManagerConfig.
           this.config.onReconnecting?.();

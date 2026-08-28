@@ -259,16 +259,29 @@ export function useRecordingSession({
       onReconnecting: () => {
         setSpeechError(speechErrorMessages['transcribe-stream-reconnecting']);
       },
+      // Deliberately separate from onProviderChange below: this fires only
+      // once the reconnected session's first transcript proves it's
+      // actually alive (see SttManagerConfig's doc comment), whereas
+      // onProviderChange fires as soon as a provider transition is
+      // DECIDED -- for manualStallRecovery specifically, that decision and
+      // the reconnect's actual success are not the same moment, and
+      // clearing this banner on the former would reopen the exact
+      // "declared success before it's proven" window this callback exists
+      // to close.
+      onReconnected: () => {
+        setSpeechError((prev) =>
+          prev === speechErrorMessages['transcribe-stream-reconnecting'] ? null : prev,
+        );
+      },
       onProviderChange: (provider) => {
         setActiveProvider(provider);
-        // Both the mobile-unavailable and reconnecting banners describe a
-        // temporary state that Transcribe Streaming actually coming back
-        // resolves -- clear either one instead of leaving it to sit
-        // alongside captions that are flowing again.
+        // The mobile-unavailable banner describes a temporary state that
+        // Transcribe Streaming actually becoming available resolves --
+        // clear it instead of leaving it to sit alongside captions that
+        // are flowing again. (The reconnecting banner is NOT cleared
+        // here -- see onReconnected above for why.)
         setSpeechError((prev) =>
-          provider === 'transcribe-streaming' &&
-          (prev === speechErrorMessages['web-speech-mobile-unavailable'] ||
-            prev === speechErrorMessages['transcribe-stream-reconnecting'])
+          provider === 'transcribe-streaming' && prev === speechErrorMessages['web-speech-mobile-unavailable']
             ? null
             : prev,
         );

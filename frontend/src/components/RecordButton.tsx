@@ -255,17 +255,20 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
       // onAudioStalled's doc comment for why the automatic paths alone
       // can't be relied on.
       tryResumeAnalyserContextRef.current?.();
-      // Give the watchdog a fresh detection window instead of leaving it
-      // latched silent: if this resume() attempt doesn't actually work
-      // (banner stays up, still frozen), the watchdog would otherwise
-      // never fire onAudioStalled a second time for the SAME stall
-      // episode, since the latch only clears on confirmed recovery
-      // (state === 'running'). The page keeps its banner open across this
-      // call either way -- only onAudioRecovered above closes it -- so
-      // resetting here can't cause a spurious re-notification the user
-      // hasn't already seen.
+      // Give the watchdog a fresh 12s detection window instead of leaving
+      // it primed to fire again the instant this attempt fails --
+      // WITHOUT touching `audioStallReportedRef`. That flag is also what
+      // the watchdog's healthy branch below checks before calling
+      // onAudioRecovered; clearing it here (as an earlier version of this
+      // did) meant a SUCCESSFUL resume was indistinguishable from an
+      // ordinary healthy tick that never stalled, so the "tap to resume"
+      // banner never closed on success -- only ever via the slower
+      // fail-then-eventually-recover path. Re-firing onAudioStalled a
+      // second time for a still-failed retry within the same episode
+      // would be a harmless no-op anyway (the page's onAudioStalled just
+      // sets a boolean already true), so leaving the flag set costs
+      // nothing.
       audioStallNotRunningSinceRef.current = null;
-      audioStallReportedRef.current = false;
     },
   }), []);
 
