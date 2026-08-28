@@ -12,6 +12,19 @@ Results feed the Phase 2 go/no-go decision and its ADR (see
 
 ## 1. One-time setup
 
+### Deploy the stack
+
+Deploy this first: the `ttobak-whisperx` ECR repository is *created* by this
+CDK deploy, so a fresh setup that tries to `docker push` before deploying
+fails with `RepositoryNotFoundException`.
+
+```bash
+cd infra && npx cdk deploy TtobakWhisperStack --exclusively
+```
+
+Never `cdk deploy --all` (see root `CLAUDE.md` Known Issues) — always a single
+changed stack with `--exclusively`.
+
 ### Build & push the WhisperX image
 
 The image bundles CUDA/PyTorch native deps built for x86_64. Build it on an
@@ -50,15 +63,6 @@ that rewrite: if the WhisperX container logs "Diarization model
 unavailable/failed" (or an equivalent pyannote load error), pull the staged
 `config.yaml` back down and inspect its rewritten paths first, before
 suspecting the WhisperX code itself.
-
-### Deploy the stack
-
-```bash
-cd infra && npx cdk deploy TtobakWhisperStack --exclusively
-```
-
-Never `cdk deploy --all` (see root `CLAUDE.md` Known Issues) — always a single
-changed stack with `--exclusively`.
 
 ## 2. Selecting meetings
 
@@ -128,13 +132,23 @@ for TD in ttobak-whisper ttobak-whisperx; do
 done
 ```
 
-**⚠️ WARNING: Failed benchmark runs may corrupt real meeting data.**
+**⚠️ WARNING: A failed `ttobak-whisper` (legacy engine) bench run may still corrupt
+real meeting data.**
 
-If a benchmark task fails (unstaged model bundle, VRAM OOM, dependency crash, etc.),
-the task's fatal-error handler calls `whisper_common.mark_meeting_error`, which
-writes `status=error` to the **real meeting's DynamoDB row** — even though the
-`OUTPUT_KEY` was bench-scoped. This is visible to users in the UI as a corrupted
-done meeting.
+The `whisperx` engine's fatal-error handler (`transcribe_whisperx.py`) checks
+`should_mark_meeting_error(OUTPUT_KEY)` before writing meeting status: a
+bench-scoped `OUTPUT_KEY` (anything under `bench-transcripts/`, as used by
+this runbook) is recognized and the `status=error` write is skipped entirely
+— a failed WhisperX bench run only ever surfaces in the ECS task log, never
+on the real meeting row.
+
+The **legacy `ttobak-whisper` engine** (`transcribe.py`) has no such guard: if
+that task fails (unstaged model bundle, VRAM OOM, dependency crash, etc.), its
+fatal-error handler unconditionally calls `whisper_common.mark_meeting_error`,
+which writes `status=error` to the **real meeting's DynamoDB row** — even
+though the `OUTPUT_KEY` was bench-scoped. This is visible to users in the UI
+as a corrupted done meeting. So the risk below applies specifically to the
+`ttobak-whisper` half of each benchmark pair.
 
 **Recovery**: After any failed bench run, verify the meeting's status:
 
@@ -163,6 +177,47 @@ Repeat for each selected meeting.
 ## 4. Resource measurement per WhisperX run
 
 This resolves the design doc's open VRAM/instance-sizing question.
+
+**Prerequisite: the ASG's EC2 instance role has no SSM permissions today.**
+`infra/lib/whisper-stack.ts` grants the ASG's instance role S3/DynamoDB/ECR
+access for the task, but no `ssm:*`/`AmazonSSMManagedInstanceCore` policy —
+so a `ttobak-whisper-asg` instance never registers with SSM, and
+`aws ssm send-command` below fails with `InvalidInstanceId`. This is a
+one-time, reversible, out-of-band operator step (not a CDK change — do not
+add this permission to `whisper-stack.ts` for a one-off benchmark):
+
+```bash
+# 1. Find the ASG's instance role via its launch template (not the task/
+#    execution roles used above -- this is the EC2 host, not the container).
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names ttobak-whisper-asg --region ap-northeast-2 \
+  --query 'AutoScalingGroups[0].LaunchTemplate'
+
+aws ec2 describe-launch-template-versions \
+  --launch-template-id <LAUNCH_TEMPLATE_ID> --region ap-northeast-2 \
+  --query 'LaunchTemplateVersions[0].LaunchTemplateData.IamInstanceProfile'
+
+# 2. Resolve the instance profile to its role, then attach the managed policy.
+#    The SSM agent is preinstalled on the ECS-optimized AL2 GPU AMI already in
+#    use, so it registers on its own as soon as the role allows it -- no AMI
+#    change needed.
+aws iam attach-role-policy \
+  --role-name <ROLE_NAME_FROM_INSTANCE_PROFILE> \
+  --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+# 3. Only instances launched AFTER the policy is attached pick up SSM
+#    registration. If the currently-running task's instance predates the
+#    attach, cycle the ASG (scale to 0, then back up) so the next benchmark
+#    run lands on a freshly-launched, SSM-registered instance.
+```
+
+Revert once benchmarking is done:
+
+```bash
+aws iam detach-role-policy \
+  --role-name <ROLE_NAME_FROM_INSTANCE_PROFILE> \
+  --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+```
 
 Find the container instance running the task:
 

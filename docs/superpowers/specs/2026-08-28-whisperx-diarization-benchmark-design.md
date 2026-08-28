@@ -42,7 +42,7 @@ As long as a new engine emits this same shape, **no Go/API changes are required*
 Purely additive — no existing resource is modified:
 - New ECR repository (`WhisperXRepo`), separate from the existing `ecrRepository`.
 - New ECS Task Definition (`WhisperXTaskDefinition`) reusing the **same** cluster, ASG, capacity provider (`ttobak-whisper-spot`), and IAM roles as the existing task definition — deliberately not a separate GPU instance pool, to avoid doubling idle-capacity cost during evaluation.
-- New env vars on the new task def: `WHISPERX_MODEL_S3_KEY` (faster-whisper CT2 weights are likely reusable as-is from the existing `models/faster-whisper-large-v3.tar.gz` — confirm at implementation time) and a new S3 prefix for the pyannote 4.x diarization bundle, e.g. `models/whisperx-diarization-4.x.tar.gz`.
+- New env vars on the new task def: `MODEL_S3_KEY` is reused as-is from the existing task def (faster-whisper CT2 weights are engine-compatible, confirmed at implementation time — no separate `WHISPERX_MODEL_S3_KEY`), plus a new S3 prefix for the pyannote 4.x diarization bundle, e.g. `models/whisperx-diarization-4.x.tar.gz`.
 
 ### Benchmark procedure (manual, no product code touched)
 
