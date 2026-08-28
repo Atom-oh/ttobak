@@ -146,15 +146,82 @@ class TestValidateAudioKey(unittest.TestCase):
 
 class TestShouldMarkMeetingError(unittest.TestCase):
     def test_empty_output_key_defaults_to_real_pipeline(self):
-        self.assertTrue(transcribe_whisperx.should_mark_meeting_error(''))
+        self.assertTrue(
+            transcribe_whisperx.should_mark_meeting_error('', 'm123'))
 
-    def test_transcripts_prefix_is_real_pipeline(self):
+    def test_own_meeting_key_is_real_pipeline(self):
         self.assertTrue(transcribe_whisperx.should_mark_meeting_error(
-            'transcripts/m123.json'))
+            'transcripts/m123.json', 'm123'))
+
+    def test_own_meeting_multipart_key_is_real_pipeline(self):
+        self.assertTrue(transcribe_whisperx.should_mark_meeting_error(
+            'transcripts/m123_part_002.json', 'm123'))
 
     def test_bench_transcripts_prefix_is_never_marked(self):
         self.assertFalse(transcribe_whisperx.should_mark_meeting_error(
-            'bench-transcripts/m123_bench_whisperx.json'))
+            'bench-transcripts/m123_bench_whisperx.json', 'm123'))
+
+    def test_other_meetings_transcripts_key_is_never_marked(self):
+        # Regression for the reported incident: a typo'd/mistyped OUTPUT_KEY
+        # that validate_output_key correctly rejects must NOT be treated as
+        # this meeting's real pipeline output -- it must never mark the real
+        # meeting row as errored.
+        self.assertFalse(transcribe_whisperx.should_mark_meeting_error(
+            'transcripts/OTHER.json', 'm123'))
+
+
+class TestValidateOutputKeyAndShouldMarkMeetingErrorAgree(unittest.TestCase):
+    """validate_output_key and should_mark_meeting_error must agree on which
+    keys count as "real pipeline" for a given meeting_id -- both derive from
+    the same _is_real_pipeline_key helper, so this asserts they can't drift."""
+
+    def test_real_pipeline_shapes_agree(self):
+        meeting_id = 'm123'
+        real_keys = [
+            '',
+            '   ',
+            f'transcripts/{meeting_id}.json',
+            f'transcripts/{meeting_id}_part_001.json',
+            f'transcripts/{meeting_id}_part_042.json',
+        ]
+        for key in real_keys:
+            with self.subTest(key=key):
+                # validate_output_key must accept it (no ValueError)...
+                resolved = transcribe_whisperx.validate_output_key(
+                    key, meeting_id)
+                self.assertTrue(resolved)
+                # ...and should_mark_meeting_error must treat the raw input
+                # (and the key validate_output_key resolved it to) as real.
+                self.assertTrue(
+                    transcribe_whisperx.should_mark_meeting_error(
+                        key, meeting_id))
+                self.assertTrue(
+                    transcribe_whisperx.should_mark_meeting_error(
+                        resolved, meeting_id))
+
+    def test_bench_and_rejected_shapes_agree_as_non_real(self):
+        meeting_id = 'm123'
+        bench_keys = ['bench-transcripts/m123_bench_whisperx.json']
+        for key in bench_keys:
+            with self.subTest(key=key):
+                resolved = transcribe_whisperx.validate_output_key(
+                    key, meeting_id)
+                self.assertEqual(resolved, key)
+                self.assertFalse(
+                    transcribe_whisperx.should_mark_meeting_error(
+                        key, meeting_id))
+
+        rejected_keys = ['transcripts/OTHER.json', 'files/x']
+        for key in rejected_keys:
+            with self.subTest(key=key):
+                with self.assertRaises(ValueError):
+                    transcribe_whisperx.validate_output_key(key, meeting_id)
+                # Even though validate_output_key rejects it outright, the
+                # error-marking judgment on the same raw key must also be
+                # False -- this is the exact incident FINDING 1(b) fixes.
+                self.assertFalse(
+                    transcribe_whisperx.should_mark_meeting_error(
+                        key, meeting_id))
 
 
 if __name__ == '__main__':

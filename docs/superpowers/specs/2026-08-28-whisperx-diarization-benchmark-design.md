@@ -39,7 +39,7 @@ As long as a new engine emits this same shape, **no Go/API changes are required*
 
 ### Infrastructure (`infra/lib/whisper-stack.ts`)
 
-Purely additive — no existing resource is modified:
+Purely additive — no existing resource is modified. [As shipped: review added one modification to an existing resource — a scoped lifecycle rule (`bench-transcripts/` prefix, 30-day current-version expiration + 30-day noncurrent-version expiration) on the existing assets bucket in `TtobakStorageStack`, added for PII-TTL reasons. This is the one exception to "purely additive"; everything else below remains net-new.]
 - New ECR repository (`WhisperXRepo`), separate from the existing `ecrRepository`.
 - New ECS Task Definition (`WhisperXTaskDefinition`) reusing the **same** cluster, ASG, capacity provider (`ttobak-whisper-spot`), and IAM roles as the existing task definition — deliberately not a separate GPU instance pool, to avoid doubling idle-capacity cost during evaluation.
 - New env vars on the new task def: `MODEL_S3_KEY` is reused as-is from the existing task def (faster-whisper CT2 weights are engine-compatible, confirmed at implementation time — no separate `WHISPERX_MODEL_S3_KEY`), plus a new S3 prefix for the pyannote 4.x diarization bundle, e.g. `models/whisperx-diarization-4.x.tar.gz`.

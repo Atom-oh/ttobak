@@ -19,7 +19,7 @@
 - Diarization and alignment are **best-effort**: any failure logs and degrades (unlabeled segments / segment-level timestamps), never aborts transcription. On fatal error the container sets the meeting's DynamoDB `status=error` exactly like `transcribe.py` does.
 - Python tests use stdlib `unittest` + `unittest.mock` only, stubbing heavy deps (`whisperx`, `boto3`) before import — follow `backend/whisper/test_transcribe.py`'s existing pattern exactly.
 - Non-ASCII in tool/JSON parameters written as literal UTF-8 (project rule).
-- Deploy note: merging files under `backend/whisper/**` will trigger `deploy-whisper.yml`, which rebuilds only the *legacy* Dockerfile (it copies just `transcribe.py`) — a harmless no-op rebuild. The new image is built/pushed manually per the runbook (Task 7); CI is not touched in Phase 1.
+- Deploy note: merging files under `backend/whisper/**` will trigger `deploy-whisper.yml`, which rebuilds only the *legacy* Dockerfile (it copies just `transcribe.py`) — a harmless no-op rebuild. The new image is built/pushed manually per the runbook (Task 7); CI is not touched in Phase 1. [As shipped: during review, `deploy-whisper.yml`'s paths filter was narrowed to `transcribe.py`+`Dockerfile` specifically, so new whisperx files (`transcribe_whisperx.py`, `Dockerfile.whisperx`, etc.) do NOT trigger the legacy rebuild at all — this is stricter than the "harmless no-op" behavior described above, not a contradiction of the "CI not touched" claim.]
 
 ## File Structure
 

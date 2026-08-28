@@ -165,14 +165,27 @@ def build_result(segments: list[dict], language: str, language_probability: floa
     }
 
 
-def should_mark_meeting_error(output_key: str) -> bool:
+def _is_real_pipeline_key(key: str, meeting_id: str) -> bool:
+    """Shared real/bench judgment: True only for the exact shapes
+    validate_output_key accepts for the real pipeline (empty, the default
+    transcripts/{meeting_id}.json, or a multi-part transcripts/{meeting_id}_*
+    key) -- kept as a single helper so should_mark_meeting_error and
+    validate_output_key cannot drift apart on what counts as "real"."""
+    if not key:
+        return True
+    default_key = f"transcripts/{meeting_id}.json"
+    return key == default_key or key.startswith(f"transcripts/{meeting_id}_")
+
+
+def should_mark_meeting_error(output_key: str, meeting_id: str) -> bool:
     """A fatal failure should surface on the real meeting row only when this
-    run feeds the real pipeline (OUTPUT_KEY empty -> defaults to
-    transcripts/{meeting_id}.json, or explicitly under transcripts/).
-    Benchmark runs write elsewhere (e.g. bench-transcripts/) and must never
-    touch production meeting state -- the operator reads the task log instead."""
+    run feeds the real pipeline for THIS meeting_id (OUTPUT_KEY empty, or
+    exactly transcripts/{meeting_id}.json / transcripts/{meeting_id}_*).
+    Benchmark runs (bench-transcripts/) and any other/mistyped key (e.g. a
+    typo'd transcripts/OTHER.json) must never touch production meeting state
+    -- the operator reads the task log instead."""
     key = (output_key or "").strip()
-    return key == "" or key.startswith("transcripts/")
+    return _is_real_pipeline_key(key, meeting_id)
 
 
 def validate_output_key(output_key: str, meeting_id: str) -> str:
@@ -189,7 +202,7 @@ def validate_output_key(output_key: str, meeting_id: str) -> str:
         return default_key
     if key.startswith("bench-transcripts/"):
         return key
-    if key == default_key or key.startswith(f"transcripts/{meeting_id}_"):
+    if _is_real_pipeline_key(key, meeting_id):
         return key
     raise ValueError(
         f"OUTPUT_KEY {key!r} is not a valid bench-transcripts/ key or this "
@@ -211,6 +224,12 @@ def validate_audio_key(audio_key: str, user_id: str, meeting_id: str) -> str:
 def main():
     meeting_id = os.environ["MEETING_ID"]
     user_id = os.environ["USER_ID"]
+
+    # Validate OUTPUT_KEY/AUDIO_KEY before any S3 download or model/GPU work --
+    # a bad OUTPUT_KEY (e.g. a typo'd bench key) must fail fast, not after an
+    # entire GPU run's worth of download/transcription/alignment/diarization.
+    output_key = validate_output_key(os.environ.get("OUTPUT_KEY", ""), meeting_id)
+
     audio_key = os.environ.get("AUDIO_KEY")
     if audio_key:
         audio_key = validate_audio_key(audio_key, user_id, meeting_id)
@@ -290,7 +309,6 @@ def main():
         num_speakers_detected=num_speakers_detected,
         alignment_enabled=alignment_enabled)
 
-    output_key = validate_output_key(os.environ.get("OUTPUT_KEY", ""), meeting_id)
     common.upload_transcript(s3, BUCKET, output_key, result)
     print(f"Uploaded s3://{BUCKET}/{output_key}")
 
@@ -302,6 +320,7 @@ if __name__ == "__main__":
         print(f"ERROR: {e}", file=sys.stderr)
         meeting_id = os.environ.get("MEETING_ID", "")
         user_id = os.environ.get("USER_ID", "")
-        if meeting_id and user_id and should_mark_meeting_error(os.environ.get("OUTPUT_KEY", "")):
+        if meeting_id and user_id and should_mark_meeting_error(
+                os.environ.get("OUTPUT_KEY", ""), meeting_id):
             common.mark_meeting_error(table, user_id, meeting_id)
         sys.exit(1)

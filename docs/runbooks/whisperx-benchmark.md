@@ -187,13 +187,35 @@ Repeat for each selected meeting.
 
 This resolves the design doc's open VRAM/instance-sizing question.
 
-**IAM 확대 없는 대안:** before reaching for the SSM approach below, check whether
-CloudWatch agent GPU metrics (the `nvidia_smi` plugin) are already configured
-on the ASG, or whether the engine ever logs VRAM figures to its own
-CloudWatch log group — either would answer the VRAM question with zero IAM
-change. Neither is set up on `ttobak-whisper-asg` today, so the SSM attach
-below is the fallback: a deliberate, temporary elevation for this one
-benchmark, not the default path.
+### RECOMMENDED: CloudWatch agent `nvidia_smi` metrics (zero IAM change)
+
+Before reaching for the SSM approach below, check whether CloudWatch agent GPU
+metrics (the `nvidia_smi` plugin) are already configured on the ASG, or
+whether the engine ever logs VRAM figures to its own CloudWatch log group —
+either would answer the VRAM question with **zero IAM change and zero risk to
+the running ASG**. This is the primary path: prefer it whenever it's
+available, since it requires no elevation of the instance role and no ASG
+cycling at all.
+
+Neither is set up on `ttobak-whisper-asg` today. If configuring the
+CloudWatch agent for this benchmark is out of scope for the time available,
+the SSM attach below is the **fallback** — a deliberate, temporary elevation
+for this one benchmark, not the default path, and one that carries real risk
+to production STT (see the mandatory precondition below).
+
+### FALLBACK: SSM attach (carries production risk — read the precondition first)
+
+**⚠️ This path can kill a real user's in-flight transcription.** The ASG
+(`infra/lib/whisper-stack.ts`) has `enableManagedTerminationProtection: false`
+and step 3 below tells you to cycle it (scale to 0, then back up) to force a
+freshly-launched, SSM-registered instance. With termination protection off,
+cycling the ASG terminates *every* instance in it immediately, including one
+mid-task on a real (non-benchmark) transcription — that meeting gets stuck in
+`transcribing` until the 60-minute auto-expiry marks it `error`. Never cycle
+the ASG without first confirming no task is running (below), and treat the
+whole SSM elevation as time-boxed to this benchmark session — attach, take
+your measurements, detach the same day (see §7's detach checklist; don't let
+this policy sit attached across sessions or overnight).
 
 **Prerequisite: the ASG's EC2 instance role has no SSM permissions today.**
 `infra/lib/whisper-stack.ts` scopes the ASG's EC2 instance role to
@@ -226,12 +248,30 @@ aws iam attach-role-policy \
 
 # 3. Only instances launched AFTER the policy is attached pick up SSM
 #    registration. If the currently-running task's instance predates the
-#    attach, cycle the ASG (scale to 0, then back up) so the next benchmark
-#    run lands on a freshly-launched, SSM-registered instance.
+#    attach, you may need to cycle the ASG (scale to 0, then back up) so the
+#    next benchmark run lands on a freshly-launched, SSM-registered instance
+#    -- but see the MANDATORY precondition immediately below before doing so.
 ```
 
+**MANDATORY precondition before cycling the ASG (scale to 0, then back up):**
+
+```bash
+aws ecs list-tasks --cluster ttobak-whisper --desired-status RUNNING --region ap-northeast-2
+```
+
+This MUST return an empty task list. If it returns any task ARN, **do not
+cycle the ASG — wait** and re-check until it's empty. `enableManagedTerminationProtection`
+is `false` on this ASG, so scaling to 0 terminates every instance immediately,
+including one that is mid-task on a real (non-benchmark) transcription; that
+meeting gets stuck in `transcribing` until the 60-minute auto-expiry marks it
+`error`. There is no way to selectively terminate only the idle instance
+while termination protection is off — cycling the ASG at all is only safe
+when the cluster has zero running tasks.
+
 Revert once benchmarking is done — see the SSM detach checklist item in §7
-Cleanup.
+Cleanup. Keep the whole SSM elevation time-boxed to this benchmark session:
+attach, measure, detach the same day — don't leave the policy attached
+across sessions or overnight.
 
 Find the container instance running the task:
 

@@ -283,7 +283,7 @@ ECS infra for Whisper GPU batch transcription. After a recording completes, `tto
 
 ### Auto Scaling Group
 - **Name**: `ttobak-whisper-asg`
-- **Instance type**: g5.xlarge (NVIDIA A10G GPU, 16GB VRAM)
+- **Instance type**: g5.xlarge (NVIDIA A10G GPU, 24GB VRAM)
 - **AMI**: ECS-optimized Amazon Linux 2 (GPU)
 - **Spot price**: $1.10
 - **Capacity**: min=0, max=10, desired=0 (zero-scale)
