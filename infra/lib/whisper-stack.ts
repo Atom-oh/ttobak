@@ -18,11 +18,15 @@ export const WHISPER_CLUSTER_NAME = 'ttobak-whisper';
 export const WHISPER_TASK_FAMILY = 'ttobak-whisper';
 export const WHISPER_CONTAINER_NAME = 'whisper';
 export const WHISPER_CAPACITY_PROVIDER = 'ttobak-whisper-spot';
+export const WHISPERX_TASK_FAMILY = 'ttobak-whisperx';
+export const WHISPERX_CONTAINER_NAME = 'whisperx';
 
 export class WhisperStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
   public readonly taskDefinition: ecs.Ec2TaskDefinition;
   public readonly ecrRepository: ecr.Repository;
+  public readonly whisperxTaskDefinition: ecs.Ec2TaskDefinition;
+  public readonly whisperxEcrRepository: ecr.Repository;
 
   constructor(scope: Construct, id: string, props: WhisperStackProps) {
     super(scope, id, props);
@@ -198,6 +202,56 @@ export class WhisperStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'VpcId', {
       value: vpc.vpcId,
       exportName: 'TtobakWhisperVpcId',
+    });
+
+    // --- WhisperX benchmark engine (Phase 1, ADR-019 follow-up) ---
+    // Additive twin of the resources above: separate image + task def so
+    // pyannote 4.x can be benchmarked against the production engine without
+    // touching it. Shares the same cluster/ASG/capacity provider (GPU pool
+    // is not split) and the same IAM roles. Nothing invokes this task
+    // definition automatically -- operators run it by hand, see
+    // docs/runbooks/whisperx-benchmark.md.
+    this.whisperxEcrRepository = new ecr.Repository(this, 'WhisperXRepo', {
+      repositoryName: 'ttobak-whisperx',
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      lifecycleRules: [{ maxImageCount: 5 }],
+    });
+
+    this.whisperxTaskDefinition = new ecs.Ec2TaskDefinition(this, 'WhisperXTaskDef', {
+      family: WHISPERX_TASK_FAMILY,
+      executionRole,
+      taskRole,
+      networkMode: ecs.NetworkMode.HOST,
+    });
+
+    this.whisperxTaskDefinition.addContainer('whisperx', {
+      containerName: WHISPERX_CONTAINER_NAME,
+      image: ecs.ContainerImage.fromEcrRepository(this.whisperxEcrRepository, 'latest'),
+      memoryLimitMiB: 12288,
+      gpuCount: 1,
+      environment: {
+        BUCKET_NAME: props.bucket.bucketName,
+        TABLE_NAME: props.table.tableName,
+        AWS_REGION: cdk.Aws.REGION,
+        VOCAB_KEY: 'config/custom-vocabulary.txt',
+        // CT2 large-v3 weights are engine-compatible -- reuse the staged archive.
+        MODEL_S3_KEY: 'models/faster-whisper-large-v3.tar.gz',
+        WHISPERX_DIARIZATION_S3_KEY: 'models/whisperx-diarization-4.x.tar.gz',
+        // Conservative default: whisperx's own default of 16 raises peak
+        // VRAM on the shared 24GB A10G (see design spec's sizing risk).
+        WHISPERX_BATCH_SIZE: '8',
+      },
+      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'whisperx' }),
+      essential: true,
+    });
+
+    new cdk.CfnOutput(this, 'WhisperXTaskDefArn', {
+      value: this.whisperxTaskDefinition.taskDefinitionArn,
+      exportName: 'TtobakWhisperXTaskDefArn',
+    });
+    new cdk.CfnOutput(this, 'WhisperXEcrRepoUri', {
+      value: this.whisperxEcrRepository.repositoryUri,
+      exportName: 'TtobakWhisperXEcrUri',
     });
   }
 }

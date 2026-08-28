@@ -311,6 +311,9 @@ ECS infra for Whisper GPU batch transcription. After a recording completes, `tto
 ### Outputs
 - `ClusterArn`, `TaskDefinitionArn`, `EcrRepoUri`, `VpcId`
 
+### WhisperX benchmark engine (additive, benchmark-only)
+A second ECR repo (`ttobak-whisperx`) and ECS task definition (family `ttobak-whisperx`, container `whisperx`) sit alongside the production `ttobak-whisper` resources above, sharing the same cluster/ASG/capacity provider and IAM roles (`ttobak-whisper-execution-role`/`ttobak-whisper-task-role`) rather than splitting the GPU pool. Container env adds `WHISPERX_DIARIZATION_S3_KEY` (default `models/whisperx-diarization-4.x.tar.gz`) and `WHISPERX_BATCH_SIZE` (default `8`, conservative vs. whisperx's own default of 16 to bound peak VRAM on the shared 24GB A10G). Reuses the same staged `MODEL_S3_KEY` (CT2 large-v3 weights are engine-compatible). Outputs: `WhisperXTaskDefArn` (export `TtobakWhisperXTaskDefArn`), `WhisperXEcrRepoUri` (export `TtobakWhisperXEcrUri`). This task definition is never invoked automatically by any pipeline — it exists to benchmark pyannote 4.x against the production diarization engine (ADR-019 follow-up) and is run manually by operators; see `docs/runbooks/whisperx-benchmark.md`.
+
 ## 8. AiStack
 
 ### IAM Policies (granted to Lambdas)
