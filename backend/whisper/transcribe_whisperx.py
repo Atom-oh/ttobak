@@ -80,6 +80,23 @@ def _ensure_diarization_config() -> str | None:
         return None
 
 
+def _log_gpu_memory(stage: str) -> None:
+    """Prints one GPU memory sample to the task log so the benchmark's peak-
+    VRAM question (docs/runbooks/whisperx-benchmark.md §4) is answerable from
+    CloudWatch logs alone -- no SSM access to the shared production instance
+    role required. Best-effort: never raises."""
+    try:
+        import subprocess
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total,utilization.gpu",
+             "--format=csv,noheader"],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
+        print(f"GPU[{stage}]: {out.stdout.strip()}")
+    except Exception as e:
+        print(f"GPU[{stage}]: nvidia-smi unavailable ({e})")
+
+
 def _turns_from_diarization(diarization) -> list[tuple]:
     """Extracts (start, end, label) turns from a pyannote result. 4.x may
     return a wrapper whose Annotation lives at .speaker_diarization (3.x
@@ -114,7 +131,16 @@ def _diarize(config_path: str, audio_path: str, num_speakers: int | None) -> lis
         # unwrap defensively so both shapes work.
         return _turns_from_diarization(diarization)
     except Exception as e:
-        print(f"Diarization failed, falling back to unlabeled segments: {e}")
+        detail = str(e)
+        stderr = getattr(e, "stderr", None)
+        if stderr:
+            # subprocess.CalledProcessError.stderr may be bytes (capture_output=True
+            # above returns text, but be defensive for any other subprocess call
+            # this except also catches) -- decode defensively, never raise here.
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            detail = f"{detail} | stderr: {stderr.strip()}"
+        print(f"Diarization failed, falling back to unlabeled segments: {detail}")
         return []
 
 
@@ -309,6 +335,7 @@ def main():
     model = whisperx.load_model(
         model_dir, device="cuda", compute_type="float16",
         language="ko", asr_options=asr_options)
+    _log_gpu_memory("model-loaded")
 
     print("Transcribing (batched)...")
     start = time.time()
@@ -322,8 +349,21 @@ def main():
     language = tx.get("language", "ko")
     duration_seconds = len(audio) / SAMPLE_RATE
     print(f"Done: {len(segments)} segments in {elapsed:.1f}s")
+    _log_gpu_memory("transcribed")
+
+    # Free the ASR model before alignment/diarization load their own models --
+    # §4's per-stage VRAM samples should reflect per-stage residency (only the
+    # model(s) actually in use for that stage), not all-models-resident, since
+    # that's what the Phase 2 instance-sizing decision needs to see.
+    del model
+    try:
+        import torch
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
 
     segments, alignment_enabled = _try_align(segments, audio, language)
+    _log_gpu_memory("aligned")
 
     num_speakers_env = os.environ.get("NUM_SPEAKERS", "").strip()
     num_speakers = int(num_speakers_env) if num_speakers_env.isdigit() else None
@@ -335,6 +375,7 @@ def main():
         print("Diarizing (pyannote 4.x)...")
         diarize_start = time.time()
         turns = _diarize(diarization_config, local_path, num_speakers)
+        _log_gpu_memory("diarized")
         if turns:
             segments = common.assign_speakers(segments, turns)
             num_speakers_detected = len({t[2] for t in turns})

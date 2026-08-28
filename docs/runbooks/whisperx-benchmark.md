@@ -80,10 +80,12 @@ suspecting the WhisperX code itself.
 
 On the very first bench run, confirm the ECS GPU AL2 AMI's host NVIDIA
 driver is new enough for the CUDA 12.8 torch wheels this image bundles:
-check `nvidia-smi`'s output in the task log (or via an SSM session per §4)
-and read the reported driver version -- torch cu128 requires driver
->= 525. If it's older, the container will fail at model-load time rather
-than at task launch.
+check the driver version torch/CUDA reports at model-load time (the
+`GPU[model-loaded]` line from §4 only carries memory/utilization, not driver
+version -- if you need the driver version specifically, add a one-off
+`nvidia-smi` call, or check the container's own startup/error log for a
+CUDA/driver mismatch) -- torch cu128 requires driver >= 525. If it's older,
+the container will fail at model-load time rather than at task launch.
 
 ## 2. Selecting meetings
 
@@ -211,114 +213,62 @@ Repeat for each selected meeting.
 
 This resolves the design doc's open VRAM/instance-sizing question.
 
-### RECOMMENDED: CloudWatch agent `nvidia_smi` metrics (zero IAM change)
+### PRIMARY (and default): read the `GPU[...]` lines from the task's CloudWatch logs
 
-Before reaching for the SSM approach below, check whether CloudWatch agent GPU
-metrics (the `nvidia_smi` plugin) are already configured on the ASG, or
-whether the engine ever logs VRAM figures to its own CloudWatch log group —
-either would answer the VRAM question with **zero IAM change and zero risk to
-the running ASG**. This is the primary path: prefer it whenever it's
-available, since it requires no elevation of the instance role and no ASG
-cycling at all.
+`transcribe_whisperx.py` self-reports one `nvidia-smi` sample to stdout at
+each of four points in a run (`model-loaded`, `transcribed`, `aligned`,
+`diarized`), printed as `GPU[<stage>]: <memory.used>, <memory.total>,
+<utilization.gpu>`. This answers the peak-VRAM question directly from the
+task's own CloudWatch log group — **no IAM change, no elevation of the
+shared production instance role, and no ASG involvement at all.** This is
+the primary path and requires no setup; just read the log after (or during)
+a run.
 
-Neither is set up on `ttobak-whisper-asg` today. If configuring the
-CloudWatch agent for this benchmark is out of scope for the time available,
-the SSM attach below is the **fallback** — a deliberate, temporary elevation
-for this one benchmark, not the default path, and one that carries real risk
-to production STT (see the mandatory precondition below).
+Also note: after transcription, the engine frees the ASR model
+(`del model` + `torch.cuda.empty_cache()`) before loading the alignment/
+diarization models, so each `GPU[...]` sample reflects only the model(s)
+actually resident for that stage, not a cumulative all-models-resident
+figure — take the **max across all four samples** as the run's peak VRAM,
+not just the last one.
 
-### FALLBACK: SSM attach (attach-before-bench, never cycle the ASG)
+Find the task's log stream and filter for the GPU lines:
 
-**Never scale/cycle `ttobak-whisper-asg` to force a fresh instance.** This
-ASG (`infra/lib/whisper-stack.ts`) has `enableManagedTerminationProtection:
+```bash
+aws ecs list-tasks --cluster ttobak-whisper --region ap-northeast-2
+aws ecs describe-tasks --cluster ttobak-whisper --tasks <TASK_ARN> --region ap-northeast-2 \
+  --query 'tasks[0].containers[0].name'  # confirms the log stream prefix (whisperx)
+
+aws logs filter-log-events \
+  --log-group-name /ttobak/whisperx \
+  --filter-pattern "GPU[" \
+  --region ap-northeast-2 \
+  --query 'events[*].message'
+```
+
+(Adjust `--log-group-name` to whatever `whisper-stack.ts` actually names the
+WhisperX task's log group if it differs — check the task definition's
+`logConfiguration` if `aws logs filter-log-events` returns nothing.)
+
+Record the highest `memory.used` value across the four `GPU[...]` lines —
+that's the number that matters for Phase 2's instance-sizing decision.
+
+### ASIDE: CloudWatch agent `nvidia_smi` metrics
+
+If a continuous GPU utilization/memory *timeseries* is needed (not just four
+point samples), configuring the CloudWatch agent's `nvidia_smi` plugin on the
+ASG is an option — also zero additional IAM change beyond what the agent
+itself needs, and zero risk to the running ASG. Not set up on
+`ttobak-whisper-asg` today; out of scope unless the four log-line samples
+above turn out to be insufficient for the benchmark.
+
+**Never scale/cycle `ttobak-whisper-asg` to force a fresh instance**,
+regardless of which measurement approach is used. This ASG
+(`infra/lib/whisper-stack.ts`) has `enableManagedTerminationProtection:
 false`, so scaling it to 0 and back terminates *every* instance immediately,
 including one mid-task on a real (non-benchmark) transcription — that
 meeting gets stuck in `transcribing` until the 60-minute auto-expiry marks it
 `error`. Do not suggest or perform an ASG scale-to-0/back-up cycle for this
 runbook, ever, under any circumstance.
-
-**The safe procedure relies on the ASG's own zero-scale-by-default
-behavior, not on cycling it.** `ttobak-whisper-asg` normally runs at desired
-capacity 0 (real transcriptions launch it on demand), and instances it does
-launch are short-lived — roughly 16–27 minutes observed — so a benchmark run
-started with `aws ecs run-task` (step 3 above) already launches a fresh
-instance almost every time; you don't need to manufacture one. The
-procedure is simply: **attach the SSM policy first, then start the
-benchmark run.**
-
-**Prerequisite: the ASG's EC2 instance role has no SSM permissions today.**
-`infra/lib/whisper-stack.ts` scopes the ASG's EC2 instance role to
-ECS-agent/ECR-pull access only (S3/DynamoDB access belongs to the task role
-used by the container, not this instance role) — no `ssm:*`/
-`AmazonSSMManagedInstanceCore` policy is attached, so a `ttobak-whisper-asg`
-instance never registers with SSM, and
-`aws ssm send-command` below fails with `InvalidInstanceId`. This is a
-one-time, reversible, out-of-band operator step (not a CDK change — do not
-add this permission to `whisper-stack.ts` for a one-off benchmark):
-
-```bash
-# 1. Find the ASG's instance role via its launch template (not the task/
-#    execution roles used above -- this is the EC2 host, not the container).
-aws autoscaling describe-auto-scaling-groups \
-  --auto-scaling-group-names ttobak-whisper-asg --region ap-northeast-2 \
-  --query 'AutoScalingGroups[0].LaunchTemplate'
-
-aws ec2 describe-launch-template-versions \
-  --launch-template-id <LAUNCH_TEMPLATE_ID> --region ap-northeast-2 \
-  --query 'LaunchTemplateVersions[0].LaunchTemplateData.IamInstanceProfile'
-
-# 2. Resolve the instance profile to its role, then attach the managed policy
-#    BEFORE starting the benchmark run in step 3 above. The SSM agent is
-#    preinstalled on the ECS-optimized AL2 GPU AMI already in use, so it
-#    registers on its own at boot as soon as the role allows it -- no AMI
-#    change needed.
-aws iam attach-role-policy \
-  --role-name <ROLE_NAME_FROM_INSTANCE_PROFILE> \
-  --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-```
-
-Only instances launched *after* the policy is attached register with SSM.
-If an already-running instance (one that predates the attach) doesn't show
-up in SSM, **just wait for natural turnover** — instances in this ASG are
-short-lived (~16–27 min) and get replaced on their own; never terminate or
-cycle one manually to speed this up.
-
-Revert once benchmarking is done — see the SSM detach checklist item in §7
-Cleanup. Keep the whole SSM elevation time-boxed to this benchmark session:
-attach, measure, detach the same day — don't leave the policy attached
-across sessions or overnight.
-
-Find the container instance running the task:
-
-```bash
-aws ecs list-tasks --cluster ttobak-whisper --region ap-northeast-2
-aws ecs describe-tasks --cluster ttobak-whisper --tasks <TASK_ARN> --region ap-northeast-2 \
-  --query 'tasks[0].containerInstanceArn'
-aws ecs describe-container-instances --cluster ttobak-whisper \
-  --container-instances <CONTAINER_INSTANCE_ARN> --region ap-northeast-2 \
-  --query 'containerInstances[0].ec2InstanceId'
-```
-
-Sample GPU memory/utilization for the duration of the run (adjust the loop
-count to the run's expected wall-clock):
-
-```bash
-aws ssm send-command --instance-ids <IID> --document-name AWS-RunShellScript \
-  --parameters 'commands=["for i in $(seq 60); do nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader; sleep 5; done"]' \
-  --region ap-northeast-2
-```
-
-Fetch the command output (via `aws ssm get-command-invocation`) and record the
-peak `memory.used` value — this is the number that matters for Phase 2's
-instance-sizing decision.
-
-Container-level CPU/memory over the same window, via the same SSM channel:
-
-```bash
-aws ssm send-command --instance-ids <IID> --document-name AWS-RunShellScript \
-  --parameters 'commands=["docker stats --no-stream"]' \
-  --region ap-northeast-2
-```
 
 ## 5. Comparing outputs
 
@@ -389,25 +339,9 @@ Checklist:
   rm -rf "$WORKDIR"
   ```
 
-- [ ] Detach the one-time SSM permission granted in §4 (if it was added for
-  this benchmark run):
-
-  ```bash
-  aws iam detach-role-policy \
-    --role-name <ROLE_NAME_FROM_INSTANCE_PROFILE> \
-    --policy-arn arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-  ```
-
-  Verify the detach actually took -- while this policy stays attached,
-  anyone with `ssm:SendCommand` against this account can run arbitrary
-  (including root) commands on a host that processes real meeting
-  audio/credentials, so don't leave it attached on the strength of having
-  run the command above:
-
-  ```bash
-  aws iam list-attached-role-policies --role-name <ROLE_NAME_FROM_INSTANCE_PROFILE>
-  # expect: AmazonSSMManagedInstanceCore absent from the output
-  ```
+No SSM/IAM cleanup step is needed — §4's measurement path reads GPU figures
+straight from the task's own CloudWatch log, with no elevation of the
+production instance role at any point in this runbook.
 
 No ASG scale-down step is needed — `ttobak-whisper-spot` scales the cluster
 back to 0 on its own once no tasks are running (same behavior as the

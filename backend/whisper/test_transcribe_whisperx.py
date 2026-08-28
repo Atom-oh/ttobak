@@ -53,6 +53,28 @@ class TestBuildResult(unittest.TestCase):
                          {'start': 2.0, 'end': 4.0, 'text': '반갑습니다'})
 
 
+class TestLogGpuMemory(unittest.TestCase):
+    """_log_gpu_memory is best-effort task-log GPU reporting (FINDING 1 fix:
+    replaces the runbook's SSM-attach fallback -- no elevated production
+    instance-role access is needed to answer the benchmark's peak-VRAM
+    question, just the CloudWatch task log)."""
+
+    def test_nvidia_smi_failure_does_not_raise(self):
+        with mock.patch('subprocess.run', side_effect=OSError('nvidia-smi not found')):
+            transcribe_whisperx._log_gpu_memory('model-loaded')  # must not raise
+
+    def test_successful_run_prints_gpu_line(self):
+        fake_result = mock.Mock(stdout='1024 MiB, 24576 MiB, 5 %\n')
+        with mock.patch('subprocess.run', return_value=fake_result), \
+             mock.patch('builtins.print') as mock_print:
+            transcribe_whisperx._log_gpu_memory('transcribed')
+
+        mock_print.assert_called_once()
+        printed = mock_print.call_args[0][0]
+        self.assertIn('GPU[transcribed]', printed)
+        self.assertIn('1024 MiB, 24576 MiB, 5 %', printed)
+
+
 class TestTurnsFromDiarization(unittest.TestCase):
     def test_annotation_shape_direct_itertracks(self):
         """3.x-style: pipeline(...) returns the Annotation directly."""

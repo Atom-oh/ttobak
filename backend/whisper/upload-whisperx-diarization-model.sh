@@ -34,7 +34,11 @@ if [ -z "${HF_TOKEN:-}" ]; then
 fi
 
 echo "Downloading ${PIPELINE_REPO} (pyannote.audio 4.x pipeline)..."
-pip3 install -q huggingface_hub pyyaml
+# Prefer a venv for operator hygiene; the --break-system-packages fallback
+# below is only for PEP 668 "externally-managed" hosts (e.g. Ubuntu 24.04)
+# where a plain pip3 install fails outright.
+pip3 install -q huggingface_hub pyyaml 2>/dev/null || \
+  pip3 install -q --break-system-packages huggingface_hub pyyaml
 # HF_TOKEN is already in this shell's env (the runbook invokes this script as
 # `HF_TOKEN=... ./upload-whisperx-diarization-model.sh`). This export only
 # controls propagation into the child python3 process below -- it does not
