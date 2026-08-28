@@ -267,26 +267,35 @@ This resolves the design doc's open VRAM/instance-sizing question.
 ### PRIMARY (and default): read the `GPU[...]` lines from the task's CloudWatch logs
 
 `transcribe_whisperx.py` self-reports one `nvidia-smi` sample to stdout at
-up to four points in a run (`model-loaded`, `transcribed`, `aligned`,
-`diarized` — diarization is best-effort and is skipped entirely when the
-model bundle isn't staged, in which case only the first three lines appear),
-printed as `GPU[<stage>]: <memory.used>, <memory.total>, <utilization.gpu>`.
-This answers the peak-VRAM question directly from the task's own CloudWatch
-log group — **no IAM change, no elevation of the shared production instance
+up to five points in a run (`model-loaded`, `transcribed`, `aligning`,
+`align-freed`, `diarized` — diarization is best-effort and is skipped
+entirely when the model bundle isn't staged, in which case only the first
+four lines appear), printed as
+`GPU[<stage>]: <memory.used>, <memory.total>, <utilization.gpu>`. This
+answers the peak-VRAM question directly from the task's own CloudWatch log
+group — **no IAM change, no elevation of the shared production instance
 role, and no ASG involvement at all.** This is the primary path and requires
 no setup; just read the log after (or during) a run.
 
 Also note: after transcription, the engine frees the ASR model
-(`del model` + `torch.cuda.empty_cache()`), and after alignment it likewise
-frees the wav2vec2 align model, before loading the next stage's model, so
-each `GPU[...]` sample reflects only the model(s) actually resident for that
-stage, not a cumulative all-models-resident figure — take the **max across
-all (up to four) samples** as the run's peak VRAM, not just the last one.
-One honest caveat: these are still four point-in-time samples taken right
-after each stage's own work completes, not a continuous trace — a stage
-could still transiently peak higher mid-computation than what its sample
-captures (see the CloudWatch agent aside below if that gap matters for a
-specific run).
+(`del model` + `torch.cuda.empty_cache()`) before alignment loads its own
+model. `aligning` is sampled immediately after `whisperx.align(...)`
+returns, while the wav2vec2 align model is still resident on the GPU — this
+is the sample that actually captures alignment's own VRAM use, which is
+often the run's peak. Only after that sample does the engine free the align
+model (`align_model = None` + `torch.cuda.empty_cache()`); `align-freed` is
+sampled next and reflects residency with that model already released, not
+alignment's own peak (an earlier revision sampled only this point, under the
+stage label `aligned`, which meant alignment's own VRAM use was never
+captured at all). So each `GPU[...]` sample reflects only the model(s)
+actually resident at that point, not a cumulative all-models-resident
+figure — take the **max across all (up to five) samples** as the run's
+peak VRAM, not just the last one. One honest caveat: these are still
+point-in-time samples taken right after each stage's own work completes
+(or, for `aligning`, right as alignment finishes but before its model is
+freed), not a continuous trace — a stage could still transiently peak
+higher mid-computation than what its sample captures (see the CloudWatch
+agent aside below if that gap matters for a specific run).
 
 Find the task's own log stream and filter for the GPU lines — **scope to
 this run's stream, not the whole log group**: the log group's 30-day
@@ -328,16 +337,17 @@ aws logs filter-log-events \
 (`WhisperXLogGroup` in `infra/lib/whisper-stack.ts`, 30-day retention) — the
 name above is exact, not a placeholder to adjust.
 
-Record the highest `memory.used` value across the four `GPU[...]` lines —
-that's the number that matters for Phase 2's instance-sizing decision.
+Record the highest `memory.used` value across the (up to five) `GPU[...]`
+lines — that's the number that matters for Phase 2's instance-sizing
+decision.
 
 ### ASIDE: CloudWatch agent `nvidia_smi` metrics
 
-If a continuous GPU utilization/memory *timeseries* is needed (not just four
+If a continuous GPU utilization/memory *timeseries* is needed (not just five
 point samples), configuring the CloudWatch agent's `nvidia_smi` plugin on the
 ASG is an option — also zero additional IAM change beyond what the agent
 itself needs, and zero risk to the running ASG. Not set up on
-`ttobak-whisper-asg` today; out of scope unless the four log-line samples
+`ttobak-whisper-asg` today; out of scope unless the five log-line samples
 above turn out to be insufficient for the benchmark.
 
 **Never scale/cycle `ttobak-whisper-asg` to force a fresh instance**,

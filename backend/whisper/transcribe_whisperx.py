@@ -196,10 +196,20 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
     did `del` on its own parameter, which only removed the callee's binding
     and left this scope's reference alive through the empty_cache() call --
     the model was never actually freed. Without this, the model would stay
-    resident for the rest of the run, so the GPU[aligned]/GPU[diarized]
+    resident for the rest of the run, so the GPU[align-freed]/GPU[diarized]
     samples in §4 would include its memory even though those stages don't
     use it -- contradicting the per-stage-residency claim in
     _log_gpu_memory's caller and the runbook.
+
+    GPU sampling (FINDING 1, round 13): main()'s post-call GPU sample fires
+    AFTER this function's `finally` has already freed the align model and
+    emptied the CUDA cache, so alignment's own VRAM residency -- the run's
+    likely peak -- was never sampled and §4's "max across samples" claim
+    systematically under-reported. This function samples itself, immediately
+    after `whisperx.align(...)` returns and the redirect context above has
+    exited (so the GPU[...] line reaches real stdout, not the suppressed
+    buffer) but BEFORE the `finally` below drops the model reference --
+    i.e. while the align model is still resident on the GPU.
 
     Returns (segments, alignment_enabled, repaired_count)."""
     import contextlib
@@ -214,6 +224,10 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
             align_model, metadata = whisperx.load_align_model(
                 language_code=language, device="cuda")
             aligned = whisperx.align(segments, align_model, metadata, audio, "cuda")
+        # Sample GPU memory now, while align_model/metadata are still
+        # resident (this function's own `finally` hasn't run yet) -- see the
+        # GPU-sampling note in this function's docstring.
+        _log_gpu_memory("aligning")
         captured_lines = sum(
             1 for buf in (stdout_buf, stderr_buf)
             for line in buf.getvalue().splitlines() if line.strip())
@@ -309,15 +323,19 @@ def build_result(segments: list[dict], language: str, language_probability: floa
 
 
 class BenchConfigError(ValueError):
-    """Raised ONLY by this module's own operator-facing config validators
-    (validate_output_key, validate_audio_key) -- never by whisperx/pyannote/
-    ffmpeg or any other library call. Its message is built entirely from
-    S3 key strings and env-var values this process itself received, never
-    from transcript/audio content, so it is safe-by-construction to log
-    verbatim (FINDING 2, round 12) -- unlike a generic exception's str(),
-    which can embed transcript fragments raised from library internals.
-    Subclasses ValueError so any existing `assertRaises(ValueError)` test
-    coverage for these validators keeps passing unchanged."""
+    """Raised ONLY by this module's own operator-facing config checks
+    (validate_output_key, validate_audio_key, and main()'s MEETING_ID/
+    USER_ID/no-audio-found checks) -- never by whisperx/pyannote/ffmpeg or
+    any other library call. Its message is built entirely from S3 key
+    strings, env-var values, and meeting/user identifiers this process
+    itself received, never from transcript/audio content -- every one of
+    these checks runs before any audio download or model/GPU work, so no
+    transcript content can exist yet -- so it is safe-by-construction to log
+    verbatim (FINDING 2, round 12; extended round 13) -- unlike a generic
+    exception's str(), which can embed transcript fragments raised from
+    library internals. Subclasses ValueError so any existing
+    `assertRaises(ValueError)` test coverage for these validators keeps
+    passing unchanged."""
 
 
 def _is_real_pipeline_key(key: str, meeting_id: str) -> bool:
@@ -418,8 +436,17 @@ def validate_audio_key(audio_key: str, user_id: str, meeting_id: str) -> str:
 
 
 def main():
-    meeting_id = os.environ["MEETING_ID"]
-    user_id = os.environ["USER_ID"]
+    # Read via .get()+check (not os.environ[...]) so a missing env var
+    # raises BenchConfigError, not a bare KeyError: this failure happens
+    # before any S3/audio access, so no transcript content is possible yet
+    # -- the message is safe-by-construction, same as validate_output_key/
+    # validate_audio_key (FINDING 2(b), round 13).
+    meeting_id = os.environ.get("MEETING_ID", "").strip()
+    if not meeting_id:
+        raise BenchConfigError("MEETING_ID env var is required")
+    user_id = os.environ.get("USER_ID", "").strip()
+    if not user_id:
+        raise BenchConfigError("USER_ID env var is required")
 
     # Validate OUTPUT_KEY/AUDIO_KEY before any S3 download or model/GPU work --
     # a bad OUTPUT_KEY (e.g. a typo'd bench key) must fail fast, not after an
@@ -435,7 +462,10 @@ def main():
     if not audio_key:
         audio_key = common.find_audio_key(s3, BUCKET, user_id, meeting_id)
     if not audio_key:
-        raise RuntimeError(f"No audio file found for meeting {meeting_id}")
+        # Safe by construction, same as MEETING_ID/USER_ID above: no audio
+        # has been downloaded yet at this point, so no transcript content
+        # can be embedded in this message (FINDING 2(b), round 13).
+        raise BenchConfigError(f"No audio file found for meeting {meeting_id}")
 
     basename = audio_key.rsplit("/", 1)[-1]
     ext = basename.rsplit(".", 1)[-1] if "." in basename else "bin"
@@ -484,7 +514,12 @@ def main():
         pass
 
     segments, alignment_enabled, alignment_repaired = _try_align(segments, audio, language)
-    _log_gpu_memory("aligned")
+    # _try_align already sampled GPU[aligning] itself, while the align model
+    # was still resident (see its docstring) -- this sample is taken after
+    # _try_align's own `finally` has freed that model and emptied the CUDA
+    # cache, so it reflects post-alignment residency, not alignment's own
+    # peak.
+    _log_gpu_memory("align-freed")
 
     num_speakers_env = os.environ.get("NUM_SPEAKERS", "").strip()
     num_speakers = int(num_speakers_env) if num_speakers_env.isdigit() else None
@@ -543,7 +578,7 @@ def format_fatal_error(e: Exception) -> str:
     anything."""
     if isinstance(e, BenchConfigError):
         return f"ERROR: {type(e).__name__}: {e}"
-    message_len = len(str(e).encode("utf-8", errors="replace"))
+    message_len = len(str(e))
     return (f"ERROR: {type(e).__name__} (message suppressed, "
             f"{message_len} chars -- PII hygiene; see task exit code)")
 

@@ -150,9 +150,16 @@ class TestTryAlign(unittest.TestCase):
         fake_whisperx.align = lambda segments, model, metadata, audio, device: {
             'segments': aligned_segments}
 
-        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}), \
+                mock.patch.object(
+                    transcribe_whisperx, '_log_gpu_memory') as mock_log_gpu:
             result_segments, alignment_enabled, repaired = transcribe_whisperx._try_align(
                 input_segments, audio=object(), language='ko')
+
+        # FINDING 1 (round 13): the run's likely peak VRAM is alignment's own
+        # residency -- must be sampled while the align model is still
+        # resident, not only after _try_align's own `finally` has freed it.
+        mock_log_gpu.assert_called_once_with('aligning')
 
         self.assertTrue(alignment_enabled)
         self.assertEqual(repaired, 1)
