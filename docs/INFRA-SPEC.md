@@ -105,7 +105,7 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
     "MaxAge": 3600
   }
   ```
-- **Lifecycle**: `audio/` → IA after 90 days; `processed/` → IA after 180 days
+- **Lifecycle**: `audio/` → IA after 90 days; `processed/` → IA after 180 days; `bench-transcripts/` (whisperx benchmark output, PII) → current-version expiration at 30 days (on this versioned bucket, this creates a delete marker rather than deleting the object outright) + noncurrent-version expiration 30 days after that, so worst-case effective retention before the underlying data is actually gone is ~60 days
 - **Block public access**: ALL blocked
 - **Removal policy**: RETAIN
 
@@ -283,7 +283,7 @@ ECS infra for Whisper GPU batch transcription. After a recording completes, `tto
 
 ### Auto Scaling Group
 - **Name**: `ttobak-whisper-asg`
-- **Instance type**: g5.xlarge (NVIDIA A10G GPU, 16GB VRAM)
+- **Instance type**: g5.xlarge (NVIDIA A10G GPU, 24GB VRAM)
 - **AMI**: ECS-optimized Amazon Linux 2 (GPU)
 - **Spot price**: $1.10
 - **Capacity**: min=0, max=10, desired=0 (zero-scale)
@@ -310,6 +310,10 @@ ECS infra for Whisper GPU batch transcription. After a recording completes, `tto
 
 ### Outputs
 - `ClusterArn`, `TaskDefinitionArn`, `EcrRepoUri`, `VpcId`
+- `WhisperXTaskDefArn` (export `TtobakWhisperXTaskDefArn`), `WhisperXEcrRepoUri` (export `TtobakWhisperXEcrUri`) — see WhisperX benchmark engine below.
+
+### WhisperX benchmark engine (additive, benchmark-only)
+A second ECR repo (`ttobak-whisperx`) and ECS task definition (family `ttobak-whisperx`, container `whisperx`) sit alongside the production `ttobak-whisper` resources above, sharing the same cluster/ASG/capacity provider (not splitting the GPU pool) but with its own IAM task role — `ttobak-whisperx-task-role`, kept separate from the legacy `ttobak-whisper-task-role` because reusing that role would give every bench run full bucket read/write + table read/write, far more than a benchmark harness needs. The execution role (`ttobak-whisper-execution-role`, ECR pull + log delivery only) stays shared — that's not a data-plane privilege. `ttobak-whisperx-task-role`'s grants are scoped to the benchmark's actual needs: read on `audio/*`, `models/*`, `config/*`; write on ONLY `bench-transcripts/*` (its own output prefix) — there is no `transcripts/*` write grant, since Phase 1 never legitimately writes there. `validate_output_key` in `transcribe_whisperx.py` still ACCEPTS the calling meeting's own `transcripts/{meetingId}[...].json` key as a deliberate Phase-2 drop-in escape hatch at the application layer, but with no matching IAM grant, pointing `OUTPUT_KEY` at it in Phase 1 now also fails at the IAM layer (S3 `PutObject` `AccessDenied`) — correct defense-in-depth on top of the application-level gate, not a gap. Phase 2's cutover to this task definition for real-pipeline runs will need to add the `transcripts/*` write grant back (or reuse the legacy role) for that escape hatch to actually work. Deliberately **no DynamoDB grant** — `mark_meeting_error` (`whisper_common.py`) is best-effort and just logs the `AccessDenied` when a bench run's error path tries to write meeting status; Phase 2's cutover to this task definition for real-pipeline runs will need to either grant table read/write or reuse the legacy role. Note: `TABLE_NAME` is still a required env var at container import time (`transcribe_whisperx.py` reads `os.environ["TABLE_NAME"]` at module load) even though the role carries no DynamoDB grant — `mark_meeting_error` fails `AccessDenied` harmlessly on that best-effort path, logged but never raised; omitting the env var entirely would instead crash at import with a `KeyError`, before any benchmark work starts, so it stays required despite the role granting it nothing. Container logs go to a dedicated log group `/ttobak/whisperx` (30-day retention, `RemovalPolicy.DESTROY`) rather than the shared default — `aws/*` is reserved by AWS, so custom log groups use the `/ttobak/*` convention. Container env adds `WHISPERX_DIARIZATION_S3_KEY` (default `models/whisperx-diarization-4.x.tar.gz`) and `WHISPERX_BATCH_SIZE` (default `8`, conservative vs. whisperx's own default of 16 to bound peak VRAM on the shared 24GB A10G). Reuses the same staged `MODEL_S3_KEY` (CT2 large-v3 weights are engine-compatible). Outputs: `WhisperXTaskDefArn` (export `TtobakWhisperXTaskDefArn`), `WhisperXEcrRepoUri` (export `TtobakWhisperXEcrUri`). This task definition is never invoked automatically by any pipeline — it exists to benchmark pyannote 4.x against the production diarization engine (ADR-019 follow-up) and is run manually by operators; see `docs/runbooks/whisperx-benchmark.md`. **`OUTPUT_KEY` contract diverges from the legacy task**: `transcribe_whisperx.py` requires an explicit `OUTPUT_KEY` and fails fast (raises before any download/GPU work) if it's unset or blank, whereas the legacy `transcribe.py` defaults to `transcripts/{meetingId}.json` when `OUTPUT_KEY` is omitted. Benchmark run output lives under S3 prefix `bench-transcripts/`, deliberately outside both the `storage-stack.ts` OAC read allowlist and the `transcripts/`-prefixed EventBridge rule that triggers `ttobak-summarize` — so a bench artifact is never served as a download and never fires the summarize pipeline.
 
 ## 8. AiStack
 

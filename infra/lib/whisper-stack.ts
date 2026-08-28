@@ -6,6 +6,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
 export interface WhisperStackProps extends cdk.StackProps {
@@ -18,11 +19,15 @@ export const WHISPER_CLUSTER_NAME = 'ttobak-whisper';
 export const WHISPER_TASK_FAMILY = 'ttobak-whisper';
 export const WHISPER_CONTAINER_NAME = 'whisper';
 export const WHISPER_CAPACITY_PROVIDER = 'ttobak-whisper-spot';
+export const WHISPERX_TASK_FAMILY = 'ttobak-whisperx';
+export const WHISPERX_CONTAINER_NAME = 'whisperx';
 
 export class WhisperStack extends cdk.Stack {
   public readonly cluster: ecs.Cluster;
   public readonly taskDefinition: ecs.Ec2TaskDefinition;
   public readonly ecrRepository: ecr.Repository;
+  public readonly whisperxTaskDefinition: ecs.Ec2TaskDefinition;
+  public readonly whisperxEcrRepository: ecr.Repository;
 
   constructor(scope: Construct, id: string, props: WhisperStackProps) {
     super(scope, id, props);
@@ -198,6 +203,95 @@ export class WhisperStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'VpcId', {
       value: vpc.vpcId,
       exportName: 'TtobakWhisperVpcId',
+    });
+
+    // --- WhisperX benchmark engine (Phase 1, ADR-019 follow-up) ---
+    // Additive twin of the resources above: separate image + task def so
+    // pyannote 4.x can be benchmarked against the production engine without
+    // touching it. Shares the same cluster/ASG/capacity provider (GPU pool
+    // is not split) but -- unlike the legacy engine above -- gets its OWN
+    // task role, scoped to what the benchmark actually needs (round-10
+    // review finding: reusing the legacy taskRole gave every bench run
+    // full bucket read/write + table read/write, far more than a
+    // benchmark harness needs). executionRole (ECR pull + log delivery
+    // only) stays shared -- that's not a data-plane privilege.
+    this.whisperxEcrRepository = new ecr.Repository(this, 'WhisperXRepo', {
+      repositoryName: 'ttobak-whisperx',
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      lifecycleRules: [{ maxImageCount: 5 }],
+    });
+
+    const whisperxTaskRole = new iam.Role(this, 'WhisperXTaskRole', {
+      roleName: 'ttobak-whisperx-task-role',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+    });
+    // Read: the model/config/vocab archives it stages, and the source audio
+    // it transcribes. No write access to any read-only prefix.
+    props.bucket.grantRead(whisperxTaskRole, 'audio/*');
+    props.bucket.grantRead(whisperxTaskRole, 'models/*');
+    props.bucket.grantRead(whisperxTaskRole, 'config/*');
+    // Write: bench-transcripts/* is the benchmark's own output prefix, and
+    // the ONLY write grant this role gets (round-11 review finding: Phase 1
+    // never legitimately writes to transcripts/*, so that grant was pure
+    // unused blast radius). validate_output_key (transcribe_whisperx.py)
+    // still ACCEPTS this meeting's own transcripts/{meetingId}[...].json key
+    // as a deliberate Phase-2 drop-in escape hatch at the application layer,
+    // but with no matching IAM grant here, actually pointing OUTPUT_KEY at
+    // it in Phase 1 now also fails at the IAM layer (S3 PutObject
+    // AccessDenied) -- correct defense-in-depth, not a bug. Phase 2's
+    // cutover to real-pipeline runs must add the transcripts/* write grant
+    // back (or reuse the legacy task role) for that escape hatch to work.
+    props.bucket.grantPut(whisperxTaskRole, 'bench-transcripts/*');
+    // Deliberately NO DynamoDB grant: mark_meeting_error (whisper_common.py)
+    // is best-effort and just logs the AccessDenied when a bench run's error
+    // path tries to write meeting status. Phase 2's cutover to this task
+    // definition for real-pipeline runs will need to either grant table
+    // read/write here or reuse the legacy taskRole -- revisit at that point.
+
+    const whisperxLogGroup = new logs.LogGroup(this, 'WhisperXLogGroup', {
+      logGroupName: '/ttobak/whisperx',
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    this.whisperxTaskDefinition = new ecs.Ec2TaskDefinition(this, 'WhisperXTaskDef', {
+      family: WHISPERX_TASK_FAMILY,
+      executionRole,
+      taskRole: whisperxTaskRole,
+      networkMode: ecs.NetworkMode.HOST,
+    });
+
+    this.whisperxTaskDefinition.addContainer('whisperx', {
+      containerName: WHISPERX_CONTAINER_NAME,
+      image: ecs.ContainerImage.fromEcrRepository(this.whisperxEcrRepository, 'latest'),
+      memoryLimitMiB: 12288,
+      gpuCount: 1,
+      environment: {
+        BUCKET_NAME: props.bucket.bucketName,
+        TABLE_NAME: props.table.tableName,
+        AWS_REGION: cdk.Aws.REGION,
+        VOCAB_KEY: 'config/custom-vocabulary.txt',
+        // CT2 large-v3 weights are engine-compatible -- reuse the staged archive.
+        MODEL_S3_KEY: 'models/faster-whisper-large-v3.tar.gz',
+        WHISPERX_DIARIZATION_S3_KEY: 'models/whisperx-diarization-4.x.tar.gz',
+        // Conservative default: whisperx's own default of 16 raises peak
+        // VRAM on the shared 24GB A10G (see design spec's sizing risk).
+        WHISPERX_BATCH_SIZE: '8',
+      },
+      logging: ecs.LogDrivers.awsLogs({
+        logGroup: whisperxLogGroup,
+        streamPrefix: 'whisperx',
+      }),
+      essential: true,
+    });
+
+    new cdk.CfnOutput(this, 'WhisperXTaskDefArn', {
+      value: this.whisperxTaskDefinition.taskDefinitionArn,
+      exportName: 'TtobakWhisperXTaskDefArn',
+    });
+    new cdk.CfnOutput(this, 'WhisperXEcrRepoUri', {
+      value: this.whisperxEcrRepository.repositoryUri,
+      exportName: 'TtobakWhisperXEcrUri',
     });
   }
 }

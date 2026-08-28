@@ -141,4 +141,24 @@ describe('StorageStack', () => {
       }),
     });
   });
+
+  test('bench-transcripts/ expires after 30 days (PII, operator-scratch only)', () => {
+    // docs/runbooks/whisperx-benchmark.md's bench-transcripts/ prefix holds
+    // full meeting transcript text -- expire it automatically rather than
+    // relying on manual runbook cleanup (CLAUDE.md security policy: PII
+    // requires TTL). Noncurrent versions must expire too since the bucket
+    // is versioned, or old versions of the data outlive the "delete".
+    template.hasResourceProperties('AWS::S3::Bucket', {
+      LifecycleConfiguration: {
+        Rules: Match.arrayWith([
+          Match.objectLike({
+            Prefix: 'bench-transcripts/',
+            Status: 'Enabled',
+            ExpirationInDays: 30,
+            NoncurrentVersionExpiration: { NoncurrentDays: 30 },
+          }),
+        ]),
+      },
+    });
+  });
 });
