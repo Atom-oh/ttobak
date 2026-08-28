@@ -4,8 +4,8 @@ Phase 1 benchmark procedure for comparing the legacy Whisper+pyannote 3.1 pipeli
 (task def `ttobak-whisper`, container `whisper`) against the WhisperX+pyannote 4.x
 pipeline (task def `ttobak-whisperx`, container `whisperx`) on real, already-`done`
 meetings. This is a manual, operator-driven benchmark — it produces no product
-change and writes no output into any real meeting's data. Account 180294183052,
-region ap-northeast-2 throughout.
+change and writes no output into real meeting's S3 data (all bench transcripts go to
+`bench-transcripts/` prefix). Account 180294183052, region ap-northeast-2 throughout.
 
 Results feed the Phase 2 go/no-go decision and its ADR (see
 `docs/decisions/ADR-006` sibling ADRs for the format).
@@ -127,6 +127,36 @@ for TD in ttobak-whisper ttobak-whisperx; do
     --region ap-northeast-2
 done
 ```
+
+**⚠️ WARNING: Failed benchmark runs may corrupt real meeting data.**
+
+If a benchmark task fails (unstaged model bundle, VRAM OOM, dependency crash, etc.),
+the task's fatal-error handler calls `whisper_common.mark_meeting_error`, which
+writes `status=error` to the **real meeting's DynamoDB row** — even though the
+`OUTPUT_KEY` was bench-scoped. This is visible to users in the UI as a corrupted
+done meeting.
+
+**Recovery**: After any failed bench run, verify the meeting's status:
+
+```bash
+aws dynamodb get-item --table-name ttobak-main \
+  --key '{"PK":{"S":"USER#<userId>"},"SK":{"S":"MEETING#<meetingId>"}}' \
+  --region ap-northeast-2 \
+  --query 'Item.status'
+```
+
+If it shows `error`, restore it to `done`:
+
+```bash
+aws dynamodb update-item --table-name ttobak-main \
+  --key '{"PK":{"S":"USER#<userId>"},"SK":{"S":"MEETING#<meetingId>"}}' \
+  --update-expression 'SET #s = :s' \
+  --expression-attribute-names '{"#s":"status"}' \
+  --expression-attribute-values '{":s":{"S":"done"}}' \
+  --region ap-northeast-2
+```
+
+Successful benchmark runs never touch DynamoDB — only the fatal-error path does.
 
 Repeat for each selected meeting.
 
