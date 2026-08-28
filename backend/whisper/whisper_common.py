@@ -13,7 +13,11 @@ clients so unit tests can pass MagicMocks without patching module globals.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import tarfile
+import time
+from contextlib import closing
 
 from botocore.exceptions import ClientError
 
@@ -143,15 +147,33 @@ def load_custom_vocab_prompt(s3, bucket: str, vocab_key: str) -> str:
         return ""
 
 
-def stream_extract_tar(s3, bucket: str, key: str, dest_dir: str) -> None:
+def stream_extract_tar(s3, bucket: str, key: str, dest_dir: str, max_attempts: int = 3) -> None:
     """Stream-extracts s3://bucket/key (a .tar.gz) into dest_dir without
     landing the archive on disk (root-volume headroom; see whisper-stack.ts
-    blockDevices comment). filter="data" rejects path-escape members."""
-    import os
-    os.makedirs(dest_dir, exist_ok=True)
-    obj = s3.get_object(Bucket=bucket, Key=key)
-    with tarfile.open(fileobj=obj["Body"], mode="r|gz") as tar:
-        tar.extractall(dest_dir, filter="data")
+    blockDevices comment). filter="data" rejects path-escape members.
+
+    Retries on any failure (same rationale/semantics as transcribe.py's
+    _stream_extract): a single get_object stream has no built-in recovery
+    from a mid-transfer hiccup on a multi-GB object, so one would otherwise
+    fail the whole task. Each retry wipes dest_dir first so a partial
+    extraction from the failed attempt can't interfere with the next one."""
+    last_err: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if os.path.isdir(dest_dir):
+                shutil.rmtree(dest_dir)
+            os.makedirs(dest_dir, exist_ok=True)
+            with closing(s3.get_object(Bucket=bucket, Key=key)["Body"]) as body:
+                with tarfile.open(fileobj=body, mode="r|gz") as tar:
+                    tar.extractall(dest_dir, filter="data")
+            return
+        except Exception as e:
+            last_err = e
+            print(f"Stream-extract of s3://{bucket}/{key} failed "
+                  f"(attempt {attempt}/{max_attempts}): {e}")
+            if attempt < max_attempts:
+                time.sleep(2 ** attempt)
+    raise last_err
 
 
 def upload_transcript(s3, bucket: str, output_key: str, result: dict) -> None:
@@ -172,5 +194,5 @@ def mark_meeting_error(table, user_id: str, meeting_id: str) -> None:
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={":s": "error"},
         )
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Failed to mark meeting {meeting_id} as error: {e}")

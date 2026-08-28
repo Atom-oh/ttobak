@@ -70,6 +70,17 @@ def _ensure_diarization_config() -> str | None:
         return None
 
 
+def _turns_from_diarization(diarization) -> list[tuple]:
+    """Extracts (start, end, label) turns from a pyannote result. 4.x may
+    return a wrapper whose Annotation lives at .speaker_diarization (3.x
+    returned the Annotation itself) -- unwrap defensively so both work."""
+    annotation = getattr(diarization, "speaker_diarization", diarization)
+    return [
+        (turn.start, turn.end, label)
+        for turn, _, label in annotation.itertracks(yield_label=True)
+    ]
+
+
 def _diarize(config_path: str, audio_path: str, num_speakers: int | None) -> list[tuple]:
     """pyannote 4.x diarization -> [(start, end, label)]. [] on any failure
     (caller falls back to unlabeled segments). NUM_SPEAKERS is a
@@ -88,10 +99,10 @@ def _diarize(config_path: str, audio_path: str, num_speakers: int | None) -> lis
         pipeline.to(torch.device("cuda"))
         kwargs = {"max_speakers": num_speakers} if num_speakers else {}
         diarization = pipeline(wav_path, **kwargs)
-        return [
-            (turn.start, turn.end, label)
-            for turn, _, label in diarization.itertracks(yield_label=True)
-        ]
+        # pyannote.audio 4.x may return a result wrapper whose Annotation
+        # lives at .speaker_diarization (3.x returned the Annotation itself);
+        # unwrap defensively so both shapes work.
+        return _turns_from_diarization(diarization)
     except Exception as e:
         print(f"Diarization failed, falling back to unlabeled segments: {e}")
         return []
@@ -148,6 +159,16 @@ def build_result(segments: list[dict], language: str, language_probability: floa
             "alignment_enabled": alignment_enabled,
         },
     }
+
+
+def should_mark_meeting_error(output_key: str) -> bool:
+    """A fatal failure should surface on the real meeting row only when this
+    run feeds the real pipeline (OUTPUT_KEY empty -> defaults to
+    transcripts/{meeting_id}.json, or explicitly under transcripts/).
+    Benchmark runs write elsewhere (e.g. bench-transcripts/) and must never
+    touch production meeting state -- the operator reads the task log instead."""
+    key = (output_key or "").strip()
+    return key == "" or key.startswith("transcripts/")
 
 
 def main():
@@ -236,6 +257,6 @@ if __name__ == "__main__":
         print(f"ERROR: {e}", file=sys.stderr)
         meeting_id = os.environ.get("MEETING_ID", "")
         user_id = os.environ.get("USER_ID", "")
-        if meeting_id and user_id:
+        if meeting_id and user_id and should_mark_meeting_error(os.environ.get("OUTPUT_KEY", "")):
             common.mark_meeting_error(table, user_id, meeting_id)
         sys.exit(1)

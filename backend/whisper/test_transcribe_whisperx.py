@@ -53,5 +53,52 @@ class TestBuildResult(unittest.TestCase):
                          {'start': 2.0, 'end': 4.0, 'text': '반갑습니다'})
 
 
+class TestTurnsFromDiarization(unittest.TestCase):
+    def test_annotation_shape_direct_itertracks(self):
+        """3.x-style: pipeline(...) returns the Annotation directly."""
+        class FakeTurn:
+            def __init__(self, start, end):
+                self.start, self.end = start, end
+
+        class FakeAnnotation:
+            def itertracks(self, yield_label=False):
+                yield FakeTurn(0.0, 1.0), None, 'SPEAKER_00'
+                yield FakeTurn(1.0, 2.0), None, 'SPEAKER_01'
+
+        turns = transcribe_whisperx._turns_from_diarization(FakeAnnotation())
+        self.assertEqual(turns, [(0.0, 1.0, 'SPEAKER_00'), (1.0, 2.0, 'SPEAKER_01')])
+
+    def test_wrapper_shape_speaker_diarization_attribute(self):
+        """4.x-style: pipeline(...) returns a wrapper exposing
+        .speaker_diarization as the Annotation."""
+        class FakeTurn:
+            def __init__(self, start, end):
+                self.start, self.end = start, end
+
+        class FakeAnnotation:
+            def itertracks(self, yield_label=False):
+                yield FakeTurn(0.0, 1.5), None, 'SPEAKER_00'
+
+        class FakeResultWrapper:
+            def __init__(self):
+                self.speaker_diarization = FakeAnnotation()
+
+        turns = transcribe_whisperx._turns_from_diarization(FakeResultWrapper())
+        self.assertEqual(turns, [(0.0, 1.5, 'SPEAKER_00')])
+
+
+class TestShouldMarkMeetingError(unittest.TestCase):
+    def test_empty_output_key_defaults_to_real_pipeline(self):
+        self.assertTrue(transcribe_whisperx.should_mark_meeting_error(''))
+
+    def test_transcripts_prefix_is_real_pipeline(self):
+        self.assertTrue(transcribe_whisperx.should_mark_meeting_error(
+            'transcripts/m123.json'))
+
+    def test_bench_transcripts_prefix_is_never_marked(self):
+        self.assertFalse(transcribe_whisperx.should_mark_meeting_error(
+            'bench-transcripts/m123_bench_whisperx.json'))
+
+
 if __name__ == '__main__':
     unittest.main()

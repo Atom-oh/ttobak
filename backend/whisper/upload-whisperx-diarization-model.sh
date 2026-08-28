@@ -24,7 +24,6 @@ REGION="${2:-ap-northeast-2}"
 # for this repo today; it's kept so a future pipeline revision that DOES
 # reference external HF repos still gets staged/rewritten automatically.
 PIPELINE_REPO="${PIPELINE_REPO:-pyannote/speaker-diarization-community-1}"
-export PIPELINE_REPO HF_TOKEN
 S3_KEY="models/whisperx-diarization-4.x.tar.gz"
 
 if [ -z "${HF_TOKEN:-}" ]; then
@@ -36,6 +35,9 @@ fi
 
 echo "Downloading ${PIPELINE_REPO} (pyannote.audio 4.x pipeline)..."
 pip3 install -q huggingface_hub pyyaml
+# Export only after the pip install above, so the token isn't sitting in the
+# environment during package installation.
+export PIPELINE_REPO HF_TOKEN
 
 STAGE_DIR=$(python3 - <<'EOF'
 import os, re, shutil, tempfile

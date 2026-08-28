@@ -6,7 +6,10 @@ needed to import the module itself.
 """
 
 import datetime
+import io
 import json
+import tarfile
+import tempfile
 import unittest
 from unittest import mock
 
@@ -144,6 +147,37 @@ class TestUploadTranscript(unittest.TestCase):
         self.assertEqual(kwargs['Key'], 'transcripts/m.json')
         self.assertEqual(kwargs['ContentType'], 'application/json')
         self.assertIn('가', kwargs['Body'].decode('utf-8'))
+
+
+def _make_targz_body(filename: str = 'hello.txt', content: bytes = b'hi') -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w:gz') as tar:
+        info = tarfile.TarInfo(name=filename)
+        info.size = len(content)
+        tar.addfile(info, io.BytesIO(content))
+    return buf.getvalue()
+
+
+class TestStreamExtractTar(unittest.TestCase):
+    def test_raises_after_max_attempts_on_repeated_failure(self):
+        s3 = mock.MagicMock()
+        s3.get_object.side_effect = [RuntimeError('boom1'), RuntimeError('boom2'),
+                                      RuntimeError('boom3')]
+        with tempfile.TemporaryDirectory() as dest_dir:
+            with mock.patch('whisper_common.time.sleep'):
+                with self.assertRaises(RuntimeError):
+                    whisper_common.stream_extract_tar(s3, 'bucket', 'key', dest_dir)
+        self.assertEqual(s3.get_object.call_count, 3)
+
+    def test_succeeds_on_first_attempt_extracts_once(self):
+        body_bytes = _make_targz_body('hello.txt', b'hi there')
+        s3 = mock.MagicMock()
+        s3.get_object.return_value = {'Body': io.BytesIO(body_bytes)}
+        with tempfile.TemporaryDirectory() as dest_dir:
+            whisper_common.stream_extract_tar(s3, 'bucket', 'key', dest_dir)
+            self.assertEqual(s3.get_object.call_count, 1)
+            with open(f'{dest_dir}/hello.txt', 'rb') as f:
+                self.assertEqual(f.read(), b'hi there')
 
 
 class TestMarkMeetingError(unittest.TestCase):
