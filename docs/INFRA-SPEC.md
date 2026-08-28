@@ -291,6 +291,7 @@ ECS infra for Whisper GPU batch transcription. After a recording completes, `tto
 - **Security group**: Egress only (no inbound)
 - **Root volume**: 200 GiB gp3, encrypted, `deleteOnTermination: true` — raised from the ECS GPU AL2 AMI's 30 GiB default. The Whisper image alone unpacks to ~15GB (CUDA + torch), and ECS's default 3-hour stopped-task cleanup wait meant a just-finished task's writable layer could still be occupying disk on the same (reused, still-warm) instance when the next task landed, exceeding 30 GiB — fixed 2026-08-27 (see CLAUDE.md Known Issues for the incident). Only applies to instances launched after deploy; the ASG's `minCapacity: 0` means no cost while idle.
 - **User data**: `ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=3m` (down from ECS's 3-hour default) so a stopped task's writable layer is reclaimed quickly on a reused instance instead of accumulating against the next task's disk needs. Deliberately does not touch `ECS_IMAGE_CLEANUP_INTERVAL`/`ECS_IMAGE_MINIMUM_CLEANUP_AGE` — evicting the 15GB Whisper image on an idle-but-still-warm instance would force a slow ECR re-pull for the next task, and the 200 GiB volume above no longer needs the space back.
+- **Application-side mitigation**: `backend/whisper/transcribe.py` stream-extracts the model/diarization tarballs directly from the S3 response body (bounded retry on transfer failure) instead of downloading them to disk first, trimming each task's own peak disk footprint independent of the ASG-level fixes above.
 
 ### ECS Capacity Provider
 - **Name**: `ttobak-whisper-spot`

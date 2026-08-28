@@ -117,15 +117,20 @@ export class WhisperStack extends cdk.Stack {
     // Reclaim a stopped task's writable layer quickly instead of ECS's
     // 3-hour default -- with the 30 GiB root volume this used to be, a
     // just-finished task's layer sitting around that long was enough on its
-    // own to starve the next task's disk needs on the same instance (the
-    // disk-full incident above). 3m (just above the minimum of 1m) leaves a
-    // small margin for awslogs to flush the task's final log lines before
-    // its layer is removed. Deliberately NOT touching image cleanup here:
-    // the 15GB Whisper image is large enough that evicting it on an idle
-    // instance would make the next task on that (still-warm) instance re-pull
-    // it from ECR, and the 200 GiB volume above no longer needs the space.
-    // Must run after addAsgCapacityProvider (above), which appends its own
-    // ECS-cluster-join user data to the launch template first.
+    // own to starve the next task's disk needs on an instance ECS reused for
+    // a second task within the same ~16-27 minute Spot lifetime (the
+    // disk-full incident above; instances always terminate within that
+    // window, so this only matters for back-to-back tasks landing on one
+    // still-warm instance, not long-lived idle capacity). 3m (just above the
+    // minimum of 1m) leaves a small margin for awslogs to flush the task's
+    // final log lines before its layer is removed. Deliberately NOT
+    // touching image cleanup here: the 15GB Whisper image is large enough
+    // that evicting it on an idle instance would make the next task on that
+    // (still-warm) instance re-pull it from ECR, and the 200 GiB volume
+    // above no longer needs the space. This line doesn't depend on running
+    // after addAsgCapacityProvider (above) -- they append distinct keys to
+    // the same ecs.config file -- but is kept below it for readability,
+    // grouped with the capacity provider it tunes.
     asg.addUserData(
       'echo ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=3m >> /etc/ecs/ecs.config',
     );
