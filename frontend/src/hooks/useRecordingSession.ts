@@ -41,9 +41,42 @@ const speechErrorMessages: Record<string, string> = {
   // Web Speech's own mic capture can end the recording's mic track on
   // iOS/Android (see SttManager.fallbackToWebSpeech), so it's never used
   // as a fallback on mobile while a mic/tab stream is recording. Recording
-  // itself is unaffected — only live captions stop.
-  'web-speech-mobile-unavailable': '이 기기에서는 브라우저 음성 인식을 실시간 자막에 사용할 수 없습니다. 녹음은 계속되며, AWS 자막 연결이 준비되면 자동으로 다시 시작됩니다.',
+  // itself is unaffected — only live captions stop. Deliberately does NOT
+  // promise an automatic recovery -- SttManager.retryWithConfig's
+  // promotion only fires on a genuinely late config arrival, not on a
+  // stalled AudioContext that's stuck for a gesture-policy reason nothing
+  // automatic can work around. The retry button (wired to
+  // manualStallRecovery via canRetryLiveCaptions below) is the actual path
+  // back.
+  'web-speech-mobile-unavailable': '이 기기에서는 브라우저 음성 인식을 실시간 자막에 사용할 수 없습니다. 녹음은 계속되며, 아래 버튼으로 자막 연결을 다시 시도할 수 있습니다.',
+  // Fired immediately on the FIRST stall detection (SttManagerConfig's
+  // onReconnecting), before the automatic one-shot reconnect even runs --
+  // see that callback's doc comment. Not a terminal error: the automatic
+  // attempt frequently succeeds on its own, this just stops the wait from
+  // being completely silent.
+  'transcribe-stream-reconnecting': '실시간 자막 연결이 불안정합니다. 자동으로 재연결을 시도합니다 — 바로 다시 연결하려면 아래 버튼을 누르세요.',
+  // manualStallRecovery() returned false -- there is genuinely nothing to
+  // retry into right now (e.g. Transcribe Streaming was never configured
+  // for this session, or the session already stopped/paused). Replaces
+  // the previous silent no-op so the button always gives real feedback.
+  'live-caption-retry-unavailable': '지금은 자막 연결을 다시 시도할 수 없습니다. 녹음은 계속됩니다.',
 };
+
+// speechError values that manualStallRecovery's retry button can actually
+// do something about -- scoped to the stall/mobile-freeze scenario this
+// exists for, not every error that happens to mention Transcribe Streaming
+// (transcribe-native-unavailable has no fallback to retry into; the
+// desktop-only recognition-failed already has its own
+// handleRestartStt/isSttPermanentlyFailed path).
+const RETRYABLE_LIVE_CAPTION_ERRORS = new Set([
+  'transcribe-stream-reconnecting',
+  'web-speech-mobile-unavailable',
+  // manualStallRecovery() can return false transiently (e.g. the session
+  // is currently paused) -- keeping this in the retryable set means a
+  // failed attempt doesn't destroy the button permanently, unlike
+  // replacing speechError with a non-retryable message would.
+  'live-caption-retry-unavailable',
+]);
 
 interface UseRecordingSessionOptions {
   targetLang: string;
@@ -140,6 +173,29 @@ export function useRecordingSession({
 
   const isSttPermanentlyFailed = speechError === speechErrorMessages['recognition-failed'];
 
+  // Whether the CURRENT speechError is one manualStallRecovery can actually
+  // fix -- gates the retry button separately from isSttPermanentlyFailed's
+  // own (desktop-only) button.
+  const canRetryLiveCaptions = speechError !== null &&
+    Object.entries(speechErrorMessages).some(
+      ([code, message]) => message === speechError && RETRYABLE_LIVE_CAPTION_ERRORS.has(code),
+    );
+
+  /**
+   * User-initiated recovery for a stuck live-caption pipeline (stalled
+   * AudioContext, or the mobile-unavailable dead end) -- MUST be called
+   * synchronously from the retry button's onClick, before any `await`.
+   * See SttManager.manualStallRecovery's doc comment for why: everything
+   * automatic already tried to fix this from an event listener, not a
+   * real click, and that's the actual reason it's stuck.
+   */
+  const retryLiveCaptions = useCallback(() => {
+    const started = sttManagerRef.current?.manualStallRecovery();
+    if (started === false) {
+      setSpeechError(speechErrorMessages['live-caption-retry-unavailable']);
+    }
+  }, []);
+
   const handleRestartStt = useCallback(() => {
     setSpeechError(null);
     // Stop and restart the manager
@@ -213,13 +269,30 @@ export function useRecordingSession({
       targetLang: targetLangRef.current,
       translationEnabled,
       transcribeStreamingConfig: transcribeConfig ?? undefined,
+      onReconnecting: () => {
+        setSpeechError(speechErrorMessages['transcribe-stream-reconnecting']);
+      },
+      // Deliberately separate from onProviderChange below: this fires only
+      // once the reconnected session's first transcript proves it's
+      // actually alive (see SttManagerConfig's doc comment), whereas
+      // onProviderChange fires as soon as a provider transition is
+      // DECIDED -- for manualStallRecovery specifically, that decision and
+      // the reconnect's actual success are not the same moment, and
+      // clearing this banner on the former would reopen the exact
+      // "declared success before it's proven" window this callback exists
+      // to close.
+      onReconnected: () => {
+        setSpeechError((prev) =>
+          prev === speechErrorMessages['transcribe-stream-reconnecting'] ? null : prev,
+        );
+      },
       onProviderChange: (provider) => {
         setActiveProvider(provider);
-        // The 'web-speech-mobile-unavailable' banner promises captions
-        // resume automatically once Transcribe Streaming becomes
-        // available (SttManager.retryWithConfig) -- clear it once that
-        // actually happens instead of leaving it to sit alongside
-        // captions that are now flowing again.
+        // The mobile-unavailable banner describes a temporary state that
+        // Transcribe Streaming actually becoming available resolves --
+        // clear it instead of leaving it to sit alongside captions that
+        // are flowing again. (The reconnecting banner is NOT cleared
+        // here -- see onReconnected above for why.)
         setSpeechError((prev) =>
           provider === 'transcribe-streaming' && prev === speechErrorMessages['web-speech-mobile-unavailable']
             ? null
@@ -332,6 +405,8 @@ export function useRecordingSession({
     speechError,
     setSpeechError,
     isSttPermanentlyFailed,
+    canRetryLiveCaptions,
+    retryLiveCaptions,
     translations,
     currentInterimTranslation,
     displayTranscripts,

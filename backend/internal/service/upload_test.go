@@ -29,6 +29,30 @@ func TestSidecarPDFKey(t *testing.T) {
 	}
 }
 
+func TestIsCheckpointFileName(t *testing.T) {
+	cases := []struct {
+		name     string
+		fileName string
+		want     bool
+	}{
+		{"webm checkpoint", "recording_progress.webm", true},
+		{"m4a checkpoint (iOS Safari)", "recording_progress.m4a", true},
+		{"ogg checkpoint (Firefox fallback)", "recording_progress.ogg", true},
+		{"final upload, not a checkpoint", "recording_1234567890.webm", false},
+		{"unrecognized extension", "recording_progress.mp3", false},
+		{"no extension", "recording_progress", false},
+		{"empty string", "", false},
+		{"prefix substring but no dot", "recording_progresswebm", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isCheckpointFileName(c.fileName); got != c.want {
+				t.Errorf("isCheckpointFileName(%q) = %v, want %v", c.fileName, got, c.want)
+			}
+		})
+	}
+}
+
 func TestValidateRediarizeEligibility(t *testing.T) {
 	baseMeeting := func() *model.Meeting {
 		return &model.Meeting{
