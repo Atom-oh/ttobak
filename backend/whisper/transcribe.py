@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tarfile
 import time
+from contextlib import closing
 
 import boto3
 from botocore.exceptions import ClientError
@@ -28,6 +31,44 @@ dynamodb = boto3.resource("dynamodb", region_name=REGION)
 table = dynamodb.Table(TABLE)
 
 
+def _stream_extract(s3_key: str, dest_dir: str, max_attempts: int = 3) -> None:
+    """Streams an S3 object directly into a tar extractor instead of
+    downloading it to disk first -- the model tarballs are multi-GB, and
+    holding both the compressed archive and its extracted contents on disk
+    at once was contributing to the GPU instance's root volume filling up
+    (see infra/lib/whisper-stack.ts's blockDevices comment). mode="r|gz" is
+    the streaming (non-seekable) tar mode required for a StreamingBody.
+    filter="data" (PEP 706, stdlib since Python 3.12/3.8.17+) rejects tar
+    members that would escape dest_dir via ../ paths or symlinks -- the
+    container's Ubuntu 24.04 base ships Python 3.12, so this is always
+    available here.
+
+    Retries on any failure: unlike s3.download_file's Transfer Manager (which
+    retries at the part level), a single get_object stream has no built-in
+    recovery from a mid-transfer hiccup (throttling, connection reset) on a
+    multi-GB object, so one would otherwise fail the whole task. Each retry
+    wipes dest_dir first so a partial extraction from the failed attempt
+    can't interfere with the next one or with the caller's file-existence
+    cache check."""
+    last_err: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if os.path.isdir(dest_dir):
+                shutil.rmtree(dest_dir)
+            os.makedirs(dest_dir, exist_ok=True)
+            with closing(s3.get_object(Bucket=BUCKET, Key=s3_key)["Body"]) as body:
+                with tarfile.open(fileobj=body, mode="r|gz") as tar:
+                    tar.extractall(dest_dir, filter="data")
+            return
+        except Exception as e:
+            last_err = e
+            print(f"Stream-extract of s3://{BUCKET}/{s3_key} failed "
+                  f"(attempt {attempt}/{max_attempts}): {e}")
+            if attempt < max_attempts:
+                time.sleep(2 ** attempt)
+    raise last_err
+
+
 def _ensure_model() -> str:
     if os.path.exists(os.path.join(MODEL_LOCAL_DIR, "model.bin")):
         print("Model already cached locally")
@@ -35,14 +76,7 @@ def _ensure_model() -> str:
 
     print(f"Downloading model from s3://{BUCKET}/{MODEL_S3_KEY}")
     start = time.time()
-    archive = "/tmp/model.tar.gz"
-    s3.download_file(BUCKET, MODEL_S3_KEY, archive)
-    os.makedirs(MODEL_LOCAL_DIR, exist_ok=True)
-
-    import tarfile
-    with tarfile.open(archive) as tar:
-        tar.extractall(MODEL_LOCAL_DIR)
-    os.remove(archive)
+    _stream_extract(MODEL_S3_KEY, MODEL_LOCAL_DIR)
     elapsed = time.time() - start
     print(f"Model ready ({elapsed:.0f}s)")
     return MODEL_LOCAL_DIR
@@ -60,18 +94,7 @@ def _ensure_diarization_model() -> str | None:
     print(f"Downloading diarization model from s3://{BUCKET}/{DIARIZATION_S3_KEY}")
     try:
         start = time.time()
-        archive = "/tmp/diarization-model.tar.gz"
-        s3.download_file(BUCKET, DIARIZATION_S3_KEY, archive)
-        os.makedirs(DIARIZATION_LOCAL_DIR, exist_ok=True)
-
-        import tarfile
-        with tarfile.open(archive) as tar:
-            # filter="data" (PEP 706, stdlib since Python 3.12/3.8.17+) rejects
-            # tar members that would escape DIARIZATION_LOCAL_DIR via ../ paths
-            # or symlinks -- the container's Ubuntu 24.04 base ships Python
-            # 3.12, so this is always available here.
-            tar.extractall(DIARIZATION_LOCAL_DIR, filter="data")
-        os.remove(archive)
+        _stream_extract(DIARIZATION_S3_KEY, DIARIZATION_LOCAL_DIR)
         elapsed = time.time() - start
         print(f"Diarization model ready ({elapsed:.0f}s)")
         return config_path

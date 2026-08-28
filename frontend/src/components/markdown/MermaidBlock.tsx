@@ -3,20 +3,72 @@
 import { useState, useEffect, useRef, useId } from 'react';
 import { ZoomPanViewport } from './ZoomPanViewport';
 import { DiagramLightbox } from './DiagramLightbox';
+import { useTheme } from '@/hooks/useTheme';
 
 interface MermaidBlockProps {
   code: string;
 }
+
+// Mirrors globals.css's dark-mode tokens (`.dark { ... }`) -- kept as an
+// explicit palette rather than read via getComputedStyle because mermaid
+// needs keys (mainBkg, clusterBkg, edgeLabelBackground) with no 1:1 token,
+// so a derivation would be needed either way, and this avoids any paint
+// timing risk.
+const DARK_THEME_VARIABLES = {
+  primaryColor: '#8b85f7',
+  primaryTextColor: '#e4e1e9',
+  primaryBorderColor: '#8b85f7',
+  lineColor: '#8a8f98',
+  secondaryColor: '#1a1a24',
+  tertiaryColor: '#0e0e13',
+  background: '#131022',
+  mainBkg: '#1a1a24',
+  nodeBorder: '#8b85f7',
+  clusterBkg: '#0e0e13',
+  titleColor: '#e4e1e9',
+  edgeLabelBackground: '#131022',
+};
+
+// Mirrors globals.css's :root tokens (light mode).
+const LIGHT_THEME_VARIABLES = {
+  primaryColor: '#3211d4',
+  primaryTextColor: '#0f172a',
+  primaryBorderColor: '#3211d4',
+  lineColor: '#64748b',
+  secondaryColor: '#f1f5f9',
+  tertiaryColor: '#e2e8f0',
+  background: '#ffffff',
+  mainBkg: '#f8fafc',
+  nodeBorder: '#3211d4',
+  clusterBkg: '#f1f5f9',
+  titleColor: '#0f172a',
+  edgeLabelBackground: '#ffffff',
+};
 
 export function MermaidBlock({ code }: MermaidBlockProps) {
   const [svg, setSvg] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [fullscreen, setFullscreen] = useState(false);
   const uniqueId = useId().replace(/:/g, '-');
+  // Bumped on every effect run and folded into the render id below -- a
+  // theme toggle re-render can start a new render while a previous one is
+  // still in flight (mermaid.render is async), and two calls sharing the
+  // same DOM id can collide. `cancelled` alone only suppresses this
+  // component's OWN stale setState, not mermaid's in-flight render call.
+  const renderGenerationRef = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { theme } = useTheme();
 
   useEffect(() => {
     let cancelled = false;
+    const generation = ++renderGenerationRef.current;
+    // Clear any error from a previous run of this effect -- without this,
+    // a transient failure (e.g. a theme toggle re-render racing a prior
+    // in-flight render onto the same DOM id) leaves `error` set forever:
+    // the early `if (error) return` below never sees this run's success
+    // even after `setSvg` fires, and the diagram is stuck on the error
+    // card for the rest of the component's life.
+    setError('');
     (async () => {
       try {
         const mermaid = (await import('mermaid')).default;
@@ -27,31 +79,18 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
           // future mermaid upgrade or config merge must never silently
           // enable click handlers / script in rendered SVG.
           securityLevel: 'strict',
-          theme: 'dark',
-          themeVariables: {
-            primaryColor: '#8b85f7',
-            primaryTextColor: '#e4e1e9',
-            primaryBorderColor: '#8b85f7',
-            lineColor: '#8a8f98',
-            secondaryColor: '#1a1a24',
-            tertiaryColor: '#0e0e13',
-            background: '#131022',
-            mainBkg: '#1a1a24',
-            nodeBorder: '#8b85f7',
-            clusterBkg: '#0e0e13',
-            titleColor: '#e4e1e9',
-            edgeLabelBackground: '#131022',
-          },
+          theme: theme === 'dark' ? 'dark' : 'default',
+          themeVariables: theme === 'dark' ? DARK_THEME_VARIABLES : LIGHT_THEME_VARIABLES,
           fontFamily: 'Inter, sans-serif',
         });
-        const { svg: renderedSvg } = await mermaid.render(`mermaid-${uniqueId}`, code.trim());
+        const { svg: renderedSvg } = await mermaid.render(`mermaid-${uniqueId}-${generation}`, code.trim());
         if (!cancelled) setSvg(renderedSvg);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Mermaid render failed');
       }
     })();
     return () => { cancelled = true; };
-  }, [code, uniqueId]);
+  }, [code, uniqueId, theme]);
 
   if (error) {
     return (
@@ -64,14 +103,14 @@ export function MermaidBlock({ code }: MermaidBlockProps) {
 
   if (!svg) {
     return (
-      <div className="my-4 rounded-xl border border-white/[0.06] bg-[#0a0a0f] p-8 flex items-center justify-center">
+      <div className="my-4 rounded-xl border border-slate-200 dark:border-white/[0.06] bg-white dark:bg-[#0a0a0f] p-8 flex items-center justify-center">
         <div className="animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div ref={containerRef} className="my-4 rounded-xl border border-white/[0.06] bg-[#0a0a0f]">
+    <div ref={containerRef} className="my-4 rounded-xl border border-slate-200 dark:border-white/[0.06] bg-white dark:bg-[#0a0a0f]">
       {/*
         [&>svg]:max-w-full only bounds the INITIAL fit — it must not apply
         inside the zoom transform, or scaling up re-clamps the SVG back to

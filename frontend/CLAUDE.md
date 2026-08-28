@@ -36,6 +36,7 @@ npm run lint      # ESLint
   - `useLiveSummary` — Polls /api/meetings/{id}/summary during recording
   - `usePostRecording` — Post-recording status polling and finalization
   - `useAudioDevices` — Enumerate and select mic devices
+  - `useTheme` — Reads `<html>`'s `.dark` class and tracks changes via `MutationObserver` (the sidebar's theme toggle only flips the class + writes `localStorage`, it emits no event); any component that needs to know light-vs-dark in JS (mermaid, shiki) should use this instead of reading `document.documentElement.classList` directly
 - `src/types/` — TypeScript type definitions (`meeting.ts`)
 
 ## Conventions
@@ -44,7 +45,7 @@ npm run lint      # ESLint
 - Auth: Cognito SDK in `lib/auth.ts`, JWT in localStorage, auto-refresh on 401
 - API calls: `lib/api.ts` apiFetch with Bearer token; error shape `{ error: { code, message } }`
 - Styling: Tailwind v4 with `@custom-variant dark` (class-based, not media query); design tokens in `globals.css`; Material Symbols Outlined icons
-- Dark mode: `.dark` class on `<html>` toggled via localStorage `theme` key; `@custom-variant dark (&:where(.dark, .dark *))` in globals.css makes all `dark:` utilities respond to the class
+- Dark mode: `.dark` class on `<html>` toggled via localStorage `theme` key; `@custom-variant dark (&:where(.dark, .dark *))` in globals.css makes all `dark:` utilities respond to the class. JS that needs to know the theme (not just apply `dark:` classes) uses `useTheme` — which also now owns writing the toggle (class + localStorage) — rather than reading/writing the class directly; the hook's own implementation and `layout.tsx`'s inline pre-hydration bootstrap script are the only exceptions, by necessity
 - Primary colors: light `#3211d4`, dark `#8b85f7` (violet) -- one unified indigo/violet brand, no separate neon palette (see root CLAUDE.md's Design System section for the full token table)
 - Responsive: mobile (`<768px`) bottom nav; desktop (`>=1024px`) sidebar `w-64`
 
