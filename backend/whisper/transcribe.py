@@ -4,7 +4,9 @@ import json
 import os
 import subprocess
 import sys
+import tarfile
 import time
+from contextlib import closing
 
 import boto3
 from botocore.exceptions import ClientError
@@ -28,6 +30,23 @@ dynamodb = boto3.resource("dynamodb", region_name=REGION)
 table = dynamodb.Table(TABLE)
 
 
+def _stream_extract(s3_key: str, dest_dir: str) -> None:
+    """Streams an S3 object directly into a tar extractor instead of
+    downloading it to disk first -- the model tarballs are multi-GB, and
+    holding both the compressed archive and its extracted contents on disk
+    at once was contributing to the GPU instance's root volume filling up
+    (see infra/lib/whisper-stack.ts's blockDevices comment). mode="r|gz" is
+    the streaming (non-seekable) tar mode required for a StreamingBody.
+    filter="data" (PEP 706, stdlib since Python 3.12/3.8.17+) rejects tar
+    members that would escape dest_dir via ../ paths or symlinks -- the
+    container's Ubuntu 24.04 base ships Python 3.12, so this is always
+    available here."""
+    os.makedirs(dest_dir, exist_ok=True)
+    with closing(s3.get_object(Bucket=BUCKET, Key=s3_key)["Body"]) as body:
+        with tarfile.open(fileobj=body, mode="r|gz") as tar:
+            tar.extractall(dest_dir, filter="data")
+
+
 def _ensure_model() -> str:
     if os.path.exists(os.path.join(MODEL_LOCAL_DIR, "model.bin")):
         print("Model already cached locally")
@@ -35,18 +54,7 @@ def _ensure_model() -> str:
 
     print(f"Downloading model from s3://{BUCKET}/{MODEL_S3_KEY}")
     start = time.time()
-    os.makedirs(MODEL_LOCAL_DIR, exist_ok=True)
-
-    import tarfile
-    # Stream-extract directly from the S3 response body instead of
-    # downloading the tarball to disk first -- the model archive is 2.85GB,
-    # and holding both the compressed archive and its extracted contents at
-    # once was contributing to the GPU instance's root volume filling up
-    # (see infra/lib/whisper-stack.ts blockDevices comment). mode="r|gz" is
-    # the streaming (non-seekable) tar mode required for a StreamingBody.
-    obj = s3.get_object(Bucket=BUCKET, Key=MODEL_S3_KEY)
-    with tarfile.open(fileobj=obj["Body"], mode="r|gz") as tar:
-        tar.extractall(MODEL_LOCAL_DIR, filter="data")
+    _stream_extract(MODEL_S3_KEY, MODEL_LOCAL_DIR)
     elapsed = time.time() - start
     print(f"Model ready ({elapsed:.0f}s)")
     return MODEL_LOCAL_DIR
@@ -64,19 +72,7 @@ def _ensure_diarization_model() -> str | None:
     print(f"Downloading diarization model from s3://{BUCKET}/{DIARIZATION_S3_KEY}")
     try:
         start = time.time()
-        os.makedirs(DIARIZATION_LOCAL_DIR, exist_ok=True)
-
-        import tarfile
-        # Stream-extract directly from the S3 response body (see _ensure_model's
-        # comment) to avoid holding the compressed archive and its extracted
-        # contents on disk at the same time.
-        obj = s3.get_object(Bucket=BUCKET, Key=DIARIZATION_S3_KEY)
-        with tarfile.open(fileobj=obj["Body"], mode="r|gz") as tar:
-            # filter="data" (PEP 706, stdlib since Python 3.12/3.8.17+) rejects
-            # tar members that would escape DIARIZATION_LOCAL_DIR via ../ paths
-            # or symlinks -- the container's Ubuntu 24.04 base ships Python
-            # 3.12, so this is always available here.
-            tar.extractall(DIARIZATION_LOCAL_DIR, filter="data")
+        _stream_extract(DIARIZATION_S3_KEY, DIARIZATION_LOCAL_DIR)
         elapsed = time.time() - start
         print(f"Diarization model ready ({elapsed:.0f}s)")
         return config_path

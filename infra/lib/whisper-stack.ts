@@ -76,14 +76,15 @@ export class WhisperStack extends cdk.Stack {
       // enough headroom: the Whisper container image alone unpacks to ~15GB
       // (CUDA 12.9 + torch cu124), and each task transiently needs a few more
       // GB for the extracted faster-whisper model plus the source audio
-      // (transcribe.py stream-extracts the 2.85GB model tarball directly
-      // rather than downloading it to disk first, but extraction still needs
-      // room for the unpacked model). A prior task's stopped-but-not-yet-
-      // cleaned writable layer sharing the same instance was enough to push a
-      // second task over 30 GiB and fail with "[Errno 28] No space left on
-      // device" (see the 2026-08-26 ttobak-whisper incident on meeting
-      // a435a3dc). 200 GiB gives enough margin for several concurrent tasks;
-      // the ASG's desiredCapacity is 0 so this costs nothing while idle.
+      // (transcribe.py stream-extracts the model tarball directly rather
+      // than downloading it to disk first, but extraction still needs room
+      // for the unpacked model). A prior task's stopped-but-not-yet-cleaned
+      // writable layer sharing the same instance was enough to push a second
+      // task over 30 GiB and fail with "[Errno 28] No space left on device"
+      // (disk-full incident, see CLAUDE.md Known Issues). 200 GiB gives
+      // enough margin for several concurrent tasks. This only takes effect
+      // on instances launched after deploy -- minCapacity is 0 (zero-scale),
+      // so there's no cost while idle and no need to refresh anything.
       blockDevices: [{
         deviceName: '/dev/xvda',
         volume: autoscaling.BlockDeviceVolume.ebs(200, {
@@ -113,17 +114,20 @@ export class WhisperStack extends cdk.Stack {
 
     this.cluster.addAsgCapacityProvider(capacityProvider);
 
-    // Reclaim a stopped task's writable layer (and unused container images)
-    // quickly instead of ECS's 3-hour default -- with the 30 GiB root volume
-    // this used to be, a just-finished task's layer sitting around that long
-    // was enough on its own to starve the next task's disk needs (the
-    // a435a3dc incident above). 1m is the minimum ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION
-    // accepts. Must run after addAsgCapacityProvider (above), which appends
-    // its own ECS-cluster-join user data to the launch template first.
+    // Reclaim a stopped task's writable layer quickly instead of ECS's
+    // 3-hour default -- with the 30 GiB root volume this used to be, a
+    // just-finished task's layer sitting around that long was enough on its
+    // own to starve the next task's disk needs on the same instance (the
+    // disk-full incident above). 3m (just above the minimum of 1m) leaves a
+    // small margin for awslogs to flush the task's final log lines before
+    // its layer is removed. Deliberately NOT touching image cleanup here:
+    // the 15GB Whisper image is large enough that evicting it on an idle
+    // instance would make the next task on that (still-warm) instance re-pull
+    // it from ECR, and the 200 GiB volume above no longer needs the space.
+    // Must run after addAsgCapacityProvider (above), which appends its own
+    // ECS-cluster-join user data to the launch template first.
     asg.addUserData(
-      'echo ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=1m >> /etc/ecs/ecs.config',
-      'echo ECS_IMAGE_CLEANUP_INTERVAL=10m >> /etc/ecs/ecs.config',
-      'echo ECS_IMAGE_MINIMUM_CLEANUP_AGE=30m >> /etc/ecs/ecs.config',
+      'echo ECS_ENGINE_TASK_CLEANUP_WAIT_DURATION=3m >> /etc/ecs/ecs.config',
     );
 
     // Task execution role
