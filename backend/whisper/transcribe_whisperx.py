@@ -155,18 +155,17 @@ def _diarize(config_path: str, audio_path: str, num_speakers: int | None) -> lis
         return []
 
 
-def _free_align_model(align_model) -> None:
-    """Frees the wav2vec2 align model's GPU residency (FINDING 1, round 11):
-    without this, the model stays resident for the rest of the run, so the
-    GPU[aligned]/GPU[diarized] samples in §4 would include its memory even
-    though those stages don't use it -- contradicting the per-stage-
-    residency claim in _log_gpu_memory's caller and the runbook. Best-effort:
-    lazy torch import, never raises (mirrors the `del model` +
+def _empty_cuda_cache() -> None:
+    """Releases cached (already-freed) CUDA memory back to the allocator.
+    Takes no model argument on purpose (FINDING 1, round 12): a prior version
+    took the model as a parameter and did `del <param>` inside this helper,
+    which only drops the *callee's own* local binding -- the caller's local
+    variable still held a live reference the whole time, so the model was
+    NEVER actually freed and this empty_cache() call was releasing nothing.
+    The caller MUST drop its own reference (e.g. `align_model = None`) before
+    calling this, so the object's refcount can actually reach zero first.
+    Best-effort: lazy torch import, never raises (mirrors the `del model` +
     empty_cache() pattern already used for the ASR model in main())."""
-    try:
-        del align_model
-    except Exception:
-        pass
     try:
         import torch
         torch.cuda.empty_cache()
@@ -187,11 +186,27 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
     a buffer that is inspected but never printed or logged verbatim -- only
     derived facts (line count, exception type) reach the task log.
 
+    GPU residency (FINDING 1, round 12): on every path (keep, discard,
+    exception) this function's own `finally` drops ITS OWN local references
+    to the align model/metadata (`align_model = None`, `metadata = None`)
+    BEFORE calling `_empty_cuda_cache()` -- clearing the reference in THIS
+    scope is what lets the object's refcount reach zero (nothing else in
+    this process holds one), so the cache-clear that follows actually
+    reclaims its memory. A prior version passed the model into a helper that
+    did `del` on its own parameter, which only removed the callee's binding
+    and left this scope's reference alive through the empty_cache() call --
+    the model was never actually freed. Without this, the model would stay
+    resident for the rest of the run, so the GPU[aligned]/GPU[diarized]
+    samples in §4 would include its memory even though those stages don't
+    use it -- contradicting the per-stage-residency claim in
+    _log_gpu_memory's caller and the runbook.
+
     Returns (segments, alignment_enabled, repaired_count)."""
     import contextlib
     import io
     stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
     align_model = None
+    metadata = None
     try:
         import whisperx
         with contextlib.redirect_stdout(stdout_buf), \
@@ -242,10 +257,13 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
               f"{type(e).__name__}")
         return segments, False, 0
     finally:
-        # Free the align model's GPU residency on every path (keep, discard,
-        # exception) -- see _free_align_model.
+        # Drop THIS scope's references first, then clear the cache -- see
+        # the GPU-residency note in this function's docstring for why order
+        # matters here.
         if align_model is not None:
-            _free_align_model(align_model)
+            align_model = None
+            metadata = None
+            _empty_cuda_cache()
 
 
 def build_result(segments: list[dict], language: str, language_probability: float,
@@ -288,6 +306,18 @@ def build_result(segments: list[dict], language: str, language_probability: floa
             "alignment_repaired": alignment_repaired,
         },
     }
+
+
+class BenchConfigError(ValueError):
+    """Raised ONLY by this module's own operator-facing config validators
+    (validate_output_key, validate_audio_key) -- never by whisperx/pyannote/
+    ffmpeg or any other library call. Its message is built entirely from
+    S3 key strings and env-var values this process itself received, never
+    from transcript/audio content, so it is safe-by-construction to log
+    verbatim (FINDING 2, round 12) -- unlike a generic exception's str(),
+    which can embed transcript fragments raised from library internals.
+    Subclasses ValueError so any existing `assertRaises(ValueError)` test
+    coverage for these validators keeps passing unchanged."""
 
 
 def _is_real_pipeline_key(key: str, meeting_id: str) -> bool:
@@ -336,17 +366,18 @@ def validate_output_key(output_key: str, meeting_id: str) -> str:
     REQUIRED: this is a Phase-1 benchmark-only engine that nothing invokes
     automatically, so a forgotten env var must never silently default into
     the production transcripts/{meeting_id}.json key and fire the summarize
-    pipeline. An empty/whitespace-only key raises ValueError immediately.
-    Only two shapes are legal beyond that: a benchmark key under
-    bench-transcripts/, or the real pipeline's own key
-    transcripts/{meeting_id}.json -- including the multi-part variant
-    transcripts/{meeting_id}_part_NNN.json (exact 3-digit fullmatch only, see
-    _is_real_pipeline_key) -- kept on purpose as a deliberate Phase-2
-    drop-in escape hatch so this engine can be pointed at the real pipeline
-    key once it's promoted. Anything else (another meeting's transcripts/
-    key, a mistyped bench key missing the bench-transcripts/ prefix, an
-    arbitrary prefix) raises ValueError before a single byte is written,
-    mirroring should_mark_meeting_error's bench/real split on the S3 side.
+    pipeline. An empty/whitespace-only key raises BenchConfigError (a
+    ValueError subclass -- see its docstring) immediately. Only two shapes
+    are legal beyond that: a benchmark key under bench-transcripts/, or the
+    real pipeline's own key transcripts/{meeting_id}.json -- including the
+    multi-part variant transcripts/{meeting_id}_part_NNN.json (exact 3-digit
+    fullmatch only, see _is_real_pipeline_key) -- kept on purpose as a
+    deliberate Phase-2 drop-in escape hatch so this engine can be pointed at
+    the real pipeline key once it's promoted. Anything else (another
+    meeting's transcripts/ key, a mistyped bench key missing the
+    bench-transcripts/ prefix, an arbitrary prefix) raises BenchConfigError
+    before a single byte is written, mirroring should_mark_meeting_error's
+    bench/real split on the S3 side.
 
     NOTE (round-11 review, FINDING 3): as of this PR, ttobak-whisperx-task-role
     (infra/lib/whisper-stack.ts) no longer grants write on transcripts/* --
@@ -361,7 +392,7 @@ def validate_output_key(output_key: str, meeting_id: str) -> str:
     hatch to actually work."""
     key = (output_key or "").strip()
     if not key:
-        raise ValueError(
+        raise BenchConfigError(
             "Phase 1 benchmark engine requires an explicit OUTPUT_KEY (use "
             "bench-transcripts/...); refusing to default to the production "
             "transcripts/ key")
@@ -369,7 +400,7 @@ def validate_output_key(output_key: str, meeting_id: str) -> str:
         return key
     if _is_real_pipeline_key(key, meeting_id):
         return key
-    raise ValueError(
+    raise BenchConfigError(
         f"OUTPUT_KEY {key!r} is not a valid bench-transcripts/ key or this "
         f"meeting's own transcripts/{meeting_id}(.json|_part_NNN.json) key")
 
@@ -380,7 +411,7 @@ def validate_audio_key(audio_key: str, user_id: str, meeting_id: str) -> str:
     (the task role is bucket-wide, so IAM does not enforce this)."""
     prefix = f"audio/{user_id}/{meeting_id}/"
     if not audio_key.startswith(prefix):
-        raise ValueError(
+        raise BenchConfigError(
             f"AUDIO_KEY {audio_key!r} is not under this meeting's own audio "
             f"prefix {prefix!r}")
     return audio_key
@@ -494,15 +525,37 @@ def main():
     print(f"Uploaded s3://{BUCKET}/{output_key}")
 
 
+def format_fatal_error(e: Exception) -> str:
+    """Renders the fatal-error line for the __main__ handler. Pure and
+    independently testable (FINDING 2, round 12): a plain
+    `str(e)[:300]` length cap is NOT redaction -- 300 characters of a
+    library exception (whisperx/pyannote internals) can still embed a
+    transcript fragment verbatim, just a truncated one, which is meeting
+    PII the task log group would then retain for 30 days.
+
+    BenchConfigError (see its docstring) is the one exception type this
+    module raises whose message is safe-by-construction -- built only from
+    S3 keys/env values, never transcript content -- so its full message is
+    printed verbatim. Every other exception type prints ONLY its type name
+    plus the message's byte length, never any of the message content
+    itself, since an arbitrary exception (including one raised by a
+    third-party library this module doesn't control) could contain
+    anything."""
+    if isinstance(e, BenchConfigError):
+        return f"ERROR: {type(e).__name__}: {e}"
+    message_len = len(str(e).encode("utf-8", errors="replace"))
+    return (f"ERROR: {type(e).__name__} (message suppressed, "
+            f"{message_len} chars -- PII hygiene; see task exit code)")
+
+
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        # A bare str(e) can embed transcript fragments raised from library
-        # internals (whisperx/pyannote), which is meeting PII the task log
-        # group would then retain for 30 days (FINDING 2(c), round 11) --
-        # log the exception type plus a length-capped message instead.
-        print(f"ERROR: {type(e).__name__}: {str(e)[:300]}", file=sys.stderr)
+        # See format_fatal_error's docstring for why a type-only message is
+        # used for any exception other than this module's own
+        # BenchConfigError (FINDING 2, round 12).
+        print(format_fatal_error(e), file=sys.stderr)
         meeting_id = os.environ.get("MEETING_ID", "")
         user_id = os.environ.get("USER_ID", "")
         if meeting_id and user_id and should_mark_meeting_error(

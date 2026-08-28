@@ -29,20 +29,20 @@ ADRs in this project use).
 
 Deploy both stacks this benchmark needs, in this order:
 
-1. **`TtobakWhisperStack`** — creates the `ttobak-whisperx` ECR repository
-   and task definition. Deploy this first: a fresh setup that tries to
-   `docker push` before this deploy fails with `RepositoryNotFoundException`.
-
-   ```bash
-   cd infra && npx cdk deploy TtobakWhisperStack --exclusively
-   ```
-
-2. **`TtobakStorageStack`** — adds the `bench-transcripts/` lifecycle rule
+1. **`TtobakStorageStack`** — adds the `bench-transcripts/` lifecycle rule
    (see `docs/INFRA-SPEC.md`). This is a separate stack from
    `TtobakWhisperStack`, so it needs its own deploy:
 
    ```bash
    cd infra && npx cdk deploy TtobakStorageStack --exclusively
+   ```
+
+2. **`TtobakWhisperStack`** — creates the `ttobak-whisperx` ECR repository
+   and task definition. Deploy this second: a fresh setup that tries to
+   `docker push` before this deploy fails with `RepositoryNotFoundException`.
+
+   ```bash
+   cd infra && npx cdk deploy TtobakWhisperStack --exclusively
    ```
 
 `deploy-infra.yml` covers both of these automatically on merge, so this

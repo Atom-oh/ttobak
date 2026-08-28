@@ -5,11 +5,13 @@ container-only deps, and the module reads required env vars at import time,
 so both are stubbed before import."""
 
 import contextlib
+import gc
 import io
 import os
 import sys
 import types
 import unittest
+import weakref
 from unittest import mock
 
 os.environ['BUCKET_NAME'] = 'test-bucket'
@@ -301,43 +303,72 @@ class TestTryAlign(unittest.TestCase):
         self.assertNotIn(SECRET_TEXT, printed)
         self.assertIn('RuntimeError', printed)
 
-    def test_align_model_freed_after_successful_alignment(self):
-        # FINDING 1 (round 11): the align model must not stay GPU-resident
-        # past _try_align's own call -- _free_align_model must be invoked
-        # exactly once on the successful path.
+    def test_align_model_actually_freed_after_successful_alignment(self):
+        # FINDING 1 (round 12): a previous "freed" test mocked
+        # _free_align_model itself, so it could only assert the helper was
+        # CALLED, not that the model was actually released -- and in fact it
+        # wasn't (the helper did `del` on its own parameter, which drops only
+        # the callee's binding while _try_align's own local `align_model`
+        # kept the object alive). This test uses a REAL sentinel object (not
+        # a mock) and a weakref to it, so it can only pass if _try_align's
+        # caller-side scope genuinely drops its last reference.
+        class _AlignModelSentinel:
+            """Plain object subclass -- supports weakref, unlike a bare
+            object() instance."""
+
+        sentinel = _AlignModelSentinel()
+        sentinel_ref = weakref.ref(sentinel)
+
         aligned_segments = [{'start': 0.0, 'end': 1.0, 'text': 'a', 'words': []}]
         fake_whisperx = types.ModuleType('whisperx')
         fake_whisperx.load_align_model = lambda language_code, device: (
-            'align-model-sentinel', object())
+            sentinel, object())
         fake_whisperx.align = lambda segments, model, metadata, audio, device: {
             'segments': aligned_segments}
 
-        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}), \
-                mock.patch.object(transcribe_whisperx, '_free_align_model') as mock_free:
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
             transcribe_whisperx._try_align(
                 [{'start': 0.0, 'end': 1.0, 'text': 'a'}], audio=object(),
                 language='ko')
 
-        mock_free.assert_called_once()
+        del sentinel  # drop this test's own reference too
+        gc.collect()
+        self.assertIsNone(
+            sentinel_ref(),
+            'align model sentinel is still alive after _try_align returned '
+            '-- something is still holding a reference, so it was never '
+            'actually freed')
 
-    def test_align_model_freed_after_exception(self):
-        # Same as above, but on the exception path -- the model must still
-        # be freed even though alignment failed.
+    def test_align_model_actually_freed_after_exception(self):
+        # Same real-leak check as above, but on the exception path -- the
+        # model must still be released even though alignment failed.
+        class _AlignModelSentinel:
+            """Plain object subclass -- supports weakref, unlike a bare
+            object() instance."""
+
+        sentinel = _AlignModelSentinel()
+        sentinel_ref = weakref.ref(sentinel)
+
         def raising_align(segments, model, metadata, audio, device):
             raise RuntimeError('boom')
 
         fake_whisperx = types.ModuleType('whisperx')
         fake_whisperx.load_align_model = lambda language_code, device: (
-            'align-model-sentinel', object())
+            sentinel, object())
         fake_whisperx.align = raising_align
 
-        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}), \
-                mock.patch.object(transcribe_whisperx, '_free_align_model') as mock_free:
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
             transcribe_whisperx._try_align(
                 [{'start': 0.0, 'end': 1.0, 'text': 'a'}], audio=object(),
                 language='ko')
 
-        mock_free.assert_called_once()
+        del sentinel
+        gc.collect()
+        self.assertIsNone(
+            sentinel_ref(),
+            'align model sentinel is still alive after _try_align raised '
+            '-- something is still holding a reference, so it was never '
+            'actually freed')
 
 
 class TestValidateOutputKey(unittest.TestCase):
@@ -516,6 +547,51 @@ class TestValidateOutputKeyAndShouldMarkMeetingErrorAgree(unittest.TestCase):
                 self.assertFalse(
                     transcribe_whisperx.should_mark_meeting_error(
                         key, meeting_id))
+
+
+class TestBenchConfigErrorRaised(unittest.TestCase):
+    """FINDING 2 (round 12): validate_output_key/validate_audio_key must
+    raise BenchConfigError specifically (not a bare ValueError), so
+    format_fatal_error can tell an operator-facing config error (safe to log
+    verbatim) apart from a library exception (never safe to log verbatim).
+    BenchConfigError subclasses ValueError, so existing
+    assertRaises(ValueError) coverage above still passes unchanged."""
+
+    def test_validate_output_key_raises_bench_config_error(self):
+        with self.assertRaises(transcribe_whisperx.BenchConfigError):
+            transcribe_whisperx.validate_output_key('', 'm123')
+
+    def test_validate_audio_key_raises_bench_config_error(self):
+        with self.assertRaises(transcribe_whisperx.BenchConfigError):
+            transcribe_whisperx.validate_audio_key(
+                'audio/u2/m123/rec.mp3', 'u1', 'm123')
+
+
+class TestFormatFatalError(unittest.TestCase):
+    """FINDING 2 (round 12): a bare `str(e)[:300]` length cap is not
+    redaction -- 300 characters of a library exception can still embed a
+    transcript fragment verbatim. format_fatal_error must print a
+    BenchConfigError's message verbatim (safe by construction) but reduce
+    any OTHER exception to its type name plus a message length, never the
+    message content itself."""
+
+    def test_generic_exception_message_is_not_printed(self):
+        marker = 'SECRET_MEETING_TRANSCRIPT_FRAGMENT_777'
+        line = transcribe_whisperx.format_fatal_error(RuntimeError(marker))
+        self.assertNotIn(marker, line)
+        self.assertIn('RuntimeError', line)
+        self.assertIn(str(len(marker)), line)
+
+    def test_bench_config_error_message_is_printed_verbatim(self):
+        message = "OUTPUT_KEY 'files/x' is not a valid bench-transcripts/ key"
+        line = transcribe_whisperx.format_fatal_error(
+            transcribe_whisperx.BenchConfigError(message))
+        self.assertIn(message, line)
+        self.assertIn('BenchConfigError', line)
+
+    def test_bench_config_error_subclasses_value_error(self):
+        self.assertTrue(
+            issubclass(transcribe_whisperx.BenchConfigError, ValueError))
 
 
 if __name__ == '__main__':

@@ -4,7 +4,7 @@
 
 **Goal:** Stand up an isolated WhisperX (pyannote 4.x) transcription+diarization engine — new container image, new ECS task definition, model-staging script, and a manual benchmark runbook — so its speaker-diarization quality can be compared against the existing faster-whisper + pyannote 3.1 engine on real meeting audio, **with zero changes to any production code path**.
 
-**Architecture:** A second, self-contained Python entry point (`transcribe_whisperx.py`) plus a shared helper module (`whisper_common.py`) live next to the existing `transcribe.py`. A second Dockerfile builds a separate image into a new ECR repo; a second ECS task definition reuses the existing cluster/ASG/capacity-provider/IAM roles. Nothing invokes the new task automatically — an operator runs it by hand via `aws ecs run-task` with `OUTPUT_KEY` overridden to benchmark-only S3 keys.
+**Architecture:** A second, self-contained Python entry point (`transcribe_whisperx.py`) plus a shared helper module (`whisper_common.py`) live next to the existing `transcribe.py`. A second Dockerfile builds a separate image into a new ECR repo; a second ECS task definition reuses the existing cluster/ASG/capacity-provider/IAM roles [As shipped: a dedicated least-privilege ttobak-whisperx-task-role replaced the shared task role during review]. Nothing invokes the new task automatically — an operator runs it by hand via `aws ecs run-task` with `OUTPUT_KEY` overridden to benchmark-only S3 keys.
 
 **Tech Stack:** Python 3.12 (stdlib unittest), whisperx 3.8.x (pulls torch 2.8/cu128, pyannote.audio 4.x, faster-whisper, ctranslate2), CDK TypeScript (jest), Docker, bash.
 
