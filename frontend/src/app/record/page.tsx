@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { RecordButton } from '@/components/RecordButton';
+import { RecordButton, type RecordButtonHandle } from '@/components/RecordButton';
 import { MicSelector } from '@/components/MicSelector';
 import { FileUploader } from '@/components/FileUploader';
 import { LiveTranscript } from '@/components/LiveTranscript';
@@ -82,6 +82,16 @@ function RecordPageInner() {
   const [previewAnalyser, setPreviewAnalyser] = useState<AnalyserNode | null>(null);
   const previewStreamRef = useRef<MediaStream | null>(null);
   const previewCtxRef = useRef<AudioContext | null>(null);
+  // Imperative handle for the mobile "탭하여 재개" recovery button below --
+  // resumeAudio() must be called synchronously from that button's onClick
+  // to keep the click's user-activation privilege (see RecordButton's
+  // onAudioStalled doc comment).
+  const recordButtonRef = useRef<RecordButtonHandle>(null);
+  // Waveform-specific stall, surfaced by RecordButton's own watchdog --
+  // kept separate from session.speechError (which only knows about the
+  // live-caption AudioContext) so the banner can show a distinct, correct
+  // message even when captions happen to be fine.
+  const [audioStalled, setAudioStalled] = useState(false);
 
   // Client-side meeting ID (stable across re-renders)
   const [clientMeetingIdBase] = useState(() => `meeting_${Date.now()}`);
@@ -409,6 +419,7 @@ function RecordPageInner() {
       const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
       setTabSharingLabel(label);
     }
+    setAudioStalled(false);
     summary.reset();
     // New recording session — the previous recording's auto-fired proactive
     // questions must not shadow identically-worded ones in this session.
@@ -657,9 +668,58 @@ function RecordPageInner() {
                 음성 인식 재시작
               </button>
             )}
+            {session.canRetryLiveCaptions && session.isRecording && (
+              <button
+                // MUST stay synchronous, no `await` before either call --
+                // both resumeAudio() and retryLiveCaptions() construct a
+                // fresh AudioContext and need this click's user-activation
+                // privilege (see RecordButton.onAudioStalled and
+                // SttManager.manualStallRecovery's doc comments for why
+                // the automatic paths alone can't recover this).
+                onClick={() => {
+                  recordButtonRef.current?.resumeAudio();
+                  session.retryLiveCaptions();
+                }}
+                className="mt-2 px-3 py-1.5 bg-amber-600 text-white text-xs font-semibold rounded-lg hover:bg-amber-700 transition-colors"
+              >
+                지금 다시 연결
+              </button>
+            )}
           </div>
           <button
             onClick={() => session.setSpeechError(null)}
+            className="p-1 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded transition-colors"
+          >
+            <span className="material-symbols-outlined text-amber-400 text-lg">close</span>
+          </button>
+        </div>
+      )}
+
+      {/* Waveform-only stall — the live-caption AudioContext can be fine
+          while this one (RecordButton's own analyser, a separate
+          AudioContext) is stuck; kept as its own banner rather than folded
+          into session.speechError so it doesn't imply captions are also
+          broken when they aren't. */}
+      {audioStalled && (
+        <div className="mx-6 mt-2 px-4 py-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-start gap-3">
+          <span className="material-symbols-outlined text-amber-500 text-xl mt-0.5">graphic_eq</span>
+          <div className="flex-1">
+            <p className="text-sm text-amber-800 dark:text-amber-200">마이크 파형이 멈췄습니다. 녹음 자체는 계속되고 있습니다.</p>
+            <button
+              // Synchronous, no `await` before this call — see the retry
+              // button above for why. Deliberately does NOT clear
+              // audioStalled here -- resumeAudio() can't report success
+              // synchronously, so the banner stays up until RecordButton's
+              // own watchdog confirms recovery via onAudioRecovered
+              // (usually within one more 4s tick if the tap worked).
+              onClick={() => recordButtonRef.current?.resumeAudio()}
+              className="mt-2 px-3 py-1.5 bg-amber-600 text-white text-xs font-semibold rounded-lg hover:bg-amber-700 transition-colors"
+            >
+              탭하여 재개
+            </button>
+          </div>
+          <button
+            onClick={() => setAudioStalled(false)}
             className="p-1 hover:bg-amber-100 dark:hover:bg-amber-900/40 rounded transition-colors"
           >
             <span className="material-symbols-outlined text-amber-400 text-lg">close</span>
@@ -862,6 +922,7 @@ function RecordPageInner() {
         {/* Recording Section — hidden in upload mode */}
         {!isUploadMode && <div className="flex flex-col items-center justify-center mb-8">
           <RecordButton
+            ref={recordButtonRef}
             meetingId={clientMeetingId}
             meetingTitle={meetingTitle || 'Untitled Meeting'}
             audioSource={audioSource}
@@ -921,11 +982,13 @@ function RecordPageInner() {
             onRecordingStart={handleRecordingStart}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
-            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); }}
+            onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); }}
             onPermissionGranted={refreshDevices}
             onCaptureImage={handleFileAttach}
             onAnalyserReady={setAnalyserNode}
             onCheckpoint={handleCheckpoint}
+            onAudioStalled={() => setAudioStalled(true)}
+            onAudioRecovered={() => setAudioStalled(false)}
           />
         </div>}
 

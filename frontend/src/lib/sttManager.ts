@@ -28,6 +28,18 @@ export interface SttManagerConfig {
   translationEnabled: boolean;
   transcribeStreamingConfig?: TranscribeStreamingConfig;
   onProviderChange?: (provider: LiveSttProvider) => void;
+  /**
+   * Fired the moment a stall is FIRST detected, before the automatic
+   * one-shot reconnect attempt even runs -- previously this whole sequence
+   * was invisible to the page until the automatic retry also failed
+   * (25-30s+, sometimes 50-60s if a second stall's retry was also
+   * consumed), and even then the message users saw overpromised an
+   * automatic recovery that the mobile-blocked Web Speech fallback can
+   * never actually deliver. This lets the page show an immediate,
+   * actionable "reconnecting — tap to retry now" banner instead of dead
+   * silence, with `manualStallRecovery()` wired to the retry button.
+   */
+  onReconnecting?: () => void;
 }
 
 export class SttManager {
@@ -141,6 +153,55 @@ export class SttManager {
     // TranscribeStreamingSession.start().catch() already routes failures
     // to fallbackToWebSpeech) -- this .catch only guards the rarer case
     // of the synchronous session construction itself throwing.
+    this.startTranscribeStreaming(this.stream).catch(() => this.fallbackToWebSpeech(true));
+    this.activeProvider = 'transcribe-streaming';
+    this.config.onProviderChange?.('transcribe-streaming');
+  }
+
+  /**
+   * User-initiated recovery for a stuck live-caption pipeline, wired to the
+   * page's "지금 다시 연결" retry button. MUST be called synchronously
+   * from that button's onClick, before any `await` -- everything the
+   * automatic stall-recovery path already tries (onstatechange, the
+   * watchdog's resume() retries, the visibilitychange/pageshow/focus
+   * reconnect below) calls into `new AudioContext()`/`resume()` from an
+   * event listener, not a real click, and iOS Safari can refuse those
+   * indefinitely without a fresh user gesture. This method's own
+   * `startTranscribeStreaming` call constructs a brand new AudioContext
+   * synchronously within THIS call's stack, so it inherits the click's
+   * user-activation privilege where the automatic paths structurally
+   * cannot.
+   *
+   * Unlike `retryWithConfig`, this always tears down and restarts
+   * regardless of whether Transcribe Streaming already looks "active" --
+   * a session can be `this.activeProvider === 'transcribe-streaming'`
+   * while its underlying AudioContext is silently stuck, which is exactly
+   * the state this exists to escape.
+   */
+  manualStallRecovery(): void {
+    if (this.stopped || !this.stream) return;
+    if (this.preferredProvider !== 'transcribe-streaming' || !this.config.transcribeStreamingConfig) return;
+    // Paused: nothing to reconnect right now -- resume() already restarts
+    // Transcribe Streaming fresh when the recording itself resumes, and
+    // starting a session against a stream that isn't being recorded would
+    // just leak it the same way retryWithConfig's own paused guard avoids.
+    if (this.paused) return;
+    if (this.pendingStallReconnect) {
+      document.removeEventListener('visibilitychange', this.pendingStallReconnect);
+      window.removeEventListener('pageshow', this.pendingStallReconnect);
+      window.removeEventListener('focus', this.pendingStallReconnect);
+      this.pendingStallReconnect = null;
+    }
+    this.transcribeSession?.stop();
+    this.transcribeSession = null;
+    this.webSpeechClient?.stop();
+    this.webSpeechClient = null;
+    // A deliberate, gesture-backed retry deserves its own fresh grace,
+    // distinct from the automatic one-shot -- otherwise a SECOND lock
+    // later in the same recording would have no automatic attempt left
+    // and this button would be the only path back, silently more load-
+    // bearing than its automatic counterpart was ever designed to be.
+    this.stalledReconnectAttempted = false;
     this.startTranscribeStreaming(this.stream).catch(() => this.fallbackToWebSpeech(true));
     this.activeProvider = 'transcribe-streaming';
     this.config.onProviderChange?.('transcribe-streaming');
@@ -284,6 +345,9 @@ export class SttManager {
           !this.stalledReconnectAttempted
         ) {
           this.stalledReconnectAttempted = true;
+          // Notify the page NOW, not only if this automatic attempt also
+          // fails -- see onReconnecting's doc comment on SttManagerConfig.
+          this.config.onReconnecting?.();
           if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
             // The lock/backgrounding that caused this stall is still in
             // effect -- reconnecting right now would just start a second

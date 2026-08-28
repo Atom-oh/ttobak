@@ -434,18 +434,19 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 		return fmt.Errorf("meeting is not in recording state (current: %s)", meeting.Status)
 	}
 
-	// Check that progress file exists in S3
-	progressKey := fmt.Sprintf("audio/%s/%s/recording_progress.webm", userID, meetingID)
-	_, err = s.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(s.bucketName),
-		Key:    aws.String(progressKey),
-	})
+	// Find the progress file by prefix, not a hardcoded extension --
+	// RecordButton's checkpoint uses whatever MediaRecorder's mimeType maps
+	// to (webm on desktop/Android, m4a on iOS Safari, which has no webm
+	// encoder at all), so a fixed ".webm" here made "녹음 복구" fail with
+	// "no recoverable audio found" on every iOS recording, unconditionally.
+	progressKey, ext, err := s.findProgressFile(ctx, userID, meetingID)
 	if err != nil {
 		return fmt.Errorf("no recoverable audio found (progress file missing)")
 	}
 
-	// Copy progress file to a final filename (triggers EventBridge S3 event → transcribe Lambda)
-	finalKey := fmt.Sprintf("audio/%s/%s/recording_recovered_%d.webm", userID, meetingID, time.Now().UnixMilli())
+	// Copy progress file to a final filename (triggers EventBridge S3 event → transcribe Lambda),
+	// preserving whatever extension the progress file actually had.
+	finalKey := fmt.Sprintf("audio/%s/%s/recording_recovered_%d.%s", userID, meetingID, time.Now().UnixMilli(), ext)
 	_, err = s.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(s.bucketName),
 		Key:        aws.String(finalKey),
@@ -460,6 +461,34 @@ func (s *UploadService) RecoverMeeting(ctx context.Context, userID, meetingID st
 		"audioKey": finalKey,
 		"status":   model.StatusTranscribing,
 	})
+}
+
+// findProgressFile locates a recording checkpoint under
+// audio/{userID}/{meetingID}/recording_progress.* by prefix rather than a
+// fixed extension, and returns its key plus the bare extension (no dot) for
+// the caller to preserve on the recovered copy. There is exactly one
+// checkpoint per meeting (RecordButton always writes the same fixed
+// filename, overwriting the previous checkpoint each time), so the first
+// match is unambiguous.
+func (s *UploadService) findProgressFile(ctx context.Context, userID, meetingID string) (key string, ext string, err error) {
+	prefix := fmt.Sprintf("audio/%s/%s/recording_progress.", userID, meetingID)
+	out, err := s.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket:  aws.String(s.bucketName),
+		Prefix:  aws.String(prefix),
+		MaxKeys: aws.Int32(1),
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("listing progress files: %w", err)
+	}
+	if len(out.Contents) == 0 || out.Contents[0].Key == nil {
+		return "", "", fmt.Errorf("no progress file under %s", prefix)
+	}
+	key = *out.Contents[0].Key
+	ext = strings.TrimPrefix(path.Ext(key), ".")
+	if ext == "" {
+		return "", "", fmt.Errorf("progress file %s has no extension", key)
+	}
+	return key, ext, nil
 }
 
 // validateRediarizeEligibility is the pure decision core of RediarizeMeeting:

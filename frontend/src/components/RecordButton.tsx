@@ -1,10 +1,22 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
 import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
+
+/**
+ * Imperative handle for manually resuming the waveform AudioContext from a
+ * genuine click handler -- see onAudioStalled below for why this can't just
+ * happen automatically. The parent must call `resumeAudio()` synchronously
+ * inside its own onClick, before any `await`, or the call loses the click's
+ * user-activation privilege and `resume()` can silently fail the same way
+ * the automatic paths already do.
+ */
+export interface RecordButtonHandle {
+  resumeAudio: () => void;
+}
 
 interface RecordButtonProps {
   meetingId: string;
@@ -42,6 +54,28 @@ interface RecordButtonProps {
   onCaptureImage?: (file: File) => void;
   onAnalyserReady?: (analyser: AnalyserNode | null) => void;
   onCheckpoint?: (blob: Blob, mimeType: string) => void;
+  /**
+   * Fired (once, latched) when the waveform's own AudioContext has sat
+   * outside 'running' for longer than a resume should ever take. Mobile
+   * OSes suspend it on screen lock/background same as the Transcribe
+   * Streaming AudioContext does (see transcribeStreamingClient.ts's stall
+   * watchdog) -- but unlike that one, nothing here was reporting it at
+   * all, so a stuck waveform was completely invisible. The automatic
+   * resume paths (onstatechange, the re-acquire effect below) call
+   * resume() from event listeners, not a real click -- iOS Safari can
+   * refuse resume() indefinitely without a fresh user gesture, so this
+   * signal exists to surface a "tap to fix" affordance, not to replace
+   * the automatic attempts (which still run and often succeed on their
+   * own). Cleared (implicitly, by never firing again) once the context
+   * recovers on its own.
+   */
+  onAudioStalled?: () => void;
+  /** Fired once the watchdog above sees the context actually back to
+   * 'running' after having reported a stall -- lets the page clear its
+   * recovery banner on confirmed success instead of guessing from the
+   * button click alone (which can't know whether resume() actually
+   * worked). */
+  onAudioRecovered?: () => void;
   audioSource?: 'mic' | 'tab' | 'system';
   /** Disables starting a NEW recording — used while a previous recording's
    * post-processing (notes/upload/notify, or its error banner) is still
@@ -60,7 +94,7 @@ function formatTime(seconds: number): string {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-export function RecordButton({
+export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(function RecordButton({
   meetingId,
   meetingTitle = 'Meeting',
   deviceId,
@@ -77,9 +111,11 @@ export function RecordButton({
   onCaptureImage,
   onAnalyserReady,
   onCheckpoint,
+  onAudioStalled,
+  onAudioRecovered,
   audioSource = 'mic',
   disabled = false,
-}: RecordButtonProps) {
+}, ref) {
   const [state, setState] = useState<RecordingState>('idle');
   const [elapsedTime, setElapsedTime] = useState(0);
   const recordingStateRef = useRef<RecordingState>('idle');
@@ -115,6 +151,17 @@ export function RecordButton({
   const nativePcmUnlistenRef = useRef<(() => void) | null>(null);
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const wakeLockRequestInFlightRef = useRef(false);
+  // Hoisted out of startRecordingInner's local closure so both the
+  // visibility re-acquire effect below AND the imperative resumeAudio()
+  // handle (for the manual "tap to fix" recovery button) can call the
+  // SAME resume attempt the AudioContext's own onstatechange uses.
+  const tryResumeAnalyserContextRef = useRef<(() => void) | null>(null);
+  // Stall watchdog for the waveform's own AudioContext, mirroring
+  // transcribeStreamingClient.ts's -- see onAudioStalled's doc comment for
+  // why nothing surfaced this before.
+  const audioStallTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const audioStallNotRunningSinceRef = useRef<number | null>(null);
+  const audioStallReportedRef = useRef(false);
 
   // Screen Wake Lock: without this, mobile OSes dim/lock the screen during a
   // recording, which suspends the page's AudioContext(s) and (for Web
@@ -181,9 +228,14 @@ export function RecordButton({
   // effect exists for, so pageshow/focus are wired to the same handler.
   useEffect(() => {
     const handleReacquire = () => {
-      if (document.visibilityState === 'visible' && isRecordingRef.current && !wakeLockRef.current) {
-        requestWakeLock();
-      }
+      if (document.visibilityState !== 'visible' || !isRecordingRef.current) return;
+      if (!wakeLockRef.current) requestWakeLock();
+      // The waveform AudioContext's own onstatechange only fires when the
+      // browser itself decides to change state -- some browsers never
+      // re-fire it after a suspend that outlasted the page's visibility,
+      // so without an explicit retry here on return, a stuck context could
+      // sit suspended indefinitely with nothing left to ever nudge it.
+      tryResumeAnalyserContextRef.current?.();
     };
     document.addEventListener('visibilitychange', handleReacquire);
     window.addEventListener('pageshow', handleReacquire);
@@ -194,6 +246,28 @@ export function RecordButton({
       window.removeEventListener('focus', handleReacquire);
     };
   }, [requestWakeLock]);
+
+  useImperativeHandle(ref, () => ({
+    resumeAudio: () => {
+      // Called from the recovery banner's onClick -- MUST run synchronously
+      // within that click's call stack (no await first) so this resume()
+      // still carries the click's user-activation privilege. See
+      // onAudioStalled's doc comment for why the automatic paths alone
+      // can't be relied on.
+      tryResumeAnalyserContextRef.current?.();
+      // Give the watchdog a fresh detection window instead of leaving it
+      // latched silent: if this resume() attempt doesn't actually work
+      // (banner stays up, still frozen), the watchdog would otherwise
+      // never fire onAudioStalled a second time for the SAME stall
+      // episode, since the latch only clears on confirmed recovery
+      // (state === 'running'). The page keeps its banner open across this
+      // call either way -- only onAudioRecovered above closes it -- so
+      // resetting here can't cause a spurious re-notification the user
+      // hasn't already seen.
+      audioStallNotRunningSinceRef.current = null;
+      audioStallReportedRef.current = false;
+    },
+  }), []);
 
   // iOS Safari has supported MediaRecorder since 14.3 (audio/mp4 output,
   // mapped to .m4a below), so it should take the normal recording path --
@@ -208,6 +282,13 @@ export function RecordButton({
       cancelAnimationFrame(animationRef.current);
       animationRef.current = null;
     }
+    if (audioStallTimerRef.current) {
+      clearInterval(audioStallTimerRef.current);
+      audioStallTimerRef.current = null;
+    }
+    audioStallNotRunningSinceRef.current = null;
+    audioStallReportedRef.current = false;
+    tryResumeAnalyserContextRef.current = null;
     analyserRef.current = null;
     onAnalyserReady?.(null);
     if (audioContextRef.current) {
@@ -463,12 +544,48 @@ export function RecordButton({
       };
       tryResumeAudioContext();
       audioContext.onstatechange = tryResumeAudioContext;
+      tryResumeAnalyserContextRef.current = tryResumeAudioContext;
       const source = audioContext.createMediaStreamSource(stream);
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
       source.connect(analyser);
       analyserRef.current = analyser;
       onAnalyserReady?.(analyser);
+
+      // Stall watchdog: none of the automatic resume attempts above are
+      // guaranteed to ever succeed (see onAudioStalled's doc comment on
+      // the prop) -- this is what turns an indefinitely-stuck context into
+      // a one-time, user-visible signal instead of a silently frozen
+      // waveform. 12s / 4 checks mirrors transcribeStreamingClient.ts's
+      // stall watchdog closely enough to feel consistent, without being
+      // identical (this one only needs to detect "still not running",
+      // not "no chunks arrived", since AnalyserNode has no chunk stream).
+      const STALL_NOT_RUNNING_MS = 12_000;
+      audioStallNotRunningSinceRef.current = null;
+      audioStallReportedRef.current = false;
+      audioStallTimerRef.current = setInterval(() => {
+        if (!isRecordingRef.current) return;
+        if (audioContext.state !== 'running') {
+          if (audioStallNotRunningSinceRef.current === null) {
+            audioStallNotRunningSinceRef.current = Date.now();
+          } else if (
+            !audioStallReportedRef.current &&
+            Date.now() - audioStallNotRunningSinceRef.current > STALL_NOT_RUNNING_MS
+          ) {
+            audioStallReportedRef.current = true;
+            console.warn('Waveform AudioContext stuck outside "running" — surfacing recovery prompt');
+            onAudioStalled?.();
+          }
+        } else {
+          // Only notify recovery if a stall was actually reported first --
+          // this branch also runs on every ordinary healthy tick, and
+          // firing onAudioRecovered then would be a meaningless no-op call
+          // for the page, not a real "it just got fixed" signal.
+          if (audioStallReportedRef.current) onAudioRecovered?.();
+          audioStallNotRunningSinceRef.current = null;
+          audioStallReportedRef.current = false;
+        }
+      }, 4_000);
 
       chunksRef.current = [];
       stopFinalizedRef.current = false;
@@ -955,4 +1072,4 @@ export function RecordButton({
       )}
     </div>
   );
-}
+});
