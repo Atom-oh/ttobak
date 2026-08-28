@@ -49,7 +49,7 @@ export function DiagramLightbox({ onClose, children, resetKey }: DiagramLightbox
 
         <ZoomPanViewport
           resetKey={resetKey}
-          className="w-full h-full rounded-lg bg-[#0a0a0f]"
+          className="w-full h-full rounded-lg bg-white dark:bg-[#0a0a0f]"
           minHeightClassName="min-h-0"
           maxHeightClassName="max-h-none"
         >

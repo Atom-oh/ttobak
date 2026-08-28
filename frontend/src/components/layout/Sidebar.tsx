@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
+import { useTheme } from '@/hooks/useTheme';
 
 const mainNav = [
   { href: '/', icon: 'video_camera_front', label: 'Meetings' },
@@ -32,28 +33,9 @@ function NavItem({ href, icon, label, isActive }: { href: string; icon: string; 
   );
 }
 
-function useDarkMode() {
-  const [isDark, setIsDark] = useState(false);
-
-  useEffect(() => {
-    const root = document.documentElement;
-    setIsDark(root.classList.contains('dark'));
-  }, []);
-
-  const toggle = () => {
-    const root = document.documentElement;
-    const next = !isDark;
-    root.classList.toggle('dark', next);
-    localStorage.setItem('theme', next ? 'dark' : 'light');
-    setIsDark(next);
-  };
-
-  return { isDark, toggle };
-}
-
 export function Sidebar({ activePath }: { activePath: string }) {
   const { user, logout } = useAuth();
-  const { isDark, toggle: toggleDark } = useDarkMode();
+  const { isDark, toggle: toggleDark } = useTheme();
   const [showNewMenu, setShowNewMenu] = useState(false);
 
   return (

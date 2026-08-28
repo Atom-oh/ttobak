@@ -11,6 +11,10 @@
    No neon, no glow — calm premium (Linear/Vercel-like).
    ═══════════════════════════════════════════════ */
 
+/* If you change these values (light block below or .dark override),
+   also update MermaidBlock.tsx's LIGHT_THEME_VARIABLES/DARK_THEME_VARIABLES
+   -- mermaid needs a hardcoded JS palette (no 1:1 token for keys like
+   mainBkg/clusterBkg/edgeLabelBackground) that mirrors these by hand. */
 :root {
   --primary: #3211d4;
   --primary-hover: #2a0eb3;
