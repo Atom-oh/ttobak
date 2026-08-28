@@ -3,7 +3,13 @@ name: Deploy Whisper STT
 on:
   push:
     branches: [main]
-    paths: ['backend/whisper/**']
+    # Scoped to only what the legacy Dockerfile actually consumes: it COPYs
+    # just transcribe.py, and its pip deps (faster-whisper, pyannote<4, boto3)
+    # are unpinned -- rebuilding on unrelated sibling-file changes (e.g. the
+    # whisperx benchmark engine files) could silently produce a different
+    # production image. The whisperx image is built manually per
+    # docs/runbooks/whisperx-benchmark.md, not by this workflow.
+    paths: ['backend/whisper/transcribe.py', 'backend/whisper/Dockerfile']
   workflow_dispatch:
 
 permissions:
