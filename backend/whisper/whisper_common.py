@@ -12,6 +12,11 @@ clients so unit tests can pass MagicMocks without patching module globals.
 
 from __future__ import annotations
 
+import json
+import tarfile
+
+from botocore.exceptions import ClientError
+
 
 def normalize_speaker_labels(segments: list[dict]) -> list[dict]:
     """Rewrites raw diarization labels ("SPEAKER_00") to spk_N in
@@ -80,3 +85,92 @@ def assign_speakers(segments: list[dict], turns: list[tuple], use_words: bool = 
         if label is not None:
             seg["speaker"] = label
     return normalize_speaker_labels(segments)
+
+
+# Audio discovery filters — exclude empty/placeholder uploads and
+# progress/checkpoint sidecars. (Values mirror transcribe.py.)
+MIN_AUDIO_SIZE_BYTES = 1024
+SKIP_KEY_SUBSTRINGS = ("recording_progress", "checkpoint")
+
+
+def audio_key_exists(s3, bucket: str, key: str) -> bool:
+    """True if the key exists. False only on 404; auth/throttle errors re-raise."""
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
+
+
+def find_audio_key(s3, bucket: str, user_id: str, meeting_id: str) -> str | None:
+    """Most recently modified valid audio object under the meeting's prefix
+    (paginated; re-recordings supersede older uploads)."""
+    prefix = f"audio/{user_id}/{meeting_id}/"
+    paginator = s3.get_paginator("list_objects_v2")
+    candidates = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if any(p in key for p in SKIP_KEY_SUBSTRINGS):
+                continue
+            if obj["Size"] < MIN_AUDIO_SIZE_BYTES:
+                continue
+            candidates.append(obj)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda o: o["LastModified"])["Key"]
+
+
+def load_custom_vocab_prompt(s3, bucket: str, vocab_key: str) -> str:
+    """TSV custom-vocabulary file -> space-joined display terms. Empty string
+    on any failure (vocab is always optional)."""
+    try:
+        resp = s3.get_object(Bucket=bucket, Key=vocab_key)
+        lines = resp["Body"].read().decode("utf-8").strip().split("\n")
+        terms = []
+        for line in lines[1:]:
+            cols = line.split("\t")
+            display = cols[2].strip() if len(cols) >= 3 else cols[0].strip()
+            if display:
+                terms.append(display)
+        print(f"Custom vocab loaded: {len(terms)} terms")
+        return " ".join(terms)
+    except Exception as e:
+        print(f"Custom vocab not available: {e}")
+        return ""
+
+
+def stream_extract_tar(s3, bucket: str, key: str, dest_dir: str) -> None:
+    """Stream-extracts s3://bucket/key (a .tar.gz) into dest_dir without
+    landing the archive on disk (root-volume headroom; see whisper-stack.ts
+    blockDevices comment). filter="data" rejects path-escape members."""
+    import os
+    os.makedirs(dest_dir, exist_ok=True)
+    obj = s3.get_object(Bucket=bucket, Key=key)
+    with tarfile.open(fileobj=obj["Body"], mode="r|gz") as tar:
+        tar.extractall(dest_dir, filter="data")
+
+
+def upload_transcript(s3, bucket: str, output_key: str, result: dict) -> None:
+    s3.put_object(
+        Bucket=bucket,
+        Key=output_key,
+        Body=json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8"),
+        ContentType="application/json",
+    )
+
+
+def mark_meeting_error(table, user_id: str, meeting_id: str) -> None:
+    """Best-effort status=error write on fatal failure; never raises."""
+    try:
+        table.update_item(
+            Key={"PK": f"USER#{user_id}", "SK": f"MEETING#{meeting_id}"},
+            UpdateExpression="SET #s = :s",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":s": "error"},
+        )
+    except Exception:
+        pass

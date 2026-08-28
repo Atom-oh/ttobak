@@ -5,7 +5,12 @@ clients, and its speaker functions import nothing heavy, so no stubbing is
 needed to import the module itself.
 """
 
+import datetime
+import json
 import unittest
+from unittest import mock
+
+from botocore.exceptions import ClientError
 
 import whisper_common
 
@@ -85,6 +90,74 @@ class TestAssignSpeakers(unittest.TestCase):
         turns = [(0.0, 3.0, 'SPEAKER_00'), (3.0, 10.0, 'SPEAKER_01')]
         result = whisper_common.assign_speakers(segments, turns)
         self.assertEqual(result[0]['speaker'], 'spk_0')
+
+
+class TestAudioKeyExists(unittest.TestCase):
+    def test_true_on_head_success(self):
+        s3 = mock.MagicMock()
+        self.assertTrue(whisper_common.audio_key_exists(s3, 'b', 'k'))
+
+    def test_false_on_404(self):
+        s3 = mock.MagicMock()
+        s3.head_object.side_effect = ClientError(
+            {'Error': {'Code': '404'}}, 'HeadObject')
+        self.assertFalse(whisper_common.audio_key_exists(s3, 'b', 'k'))
+
+    def test_reraises_non_404(self):
+        s3 = mock.MagicMock()
+        s3.head_object.side_effect = ClientError(
+            {'Error': {'Code': 'AccessDenied'}}, 'HeadObject')
+        with self.assertRaises(ClientError):
+            whisper_common.audio_key_exists(s3, 'b', 'k')
+
+
+class TestFindAudioKey(unittest.TestCase):
+    def test_picks_latest_valid_candidate(self):
+        s3 = mock.MagicMock()
+        s3.get_paginator.return_value.paginate.return_value = [{
+            'Contents': [
+                {'Key': 'audio/u/m/recording_progress.json', 'Size': 5000,
+                 'LastModified': datetime.datetime(2026, 1, 3)},
+                {'Key': 'audio/u/m/tiny.webm', 'Size': 10,
+                 'LastModified': datetime.datetime(2026, 1, 2)},
+                {'Key': 'audio/u/m/old.webm', 'Size': 5000,
+                 'LastModified': datetime.datetime(2026, 1, 1)},
+                {'Key': 'audio/u/m/new.webm', 'Size': 5000,
+                 'LastModified': datetime.datetime(2026, 1, 2)},
+            ],
+        }]
+        self.assertEqual(
+            whisper_common.find_audio_key(s3, 'b', 'u', 'm'), 'audio/u/m/new.webm')
+
+    def test_none_when_no_candidates(self):
+        s3 = mock.MagicMock()
+        s3.get_paginator.return_value.paginate.return_value = [{}]
+        self.assertIsNone(whisper_common.find_audio_key(s3, 'b', 'u', 'm'))
+
+
+class TestUploadTranscript(unittest.TestCase):
+    def test_puts_pretty_utf8_json(self):
+        s3 = mock.MagicMock()
+        whisper_common.upload_transcript(s3, 'b', 'transcripts/m.json', {'k': '가'})
+        kwargs = s3.put_object.call_args.kwargs
+        self.assertEqual(kwargs['Bucket'], 'b')
+        self.assertEqual(kwargs['Key'], 'transcripts/m.json')
+        self.assertEqual(kwargs['ContentType'], 'application/json')
+        self.assertIn('가', kwargs['Body'].decode('utf-8'))
+
+
+class TestMarkMeetingError(unittest.TestCase):
+    def test_swallows_dynamo_failure(self):
+        table = mock.MagicMock()
+        table.update_item.side_effect = RuntimeError('boom')
+        whisper_common.mark_meeting_error(table, 'u', 'm')  # must not raise
+
+    def test_writes_error_status(self):
+        table = mock.MagicMock()
+        whisper_common.mark_meeting_error(table, 'u', 'm')
+        kwargs = table.update_item.call_args.kwargs
+        self.assertEqual(kwargs['Key'], {'PK': 'USER#u', 'SK': 'MEETING#m'})
+        self.assertEqual(kwargs['ExpressionAttributeValues'], {':s': 'error'})
 
 
 if __name__ == '__main__':
