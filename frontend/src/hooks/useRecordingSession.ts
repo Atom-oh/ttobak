@@ -71,6 +71,11 @@ const speechErrorMessages: Record<string, string> = {
 const RETRYABLE_LIVE_CAPTION_ERRORS = new Set([
   'transcribe-stream-reconnecting',
   'web-speech-mobile-unavailable',
+  // manualStallRecovery() can return false transiently (e.g. the session
+  // is currently paused) -- keeping this in the retryable set means a
+  // failed attempt doesn't destroy the button permanently, unlike
+  // replacing speechError with a non-retryable message would.
+  'live-caption-retry-unavailable',
 ]);
 
 interface UseRecordingSessionOptions {
