@@ -67,8 +67,9 @@ def get_meeting(meeting_id):
     resp = ddb.query(
         TableName=TABLE,
         IndexName="GSI3",
-        KeyConditionExpression="meetingId = :mid",
-        FilterExpression="entityType = :et",
+        # entityType is GSI3's sort key, so it belongs in KeyConditionExpression --
+        # DynamoDB rejects a FilterExpression that references an index key attribute.
+        KeyConditionExpression="meetingId = :mid AND entityType = :et",
         ExpressionAttributeValues={
             ":mid": {"S": meeting_id},
             ":et": {"S": "MEETING"},
