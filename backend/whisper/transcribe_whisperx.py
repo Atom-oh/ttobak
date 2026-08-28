@@ -160,15 +160,27 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
                   f"(would skew the benchmark), using segment-level "
                   f"timestamps")
             return segments, False
-        bad = sum(
-            1 for seg in aligned_segments
-            if seg.get("start") is None or seg.get("end") is None)
-        if bad:
-            print(f"Alignment produced {bad} segment(s) with missing "
-                  f"start/end; discarding aligned result, using "
-                  f"segment-level timestamps")
-            return segments, False
-        print("Alignment succeeded (word-level timestamps available)")
+        repaired = 0
+        for i, seg in enumerate(aligned_segments):
+            if seg.get("start") is None or seg.get("end") is None:
+                # Index mapping is valid (counts match) -- repair just this
+                # segment from the corresponding input segment's
+                # segment-level timestamps and drop its words, rather than
+                # discarding the whole aligned result (which would silently
+                # degrade word-majority speaker assignment -- the thing
+                # this benchmark exists to evaluate -- to segment-overlap
+                # for every segment, not just the bad one).
+                seg["start"] = segments[i]["start"]
+                seg["end"] = segments[i]["end"]
+                seg.pop("words", None)
+                repaired += 1
+        if repaired:
+            print(f"Alignment produced {repaired} segment(s) with missing "
+                  f"start/end; repaired from segment-level timestamps "
+                  f"(words dropped for those segments only), kept aligned "
+                  f"words for the rest")
+        else:
+            print("Alignment succeeded (word-level timestamps available)")
         return aligned_segments, True
     except Exception as e:
         print(f"Alignment unavailable, using segment-level timestamps: {e}")

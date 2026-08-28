@@ -54,4 +54,39 @@ describe('WhisperStack whisperx benchmark additions', () => {
       Family: 'ttobak-whisper',
     });
   });
+
+  test('whisperx task def uses a dedicated scoped task role, not the legacy one', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::IAM::Role', {
+      RoleName: 'ttobak-whisperx-task-role',
+    });
+    const whisperxRoleLogicalIds = Object.keys(
+      template.findResources('AWS::IAM::Role', {
+        Properties: Match.objectLike({ RoleName: 'ttobak-whisperx-task-role' }),
+      }),
+    );
+    expect(whisperxRoleLogicalIds).toHaveLength(1);
+    const legacyRoleLogicalIds = Object.keys(
+      template.findResources('AWS::IAM::Role', {
+        Properties: Match.objectLike({ RoleName: 'ttobak-whisper-task-role' }),
+      }),
+    );
+    expect(legacyRoleLogicalIds).toHaveLength(1);
+
+    const whisperxTaskDefs = template.findResources('AWS::ECS::TaskDefinition', {
+      Properties: Match.objectLike({ Family: 'ttobak-whisperx' }),
+    });
+    const [whisperxTaskDef] = Object.values(whisperxTaskDefs) as any[];
+    const taskRoleArn = whisperxTaskDef.Properties.TaskRoleArn;
+    expect(taskRoleArn['Fn::GetAtt'][0]).toBe(whisperxRoleLogicalIds[0]);
+    expect(taskRoleArn['Fn::GetAtt'][0]).not.toBe(legacyRoleLogicalIds[0]);
+  });
+
+  test('has a dedicated /ttobak/whisperx log group with 30-day retention', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: '/ttobak/whisperx',
+      RetentionInDays: 30,
+    });
+  });
 });

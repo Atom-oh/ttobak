@@ -110,20 +110,24 @@ class TestTurnsFromDiarization(unittest.TestCase):
 
 
 class TestTryAlign(unittest.TestCase):
-    def test_any_none_timestamp_discards_aligned_result(self):
-        # Regression for FINDING 2: whisperx.align() may emit a segment with
-        # a missing/None start or end (partial alignment failure). Returning
-        # such a segment would crash build_result's round(seg["start"], 2).
-        # The all-or-nothing best-effort rule: if ANY aligned segment lacks
-        # a numeric start/end, discard the whole aligned result and fall
-        # back to the original input segments with alignment_enabled=False.
+    def test_any_none_timestamp_repairs_that_segment_only(self):
+        # Regression for FINDING A (round 10): whisperx.align() may emit a
+        # segment with a missing/None start or end (partial alignment
+        # failure). Returning such a segment would crash build_result's
+        # round(seg["start"], 2). Previously this discarded the ENTIRE
+        # aligned result, degrading word-majority speaker assignment to
+        # segment-overlap for every segment. Since the index mapping is
+        # still valid (counts match), only the bad segment is repaired --
+        # timestamps copied from the same-index input segment, words
+        # dropped -- while every other aligned segment (with words) is
+        # kept intact.
         input_segments = [
             {'start': 0.0, 'end': 1.0, 'text': 'a'},
             {'start': 1.0, 'end': 2.0, 'text': 'b'},
         ]
         aligned_segments = [
-            {'start': 0.0, 'end': 1.0, 'text': 'a'},
-            {'start': None, 'end': None, 'text': 'b'},
+            {'start': 0.0, 'end': 1.0, 'text': 'a', 'words': [{'word': 'a'}]},
+            {'start': None, 'end': None, 'text': 'b', 'words': [{'word': 'b'}]},
         ]
 
         fake_whisperx = types.ModuleType('whisperx')
@@ -136,8 +140,16 @@ class TestTryAlign(unittest.TestCase):
             result_segments, alignment_enabled = transcribe_whisperx._try_align(
                 input_segments, audio=object(), language='ko')
 
-        self.assertEqual(result_segments, input_segments)
-        self.assertFalse(alignment_enabled)
+        self.assertTrue(alignment_enabled)
+        # First segment untouched, with words intact.
+        self.assertEqual(result_segments[0]['start'], 0.0)
+        self.assertEqual(result_segments[0]['end'], 1.0)
+        self.assertEqual(result_segments[0]['words'], [{'word': 'a'}])
+        # Second segment repaired from the input's segment-level timestamps,
+        # words dropped.
+        self.assertEqual(result_segments[1]['start'], 1.0)
+        self.assertEqual(result_segments[1]['end'], 2.0)
+        self.assertNotIn('words', result_segments[1])
 
     def test_segment_count_mismatch_discards_aligned_result(self):
         # Regression for FINDING 3: whisperx.align() may silently drop a
@@ -183,6 +195,42 @@ class TestTryAlign(unittest.TestCase):
 
         self.assertEqual(result_segments, aligned_segments)
         self.assertTrue(alignment_enabled)
+
+    def test_repaired_mix_passes_through_assign_speakers(self):
+        # A repaired-mix result (one segment with words, one repaired
+        # without) must flow through whisper_common.assign_speakers without
+        # error: the good segment uses word-majority voting, the repaired
+        # one falls back to segment overlap.
+        input_segments = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': 1.0, 'end': 2.0, 'text': 'b'},
+        ]
+        aligned_segments = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a',
+             'words': [{'word': 'a', 'start': 0.1, 'end': 0.9}]},
+            {'start': None, 'end': None, 'text': 'b',
+             'words': [{'word': 'b', 'start': 1.1, 'end': 1.9}]},
+        ]
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            object(), object())
+        fake_whisperx.align = lambda segments, model, metadata, audio, device: {
+            'segments': aligned_segments}
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            result_segments, alignment_enabled = transcribe_whisperx._try_align(
+                input_segments, audio=object(), language='ko')
+
+        self.assertIn('words', result_segments[0])
+        self.assertNotIn('words', result_segments[1])
+
+        turns = [(0.0, 1.0, 'SPEAKER_00'), (1.0, 2.0, 'SPEAKER_01')]
+        from whisper_common import assign_speakers
+        out = assign_speakers(result_segments, turns)
+
+        self.assertEqual(out[0]['speaker'], 'spk_0')
+        self.assertEqual(out[1]['speaker'], 'spk_1')
 
 
 class TestValidateOutputKey(unittest.TestCase):

@@ -6,6 +6,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as autoscaling from 'aws-cdk-lib/aws-autoscaling';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 
 export interface WhisperStackProps extends cdk.StackProps {
@@ -208,19 +209,51 @@ export class WhisperStack extends cdk.Stack {
     // Additive twin of the resources above: separate image + task def so
     // pyannote 4.x can be benchmarked against the production engine without
     // touching it. Shares the same cluster/ASG/capacity provider (GPU pool
-    // is not split) and the same IAM roles. Nothing invokes this task
-    // definition automatically -- operators run it by hand, see
-    // docs/runbooks/whisperx-benchmark.md.
+    // is not split) but -- unlike the legacy engine above -- gets its OWN
+    // task role, scoped to what the benchmark actually needs (round-10
+    // review finding: reusing the legacy taskRole gave every bench run
+    // full bucket read/write + table read/write, far more than a
+    // benchmark harness needs). executionRole (ECR pull + log delivery
+    // only) stays shared -- that's not a data-plane privilege.
     this.whisperxEcrRepository = new ecr.Repository(this, 'WhisperXRepo', {
       repositoryName: 'ttobak-whisperx',
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       lifecycleRules: [{ maxImageCount: 5 }],
     });
 
+    const whisperxTaskRole = new iam.Role(this, 'WhisperXTaskRole', {
+      roleName: 'ttobak-whisperx-task-role',
+      assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
+    });
+    // Read: the model/config/vocab archives it stages, and the source audio
+    // it transcribes. No write access to any read-only prefix.
+    props.bucket.grantRead(whisperxTaskRole, 'audio/*');
+    props.bucket.grantRead(whisperxTaskRole, 'models/*');
+    props.bucket.grantRead(whisperxTaskRole, 'config/*');
+    // Write: bench-transcripts/* is the benchmark's own output prefix.
+    // transcripts/* is a deliberate Phase-2 escape hatch -- validate_output_key
+    // (transcribe_whisperx.py) gates any real-pipeline write to strictly the
+    // calling meeting's own transcripts/{meetingId}[...].json key, but that's
+    // an application-level gate, not an IAM one, so the grant itself has to
+    // cover the whole prefix.
+    props.bucket.grantPut(whisperxTaskRole, 'bench-transcripts/*');
+    props.bucket.grantPut(whisperxTaskRole, 'transcripts/*');
+    // Deliberately NO DynamoDB grant: mark_meeting_error (whisper_common.py)
+    // is best-effort and just logs the AccessDenied when a bench run's error
+    // path tries to write meeting status. Phase 2's cutover to this task
+    // definition for real-pipeline runs will need to either grant table
+    // read/write here or reuse the legacy taskRole -- revisit at that point.
+
+    const whisperxLogGroup = new logs.LogGroup(this, 'WhisperXLogGroup', {
+      logGroupName: '/ttobak/whisperx',
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     this.whisperxTaskDefinition = new ecs.Ec2TaskDefinition(this, 'WhisperXTaskDef', {
       family: WHISPERX_TASK_FAMILY,
       executionRole,
-      taskRole,
+      taskRole: whisperxTaskRole,
       networkMode: ecs.NetworkMode.HOST,
     });
 
@@ -241,7 +274,10 @@ export class WhisperStack extends cdk.Stack {
         // VRAM on the shared 24GB A10G (see design spec's sizing risk).
         WHISPERX_BATCH_SIZE: '8',
       },
-      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'whisperx' }),
+      logging: ecs.LogDrivers.awsLogs({
+        logGroup: whisperxLogGroup,
+        streamPrefix: 'whisperx',
+      }),
       essential: true,
     });
 

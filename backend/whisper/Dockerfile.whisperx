@@ -10,13 +10,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # whisperx pins its own torch/pyannote.audio(>=4)/faster-whisper/ctranslate2
 # versions -- don't pin them separately here, that's the version-skew trap
 # the separate image exists to avoid. The extra index serves cu128 wheels.
+# Exact-pinned (not a range): 3.8.6 is the AWS DLC-validated version for this
+# cu128/torch 2.8 combo -- an unpinned range lets a future whisperx release
+# silently drag in an unvalidated transitive dep set. boto3<2 matches the
+# repo-wide convention (see root CLAUDE.md build commands).
 RUN pip3 install --no-cache-dir --break-system-packages \
     --extra-index-url https://download.pytorch.org/whl/cu128 \
-    "whisperx>=3.8,<3.9" boto3
+    "whisperx==3.8.6" "boto3<2"
 
 # Whisper CT2 weights + diarization pipeline are loaded from S3 at runtime
 # (same pattern as the legacy image; see whisper_common.stream_extract_tar).
 COPY whisper_common.py transcribe_whisperx.py /app/
 WORKDIR /app
+
+# Non-root: the app only writes under /tmp (model/audio staging), so it
+# needs no elevated filesystem access at runtime.
+RUN useradd -m -u 10001 whisperx
+USER whisperx
 
 ENTRYPOINT ["python3", "transcribe_whisperx.py"]

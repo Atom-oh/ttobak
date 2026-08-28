@@ -3,9 +3,18 @@
 Phase 1 benchmark procedure for comparing the legacy Whisper+pyannote 3.1 pipeline
 (task def `ttobak-whisper`, container `whisper`) against the WhisperX+pyannote 4.x
 pipeline (task def `ttobak-whisperx`, container `whisperx`) on real, already-`done`
-meetings. This is a manual, operator-driven benchmark — it produces no product
-change and writes no output into real meeting's S3 data (all bench transcripts go to
-`bench-transcripts/` prefix). Account 180294183052, region ap-northeast-2 throughout.
+meetings. This is a manual, operator-driven benchmark: **when following this
+runbook's procedure** (writing to `bench-transcripts/`, always passing an
+explicit `OUTPUT_KEY` as §3 shows), a successful run produces no product
+change and writes no output into real meeting's S3 data. That scoping matters
+because of two things this runbook exists to warn about: the legacy
+`ttobak-whisper` engine's fatal-error handler can still write `status=error`
+to a real meeting's DynamoDB row even on a bench-scoped `OUTPUT_KEY` (see §3's
+warning), and `transcribe_whisperx.py`'s own real-pipeline escape hatch
+(`transcripts/*`, guarded by `validate_output_key`) exists for the Phase 2
+cutover, not for this benchmark procedure — never point `OUTPUT_KEY` at a real
+meeting's key while following this runbook. Account 180294183052, region
+ap-northeast-2 throughout.
 
 Results feed the Phase 2 go/no-go decision and its ADR (see
 `docs/decisions/ADR-006` sibling ADRs for the format).
@@ -87,6 +96,30 @@ version -- if you need the driver version specifically, add a one-off
 CUDA/driver mismatch) -- torch cu128 requires driver >= 525. If it's older,
 the container will fail at model-load time rather than at task launch.
 
+### Verify whisperx 3.8.6 actually honors `initial_prompt` (first run only)
+
+whisperx's batched transcription pipeline may ignore `asr_options.initial_prompt`
+depending on the installed version -- the legacy engine (`transcribe.py`,
+faster-whisper directly) always applies the custom-vocabulary prompt from
+`VOCAB_KEY`/`config/custom-vocabulary.txt`, but whisperx's own ASR wrapper
+does not guarantee the same behavior. Before trusting any §5/§6 text-quality
+comparison that involves custom vocabulary, check whether the pinned
+`whisperx==3.8.6`'s ASR module actually reads `initial_prompt`:
+
+```bash
+# Inside the built image, or a matching venv:
+python3 -c "import whisperx, os; print(os.path.dirname(whisperx.__file__))"
+grep -rn "initial_prompt\|hotwords" "$(python3 -c 'import whisperx, os; print(os.path.dirname(whisperx.__file__))')"
+```
+
+If `initial_prompt` doesn't appear (or is present but unused/overridden) in
+the ASR call path, the comparison is unfair to whichever engine doesn't
+apply it: the legacy engine's transcript benefits from vocabulary hints the
+whisperx transcript never got. In that case, either switch to whatever
+whisperx does support for vocabulary hinting (`hotwords`, if grep finds it
+wired into the ASR options) or annotate every §6 result row noting that
+custom-vocabulary terms were not comparably applied.
+
 ## 2. Selecting meetings
 
 Pick 3–5 meetings already in `done` status, spanning a range of speaker counts
@@ -158,14 +191,21 @@ done
 ```
 
 **⚠️ WARNING: A failed `ttobak-whisper` (legacy engine) bench run may still corrupt
-real meeting data.**
+real meeting data. This warning applies ONLY to the legacy engine, not to `ttobak-whisperx`.**
 
 The `whisperx` engine's fatal-error handler (`transcribe_whisperx.py`) checks
 `should_mark_meeting_error(OUTPUT_KEY)` before writing meeting status: a
 bench-scoped `OUTPUT_KEY` (anything under `bench-transcripts/`, as used by
 this runbook) is recognized and the `status=error` write is skipped entirely
 — a failed WhisperX bench run only ever surfaces in the ECS task log, never
-on the real meeting row.
+on the real meeting row. As of the dedicated `ttobak-whisperx-task-role`
+(`infra/lib/whisper-stack.ts`), this is now doubly true even in the
+edge case where an operator mistakenly points `OUTPUT_KEY` at a real
+meeting's `transcripts/{meetingId}.json` key: that role carries no DynamoDB
+grant at all, so any attempted `status=error` write is denied at the IAM
+layer (logged as an `AccessDenied`, not applied) regardless of what
+`should_mark_meeting_error` decides. The `ttobak-whisperx` bench task can no
+longer flip a real meeting's status under any circumstance.
 
 **`OUTPUT_KEY` is MANDATORY for the `ttobak-whisperx` task -- there is no
 default.** Unlike the legacy engine, `transcribe_whisperx.py` raises before
@@ -245,9 +285,9 @@ aws logs filter-log-events \
   --query 'events[*].message'
 ```
 
-(Adjust `--log-group-name` to whatever `whisper-stack.ts` actually names the
-WhisperX task's log group if it differs — check the task definition's
-`logConfiguration` if `aws logs filter-log-events` returns nothing.)
+`/ttobak/whisperx` is the WhisperX task's dedicated log group
+(`WhisperXLogGroup` in `infra/lib/whisper-stack.ts`, 30-day retention) — the
+name above is exact, not a placeholder to adjust.
 
 Record the highest `memory.used` value across the four `GPU[...]` lines —
 that's the number that matters for Phase 2's instance-sizing decision.
