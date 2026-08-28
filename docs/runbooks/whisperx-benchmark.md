@@ -93,14 +93,16 @@ with cross-talk if you have one). For each, note:
 
 - `userId`
 - `meetingId`
-- audio S3 key, from the meeting's `AudioKeys` (DynamoDB `ttobak-main`,
+- audio S3 key(s), from the meeting's `audioKey` or `audioKeys` (DynamoDB `ttobak-main`,
   `PK=USER#<userId>`, `SK=MEETING#<meetingId>`)
+
+Single-file meetings populate `audioKey` only; multi-part meetings populate `audioKeys` (a list) — for the Phase 1 benchmark prefer single-part meetings (the WhisperX task processes one `AUDIO_KEY` per run; multi-part meetings would need one run per part and are better excluded from selection).
 
 ```bash
 aws dynamodb get-item --table-name ttobak-main \
   --key '{"PK":{"S":"USER#<USER_ID>"},"SK":{"S":"MEETING#<MEETING_ID>"}}' \
   --region ap-northeast-2 \
-  --query 'Item.AudioKeys'
+  --query '{multi: Item.audioKeys, single: Item.audioKey}'
 ```
 
 ## 3. Running a benchmark pair
