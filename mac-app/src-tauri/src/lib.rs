@@ -25,13 +25,12 @@ mod upload;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::audio::AudioRecorder;
 use crate::error::AppError;
@@ -46,13 +45,27 @@ const STOP_CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct RecorderState {
     pub recorder: Mutex<AudioRecorder>,
     pub recorded_paths: Mutex<HashSet<PathBuf>>,
-    /// True while a `stop_and_finalize` is still running — including one
-    /// that outlived `STOP_CAPTURE_TIMEOUT` and kept going in the
-    /// background. `recording_status` exposes this so the frontend can wait
-    /// for the WAV to actually be finalized after a `stop_timed_out: true`
-    /// response: `recording` alone flips false the moment `take_handle()`
-    /// empties the recorder, long before the background finalize is done.
-    pub finalizing: Arc<AtomicBool>,
+    /// Paths of recordings whose `stop_and_finalize` is currently running —
+    /// including any that outlived `STOP_CAPTURE_TIMEOUT` and kept going in
+    /// the background. `recording_status` exposes "is this non-empty" as
+    /// `finalizing` so the frontend can wait for the WAV to actually be
+    /// finalized after a `stop_timed_out: true` response: `recording` alone
+    /// flips false the moment `take_handle()` empties the recorder, long
+    /// before the background finalize is done. `upload_recording` also
+    /// checks this directly (by path) as a server-side backstop against
+    /// uploading a file that's still being written.
+    ///
+    /// Deliberately a per-path set, not a single `AtomicBool`: a bool shared
+    /// across every recording would let an *earlier* recording's
+    /// wedged-past-timeout finalize (which unconditionally cleared it when
+    /// it eventually returned) stomp on a *later* recording's
+    /// still-in-flight finalize, making `recording_status` falsely report
+    /// "done" while that later WAV was still being written — the exact
+    /// silent-truncation bug this field exists to prevent. A set is immune
+    /// to that: each finalize inserts its own path on entry and removes only
+    /// that path on exit, regardless of how many others are concurrently in
+    /// flight.
+    pub finalizing: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
 #[derive(Serialize)]
@@ -78,7 +91,7 @@ pub struct StatusResponse {
     pub recording: bool,
     pub temp_path: Option<String>,
     pub elapsed_ms: u64,
-    /// True while a stop's `stop_and_finalize` is still running (see
+    /// True while ANY stop's `stop_and_finalize` is still running (see
     /// `RecorderState::finalizing`). After a `stop_timed_out` stop, the
     /// frontend polls until this goes false before uploading — `recording`
     /// is already false at that point and cannot express "still writing".
@@ -153,8 +166,63 @@ async fn start_recording(
     state: State<'_, RecorderState>,
     app: AppHandle,
 ) -> Result<StartResponse, AppError> {
-    let mut rec = state.recorder.lock();
-    let path = rec.start(&meeting_id, app)?;
+    // Reserve the slot (cheap, non-blocking) and let `state.recorder`'s lock
+    // go BEFORE the blocking ScreenCaptureKit FFI below — see
+    // `AudioRecorder::begin_start`'s doc comment for the bug this closes
+    // (holding the lock across a permission-dialog-length block used to
+    // freeze `recording_status`, a sync main-thread command, for as long as
+    // the dialog was up). Mirrors the shape `stop_recording` already uses
+    // on the stop path.
+    let reservation = {
+        let mut rec = state.recorder.lock();
+        rec.begin_start()?
+    };
+
+    let path = match audio::recording_path(&meeting_id) {
+        Ok(p) => p,
+        Err(e) => {
+            state.recorder.lock().cancel_start();
+            return Err(e);
+        }
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        let path_for_task = path.clone();
+        let build = tauri::async_runtime::spawn_blocking(move || {
+            audio::macos::Backend::start(
+                &path_for_task,
+                app,
+                reservation.generation,
+                reservation.generation_counter,
+            )
+        })
+        .await;
+
+        let backend = match build {
+            Ok(Ok(backend)) => backend,
+            Ok(Err(e)) => {
+                state.recorder.lock().cancel_start();
+                return Err(e);
+            }
+            Err(join_err) => {
+                state.recorder.lock().cancel_start();
+                return Err(AppError::Backend(format!(
+                    "start_capture task panicked: {join_err}"
+                )));
+            }
+        };
+
+        state.recorder.lock().install(path.clone(), backend);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (&app, &reservation);
+        state.recorder.lock().cancel_start();
+        return Err(AppError::Unsupported);
+    }
+
     let canonical = std::fs::canonicalize(&path).unwrap_or(path);
     state.recorded_paths.lock().insert(canonical.clone());
     Ok(StartResponse {
@@ -179,15 +247,30 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
     #[cfg(target_os = "macos")]
     let stop_timed_out = {
         let backend = handle.backend;
-        // Raise `finalizing` for the whole stop_and_finalize window and let
-        // the blocking task itself clear it — that way the flag stays
+        // Mark this path `finalizing` for the whole stop_and_finalize window
+        // and let the blocking task itself clear it — that way the set stays
         // accurate on the timed-out path too, where this command returns
-        // while the task keeps running in the background.
-        state.finalizing.store(true, Ordering::SeqCst);
-        let finalize_done = Arc::clone(&state.finalizing);
+        // while the task keeps running in the background. A per-path set,
+        // not a single shared bool: two overlapping stops (this one, plus an
+        // earlier one that's still wedged past its own timeout) must not let
+        // either's completion make `recording_status`/`upload_recording`
+        // falsely treat the OTHER one's path as done — see
+        // `RecorderState::finalizing`'s doc comment.
+        //
+        // Canonicalize before inserting: `path` here is `handle.path`, the
+        // raw temp path (e.g. under `/tmp` on macOS, which symlinks to
+        // `/private/tmp` — the same reason `allowed_dir()`/
+        // `validate_recording_path` canonicalize elsewhere in this file).
+        // `upload_recording`'s backstop compares against this set using the
+        // CANONICAL path it already computed via `validate_recording_path`
+        // — without canonicalizing here too, that comparison would never
+        // match on a real Mac and the backstop would silently do nothing.
+        let finalize_path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        state.finalizing.lock().insert(finalize_path.clone());
+        let finalizing = Arc::clone(&state.finalizing);
         let stop_task = tauri::async_runtime::spawn_blocking(move || {
             let result = backend.stop_and_finalize();
-            finalize_done.store(false, Ordering::SeqCst);
+            finalizing.lock().remove(&finalize_path);
             result
         });
 
@@ -239,7 +322,7 @@ fn recording_status(state: State<'_, RecorderState>) -> StatusResponse {
         recording: snapshot.recording,
         temp_path: snapshot.path.map(|p| p.to_string_lossy().into_owned()),
         elapsed_ms: snapshot.elapsed_ms,
-        finalizing: state.finalizing.load(Ordering::SeqCst),
+        finalizing: !state.finalizing.lock().is_empty(),
     }
 }
 
@@ -265,7 +348,7 @@ pub fn run() {
         .manage(RecorderState {
             recorder: Mutex::new(AudioRecorder::new()),
             recorded_paths: Mutex::new(HashSet::new()),
-            finalizing: Arc::new(AtomicBool::new(false)),
+            finalizing: Arc::new(Mutex::new(HashSet::new())),
         })
         .invoke_handler(tauri::generate_handler![
             start_recording,
@@ -275,12 +358,72 @@ pub fn run() {
             cleanup_recording,
         ])
         .setup(|app| {
-            #[cfg(target_os = "macos")]
-            {
-                let _ = app;
+            // Adopt any leftover temp WAVs from a previous run (crash, force
+            // quit, or a stop that never got a chance to finalize) into
+            // `recorded_paths` so `upload_recording`/`cleanup_recording` can
+            // still reach them — otherwise `validate_recording_path` rejects
+            // them forever with "path was not created by this recording
+            // session", even though they already live inside the whitelisted
+            // directory and the /record?mode=upload recovery route the
+            // error messages point to doesn't go through these commands at
+            // all. Best-effort: any error here (directory doesn't exist yet
+            // on a fresh install, unreadable entry) just means nothing gets
+            // adopted, never a startup failure.
+            let dir = allowed_dir();
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                let state = app.state::<RecorderState>();
+                let mut paths = state.recorded_paths.lock();
+                let mut adopted = 0usize;
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("wav") {
+                        continue;
+                    }
+                    if let Ok(canonical) = std::fs::canonicalize(&path) {
+                        paths.insert(canonical);
+                        adopted += 1;
+                    }
+                }
+                if adopted > 0 {
+                    log::info!(
+                        "adopted {adopted} leftover recording(s) from a previous run in {}",
+                        dir.display()
+                    );
+                }
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Best-effort finalize on quit. Without this, force-quitting (or
+            // the window closing) mid-recording never calls
+            // `stop_capture`/`finalize_writer`, so the WAV's RIFF/data
+            // header stays at hound's zero placeholder beyond whatever the
+            // last periodic 5s flush checkpoint wrote (see
+            // `FLUSH_INTERVAL_CHANNEL_SAMPLES` in audio.rs).
+            //
+            // `RunEvent::Exit` fires as the app is already tearing down, so
+            // this is deliberately synchronous and un-timed-out, unlike the
+            // live `stop_recording` command's spawn_blocking+timeout dance —
+            // there is no IPC promise to keep responsive here, and a slow
+            // ScreenCaptureKit stop at this point is better to just wait out
+            // (process exit is already in motion; nothing else needs this
+            // thread) than to abandon and lose the tail of the recording.
+            if let tauri::RunEvent::Exit = event {
+                let state = app_handle.state::<RecorderState>();
+                let handle = {
+                    let mut rec = state.recorder.lock();
+                    rec.take_handle().ok()
+                };
+                #[cfg(target_os = "macos")]
+                if let Some(handle) = handle {
+                    if let Err(e) = handle.backend.stop_and_finalize() {
+                        log::error!("stop_and_finalize on exit failed: {e}");
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = handle;
+            }
+        });
 }

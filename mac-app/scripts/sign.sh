@@ -48,6 +48,13 @@ fi
 
 for APP in "${APPS[@]}"; do
   echo "==> re-signing $APP"
+  # NOTE: --deep is deprecated by Apple (it signs nested code with the
+  # OUTER bundle's identity/entitlements in one pass, rather than the
+  # correct inside-out order: sign nested binaries first, then the bundle).
+  # This works today because signing is ad-hoc (`--sign -`, no real
+  # identity/notarization involved), but --deep would need to be replaced
+  # with an explicit inside-out signing loop before this app is ever
+  # notarized with a real Developer ID.
   codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP"
 
   echo "    verifying entitlements..."

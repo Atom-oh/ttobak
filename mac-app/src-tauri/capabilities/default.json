@@ -4,7 +4,10 @@
   "description": "Core permissions for the TTOBAK Mac App. The window loads the remote production SPA (see tauri.conf.json's `build.devUrl`/window `url`), not a local `tauri://` origin, so a capability without an explicit `remote` grant only matches the local context — commands still work (they bypass the ACL entirely when the app has no ACL manifest), but `plugin:event|listen` and other ACL-gated APIs are silently rejected for the remote origin without this.",
   "windows": ["main"],
   "remote": {
-    "urls": ["https://ttobak.atomai.click"]
+    "urls": [
+      "https://ttobak.atomai.click",
+      "https://d2olomx8td8txt.cloudfront.net"
+    ]
   },
   "permissions": [
     "core:default"

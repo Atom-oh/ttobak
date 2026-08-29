@@ -788,7 +788,16 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
             await new Promise((r) => setTimeout(r, 1000));
             try {
               const status = await getNativeRecordingStatus();
-              if (!status.recording && !status.finalizing) {
+              // `status.finalizing` is optional (older Rust builds don't
+              // send it, see TauriStatusResponse's doc comment) — `undefined`
+              // must NOT be treated as "not finalizing". `!undefined` is
+              // `true`, so a naive `!status.finalizing` would pass on the
+              // very first poll against such a build and hand off a file
+              // that's still being written (the exact bug this wait exists
+              // to prevent). Only an explicit `false` counts as done; any
+              // other value (including undefined) keeps waiting out the
+              // full 30s window, which is always safe.
+              if (!status.recording && status.finalizing === false) {
                 finalized = true;
                 break;
               }

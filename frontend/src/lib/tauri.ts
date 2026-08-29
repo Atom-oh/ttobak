@@ -77,7 +77,15 @@ export interface TauriStatusResponse {
   /** True while a stop's background finalize is still writing the WAV.
    * `recording` flips false the moment the stop command takes the handle,
    * so after `stop_timed_out` this — not `recording` — is what signals the
-   * file is safe to upload. Optional: older Rust builds don't send it. */
+   * file is safe to upload.
+   *
+   * Optional only for wire-compatibility with an older installed Rust build
+   * that predates this field — a *current* build always sends it. Treat
+   * `undefined` as "unknown", never as `false`: every consumer must check
+   * `=== false` explicitly (not `!status.finalizing`), or an old build's
+   * missing field reads as "already finalized" on the very first poll and
+   * uploads a WAV that's still being written. See `RecordButton.tsx`'s
+   * stop-timed-out poll loop for the one place this actually matters. */
   finalizing?: boolean;
 }
 

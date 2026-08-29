@@ -34,7 +34,19 @@ use crate::{validate_recording_path, RecorderState};
 /// connection (dead TCP, wedged proxy) should be aborted. This is the
 /// replacement for the frontend's old `uploadAudioWithRetry`, which aborted
 /// every attempt at a fixed 30 seconds regardless of file size or progress.
+///
+/// "No new bytes sent" specifically means no new bytes have been *read off
+/// disk* since `sent` is incremented at read time (see `stream_file_to_url`)
+/// — once the whole file has been read, this stops firing regardless of how
+/// long the still-pending PUT then waits on S3's response (that wait is
+/// exempted separately, see the `loaded >= total` check below).
+#[cfg(not(test))]
 const STALL_TIMEOUT: Duration = Duration::from_secs(60);
+/// Short-circuited for tests so
+/// `stall_watchdog_does_not_abort_after_the_full_body_is_sent` doesn't need
+/// to block for a real 60s to exercise the exemption.
+#[cfg(test)]
+const STALL_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// How often to sample bytes-sent and emit a progress event.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(300);
@@ -136,6 +148,18 @@ async fn stream_file_to_url(
             tokio::time::sleep(PROGRESS_INTERVAL).await;
             let loaded = sent.load(Ordering::Relaxed);
             on_progress(loaded, total);
+            // Once every byte has been read off disk and handed to hyper,
+            // `sent` (incremented by `ReaderStream`'s `inspect_ok`, i.e. at
+            // *read* time, not at ack time) stops changing while the
+            // request awaits S3's response to the PUT. Without this
+            // exemption, that response wait looked identical to a dead
+            // connection to this watchdog — `STALL_TIMEOUT` could fire on a
+            // fully-sent, healthy upload that was simply waiting on S3, and
+            // `uploadRecordingWithRetry` would then re-upload the entire
+            // file from scratch for no reason.
+            if loaded >= total {
+                continue;
+            }
             if loaded != last_seen {
                 last_seen = loaded;
                 stalled_since = tokio::time::Instant::now();
@@ -194,6 +218,37 @@ pub async fn upload_recording(
         let recorded = state.recorded_paths.lock();
         validate_recording_path(&path, &recorded)?
     };
+
+    // Server-side backstop against uploading a file that's still being
+    // written: `upload.rs` measures `Content-Length` once at open time
+    // (below), so bytes appended after that point are silently dropped from
+    // the S3 object. The frontend already waits for `recording_status`'s
+    // `finalizing` to go false before calling this command, but this check
+    // makes that a real guarantee rather than a convention every caller must
+    // separately honor.
+    {
+        let rec = state.recorder.lock();
+        let snapshot = rec.snapshot();
+        // `snapshot.path` is the raw temp path (e.g. under `/tmp` on macOS,
+        // which symlinks to `/private/tmp`) — canonicalize before comparing
+        // against `canonical` (already canonicalized by
+        // `validate_recording_path` above), or this check would silently
+        // never match on a real Mac. See `stop_recording`'s matching
+        // canonicalize for the `finalizing` set, same reasoning.
+        let active_canonical = snapshot.path.as_ref().and_then(|p| std::fs::canonicalize(p).ok());
+        if snapshot.recording && active_canonical.as_deref() == Some(canonical.as_path()) {
+            return Err(AppError::Backend(
+                "refusing to upload — this path is the currently active recording".into(),
+            ));
+        }
+    }
+    if state.finalizing.lock().contains(&canonical) {
+        return Err(AppError::Backend(
+            "refusing to upload — this recording is still being finalized, try again shortly"
+                .into(),
+        ));
+    }
+
     let url = validate_upload_url(&upload_url)?;
 
     stream_file_to_url(&canonical, url, &content_type, move |loaded, total| {
@@ -354,6 +409,78 @@ mod tests {
             message.contains("AccessDenied"),
             "error should include a snippet of the response body: {message}"
         );
+
+        tokio::fs::remove_file(&file_path).await.ok();
+    }
+
+    /// The mock server intentionally delays its response well past
+    /// `STALL_TIMEOUT` (300ms in this test build, see its `#[cfg(test)]`
+    /// override) AFTER it has fully received the body, simulating a
+    /// slow-but-healthy S3 response to a large PUT. Before the `loaded >=
+    /// total` exemption in `stream_file_to_url`'s watchdog, this looked
+    /// identical to a dead connection and the upload would be aborted (and
+    /// then fully re-uploaded by `uploadRecordingWithRetry`) even though
+    /// nothing was actually wrong.
+    #[tokio::test]
+    async fn stall_watchdog_does_not_abort_after_the_full_body_is_sent() {
+        let contents = b"a body that is fully sent before the server responds".to_vec();
+        let file_path = write_temp_file("stall-exempt", &contents).await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let port = listener.local_addr().expect("local_addr").port();
+
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let headers_end = loop {
+                let n = stream.read(&mut chunk).expect("read headers");
+                assert!(n > 0, "connection closed before headers completed");
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = find_double_crlf(&buf) {
+                    break pos;
+                }
+            };
+            let header_text = String::from_utf8_lossy(&buf[..headers_end]).to_string();
+            let mut content_length = 0usize;
+            for line in header_text.lines().skip(1) {
+                if let Some((k, v)) = line.split_once(':') {
+                    if k.trim().eq_ignore_ascii_case("content-length") {
+                        content_length = v.trim().parse().expect("valid content-length");
+                    }
+                }
+            }
+            let mut body = buf[headers_end + 4..].to_vec();
+            while body.len() < content_length {
+                let n = stream.read(&mut chunk).expect("read body");
+                assert!(n > 0, "connection closed before body completed");
+                body.extend_from_slice(&chunk[..n]);
+            }
+
+            // Body fully received — now stall well past STALL_TIMEOUT before
+            // responding, simulating S3 taking its time to ack a large PUT.
+            std::thread::sleep(Duration::from_millis(700));
+
+            let response_body: &[u8] = b"";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response_body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write status line");
+            stream.write_all(response_body).expect("write response body");
+        });
+
+        let url = reqwest::Url::parse(&format!("http://127.0.0.1:{port}/put-target"))
+            .expect("valid mock url");
+
+        let status = stream_file_to_url(&file_path, url, "audio/wav", |_, _| {})
+            .await
+            .expect(
+                "a healthy connection that has fully sent the body must not be aborted just \
+                 because the server's response is slow",
+            );
+
+        assert_eq!(status, 200);
 
         tokio::fs::remove_file(&file_path).await.ok();
     }
