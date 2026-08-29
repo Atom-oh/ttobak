@@ -376,6 +376,10 @@ mod tests {
     /// these tests run in well under a second.
     const TEST_STALL_TIMEOUT: Duration = Duration::from_millis(200);
     const TEST_RESPONSE_DEADLINE: Duration = Duration::from_millis(1500);
+    /// Shorter than `TEST_RESPONSE_DEADLINE`, used only by the
+    /// silent-server regression test below, which needs a deadline it can
+    /// actually exceed within the test's own budget.
+    const TEST_SHORT_RESPONSE_DEADLINE: Duration = Duration::from_millis(400);
 
     async fn write_temp_file(name: &str, contents: &[u8]) -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
@@ -547,15 +551,14 @@ mod tests {
         tokio::fs::remove_file(&file_path).await.ok();
     }
 
-    /// Regression test for the CI review's L2-1 finding: an earlier version
-    /// of the watchdog disabled itself entirely once `loaded >= total`,
-    /// which meant a connection that died (or a wedged proxy that never
-    /// answers) right after the full body was sent would hang this upload
-    /// forever — the `reqwest` client here sets only a `connect_timeout`,
-    /// deliberately no total request timeout. This test's mock server reads
-    /// the whole request and then goes silent (no response, connection kept
-    /// open) — the upload must still time out, bounded by
-    /// `response_deadline_after_full_send`, not hang.
+    /// Regression test: an earlier version of the watchdog disabled itself
+    /// entirely once `loaded >= total`, which meant a connection that died
+    /// (or a wedged proxy that never answers) right after the full body was
+    /// sent would hang this upload forever — the `reqwest` client here sets
+    /// only a `connect_timeout`, deliberately no total request timeout.
+    /// This test's mock server reads the whole request and then goes silent
+    /// (no response, connection kept open) — the upload must still time
+    /// out, bounded by `response_deadline_after_full_send`, not hang.
     #[tokio::test]
     async fn full_send_deadline_is_bounded_not_infinite() {
         let contents = b"a body that is fully sent, then the server goes silent".to_vec();
@@ -608,8 +611,8 @@ mod tests {
             &file_path,
             url,
             "audio/wav",
-            Duration::from_millis(200),
-            Duration::from_millis(400),
+            TEST_STALL_TIMEOUT,
+            TEST_SHORT_RESPONSE_DEADLINE,
             |_, _| {},
         )
         .await

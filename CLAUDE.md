@@ -39,6 +39,12 @@ cd backend/python/qa && python3 -m unittest test_handler -v    # mocks boto3 at 
 cd backend/python/sim && python3 -m unittest test_handler -v
 cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx -v
 
+# Mac App (Rust) -- `screencapturekit` is macOS-target-gated in Cargo.toml, so
+# `cargo test` itself runs on any platform; only the ScreenCaptureKit-adjacent
+# tests nested inside audio.rs's `#[cfg(target_os = "macos")]` module require
+# an actual Mac to execute (see mac-app/CLAUDE.md for the full build/sign flow).
+cd mac-app/src-tauri && cargo test
+
 # CDK
 cd infra && npx cdk synth        # synthesize all 11 stacks
 cd infra && npm test             # jest tests
@@ -114,6 +120,9 @@ All GET download URLs (`downloadUrl`/`previewUrl`/`audioUrl`/attachment `url`/pu
 
 ### Frontend (Next.js 16)
 Static export (`output: 'export'` prod only). Auth via Cognito SDK (`src/lib/auth.ts`), API client (`src/lib/api.ts`). Dynamic routes use `generateStaticParams` + CloudFront 404→index.html SPA fallback. Tailwind v4 with class-based dark mode, TipTap editor, Material Symbols. Client-side AWS Transcribe Streaming via `@aws-sdk/client-transcribe-streaming`.
+
+### Mac App (mac-app/, ADR-006/ADR-024)
+Tauri 2 + Rust desktop wrapper adding native macOS ScreenCaptureKit system-audio capture to the SPA. Only builds on Darwin, no CI (built/signed locally — see `mac-app/CLAUDE.md` for the full command surface, pitfalls, and signing steps). Bulk audio bytes never cross the Tauri IPC bridge to the WebView — a ~35-minute recording once crashed JavaScriptCore that way; only the byte *transport* is Rust (`upload_recording` streams a finished WAV from disk straight to a presigned S3 URL), while presign/auth/upload-complete notification stay in the SPA. Raw PCM chunks DO cross that bridge by design, though (`native-pcm-chunk`, for live captions in System Audio mode) — only the finished WAV bypasses it. `upload_recording` pins an exact S3 bucket host rather than a `.amazonaws.com` suffix (a suffix check would accept any AWS customer's bucket, since the WebView fully controls the presigned URL it passes in under a compromised-frontend precondition) — loosening this to a suffix match is a real security finding. The Rust side never holds its recorder lock across blocking ScreenCaptureKit FFI (no timeout of its own) — commands reserve, release the lock, do the blocking work, then reacquire, so a slow permission dialog or a wedged stop can't freeze the sync `recording_status` command; any state two code paths both gate on must be updated in the SAME critical section as the transition it depends on, not as a separate step after the lock is released (flag a gap there as a MAJOR TOCTOU). `recording_status` takes the specific path to check, not a global "is anything finalizing" aggregate — the latter was tried and reverted: it let an unrelated, still-wedged EARLIER recording keep a LATER, already-finished recording's finalize looking incomplete forever whenever the two overlapped.
 
 ## Documentation
 

@@ -7,7 +7,8 @@
 //!   straight from disk to a presigned S3 URL (bulk audio bytes never cross
 //!   the IPC bridge to the WebView — see `upload.rs` module docs)
 //! - `cleanup_recording(path)` — delete a temp WAV file and revoke whitelist entry
-//! - `recording_status()` — current capture state for the UI
+//! - `recording_status(path)` — current capture state for the UI, plus
+//!   whether `path` specifically is still being finalized
 //!
 //! `read_recording_bytes` (WAV bytes via IPC binary response) used to exist
 //! here and has been deliberately removed: on a real ~35-minute recording it
@@ -47,24 +48,30 @@ pub struct RecorderState {
     pub recorded_paths: Mutex<HashSet<PathBuf>>,
     /// Paths of recordings whose `stop_and_finalize` is currently running —
     /// including any that outlived `STOP_CAPTURE_TIMEOUT` and kept going in
-    /// the background. `recording_status` exposes "is this non-empty" as
-    /// `finalizing` so the frontend can wait for the WAV to actually be
-    /// finalized after a `stop_timed_out: true` response: `recording` alone
-    /// flips false the moment `take_handle()` empties the recorder, long
-    /// before the background finalize is done. `upload_recording` also
-    /// checks this directly (by path) as a server-side backstop against
-    /// uploading a file that's still being written.
+    /// the background. `recording_status(path)` reports whether THAT
+    /// specific path is in this set as `finalizing`, so the frontend can
+    /// wait for its own WAV to actually be finalized after a
+    /// `stop_timed_out: true` response: `recording` alone flips false the
+    /// moment `take_handle()` empties the recorder, long before the
+    /// background finalize is done. `upload_recording` also checks this
+    /// directly (by path) as a server-side backstop against uploading a
+    /// file that's still being written.
     ///
     /// Deliberately a per-path set, not a single `AtomicBool`: a bool shared
     /// across every recording would let an *earlier* recording's
     /// wedged-past-timeout finalize (which unconditionally cleared it when
     /// it eventually returned) stomp on a *later* recording's
-    /// still-in-flight finalize, making `recording_status` falsely report
-    /// "done" while that later WAV was still being written — the exact
+    /// still-in-flight finalize, making status checks falsely report "done"
+    /// while that later WAV was still being written — the exact
     /// silent-truncation bug this field exists to prevent. A set is immune
     /// to that: each finalize inserts its own path on entry and removes only
     /// that path on exit, regardless of how many others are concurrently in
-    /// flight.
+    /// flight. This must be checked PER-PATH, though, not by "is the set
+    /// non-empty at all" — an earlier, still-wedged recording's entry
+    /// staying in the set would otherwise make a caller's own, already-
+    /// finished recording look permanently unfinished whenever the two
+    /// overlap, which is exactly the scenario this whole mechanism exists to
+    /// handle correctly.
     pub finalizing: Arc<Mutex<HashSet<PathBuf>>>,
 }
 
@@ -91,10 +98,11 @@ pub struct StatusResponse {
     pub recording: bool,
     pub temp_path: Option<String>,
     pub elapsed_ms: u64,
-    /// True while ANY stop's `stop_and_finalize` is still running (see
-    /// `RecorderState::finalizing`). After a `stop_timed_out` stop, the
-    /// frontend polls until this goes false before uploading — `recording`
-    /// is already false at that point and cannot express "still writing".
+    /// True while the path passed to `recording_status` specifically is
+    /// still being finalized (see `RecorderState::finalizing`). After a
+    /// `stop_timed_out` stop, the frontend polls until this goes false
+    /// before uploading — `recording` is already false at that point and
+    /// cannot express "still writing".
     pub finalizing: bool,
 }
 
@@ -229,7 +237,7 @@ async fn start_recording(
     // `unreachable_code` lint for on this platform.
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (&app, &reservation);
+        let _ = (&app, &reservation, &path);
         state.recorder.lock().cancel_start();
         Err(AppError::Unsupported)
     }
@@ -335,14 +343,28 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
 }
 
 #[tauri::command]
-fn recording_status(state: State<'_, RecorderState>) -> StatusResponse {
+fn recording_status(path: String, state: State<'_, RecorderState>) -> StatusResponse {
     let rec = state.recorder.lock();
     let snapshot = rec.snapshot();
+    // Report `finalizing` for THIS specific path, not "is any recording
+    // anywhere still finalizing" — the previous any-path aggregate let an
+    // unrelated, still-wedged-past-timeout stop from an EARLIER recording
+    // keep a LATER recording's own (already-finished) finalize looking
+    // incomplete forever, so the frontend's post-timeout poll would exhaust
+    // all its retries in exactly the overlapping-stop scenario this whole
+    // mechanism exists to handle. Canonicalize first: `finalizing`'s
+    // entries are canonical paths (see `stop_recording`), and `path` here
+    // is whatever raw string the frontend passed back — if it can't be
+    // canonicalized (e.g. the file no longer exists), there's nothing left
+    // to report as still-finalizing.
+    let finalizing = std::fs::canonicalize(&path)
+        .map(|canonical| state.finalizing.lock().contains(&canonical))
+        .unwrap_or(false);
     StatusResponse {
         recording: snapshot.recording,
         temp_path: snapshot.path.map(|p| p.to_string_lossy().into_owned()),
         elapsed_ms: snapshot.elapsed_ms,
-        finalizing: !state.finalizing.lock().is_empty(),
+        finalizing,
     }
 }
 

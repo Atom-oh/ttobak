@@ -787,7 +787,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
           for (let i = 0; i < 30; i++) {
             await new Promise((r) => setTimeout(r, 1000));
             try {
-              const status = await getNativeRecordingStatus();
+              const status = await getNativeRecordingStatus(tempPath);
               // `status.finalizing` is optional (older Rust builds don't
               // send it, see TauriStatusResponse's doc comment) — `undefined`
               // must NOT be treated as "not finalizing". `!undefined` is

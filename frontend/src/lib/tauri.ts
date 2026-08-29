@@ -74,10 +74,15 @@ export interface TauriStatusResponse {
   recording: boolean;
   temp_path: string | null;
   elapsed_ms: number;
-  /** True while a stop's background finalize is still writing the WAV.
-   * `recording` flips false the moment the stop command takes the handle,
-   * so after `stop_timed_out` this — not `recording` — is what signals the
-   * file is safe to upload.
+  /** True while the SPECIFIC path passed to `getNativeRecordingStatus`
+   * (not "any recording anywhere") is still being finalized in the
+   * background. `recording` flips false the moment the stop command takes
+   * the handle, so after `stop_timed_out` this — not `recording` — is what
+   * signals the file is safe to upload. A global (any-path) aggregate was
+   * tried first and reverted: an unrelated, still-wedged-past-timeout stop
+   * from an EARLIER recording kept a LATER recording's own already-finished
+   * finalize looking incomplete forever whenever the two overlapped —
+   * exactly the scenario per-path tracking exists to get right.
    *
    * Optional only for wire-compatibility with an older installed Rust build
    * that predates this field — a *current* build always sends it. Treat
@@ -102,8 +107,15 @@ export function stopNativeRecording(): Promise<TauriStopResponse> {
   return invoke<TauriStopResponse>('stop_recording');
 }
 
-export function getNativeRecordingStatus(): Promise<TauriStatusResponse> {
-  return invoke<TauriStatusResponse>('recording_status');
+/**
+ * `path` is required — the Rust side reports `finalizing` for exactly this
+ * path, not "is any recording anywhere still finalizing" (see
+ * TauriStatusResponse.finalizing's doc comment for why that global version
+ * was reverted). Callers must pass the specific temp WAV path they're
+ * waiting on.
+ */
+export function getNativeRecordingStatus(path: string): Promise<TauriStatusResponse> {
+  return invoke<TauriStatusResponse>('recording_status', { path });
 }
 
 /**
