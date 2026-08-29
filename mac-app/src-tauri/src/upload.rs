@@ -38,15 +38,23 @@ use crate::{validate_recording_path, RecorderState};
 /// "No new bytes sent" specifically means no new bytes have been *read off
 /// disk* since `sent` is incremented at read time (see `stream_file_to_url`)
 /// — once the whole file has been read, this stops firing regardless of how
-/// long the still-pending PUT then waits on S3's response (that wait is
-/// exempted separately, see the `loaded >= total` check below).
-#[cfg(not(test))]
+/// long the still-pending PUT then waits on S3's response. That wait gets a
+/// SEPARATE, longer deadline (`RESPONSE_DEADLINE_AFTER_FULL_SEND` below)
+/// rather than being exempted from any timeout at all — an earlier version
+/// of this watchdog disabled itself entirely once `loaded >= total`, which
+/// meant a connection that died (or a `total == 0` empty file) right after
+/// the full send would hang the upload IPC call forever, since the
+/// `reqwest` client here sets only a `connect_timeout`, deliberately no
+/// total request timeout (see `stream_file_to_url`).
 const STALL_TIMEOUT: Duration = Duration::from_secs(60);
-/// Short-circuited for tests so
-/// `stall_watchdog_does_not_abort_after_the_full_body_is_sent` doesn't need
-/// to block for a real 60s to exercise the exemption.
-#[cfg(test)]
-const STALL_TIMEOUT: Duration = Duration::from_millis(300);
+
+/// Once the entire file has been read off disk and handed to hyper, this is
+/// how long to wait for S3's response before giving up. Deliberately much
+/// longer than `STALL_TIMEOUT` — S3 has already received the whole body at
+/// this point, so a slow ack is not the same failure mode as a stalled
+/// transfer, but it must still be BOUNDED, or a dead connection after a full
+/// send hangs the upload forever (see `STALL_TIMEOUT`'s doc comment).
+const RESPONSE_DEADLINE_AFTER_FULL_SEND: Duration = Duration::from_secs(180);
 
 /// How often to sample bytes-sent and emit a progress event.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(300);
@@ -96,14 +104,23 @@ pub(crate) fn validate_upload_url(upload_url: &str) -> Result<reqwest::Url, AppE
 
 /// Stream `file_path` to `url` via HTTP PUT, calling `on_progress(loaded,
 /// total)` roughly every `PROGRESS_INTERVAL`. Returns the response status
-/// code on success (2xx); any other status, or a stalled transfer, is an
-/// `Err`. Pure of any Tauri types so it can run under a plain `tokio::test`
-/// against a local mock server — the security-relevant URL validation
-/// happens in `validate_upload_url`, called by the command before this.
+/// code on success (2xx); any other status, a stalled transfer, or an
+/// unanswered fully-sent request, is an `Err`. Pure of any Tauri types so it
+/// can run under a plain `tokio::test` against a local mock server — the
+/// security-relevant URL validation happens in `validate_upload_url`, called
+/// by the command before this.
+///
+/// `stall_timeout`/`response_deadline_after_full_send` are parameters
+/// (rather than baked-in constants) specifically so tests can use short
+/// values without a `#[cfg(test)]` override on the production constants —
+/// the real command below always passes `STALL_TIMEOUT`/
+/// `RESPONSE_DEADLINE_AFTER_FULL_SEND`.
 async fn stream_file_to_url(
     file_path: &Path,
     url: reqwest::Url,
     content_type: &str,
+    stall_timeout: Duration,
+    response_deadline_after_full_send: Duration,
     mut on_progress: impl FnMut(u64, u64),
 ) -> Result<u16, AppError> {
     let file = tokio::fs::File::open(file_path)
@@ -141,46 +158,57 @@ async fn stream_file_to_url(
         .body(body)
         .send();
 
+    // Returns a human-readable reason once it decides the upload should be
+    // aborted; never returns otherwise (the `select!` below picks whichever
+    // of this or `request` finishes first, so this future's job is purely
+    // to decide WHEN to give up, not to do the aborting itself — dropping
+    // it via `select!` is what cancels the still-pending `request` future).
     let progress_watchdog = async {
         let mut last_seen = 0u64;
         let mut stalled_since = tokio::time::Instant::now();
+        // Set once every byte has been read off disk and handed to hyper —
+        // `sent` (incremented by `ReaderStream`'s `inspect_ok`, i.e. at
+        // *read* time, not at ack time) stops changing at that point while
+        // the request awaits S3's response. From here on this loop switches
+        // from "no read progress" stall detection to a separate, bounded
+        // deadline for that response — see `RESPONSE_DEADLINE_AFTER_FULL_SEND`'s
+        // doc comment for why this must still be a bounded wait, not an
+        // unconditional exemption from any timeout.
+        let mut full_send_deadline: Option<tokio::time::Instant> = None;
         loop {
             tokio::time::sleep(PROGRESS_INTERVAL).await;
             let loaded = sent.load(Ordering::Relaxed);
             on_progress(loaded, total);
-            // Once every byte has been read off disk and handed to hyper,
-            // `sent` (incremented by `ReaderStream`'s `inspect_ok`, i.e. at
-            // *read* time, not at ack time) stops changing while the
-            // request awaits S3's response to the PUT. Without this
-            // exemption, that response wait looked identical to a dead
-            // connection to this watchdog — `STALL_TIMEOUT` could fire on a
-            // fully-sent, healthy upload that was simply waiting on S3, and
-            // `uploadRecordingWithRetry` would then re-upload the entire
-            // file from scratch for no reason.
+
             if loaded >= total {
+                let deadline = *full_send_deadline
+                    .get_or_insert_with(|| tokio::time::Instant::now() + response_deadline_after_full_send);
+                if tokio::time::Instant::now() >= deadline {
+                    return format!(
+                        "no response from the server within {}s after the full body ({loaded} \
+                         bytes) was sent",
+                        response_deadline_after_full_send.as_secs()
+                    );
+                }
                 continue;
             }
+
             if loaded != last_seen {
                 last_seen = loaded;
                 stalled_since = tokio::time::Instant::now();
-            } else if stalled_since.elapsed() >= STALL_TIMEOUT {
-                // Returning here makes `select!` below pick this arm, which
-                // drops (and thereby cancels) the still-pending `request`
-                // future — this is the actual abort mechanism, there is no
-                // separate cancellation handle to manage.
-                return;
+            } else if stalled_since.elapsed() >= stall_timeout {
+                return format!(
+                    "no progress for {}s ({loaded} / {total} bytes sent)",
+                    stall_timeout.as_secs()
+                );
             }
         }
     };
 
     let response = tokio::select! {
         result = request => result.map_err(|e| AppError::Backend(format!("upload request failed: {e}")))?,
-        _ = progress_watchdog => {
-            let loaded = sent.load(Ordering::Relaxed);
-            return Err(AppError::Backend(format!(
-                "upload stalled — no progress for {}s ({loaded} / {total} bytes sent)",
-                STALL_TIMEOUT.as_secs()
-            )));
+        reason = progress_watchdog => {
+            return Err(AppError::Backend(format!("upload stalled — {reason}")));
         }
     };
 
@@ -251,9 +279,16 @@ pub async fn upload_recording(
 
     let url = validate_upload_url(&upload_url)?;
 
-    stream_file_to_url(&canonical, url, &content_type, move |loaded, total| {
-        let _ = app.emit("native-upload-progress", UploadProgress { loaded, total });
-    })
+    stream_file_to_url(
+        &canonical,
+        url,
+        &content_type,
+        STALL_TIMEOUT,
+        RESPONSE_DEADLINE_AFTER_FULL_SEND,
+        move |loaded, total| {
+            let _ = app.emit("native-upload-progress", UploadProgress { loaded, total });
+        },
+    )
     .await
 }
 
@@ -335,6 +370,13 @@ mod tests {
         buf.windows(4).position(|w| w == b"\r\n\r\n")
     }
 
+    /// Short test-only durations passed explicitly to `stream_file_to_url`
+    /// instead of a `#[cfg(test)]` override on the production constants —
+    /// keeps the real 60s/180s values honest for production while letting
+    /// these tests run in well under a second.
+    const TEST_STALL_TIMEOUT: Duration = Duration::from_millis(200);
+    const TEST_RESPONSE_DEADLINE: Duration = Duration::from_millis(1500);
+
     async fn write_temp_file(name: &str, contents: &[u8]) -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
         path.push(format!("ttobak-mac-upload-test-{name}-{}", std::process::id()));
@@ -356,9 +398,16 @@ mod tests {
             .expect("valid mock url");
 
         let mut progress_calls = Vec::new();
-        let status = stream_file_to_url(&file_path, url, "audio/wav", |loaded, total| {
-            progress_calls.push((loaded, total));
-        })
+        let status = stream_file_to_url(
+            &file_path,
+            url,
+            "audio/wav",
+            TEST_STALL_TIMEOUT,
+            TEST_RESPONSE_DEADLINE,
+            |loaded, total| {
+                progress_calls.push((loaded, total));
+            },
+        )
         .await
         .expect("upload should succeed");
 
@@ -399,9 +448,16 @@ mod tests {
         let url = reqwest::Url::parse(&format!("http://127.0.0.1:{port}/put-target"))
             .expect("valid mock url");
 
-        let err = stream_file_to_url(&file_path, url, "audio/wav", |_, _| {})
-            .await
-            .expect_err("a 403 response must be surfaced as an error, not swallowed");
+        let err = stream_file_to_url(
+            &file_path,
+            url,
+            "audio/wav",
+            TEST_STALL_TIMEOUT,
+            TEST_RESPONSE_DEADLINE,
+            |_, _| {},
+        )
+        .await
+        .expect_err("a 403 response must be surfaced as an error, not swallowed");
 
         let message = err.to_string();
         assert!(message.contains("403"), "error should mention the status code: {message}");
@@ -414,13 +470,12 @@ mod tests {
     }
 
     /// The mock server intentionally delays its response well past
-    /// `STALL_TIMEOUT` (300ms in this test build, see its `#[cfg(test)]`
-    /// override) AFTER it has fully received the body, simulating a
-    /// slow-but-healthy S3 response to a large PUT. Before the `loaded >=
-    /// total` exemption in `stream_file_to_url`'s watchdog, this looked
-    /// identical to a dead connection and the upload would be aborted (and
-    /// then fully re-uploaded by `uploadRecordingWithRetry`) even though
-    /// nothing was actually wrong.
+    /// `TEST_STALL_TIMEOUT` AFTER it has fully received the body, simulating
+    /// a slow-but-healthy S3 response to a large PUT. Before this watchdog
+    /// distinguished "no read progress" from "fully sent, waiting on a
+    /// response", this looked identical to a dead connection and the
+    /// upload would be aborted (and then fully re-uploaded by
+    /// `uploadRecordingWithRetry`) even though nothing was actually wrong.
     #[tokio::test]
     async fn stall_watchdog_does_not_abort_after_the_full_body_is_sent() {
         let contents = b"a body that is fully sent before the server responds".to_vec();
@@ -473,14 +528,101 @@ mod tests {
         let url = reqwest::Url::parse(&format!("http://127.0.0.1:{port}/put-target"))
             .expect("valid mock url");
 
-        let status = stream_file_to_url(&file_path, url, "audio/wav", |_, _| {})
-            .await
-            .expect(
-                "a healthy connection that has fully sent the body must not be aborted just \
-                 because the server's response is slow",
-            );
+        let status = stream_file_to_url(
+            &file_path,
+            url,
+            "audio/wav",
+            TEST_STALL_TIMEOUT,
+            TEST_RESPONSE_DEADLINE,
+            |_, _| {},
+        )
+        .await
+        .expect(
+            "a healthy connection that has fully sent the body must not be aborted just \
+             because the server's response is slow",
+        );
 
         assert_eq!(status, 200);
+
+        tokio::fs::remove_file(&file_path).await.ok();
+    }
+
+    /// Regression test for the CI review's L2-1 finding: an earlier version
+    /// of the watchdog disabled itself entirely once `loaded >= total`,
+    /// which meant a connection that died (or a wedged proxy that never
+    /// answers) right after the full body was sent would hang this upload
+    /// forever — the `reqwest` client here sets only a `connect_timeout`,
+    /// deliberately no total request timeout. This test's mock server reads
+    /// the whole request and then goes silent (no response, connection kept
+    /// open) — the upload must still time out, bounded by
+    /// `response_deadline_after_full_send`, not hang.
+    #[tokio::test]
+    async fn full_send_deadline_is_bounded_not_infinite() {
+        let contents = b"a body that is fully sent, then the server goes silent".to_vec();
+        let file_path = write_temp_file("silent-server", &contents).await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
+        let port = listener.local_addr().expect("local_addr").port();
+
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let headers_end = loop {
+                let n = stream.read(&mut chunk).expect("read headers");
+                assert!(n > 0, "connection closed before headers completed");
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = find_double_crlf(&buf) {
+                    break pos;
+                }
+            };
+            let header_text = String::from_utf8_lossy(&buf[..headers_end]).to_string();
+            let mut content_length = 0usize;
+            for line in header_text.lines().skip(1) {
+                if let Some((k, v)) = line.split_once(':') {
+                    if k.trim().eq_ignore_ascii_case("content-length") {
+                        content_length = v.trim().parse().expect("valid content-length");
+                    }
+                }
+            }
+            let mut body = buf[headers_end + 4..].to_vec();
+            while body.len() < content_length {
+                let n = stream.read(&mut chunk).expect("read body");
+                assert!(n > 0, "connection closed before body completed");
+                body.extend_from_slice(&chunk[..n]);
+            }
+
+            // Deliberately never respond and never close the connection —
+            // simulates a dead TCP peer or a wedged proxy discovered only
+            // AFTER the client already sent everything. Sleeping far longer
+            // than the test's own timeout budget proves this test is
+            // actually exercising the bounded-deadline path, not a
+            // coincidental fast failure.
+            std::thread::sleep(Duration::from_secs(30));
+        });
+
+        let url = reqwest::Url::parse(&format!("http://127.0.0.1:{port}/put-target"))
+            .expect("valid mock url");
+
+        let err = stream_file_to_url(
+            &file_path,
+            url,
+            "audio/wav",
+            Duration::from_millis(200),
+            Duration::from_millis(400),
+            |_, _| {},
+        )
+        .await
+        .expect_err(
+            "a server that goes silent right after a full send must eventually time out, \
+             not hang forever",
+        );
+
+        assert!(
+            err.to_string().contains("no response"),
+            "error should explain this was a post-send response timeout, not a generic \
+             failure: {err}"
+        );
 
         tokio::fs::remove_file(&file_path).await.ok();
     }

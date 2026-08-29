@@ -214,32 +214,63 @@ async fn start_recording(
         };
 
         state.recorder.lock().install(path.clone(), backend);
+
+        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+        state.recorded_paths.lock().insert(canonical.clone());
+        return Ok(StartResponse {
+            temp_path: canonical.to_string_lossy().into_owned(),
+        });
     }
 
+    // On non-macOS builds, the block above doesn't exist, so this is the
+    // whole remaining function body — not dead code following an
+    // unconditional early return, which the previous shape (a shared tail
+    // after two cfg branches, one of which always returned) triggered an
+    // `unreachable_code` lint for on this platform.
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (&app, &reservation);
         state.recorder.lock().cancel_start();
-        return Err(AppError::Unsupported);
+        Err(AppError::Unsupported)
     }
-
-    let canonical = std::fs::canonicalize(&path).unwrap_or(path);
-    state.recorded_paths.lock().insert(canonical.clone());
-    Ok(StartResponse {
-        temp_path: canonical.to_string_lossy().into_owned(),
-    })
 }
 
 #[tauri::command]
 async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse, AppError> {
-    // Take the handle out and let the `state.recorder` lock go BEFORE the
-    // blocking, no-timeout-of-its-own `stop_capture()` FFI call — holding
-    // that lock across it used to mean a wedged ScreenCaptureKit stop could
-    // block every other command needing `RecorderState.recorder` (notably
-    // `recording_status`, which runs on the app's main thread).
-    let handle = {
+    // Take the handle out AND mark its path `finalizing`, in the SAME
+    // critical section — then let the `state.recorder` lock go BEFORE the
+    // blocking, no-timeout-of-its-own `stop_capture()` FFI call. Holding
+    // that lock across the FFI call used to mean a wedged ScreenCaptureKit
+    // stop could block every other command needing `RecorderState.recorder`
+    // (notably `recording_status`, which runs on the app's main thread).
+    //
+    // Doing the `finalizing` insert here — while `state.recorder`'s lock is
+    // still held — closes a TOCTOU window a review caught: the previous
+    // version released this lock right after `take_handle()` and only
+    // inserted into `finalizing` afterward. In that gap, `upload_recording`
+    // could acquire `state.recorder.lock()` (observing `recording: false`,
+    // since the handle was already taken) AND find `finalizing` still
+    // empty, passing both of its backstop checks against a WAV that hadn't
+    // actually finished being written. Inserting under the SAME lock
+    // guarantees — via Rust's Mutex acquire/release ordering — that any
+    // thread which later observes `recording: false` here has also already
+    // observed this insert, because it cannot acquire `state.recorder.lock()`
+    // until this critical section releases it.
+    let (handle, finalize_path) = {
         let mut rec = state.recorder.lock();
-        rec.take_handle()?
+        let handle = rec.take_handle()?;
+        // Canonicalize before inserting: `handle.path` is the raw temp path
+        // (e.g. under `/tmp` on macOS, which symlinks to `/private/tmp` —
+        // the same reason `allowed_dir()`/`validate_recording_path`
+        // canonicalize elsewhere in this file). `upload_recording`'s
+        // backstop compares against this set using the CANONICAL path it
+        // already computed via `validate_recording_path` — without
+        // canonicalizing here too, that comparison would never match on a
+        // real Mac and the backstop would silently do nothing.
+        let finalize_path =
+            std::fs::canonicalize(&handle.path).unwrap_or_else(|_| handle.path.clone());
+        state.finalizing.lock().insert(finalize_path.clone());
+        (handle, finalize_path)
     };
     let duration_ms = handle.started_at.elapsed().as_millis() as u64;
     let path = handle.path;
@@ -247,26 +278,15 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
     #[cfg(target_os = "macos")]
     let stop_timed_out = {
         let backend = handle.backend;
-        // Mark this path `finalizing` for the whole stop_and_finalize window
-        // and let the blocking task itself clear it — that way the set stays
-        // accurate on the timed-out path too, where this command returns
-        // while the task keeps running in the background. A per-path set,
-        // not a single shared bool: two overlapping stops (this one, plus an
-        // earlier one that's still wedged past its own timeout) must not let
-        // either's completion make `recording_status`/`upload_recording`
-        // falsely treat the OTHER one's path as done — see
-        // `RecorderState::finalizing`'s doc comment.
-        //
-        // Canonicalize before inserting: `path` here is `handle.path`, the
-        // raw temp path (e.g. under `/tmp` on macOS, which symlinks to
-        // `/private/tmp` — the same reason `allowed_dir()`/
-        // `validate_recording_path` canonicalize elsewhere in this file).
-        // `upload_recording`'s backstop compares against this set using the
-        // CANONICAL path it already computed via `validate_recording_path`
-        // — without canonicalizing here too, that comparison would never
-        // match on a real Mac and the backstop would silently do nothing.
-        let finalize_path = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        state.finalizing.lock().insert(finalize_path.clone());
+        // Let the blocking task itself clear `finalizing` on completion —
+        // that way the set stays accurate on the timed-out path too, where
+        // this command returns while the task keeps running in the
+        // background. A per-path set, not a single shared bool: two
+        // overlapping stops (this one, plus an earlier one that's still
+        // wedged past its own timeout) must not let either's completion
+        // make `recording_status`/`upload_recording` falsely treat the
+        // OTHER one's path as done — see `RecorderState::finalizing`'s doc
+        // comment.
         let finalizing = Arc::clone(&state.finalizing);
         let stop_task = tauri::async_runtime::spawn_blocking(move || {
             let result = backend.stop_and_finalize();

@@ -796,7 +796,12 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
               // that's still being written (the exact bug this wait exists
               // to prevent). Only an explicit `false` counts as done; any
               // other value (including undefined) keeps waiting out the
-              // full 30s window, which is always safe.
+              // full 30s window instead — that's never WORSE than the old
+              // bug (it can only over-wait, not under-wait), but against a
+              // build that truly never sends this field it doesn't actually
+              // resolve anything either: the loop just runs its full
+              // 30 iterations and falls through to the timeout error below,
+              // since it has no other signal to go on.
               if (!status.recording && status.finalizing === false) {
                 finalized = true;
                 break;

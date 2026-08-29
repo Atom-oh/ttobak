@@ -10,7 +10,7 @@
 //! `cargo check` works on Linux dev machines (e.g. CI lint).
 
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -108,7 +108,6 @@ impl AudioRecorder {
             return Err(AppError::AlreadyRunning);
         }
         self.starting = true;
-        use std::sync::atomic::Ordering;
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         Ok(StartReservation {
             generation,
@@ -569,17 +568,20 @@ pub mod macos {
                     match w.flush() {
                         Ok(()) => {
                             // Subtract the fixed threshold, not the observed
-                            // `since_flush` snapshot: this whole block runs
-                            // under `self.writer.lock()`, which today
-                            // serializes callbacks, but subtracting the
-                            // threshold instead of the (potentially
-                            // overlapping) snapshot stays correct even if
-                            // that invariant is ever loosened — subtracting
-                            // the snapshot would let two concurrent
-                            // crossings both subtract their own larger
-                            // total, underflowing this counter to near
-                            // `u64::MAX` and forcing every later callback to
-                            // flush.
+                            // `since_flush` snapshot: subtracting the
+                            // snapshot would let two concurrent crossings
+                            // both subtract their own larger total,
+                            // underflowing this counter to near `u64::MAX`
+                            // and forcing every later callback to flush.
+                            // This is a mitigation, not a full fix, if the
+                            // single-callback-thread assumption (this whole
+                            // block runs under `self.writer.lock()`, which
+                            // today serializes callbacks) is ever loosened —
+                            // two truly concurrent crossings can still
+                            // double-subtract the fixed threshold and
+                            // underflow. A `fetch_update`/CAS loop would be
+                            // needed to make this correct under real
+                            // concurrency; this only narrows the window.
                             self.since_flush
                                 .fetch_sub(FLUSH_INTERVAL_CHANNEL_SAMPLES, Ordering::Relaxed);
                         }
@@ -697,25 +699,41 @@ pub mod macos {
     /// `did_output_sample_buffer` to confirm which layout is actually in
     /// play on real hardware.
     ///
-    /// Pure and free of any ScreenCaptureKit/Tauri types specifically so it
-    /// can be unit tested (below) without a Mac or a live capture session.
+    /// Pure and free of any ScreenCaptureKit FFI types specifically so it can
+    /// be unit tested (below) without a live capture session — it still only
+    /// *builds and runs* on macOS, though, since it lives inside this
+    /// module's `#[cfg(target_os = "macos")]` gate.
+    ///
+    /// Pads short/malformed planes with silence up to the LONGEST plane,
+    /// rather than truncating every plane down to the shortest. A single
+    /// malformed buffer (see the `data.len() % 4 != 0` guard in
+    /// `did_output_sample_buffer`, which converts it to an empty plane) is a
+    /// defensive, low-probability branch — but truncating-to-shortest would
+    /// let that one empty plane force `frame_count` to 0 via `min()`,
+    /// discarding every OTHER channel's real audio for the entire callback
+    /// too. Padding instead means only the malformed channel loses that
+    /// callback's audio (as silence); every good channel's audio survives.
     fn interleave_planes(planes: Vec<Vec<f32>>) -> Vec<f32> {
         match planes.len() {
             0 => Vec::new(),
             1 => planes.into_iter().next().unwrap(),
             n => {
                 let lens: Vec<usize> = planes.iter().map(|p| p.len()).collect();
-                let frame_count = lens.iter().copied().min().unwrap_or(0);
+                let frame_count = lens.iter().copied().max().unwrap_or(0);
+                if frame_count == 0 {
+                    return Vec::new();
+                }
                 if lens.iter().any(|&l| l != frame_count) {
                     log::warn!(
                         "planar audio buffers have mismatched lengths {lens:?}, \
-                         truncating to the shortest ({frame_count} samples/plane)"
+                         padding short/malformed planes with silence up to \
+                         {frame_count} samples/plane"
                     );
                 }
                 let mut out = Vec::with_capacity(frame_count * n);
                 for i in 0..frame_count {
                     for plane in &planes {
-                        out.push(plane[i]);
+                        out.push(plane.get(i).copied().unwrap_or(0.0));
                     }
                 }
                 out
@@ -747,9 +765,27 @@ pub mod macos {
         }
 
         #[test]
-        fn mismatched_plane_lengths_truncate_to_the_shortest_without_panicking() {
+        fn mismatched_plane_lengths_pad_the_shorter_plane_with_silence() {
             let planes = vec![vec![1.0, 2.0, 3.0], vec![10.0, 20.0]];
-            assert_eq!(interleave_planes(planes), vec![1.0, 10.0, 2.0, 20.0]);
+            assert_eq!(
+                interleave_planes(planes),
+                vec![1.0, 10.0, 2.0, 20.0, 3.0, 0.0]
+            );
+        }
+
+        #[test]
+        fn one_empty_plane_does_not_erase_the_other_channels_audio() {
+            // Regression test: a single malformed/skipped buffer (see the
+            // `data.len() % 4 != 0` guard in `did_output_sample_buffer`)
+            // used to zero the WHOLE callback's audio when `frame_count`
+            // was computed as `min(lens)` — an empty plane forced that min
+            // to 0 regardless of how much real audio the other channel(s)
+            // had. Padding to `max(lens)` instead preserves it.
+            let planes = vec![vec![1.0, 2.0, 3.0], vec![]];
+            assert_eq!(
+                interleave_planes(planes),
+                vec![1.0, 0.0, 2.0, 0.0, 3.0, 0.0]
+            );
         }
 
         #[test]
