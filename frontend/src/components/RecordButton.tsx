@@ -788,6 +788,21 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
             await new Promise((r) => setTimeout(r, 1000));
             try {
               const status = await getNativeRecordingStatus(tempPath);
+              // Check `finalizing` alone — NOT `!status.recording` too.
+              // `status.finalizing` is now specific to `tempPath` (the Rust
+              // side canonicalizes and checks THIS path), but
+              // `status.recording` is still the recorder's GLOBAL state: by
+              // the time this loop runs, `stop_recording` has already taken
+              // the handle for `tempPath`, so nothing here is "recording"
+              // for tempPath specifically — but the user could have started
+              // a brand-new recording while this loop was waiting, which
+              // would make `status.recording` true again for THAT unrelated
+              // recording. Gating on it too would make this loop spin for
+              // the full 30s and then error out even though tempPath's own
+              // WAV had already finished finalizing — exactly the
+              // overlapping-recording bug this per-path `finalizing` field
+              // exists to avoid.
+              //
               // `status.finalizing` is optional (older Rust builds don't
               // send it, see TauriStatusResponse's doc comment) — `undefined`
               // must NOT be treated as "not finalizing". `!undefined` is
@@ -802,7 +817,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
               // resolve anything either: the loop just runs its full
               // 30 iterations and falls through to the timeout error below,
               // since it has no other signal to go on.
-              if (!status.recording && status.finalizing === false) {
+              if (status.finalizing === false) {
                 finalized = true;
                 break;
               }

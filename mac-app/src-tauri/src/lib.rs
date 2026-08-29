@@ -43,6 +43,13 @@ use crate::error::AppError;
 /// the command's promise forever.
 const STOP_CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// A leftover temp WAV found at startup (see `run()`'s `.setup()`) older
+/// than this is deleted outright rather than adopted into `recorded_paths`.
+/// Raw meeting audio is PII; a crash this old is treated as abandoned, not
+/// recoverable, so it shouldn't accumulate indefinitely in this app's temp
+/// directory across every future launch.
+const LEFTOVER_RECORDING_MAX_AGE: Duration = Duration::from_secs(48 * 3600);
+
 pub struct RecorderState {
     pub recorder: Mutex<AudioRecorder>,
     pub recorded_paths: Mutex<HashSet<PathBuf>>,
@@ -344,8 +351,15 @@ async fn stop_recording(state: State<'_, RecorderState>) -> Result<StopResponse,
 
 #[tauri::command]
 fn recording_status(path: String, state: State<'_, RecorderState>) -> StatusResponse {
-    let rec = state.recorder.lock();
-    let snapshot = rec.snapshot();
+    let snapshot = {
+        let rec = state.recorder.lock();
+        rec.snapshot()
+    };
+    // The recorder lock is already dropped by this point — this command
+    // exists specifically so it never blocks (see `AudioRecorder::
+    // begin_start`'s doc comment), and `std::fs::canonicalize` below is a
+    // blocking syscall that has no reason to run while still holding it.
+    //
     // Report `finalizing` for THIS specific path, not "is any recording
     // anywhere still finalizing" — the previous any-path aggregate let an
     // unrelated, still-wedged-past-timeout stop from an EARLIER recording
@@ -411,14 +425,45 @@ pub fn run() {
             // all. Best-effort: any error here (directory doesn't exist yet
             // on a fresh install, unreadable entry) just means nothing gets
             // adopted, never a startup failure.
+            //
+            // Two hardenings beyond the bare "any *.wav in this dir" check:
+            // - `entry.file_type()` (which, unlike `Path::metadata()`, does
+            //   NOT follow symlinks) must report a regular file before this
+            //   whitelists it. This is defense-in-depth on top of
+            //   `validate_recording_path`'s existing `starts_with(allowed_dir)`
+            //   containment check (which already blocks a symlink pointing
+            //   outside this directory at upload/delete time regardless) —
+            //   it keeps the whitelist itself from ever holding anything but
+            //   an actual recording file in the first place.
+            // - a file whose mtime is older than
+            //   `LEFTOVER_RECORDING_MAX_AGE` is deleted outright instead of
+            //   adopted: raw meeting audio (PII) sitting unbounded in a temp
+            //   directory across every future launch is worse than losing
+            //   an unrecoverable, long-abandoned crash's tail.
             let dir = allowed_dir();
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 let state = app.state::<RecorderState>();
                 let mut paths = state.recorded_paths.lock();
                 let mut adopted = 0usize;
+                let mut deleted_stale = 0usize;
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.extension().and_then(|e| e.to_str()) != Some("wav") {
+                        continue;
+                    }
+                    let is_regular_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
+                    if !is_regular_file {
+                        continue;
+                    }
+                    let age = entry
+                        .metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|modified| modified.elapsed().ok());
+                    if age.map(|a| a >= LEFTOVER_RECORDING_MAX_AGE).unwrap_or(false) {
+                        if std::fs::remove_file(&path).is_ok() {
+                            deleted_stale += 1;
+                        }
                         continue;
                     }
                     if let Ok(canonical) = std::fs::canonicalize(&path) {
@@ -432,18 +477,29 @@ pub fn run() {
                         dir.display()
                     );
                 }
+                if deleted_stale > 0 {
+                    log::info!(
+                        "deleted {deleted_stale} leftover recording(s) older than {:?} in {}",
+                        LEFTOVER_RECORDING_MAX_AGE,
+                        dir.display()
+                    );
+                }
             }
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            // Best-effort finalize on quit. Without this, force-quitting (or
-            // the window closing) mid-recording never calls
-            // `stop_capture`/`finalize_writer`, so the WAV's RIFF/data
-            // header stays at hound's zero placeholder beyond whatever the
-            // last periodic 5s flush checkpoint wrote (see
-            // `FLUSH_INTERVAL_CHANNEL_SAMPLES` in audio.rs).
+            // Best-effort finalize on a GRACEFUL quit (window closed, Cmd+Q,
+            // app.exit()). This only helps that path — a SIGKILL (Activity
+            // Monitor "Force Quit", `kill -9`) tears the process down
+            // without running any callback here at all, same as it always
+            // has; only the periodic 5s flush checkpoint
+            // (`FLUSH_INTERVAL_CHANNEL_SAMPLES` in audio.rs) protects
+            // against that case. Without this handler, a graceful quit
+            // mid-recording never calls `stop_capture`/`finalize_writer`
+            // either, so the WAV's RIFF/data header stays at hound's zero
+            // placeholder beyond whatever that last checkpoint wrote.
             //
             // `RunEvent::Exit` fires as the app is already tearing down, so
             // this is deliberately synchronous and un-timed-out, unlike the

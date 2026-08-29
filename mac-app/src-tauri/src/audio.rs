@@ -532,7 +532,7 @@ pub mod macos {
                 })
                 .collect();
 
-            let samples_f32: Vec<f32> = interleave_planes(planes);
+            let samples_f32: Vec<f32> = super::interleave_planes(planes);
 
             // RMS over this buffer for the level meter event. Computed once,
             // before we move on to the WAV write and PCM downsample passes.
@@ -684,125 +684,130 @@ pub mod macos {
             }
         }
     }
+}
 
-    /// Normalize ScreenCaptureKit's per-buffer f32 planes to interleaved
-    /// samples. ScreenCaptureKit can deliver either one interleaved buffer
-    /// (all channels packed together, LRLRLR…) or one buffer per channel
-    /// (planar — a whole mono plane per channel); every consumer downstream
-    /// of this function assumes interleaved stereo (the WAV write pass's
-    /// implicit `channels: 2` framing in `did_output_sample_buffer`, and
-    /// `AudioOutput::emit_pcm_chunks`'s `chunks_exact(CHANNELS)` downmix), so
-    /// this is where that assumption is made true regardless of which
-    /// layout a given callback actually used. Getting this wrong silently
-    /// produces a double-speed, channel-swapped recording (planar samples
-    /// treated as interleaved) — see the "first audio buffer" log line in
-    /// `did_output_sample_buffer` to confirm which layout is actually in
-    /// play on real hardware.
-    ///
-    /// Pure and free of any ScreenCaptureKit FFI types specifically so it can
-    /// be unit tested (below) without a live capture session — it still only
-    /// *builds and runs* on macOS, though, since it lives inside this
-    /// module's `#[cfg(target_os = "macos")]` gate.
-    ///
-    /// Pads short/malformed planes with silence up to the LONGEST plane,
-    /// rather than truncating every plane down to the shortest. A single
-    /// malformed buffer (see the `data.len() % 4 != 0` guard in
-    /// `did_output_sample_buffer`, which converts it to an empty plane) is a
-    /// defensive, low-probability branch — but truncating-to-shortest would
-    /// let that one empty plane force `frame_count` to 0 via `min()`,
-    /// discarding every OTHER channel's real audio for the entire callback
-    /// too. Padding instead means only the malformed channel loses that
-    /// callback's audio (as silence); every good channel's audio survives.
-    fn interleave_planes(planes: Vec<Vec<f32>>) -> Vec<f32> {
-        match planes.len() {
-            0 => Vec::new(),
-            1 => planes.into_iter().next().unwrap(),
-            n => {
-                let lens: Vec<usize> = planes.iter().map(|p| p.len()).collect();
-                let frame_count = lens.iter().copied().max().unwrap_or(0);
-                if frame_count == 0 {
-                    return Vec::new();
-                }
-                if lens.iter().any(|&l| l != frame_count) {
-                    log::warn!(
-                        "planar audio buffers have mismatched lengths {lens:?}, \
-                         padding short/malformed planes with silence up to \
-                         {frame_count} samples/plane"
-                    );
-                }
-                let mut out = Vec::with_capacity(frame_count * n);
-                for i in 0..frame_count {
-                    for plane in &planes {
-                        out.push(plane.get(i).copied().unwrap_or(0.0));
-                    }
-                }
-                out
+/// Normalize ScreenCaptureKit's per-buffer f32 planes to interleaved
+/// samples. ScreenCaptureKit can deliver either one interleaved buffer
+/// (all channels packed together, LRLRLR…) or one buffer per channel
+/// (planar — a whole mono plane per channel); every consumer downstream
+/// of this function assumes interleaved stereo (the WAV write pass's
+/// implicit `channels: 2` framing in `macos::did_output_sample_buffer`,
+/// and `macos::AudioOutput::emit_pcm_chunks`'s `chunks_exact(CHANNELS)`
+/// downmix), so this is where that assumption is made true regardless of
+/// which layout a given callback actually used. Getting this wrong
+/// silently produces a double-speed, channel-swapped recording (planar
+/// samples treated as interleaved) — see the "first audio buffer" log
+/// line in `did_output_sample_buffer` to confirm which layout is actually
+/// in play on real hardware.
+///
+/// Deliberately NOT inside `mod macos`'s `#[cfg(target_os = "macos")]`
+/// gate, even though its only real caller (`macos::did_output_sample_buffer`)
+/// lives inside it: this function itself has no ScreenCaptureKit/FFI
+/// dependency, so gating it out on non-macOS builds would only keep its
+/// regression tests below from ever running except on a Mac — and this
+/// module has no CI, so that would mean the planar/interleaved bug and the
+/// empty-plane bug these tests cover could never actually be caught by any
+/// automated run.
+///
+/// Pads short/malformed planes with silence up to the LONGEST plane,
+/// rather than truncating every plane down to the shortest. A single
+/// malformed buffer (see the `data.len() % 4 != 0` guard in
+/// `macos::did_output_sample_buffer`, which converts it to an empty plane)
+/// is a defensive, low-probability branch — but truncating-to-shortest
+/// would let that one empty plane force `frame_count` to 0 via `min()`,
+/// discarding every OTHER channel's real audio for the entire callback
+/// too. Padding instead means only the malformed channel loses that
+/// callback's audio (as silence); every good channel's audio survives.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn interleave_planes(planes: Vec<Vec<f32>>) -> Vec<f32> {
+    match planes.len() {
+        0 => Vec::new(),
+        1 => planes.into_iter().next().unwrap(),
+        n => {
+            let lens: Vec<usize> = planes.iter().map(|p| p.len()).collect();
+            let frame_count = lens.iter().copied().max().unwrap_or(0);
+            if frame_count == 0 {
+                return Vec::new();
             }
+            if lens.iter().any(|&l| l != frame_count) {
+                log::warn!(
+                    "planar audio buffers have mismatched lengths {lens:?}, \
+                     padding short/malformed planes with silence up to \
+                     {frame_count} samples/plane"
+                );
+            }
+            let mut out = Vec::with_capacity(frame_count * n);
+            for i in 0..frame_count {
+                for plane in &planes {
+                    out.push(plane.get(i).copied().unwrap_or(0.0));
+                }
+            }
+            out
         }
     }
+}
 
-    #[cfg(test)]
-    mod interleave_tests {
-        use super::interleave_planes;
+#[cfg(test)]
+mod interleave_tests {
+    use super::interleave_planes;
 
-        #[test]
-        fn single_buffer_passes_through_unchanged_as_already_interleaved() {
-            let planes = vec![vec![1.0, 2.0, 3.0, 4.0]];
-            assert_eq!(interleave_planes(planes), vec![1.0, 2.0, 3.0, 4.0]);
-        }
+    #[test]
+    fn single_buffer_passes_through_unchanged_as_already_interleaved() {
+        let planes = vec![vec![1.0, 2.0, 3.0, 4.0]];
+        assert_eq!(interleave_planes(planes), vec![1.0, 2.0, 3.0, 4.0]);
+    }
 
-        #[test]
-        fn two_planes_interleave_in_plane_order() {
-            // One plane per channel (planar): L = [1,2,3], R = [10,20,30].
-            // Correct interleaving is L0,R0,L1,R1,L2,R2 — NOT the buggy
-            // flatten-then-treat-as-interleaved behavior this replaces,
-            // which would have produced L0,L1,L2,R0,R1,R2.
-            let planes = vec![vec![1.0, 2.0, 3.0], vec![10.0, 20.0, 30.0]];
-            assert_eq!(
-                interleave_planes(planes),
-                vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0]
-            );
-        }
+    #[test]
+    fn two_planes_interleave_in_plane_order() {
+        // One plane per channel (planar): L = [1,2,3], R = [10,20,30].
+        // Correct interleaving is L0,R0,L1,R1,L2,R2 — NOT the buggy
+        // flatten-then-treat-as-interleaved behavior this replaces,
+        // which would have produced L0,L1,L2,R0,R1,R2.
+        let planes = vec![vec![1.0, 2.0, 3.0], vec![10.0, 20.0, 30.0]];
+        assert_eq!(
+            interleave_planes(planes),
+            vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0]
+        );
+    }
 
-        #[test]
-        fn mismatched_plane_lengths_pad_the_shorter_plane_with_silence() {
-            let planes = vec![vec![1.0, 2.0, 3.0], vec![10.0, 20.0]];
-            assert_eq!(
-                interleave_planes(planes),
-                vec![1.0, 10.0, 2.0, 20.0, 3.0, 0.0]
-            );
-        }
+    #[test]
+    fn mismatched_plane_lengths_pad_the_shorter_plane_with_silence() {
+        let planes = vec![vec![1.0, 2.0, 3.0], vec![10.0, 20.0]];
+        assert_eq!(
+            interleave_planes(planes),
+            vec![1.0, 10.0, 2.0, 20.0, 3.0, 0.0]
+        );
+    }
 
-        #[test]
-        fn one_empty_plane_does_not_erase_the_other_channels_audio() {
-            // Regression test: a single malformed/skipped buffer (see the
-            // `data.len() % 4 != 0` guard in `did_output_sample_buffer`)
-            // used to zero the WHOLE callback's audio when `frame_count`
-            // was computed as `min(lens)` — an empty plane forced that min
-            // to 0 regardless of how much real audio the other channel(s)
-            // had. Padding to `max(lens)` instead preserves it.
-            let planes = vec![vec![1.0, 2.0, 3.0], vec![]];
-            assert_eq!(
-                interleave_planes(planes),
-                vec![1.0, 0.0, 2.0, 0.0, 3.0, 0.0]
-            );
-        }
+    #[test]
+    fn one_empty_plane_does_not_erase_the_other_channels_audio() {
+        // Regression test: a single malformed/skipped buffer (see the
+        // `data.len() % 4 != 0` guard in `did_output_sample_buffer`)
+        // used to zero the WHOLE callback's audio when `frame_count`
+        // was computed as `min(lens)` — an empty plane forced that min
+        // to 0 regardless of how much real audio the other channel(s)
+        // had. Padding to `max(lens)` instead preserves it.
+        let planes = vec![vec![1.0, 2.0, 3.0], vec![]];
+        assert_eq!(
+            interleave_planes(planes),
+            vec![1.0, 0.0, 2.0, 0.0, 3.0, 0.0]
+        );
+    }
 
-        #[test]
-        fn empty_input_yields_empty_output() {
-            let planes: Vec<Vec<f32>> = vec![];
-            assert_eq!(interleave_planes(planes), Vec::<f32>::new());
-        }
+    #[test]
+    fn empty_input_yields_empty_output() {
+        let planes: Vec<Vec<f32>> = vec![];
+        assert_eq!(interleave_planes(planes), Vec::<f32>::new());
+    }
 
-        #[test]
-        fn three_planes_interleave_correctly() {
-            // Not expected from a stereo config, but the function should
-            // generalize rather than silently assume exactly 2 channels.
-            let planes = vec![vec![1.0, 2.0], vec![10.0, 20.0], vec![100.0, 200.0]];
-            assert_eq!(
-                interleave_planes(planes),
-                vec![1.0, 10.0, 100.0, 2.0, 20.0, 200.0]
-            );
-        }
+    #[test]
+    fn three_planes_interleave_correctly() {
+        // Not expected from a stereo config, but the function should
+        // generalize rather than silently assume exactly 2 channels.
+        let planes = vec![vec![1.0, 2.0], vec![10.0, 20.0], vec![100.0, 200.0]];
+        assert_eq!(
+            interleave_planes(planes),
+            vec![1.0, 10.0, 100.0, 2.0, 20.0, 200.0]
+        );
     }
 }
