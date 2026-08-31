@@ -114,6 +114,98 @@ func TestBuildAttachmentContext_EmptyWhenNothingUsable(t *testing.T) {
 	}
 }
 
+func TestBuildAttachmentLinkSections(t *testing.T) {
+	tests := []struct {
+		name        string
+		attachments []model.Attachment
+		want        []string       // substrings that must appear
+		notWant     []string       // substrings that must NOT appear
+		wantCounts  map[string]int // exact substring occurrence counts
+	}{
+		{
+			name: "image and document render under their own sections, with the sentinel",
+			attachments: []model.Attachment{
+				{AttachmentID: "img-1", Type: model.AttachTypeDiagram, FileName: "arch.png", ProcessedContent: "mermaid", Status: model.AttachStatusDone},
+				{AttachmentID: "doc-1", Type: model.AttachTypeDocument, FileName: "spec.pdf", Status: model.AttachStatusDone},
+			},
+			// attachmentSentinel is the contract that stops a re-summarize
+			// from appending these sections twice — its presence in the tail
+			// is as load-bearing as the sections themselves.
+			want: []string{attachmentSentinel, "## 첨부 이미지", "![arch.png](attachment://img-1)", "## 첨부 문서", "[spec.pdf](attachment://doc-1)"},
+		},
+		{
+			name: "duplicated rows sharing an AttachmentID link once",
+			attachments: []model.Attachment{
+				{AttachmentID: "doc-1", Type: model.AttachTypeDocument, FileName: "spec.pdf", Status: model.AttachStatusDone},
+				{AttachmentID: "doc-1", Type: model.AttachTypeDocument, FileName: "spec.pdf", Status: model.AttachStatusDone},
+			},
+			wantCounts: map[string]int{"attachment://doc-1": 1},
+		},
+		{
+			name: "image row without a filename renders no empty heading",
+			attachments: []model.Attachment{
+				{AttachmentID: "img-1", Type: model.AttachTypePhoto, ProcessedContent: "분석", Status: model.AttachStatusDone},
+			},
+			notWant: []string{"첨부"},
+		},
+		{
+			name:        "empty input produces nothing",
+			attachments: nil,
+			notWant:     []string{"첨부"},
+		},
+		{
+			name: "document with ProcessedContent stays a document link, never a broken image",
+			// Mirrors buildAttachmentContext's Type guard: if document
+			// content extraction ever populates ProcessedContent, the link
+			// tail must not render a ![...] for a non-image object.
+			attachments: []model.Attachment{
+				{AttachmentID: "doc-1", Type: model.AttachTypeDocument, FileName: "spec.pdf", ProcessedContent: "extracted text", Status: model.AttachStatusDone},
+			},
+			want:    []string{"## 첨부 문서", "[spec.pdf](attachment://doc-1)"},
+			notWant: []string{"## 첨부 이미지", "![spec.pdf]"},
+		},
+		{
+			name: "same filename different attachments both keep links (ID dedup)",
+			attachments: []model.Attachment{
+				{AttachmentID: "doc-1", Type: model.AttachTypeDocument, FileName: "proposal.pptx", Status: model.AttachStatusDone},
+				{AttachmentID: "doc-2", Type: model.AttachTypeDocument, FileName: "proposal.pptx", Status: model.AttachStatusDone},
+			},
+			want: []string{"attachment://doc-1", "attachment://doc-2"},
+		},
+		{
+			name: "non-done rows and empty input produce nothing",
+			attachments: []model.Attachment{
+				{AttachmentID: "doc-1", Type: model.AttachTypeDocument, FileName: "half.pptx", Status: model.AttachStatusUploaded},
+				{AttachmentID: "img-1", Type: model.AttachTypePhoto, FileName: "p.jpg", ProcessedContent: "x", Status: model.AttachStatusProcessing},
+			},
+			notWant: []string{"첨부"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildAttachmentLinkSections(tt.attachments)
+			for _, w := range tt.want {
+				if !strings.Contains(got, w) {
+					t.Fatalf("missing %q in: %q", w, got)
+				}
+			}
+			for _, nw := range tt.notWant {
+				if strings.Contains(got, nw) {
+					t.Fatalf("unexpected %q in: %q", nw, got)
+				}
+			}
+			if len(tt.want) == 0 && len(tt.wantCounts) == 0 && got != "" {
+				t.Fatalf("expected empty tail, got: %q", got)
+			}
+			for sub, count := range tt.wantCounts {
+				if strings.Count(got, sub) != count {
+					t.Fatalf("want %d occurrences of %q, got %d in: %q", count, sub, strings.Count(got, sub), got)
+				}
+			}
+		})
+	}
+}
+
 func TestHasNonOwnerCollaborator(t *testing.T) {
 	tests := []struct {
 		name    string

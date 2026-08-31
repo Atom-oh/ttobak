@@ -11,7 +11,8 @@ import { LiveTranscript } from '@/components/LiveTranscript';
 import { RecordingTabs } from '@/components/RecordingTabs';
 import { TranslationView } from '@/components/TranslationView';
 import { LiveSummary } from '@/components/LiveSummary';
-import { LiveQAPanel, resetProactiveClaims } from '@/components/LiveQAPanel';
+import { LiveQAPanel } from '@/components/LiveQAPanel';
+import { resetProactiveClaims } from '@/lib/proactiveSearch';
 import ReferenceTabs from '@/components/ReferenceTabs';
 import ReferencePanel from '@/components/ReferencePanel';
 import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingConfig';
@@ -1214,7 +1215,7 @@ function RecordPageInner() {
                 meetingId={postRecording.serverMeetingId || undefined}
                 onDetectedQuestionsChange={setDetectedCount}
                 serverDetectedQuestions={summary.detectedQuestions}
-                proactiveQuestions={summary.proactiveQuestions}
+                proactiveBatch={summary.proactiveBatch}
                 onAskedQuestion={summary.addAskedQuestion}
                 onSaveToNotes={handleSaveQAToNotes}
               />
@@ -1276,7 +1277,7 @@ function RecordPageInner() {
                     meetingId={postRecording.serverMeetingId || undefined}
                     onDetectedQuestionsChange={setDetectedCount}
                     serverDetectedQuestions={summary.detectedQuestions}
-                    proactiveQuestions={summary.proactiveQuestions}
+                    proactiveBatch={summary.proactiveBatch}
                     onAskedQuestion={summary.addAskedQuestion}
                     onSaveToNotes={handleSaveQAToNotes}
                   />

@@ -81,6 +81,79 @@ def check_research_limit(user_id):
         return True
 
 
+# Server-side per-user cap on search_web calls (ADR-028 tracked follow-up:
+# the frontend caps proactive auto-fires, but nothing stopped a hostile
+# client from burning gateway calls through the manual path). Hourly window,
+# same atomic-counter pattern as check_research_limit. 0 disables the check.
+# A typo'd env value must not fail Lambda init (same rationale as the
+# crawler's _parse_relevance_threshold) — fall back to the default.
+DEFAULT_WEB_SEARCH_HOURLY_LIMIT = 30
+
+
+def _parse_web_search_limit(raw):
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            f'WEB_SEARCH_HOURLY_LIMIT={raw!r} is not an integer, using {DEFAULT_WEB_SEARCH_HOURLY_LIMIT}')
+        return DEFAULT_WEB_SEARCH_HOURLY_LIMIT
+
+
+WEB_SEARCH_HOURLY_LIMIT = _parse_web_search_limit(
+    os.environ.get('WEB_SEARCH_HOURLY_LIMIT', str(DEFAULT_WEB_SEARCH_HOURLY_LIMIT)))
+
+
+def check_web_search_limit(user_id):
+    """True if user_id may make another search_web call this hour.
+
+    Atomic increment on USER#{id}/WEBSEARCH_HOURLY#{YYYY-MM-DDTHH}, expiring
+    via the table's TTL sweep (the row writes `pendingShareExpiresAt` — the
+    attribute `storage-stack.ts` actually points `timeToLiveAttribute` at;
+    an attribute literally named "TTL", like check_research_limit's rows,
+    is never swept and would accumulate one row per user per hour forever).
+    Over-limit increments are compensated back down so a burst of denied
+    calls can't inflate the counter. Fails OPEN only on the INCREMENT
+    failing (same availability-over-strictness call as check_research_limit
+    — this is an abuse brake, not a security boundary); a failure of the
+    compensating decrement never flips an already-established denial back
+    to allow."""
+    if WEB_SEARCH_HOURLY_LIMIT <= 0:
+        return True
+    from datetime import datetime, timezone
+    hour = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H')
+    counter_pk = f"USER#{user_id}"
+    counter_sk = f"WEBSEARCH_HOURLY#{hour}"
+    try:
+        resp = table.update_item(
+            Key={"PK": counter_pk, "SK": counter_sk},
+            UpdateExpression="SET #c = if_not_exists(#c, :zero) + :one, #ttl = :ttl",
+            ExpressionAttributeNames={"#c": "count", "#ttl": "pendingShareExpiresAt"},
+            ExpressionAttributeValues={
+                ":zero": 0, ":one": 1,
+                ":ttl": int(time.time()) + 7200,
+            },
+            ReturnValues="UPDATED_NEW",
+        )
+        current = int(resp.get("Attributes", {}).get("count", 1))
+    except Exception as e:
+        logger.warning(f"Failed to check web search limit for {user_id}: {e}")
+        return True
+    if current > WEB_SEARCH_HOURLY_LIMIT:
+        try:
+            table.update_item(
+                Key={"PK": counter_pk, "SK": counter_sk},
+                UpdateExpression="SET #c = #c - :one",
+                ExpressionAttributeNames={"#c": "count"},
+                ExpressionAttributeValues={":one": 1},
+            )
+        except Exception as e:
+            # The denial stands — compensation failure only means this hour's
+            # counter stays inflated by one, never that the call goes through.
+            logger.warning(f"Web search limit compensation failed for {user_id}: {e}")
+        return False
+    return True
+
+
 def create_research_from_chat(user_id, topic, mode):
     """Create a research job from the chat assistant.
 
@@ -825,6 +898,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
         "load_meeting_context": load_meeting_context,
         "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
         "check_research_limit": check_research_limit,
+        "check_web_search_limit": check_web_search_limit,
         "list_accounts": list_accounts_for_user,
         "get_account_insights": get_account_insights_for_chat,
         "get_account_brief": get_account_brief_for_chat,
@@ -1247,6 +1321,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         "load_meeting_context": load_meeting_context,
         "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
         "check_research_limit": check_research_limit,
+        "check_web_search_limit": check_web_search_limit,
         "list_accounts": list_accounts_for_user,
         "get_account_insights": get_account_insights_for_chat,
         "get_account_brief": get_account_brief_for_chat,

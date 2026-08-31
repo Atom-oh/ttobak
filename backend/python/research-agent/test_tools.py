@@ -254,6 +254,18 @@ class TestSigv4PostConfigGuard(unittest.TestCase):
         finally:
             tools.WEB_SEARCH_GATEWAY_URL = original
 
+    def test_raises_on_non_https_gateway_url(self):
+        # An http:// endpoint would send the SigV4 Authorization header (and
+        # the query) in cleartext — refuse rather than degrade. Kept in sync
+        # with the qa/web_search.py and crawler copies.
+        original = tools.WEB_SEARCH_GATEWAY_URL
+        try:
+            tools.WEB_SEARCH_GATEWAY_URL = 'http://gw.example/mcp'
+            with self.assertRaises(RuntimeError):
+                tools._sigv4_post('{}')
+        finally:
+            tools.WEB_SEARCH_GATEWAY_URL = original
+
 
 class TestExtractSseJson(unittest.TestCase):
     def test_plain_json_passes_through_unchanged(self):

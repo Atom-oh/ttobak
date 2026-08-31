@@ -77,7 +77,7 @@ Research Pipeline:
   POST /api/research --> Bedrock Agent (Deep Research) --> S3 KB
 
 QA Pipeline:
-  POST /api/qa/ask --> Bedrock Converse (Sonnet 5) + Tools (KB, AWS Docs, Transcript)
+  POST /api/qa/ask --> Bedrock Converse (Sonnet 5) + Tools (KB, AWS Docs, Transcript, Web Search via AgentCore Gateway)
 ```
 
 ### CDK Stack Dependency
@@ -282,7 +282,7 @@ CloudFront (ttobak.atomai.click)
   POST /api/research --> Bedrock Agent (딥 리서치) --> S3 KB
 
 QA 파이프라인:
-  POST /api/qa/ask --> Bedrock Converse (Sonnet 5) + Tools (KB, AWS Docs, Transcript)
+  POST /api/qa/ask --> Bedrock Converse (Sonnet 5) + Tools (KB, AWS Docs, Transcript, Web Search via AgentCore Gateway)
 ```
 
 ### CDK 스택 의존성
