@@ -51,7 +51,9 @@
 
 - 미팅 중 최신 정보 질문에 라이브 QA가 답할 수 있고, (opt-in 시) 감지된 사실형 질문은 답이 미리 떠 있다.
 - 토큰/호출량: 자동 발화는 배치당 1건 + Bedrock 라운드 제한(MAX_TOOL_ROUNDS)으로 상한이 있다. 서버측
-  per-user rate limit은 없다 — 남용 신호가 보이면 후속으로 추가한다(tracked).
+  per-user rate limit은 후속 PR에서 추가됐다 — `check_web_search_limit`(시간당 `WEB_SEARCH_HOURLY_LIMIT`회,
+  기본 30, 게이트웨이 호출 전에 검사해 초과 호출은 외부 쿼터를 소비하지 않음; DynamoDB 오류 시 fail-open —
+  가용성 우선의 남용 브레이크이지 보안 경계가 아니다).
 - SigV4+MCP 플러밍이 3중 복제로 늘었다. 변경 시 세 파일을 함께 고쳐야 한다(각 파일 docstring에 명시).
 - `WEB_SEARCH_GATEWAY_URL` 미설정 시 도구가 목록에서 빠지는 게 아니라 호출 시 실패 사유를 반환한다 —
   도구 라운드 1회를 소비하므로 "완전 비활성"은 아니다. 미설정 배포는 초기 셋업 과도기뿐이라 수용.

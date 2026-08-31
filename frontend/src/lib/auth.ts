@@ -1,5 +1,6 @@
 'use client';
 
+import { proactiveSearchStore } from './proactiveSearch';
 import {
   CognitoUserPool,
   CognitoUser,
@@ -159,6 +160,11 @@ export async function signOut(): Promise<void> {
   localStorage.removeItem('idToken');
   localStorage.removeItem('accessToken');
   localStorage.removeItem('refreshToken');
+  // The proactive-search opt-in consents to sending conversation-derived
+  // queries to an external search provider — it's origin-wide localStorage,
+  // so on a shared browser it must not carry over to the next person who
+  // logs in. Back to the OFF default on every sign-out.
+  proactiveSearchStore.clear();
 }
 
 export async function getCurrentUser(): Promise<AuthUser | null> {

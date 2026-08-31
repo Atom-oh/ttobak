@@ -9,7 +9,7 @@ TtobakApp (bin/infra.ts)
 ├── WebSearchGatewayStack - AgentCore Gateway + Web Search connector (us-east-1)
 ├── AuthStack           - Cognito User Pool + App Client
 ├── StorageStack        - DynamoDB + S3
-├── AiStack             - Transcribe/Nova Sonic/Bedrock IAM (depends: WebSearchGateway, etc.)
+├── AiStack             - Transcribe/Nova Sonic/Bedrock IAM (depends: Storage, Knowledge, Auth, WebSearchGateway)
 ├── WhisperStack        - ECS Cluster + GPU Spot ASG + ECR
 ├── KnowledgeStack      - Bedrock KB + OpenSearch Serverless
 ├── EdgeAuthStack       - Lambda@Edge (us-east-1, JWT verification)
@@ -17,7 +17,7 @@ TtobakApp (bin/infra.ts)
 │                         (depends: Auth, Storage, AI, Knowledge, WebSearchGateway —
 │                          QA Lambda's WEB_SEARCH_GATEWAY_URL is a cross-region ref)
 ├── CrawlerStack        - Step Functions + crawler Lambdas (depends: AI, Storage, Knowledge, WebSearchGateway)
-├── ResearchAgentStack  - Bedrock Agent + tool Lambdas
+├── ResearchAgentStack  - Bedrock Agent + tool Lambdas (depends: Storage, Knowledge)
 └── FrontendStack       - S3 + CloudFront (depends: EdgeAuth, Gateway, Auth)
 ```
 
@@ -192,7 +192,7 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 #### QA Lambda (`ttobak-qa`, Python)
 - Trigger: API Gateway HTTP (`/api/qa/*`, sync) + async re-invocation from the WebSocket Lambda (`InvocationType=Event`, live Q&A streaming)
 - Async retry: `retryAttempts: 0` (`configureAsyncInvoke`) — without this, Lambda's default 2 retries could deliver a stale duplicate answer delta to an already-closed WebSocket session
-- Env: `TABLE_NAME`, `KB_ID`, `BEDROCK_MODEL_ID`, `DETECT_MODEL_ID`, `MAX_TOOL_ROUNDS`, `KB_CACHE_TTL_SECONDS`, `RESEARCH_SFN_ARN`, `WEB_SEARCH_GATEWAY_URL`/`WEB_SEARCH_GATEWAY_REGION` (`search_web` tool — cross-region SigV4 call to the us-east-1 AgentCore Web Search Gateway; if unset, the tool stays exposed but returns a "web search not configured" failure to the model)
+- Env: `TABLE_NAME`, `KB_ID`, `BEDROCK_MODEL_ID`, `DETECT_MODEL_ID`, `MAX_TOOL_ROUNDS`, `KB_CACHE_TTL_SECONDS`, `RESEARCH_SFN_ARN`, `WEB_SEARCH_GATEWAY_URL`/`WEB_SEARCH_GATEWAY_REGION` (`search_web` tool — cross-region SigV4 call to the us-east-1 AgentCore Web Search Gateway; if unset, the tool stays exposed but returns a "web search not configured" failure to the model), `WEB_SEARCH_HOURLY_LIMIT` (server-side per-user hourly cap on `search_web`, default 30, `0` disables — checked before the gateway call so a capped call consumes no external quota)
 - Permissions: DynamoDB R/W, Bedrock InvokeModel(+stream)/Retrieve, Step Functions StartExecution, WebSocket ManageConnections, `bedrock-agentcore:InvokeGateway` (scoped to the Web Search Gateway ARN, `ai-stack.ts`)
 
 #### Convert-Doc Lambda (ADR-022)

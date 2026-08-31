@@ -105,19 +105,31 @@ def _query_ref(query):
     return f'q#{digest}/len={len(query)}'
 
 
+# Free-text input keys across ALL tools: their values are model-composed and
+# can derive from meeting conversation (search_web.query, search_transcript.
+# keywords, list_meetings.keyword, get_aws_recommendation.useCase,
+# start_research.topic, search_knowledge_base/search_aws_docs.query) — hash
+# them all in logs, not just search_web's. Identifier-shaped keys (meetingId,
+# account, dates, limits) stay loggable for debugging.
+_FREE_TEXT_INPUT_KEYS = frozenset({'query', 'keywords', 'keyword', 'useCase', 'topic'})
+
+
 def redact_tool_input_for_log(tool_name, tool_input):
-    """Return a log-safe copy of a tool input: search_web's query is replaced
-    with its _query_ref (the agentic loop logs every tool call's input, and a
-    plaintext query there would defeat this module's own hashed logging). A
-    non-string query (model ignoring the schema) is fully masked rather than
-    passed through. Other tools' inputs pass through unchanged — they carry
-    meeting/account identifiers, not free conversation text."""
-    if tool_name != 'search_web' or not isinstance(tool_input, dict):
+    """Return a log-safe copy of a tool input for the agentic loop's
+    tool-call log: every free-text key (see _FREE_TEXT_INPUT_KEYS) is
+    replaced with its _query_ref, tool-independent — search_transcript's
+    keywords and list_meetings' keyword are just as conversation-derived as
+    search_web's query, so a search_web-only mask would leak the same text
+    through a neighboring tool. A non-string value under a free-text key
+    (model ignoring the schema) is fully masked rather than passed through.
+    tool_name is kept for call-site readability and future per-tool rules."""
+    del tool_name  # redaction is key-based, not tool-based
+    if not isinstance(tool_input, dict):
         return tool_input
     redacted = dict(tool_input)
-    if 'query' in redacted:
-        q = redacted['query']
-        redacted['query'] = _query_ref(q) if isinstance(q, str) else '<redacted non-string>'
+    for key in _FREE_TEXT_INPUT_KEYS & redacted.keys():
+        v = redacted[key]
+        redacted[key] = _query_ref(v) if isinstance(v, str) else '<redacted non-string>'
     return redacted
 
 

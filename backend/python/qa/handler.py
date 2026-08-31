@@ -81,6 +81,53 @@ def check_research_limit(user_id):
         return True
 
 
+# Server-side per-user cap on search_web calls (ADR-028 tracked follow-up:
+# the frontend caps proactive auto-fires, but nothing stopped a hostile
+# client from burning gateway calls through the manual path). Hourly window,
+# same atomic-counter pattern as check_research_limit. 0 disables the check.
+WEB_SEARCH_HOURLY_LIMIT = int(os.environ.get('WEB_SEARCH_HOURLY_LIMIT', '30'))
+
+
+def check_web_search_limit(user_id):
+    """True if user_id may make another search_web call this hour.
+
+    Atomic increment on USER#{id}/WEBSEARCH_HOURLY#{YYYY-MM-DDTHH} with a 2h
+    TTL; over-limit increments are compensated back down so a burst of
+    denied calls can't inflate the counter. Fails OPEN on DynamoDB errors
+    (same availability-over-strictness call as check_research_limit — this
+    is an abuse brake, not a security boundary)."""
+    if WEB_SEARCH_HOURLY_LIMIT <= 0:
+        return True
+    from datetime import datetime, timezone
+    hour = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H')
+    counter_pk = f"USER#{user_id}"
+    counter_sk = f"WEBSEARCH_HOURLY#{hour}"
+    try:
+        resp = table.update_item(
+            Key={"PK": counter_pk, "SK": counter_sk},
+            UpdateExpression="SET #c = if_not_exists(#c, :zero) + :one, #ttl = :ttl",
+            ExpressionAttributeNames={"#c": "count", "#ttl": "TTL"},
+            ExpressionAttributeValues={
+                ":zero": 0, ":one": 1,
+                ":ttl": int(time.time()) + 7200,
+            },
+            ReturnValues="UPDATED_NEW",
+        )
+        current = int(resp.get("Attributes", {}).get("count", 1))
+        if current > WEB_SEARCH_HOURLY_LIMIT:
+            table.update_item(
+                Key={"PK": counter_pk, "SK": counter_sk},
+                UpdateExpression="SET #c = #c - :one",
+                ExpressionAttributeNames={"#c": "count"},
+                ExpressionAttributeValues={":one": 1},
+            )
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to check web search limit for {user_id}: {e}")
+        return True
+
+
 def create_research_from_chat(user_id, topic, mode):
     """Create a research job from the chat assistant.
 
@@ -825,6 +872,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None):
         "load_meeting_context": load_meeting_context,
         "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
         "check_research_limit": check_research_limit,
+        "check_web_search_limit": check_web_search_limit,
         "list_accounts": list_accounts_for_user,
         "get_account_insights": get_account_insights_for_chat,
         "get_account_brief": get_account_brief_for_chat,
@@ -1247,6 +1295,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         "load_meeting_context": load_meeting_context,
         "create_research": lambda uid, topic, mode: create_research_from_chat(uid, topic, mode),
         "check_research_limit": check_research_limit,
+        "check_web_search_limit": check_web_search_limit,
         "list_accounts": list_accounts_for_user,
         "get_account_insights": get_account_insights_for_chat,
         "get_account_brief": get_account_brief_for_chat,

@@ -384,6 +384,58 @@ func buildSummarizeUserPrompt(transcript, priorContext string, segments []speake
 //     cited in the note body while missing from the link list.
 //
 // Returns "" when there is nothing to add.
+// attachmentSentinel marks the machine-appended attachment sections at the
+// end of a generated note, so a re-summarize never appends them twice.
+const attachmentSentinel = "<!-- ttobak:attachments -->"
+
+// buildAttachmentLinkSections renders the machine-appended tail of a
+// generated note: `## 첨부 이미지` (inline image refs for processed
+// attachments) and `## 첨부 문서` (download links for document attachments).
+// Extracted as a pure function so the branch invariants stay unit-tested:
+//   - only AttachStatusDone rows are rendered (an aborted upload must not
+//     get a link);
+//   - the image branch excludes AttachTypeDocument, mirroring
+//     buildAttachmentContext — a document row that ever gains
+//     ProcessedContent must not render as a broken ![...] image AND vanish
+//     from the 첨부 문서 list;
+//   - document links dedup by AttachmentID, not FileName: two DIFFERENT
+//     documents sharing a name must both keep their links (each resolves to
+//     its own object); genuinely duplicated rows share the ID.
+//
+// Returns "" when there is nothing to append (caller adds nothing).
+func buildAttachmentLinkSections(attachments []model.Attachment) string {
+	var imgSection, docSection strings.Builder
+	seenDocLinks := make(map[string]bool)
+	for _, att := range attachments {
+		if att.Status != model.AttachStatusDone {
+			continue
+		}
+		safeName := sanitizeMarkdownText(att.FileName)
+		if att.ProcessedContent != "" && att.Type != model.AttachTypeDocument {
+			imgSection.WriteString(fmt.Sprintf(
+				"\n### %s\n![%s](attachment://%s)\n",
+				safeName, safeName, att.AttachmentID,
+			))
+		} else if att.Type == model.AttachTypeDocument && att.FileName != "" && !seenDocLinks[att.AttachmentID] {
+			seenDocLinks[att.AttachmentID] = true
+			docSection.WriteString(fmt.Sprintf(
+				"- [%s](attachment://%s)\n", safeName, att.AttachmentID,
+			))
+		}
+	}
+	if imgSection.Len() == 0 && docSection.Len() == 0 {
+		return ""
+	}
+	out := "\n\n---\n\n" + attachmentSentinel
+	if imgSection.Len() > 0 {
+		out += "\n## 첨부 이미지\n" + imgSection.String()
+	}
+	if docSection.Len() > 0 {
+		out += "\n## 첨부 문서\n" + docSection.String()
+	}
+	return out
+}
+
 func buildAttachmentContext(attachments []model.Attachment) string {
 	var analyses strings.Builder
 	hasDiagram := false
@@ -552,39 +604,8 @@ ADR-013 — 트랜스크립트 딥 링크:
 	// links for document attachments (PPTX/PDF/DOCX/MD — never content-
 	// extracted, so this link list is the only way they surface in the note).
 	// Frontend resolves attachment:// URLs to presigned S3 URLs at render time.
-	const attachmentSentinel = "<!-- ttobak:attachments -->"
 	if len(attachments) > 0 && !strings.Contains(content, attachmentSentinel) {
-		var imgSection, docSection strings.Builder
-		// Dedup by AttachmentID, not FileName: two DIFFERENT documents that
-		// happen to share a name must both keep their links (each resolves
-		// to its own object); genuinely duplicated rows share the ID.
-		seenDocLinks := make(map[string]bool)
-		for _, att := range attachments {
-			if att.Status != model.AttachStatusDone {
-				continue
-			}
-			safeName := sanitizeMarkdownText(att.FileName)
-			if att.ProcessedContent != "" {
-				imgSection.WriteString(fmt.Sprintf(
-					"\n### %s\n![%s](attachment://%s)\n",
-					safeName, safeName, att.AttachmentID,
-				))
-			} else if att.Type == model.AttachTypeDocument && att.FileName != "" && !seenDocLinks[att.AttachmentID] {
-				seenDocLinks[att.AttachmentID] = true
-				docSection.WriteString(fmt.Sprintf(
-					"- [%s](attachment://%s)\n", safeName, att.AttachmentID,
-				))
-			}
-		}
-		if imgSection.Len() > 0 || docSection.Len() > 0 {
-			content += "\n\n---\n\n" + attachmentSentinel
-			if imgSection.Len() > 0 {
-				content += "\n## 첨부 이미지\n" + imgSection.String()
-			}
-			if docSection.Len() > 0 {
-				content += "\n## 첨부 문서\n" + docSection.String()
-			}
-		}
+		content += buildAttachmentLinkSections(attachments)
 	}
 
 	if err := s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{

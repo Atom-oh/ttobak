@@ -262,6 +262,11 @@ def _sigv4_post(body_json: str) -> str:
     """
     if not WEB_SEARCH_GATEWAY_URL:
         raise RuntimeError('WEB_SEARCH_GATEWAY_URL is not set')
+    # A misconfigured http:// endpoint would send the SigV4 Authorization
+    # header (and the query) in cleartext — refuse rather than degrade.
+    # (Backported from qa/web_search.py's copy.)
+    if not WEB_SEARCH_GATEWAY_URL.startswith('https://'):
+        raise RuntimeError('WEB_SEARCH_GATEWAY_URL must be https')
     session = botocore.session.get_session()
     credentials = session.get_credentials()
     if credentials is None:
@@ -277,7 +282,9 @@ def _sigv4_post(body_json: str) -> str:
     body = prepared.body.encode('utf-8') if isinstance(prepared.body, str) else prepared.body
     req = Request(prepared.url, data=body, headers=dict(prepared.headers), method='POST')
     with urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
-        return _extract_sse_json(resp.read().decode('utf-8'))
+        # Bounded read: a misbehaving upstream must not balloon Lambda
+        # memory. 2MB is far above any real search response.
+        return _extract_sse_json(resp.read(2_000_000).decode('utf-8', errors='replace'))
 
 
 def _gateway_web_search(query: str, max_results: int = 10) -> tuple:
