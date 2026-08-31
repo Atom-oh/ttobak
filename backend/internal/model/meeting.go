@@ -315,6 +315,10 @@ const (
 	PrefixConfig     = "CONFIG"
 	PrefixResearch   = "RESEARCH#"
 
+	// (The qa Lambda's web-search hourly rate-limit counter — Python-only,
+	// USER#{id}/WEBSEARCH_HOURLY#{YYYY-MM-DDTHH}, no Go model — shares
+	// PendingShare's `pendingShareExpiresAt` TTL attribute deliberately, to
+	// opt into the table sweep; see qa/handler.py's check_web_search_limit.)
 	// PrefixPendingShare / PrefixPendingAccount / PrefixPendingMeeting key the
 	// PendingShare item below: PK: PENDING_SHARE#{email}, SK:
 	// PENDING_ACCOUNT#{accountId} or PENDING_MEETING#{meetingId}.

@@ -2076,5 +2076,19 @@ class TestRecordHistory(unittest.TestCase):
             news_crawler._record_history('wooribank', 1, 0, [], start_time=0.0)  # must not raise
 
 
+class TestSigv4PostHttpsGuard(unittest.TestCase):
+    def test_raises_on_non_https_gateway_url(self):
+        # An http:// endpoint would send the SigV4 Authorization header (and
+        # the query) in cleartext — refuse rather than degrade. Kept in sync
+        # with the qa/web_search.py and research-agent copies.
+        original = news_crawler.WEB_SEARCH_GATEWAY_URL
+        try:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = 'http://gw.example/mcp'
+            with self.assertRaises(RuntimeError):
+                news_crawler._sigv4_post('{}')
+        finally:
+            news_crawler.WEB_SEARCH_GATEWAY_URL = original
+
+
 if __name__ == '__main__':
     unittest.main()

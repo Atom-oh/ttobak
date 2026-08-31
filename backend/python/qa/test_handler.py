@@ -487,7 +487,9 @@ class TestWebSearchTool(unittest.TestCase):
         with mock.patch.object(tools, 'gateway_web_search', return_value=([
             {'title': 'T', 'url': 'https://example.com/x', 'text': 's'},
         ], None)) as mocked:
-            text, sources = tools.execute_tool('search_web', {'query': 'q', 'maxResults': 3}, {})
+            text, sources = tools.execute_tool(
+                'search_web', {'query': 'q', 'maxResults': 3},
+                {'user_id': 'u1', 'check_web_search_limit': lambda uid: True})
         mocked.assert_called_once_with('q', 3)
         self.assertIn('https://example.com/x', text)
         self.assertEqual(sources, ['https://example.com/x'])
@@ -505,7 +507,9 @@ class TestWebSearchTool(unittest.TestCase):
         import tools
         for bad in (0, -3, 'x'):
             with mock.patch.object(tools, 'gateway_web_search', return_value=([], None)) as mocked:
-                tools.execute_tool('search_web', {'query': 'q', 'maxResults': bad}, {})
+                tools.execute_tool(
+                    'search_web', {'query': 'q', 'maxResults': bad},
+                    {'user_id': 'u1', 'check_web_search_limit': lambda uid: True})
             self.assertGreaterEqual(mocked.call_args[0][1], 1, f'maxResults={bad!r} not clamped')
 
     def test_non_http_urls_filtered_from_results(self):
@@ -542,19 +546,35 @@ class TestWebSearchTool(unittest.TestCase):
         self.assertIn('https://en.example.com/wiki/Foo_%28bar%29', text)
         self.assertNotIn('Foo_(bar)', text)
 
-    def test_redact_tool_input_masks_search_web_query_only(self):
-        # The agentic loop logs every tool call's input — search_web's query
-        # is conversation-derived and must be hashed there, exactly like
-        # web_search.py's own logs; other tools' inputs pass through.
+    def test_redact_tool_input_masks_free_text_keys_for_any_tool(self):
+        # The agentic loop logs every tool call's input — free-text keys are
+        # conversation-derived regardless of which tool carries them, so the
+        # mask is key-based (a fixed blocklist of known free-text keys),
+        # not search_web-specific. Identifier keys stay loggable.
         import web_search
         redacted = web_search.redact_tool_input_for_log('search_web', {'query': '민감한 고객사 키워드', 'maxResults': 3})
         self.assertNotIn('민감한', json.dumps(redacted, ensure_ascii=False))
         self.assertTrue(redacted['query'].startswith('q#'))
         self.assertEqual(redacted['maxResults'], 3)
-        untouched = web_search.redact_tool_input_for_log('list_meetings', {'keyword': '고객사'})
-        self.assertEqual(untouched, {'keyword': '고객사'})
-        # A schema-defying non-string query must be fully masked, not passed
-        # through as-is (it could embed the conversation text in a list/dict).
+        # search_transcript/list_meetings carry the same conversation text
+        # under different key names — masked too.
+        st = web_search.redact_tool_input_for_log('search_transcript', {'keywords': '고객사 이전 계획'})
+        self.assertTrue(st['keywords'].startswith('q#'))
+        lm = web_search.redact_tool_input_for_log('list_meetings', {'keyword': '고객사', 'limit': 5})
+        self.assertTrue(lm['keyword'].startswith('q#'))
+        self.assertEqual(lm['limit'], 5)
+        # 'account' is a customer NAME/alias per the tool schema (예: 하나은행),
+        # not an opaque id — the top sensitivity class in ADR-028's threat
+        # model must never appear in logs.
+        ai = web_search.redact_tool_input_for_log('get_account_insights', {'account': '하나은행', 'from': '2026-08-01T00:00:00Z'})
+        self.assertTrue(ai['account'].startswith('q#'))
+        self.assertEqual(ai['from'], '2026-08-01T00:00:00Z')
+        # Identifier-shaped inputs pass through untouched.
+        gm = web_search.redact_tool_input_for_log('get_meeting_detail', {'meetingId': 'm-123'})
+        self.assertEqual(gm, {'meetingId': 'm-123'})
+        # A schema-defying non-string value under a free-text key must be
+        # fully masked, not passed through (it could embed the conversation
+        # text in a list/dict).
         weird = web_search.redact_tool_input_for_log('search_web', {'query': ['민감', '키워드']})
         self.assertEqual(weird['query'], '<redacted non-string>')
 
@@ -563,6 +583,69 @@ class TestWebSearchTool(unittest.TestCase):
         with mock.patch.object(web_search, 'WEB_SEARCH_GATEWAY_URL', 'http://gw.example/mcp'):
             with self.assertRaises(RuntimeError):
                 web_search._sigv4_post('{}')
+
+
+class TestWebSearchRateLimit(unittest.TestCase):
+    """Server-side per-user hourly cap on search_web (ADR-028 follow-up):
+    atomic counter with over-limit compensation, fail-open on DynamoDB
+    errors, and a tool-level denial message distinct from no-results and
+    gateway errors so a capped user consumes no external quota."""
+
+    def setUp(self):
+        self.mock_table = mock.MagicMock()
+        patcher = mock.patch.object(handler, 'table', self.mock_table)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _counter_response(self, count):
+        return {'Attributes': {'count': count}}
+
+    def test_under_limit_allows(self):
+        self.mock_table.update_item.return_value = self._counter_response(1)
+        with mock.patch.object(handler, 'WEB_SEARCH_HOURLY_LIMIT', 30):
+            self.assertTrue(handler.check_web_search_limit('u1'))
+        self.assertEqual(self.mock_table.update_item.call_count, 1)
+
+    def test_over_limit_denies_and_compensates(self):
+        self.mock_table.update_item.return_value = self._counter_response(31)
+        with mock.patch.object(handler, 'WEB_SEARCH_HOURLY_LIMIT', 30):
+            self.assertFalse(handler.check_web_search_limit('u1'))
+        # Second update_item is the compensating decrement, so a burst of
+        # denied calls can't inflate the counter.
+        self.assertEqual(self.mock_table.update_item.call_count, 2)
+
+    def test_dynamodb_failure_fails_open(self):
+        self.mock_table.update_item.side_effect = RuntimeError('ddb down')
+        with mock.patch.object(handler, 'WEB_SEARCH_HOURLY_LIMIT', 30):
+            self.assertTrue(handler.check_web_search_limit('u1'))
+
+    def test_zero_limit_disables_check(self):
+        with mock.patch.object(handler, 'WEB_SEARCH_HOURLY_LIMIT', 0):
+            self.assertTrue(handler.check_web_search_limit('u1'))
+        self.mock_table.update_item.assert_not_called()
+
+    def test_capped_user_never_reaches_gateway(self):
+        import tools
+        with mock.patch.object(tools, 'gateway_web_search') as mocked_gw:
+            text, sources = tools.execute_tool(
+                'search_web', {'query': 'q'},
+                {'user_id': 'u1', 'check_web_search_limit': lambda uid: False},
+            )
+        mocked_gw.assert_not_called()
+        self.assertIn('한도', text)
+        self.assertNotIn('관련 결과를 찾지 못했습니다', text)
+        self.assertEqual(sources, [])
+
+    def test_missing_limit_context_denies_instead_of_unmetered(self):
+        # search_web is an external-egress tool: a context without user_id or
+        # the checker is a regression, and the safe default is denial, never
+        # an unmetered call.
+        import tools
+        with mock.patch.object(tools, 'gateway_web_search') as mocked_gw:
+            text, sources = tools.execute_tool('search_web', {'query': 'q'}, {'user_id': 'u1'})
+        mocked_gw.assert_not_called()
+        self.assertIn('수행할 수 없습니다', text)
+        self.assertEqual(sources, [])
 
 
 if __name__ == '__main__':

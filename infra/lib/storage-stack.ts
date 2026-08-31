@@ -47,6 +47,11 @@ export class StorageStack extends cdk.Stack {
       // that check and is dropped on the spot), since DynamoDB's sweep can
       // lag real time by up to 48 hours -- this setting only reclaims the
       // row physically once nothing needs it, not a correctness gate.
+      // One other row family deliberately opts INTO this sweep by writing
+      // the same attribute: the QA web-search hourly rate-limit counter
+      // (backend/python/qa/handler.py's check_web_search_limit,
+      // USER#{id}/WEBSEARCH_HOURLY#{hour}, 2h expiry) -- hourly counter
+      // rows are the one QA family that genuinely must be reclaimed.
       timeToLiveAttribute: 'pendingShareExpiresAt',
     });
 

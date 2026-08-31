@@ -280,6 +280,9 @@ export class GatewayStack extends cdk.Stack {
         // the model (costs one tool round; import never throws).
         WEB_SEARCH_GATEWAY_URL: props.webSearchGatewayUrl || '',
         WEB_SEARCH_GATEWAY_REGION: 'us-east-1',
+        // Server-side per-user hourly cap on search_web calls (ADR-028
+        // follow-up). '0' disables the check.
+        WEB_SEARCH_HOURLY_LIMIT: '30',
       },
       timeout: cdk.Duration.seconds(60),
       memorySize: 512,

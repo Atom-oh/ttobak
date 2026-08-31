@@ -3,6 +3,17 @@
 import { useState, useRef, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { qaApi } from '@/lib/api';
 import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
+import {
+  claimedProactiveQuestions,
+  proactiveAttemptCounts,
+  MAX_PROACTIVE_ATTEMPTS,
+  proactiveGuard,
+  proactiveSearchStore,
+  registerProactiveAttempt,
+  completeProactiveAsk,
+  rollbackProactiveClaimState,
+  type ProactiveBatch,
+} from '@/lib/proactiveSearch';
 import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
 
 interface LiveQAPanelProps {
@@ -10,8 +21,8 @@ interface LiveQAPanelProps {
   meetingId?: string;
   onDetectedQuestionsChange?: (count: number) => void;
   serverDetectedQuestions?: string[];
-  /** Detected questions flagged as search-answerable — the panel auto-fires the first new one */
-  proactiveQuestions?: string[];
+  /** One detection round's search-answerable questions, generation-tagged — the panel auto-fires at most one per generation */
+  proactiveBatch?: ProactiveBatch;
   onAskedQuestion?: (question: string) => void;
   /** Save a Q&A entry into the meeting notes */
   onSaveToNotes?: (question: string, answer: string) => void;
@@ -40,59 +51,12 @@ const suggestedQuestions = [
 
 const WS_URL = process.env.NEXT_PUBLIC_WEBSOCKET_URL || '';
 
-// Proactive questions already auto-fired, shared across ALL LiveQAPanel
-// instances: the desktop aside and the mobile bottom sheet are both MOUNTED
-// during recording (the desktop one is only CSS-hidden on mobile), so
-// instance-local dedup alone would double-fire every proactive search.
-// Keys are the bare question text — safe because the set is scoped to ONE
-// recording: resetProactiveClaims() below is called on every recording
-// start. (A meetingId-based namespace would be unstable instead: the id
-// appears mid-recording when the draft meeting is created, and a key that
-// flips `live|q` → `{id}|q` re-fires the same question.) A claim is rolled
-// back (deleted) when its ask fails — a WS stall/error must not permanently
-// consume a question that never got an answer.
-const claimedProactiveQuestions = new Set<string>();
-
-// Batch-consumption marker and in-flight flag live at MODULE scope, next to
-// the claim set, for the same reason the claim set does: both panel
-// instances stay mounted, so instance-local refs would let instance B
-// re-consume a batch instance A already fired from (breaking the "one
-// auto-ask per batch" cap with a possibly stale question) or fire while A's
-// proactive answer is still streaming.
-let consumedProactiveBatch: string[] | undefined;
-let proactiveAskInFlight = false;
-
-/** Clear proactive state for a new recording session. Called from the
- * record page's recording-start handler (alongside useLiveSummary.reset())
- * so the previous recording's fired questions can't shadow this one's. */
-export function resetProactiveClaims() {
-  claimedProactiveQuestions.clear();
-  consumedProactiveBatch = undefined;
-  proactiveAskInFlight = false;
-}
-
-// Proactive-search opt-in (default OFF — auto-firing sends conversation-
-// derived queries to an external web search provider). A tiny external
-// store, NOT per-instance state: both panel instances stay mounted, and an
-// instance-local copy read from localStorage once at mount would let a
-// toggle flipped OFF in one instance keep auto-firing from the other —
-// breaking the privacy control it exists to provide. `storage` events don't
-// fire within the same document, so the store notifies subscribers itself.
-const PROACTIVE_SEARCH_STORAGE_KEY = 'ttobak.proactiveSearchEnabled';
-const proactiveSearchListeners = new Set<() => void>();
-const proactiveSearchStore = {
-  get(): boolean {
-    try { return localStorage.getItem(PROACTIVE_SEARCH_STORAGE_KEY) === '1'; } catch { return false; }
-  },
-  set(value: boolean) {
-    try { localStorage.setItem(PROACTIVE_SEARCH_STORAGE_KEY, value ? '1' : '0'); } catch { /* stays off */ }
-    proactiveSearchListeners.forEach((l) => l());
-  },
-  subscribe(listener: () => void) {
-    proactiveSearchListeners.add(listener);
-    return () => { proactiveSearchListeners.delete(listener); };
-  },
-};
+// Cross-instance proactive-search state (claim set, batch/in-flight guards,
+// opt-in store) lives in lib/proactiveSearch.ts — both panel instances (the
+// desktop aside and the mobile bottom sheet) stay mounted simultaneously
+// during recording, so every one of these must be shared, and non-component
+// callers (record page's recording-start reset, auth.ts's logout opt-in
+// clear) need it without importing a component module.
 
 /** Tail-truncate to at most maxBytes of UTF-8, without splitting a multi-byte char. */
 function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): string | undefined {
@@ -104,7 +68,7 @@ function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): st
   return new TextDecoder().decode(bytes.slice(start));
 }
 
-export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, proactiveQuestions, onAskedQuestion, onSaveToNotes }: LiveQAPanelProps) {
+export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, proactiveBatch, onAskedQuestion, onSaveToNotes }: LiveQAPanelProps) {
   const [question, setQuestion] = useState('');
   const [qaHistory, setQaHistory] = useState<QAEntry[]>([]);
   const [isAsking, setIsAsking] = useState(false);
@@ -135,9 +99,12 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     if (!entryId) return;
     const claimed = proactiveClaimByEntryRef.current.get(entryId);
     if (claimed) {
-      claimedProactiveQuestions.delete(claimed);
       proactiveClaimByEntryRef.current.delete(entryId);
-      proactiveAskInFlight = false;
+      // Releases the claim (until MAX_PROACTIVE_ATTEMPTS) and this
+      // question's in-flight ownership; the consumed-batch GENERATION stays
+      // consumed — a retry waits for the next detection round's new id, so
+      // a persistent failure can't loop against the same batch.
+      rollbackProactiveClaimState(claimed);
     }
   }, []);
   // A proactive question is recorded as "asked" only on SUCCESS: recording
@@ -150,7 +117,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     const q = proactiveClaimByEntryRef.current.get(entryId);
     if (!q) return;
     proactiveClaimByEntryRef.current.delete(entryId);
-    proactiveAskInFlight = false;
+    completeProactiveAsk(q);
     setAskedQuestions(prev => (prev.includes(q) ? prev : [...prev, q]));
     onAskedQuestion?.(q);
   }, [onAskedQuestion]);
@@ -366,9 +333,11 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     return () => {
       wsRef.current?.disconnect();
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
-      pendingClaims.forEach((q) => claimedProactiveQuestions.delete(q));
-      if (pendingClaims.size > 0) proactiveAskInFlight = false;
+      pendingClaims.forEach((q) => rollbackProactiveClaimState(q));
       pendingClaims.clear();
+      // (rollbackProactiveClaimState only releases the in-flight flag for a
+      // question THIS instance owns — a sibling instance's live ask is
+      // untouched, and the consumed-batch generation is never rolled back.)
     };
   }, []);
 
@@ -409,9 +378,8 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     // a sibling panel instance's effect running in the same flush sees it as
     // taken. Registered per-entry so every failure path can roll it back.
     if (opts?.proactive) {
-      claimedProactiveQuestions.add(q.trim());
+      registerProactiveAttempt(q.trim());
       proactiveClaimByEntryRef.current.set(entryId, q.trim());
-      proactiveAskInFlight = true;
     }
 
     // Try WebSocket streaming first
@@ -527,38 +495,43 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   // screen by the time someone would have typed it. OFF by default —
   // auto-firing sends conversation-derived queries to an external web
   // search provider, so it requires the explicit header toggle (persisted
-  // opt-in). Guards keep it from becoming spam: at most ONE auto-ask per
-  // detection batch (a batch is consumed the moment it fires — the rest
-  // stay as tappable suggestion chips), each question auto-fires at most
-  // once per recording session ACROSS panel instances
-  // (claimedProactiveQuestions, module-level, claimed inside handleAsk,
-  // rolled back on failure, cleared on recording start via
-  // resetProactiveClaims),
-  // only the visible panel fires (isPanelVisible above), and nothing fires
-  // while another answer is in flight or while the user is composing their
-  // own question (an auto-ask would steal the single active-entry streaming
-  // slot). A batch arriving while blocked is held, not dropped: it stays
-  // unconsumed until an eligible render fires it. The consumed marker and
-  // the proactive in-flight flag are MODULE-level (see their declaration):
-  // an instance-local ref would let the OTHER mounted panel instance
-  // re-consume the same batch — a second, possibly stale auto-fire.
+  // per-user opt-in). Guards keep it from becoming spam: at most ONE
+  // auto-ask per detection GENERATION (ProactiveBatch.id — consumed the
+  // moment any instance fires from it and never re-armed by rollback; the
+  // rest of the batch stays as tappable suggestion chips), each question
+  // claims once per recording session across panel instances with a hard
+  // MAX_PROACTIVE_ATTEMPTS retry cap (claim rolled back on failure so the
+  // NEXT generation may retry, everything cleared on recording start via
+  // resetProactiveClaims), only the visible panel fires (isPanelVisible
+  // above), and nothing fires while a proactive ask is in flight anywhere,
+  // this instance is answering, or the user is composing their own question
+  // (an auto-ask would steal the single active-entry streaming slot). A
+  // batch arriving while blocked is held, not dropped: it stays unconsumed
+  // until an eligible render fires it. The guards are MODULE-level (see
+  // lib/proactiveSearch.ts): instance-local refs would let the OTHER
+  // mounted panel instance re-consume the same generation.
   useEffect(() => {
     if (!proactiveSearchEnabled) return;
-    if (!proactiveQuestions || proactiveQuestions.length === 0) return;
-    if (consumedProactiveBatch === proactiveQuestions) return;
-    if (proactiveAskInFlight || isAsking || question.trim() || !isPanelVisible) return;
-    const next = proactiveQuestions.find(
+    if (!proactiveBatch || proactiveBatch.questions.length === 0) return;
+    // Generation guard: each detection round fires at most once, across
+    // BOTH instances, and is never re-armed by a rollback — a failed ask
+    // retries only when the next round arrives with a new id (and only
+    // until MAX_PROACTIVE_ATTEMPTS, after which the question stays claimed).
+    if (proactiveGuard.consumedBatchId === proactiveBatch.id) return;
+    if (proactiveGuard.inFlightQuestion || isAsking || question.trim() || !isPanelVisible) return;
+    const next = proactiveBatch.questions.find(
       (q) =>
         q.trim() &&
         !claimedProactiveQuestions.has(q.trim()) &&
+        (proactiveAttemptCounts.get(q.trim()) ?? 0) < MAX_PROACTIVE_ATTEMPTS &&
         !askedQuestions.includes(q.trim()),
     );
-    consumedProactiveBatch = proactiveQuestions;
+    proactiveGuard.consumedBatchId = proactiveBatch.id;
     if (!next) return;
     handleAsk(next, { proactive: true });
     // handleAsk identity changes are harmless as a dep: the module-level
-    // consumed-batch marker prevents a re-run from refiring the same batch.
-  }, [proactiveSearchEnabled, proactiveQuestions, isAsking, question, askedQuestions, isPanelVisible, handleAsk]);
+    // consumed-generation marker prevents a re-run from refiring the batch.
+  }, [proactiveSearchEnabled, proactiveBatch, isAsking, question, askedQuestions, isPanelVisible, handleAsk]);
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
+import type { ProactiveBatch } from '@/lib/proactiveSearch';
 import { summaryApi, qaApi } from '@/lib/api';
 
 interface UseLiveSummaryOptions {
@@ -14,7 +15,12 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
   const [detectedQuestions, setDetectedQuestions] = useState<string[]>([]);
   // Subset of detectedQuestions the detector flagged as immediately
   // answerable via search — LiveQAPanel auto-fires the first new one.
-  const [proactiveQuestions, setProactiveQuestions] = useState<string[]>([]);
+  const [proactiveBatch, setProactiveBatch] = useState<ProactiveBatch | undefined>(undefined);
+  // Monotonic generation id for proactive batches: LiveQAPanel's consumed-
+  // batch guard compares this id, so each detection round is fireable at
+  // most once even when its question content is identical to the last —
+  // and a failed ask can retry only when a NEW round arrives.
+  const proactiveBatchSeqRef = useRef(0);
 
   const lastSummaryWordCountRef = useRef(0);
   const summaryIntervalRef = useRef(summaryInterval);
@@ -66,7 +72,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     setIsGenerating(false);
     setLastSummaryWordCount(0);
     setDetectedQuestions([]);
-    setProactiveQuestions([]);
+    setProactiveBatch(undefined);
     lastSummaryWordCountRef.current = 0;
     liveSummaryRef.current = '';
     askedQuestionsRef.current = [];
@@ -156,7 +162,11 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
         if (generation <= detectAppliedGenerationRef.current) return;
         detectAppliedGenerationRef.current = generation;
         setDetectedQuestions(res.questions);
-        setProactiveQuestions(res.proactive ?? []);
+        setProactiveBatch(
+          res.proactive && res.proactive.length > 0
+            ? { id: ++proactiveBatchSeqRef.current, questions: res.proactive }
+            : undefined,
+        );
       })
       .catch(() => {}); // silent fail
 
@@ -174,7 +184,7 @@ export function useLiveSummary({ summaryInterval }: UseLiveSummaryOptions) {
     isGenerating,
     lastSummaryWordCount,
     detectedQuestions,
-    proactiveQuestions,
+    proactiveBatch,
     askedQuestionsRef,
     checkThreshold,
     addAskedQuestion,

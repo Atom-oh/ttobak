@@ -189,6 +189,20 @@ class _SSRFSafeRedirectHandler(HTTPRedirectHandler):
 _ssrf_safe_opener = build_opener(_SSRFSafeRedirectHandler)
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Refuse HTTP redirects on the SigV4-signed gateway call: urlopen's
+    default handler re-sends headers — including Authorization — to the
+    redirect target, so a redirect could downgrade or exfiltrate the
+    signature. The AWS-managed gateway endpoint never legitimately
+    redirects. Kept in sync across the three gateway-caller copies."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RuntimeError(f"gateway redirect refused (HTTP {code})")
+
+
+_no_redirect_opener = build_opener(_NoRedirectHandler())
+
+
 def _fetch_url(url: str, timeout: int = FETCH_TIMEOUT_SECONDS) -> str:
     if not url.startswith(('http://', 'https://')):
         raise ValueError(f'Unsupported URL scheme: {url[:30]}')
@@ -262,6 +276,11 @@ def _sigv4_post(body_json: str) -> str:
     """
     if not WEB_SEARCH_GATEWAY_URL:
         raise RuntimeError('WEB_SEARCH_GATEWAY_URL is not set')
+    # A misconfigured http:// endpoint would send the SigV4 Authorization
+    # header (and the query) in cleartext — refuse rather than degrade.
+    # (Backported from qa/web_search.py's copy.)
+    if not WEB_SEARCH_GATEWAY_URL.startswith('https://'):
+        raise RuntimeError('WEB_SEARCH_GATEWAY_URL must be https')
     session = botocore.session.get_session()
     credentials = session.get_credentials()
     if credentials is None:
@@ -276,8 +295,10 @@ def _sigv4_post(body_json: str) -> str:
     prepared = request.prepare()
     body = prepared.body.encode('utf-8') if isinstance(prepared.body, str) else prepared.body
     req = Request(prepared.url, data=body, headers=dict(prepared.headers), method='POST')
-    with urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
-        return _extract_sse_json(resp.read().decode('utf-8'))
+    with _no_redirect_opener.open(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
+        # Bounded read: a misbehaving upstream must not balloon Lambda
+        # memory. 2MB is far above any real search response.
+        return _extract_sse_json(resp.read(2_000_000).decode('utf-8', errors='replace'))
 
 
 def _gateway_web_search(query: str, max_results: int = 10) -> tuple:

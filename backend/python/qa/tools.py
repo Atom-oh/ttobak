@@ -174,6 +174,23 @@ def execute_tool(tool_name, tool_input, context):
     """
     try:
         if tool_name == "search_web":
+            # Server-side per-user hourly cap (ADR-028 follow-up): checked
+            # BEFORE the gateway call so a capped user consumes no external
+            # search quota. The message is distinct from both "no results"
+            # and "gateway error" so the model reports the limit instead of
+            # retrying or hallucinating over an outage.
+            user_id = context.get("user_id")
+            check_fn = context.get("check_web_search_limit")
+            if not user_id or not check_fn:
+                # Every real caller is authenticated and wires the checker, so
+                # this branch is a context regression. search_web is an
+                # external-egress tool — fail CLOSED rather than run unmetered.
+                logger.warning("search_web called without user_id/limit checker — denying")
+                return ("웹 검색을 수행할 수 없습니다 (사용자 인증 정보 없음). "
+                        "검색 없이 아는 범위에서 답하세요."), []
+            if not check_fn(user_id):
+                return ("웹 검색 시간당 한도에 도달했습니다. 검색 없이 아는 범위에서 답하고, "
+                        "잠시 후 다시 시도할 수 있다고 안내하세요."), []
             # Clamp to [1, 10]: a model-supplied 0/negative value would slice
             # to [] with error=None, which reads as a genuine "no results" —
             # exactly the failure/no-results ambiguity format_web_results

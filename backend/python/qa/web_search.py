@@ -14,7 +14,7 @@ import hashlib
 import json
 import logging
 import os
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import botocore.session
 from botocore.auth import SigV4Auth
@@ -27,6 +27,20 @@ WEB_SEARCH_GATEWAY_REGION = os.environ.get('WEB_SEARCH_GATEWAY_REGION', 'us-east
 # Live QA streams the answer to a waiting human — keep the search bounded so
 # one slow upstream fetch can't eat the whole answer round.
 FETCH_TIMEOUT_SECONDS = 15
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Refuse HTTP redirects on the SigV4-signed gateway call: urlopen's
+    default handler re-sends headers — including Authorization — to the
+    redirect target, so a redirect could downgrade or exfiltrate the
+    signature. The AWS-managed gateway endpoint never legitimately
+    redirects. Kept in sync across the three gateway-caller copies."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RuntimeError(f'gateway redirect refused (HTTP {code})')
+
+
+_no_redirect_opener = build_opener(_NoRedirectHandler())
 
 
 def _extract_sse_json(text):
@@ -81,7 +95,7 @@ def _sigv4_post(body_json):
     prepared = request.prepare()
     body = prepared.body.encode('utf-8') if isinstance(prepared.body, str) else prepared.body
     req = Request(prepared.url, data=body, headers=dict(prepared.headers), method='POST')
-    with urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
+    with _no_redirect_opener.open(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
         # Bounded read: a misbehaving upstream must not balloon Lambda memory.
         # 2MB is far above any real search response (a handful of snippets).
         return _extract_sse_json(resp.read(2_000_000).decode('utf-8', errors='replace'))
@@ -105,19 +119,36 @@ def _query_ref(query):
     return f'q#{digest}/len={len(query)}'
 
 
+# Free-text input keys across ALL tools: their values are model-composed and
+# can derive from meeting conversation (search_web.query, search_transcript.
+# keywords, list_meetings.keyword, get_aws_recommendation.useCase,
+# start_research.topic, search_knowledge_base/search_aws_docs.query, and
+# get_account_insights/get_account_brief.account — per its schema a customer
+# NAME or alias, e.g. '하나은행', the top sensitivity class in ADR-028's
+# threat model, NOT an opaque id) — hash them all in logs. Truly
+# identifier-shaped keys (meetingId, RFC3339 dates, numeric limits) stay
+# loggable for debugging. NOTE: this is a fixed blocklist of known free-text
+# keys (allow-by-default for unknown keys) — when adding a tool with a new
+# free-text input key, add the key here.
+_FREE_TEXT_INPUT_KEYS = frozenset({'query', 'keywords', 'keyword', 'useCase', 'topic', 'account'})
+
+
 def redact_tool_input_for_log(tool_name, tool_input):
-    """Return a log-safe copy of a tool input: search_web's query is replaced
-    with its _query_ref (the agentic loop logs every tool call's input, and a
-    plaintext query there would defeat this module's own hashed logging). A
-    non-string query (model ignoring the schema) is fully masked rather than
-    passed through. Other tools' inputs pass through unchanged — they carry
-    meeting/account identifiers, not free conversation text."""
-    if tool_name != 'search_web' or not isinstance(tool_input, dict):
+    """Return a log-safe copy of a tool input for the agentic loop's
+    tool-call log: every free-text key (see _FREE_TEXT_INPUT_KEYS) is
+    replaced with its _query_ref, tool-independent — search_transcript's
+    keywords and list_meetings' keyword are just as conversation-derived as
+    search_web's query, so a search_web-only mask would leak the same text
+    through a neighboring tool. A non-string value under a free-text key
+    (model ignoring the schema) is fully masked rather than passed through.
+    tool_name is kept for call-site readability and future per-tool rules."""
+    del tool_name  # redaction is key-based, not tool-based
+    if not isinstance(tool_input, dict):
         return tool_input
     redacted = dict(tool_input)
-    if 'query' in redacted:
-        q = redacted['query']
-        redacted['query'] = _query_ref(q) if isinstance(q, str) else '<redacted non-string>'
+    for key in _FREE_TEXT_INPUT_KEYS & redacted.keys():
+        v = redacted[key]
+        redacted[key] = _query_ref(v) if isinstance(v, str) else '<redacted non-string>'
     return redacted
 
 
