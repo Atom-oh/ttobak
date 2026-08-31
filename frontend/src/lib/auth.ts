@@ -8,7 +8,7 @@ import {
   CognitoRefreshToken,
 } from 'amazon-cognito-identity-js';
 
-import { proactiveSearchStore } from './proactiveSearch';
+import { proactiveSearchStore, resetProactiveClaims } from './proactiveSearch';
 import { getRuntimeConfig } from './runtimeConfig';
 
 let userPoolPromise: Promise<CognitoUserPool> | null = null;
@@ -162,10 +162,12 @@ export async function signOut(): Promise<void> {
   localStorage.removeItem('accessToken');
   localStorage.removeItem('refreshToken');
   // The proactive-search opt-in consents to sending conversation-derived
-  // queries to an external search provider — it's origin-wide localStorage,
-  // so on a shared browser it must not carry over to the next person who
-  // logs in. Back to the OFF default on every sign-out.
+  // queries to an external search provider — drop this user's stored
+  // consent and the in-memory claim state on explicit sign-out (symmetric
+  // with AuthProvider's expiry teardown; the per-user storage key is what
+  // covers the quiet-expiry path neither callback sees).
   proactiveSearchStore.clear();
+  resetProactiveClaims();
 }
 
 export async function getCurrentUser(): Promise<AuthUser | null> {

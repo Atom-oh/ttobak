@@ -118,8 +118,9 @@ func TestBuildAttachmentLinkSections(t *testing.T) {
 	tests := []struct {
 		name        string
 		attachments []model.Attachment
-		want        []string // substrings that must appear
-		notWant     []string // substrings that must NOT appear
+		want        []string       // substrings that must appear
+		notWant     []string       // substrings that must NOT appear
+		wantCounts  map[string]int // exact substring occurrence counts
 	}{
 		{
 			name: "image and document render under their own sections, with the sentinel",
@@ -138,7 +139,14 @@ func TestBuildAttachmentLinkSections(t *testing.T) {
 				{AttachmentID: "doc-1", Type: model.AttachTypeDocument, FileName: "spec.pdf", Status: model.AttachStatusDone},
 				{AttachmentID: "doc-1", Type: model.AttachTypeDocument, FileName: "spec.pdf", Status: model.AttachStatusDone},
 			},
-			want: []string{"attachment://doc-1"},
+			wantCounts: map[string]int{"attachment://doc-1": 1},
+		},
+		{
+			name: "image row without a filename renders no empty heading",
+			attachments: []model.Attachment{
+				{AttachmentID: "img-1", Type: model.AttachTypePhoto, ProcessedContent: "분석", Status: model.AttachStatusDone},
+			},
+			notWant: []string{"첨부"},
 		},
 		{
 			name:        "empty input produces nothing",
@@ -186,12 +194,13 @@ func TestBuildAttachmentLinkSections(t *testing.T) {
 					t.Fatalf("unexpected %q in: %q", nw, got)
 				}
 			}
-			if len(tt.want) == 0 && got != "" {
+			if len(tt.want) == 0 && len(tt.wantCounts) == 0 && got != "" {
 				t.Fatalf("expected empty tail, got: %q", got)
 			}
-			if tt.name == "duplicated rows sharing an AttachmentID link once" &&
-				strings.Count(got, "attachment://doc-1") != 1 {
-				t.Fatalf("same-ID duplicate not deduplicated: %q", got)
+			for sub, count := range tt.wantCounts {
+				if strings.Count(got, sub) != count {
+					t.Fatalf("want %d occurrences of %q, got %d in: %q", count, sub, strings.Count(got, sub), got)
+				}
 			}
 		})
 	}

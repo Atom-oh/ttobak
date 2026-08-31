@@ -5,10 +5,14 @@ import { qaApi } from '@/lib/api';
 import { RealtimeWebSocket, type WebSocketMessage } from '@/lib/websocket';
 import {
   claimedProactiveQuestions,
+  proactiveAttemptCounts,
+  MAX_PROACTIVE_ATTEMPTS,
   proactiveGuard,
-  proactiveBatchKey,
   proactiveSearchStore,
+  registerProactiveAttempt,
+  completeProactiveAsk,
   rollbackProactiveClaimState,
+  type ProactiveBatch,
 } from '@/lib/proactiveSearch';
 import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
 
@@ -17,8 +21,8 @@ interface LiveQAPanelProps {
   meetingId?: string;
   onDetectedQuestionsChange?: (count: number) => void;
   serverDetectedQuestions?: string[];
-  /** Detected questions flagged as search-answerable — the panel auto-fires the first new one */
-  proactiveQuestions?: string[];
+  /** One detection round's search-answerable questions, generation-tagged — the panel auto-fires at most one per generation */
+  proactiveBatch?: ProactiveBatch;
   onAskedQuestion?: (question: string) => void;
   /** Save a Q&A entry into the meeting notes */
   onSaveToNotes?: (question: string, answer: string) => void;
@@ -64,7 +68,7 @@ function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): st
   return new TextDecoder().decode(bytes.slice(start));
 }
 
-export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, proactiveQuestions, onAskedQuestion, onSaveToNotes }: LiveQAPanelProps) {
+export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, proactiveBatch, onAskedQuestion, onSaveToNotes }: LiveQAPanelProps) {
   const [question, setQuestion] = useState('');
   const [qaHistory, setQaHistory] = useState<QAEntry[]>([]);
   const [isAsking, setIsAsking] = useState(false);
@@ -96,9 +100,10 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     const claimed = proactiveClaimByEntryRef.current.get(entryId);
     if (claimed) {
       proactiveClaimByEntryRef.current.delete(entryId);
-      // Also un-consumes the (content-keyed) batch marker — see
-      // rollbackProactiveClaimState's comment for why a rollback that left
-      // the marker set would permanently consume the question.
+      // Releases the claim (until MAX_PROACTIVE_ATTEMPTS) and this
+      // question's in-flight ownership; the consumed-batch GENERATION stays
+      // consumed — a retry waits for the next detection round's new id, so
+      // a persistent failure can't loop against the same batch.
       rollbackProactiveClaimState(claimed);
     }
   }, []);
@@ -112,7 +117,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     const q = proactiveClaimByEntryRef.current.get(entryId);
     if (!q) return;
     proactiveClaimByEntryRef.current.delete(entryId);
-    proactiveGuard.askInFlight = false;
+    completeProactiveAsk(q);
     setAskedQuestions(prev => (prev.includes(q) ? prev : [...prev, q]));
     onAskedQuestion?.(q);
   }, [onAskedQuestion]);
@@ -330,6 +335,9 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
       pendingClaims.forEach((q) => rollbackProactiveClaimState(q));
       pendingClaims.clear();
+      // (rollbackProactiveClaimState only releases the in-flight flag for a
+      // question THIS instance owns — a sibling instance's live ask is
+      // untouched, and the consumed-batch generation is never rolled back.)
     };
   }, []);
 
@@ -370,9 +378,8 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     // a sibling panel instance's effect running in the same flush sees it as
     // taken. Registered per-entry so every failure path can roll it back.
     if (opts?.proactive) {
-      claimedProactiveQuestions.add(q.trim());
+      registerProactiveAttempt(q.trim());
       proactiveClaimByEntryRef.current.set(entryId, q.trim());
-      proactiveGuard.askInFlight = true;
     }
 
     // Try WebSocket streaming first
@@ -488,38 +495,43 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   // screen by the time someone would have typed it. OFF by default —
   // auto-firing sends conversation-derived queries to an external web
   // search provider, so it requires the explicit header toggle (persisted
-  // opt-in). Guards keep it from becoming spam: at most ONE auto-ask per
-  // detection batch (a batch is consumed the moment it fires — the rest
-  // stay as tappable suggestion chips), each question auto-fires at most
-  // once per recording session ACROSS panel instances
-  // (claimedProactiveQuestions, module-level, claimed inside handleAsk,
-  // rolled back on failure, cleared on recording start via
-  // resetProactiveClaims),
-  // only the visible panel fires (isPanelVisible above), and nothing fires
-  // while another answer is in flight or while the user is composing their
-  // own question (an auto-ask would steal the single active-entry streaming
-  // slot). A batch arriving while blocked is held, not dropped: it stays
-  // unconsumed until an eligible render fires it. The consumed marker and
-  // the proactive in-flight flag are MODULE-level (see their declaration):
-  // an instance-local ref would let the OTHER mounted panel instance
-  // re-consume the same batch — a second, possibly stale auto-fire.
+  // per-user opt-in). Guards keep it from becoming spam: at most ONE
+  // auto-ask per detection GENERATION (ProactiveBatch.id — consumed the
+  // moment any instance fires from it and never re-armed by rollback; the
+  // rest of the batch stays as tappable suggestion chips), each question
+  // claims once per recording session across panel instances with a hard
+  // MAX_PROACTIVE_ATTEMPTS retry cap (claim rolled back on failure so the
+  // NEXT generation may retry, everything cleared on recording start via
+  // resetProactiveClaims), only the visible panel fires (isPanelVisible
+  // above), and nothing fires while a proactive ask is in flight anywhere,
+  // this instance is answering, or the user is composing their own question
+  // (an auto-ask would steal the single active-entry streaming slot). A
+  // batch arriving while blocked is held, not dropped: it stays unconsumed
+  // until an eligible render fires it. The guards are MODULE-level (see
+  // lib/proactiveSearch.ts): instance-local refs would let the OTHER
+  // mounted panel instance re-consume the same generation.
   useEffect(() => {
     if (!proactiveSearchEnabled) return;
-    if (!proactiveQuestions || proactiveQuestions.length === 0) return;
-    if (proactiveGuard.consumedBatchKey === proactiveBatchKey(proactiveQuestions)) return;
-    if (proactiveGuard.askInFlight || isAsking || question.trim() || !isPanelVisible) return;
-    const next = proactiveQuestions.find(
+    if (!proactiveBatch || proactiveBatch.questions.length === 0) return;
+    // Generation guard: each detection round fires at most once, across
+    // BOTH instances, and is never re-armed by a rollback — a failed ask
+    // retries only when the next round arrives with a new id (and only
+    // until MAX_PROACTIVE_ATTEMPTS, after which the question stays claimed).
+    if (proactiveGuard.consumedBatchId === proactiveBatch.id) return;
+    if (proactiveGuard.inFlightQuestion || isAsking || question.trim() || !isPanelVisible) return;
+    const next = proactiveBatch.questions.find(
       (q) =>
         q.trim() &&
         !claimedProactiveQuestions.has(q.trim()) &&
+        (proactiveAttemptCounts.get(q.trim()) ?? 0) < MAX_PROACTIVE_ATTEMPTS &&
         !askedQuestions.includes(q.trim()),
     );
-    proactiveGuard.consumedBatchKey = proactiveBatchKey(proactiveQuestions);
+    proactiveGuard.consumedBatchId = proactiveBatch.id;
     if (!next) return;
     handleAsk(next, { proactive: true });
     // handleAsk identity changes are harmless as a dep: the module-level
-    // consumed-batch marker prevents a re-run from refiring the same batch.
-  }, [proactiveSearchEnabled, proactiveQuestions, isAsking, question, askedQuestions, isPanelVisible, handleAsk]);
+    // consumed-generation marker prevents a re-run from refiring the batch.
+  }, [proactiveSearchEnabled, proactiveBatch, isAsking, question, askedQuestions, isPanelVisible, handleAsk]);
 
   return (
     <div className="flex flex-col h-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">

@@ -14,7 +14,7 @@ import hashlib
 import json
 import logging
 import os
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import botocore.session
 from botocore.auth import SigV4Auth
@@ -27,6 +27,20 @@ WEB_SEARCH_GATEWAY_REGION = os.environ.get('WEB_SEARCH_GATEWAY_REGION', 'us-east
 # Live QA streams the answer to a waiting human — keep the search bounded so
 # one slow upstream fetch can't eat the whole answer round.
 FETCH_TIMEOUT_SECONDS = 15
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    """Refuse HTTP redirects on the SigV4-signed gateway call: urlopen's
+    default handler re-sends headers — including Authorization — to the
+    redirect target, so a redirect could downgrade or exfiltrate the
+    signature. The AWS-managed gateway endpoint never legitimately
+    redirects. Kept in sync across the three gateway-caller copies."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RuntimeError(f'gateway redirect refused (HTTP {code})')
+
+
+_no_redirect_opener = build_opener(_NoRedirectHandler())
 
 
 def _extract_sse_json(text):
@@ -81,7 +95,7 @@ def _sigv4_post(body_json):
     prepared = request.prepare()
     body = prepared.body.encode('utf-8') if isinstance(prepared.body, str) else prepared.body
     req = Request(prepared.url, data=body, headers=dict(prepared.headers), method='POST')
-    with urlopen(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
+    with _no_redirect_opener.open(req, timeout=FETCH_TIMEOUT_SECONDS) as resp:
         # Bounded read: a misbehaving upstream must not balloon Lambda memory.
         # 2MB is far above any real search response (a handful of snippets).
         return _extract_sse_json(resp.read(2_000_000).decode('utf-8', errors='replace'))

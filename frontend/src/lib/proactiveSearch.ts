@@ -4,13 +4,29 @@
  * Shared mutable state for the live QA panel's proactive search feature.
  *
  * Lives in lib/, NOT inside the LiveQAPanel component module, for two
- * reasons: (a) repo layering — non-component modules (auth.ts's signOut,
+ * reasons: (a) repo layering — non-component modules (auth.ts, AuthProvider,
  * the record page) need to import pieces of this without importing a
  * component file; (b) all of this state is deliberately shared across BOTH
  * LiveQAPanel instances (the desktop aside and the mobile bottom sheet are
  * simultaneously mounted during recording, the desktop one only CSS-hidden
  * on mobile), so instance-local state would break every guarantee here.
  */
+
+/**
+ * One detection round's proactive questions, tagged with a monotonically
+ * increasing generation id (useLiveSummary assigns it per guarded detect
+ * response). The id — not the question content — is what the consumed-batch
+ * guard below compares: a batch fires at most once per GENERATION, so a
+ * failed ask can retry when the NEXT detection round re-proposes the same
+ * question (new id, same content), but never in a tight loop within the
+ * same round. Content-key comparison broke one way or the other: kept on
+ * rollback it consumed identical re-detections forever; cleared on rollback
+ * it let a persistent WS failure refire the same question unboundedly.
+ */
+export interface ProactiveBatch {
+  id: number;
+  questions: string[];
+}
 
 /**
  * Proactive questions already auto-fired this recording session. Keys are
@@ -20,54 +36,81 @@
  * mid-recording when the draft meeting is created, and a key that flips
  * `live|q` → `{id}|q` re-fires the same question.) A claim is rolled back
  * (deleted) when its ask fails — a WS stall/error must not permanently
- * consume a question that never got an answer.
+ * consume a question that never got an answer — but each rollback counts
+ * against MAX_PROACTIVE_ATTEMPTS below.
  */
 export const claimedProactiveQuestions = new Set<string>();
 
 /**
- * Batch-consumption marker + in-flight flag, shared across instances for
- * the same reason as the claim set: instance-local refs would let instance
- * B re-consume a batch instance A already fired from (breaking the "one
- * auto-ask per batch" cap with a possibly stale question) or fire while
- * A's proactive answer is still streaming. The batch marker is a CONTENT
- * key (joined question texts), not an array identity — the cap must hold
- * even if a future parent re-creates an identical array per render.
+ * Fire attempts per question this recording session (successes and
+ * failures alike). A question that failed MAX_PROACTIVE_ATTEMPTS times
+ * stays claimed forever — retry-on-new-generation must converge, not turn
+ * a persistently broken socket into a slow burn of the hourly search quota.
+ */
+export const proactiveAttemptCounts = new Map<string, number>();
+export const MAX_PROACTIVE_ATTEMPTS = 2;
+
+/**
+ * Cross-instance guards. consumedBatchId marks the last GENERATION any
+ * instance fired from (never rolled back — see ProactiveBatch's comment).
+ * inFlightQuestion is the one proactive ask currently streaming, tracked by
+ * question text so a rollback/success only releases the flight it owns — an
+ * instance's unmount cleanup must not unlock a sibling instance's live ask.
  */
 export const proactiveGuard = {
-  consumedBatchKey: undefined as string | undefined,
-  askInFlight: false,
+  consumedBatchId: undefined as number | undefined,
+  inFlightQuestion: undefined as string | undefined,
 };
 
-/** Content key for a proactive batch (see proactiveGuard.consumedBatchKey). */
-export function proactiveBatchKey(batch: string[]): string {
-  return JSON.stringify(batch);
+/**
+ * Register a fire attempt for `question` (called from handleAsk's
+ * synchronous claim block). Returns the attempt count including this one.
+ */
+export function registerProactiveAttempt(question: string): number {
+  const next = (proactiveAttemptCounts.get(question) ?? 0) + 1;
+  proactiveAttemptCounts.set(question, next);
+  claimedProactiveQuestions.add(question);
+  proactiveGuard.inFlightQuestion = question;
+  return next;
 }
 
 /**
  * Roll back one claimed question after its ask FAILED (WS stall/error, HTTP
- * failure, panel unmount mid-answer). Releases the claim and the in-flight
- * flag, and — critically — un-consumes the batch marker: the marker is a
- * CONTENT key, so without this a later re-detection of the identical batch
- * would early-return forever and the rolled-back question could never
- * retry, silently breaking the claim set's "a failure must not permanently
- * consume a question" invariant that identity-compared markers used to
- * preserve by accident.
+ * failure, panel unmount mid-answer). Releases the claim — unless the
+ * question has exhausted MAX_PROACTIVE_ATTEMPTS, in which case it stays
+ * claimed for the rest of the recording — and releases the in-flight flag
+ * only if this question owns it. The consumed-batch generation is
+ * deliberately NOT touched: a retry becomes possible only when the next
+ * detection round arrives with a new generation id, never by re-running
+ * the effect against the same batch.
  */
 export function rollbackProactiveClaimState(question: string) {
-  claimedProactiveQuestions.delete(question);
-  proactiveGuard.askInFlight = false;
-  proactiveGuard.consumedBatchKey = undefined;
+  if ((proactiveAttemptCounts.get(question) ?? 0) < MAX_PROACTIVE_ATTEMPTS) {
+    claimedProactiveQuestions.delete(question);
+  }
+  if (proactiveGuard.inFlightQuestion === question) {
+    proactiveGuard.inFlightQuestion = undefined;
+  }
+}
+
+/** Release the in-flight flag after `question`'s ask SUCCEEDED (claim sticks). */
+export function completeProactiveAsk(question: string) {
+  if (proactiveGuard.inFlightQuestion === question) {
+    proactiveGuard.inFlightQuestion = undefined;
+  }
 }
 
 /**
  * Clear proactive state for a new recording session. Called from the record
- * page's recording-start handler (alongside useLiveSummary.reset()) so the
- * previous recording's fired questions can't shadow this one's.
+ * page's recording-start handler (alongside useLiveSummary.reset()) and from
+ * auth teardown paths, so neither the previous recording's nor the previous
+ * user's fired questions can shadow the next session's.
  */
 export function resetProactiveClaims() {
   claimedProactiveQuestions.clear();
-  proactiveGuard.consumedBatchKey = undefined;
-  proactiveGuard.askInFlight = false;
+  proactiveAttemptCounts.clear();
+  proactiveGuard.consumedBatchId = undefined;
+  proactiveGuard.inFlightQuestion = undefined;
 }
 
 /**
@@ -79,25 +122,61 @@ export function resetProactiveClaims() {
  * — breaking the privacy control it exists to provide. `storage` events
  * don't fire within the same document, so the store notifies subscribers
  * itself.
+ *
+ * The storage key is NAMESPACED PER USER (Cognito sub, fed by AuthProvider
+ * via setProactiveSearchUser). External-transmission consent must never
+ * transfer between people on a shared browser, and an explicit-signOut-only
+ * clear cannot guarantee that: a session that quietly expires (browser
+ * closed, tokens lapse — no signOut, no 401 teardown) leaves a shared flag
+ * behind for whoever logs in next. With per-user keys the next user reads
+ * their OWN key (default OFF), while the same user returning keeps their
+ * choice. With no known user the store reads OFF and writes nowhere.
  */
 const PROACTIVE_SEARCH_STORAGE_KEY = 'ttobak.proactiveSearchEnabled';
 const proactiveSearchListeners = new Set<() => void>();
+let proactiveSearchUserId: string | null = null;
+
+function proactiveSearchStorageKey(): string | null {
+  return proactiveSearchUserId ? `${PROACTIVE_SEARCH_STORAGE_KEY}.${proactiveSearchUserId}` : null;
+}
+
+/**
+ * Bind the opt-in store to the signed-in user (null on logout/expiry).
+ * Called by AuthProvider whenever its user state changes — covering login,
+ * initial-load session restore, explicit logout, AND the quiet-expiry path
+ * where no teardown callback ever fires (the store simply has no user and
+ * reads OFF until someone signs in).
+ */
+export function setProactiveSearchUser(userId: string | null) {
+  if (proactiveSearchUserId === userId) return;
+  proactiveSearchUserId = userId;
+  proactiveSearchListeners.forEach((l) => l());
+}
+
 export const proactiveSearchStore = {
   get(): boolean {
-    try { return localStorage.getItem(PROACTIVE_SEARCH_STORAGE_KEY) === '1'; } catch { return false; }
+    const key = proactiveSearchStorageKey();
+    if (!key) return false;
+    try { return localStorage.getItem(key) === '1'; } catch { return false; }
   },
   set(value: boolean) {
-    try { localStorage.setItem(PROACTIVE_SEARCH_STORAGE_KEY, value ? '1' : '0'); } catch { /* stays off */ }
+    const key = proactiveSearchStorageKey();
+    if (key) {
+      try { localStorage.setItem(key, value ? '1' : '0'); } catch { /* stays off */ }
+    }
     proactiveSearchListeners.forEach((l) => l());
   },
   /**
-   * Drop the opt-in entirely (back to the OFF default). Called from
-   * auth.ts's signOut: the flag is origin-wide localStorage, so on a shared
-   * browser the previous user's ON must not carry over to whoever logs in
-   * next — external transmission consent doesn't transfer between people.
+   * Drop the current user's stored opt-in (back to the OFF default), plus
+   * the legacy un-namespaced key from before per-user scoping. Called from
+   * auth teardown paths.
    */
   clear() {
-    try { localStorage.removeItem(PROACTIVE_SEARCH_STORAGE_KEY); } catch { /* already off */ }
+    const key = proactiveSearchStorageKey();
+    try {
+      if (key) localStorage.removeItem(key);
+      localStorage.removeItem(PROACTIVE_SEARCH_STORAGE_KEY);
+    } catch { /* already off */ }
     proactiveSearchListeners.forEach((l) => l());
   },
   subscribe(listener: () => void) {

@@ -487,7 +487,9 @@ class TestWebSearchTool(unittest.TestCase):
         with mock.patch.object(tools, 'gateway_web_search', return_value=([
             {'title': 'T', 'url': 'https://example.com/x', 'text': 's'},
         ], None)) as mocked:
-            text, sources = tools.execute_tool('search_web', {'query': 'q', 'maxResults': 3}, {})
+            text, sources = tools.execute_tool(
+                'search_web', {'query': 'q', 'maxResults': 3},
+                {'user_id': 'u1', 'check_web_search_limit': lambda uid: True})
         mocked.assert_called_once_with('q', 3)
         self.assertIn('https://example.com/x', text)
         self.assertEqual(sources, ['https://example.com/x'])
@@ -505,7 +507,9 @@ class TestWebSearchTool(unittest.TestCase):
         import tools
         for bad in (0, -3, 'x'):
             with mock.patch.object(tools, 'gateway_web_search', return_value=([], None)) as mocked:
-                tools.execute_tool('search_web', {'query': 'q', 'maxResults': bad}, {})
+                tools.execute_tool(
+                    'search_web', {'query': 'q', 'maxResults': bad},
+                    {'user_id': 'u1', 'check_web_search_limit': lambda uid: True})
             self.assertGreaterEqual(mocked.call_args[0][1], 1, f'maxResults={bad!r} not clamped')
 
     def test_non_http_urls_filtered_from_results(self):
@@ -632,12 +636,16 @@ class TestWebSearchRateLimit(unittest.TestCase):
         self.assertNotIn('관련 결과를 찾지 못했습니다', text)
         self.assertEqual(sources, [])
 
-    def test_missing_limit_fn_still_searches(self):
-        # Contexts without the checker (older callers) keep working.
+    def test_missing_limit_context_denies_instead_of_unmetered(self):
+        # search_web is an external-egress tool: a context without user_id or
+        # the checker is a regression, and the safe default is denial, never
+        # an unmetered call.
         import tools
-        with mock.patch.object(tools, 'gateway_web_search', return_value=([], None)) as mocked_gw:
-            tools.execute_tool('search_web', {'query': 'q'}, {'user_id': 'u1'})
-        mocked_gw.assert_called_once()
+        with mock.patch.object(tools, 'gateway_web_search') as mocked_gw:
+            text, sources = tools.execute_tool('search_web', {'query': 'q'}, {'user_id': 'u1'})
+        mocked_gw.assert_not_called()
+        self.assertIn('수행할 수 없습니다', text)
+        self.assertEqual(sources, [])
 
 
 if __name__ == '__main__':

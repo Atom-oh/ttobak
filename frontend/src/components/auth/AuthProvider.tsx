@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AuthUser, getCurrentUser, signIn, signOut, completeNewPassword, isNewPasswordRequired, NewPasswordRequiredResult, SignInResult } from '@/lib/auth';
-import { proactiveSearchStore, resetProactiveClaims } from '@/lib/proactiveSearch';
+import { proactiveSearchStore, resetProactiveClaims, setProactiveSearchUser } from '@/lib/proactiveSearch';
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -50,6 +50,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     return () => setAuthFailureCallback(null);
   }, []);
+
+  // Bind the proactive-search opt-in store to the signed-in user. This is
+  // what actually closes the shared-browser consent gap: teardown callbacks
+  // only cover explicit signOut and 401-triggered expiry, but a session that
+  // lapses QUIETLY (browser closed, tokens expire, next visitor logs in)
+  // fires neither — with the store keyed per user, the next user reads their
+  // OWN key (default OFF) no matter how the previous session ended, and the
+  // same user returning keeps their choice.
+  useEffect(() => {
+    setProactiveSearchUser(user?.userId ?? null);
+  }, [user]);
 
   // Redirect to login when auth expires on non-root pages
   useEffect(() => {

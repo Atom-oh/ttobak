@@ -391,7 +391,7 @@ func buildAttachmentLinkSections(attachments []model.Attachment) string {
 			continue
 		}
 		safeName := sanitizeMarkdownText(att.FileName)
-		if att.ProcessedContent != "" && att.Type != model.AttachTypeDocument {
+		if att.ProcessedContent != "" && att.Type != model.AttachTypeDocument && att.FileName != "" {
 			imgSection.WriteString(fmt.Sprintf(
 				"\n### %s\n![%s](attachment://%s)\n",
 				safeName, safeName, att.AttachmentID,

@@ -87,15 +87,20 @@ def check_research_limit(user_id):
 # same atomic-counter pattern as check_research_limit. 0 disables the check.
 # A typo'd env value must not fail Lambda init (same rationale as the
 # crawler's _parse_relevance_threshold) — fall back to the default.
+DEFAULT_WEB_SEARCH_HOURLY_LIMIT = 30
+
+
 def _parse_web_search_limit(raw):
     try:
         return int(raw)
     except (TypeError, ValueError):
-        logger.warning(f'WEB_SEARCH_HOURLY_LIMIT={raw!r} is not an integer, using 30')
-        return 30
+        logger.warning(
+            f'WEB_SEARCH_HOURLY_LIMIT={raw!r} is not an integer, using {DEFAULT_WEB_SEARCH_HOURLY_LIMIT}')
+        return DEFAULT_WEB_SEARCH_HOURLY_LIMIT
 
 
-WEB_SEARCH_HOURLY_LIMIT = _parse_web_search_limit(os.environ.get('WEB_SEARCH_HOURLY_LIMIT', '30'))
+WEB_SEARCH_HOURLY_LIMIT = _parse_web_search_limit(
+    os.environ.get('WEB_SEARCH_HOURLY_LIMIT', str(DEFAULT_WEB_SEARCH_HOURLY_LIMIT)))
 
 
 def check_web_search_limit(user_id):

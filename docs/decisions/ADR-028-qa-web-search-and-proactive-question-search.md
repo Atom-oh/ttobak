@@ -29,8 +29,10 @@
 3. **선제 자동 발화는 기본 꺼짐(opt-in), 단 opt-in의 범위는 '자동 발화'뿐**: 회의 대화에서 파생된 검색어가
    사용자 조작 없이 외부 웹 검색 제공자로 나가는 것은 기존 `search_knowledge_base`(계정 내부)와 다른 신뢰
    경계다. 따라서
-   - LiveQAPanel 헤더의 "선제 검색" 토글(localStorage 기반 모듈 스토어 — 두 패널 인스턴스가 동시에
-     마운트되므로 `useSyncExternalStore`로 인스턴스 간 동기화, 기본 OFF)을 켠 사용자에게만 자동 발화하고,
+   - LiveQAPanel 헤더의 "선제 검색" 토글(`lib/proactiveSearch.ts`의 모듈 스토어 — 두 패널 인스턴스가
+     동시에 마운트되므로 `useSyncExternalStore`로 인스턴스 간 동기화, 기본 OFF, localStorage 키는
+     Cognito sub로 **사용자별 네임스페이스** — 조용한 세션 만료 뒤 다른 사용자가 로그인해도 이전
+     사용자의 동의가 승계되지 않는다)을 켠 사용자에게만 자동 발화하고,
    - **수동 질문 경로에서는 토글과 무관하게 모델이 `search_web`을 호출할 수 있다** — 이 경로의 완화책은
      시스템 프롬프트/도구 설명의 쿼리 구성 제약(고객사·참석자 실명, 내부 코드명, 회의 수치 금지 — 일반화
      키워드만)과 트랜스크립트-지시문 무시 인젝션 가드다. 참가자 발화가 system 컨텍스트에 들어가는 구조상
@@ -39,13 +41,18 @@
    - 검색 쿼리 원문은 CloudWatch에 로깅하지 않으며(해시 접두사+길이만 — `web_search.py` 자체 로그와
      에이전틱 루프의 tool-call 로그 양쪽 모두, `redact_tool_input_for_log`),
    - 외부 전송 사실(수동 경로 포함)을 API-SPEC에 명시한다.
-4. **자동 발화 가드**: 감지 배치당 1건, 질문당 녹음 세션 내 전 패널 인스턴스에 걸쳐 1회(모듈 레벨 claim
-   set — 데스크톱 aside와 모바일 바텀시트가 동시에 마운트되므로 인스턴스 로컬 dedup은 이중 발화; 녹음
-   시작 시 `resetProactiveClaims()`로 초기화 — meetingId 네임스페이스는 녹음 중 id가 생기는 순간 키가
-   바뀌어 재발화하므로 쓰지 않는다), 실패 시 claim 롤백 + asked 기록을 성공 시점으로 미룸(답 없이 질문이
-   영구 소진되는 것 방지 — asked 기록이 detect의 previousQuestions로 전달되므로 선기록하면 롤백이 무력화됨),
-   답변 진행 중·사용자 입력 중·패널 비가시(IntersectionObserver로 반응형 추적) 상태에서는 보류. stale 응답
-   방지를 위해 detect 경로도 summary와 동일한 generation guard를 쓴다(`useLiveSummary`).
+4. **자동 발화 가드** (`lib/proactiveSearch.ts`에 인스턴스 간 공유 상태로 상주): 감지 배치는
+   **generation id**(`ProactiveBatch.id`, `useLiveSummary`가 detect 응답마다 단조 증가 부여)로 식별하며
+   generation당 1건만 발화 — 소비 마커는 롤백으로 되돌리지 않으므로 실패한 질문의 재시도는 다음 감지
+   라운드(새 id)에서만 가능하고, 같은 배치를 상대로 한 무한 재발화 루프가 구조적으로 불가능하다(질문당
+   `MAX_PROACTIVE_ATTEMPTS`=2 하드 캡 병행). 질문당 claim은 녹음 세션 내 전 패널 인스턴스에 걸쳐 공유
+   (녹음 시작 시 `resetProactiveClaims()`로 초기화 — meetingId 네임스페이스는 녹음 중 id가 생기는 순간
+   키가 바뀌어 재발화하므로 쓰지 않는다), 실패 시 claim 롤백 + asked 기록을 성공 시점으로 미룸(답 없이
+   질문이 영구 소진되는 것 방지 — asked 기록이 detect의 previousQuestions로 전달되므로 선기록하면 롤백이
+   무력화됨), in-flight는 질문 텍스트로 소유권을 추적해 한 인스턴스의 unmount 정리가 다른 인스턴스의
+   진행 중 발화를 풀지 못한다. 답변 진행 중·사용자 입력 중·패널 비가시(IntersectionObserver로 반응형
+   추적) 상태에서는 보류. stale 응답 방지를 위해 detect 경로도 summary와 동일한 generation guard를
+   쓴다(`useLiveSummary`).
 
 ## Consequences
 
@@ -55,9 +62,10 @@
   강제한다 — 게이트웨이 호출 전에 검사해 초과 호출은 외부 쿼터를 소비하지 않고, DynamoDB 오류 시 fail-open,
   tumbling-hour 경계 버스트는 최대 ~2×까지 허용되는 가용성 우선의 남용 브레이크이지 보안 경계가 아니다.
   crawler/research-agent의 게이트웨이 사용은 시스템 트리거라 의도적으로 무제한이다.
-- opt-in 위생: 선제 검색 opt-in은 명시적 로그아웃(`auth.ts` signOut)과 세션 만료 teardown
-  (`AuthProvider`의 authFailureCallback) 양쪽에서 OFF 기본값으로 초기화된다 — origin-wide localStorage라
-  공용 브라우저에서 이전 사용자의 외부 전송 동의가 다음 사용자에게 승계되면 안 되기 때문.
+- opt-in 위생: 저장 키가 사용자별(Cognito sub) 네임스페이스라 어떤 종료 경로(명시적 로그아웃, 401
+  teardown, **조용한 세션 만료** — 아무 콜백도 안 도는 경우)로든 다음 사용자는 자기 키(기본 OFF)만 읽는다.
+  명시적 로그아웃(`auth.ts` signOut)과 401 teardown(`AuthProvider`)은 추가로 저장 동의와 in-memory claim
+  상태를 지운다.
 - SigV4+MCP 플러밍이 3중 복제로 늘었다. 변경 시 세 파일을 함께 고쳐야 한다(각 파일 docstring에 명시).
 - `WEB_SEARCH_GATEWAY_URL` 미설정 시 도구가 목록에서 빠지는 게 아니라 호출 시 실패 사유를 반환한다 —
   도구 라운드 1회를 소비하므로 "완전 비활성"은 아니다. 미설정 배포는 초기 셋업 과도기뿐이라 수용.
