@@ -8,6 +8,7 @@ import {
   proactiveGuard,
   proactiveBatchKey,
   proactiveSearchStore,
+  rollbackProactiveClaimState,
 } from '@/lib/proactiveSearch';
 import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
 
@@ -94,9 +95,11 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     if (!entryId) return;
     const claimed = proactiveClaimByEntryRef.current.get(entryId);
     if (claimed) {
-      claimedProactiveQuestions.delete(claimed);
       proactiveClaimByEntryRef.current.delete(entryId);
-      proactiveGuard.askInFlight = false;
+      // Also un-consumes the (content-keyed) batch marker — see
+      // rollbackProactiveClaimState's comment for why a rollback that left
+      // the marker set would permanently consume the question.
+      rollbackProactiveClaimState(claimed);
     }
   }, []);
   // A proactive question is recorded as "asked" only on SUCCESS: recording
@@ -325,8 +328,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     return () => {
       wsRef.current?.disconnect();
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
-      pendingClaims.forEach((q) => claimedProactiveQuestions.delete(q));
-      if (pendingClaims.size > 0) proactiveGuard.askInFlight = false;
+      pendingClaims.forEach((q) => rollbackProactiveClaimState(q));
       pendingClaims.clear();
     };
   }, []);

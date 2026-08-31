@@ -122,12 +122,28 @@ func TestBuildAttachmentLinkSections(t *testing.T) {
 		notWant     []string // substrings that must NOT appear
 	}{
 		{
-			name: "image and document render under their own sections",
+			name: "image and document render under their own sections, with the sentinel",
 			attachments: []model.Attachment{
 				{AttachmentID: "img-1", Type: model.AttachTypeDiagram, FileName: "arch.png", ProcessedContent: "mermaid", Status: model.AttachStatusDone},
 				{AttachmentID: "doc-1", Type: model.AttachTypeDocument, FileName: "spec.pdf", Status: model.AttachStatusDone},
 			},
-			want: []string{"## 첨부 이미지", "![arch.png](attachment://img-1)", "## 첨부 문서", "[spec.pdf](attachment://doc-1)"},
+			// attachmentSentinel is the contract that stops a re-summarize
+			// from appending these sections twice — its presence in the tail
+			// is as load-bearing as the sections themselves.
+			want: []string{attachmentSentinel, "## 첨부 이미지", "![arch.png](attachment://img-1)", "## 첨부 문서", "[spec.pdf](attachment://doc-1)"},
+		},
+		{
+			name: "duplicated rows sharing an AttachmentID link once",
+			attachments: []model.Attachment{
+				{AttachmentID: "doc-1", Type: model.AttachTypeDocument, FileName: "spec.pdf", Status: model.AttachStatusDone},
+				{AttachmentID: "doc-1", Type: model.AttachTypeDocument, FileName: "spec.pdf", Status: model.AttachStatusDone},
+			},
+			want: []string{"attachment://doc-1"},
+		},
+		{
+			name:        "empty input produces nothing",
+			attachments: nil,
+			notWant:     []string{"첨부"},
 		},
 		{
 			name: "document with ProcessedContent stays a document link, never a broken image",
@@ -172,6 +188,10 @@ func TestBuildAttachmentLinkSections(t *testing.T) {
 			}
 			if len(tt.want) == 0 && got != "" {
 				t.Fatalf("expected empty tail, got: %q", got)
+			}
+			if tt.name == "duplicated rows sharing an AttachmentID link once" &&
+				strings.Count(got, "attachment://doc-1") != 1 {
+				t.Fatalf("same-ID duplicate not deduplicated: %q", got)
 			}
 		})
 	}

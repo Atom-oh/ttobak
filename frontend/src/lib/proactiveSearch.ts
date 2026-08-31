@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * Shared mutable state for the live QA panel's proactive search feature.
  *
@@ -39,6 +41,22 @@ export const proactiveGuard = {
 /** Content key for a proactive batch (see proactiveGuard.consumedBatchKey). */
 export function proactiveBatchKey(batch: string[]): string {
   return JSON.stringify(batch);
+}
+
+/**
+ * Roll back one claimed question after its ask FAILED (WS stall/error, HTTP
+ * failure, panel unmount mid-answer). Releases the claim and the in-flight
+ * flag, and — critically — un-consumes the batch marker: the marker is a
+ * CONTENT key, so without this a later re-detection of the identical batch
+ * would early-return forever and the rolled-back question could never
+ * retry, silently breaking the claim set's "a failure must not permanently
+ * consume a question" invariant that identity-compared markers used to
+ * preserve by accident.
+ */
+export function rollbackProactiveClaimState(question: string) {
+  claimedProactiveQuestions.delete(question);
+  proactiveGuard.askInFlight = false;
+  proactiveGuard.consumedBatchKey = undefined;
 }
 
 /**

@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AuthUser, getCurrentUser, signIn, signOut, completeNewPassword, isNewPasswordRequired, NewPasswordRequiredResult, SignInResult } from '@/lib/auth';
+import { proactiveSearchStore, resetProactiveClaims } from '@/lib/proactiveSearch';
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -38,6 +39,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem('idToken');
       localStorage.removeItem('accessToken');
       localStorage.removeItem('refreshToken');
+      // This session-expiry teardown does NOT go through auth.ts's signOut(),
+      // so it must drop the proactive-search opt-in itself — the flag is
+      // origin-wide localStorage, and one user's external-transmission
+      // consent must not carry over to whoever logs in next on a shared
+      // browser. Claims are cleared too so the ended session's fired
+      // questions can't shadow the next user's.
+      proactiveSearchStore.clear();
+      resetProactiveClaims();
     });
     return () => setAuthFailureCallback(null);
   }, []);

@@ -545,7 +545,7 @@ class TestWebSearchTool(unittest.TestCase):
     def test_redact_tool_input_masks_free_text_keys_for_any_tool(self):
         # The agentic loop logs every tool call's input — free-text keys are
         # conversation-derived regardless of which tool carries them, so the
-        # mask is key-based (deny-by-default for query/keyword-like keys),
+        # mask is key-based (a fixed blocklist of known free-text keys),
         # not search_web-specific. Identifier keys stay loggable.
         import web_search
         redacted = web_search.redact_tool_input_for_log('search_web', {'query': '민감한 고객사 키워드', 'maxResults': 3})
@@ -559,6 +559,12 @@ class TestWebSearchTool(unittest.TestCase):
         lm = web_search.redact_tool_input_for_log('list_meetings', {'keyword': '고객사', 'limit': 5})
         self.assertTrue(lm['keyword'].startswith('q#'))
         self.assertEqual(lm['limit'], 5)
+        # 'account' is a customer NAME/alias per the tool schema (예: 하나은행),
+        # not an opaque id — the top sensitivity class in ADR-028's threat
+        # model must never appear in logs.
+        ai = web_search.redact_tool_input_for_log('get_account_insights', {'account': '하나은행', 'from': '2026-08-01T00:00:00Z'})
+        self.assertTrue(ai['account'].startswith('q#'))
+        self.assertEqual(ai['from'], '2026-08-01T00:00:00Z')
         # Identifier-shaped inputs pass through untouched.
         gm = web_search.redact_tool_input_for_log('get_meeting_detail', {'meetingId': 'm-123'})
         self.assertEqual(gm, {'meetingId': 'm-123'})

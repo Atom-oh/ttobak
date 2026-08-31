@@ -364,26 +364,6 @@ func buildSummarizeUserPrompt(transcript, priorContext string, segments []speake
 	return body
 }
 
-// buildAttachmentContext renders the attachment-derived block appended to
-// SummarizeTranscript's user prompt. Extracted as a pure function so each of
-// the three attachment shapes stays covered by its own unit test:
-//   - diagram attachments (process-image classified them "diagram" and
-//     converted the picture to mermaid) are labeled as 첨부 다이어그램 so the
-//     system prompt's 아키텍처 다이어그램 section can treat their mermaid
-//     code as the trusted source rather than re-deriving structure from talk
-//     (that trusted-source instruction is emitted only when at least one
-//     diagram is actually present — a screenshot-only meeting must not carry
-//     a dangling reference to nonexistent mermaid);
-//   - other processed images (screenshot/whiteboard/photo analysis) keep the
-//     pre-existing 첨부 이미지 framing;
-//   - document attachments (category "file": PPTX/PDF/DOCX/MD…) have no
-//     extracted content, so only their filenames are listed — enough for the
-//     note to reference them as 참고 자료 instead of ignoring them entirely.
-//     Gated on AttachStatusDone (like the link section appended after the
-//     LLM call) and deduplicated, so a failed/aborted upload row can't get
-//     cited in the note body while missing from the link list.
-//
-// Returns "" when there is nothing to add.
 // attachmentSentinel marks the machine-appended attachment sections at the
 // end of a generated note, so a re-summarize never appends them twice.
 const attachmentSentinel = "<!-- ttobak:attachments -->"
@@ -436,6 +416,26 @@ func buildAttachmentLinkSections(attachments []model.Attachment) string {
 	return out
 }
 
+// buildAttachmentContext renders the attachment-derived block appended to
+// SummarizeTranscript's user prompt. Extracted as a pure function so each of
+// the three attachment shapes stays covered by its own unit test:
+//   - diagram attachments (process-image classified them "diagram" and
+//     converted the picture to mermaid) are labeled as 첨부 다이어그램 so the
+//     system prompt's 아키텍처 다이어그램 section can treat their mermaid
+//     code as the trusted source rather than re-deriving structure from talk
+//     (that trusted-source instruction is emitted only when at least one
+//     diagram is actually present — a screenshot-only meeting must not carry
+//     a dangling reference to nonexistent mermaid);
+//   - other processed images (screenshot/whiteboard/photo analysis) keep the
+//     pre-existing 첨부 이미지 framing;
+//   - document attachments (category "file": PPTX/PDF/DOCX/MD…) have no
+//     extracted content, so only their filenames are listed — enough for the
+//     note to reference them as 참고 자료 instead of ignoring them entirely.
+//     Gated on AttachStatusDone (like the link section appended after the
+//     LLM call) and deduplicated, so a failed/aborted upload row can't get
+//     cited in the note body while missing from the link list.
+//
+// Returns "" when there is nothing to add.
 func buildAttachmentContext(attachments []model.Attachment) string {
 	var analyses strings.Builder
 	hasDiagram := false

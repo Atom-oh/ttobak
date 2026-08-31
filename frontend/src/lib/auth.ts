@@ -1,6 +1,5 @@
 'use client';
 
-import { proactiveSearchStore } from './proactiveSearch';
 import {
   CognitoUserPool,
   CognitoUser,
@@ -8,6 +7,8 @@ import {
   CognitoUserSession,
   CognitoRefreshToken,
 } from 'amazon-cognito-identity-js';
+
+import { proactiveSearchStore } from './proactiveSearch';
 import { getRuntimeConfig } from './runtimeConfig';
 
 let userPoolPromise: Promise<CognitoUserPool> | null = null;

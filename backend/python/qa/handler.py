@@ -85,17 +85,33 @@ def check_research_limit(user_id):
 # the frontend caps proactive auto-fires, but nothing stopped a hostile
 # client from burning gateway calls through the manual path). Hourly window,
 # same atomic-counter pattern as check_research_limit. 0 disables the check.
-WEB_SEARCH_HOURLY_LIMIT = int(os.environ.get('WEB_SEARCH_HOURLY_LIMIT', '30'))
+# A typo'd env value must not fail Lambda init (same rationale as the
+# crawler's _parse_relevance_threshold) — fall back to the default.
+def _parse_web_search_limit(raw):
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning(f'WEB_SEARCH_HOURLY_LIMIT={raw!r} is not an integer, using 30')
+        return 30
+
+
+WEB_SEARCH_HOURLY_LIMIT = _parse_web_search_limit(os.environ.get('WEB_SEARCH_HOURLY_LIMIT', '30'))
 
 
 def check_web_search_limit(user_id):
     """True if user_id may make another search_web call this hour.
 
-    Atomic increment on USER#{id}/WEBSEARCH_HOURLY#{YYYY-MM-DDTHH} with a 2h
-    TTL; over-limit increments are compensated back down so a burst of
-    denied calls can't inflate the counter. Fails OPEN on DynamoDB errors
-    (same availability-over-strictness call as check_research_limit — this
-    is an abuse brake, not a security boundary)."""
+    Atomic increment on USER#{id}/WEBSEARCH_HOURLY#{YYYY-MM-DDTHH}, expiring
+    via the table's TTL sweep (the row writes `pendingShareExpiresAt` — the
+    attribute `storage-stack.ts` actually points `timeToLiveAttribute` at;
+    an attribute literally named "TTL", like check_research_limit's rows,
+    is never swept and would accumulate one row per user per hour forever).
+    Over-limit increments are compensated back down so a burst of denied
+    calls can't inflate the counter. Fails OPEN only on the INCREMENT
+    failing (same availability-over-strictness call as check_research_limit
+    — this is an abuse brake, not a security boundary); a failure of the
+    compensating decrement never flips an already-established denial back
+    to allow."""
     if WEB_SEARCH_HOURLY_LIMIT <= 0:
         return True
     from datetime import datetime, timezone
@@ -106,7 +122,7 @@ def check_web_search_limit(user_id):
         resp = table.update_item(
             Key={"PK": counter_pk, "SK": counter_sk},
             UpdateExpression="SET #c = if_not_exists(#c, :zero) + :one, #ttl = :ttl",
-            ExpressionAttributeNames={"#c": "count", "#ttl": "TTL"},
+            ExpressionAttributeNames={"#c": "count", "#ttl": "pendingShareExpiresAt"},
             ExpressionAttributeValues={
                 ":zero": 0, ":one": 1,
                 ":ttl": int(time.time()) + 7200,
@@ -114,18 +130,23 @@ def check_web_search_limit(user_id):
             ReturnValues="UPDATED_NEW",
         )
         current = int(resp.get("Attributes", {}).get("count", 1))
-        if current > WEB_SEARCH_HOURLY_LIMIT:
+    except Exception as e:
+        logger.warning(f"Failed to check web search limit for {user_id}: {e}")
+        return True
+    if current > WEB_SEARCH_HOURLY_LIMIT:
+        try:
             table.update_item(
                 Key={"PK": counter_pk, "SK": counter_sk},
                 UpdateExpression="SET #c = #c - :one",
                 ExpressionAttributeNames={"#c": "count"},
                 ExpressionAttributeValues={":one": 1},
             )
-            return False
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to check web search limit for {user_id}: {e}")
-        return True
+        except Exception as e:
+            # The denial stands — compensation failure only means this hour's
+            # counter stays inflated by one, never that the call goes through.
+            logger.warning(f"Web search limit compensation failed for {user_id}: {e}")
+        return False
+    return True
 
 
 def create_research_from_chat(user_id, topic, mode):

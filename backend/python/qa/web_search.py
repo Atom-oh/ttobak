@@ -108,10 +108,15 @@ def _query_ref(query):
 # Free-text input keys across ALL tools: their values are model-composed and
 # can derive from meeting conversation (search_web.query, search_transcript.
 # keywords, list_meetings.keyword, get_aws_recommendation.useCase,
-# start_research.topic, search_knowledge_base/search_aws_docs.query) — hash
-# them all in logs, not just search_web's. Identifier-shaped keys (meetingId,
-# account, dates, limits) stay loggable for debugging.
-_FREE_TEXT_INPUT_KEYS = frozenset({'query', 'keywords', 'keyword', 'useCase', 'topic'})
+# start_research.topic, search_knowledge_base/search_aws_docs.query, and
+# get_account_insights/get_account_brief.account — per its schema a customer
+# NAME or alias, e.g. '하나은행', the top sensitivity class in ADR-028's
+# threat model, NOT an opaque id) — hash them all in logs. Truly
+# identifier-shaped keys (meetingId, RFC3339 dates, numeric limits) stay
+# loggable for debugging. NOTE: this is a fixed blocklist of known free-text
+# keys (allow-by-default for unknown keys) — when adding a tool with a new
+# free-text input key, add the key here.
+_FREE_TEXT_INPUT_KEYS = frozenset({'query', 'keywords', 'keyword', 'useCase', 'topic', 'account'})
 
 
 def redact_tool_input_for_log(tool_name, tool_input):

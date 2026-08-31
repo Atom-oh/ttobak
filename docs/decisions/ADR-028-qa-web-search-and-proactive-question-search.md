@@ -50,10 +50,14 @@
 ## Consequences
 
 - 미팅 중 최신 정보 질문에 라이브 QA가 답할 수 있고, (opt-in 시) 감지된 사실형 질문은 답이 미리 떠 있다.
-- 토큰/호출량: 자동 발화는 배치당 1건 + Bedrock 라운드 제한(MAX_TOOL_ROUNDS)으로 상한이 있다. 서버측
-  per-user rate limit은 후속 PR에서 추가됐다 — `check_web_search_limit`(시간당 `WEB_SEARCH_HOURLY_LIMIT`회,
-  기본 30, 게이트웨이 호출 전에 검사해 초과 호출은 외부 쿼터를 소비하지 않음; DynamoDB 오류 시 fail-open —
-  가용성 우선의 남용 브레이크이지 보안 경계가 아니다).
+- 토큰/호출량: 자동 발화는 배치당 1건 + Bedrock 라운드 제한(MAX_TOOL_ROUNDS)으로 상한이 있고, 서버측으로는
+  `check_web_search_limit`이 qa Lambda의 인증 경로에서 사용자당 시간당 `WEB_SEARCH_HOURLY_LIMIT`회(기본 30)를
+  강제한다 — 게이트웨이 호출 전에 검사해 초과 호출은 외부 쿼터를 소비하지 않고, DynamoDB 오류 시 fail-open,
+  tumbling-hour 경계 버스트는 최대 ~2×까지 허용되는 가용성 우선의 남용 브레이크이지 보안 경계가 아니다.
+  crawler/research-agent의 게이트웨이 사용은 시스템 트리거라 의도적으로 무제한이다.
+- opt-in 위생: 선제 검색 opt-in은 명시적 로그아웃(`auth.ts` signOut)과 세션 만료 teardown
+  (`AuthProvider`의 authFailureCallback) 양쪽에서 OFF 기본값으로 초기화된다 — origin-wide localStorage라
+  공용 브라우저에서 이전 사용자의 외부 전송 동의가 다음 사용자에게 승계되면 안 되기 때문.
 - SigV4+MCP 플러밍이 3중 복제로 늘었다. 변경 시 세 파일을 함께 고쳐야 한다(각 파일 docstring에 명시).
 - `WEB_SEARCH_GATEWAY_URL` 미설정 시 도구가 목록에서 빠지는 게 아니라 호출 시 실패 사유를 반환한다 —
   도구 라운드 1회를 소비하므로 "완전 비활성"은 아니다. 미설정 배포는 초기 셋업 과도기뿐이라 수용.

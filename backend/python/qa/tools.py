@@ -181,7 +181,11 @@ def execute_tool(tool_name, tool_input, context):
             # retrying or hallucinating over an outage.
             user_id = context.get("user_id")
             check_fn = context.get("check_web_search_limit")
-            if user_id and check_fn and not check_fn(user_id):
+            if not user_id or not check_fn:
+                # Every real caller is authenticated and wires the checker —
+                # an unmetered call means a context regression, worth a trace.
+                logger.warning("search_web called without user_id/limit checker — unmetered")
+            elif not check_fn(user_id):
                 return ("웹 검색 시간당 한도에 도달했습니다. 검색 없이 아는 범위에서 답하고, "
                         "잠시 후 다시 시도할 수 있다고 안내하세요."), []
             # Clamp to [1, 10]: a model-supplied 0/negative value would slice
