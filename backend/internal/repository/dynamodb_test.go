@@ -381,6 +381,53 @@ func TestTranscriptOverflowThreshold(t *testing.T) {
 	}
 }
 
+func TestPickTranscriptToSpill(t *testing.T) {
+	kb := func(n int) int { return n * 1024 }
+	cases := []struct {
+		name   string
+		inline map[string]int
+		fixed  int
+		want   string
+	}{
+		{"all small fits", map[string]int{"transcriptA": kb(50), "transcriptSegments": kb(40)}, 0, ""},
+		{"segments over own 100KB cap even when total fits", map[string]int{"transcriptA": kb(50), "transcriptSegments": kb(120)}, 0, "transcriptSegments"},
+		{"A over own 300KB cap", map[string]int{"transcriptA": kb(310)}, 0, "transcriptA"},
+		// The round-4 residual hole: A and B independent, each under 300KB,
+		// combined past the budget — largest spills.
+		{"A+B combined over budget spills largest", map[string]int{"transcriptA": kb(299), "transcriptB": kb(250)}, 0, "transcriptA"},
+		// Partial update: incoming B alone is fine, but a stored inline A
+		// (fixed baseline, unspillable here) pushes the total over — the
+		// incoming field must spill.
+		{"fixed baseline forces incoming spill", map[string]int{"transcriptB": kb(90)}, kb(250), "transcriptB"},
+		{"fixed baseline alone over budget but nothing spillable", map[string]int{}, kb(400), ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := pickTranscriptToSpill(c.inline, c.fixed); got != c.want {
+				t.Fatalf("pickTranscriptToSpill(%v, %d) = %q, want %q", c.inline, c.fixed, got, c.want)
+			}
+		})
+	}
+
+	t.Run("fixpoint loop drains until fit", func(t *testing.T) {
+		inline := map[string]int{"transcriptA": kb(200), "transcriptB": kb(200), "transcriptSegments": kb(90)}
+		var spilled []string
+		for len(inline) > 0 {
+			pick := pickTranscriptToSpill(inline, 0)
+			if pick == "" {
+				break
+			}
+			spilled = append(spilled, pick)
+			delete(inline, pick)
+		}
+		// 490KB total: spill one 200KB field -> 290KB remaining fits budget
+		// and each remainder is under its own threshold.
+		if len(spilled) != 1 {
+			t.Fatalf("expected exactly 1 spill, got %v", spilled)
+		}
+	})
+}
+
 func TestValidateTranscriptRef(t *testing.T) {
 	// The ref must match the ONE key storeTranscript writes for this
 	// meeting+field. Anything else — another meeting's transcript in the

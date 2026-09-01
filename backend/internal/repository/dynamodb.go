@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/uuid"
 	"github.com/ttobak/backend/internal/model"
 )
@@ -36,6 +37,24 @@ const transcriptSizeThreshold = 300 * 1024
 // extra S3 round-trip on hydration is invisible to users.
 const segmentsSizeThreshold = 100 * 1024
 
+// transcriptInlineBudget caps the COMBINED inline bytes of all
+// transcript-family fields in one item. Per-field thresholds alone don't
+// bound the item: transcriptA (batch STT) and transcriptB (Nova) are
+// independent, so two fields each under 300KB could still push the item
+// past DynamoDB's 400KB cap. 300KB combined leaves ~100KB for every other
+// attribute (content, notes, actionItems, keys, ...).
+const transcriptInlineBudget = 300 * 1024
+
+// transcriptFamilyFields are the fields routed through the s3:// overflow
+// mechanism, in one place so a typo can't silently opt a field out.
+var transcriptFamilyFields = []string{"transcriptA", "transcriptB", "transcriptSegments"}
+
+// ErrInvalidTranscriptRef marks a transcript-family value that carries an
+// s3:// prefix but is not the one server-generated ref for its meeting and
+// field. Sentinel (not an anonymous fmt.Errorf) per this codebase's typed
+// error-handling convention so handlers can map it to 400 instead of 500.
+var ErrInvalidTranscriptRef = errors.New("invalid transcript storage reference")
+
 // transcriptOverflowThreshold returns the S3-overflow threshold for a
 // transcript-family field (see segmentsSizeThreshold for why
 // transcriptSegments spills earlier).
@@ -44,6 +63,38 @@ func transcriptOverflowThreshold(field string) int {
 		return segmentsSizeThreshold
 	}
 	return transcriptSizeThreshold
+}
+
+// pickTranscriptToSpill selects the next spillable inline transcript-family
+// field, or "" when everything fits: first any field violating its OWN
+// threshold (largest such first — a small transcriptSegments can violate
+// its 100KB cap while a bigger transcriptA is fine), then, if the combined
+// total still exceeds the budget, the largest remaining field (frees the
+// most budget per spill). fixedInline is the bytes of family fields that
+// count against the budget but canNOT be spilled by this call (already
+// stored inline by a previous partial update). Pure function for unit
+// tests; callers loop it to a fixpoint.
+func pickTranscriptToSpill(inline map[string]int, fixedInline int) string {
+	total := fixedInline
+	largest, overOwn := "", ""
+	for name, size := range inline {
+		total += size
+		if largest == "" || size > inline[largest] {
+			largest = name
+		}
+		if size >= transcriptOverflowThreshold(name) {
+			if overOwn == "" || size > inline[overOwn] {
+				overOwn = name
+			}
+		}
+	}
+	if overOwn != "" {
+		return overOwn
+	}
+	if len(inline) > 0 && total > transcriptInlineBudget {
+		return largest
+	}
+	return ""
 }
 
 // DynamoDBRepository provides DynamoDB operations for the meeting assistant
@@ -78,15 +129,18 @@ func (r *DynamoDBRepository) SetS3Client(s3Client *s3.Client, bucketName string)
 	r.bucketName = bucketName
 }
 
-// storeTranscript stores a transcript, using S3 if it exceeds the size threshold
-// Returns the value to store in DynamoDB (either the text or an s3:// reference)
+// storeTranscript uploads a transcript-family value to its canonical S3 key
+// and returns the s3:// reference to store in DynamoDB. WHETHER to spill is
+// the caller's decision (shouldSpillTranscript) — the per-field threshold no
+// longer lives here, because the combined-budget rule can force a field
+// below its own threshold to spill.
 func (r *DynamoDBRepository) storeTranscript(ctx context.Context, meetingID, field, text string) (string, error) {
 	if text == "" {
 		return "", nil
 	}
 
-	// If small enough or no S3 client, store inline
-	if len(text) < transcriptOverflowThreshold(field) || r.s3Client == nil {
+	// No S3 client (local dev): store inline
+	if r.s3Client == nil {
 		return text, nil
 	}
 
@@ -120,17 +174,47 @@ func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key
 	trimmed := strings.TrimPrefix(ref, "s3://")
 	parts := strings.SplitN(trimmed, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("invalid S3 reference: %s", ref)
+		return "", "", fmt.Errorf("%w: malformed (meeting %s, field %s)", ErrInvalidTranscriptRef, meetingID, field)
 	}
 	bucket, key = parts[0], parts[1]
+	// Deliberately do NOT echo the supplied ref or bucket back — these
+	// errors can surface in API responses and the ref is attacker-chosen.
 	if bucket != ownBucket {
-		return "", "", fmt.Errorf("refusing to dereference transcript ref outside own bucket: %s", ref)
+		return "", "", fmt.Errorf("%w: foreign bucket (meeting %s, field %s)", ErrInvalidTranscriptRef, meetingID, field)
 	}
 	expected := fmt.Sprintf("transcripts/%s/%s.txt", meetingID, field)
 	if key != expected {
-		return "", "", fmt.Errorf("refusing to dereference transcript ref not owned by meeting %s field %s: %s", meetingID, field, ref)
+		return "", "", fmt.Errorf("%w: key does not match this meeting/field (meeting %s, field %s)", ErrInvalidTranscriptRef, meetingID, field)
 	}
 	return bucket, key, nil
+}
+
+// getStoredTranscriptInlineSizes returns the CURRENT inline byte size of
+// each transcript-family attribute on the meeting item (0 for absent
+// fields and for values already spilled as s3:// refs). Used by the
+// partial-update overflow logic to budget incoming fields against siblings
+// a previous call left inline.
+func (r *DynamoDBRepository) getStoredTranscriptInlineSizes(ctx context.Context, userID, meetingID string) (map[string]int, error) {
+	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(r.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		},
+		ProjectionExpression: aws.String("transcriptA, transcriptB, transcriptSegments"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	sizes := map[string]int{}
+	for _, field := range transcriptFamilyFields {
+		if av, ok := out.Item[field]; ok {
+			if s, ok := av.(*types.AttributeValueMemberS); ok && !strings.HasPrefix(s.Value, "s3://") {
+				sizes[field] = len(s.Value)
+			}
+		}
+	}
+	return sizes, nil
 }
 
 // loadTranscript loads a transcript, fetching from S3 if it's an S3
@@ -179,26 +263,39 @@ func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meeting *mo
 		return nil
 	}
 
-	var err error
-	if strings.HasPrefix(meeting.TranscriptA, "s3://") {
-		meeting.TranscriptA, err = r.loadTranscript(ctx, meeting.MeetingID, "transcriptA", meeting.TranscriptA)
-		if err != nil {
-			return fmt.Errorf("failed to load transcriptA: %w", err)
+	// Degrade-vs-fail split: a POISON ref (fails validateTranscriptRef —
+	// e.g. planted by a client before write-side validation existed) or a
+	// DANGLING ref (well-formed own key whose object doesn't exist) must
+	// not make the whole meeting permanently unreadable — a hard-fail here
+	// bricks it beyond API repair, since even MeetingService.UpdateMeeting
+	// starts with a GetMeeting. Blanking those two classes loses nothing
+	// real (poison was never ours; dangling points at nothing) and unbricks
+	// the meeting. Every OTHER load failure (throttling, transient S3
+	// outage, permissions) still hard-fails the read as before: degrading
+	// there would let a subsequent whole-item UpdateMeeting persist the
+	// blank and silently drop a VALID ref.
+	for _, f := range []struct {
+		name string
+		val  *string
+	}{
+		{"transcriptA", &meeting.TranscriptA},
+		{"transcriptB", &meeting.TranscriptB},
+		{"transcriptSegments", &meeting.TranscriptSegments},
+	} {
+		if !strings.HasPrefix(*f.val, "s3://") {
+			continue
 		}
-	}
-
-	if strings.HasPrefix(meeting.TranscriptB, "s3://") {
-		meeting.TranscriptB, err = r.loadTranscript(ctx, meeting.MeetingID, "transcriptB", meeting.TranscriptB)
+		loaded, err := r.loadTranscript(ctx, meeting.MeetingID, f.name, *f.val)
 		if err != nil {
-			return fmt.Errorf("failed to load transcriptB: %w", err)
+			var nsk *s3types.NoSuchKey
+			if errors.Is(err, ErrInvalidTranscriptRef) || errors.As(err, &nsk) {
+				log.Printf("resolveTranscripts: degrading %s for meeting %s (unrecoverable ref: %v)", f.name, meeting.MeetingID, err)
+				*f.val = ""
+				continue
+			}
+			return fmt.Errorf("failed to load %s: %w", f.name, err)
 		}
-	}
-
-	if strings.HasPrefix(meeting.TranscriptSegments, "s3://") {
-		meeting.TranscriptSegments, err = r.loadTranscript(ctx, meeting.MeetingID, "transcriptSegments", meeting.TranscriptSegments)
-		if err != nil {
-			return fmt.Errorf("failed to load transcriptSegments: %w", err)
-		}
+		*f.val = loaded
 	}
 
 	return nil
@@ -397,30 +494,43 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	// server-generated refs are ever stored" invariant the read-side
 	// validator depends on.
 	if r.s3Client != nil && r.bucketName != "" {
-		for _, f := range []struct {
-			name string
-			val  *string
-		}{
-			{"transcriptA", &stored.TranscriptA},
-			{"transcriptB", &stored.TranscriptB},
-			// transcriptSegments spills at a lower threshold — see
-			// segmentsSizeThreshold: it shares the item with transcriptA.
-			{"transcriptSegments", &stored.TranscriptSegments},
-		} {
-			if *f.val == "" {
+		vals := map[string]*string{
+			"transcriptA":        &stored.TranscriptA,
+			"transcriptB":        &stored.TranscriptB,
+			"transcriptSegments": &stored.TranscriptSegments,
+		}
+		// First pass: validate pre-existing refs and collect inline sizes.
+		inline := map[string]int{}
+		for _, name := range transcriptFamilyFields {
+			v := *vals[name]
+			if v == "" {
 				continue
 			}
-			if strings.HasPrefix(*f.val, "s3://") {
-				if _, _, err := validateTranscriptRef(r.bucketName, stored.MeetingID, f.name, *f.val); err != nil {
-					return fmt.Errorf("rejecting %s write: %w", f.name, err)
+			if strings.HasPrefix(v, "s3://") {
+				if _, _, err := validateTranscriptRef(r.bucketName, stored.MeetingID, name, v); err != nil {
+					return fmt.Errorf("rejecting %s write: %w", name, err)
 				}
 				continue
 			}
-			ref, err := r.storeTranscript(ctx, stored.MeetingID, f.name, *f.val)
-			if err != nil {
-				return fmt.Errorf("failed to store %s: %w", f.name, err)
+			inline[name] = len(v)
+		}
+		// Second pass: spill until every remaining inline field passes
+		// BOTH its own per-field threshold AND the combined budget. Own-
+		// threshold violations are picked first (a small transcriptSegments
+		// can violate its 100KB cap while a larger transcriptA is fine);
+		// budget violations then spill the largest remaining field, which
+		// frees the most budget per spill.
+		for len(inline) > 0 {
+			pick := pickTranscriptToSpill(inline, 0)
+			if pick == "" {
+				break
 			}
-			*f.val = ref
+			ref, err := r.storeTranscript(ctx, stored.MeetingID, pick, *vals[pick])
+			if err != nil {
+				return fmt.Errorf("failed to store %s: %w", pick, err)
+			}
+			*vals[pick] = ref
+			delete(inline, pick)
 		}
 	}
 
@@ -608,24 +718,65 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 	// recording's segments JSON + transcriptA in one UpdateItem exceeded
 	// DynamoDB's 400KB item limit (meeting 797877d5) and the write failed.
 	if r.s3Client != nil && r.bucketName != "" {
-		for _, field := range []string{"transcriptA", "transcriptB", "transcriptSegments"} {
-			if val, ok := fields[field]; ok {
-				if text, isStr := val.(string); isStr && text != "" {
-					if strings.HasPrefix(text, "s3://") {
-						// Same write-time invariant as UpdateMeeting: only the
-						// server-generated ref for this meeting+field may be
-						// stored as-is; any other s3:// value is rejected.
-						if _, _, err := validateTranscriptRef(r.bucketName, meetingID, field, text); err != nil {
-							return fmt.Errorf("rejecting %s write: %w", field, err)
-						}
-						continue
-					}
-					ref, err := r.storeTranscript(ctx, meetingID, field, text)
-					if err != nil {
-						return fmt.Errorf("failed to store %s: %w", field, err)
-					}
-					fields[field] = ref
+		// Collect the inline sizes this update would leave in the item:
+		// incoming transcript-family values plus the STORED inline sizes of
+		// the family fields this update doesn't touch (a partial update
+		// writing only transcriptB must still account for a transcriptA
+		// already sitting inline, or A+B can add up past the 400KB item
+		// limit across two separate calls).
+		inline := map[string]int{}
+		incoming := map[string]bool{}
+		for _, field := range transcriptFamilyFields {
+			val, ok := fields[field]
+			if !ok {
+				continue
+			}
+			text, isStr := val.(string)
+			if !isStr || text == "" {
+				continue
+			}
+			if strings.HasPrefix(text, "s3://") {
+				// Same write-time invariant as UpdateMeeting: only the
+				// server-generated ref for this meeting+field may be
+				// stored as-is; any other s3:// value is rejected.
+				if _, _, err := validateTranscriptRef(r.bucketName, meetingID, field, text); err != nil {
+					return fmt.Errorf("rejecting %s write: %w", field, err)
 				}
+				continue
+			}
+			inline[field] = len(text)
+			incoming[field] = true
+		}
+		if len(inline) > 0 {
+			// Stored family fields this update doesn't touch count against
+			// the budget but can't be spilled here (rewriting them would
+			// race their own writers) — they enter as a fixed baseline, so
+			// the incoming fields spill until the remainder fits.
+			fixedInline := 0
+			storedSizes, err := r.getStoredTranscriptInlineSizes(ctx, userID, meetingID)
+			if err != nil {
+				// Don't block the write on a failed sizing read — fall back
+				// to judging the incoming fields alone (per-field thresholds
+				// still apply), and log so the gap is visible.
+				log.Printf("transcript overflow sizing read failed for meeting %s (falling back to incoming-only budget): %v", meetingID, err)
+			} else {
+				for field, size := range storedSizes {
+					if !incoming[field] {
+						fixedInline += size
+					}
+				}
+			}
+			for len(inline) > 0 {
+				pick := pickTranscriptToSpill(inline, fixedInline)
+				if pick == "" {
+					break
+				}
+				ref, err := r.storeTranscript(ctx, meetingID, pick, fields[pick].(string))
+				if err != nil {
+					return fmt.Errorf("failed to store %s: %w", pick, err)
+				}
+				fields[pick] = ref
+				delete(inline, pick)
 			}
 		}
 	}

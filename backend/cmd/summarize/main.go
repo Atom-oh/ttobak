@@ -932,6 +932,17 @@ func extractMeetingIDFromTranscriptKey(key string) string {
 	key = strings.TrimPrefix(key, "transcripts/")
 	key = strings.TrimSuffix(key, ".json")
 	key = strings.TrimSuffix(key, "-nova")
+	// The repository's transcript overflow spill writes
+	// transcripts/{meetingId}/{field}.txt (see repository.storeTranscript),
+	// and the EventBridge rule matches the whole transcripts/ prefix — so
+	// every spill upload lands here too. A nested key is never a meeting's
+	// own transcript JSON; returning "{id}/transcriptA.txt" as a "meeting
+	// id" would skip the status guard (GetMeetingByID misses) and then fail
+	// parsing the .txt as JSON, erroring the invocation on every long
+	// meeting's normal pipeline run. Reject anything with a path separator.
+	if strings.Contains(key, "/") {
+		return ""
+	}
 	return key
 }
 
