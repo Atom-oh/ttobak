@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -201,8 +202,8 @@ func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key
 	return bucket, key, nil
 }
 
-// getStoredTranscriptInlineSizes returns the CURRENT inline byte size of
-// each transcript-family attribute on the meeting item (0 for absent
+// getStoredTranscriptInlineSizes returns the CURRENT inline size of each
+// transcript-family attribute on the meeting item (zero value for absent
 // fields and for values already spilled as s3:// refs). Used by the
 // partial-update overflow logic to budget incoming fields against siblings
 // a previous call left inline.
@@ -213,7 +214,25 @@ func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key
 // MaxLiveSummaryRunes*4 ≈ 128KB of UTF-8).
 var nonSpillableSizedFields = []string{"content", "notes", "liveSummary", "actionItems"}
 
-func (r *DynamoDBRepository) getStoredInlineSizes(ctx context.Context, userID, meetingID string) (map[string]int, error) {
+// inlineFieldSize carries a stored String attribute's size in the two units
+// this package needs it in: bytes for the 400KB item-size budget (DynamoDB's
+// real limit is on the UTF-8-encoded item), and runes for asserting against
+// DynamoDB's own size() function in a ConditionExpression -- confirmed by
+// direct probing against a live item that size() on a String attribute
+// returns its Unicode code point (rune) count, NOT its UTF-8 byte length.
+// The two diverge by ~3x for Korean text (each Hangul syllable is 1 rune
+// but 3 UTF-8 bytes), so a guard condition built from byteLen instead of
+// runeLen never matches reality once the sizing read includes Korean
+// content/liveSummary/actionItems -- it fails deterministically on every
+// attempt (all maxSiblingAttempts retries recompute the same wrong value),
+// not just under a genuine concurrent-writer race. See the 2026-09-01
+// incident in CLAUDE.md Known Issues for how this was found.
+type inlineFieldSize struct {
+	bytes int
+	runes int
+}
+
+func (r *DynamoDBRepository) getStoredInlineSizes(ctx context.Context, userID, meetingID string) (map[string]inlineFieldSize, error) {
 	names := make([]expression.NameBuilder, 0, len(transcriptFamilyFields)+len(nonSpillableSizedFields))
 	for _, f := range transcriptFamilyFields {
 		names = append(names, expression.Name(f))
@@ -243,11 +262,11 @@ func (r *DynamoDBRepository) getStoredInlineSizes(ctx context.Context, userID, m
 	if err != nil {
 		return nil, err
 	}
-	sizes := map[string]int{}
+	sizes := map[string]inlineFieldSize{}
 	for _, field := range append(append([]string{}, transcriptFamilyFields...), nonSpillableSizedFields...) {
 		if av, ok := out.Item[field]; ok {
 			if s, ok := av.(*types.AttributeValueMemberS); ok && !strings.HasPrefix(s.Value, "s3://") {
-				sizes[field] = len(s.Value)
+				sizes[field] = inlineFieldSize{bytes: len(s.Value), runes: utf8.RuneCountInString(s.Value)}
 			}
 		}
 	}
@@ -265,7 +284,7 @@ func (r *DynamoDBRepository) getStoredInlineSizes(ctx context.Context, userID, m
 // the condition and the caller re-reads and re-decides instead of writing
 // an over-budget item. Autosave collisions just cost a bounded retry —
 // transcript writes happen once per pipeline run, not per keystroke.
-func siblingSizeCondition(carried map[string]bool, storedSizes map[string]int) (expression.ConditionBuilder, bool) {
+func siblingSizeCondition(carried map[string]bool, storedSizes map[string]inlineFieldSize) (expression.ConditionBuilder, bool) {
 	var cond expression.ConditionBuilder
 	have := false
 	add := func(c expression.ConditionBuilder) {
@@ -281,7 +300,11 @@ func siblingSizeCondition(carried map[string]bool, storedSizes map[string]int) (
 			continue
 		}
 		if size, ok := storedSizes[field]; ok {
-			add(expression.Name(field).Size().Equal(expression.Value(size)))
+			// DynamoDB's size() on a String attribute is rune-based -- see
+			// inlineFieldSize's doc comment. Using size.bytes here would
+			// make this assertion fail deterministically for any stored
+			// value containing multi-byte UTF-8 (Korean, etc).
+			add(expression.Name(field).Size().Equal(expression.Value(size.runes)))
 		} else {
 			// Sizing read saw no inline value: either absent or already an
 			// s3:// ref — both contribute 0 inline bytes; assert it stayed
@@ -850,10 +873,14 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			if err != nil {
 				return fmt.Errorf("transcript overflow sizing read failed for meeting %s: %w", meetingID, err)
 			}
+			// Budget arithmetic stays byte-based throughout: it's approximating
+			// the real 400KB item-size limit, which DynamoDB enforces on the
+			// UTF-8-encoded item -- unlike the size()-equality guard below,
+			// which must match size()'s rune-based semantics instead.
 			fixedInline := 0
 			for field, size := range storedSizes {
 				if !incoming[field] {
-					fixedInline += size
+					fixedInline += size.bytes
 				}
 			}
 			// Non-spillable large fields carried by THIS update replace
@@ -861,7 +888,7 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			for _, field := range nonSpillableSizedFields {
 				if val, ok := fields[field]; ok {
 					if text, isStr := val.(string); isStr {
-						fixedInline -= storedSizes[field]
+						fixedInline -= storedSizes[field].bytes
 						fixedInline += len(text)
 					}
 				}

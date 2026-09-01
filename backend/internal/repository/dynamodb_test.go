@@ -389,7 +389,7 @@ func TestSiblingSizeCondition(t *testing.T) {
 				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
 				"content": true, "notes": true, "liveSummary": true, "actionItems": true,
 			},
-			map[string]int{})
+			map[string]inlineFieldSize{})
 		if ok {
 			t.Fatal("expected no condition when every guarded field is carried by the update")
 		}
@@ -401,7 +401,7 @@ func TestSiblingSizeCondition(t *testing.T) {
 				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
 				"content": true, "notes": true, "actionItems": true,
 			},
-			map[string]int{"liveSummary": 5000})
+			map[string]inlineFieldSize{"liveSummary": {bytes: 5000, runes: 5000}})
 		if !ok {
 			t.Fatal("expected a condition pinning the uncarried liveSummary")
 		}
@@ -420,10 +420,53 @@ func TestSiblingSizeCondition(t *testing.T) {
 		}
 	})
 
+	t.Run("uses rune count, not byte count, for the size() operand", func(t *testing.T) {
+		// DynamoDB's size() on a String attribute is rune-based, confirmed by
+		// probing a live item (2026-09-01 incident): Korean text's byte length
+		// (UTF-8, ~3 bytes/syllable) and rune length diverge sharply, and a
+		// condition built from the wrong one fails deterministically on every
+		// write for content containing Korean -- not just under a genuine
+		// concurrent-writer race. bytes and runes are deliberately different
+		// here so a regression back to storedSizes[field].bytes fails this test.
+		cond, ok := siblingSizeCondition(
+			map[string]bool{
+				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
+				"notes": true, "actionItems": true,
+			},
+			map[string]inlineFieldSize{
+				"content":     {bytes: 18259, runes: 9265},
+				"liveSummary": {bytes: 4479, runes: 2329},
+			})
+		if !ok {
+			t.Fatal("expected a condition pinning content and liveSummary")
+		}
+		expr, err := expression.NewBuilder().WithCondition(cond).Build()
+		if err != nil {
+			t.Fatalf("condition must build: %v", err)
+		}
+		wantRuneCounts := map[string]bool{"9265": false, "2329": false}
+		for _, v := range expr.Values() {
+			if n, isN := v.(*types.AttributeValueMemberN); isN {
+				if _, want := wantRuneCounts[n.Value]; want {
+					wantRuneCounts[n.Value] = true
+				}
+				if n.Value == "18259" || n.Value == "4479" {
+					t.Fatalf("size() operand %s is the byte length, not the rune count -- "+
+						"this would fail against a real DynamoDB item every time", n.Value)
+				}
+			}
+		}
+		for runes, seen := range wantRuneCounts {
+			if !seen {
+				t.Fatalf("expected rune count %s as a size() operand, got %v", runes, expr.Values())
+			}
+		}
+	})
+
 	t.Run("stored sibling pins size, absent sibling pins absent-or-ref", func(t *testing.T) {
 		cond, ok := siblingSizeCondition(
 			map[string]bool{"transcriptB": true},
-			map[string]int{"transcriptA": 12345})
+			map[string]inlineFieldSize{"transcriptA": {bytes: 12345, runes: 12345}})
 		if !ok {
 			t.Fatal("expected a condition")
 		}
