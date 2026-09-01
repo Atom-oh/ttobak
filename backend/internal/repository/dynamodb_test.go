@@ -384,6 +384,36 @@ func TestTranscriptOverflowThreshold(t *testing.T) {
 	}
 }
 
+func TestUtf16UnitCount(t *testing.T) {
+	// This is the actual production conversion site (getStoredInlineSizes
+	// calls utf16UnitCount directly) -- the astral-character fixture below
+	// is what makes a regression back to a rune-counting implementation
+	// (e.g. utf8.RuneCountInString) fail here rather than only against
+	// Korean production data days later. See the 2026-09-01 incident in
+	// CLAUDE.md Known Issues.
+	cases := []struct {
+		name string
+		s    string
+		want int
+	}{
+		{"empty", "", 0},
+		{"pure ASCII", "abc", 3},
+		{"BMP-only (Korean)", "한글", 2},
+		{"single astral character (emoji)", "😀", 2}, // U+1F600: 1 rune, 2 UTF-16 units
+		{"mixed", "메모 😀", 5},                        // "메모"(2 units) + " "(1 unit) + emoji(2 units, 1 rune) = 5 units, 4 runes
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := utf16UnitCount(c.s); got != c.want {
+				t.Errorf("utf16UnitCount(%q) = %d, want %d", c.s, got, c.want)
+			}
+			if got := utf16UnitCount(c.s); got == len([]rune(c.s)) && c.s == "😀" {
+				t.Fatalf("utf16UnitCount(%q) matches rune count (%d) -- fixture no longer distinguishes UTF-16 units from runes", c.s, got)
+			}
+		})
+	}
+}
+
 func TestSiblingSizeCondition(t *testing.T) {
 	t.Run("no siblings when every guarded field is carried", func(t *testing.T) {
 		_, ok := siblingSizeCondition(

@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf16"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -221,15 +220,34 @@ var nonSpillableSizedFields = []string{"content", "notes", "liveSummary", "actio
 // (CLAUDE.md Known Issues has the full writeup, including the emoji probe
 // that told UTF-16 units apart from rune count): bytes for the 400KB
 // item-size budget (DynamoDB's real limit is on the UTF-8-encoded item),
-// and utf16Units for asserting against DynamoDB's own size() function in a
-// ConditionExpression, which returns the UTF-16 code unit count for a
-// String attribute -- NOT UTF-8 bytes, and NOT Unicode runes either (they
-// only coincide for BMP-only text like Korean; an astral character such as
-// an emoji is 1 rune but 2 UTF-16 units, so utf16.Encode is required, not
-// utf8.RuneCountInString).
+// and utf16Units (see utf16UnitCount below) for asserting against
+// DynamoDB's own size() function in a ConditionExpression, which returns
+// the UTF-16 code unit count for a String attribute -- NOT UTF-8 bytes,
+// and NOT Unicode runes either (they only coincide for BMP-only text like
+// Korean; an astral character such as an emoji is 1 rune but 2 UTF-16
+// units).
 type inlineFieldSize struct {
 	bytes      int
 	utf16Units int
+}
+
+// utf16UnitCount returns the UTF-16 code unit count of s, matching what
+// DynamoDB's size() function returns for a String attribute -- see
+// inlineFieldSize's doc comment above for how that was determined. A
+// counting loop rather than utf16.Encode(): avoids allocating a []rune and
+// []uint16 for every field on every sizing read (up to 7 fields, each up
+// to ~400KB), and treats invalid UTF-8 the same way utf16.Encode would
+// (each invalid byte decodes to one U+FFFD replacement rune, itself BMP
+// and therefore 1 unit).
+func utf16UnitCount(s string) int {
+	n := 0
+	for _, r := range s {
+		n++
+		if r > 0xFFFF {
+			n++ // astral character: a UTF-16 surrogate pair, 2 units for 1 rune
+		}
+	}
+	return n
 }
 
 func (r *DynamoDBRepository) getStoredInlineSizes(ctx context.Context, userID, meetingID string) (map[string]inlineFieldSize, error) {
@@ -266,7 +284,7 @@ func (r *DynamoDBRepository) getStoredInlineSizes(ctx context.Context, userID, m
 	for _, field := range append(append([]string{}, transcriptFamilyFields...), nonSpillableSizedFields...) {
 		if av, ok := out.Item[field]; ok {
 			if s, ok := av.(*types.AttributeValueMemberS); ok && !strings.HasPrefix(s.Value, "s3://") {
-				sizes[field] = inlineFieldSize{bytes: len(s.Value), utf16Units: len(utf16.Encode([]rune(s.Value)))}
+				sizes[field] = inlineFieldSize{bytes: len(s.Value), utf16Units: utf16UnitCount(s.Value)}
 			}
 		}
 	}
