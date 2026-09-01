@@ -2,8 +2,10 @@ package repository
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
@@ -382,6 +384,36 @@ func TestTranscriptOverflowThreshold(t *testing.T) {
 	}
 }
 
+func TestUtf16UnitCount(t *testing.T) {
+	// This is the actual production conversion site (getStoredInlineSizes
+	// calls utf16UnitCount directly) -- the astral-character fixture below
+	// is what makes a regression back to a rune-counting implementation
+	// (e.g. utf8.RuneCountInString) fail here rather than only against
+	// Korean production data days later. See the 2026-09-01 incident in
+	// CLAUDE.md Known Issues.
+	cases := []struct {
+		name string
+		s    string
+		want int
+	}{
+		{"empty", "", 0},
+		{"pure ASCII", "abc", 3},
+		{"BMP-only (Korean)", "한글", 2},
+		{"single astral character (emoji)", "😀", 2}, // U+1F600: 1 rune, 2 UTF-16 units
+		{"mixed", "메모 😀", 5},                        // "메모"(2 units) + " "(1 unit) + emoji(2 units, 1 rune) = 5 units, 4 runes
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := utf16UnitCount(c.s); got != c.want {
+				t.Errorf("utf16UnitCount(%q) = %d, want %d", c.s, got, c.want)
+			}
+			if got := utf16UnitCount(c.s); got == len([]rune(c.s)) && c.s == "😀" {
+				t.Fatalf("utf16UnitCount(%q) matches rune count (%d) -- fixture no longer distinguishes UTF-16 units from runes", c.s, got)
+			}
+		})
+	}
+}
+
 func TestSiblingSizeCondition(t *testing.T) {
 	t.Run("no siblings when every guarded field is carried", func(t *testing.T) {
 		_, ok := siblingSizeCondition(
@@ -389,7 +421,7 @@ func TestSiblingSizeCondition(t *testing.T) {
 				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
 				"content": true, "notes": true, "liveSummary": true, "actionItems": true,
 			},
-			map[string]int{})
+			map[string]inlineFieldSize{})
 		if ok {
 			t.Fatal("expected no condition when every guarded field is carried by the update")
 		}
@@ -401,7 +433,7 @@ func TestSiblingSizeCondition(t *testing.T) {
 				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
 				"content": true, "notes": true, "actionItems": true,
 			},
-			map[string]int{"liveSummary": 5000})
+			map[string]inlineFieldSize{"liveSummary": {bytes: 5000, utf16Units: 5000}})
 		if !ok {
 			t.Fatal("expected a condition pinning the uncarried liveSummary")
 		}
@@ -420,10 +452,103 @@ func TestSiblingSizeCondition(t *testing.T) {
 		}
 	})
 
+	t.Run("uses UTF-16 code unit count, not byte count, for the size() operand", func(t *testing.T) {
+		// DynamoDB's size() on a String attribute counts UTF-16 code units,
+		// confirmed by probing a live item (2026-09-01 incident, see CLAUDE.md
+		// Known Issues): Korean text's byte length (UTF-8, ~3 bytes/syllable)
+		// diverges sharply from its UTF-16 length, and a condition built from
+		// bytes fails deterministically on every write for content containing
+		// Korean -- not just under a genuine concurrent-writer race. bytes and
+		// utf16Units are deliberately different here so a regression back to
+		// storedSizes[field].bytes fails this test.
+		cond, ok := siblingSizeCondition(
+			map[string]bool{
+				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
+				"notes": true, "actionItems": true,
+			},
+			map[string]inlineFieldSize{
+				"content":     {bytes: 18259, utf16Units: 9265},
+				"liveSummary": {bytes: 4479, utf16Units: 2329},
+			})
+		if !ok {
+			t.Fatal("expected a condition pinning content and liveSummary")
+		}
+		expr, err := expression.NewBuilder().WithCondition(cond).Build()
+		if err != nil {
+			t.Fatalf("condition must build: %v", err)
+		}
+		wantUnits := map[string]bool{"9265": false, "2329": false}
+		for _, v := range expr.Values() {
+			if n, isN := v.(*types.AttributeValueMemberN); isN {
+				if _, want := wantUnits[n.Value]; want {
+					wantUnits[n.Value] = true
+				}
+				if n.Value == "18259" || n.Value == "4479" {
+					t.Fatalf("size() operand %s is the byte length, not the UTF-16 unit count -- "+
+						"this would fail against a real DynamoDB item every time", n.Value)
+				}
+			}
+		}
+		for units, seen := range wantUnits {
+			if !seen {
+				t.Fatalf("expected UTF-16 unit count %s as a size() operand, got %v", units, expr.Values())
+			}
+		}
+	})
+
+	t.Run("astral characters need UTF-16 code units, not runes", func(t *testing.T) {
+		// U+1F600 (😀) is a single Unicode rune but a UTF-16 surrogate PAIR --
+		// 2 code units. Korean text alone can't catch a rune-count regression
+		// (every Hangul syllable is in the Basic Multilingual Plane, so rune
+		// count and UTF-16 unit count coincide for it); this is the case that
+		// would silently reintroduce the same deterministic-failure bug via
+		// unicode/utf8.RuneCountInString instead of unicode/utf16.Encode.
+		text := "메모 😀"
+		byteLen := len(text)
+		utf16Len := len(utf16.Encode([]rune(text)))
+		runeLen := len([]rune(text))
+		if utf16Len == runeLen {
+			t.Fatalf("test fixture doesn't actually distinguish UTF-16 units from runes (got %d == %d)", utf16Len, runeLen)
+		}
+
+		cond, ok := siblingSizeCondition(
+			map[string]bool{
+				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
+				"liveSummary": true, "actionItems": true,
+			},
+			map[string]inlineFieldSize{
+				"content": {bytes: byteLen, utf16Units: utf16Len},
+			})
+		if !ok {
+			t.Fatal("expected a condition pinning content")
+		}
+		expr, err := expression.NewBuilder().WithCondition(cond).Build()
+		if err != nil {
+			t.Fatalf("condition must build: %v", err)
+		}
+		found := false
+		for _, v := range expr.Values() {
+			if n, isN := v.(*types.AttributeValueMemberN); isN {
+				switch n.Value {
+				case fmt.Sprint(utf16Len):
+					found = true
+				case fmt.Sprint(runeLen):
+					t.Fatalf("size() operand %d is the rune count, not the UTF-16 unit count (%d) -- "+
+						"would fail against a real DynamoDB item containing astral characters", runeLen, utf16Len)
+				case fmt.Sprint(byteLen):
+					t.Fatalf("size() operand %d is the byte length, not the UTF-16 unit count (%d)", byteLen, utf16Len)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("expected UTF-16 unit count %d as a size() operand, got %v", utf16Len, expr.Values())
+		}
+	})
+
 	t.Run("stored sibling pins size, absent sibling pins absent-or-ref", func(t *testing.T) {
 		cond, ok := siblingSizeCondition(
 			map[string]bool{"transcriptB": true},
-			map[string]int{"transcriptA": 12345})
+			map[string]inlineFieldSize{"transcriptA": {bytes: 12345, utf16Units: 12345}})
 		if !ok {
 			t.Fatal("expected a condition")
 		}
