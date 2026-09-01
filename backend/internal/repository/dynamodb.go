@@ -203,10 +203,12 @@ func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key
 }
 
 // getStoredInlineSizes returns the CURRENT inline size of each
-// transcript-family attribute on the meeting item (zero value for absent
-// fields and for values already spilled as s3:// refs). Used by the
-// partial-update overflow logic to budget incoming fields against siblings
-// a previous call left inline.
+// transcript-family attribute on the meeting item -- a field is simply
+// omitted from the returned map if it's absent or already spilled to an
+// s3:// ref (siblingSizeCondition's `ok` check branches on that instead of
+// a zero size, since 0 is also a valid size for an empty inline string).
+// Used by the partial-update overflow logic to budget incoming fields
+// against siblings a previous call left inline.
 // nonSpillableSizedFields are large item attributes that count against the
 // inline budget but have NO S3 overflow path of their own — the budget must
 // leave room for them or the transcript family alone can look fine while
@@ -282,6 +284,12 @@ func (r *DynamoDBRepository) getStoredInlineSizes(ctx context.Context, userID, m
 // the condition and the caller re-reads and re-decides instead of writing
 // an over-budget item. Autosave collisions just cost a bounded retry —
 // transcript writes happen once per pipeline run, not per keystroke.
+// Residual gap: the guard is a same-size heuristic, not a content/version
+// check, so a same-UTF-16-length substitution (e.g. ASCII replaced with a
+// different but equal-length string) still slips through undetected in
+// either unit -- unchanged from the byte-based version before this fix.
+// The backstop for that is DynamoDB's own 400KB item-size limit, which
+// rejects the write outright if it's ever actually exceeded.
 func siblingSizeCondition(carried map[string]bool, storedSizes map[string]inlineFieldSize) (expression.ConditionBuilder, bool) {
 	var cond expression.ConditionBuilder
 	have := false
@@ -864,17 +872,18 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			// the budget but can't be spilled here (rewriting them would
 			// race their own writers) — they enter as a fixed baseline, so
 			// the incoming fields spill until the remainder fits. The read
-			// is fail-closed: without it the budget (and the guard below)
-			// can't be computed, and writing blind is how the 400KB
-			// incident happened.
+			// is fail-closed: without it the budget (and siblingSizeCondition's
+			// guard below) can't be computed, and writing blind is how the
+			// 400KB incident happened.
 			storedSizes, err := r.getStoredInlineSizes(ctx, userID, meetingID)
 			if err != nil {
 				return fmt.Errorf("transcript overflow sizing read failed for meeting %s: %w", meetingID, err)
 			}
 			// Budget arithmetic stays byte-based throughout: it's approximating
 			// the real 400KB item-size limit, which DynamoDB enforces on the
-			// UTF-8-encoded item -- unlike the size()-equality guard below,
-			// which must match size()'s rune-based semantics instead.
+			// UTF-8-encoded item -- unlike siblingSizeCondition's size()-equality
+			// guard below, which must match size()'s UTF-16-code-unit semantics
+			// instead (see inlineFieldSize's doc comment).
 			fixedInline := 0
 			for field, size := range storedSizes {
 				if !incoming[field] {
