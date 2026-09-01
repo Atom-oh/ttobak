@@ -380,3 +380,38 @@ func TestTranscriptOverflowThreshold(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateTranscriptRef(t *testing.T) {
+	const own = "ttobak-assets-test"
+	cases := []struct {
+		name    string
+		ref     string
+		wantKey string
+		wantErr bool
+	}{
+		{"own bucket transcripts key", "s3://ttobak-assets-test/transcripts/m1/transcriptA.txt", "transcripts/m1/transcriptA.txt", false},
+		{"segments key", "s3://ttobak-assets-test/transcripts/m1/transcriptSegments.txt", "transcripts/m1/transcriptSegments.txt", false},
+		{"foreign bucket rejected", "s3://attacker-bucket/transcripts/m1/transcriptA.txt", "", true},
+		{"own bucket but audio prefix rejected", "s3://ttobak-assets-test/audio/other-user/m2/rec.webm", "", true},
+		{"path traversal rejected", "s3://ttobak-assets-test/transcripts/../audio/other/rec.webm", "", true},
+		{"malformed no key", "s3://ttobak-assets-test", "", true},
+		{"malformed empty", "s3://", "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bucket, key, err := validateTranscriptRef(own, c.ref)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q, got bucket=%q key=%q", c.ref, bucket, key)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", c.ref, err)
+			}
+			if bucket != own || key != c.wantKey {
+				t.Fatalf("got bucket=%q key=%q, want bucket=%q key=%q", bucket, key, own, c.wantKey)
+			}
+		})
+	}
+}

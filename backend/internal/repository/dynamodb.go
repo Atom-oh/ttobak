@@ -105,6 +105,31 @@ func (r *DynamoDBRepository) storeTranscript(ctx context.Context, meetingID, fie
 	return fmt.Sprintf("s3://%s/%s", r.bucketName, key), nil
 }
 
+// validateTranscriptRef parses an s3:// transcript reference and enforces
+// the only shape this repository ever writes (storeTranscript:
+// s3://{ownBucket}/transcripts/{meetingId}/{field}.txt). Without this
+// whitelist, a stored field carrying an attacker-chosen s3:// string (e.g.
+// via a user-settable transcript field passed through untouched because it
+// already "looks stored") would turn loadTranscript + the api Lambda's
+// bucket-wide grant into an arbitrary-object read primitive — another
+// user's audio, docs, or any bucket the role can reach. Pure function so
+// the security branching is unit-testable without an S3 client.
+func validateTranscriptRef(ownBucket, ref string) (bucket, key string, err error) {
+	trimmed := strings.TrimPrefix(ref, "s3://")
+	parts := strings.SplitN(trimmed, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("invalid S3 reference: %s", ref)
+	}
+	bucket, key = parts[0], parts[1]
+	if bucket != ownBucket {
+		return "", "", fmt.Errorf("refusing to dereference transcript ref outside own bucket: %s", ref)
+	}
+	if !strings.HasPrefix(key, "transcripts/") || strings.Contains(key, "..") {
+		return "", "", fmt.Errorf("refusing to dereference transcript ref outside transcripts/ prefix: %s", ref)
+	}
+	return bucket, key, nil
+}
+
 // loadTranscript loads a transcript, fetching from S3 if it's an S3 reference
 func (r *DynamoDBRepository) loadTranscript(ctx context.Context, ref string) (string, error) {
 	if ref == "" {
@@ -121,13 +146,10 @@ func (r *DynamoDBRepository) loadTranscript(ctx context.Context, ref string) (st
 		return ref, nil // Return reference as-is if no S3 client
 	}
 
-	trimmed := strings.TrimPrefix(ref, "s3://")
-	parts := strings.SplitN(trimmed, "/", 2)
-	if len(parts) != 2 {
-		return "", fmt.Errorf("invalid S3 reference: %s", ref)
+	bucket, key, err := validateTranscriptRef(r.bucketName, ref)
+	if err != nil {
+		return "", err
 	}
-	bucket := parts[0]
-	key := parts[1]
 
 	result, err := r.s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
@@ -353,34 +375,43 @@ func (r *DynamoDBRepository) BatchGetMeetings(ctx context.Context, keys []Meetin
 func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.Meeting) error {
 	meeting.UpdatedAt = time.Now().UTC()
 
+	// The s3:// ref substitution below must NOT mutate the caller's Meeting:
+	// callers keep using the hydrated object after saving (e.g.
+	// GetMeetingDetail's stuck-recovery path saves and then serves
+	// TranscriptSegments as json.RawMessage in the same request — an
+	// "s3://..." string there is invalid JSON and breaks the response).
+	// Marshal a shallow storage copy instead; string-field swaps on the copy
+	// never touch the original, and the shared slices/maps are only read.
+	stored := *meeting
+
 	// Store large transcripts in S3 if S3 client is available
 	if r.s3Client != nil && r.bucketName != "" {
 		// Store transcriptA if needed
-		if meeting.TranscriptA != "" && !strings.HasPrefix(meeting.TranscriptA, "s3://") {
-			ref, err := r.storeTranscript(ctx, meeting.MeetingID, "transcriptA", meeting.TranscriptA)
+		if stored.TranscriptA != "" && !strings.HasPrefix(stored.TranscriptA, "s3://") {
+			ref, err := r.storeTranscript(ctx, stored.MeetingID, "transcriptA", stored.TranscriptA)
 			if err != nil {
 				return fmt.Errorf("failed to store transcriptA: %w", err)
 			}
-			meeting.TranscriptA = ref
+			stored.TranscriptA = ref
 		}
 
 		// Store transcriptB if needed
-		if meeting.TranscriptB != "" && !strings.HasPrefix(meeting.TranscriptB, "s3://") {
-			ref, err := r.storeTranscript(ctx, meeting.MeetingID, "transcriptB", meeting.TranscriptB)
+		if stored.TranscriptB != "" && !strings.HasPrefix(stored.TranscriptB, "s3://") {
+			ref, err := r.storeTranscript(ctx, stored.MeetingID, "transcriptB", stored.TranscriptB)
 			if err != nil {
 				return fmt.Errorf("failed to store transcriptB: %w", err)
 			}
-			meeting.TranscriptB = ref
+			stored.TranscriptB = ref
 		}
 
 		// Store transcriptSegments if needed (lower threshold — see
 		// segmentsSizeThreshold: it shares the item with transcriptA)
-		if meeting.TranscriptSegments != "" && !strings.HasPrefix(meeting.TranscriptSegments, "s3://") {
-			ref, err := r.storeTranscript(ctx, meeting.MeetingID, "transcriptSegments", meeting.TranscriptSegments)
+		if stored.TranscriptSegments != "" && !strings.HasPrefix(stored.TranscriptSegments, "s3://") {
+			ref, err := r.storeTranscript(ctx, stored.MeetingID, "transcriptSegments", stored.TranscriptSegments)
 			if err != nil {
 				return fmt.Errorf("failed to store transcriptSegments: %w", err)
 			}
-			meeting.TranscriptSegments = ref
+			stored.TranscriptSegments = ref
 		}
 	}
 
@@ -417,9 +448,9 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 		if err != nil {
 			return fmt.Errorf("failed to preserve projectIds on meeting update: %w", err)
 		}
-		meeting.ProjectIDs = current
+		stored.ProjectIDs = current
 
-		item, err := attributevalue.MarshalMap(meeting)
+		item, err := attributevalue.MarshalMap(&stored)
 		if err != nil {
 			return fmt.Errorf("failed to marshal meeting: %w", err)
 		}
