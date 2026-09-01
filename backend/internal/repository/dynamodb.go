@@ -254,14 +254,18 @@ func (r *DynamoDBRepository) getStoredInlineSizes(ctx context.Context, userID, m
 	return sizes, nil
 }
 
-// siblingSizeCondition asserts, at write time, that each transcript-family
+// siblingSizeCondition asserts, at write time, that every budget-relevant
 // sibling NOT carried by this update still has the inline size the sizing
 // read saw (size() equality for inline values; absent-or-ref for the rest).
-// This closes the TOCTOU window between getStoredTranscriptInlineSizes and
-// the UpdateItem: a concurrent writer (e.g. Whisper's transcriptA+segments
-// racing Nova's transcriptB) changing a sibling flips the condition, and
-// the caller re-reads and re-decides instead of writing an over-budget item.
-func siblingSizeCondition(incoming map[string]bool, storedSizes map[string]int) (expression.ConditionBuilder, bool) {
+// Guarded siblings are the transcript family AND the non-spillable sized
+// fields (content/notes/liveSummary/actionItems): the budget counts both,
+// so a concurrent writer growing EITHER kind between the sizing read and
+// this UpdateItem (Whisper's transcriptA+segments racing Nova's
+// transcriptB, or a notes/liveSummary autosave landing mid-pipeline) flips
+// the condition and the caller re-reads and re-decides instead of writing
+// an over-budget item. Autosave collisions just cost a bounded retry —
+// transcript writes happen once per pipeline run, not per keystroke.
+func siblingSizeCondition(carried map[string]bool, storedSizes map[string]int) (expression.ConditionBuilder, bool) {
 	var cond expression.ConditionBuilder
 	have := false
 	add := func(c expression.ConditionBuilder) {
@@ -271,8 +275,9 @@ func siblingSizeCondition(incoming map[string]bool, storedSizes map[string]int) 
 			cond, have = c, true
 		}
 	}
-	for _, field := range transcriptFamilyFields {
-		if incoming[field] {
+	guarded := append(append([]string{}, transcriptFamilyFields...), nonSpillableSizedFields...)
+	for _, field := range guarded {
+		if carried[field] {
 			continue
 		}
 		if size, ok := storedSizes[field]; ok {
@@ -873,7 +878,18 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 				fields[pick] = ref
 				delete(inline, pick)
 			}
-			if sc, ok := siblingSizeCondition(incoming, storedSizes); ok {
+			// Fields this update itself carries need no guard — we're
+			// overwriting them; everything else budget-relevant gets pinned.
+			carried := map[string]bool{}
+			for f := range incoming {
+				carried[f] = true
+			}
+			for _, f := range nonSpillableSizedFields {
+				if _, ok := fields[f]; ok {
+					carried[f] = true
+				}
+			}
+			if sc, ok := siblingSizeCondition(carried, storedSizes); ok {
 				writeCond = writeCond.And(sc)
 				siblingGuard = true
 			}

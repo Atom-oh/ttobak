@@ -383,12 +383,40 @@ func TestTranscriptOverflowThreshold(t *testing.T) {
 }
 
 func TestSiblingSizeCondition(t *testing.T) {
-	t.Run("no siblings when all fields incoming", func(t *testing.T) {
+	t.Run("no siblings when every guarded field is carried", func(t *testing.T) {
 		_, ok := siblingSizeCondition(
-			map[string]bool{"transcriptA": true, "transcriptB": true, "transcriptSegments": true},
+			map[string]bool{
+				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
+				"content": true, "notes": true, "liveSummary": true, "actionItems": true,
+			},
 			map[string]int{})
 		if ok {
-			t.Fatal("expected no condition when every family field is incoming")
+			t.Fatal("expected no condition when every guarded field is carried by the update")
+		}
+	})
+
+	t.Run("non-spillable sibling growth is guarded too", func(t *testing.T) {
+		cond, ok := siblingSizeCondition(
+			map[string]bool{
+				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
+				"content": true, "notes": true, "actionItems": true,
+			},
+			map[string]int{"liveSummary": 5000})
+		if !ok {
+			t.Fatal("expected a condition pinning the uncarried liveSummary")
+		}
+		expr, err := expression.NewBuilder().WithCondition(cond).Build()
+		if err != nil {
+			t.Fatalf("condition must build: %v", err)
+		}
+		found := false
+		for _, v := range expr.Values() {
+			if n, isN := v.(*types.AttributeValueMemberN); isN && n.Value == "5000" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected liveSummary's 5000 as a size() operand, got %v", expr.Values())
 		}
 	})
 
