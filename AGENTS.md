@@ -16,7 +16,7 @@ Korean AI meeting assistant for AWS Solutions Architects: record → real-time S
 ```bash
 # Go binary — MUST use full path /usr/local/go/bin/go (not `go`)
 cd backend && GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/api/bootstrap ./cmd/api
-cd backend && /usr/local/go/bin/go test ./internal/...      # stdlib testing, no testify; mock repos
+cd backend && /usr/local/go/bin/go test ./...               # stdlib testing, no testify; mock repos (cmd/* package tests included — matches test-backend.yml)
 cd backend && /usr/local/go/bin/go vet ./internal/...
 cd frontend && npm run build      # static export to out/
 cd frontend && npm run lint       # eslint (NO test framework — lint+build only)
