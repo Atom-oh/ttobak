@@ -358,3 +358,25 @@ func TestProjectIDsUnchangedCondition(t *testing.T) {
 		}
 	})
 }
+
+func TestTranscriptOverflowThreshold(t *testing.T) {
+	// transcriptA/B keep the historical 300KB threshold. transcriptSegments
+	// must spill to S3 much earlier: it coexists with transcriptA in the
+	// same item, and two fields individually under 300KB can still add up
+	// past DynamoDB's 400KB item limit (the 2026-08-31 meeting-797877d5
+	// incident class: 6h recording -> segments JSON + transcript together
+	// exceeded the item limit and flipped the meeting to error).
+	cases := []struct {
+		field string
+		want  int
+	}{
+		{"transcriptA", 300 * 1024},
+		{"transcriptB", 300 * 1024},
+		{"transcriptSegments", 100 * 1024},
+	}
+	for _, c := range cases {
+		if got := transcriptOverflowThreshold(c.field); got != c.want {
+			t.Errorf("transcriptOverflowThreshold(%q) = %d, want %d", c.field, got, c.want)
+		}
+	}
+}

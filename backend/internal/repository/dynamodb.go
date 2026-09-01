@@ -26,6 +26,26 @@ import (
 // DynamoDB has a 400KB item limit; we use 300KB to leave room for other attributes
 const transcriptSizeThreshold = 300 * 1024
 
+// segmentsSizeThreshold is the (much lower) overflow threshold for
+// transcriptSegments. Unlike transcriptA/B, the segments JSON coexists with
+// transcriptA in the same item and duplicates its full text, so two fields
+// each under 300KB can still add up past the 400KB item limit — a ~6h
+// recording did exactly that on 2026-08-31 (meeting 797877d5: UpdateItem
+// failed with "Item size to update has exceeded the maximum allowed size"
+// and the meeting flipped to error). Segments are machine-read only, so the
+// extra S3 round-trip on hydration is invisible to users.
+const segmentsSizeThreshold = 100 * 1024
+
+// transcriptOverflowThreshold returns the S3-overflow threshold for a
+// transcript-family field (see segmentsSizeThreshold for why
+// transcriptSegments spills earlier).
+func transcriptOverflowThreshold(field string) int {
+	if field == "transcriptSegments" {
+		return segmentsSizeThreshold
+	}
+	return transcriptSizeThreshold
+}
+
 // DynamoDBRepository provides DynamoDB operations for the meeting assistant
 type DynamoDBRepository struct {
 	client     *dynamodb.Client
@@ -66,7 +86,7 @@ func (r *DynamoDBRepository) storeTranscript(ctx context.Context, meetingID, fie
 	}
 
 	// If small enough or no S3 client, store inline
-	if len(text) < transcriptSizeThreshold || r.s3Client == nil {
+	if len(text) < transcriptOverflowThreshold(field) || r.s3Client == nil {
 		return text, nil
 	}
 
@@ -144,6 +164,13 @@ func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meeting *mo
 		meeting.TranscriptB, err = r.loadTranscript(ctx, meeting.TranscriptB)
 		if err != nil {
 			return fmt.Errorf("failed to load transcriptB: %w", err)
+		}
+	}
+
+	if strings.HasPrefix(meeting.TranscriptSegments, "s3://") {
+		meeting.TranscriptSegments, err = r.loadTranscript(ctx, meeting.TranscriptSegments)
+		if err != nil {
+			return fmt.Errorf("failed to load transcriptSegments: %w", err)
 		}
 	}
 
@@ -345,6 +372,16 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 			}
 			meeting.TranscriptB = ref
 		}
+
+		// Store transcriptSegments if needed (lower threshold — see
+		// segmentsSizeThreshold: it shares the item with transcriptA)
+		if meeting.TranscriptSegments != "" && !strings.HasPrefix(meeting.TranscriptSegments, "s3://") {
+			ref, err := r.storeTranscript(ctx, meeting.MeetingID, "transcriptSegments", meeting.TranscriptSegments)
+			if err != nil {
+				return fmt.Errorf("failed to store transcriptSegments: %w", err)
+			}
+			meeting.TranscriptSegments = ref
+		}
 	}
 
 	// UpdateMeeting is a whole-item PutItem, not a partial UpdateItem -- every
@@ -526,9 +563,12 @@ func (r *DynamoDBRepository) UpdateMeetingFieldsIfMatch(ctx context.Context, use
 }
 
 func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}) error {
-	// Handle S3 transcript overflow for large transcript fields
+	// Handle S3 transcript overflow for large transcript fields.
+	// transcriptSegments is included since 2026-08-31: without it, a long
+	// recording's segments JSON + transcriptA in one UpdateItem exceeded
+	// DynamoDB's 400KB item limit (meeting 797877d5) and the write failed.
 	if r.s3Client != nil && r.bucketName != "" {
-		for _, field := range []string{"transcriptA", "transcriptB"} {
+		for _, field := range []string{"transcriptA", "transcriptB", "transcriptSegments"} {
 			if val, ok := fields[field]; ok {
 				if text, isStr := val.(string); isStr && text != "" && !strings.HasPrefix(text, "s3://") {
 					ref, err := r.storeTranscript(ctx, meetingID, field, text)
