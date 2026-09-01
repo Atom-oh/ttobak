@@ -195,13 +195,28 @@ func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key
 // partial-update overflow logic to budget incoming fields against siblings
 // a previous call left inline.
 func (r *DynamoDBRepository) getStoredTranscriptInlineSizes(ctx context.Context, userID, meetingID string) (map[string]int, error) {
+	proj := expression.NamesList(
+		expression.Name("transcriptA"),
+		expression.Name("transcriptB"),
+		expression.Name("transcriptSegments"),
+	)
+	expr, err := expression.NewBuilder().WithProjection(proj).Build()
+	if err != nil {
+		return nil, fmt.Errorf("build sizing projection: %w", err)
+	}
 	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(r.tableName),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 		},
-		ProjectionExpression: aws.String("transcriptA, transcriptB, transcriptSegments"),
+		ProjectionExpression:     expr.Projection(),
+		ExpressionAttributeNames: expr.Names(),
+		// The sizing decision below is guarded by a size()-equality
+		// condition on the write, but start from a strongly consistent
+		// snapshot so the common case doesn't burn a retry on a lagging
+		// replica read.
+		ConsistentRead: aws.Bool(true),
 	})
 	if err != nil {
 		return nil, err
@@ -215,6 +230,42 @@ func (r *DynamoDBRepository) getStoredTranscriptInlineSizes(ctx context.Context,
 		}
 	}
 	return sizes, nil
+}
+
+// siblingSizeCondition asserts, at write time, that each transcript-family
+// sibling NOT carried by this update still has the inline size the sizing
+// read saw (size() equality for inline values; absent-or-ref for the rest).
+// This closes the TOCTOU window between getStoredTranscriptInlineSizes and
+// the UpdateItem: a concurrent writer (e.g. Whisper's transcriptA+segments
+// racing Nova's transcriptB) changing a sibling flips the condition, and
+// the caller re-reads and re-decides instead of writing an over-budget item.
+func siblingSizeCondition(incoming map[string]bool, storedSizes map[string]int) (expression.ConditionBuilder, bool) {
+	var cond expression.ConditionBuilder
+	have := false
+	add := func(c expression.ConditionBuilder) {
+		if have {
+			cond = cond.And(c)
+		} else {
+			cond, have = c, true
+		}
+	}
+	for _, field := range transcriptFamilyFields {
+		if incoming[field] {
+			continue
+		}
+		if size, ok := storedSizes[field]; ok {
+			add(expression.Name(field).Size().Equal(expression.Value(size)))
+		} else {
+			// Sizing read saw no inline value: either absent or already an
+			// s3:// ref — both contribute 0 inline bytes; assert it stayed
+			// that way.
+			add(expression.Or(
+				expression.AttributeNotExists(expression.Name(field)),
+				expression.Name(field).BeginsWith("s3://"),
+			))
+		}
+	}
+	return cond, have
 }
 
 // loadTranscript loads a transcript, fetching from S3 if it's an S3
@@ -717,15 +768,10 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 	// transcriptSegments is included since 2026-08-31: without it, a long
 	// recording's segments JSON + transcriptA in one UpdateItem exceeded
 	// DynamoDB's 400KB item limit (meeting 797877d5) and the write failed.
+	// Validate incoming s3:// refs and collect inline candidates once.
+	inline := map[string]int{}
+	incoming := map[string]bool{}
 	if r.s3Client != nil && r.bucketName != "" {
-		// Collect the inline sizes this update would leave in the item:
-		// incoming transcript-family values plus the STORED inline sizes of
-		// the family fields this update doesn't touch (a partial update
-		// writing only transcriptB must still account for a transcriptA
-		// already sitting inline, or A+B can add up past the 400KB item
-		// limit across two separate calls).
-		inline := map[string]int{}
-		incoming := map[string]bool{}
 		for _, field := range transcriptFamilyFields {
 			val, ok := fields[field]
 			if !ok {
@@ -747,23 +793,35 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			inline[field] = len(text)
 			incoming[field] = true
 		}
+	}
+
+	// Bounded read→decide→conditional-write loop (same pattern UpdateMeeting
+	// uses for ProjectIDs): the sizing read and the UpdateItem are not
+	// atomic, so a concurrent writer of a SIBLING transcript field (e.g.
+	// Whisper's transcriptA+segments racing Nova's transcriptB) could
+	// otherwise slip in between and the two writes could add up past the
+	// 400KB item limit anyway. The write carries a size()-equality condition
+	// on every sibling the sizing read saw; a flip re-reads and re-decides.
+	const maxSiblingAttempts = 3
+	for attempt := 1; ; attempt++ {
+		writeCond := condition
+		siblingGuard := false
 		if len(inline) > 0 {
 			// Stored family fields this update doesn't touch count against
 			// the budget but can't be spilled here (rewriting them would
 			// race their own writers) — they enter as a fixed baseline, so
-			// the incoming fields spill until the remainder fits.
-			fixedInline := 0
+			// the incoming fields spill until the remainder fits. The read
+			// is fail-closed: without it the budget (and the guard below)
+			// can't be computed, and writing blind is how the 400KB
+			// incident happened.
 			storedSizes, err := r.getStoredTranscriptInlineSizes(ctx, userID, meetingID)
 			if err != nil {
-				// Don't block the write on a failed sizing read — fall back
-				// to judging the incoming fields alone (per-field thresholds
-				// still apply), and log so the gap is visible.
-				log.Printf("transcript overflow sizing read failed for meeting %s (falling back to incoming-only budget): %v", meetingID, err)
-			} else {
-				for field, size := range storedSizes {
-					if !incoming[field] {
-						fixedInline += size
-					}
+				return fmt.Errorf("transcript overflow sizing read failed for meeting %s: %w", meetingID, err)
+			}
+			fixedInline := 0
+			for field, size := range storedSizes {
+				if !incoming[field] {
+					fixedInline += size
 				}
 			}
 			for len(inline) > 0 {
@@ -778,49 +836,63 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 				fields[pick] = ref
 				delete(inline, pick)
 			}
+			if sc, ok := siblingSizeCondition(incoming, storedSizes); ok {
+				writeCond = writeCond.And(sc)
+				siblingGuard = true
+			}
 		}
-	}
 
-	// Always include updatedAt
-	fields["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
+		// Always include updatedAt (refreshed per attempt)
+		fields["updatedAt"] = time.Now().UTC().Format(time.RFC3339Nano)
 
-	// Build SET expression
-	var update expression.UpdateBuilder
-	first := true
-	for k, v := range fields {
-		if first {
-			update = expression.Set(expression.Name(k), expression.Value(v))
-			first = false
-		} else {
-			update = update.Set(expression.Name(k), expression.Value(v))
+		// Build SET expression
+		var update expression.UpdateBuilder
+		first := true
+		for k, v := range fields {
+			if first {
+				update = expression.Set(expression.Name(k), expression.Value(v))
+				first = false
+			} else {
+				update = update.Set(expression.Name(k), expression.Value(v))
+			}
 		}
-	}
 
-	expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(condition).Build()
-	if err != nil {
-		return fmt.Errorf("failed to build update expression: %w", err)
-	}
-
-	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
-			"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
-		},
-		UpdateExpression:          expr.Update(),
-		ConditionExpression:       expr.Condition(),
-		ExpressionAttributeNames:  expr.Names(),
-		ExpressionAttributeValues: expr.Values(),
-	})
-	if err != nil {
-		var ccfe *types.ConditionalCheckFailedException
-		if errors.As(err, &ccfe) {
-			return fmt.Errorf("%w: meeting %s condition not met", ErrConditionFailed, meetingID)
+		expr, err := expression.NewBuilder().WithUpdate(update).WithCondition(writeCond).Build()
+		if err != nil {
+			return fmt.Errorf("failed to build update expression: %w", err)
 		}
-		return fmt.Errorf("failed to update meeting fields: %w", err)
-	}
 
-	return nil
+		_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixUser + userID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+			},
+			UpdateExpression:          expr.Update(),
+			ConditionExpression:       expr.Condition(),
+			ExpressionAttributeNames:  expr.Names(),
+			ExpressionAttributeValues: expr.Values(),
+		})
+		if err != nil {
+			var ccfe *types.ConditionalCheckFailedException
+			if errors.As(err, &ccfe) {
+				// Only re-loop when this attempt added the sibling guard —
+				// a lost sibling race is retryable (re-read, re-decide);
+				// the CALLER's condition failing would fail identically on
+				// every retry and must surface as ErrConditionFailed now.
+				// (A sibling retry where the caller's condition was the
+				// actual failure converges to the same terminal error.)
+				if siblingGuard && attempt < maxSiblingAttempts {
+					log.Printf("transcript sibling size changed under meeting %s (attempt %d/%d); re-reading", meetingID, attempt, maxSiblingAttempts)
+					continue
+				}
+				return fmt.Errorf("%w: meeting %s condition not met", ErrConditionFailed, meetingID)
+			}
+			return fmt.Errorf("failed to update meeting fields: %w", err)
+		}
+
+		return nil
+	}
 }
 
 // PreAllocateAudioKeys initializes audioKeys as a list of empty strings for multi-file upload.

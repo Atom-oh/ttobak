@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
 )
@@ -379,6 +380,42 @@ func TestTranscriptOverflowThreshold(t *testing.T) {
 			t.Errorf("transcriptOverflowThreshold(%q) = %d, want %d", c.field, got, c.want)
 		}
 	}
+}
+
+func TestSiblingSizeCondition(t *testing.T) {
+	t.Run("no siblings when all fields incoming", func(t *testing.T) {
+		_, ok := siblingSizeCondition(
+			map[string]bool{"transcriptA": true, "transcriptB": true, "transcriptSegments": true},
+			map[string]int{})
+		if ok {
+			t.Fatal("expected no condition when every family field is incoming")
+		}
+	})
+
+	t.Run("stored sibling pins size, absent sibling pins absent-or-ref", func(t *testing.T) {
+		cond, ok := siblingSizeCondition(
+			map[string]bool{"transcriptB": true},
+			map[string]int{"transcriptA": 12345})
+		if !ok {
+			t.Fatal("expected a condition")
+		}
+		expr, err := expression.NewBuilder().WithCondition(cond).Build()
+		if err != nil {
+			t.Fatalf("condition must build: %v", err)
+		}
+		foundSize := false
+		for _, v := range expr.Values() {
+			if n, isN := v.(*types.AttributeValueMemberN); isN && n.Value == "12345" {
+				foundSize = true
+			}
+		}
+		if !foundSize {
+			t.Fatalf("expected the sizing read's 12345 to appear as a size() operand, got %v", expr.Values())
+		}
+		if !strings.Contains(*expr.Condition(), "attribute_not_exists") {
+			t.Fatalf("expected absent sibling (transcriptSegments) to be pinned absent-or-ref, got %s", *expr.Condition())
+		}
+	})
 }
 
 func TestPickTranscriptToSpill(t *testing.T) {
