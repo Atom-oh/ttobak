@@ -131,9 +131,21 @@ func (r *DynamoDBRepository) SetS3Client(s3Client *s3.Client, bucketName string)
 
 // storeTranscript uploads a transcript-family value to its canonical S3 key
 // and returns the s3:// reference to store in DynamoDB. WHETHER to spill is
-// the caller's decision (shouldSpillTranscript) — the per-field threshold no
+// the caller's decision (pickTranscriptToSpill) — the per-field threshold no
 // longer lives here, because the combined-budget rule can force a field
 // below its own threshold to spill.
+//
+// KNOWN NON-ATOMICITY (accepted, documented): this PUT lands before the
+// caller's conditional DynamoDB write, on a FIXED per-meeting/field key —
+// if that write is then rejected, the S3 object already holds the new
+// content while the item may still reference it with older expectations.
+// Accepted because (a) transcript-family fields are only ever written via
+// the UNconditional UpdateMeetingFields path or UpdateMeeting, whose only
+// conditions (sibling size guard, projectIds guard) retry until the same
+// content lands — the write converges rather than being abandoned — and
+// (b) no IfMatch caller carries transcript fields today. If one ever does,
+// switch to versioned spill keys referenced only after the item write
+// commits.
 func (r *DynamoDBRepository) storeTranscript(ctx context.Context, meetingID, field, text string) (string, error) {
 	if text == "" {
 		return "", nil
@@ -194,12 +206,22 @@ func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key
 // fields and for values already spilled as s3:// refs). Used by the
 // partial-update overflow logic to budget incoming fields against siblings
 // a previous call left inline.
-func (r *DynamoDBRepository) getStoredTranscriptInlineSizes(ctx context.Context, userID, meetingID string) (map[string]int, error) {
-	proj := expression.NamesList(
-		expression.Name("transcriptA"),
-		expression.Name("transcriptB"),
-		expression.Name("transcriptSegments"),
-	)
+// nonSpillableSizedFields are large item attributes that count against the
+// inline budget but have NO S3 overflow path of their own — the budget must
+// leave room for them or the transcript family alone can look fine while
+// the whole item still exceeds 400KB (liveSummary alone may reach
+// MaxLiveSummaryRunes*4 ≈ 128KB of UTF-8).
+var nonSpillableSizedFields = []string{"content", "notes", "liveSummary", "actionItems"}
+
+func (r *DynamoDBRepository) getStoredInlineSizes(ctx context.Context, userID, meetingID string) (map[string]int, error) {
+	names := make([]expression.NameBuilder, 0, len(transcriptFamilyFields)+len(nonSpillableSizedFields))
+	for _, f := range transcriptFamilyFields {
+		names = append(names, expression.Name(f))
+	}
+	for _, f := range nonSpillableSizedFields {
+		names = append(names, expression.Name(f))
+	}
+	proj := expression.NamesList(names[0], names[1:]...)
 	expr, err := expression.NewBuilder().WithProjection(proj).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build sizing projection: %w", err)
@@ -222,7 +244,7 @@ func (r *DynamoDBRepository) getStoredTranscriptInlineSizes(ctx context.Context,
 		return nil, err
 	}
 	sizes := map[string]int{}
-	for _, field := range transcriptFamilyFields {
+	for _, field := range append(append([]string{}, transcriptFamilyFields...), nonSpillableSizedFields...) {
 		if av, ok := out.Item[field]; ok {
 			if s, ok := av.(*types.AttributeValueMemberS); ok && !strings.HasPrefix(s.Value, "s3://") {
 				sizes[field] = len(s.Value)
@@ -571,8 +593,13 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 		// can violate its 100KB cap while a larger transcriptA is fine);
 		// budget violations then spill the largest remaining field, which
 		// frees the most budget per spill.
+		// Non-spillable large fields on the item count against the budget
+		// too (liveSummary can reach MaxLiveSummaryRunes*4 ≈ 128KB; content
+		// and notes are uncapped) — without them the transcript family can
+		// look fine while the whole item still exceeds 400KB.
+		fixedInline := len(stored.Content) + len(stored.Notes) + len(stored.LiveSummary) + len(stored.ActionItems)
 		for len(inline) > 0 {
-			pick := pickTranscriptToSpill(inline, 0)
+			pick := pickTranscriptToSpill(inline, fixedInline)
 			if pick == "" {
 				break
 			}
@@ -814,7 +841,7 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			// is fail-closed: without it the budget (and the guard below)
 			// can't be computed, and writing blind is how the 400KB
 			// incident happened.
-			storedSizes, err := r.getStoredTranscriptInlineSizes(ctx, userID, meetingID)
+			storedSizes, err := r.getStoredInlineSizes(ctx, userID, meetingID)
 			if err != nil {
 				return fmt.Errorf("transcript overflow sizing read failed for meeting %s: %w", meetingID, err)
 			}
@@ -822,6 +849,16 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			for field, size := range storedSizes {
 				if !incoming[field] {
 					fixedInline += size
+				}
+			}
+			// Non-spillable large fields carried by THIS update replace
+			// their stored values — use the incoming size instead.
+			for _, field := range nonSpillableSizedFields {
+				if val, ok := fields[field]; ok {
+					if text, isStr := val.(string); isStr {
+						fixedInline -= storedSizes[field]
+						fixedInline += len(text)
+					}
 				}
 			}
 			for len(inline) > 0 {

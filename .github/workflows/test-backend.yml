@@ -43,7 +43,9 @@ jobs:
 
       - name: Run tests
         working-directory: backend
-        run: go test ./internal/... -count=1
+        # ./... (not ./internal/...) so cmd/* package tests run too —
+        # cmd/summarize and cmd/transcribe carry unit tests of their own.
+        run: go test ./... -count=1
 
       - uses: actions/setup-python@v6
         with:
