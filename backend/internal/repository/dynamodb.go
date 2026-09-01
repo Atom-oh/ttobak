@@ -106,15 +106,17 @@ func (r *DynamoDBRepository) storeTranscript(ctx context.Context, meetingID, fie
 }
 
 // validateTranscriptRef parses an s3:// transcript reference and enforces
-// the only shape this repository ever writes (storeTranscript:
-// s3://{ownBucket}/transcripts/{meetingId}/{field}.txt). Without this
-// whitelist, a stored field carrying an attacker-chosen s3:// string (e.g.
-// via a user-settable transcript field passed through untouched because it
-// already "looks stored") would turn loadTranscript + the api Lambda's
-// bucket-wide grant into an arbitrary-object read primitive — another
-// user's audio, docs, or any bucket the role can reach. Pure function so
-// the security branching is unit-testable without an S3 client.
-func validateTranscriptRef(ownBucket, ref string) (bucket, key string, err error) {
+// the ONE exact key this repository ever writes for this meeting and field
+// (storeTranscript: s3://{ownBucket}/transcripts/{meetingId}/{field}.txt).
+// Binding to the meeting/field matters, not just bucket+prefix: a
+// user-settable transcript field (UpdateMeetingRequest.TranscriptA) is
+// passed through untouched when it already "looks stored", so a
+// prefix-only whitelist still lets an authenticated editor plant ANOTHER
+// meeting's transcript key on their own meeting and read a different
+// tenant's transcript through the api Lambda's bucket-wide grant. Exact
+// per-meeting key match closes that. Pure function so the security
+// branching is unit-testable without an S3 client.
+func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key string, err error) {
 	trimmed := strings.TrimPrefix(ref, "s3://")
 	parts := strings.SplitN(trimmed, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -124,14 +126,17 @@ func validateTranscriptRef(ownBucket, ref string) (bucket, key string, err error
 	if bucket != ownBucket {
 		return "", "", fmt.Errorf("refusing to dereference transcript ref outside own bucket: %s", ref)
 	}
-	if !strings.HasPrefix(key, "transcripts/") || strings.Contains(key, "..") {
-		return "", "", fmt.Errorf("refusing to dereference transcript ref outside transcripts/ prefix: %s", ref)
+	expected := fmt.Sprintf("transcripts/%s/%s.txt", meetingID, field)
+	if key != expected {
+		return "", "", fmt.Errorf("refusing to dereference transcript ref not owned by meeting %s field %s: %s", meetingID, field, ref)
 	}
 	return bucket, key, nil
 }
 
-// loadTranscript loads a transcript, fetching from S3 if it's an S3 reference
-func (r *DynamoDBRepository) loadTranscript(ctx context.Context, ref string) (string, error) {
+// loadTranscript loads a transcript, fetching from S3 if it's an S3
+// reference. meetingID/field pin the ref to the one key storeTranscript
+// writes for this meeting — see validateTranscriptRef.
+func (r *DynamoDBRepository) loadTranscript(ctx context.Context, meetingID, field, ref string) (string, error) {
 	if ref == "" {
 		return "", nil
 	}
@@ -146,7 +151,7 @@ func (r *DynamoDBRepository) loadTranscript(ctx context.Context, ref string) (st
 		return ref, nil // Return reference as-is if no S3 client
 	}
 
-	bucket, key, err := validateTranscriptRef(r.bucketName, ref)
+	bucket, key, err := validateTranscriptRef(r.bucketName, meetingID, field, ref)
 	if err != nil {
 		return "", err
 	}
@@ -176,21 +181,21 @@ func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meeting *mo
 
 	var err error
 	if strings.HasPrefix(meeting.TranscriptA, "s3://") {
-		meeting.TranscriptA, err = r.loadTranscript(ctx, meeting.TranscriptA)
+		meeting.TranscriptA, err = r.loadTranscript(ctx, meeting.MeetingID, "transcriptA", meeting.TranscriptA)
 		if err != nil {
 			return fmt.Errorf("failed to load transcriptA: %w", err)
 		}
 	}
 
 	if strings.HasPrefix(meeting.TranscriptB, "s3://") {
-		meeting.TranscriptB, err = r.loadTranscript(ctx, meeting.TranscriptB)
+		meeting.TranscriptB, err = r.loadTranscript(ctx, meeting.MeetingID, "transcriptB", meeting.TranscriptB)
 		if err != nil {
 			return fmt.Errorf("failed to load transcriptB: %w", err)
 		}
 	}
 
 	if strings.HasPrefix(meeting.TranscriptSegments, "s3://") {
-		meeting.TranscriptSegments, err = r.loadTranscript(ctx, meeting.TranscriptSegments)
+		meeting.TranscriptSegments, err = r.loadTranscript(ctx, meeting.MeetingID, "transcriptSegments", meeting.TranscriptSegments)
 		if err != nil {
 			return fmt.Errorf("failed to load transcriptSegments: %w", err)
 		}

@@ -382,24 +382,33 @@ func TestTranscriptOverflowThreshold(t *testing.T) {
 }
 
 func TestValidateTranscriptRef(t *testing.T) {
+	// The ref must match the ONE key storeTranscript writes for this
+	// meeting+field. Anything else — another meeting's transcript in the
+	// same bucket included — is a cross-tenant read primitive when combined
+	// with the user-settable TranscriptA passthrough and the api Lambda's
+	// bucket-wide grant, and must be rejected.
 	const own = "ttobak-assets-test"
 	cases := []struct {
 		name    string
+		field   string
 		ref     string
 		wantKey string
 		wantErr bool
 	}{
-		{"own bucket transcripts key", "s3://ttobak-assets-test/transcripts/m1/transcriptA.txt", "transcripts/m1/transcriptA.txt", false},
-		{"segments key", "s3://ttobak-assets-test/transcripts/m1/transcriptSegments.txt", "transcripts/m1/transcriptSegments.txt", false},
-		{"foreign bucket rejected", "s3://attacker-bucket/transcripts/m1/transcriptA.txt", "", true},
-		{"own bucket but audio prefix rejected", "s3://ttobak-assets-test/audio/other-user/m2/rec.webm", "", true},
-		{"path traversal rejected", "s3://ttobak-assets-test/transcripts/../audio/other/rec.webm", "", true},
-		{"malformed no key", "s3://ttobak-assets-test", "", true},
-		{"malformed empty", "s3://", "", true},
+		{"own meeting transcriptA", "transcriptA", "s3://ttobak-assets-test/transcripts/m1/transcriptA.txt", "transcripts/m1/transcriptA.txt", false},
+		{"own meeting segments", "transcriptSegments", "s3://ttobak-assets-test/transcripts/m1/transcriptSegments.txt", "transcripts/m1/transcriptSegments.txt", false},
+		{"ANOTHER meeting's transcript rejected", "transcriptA", "s3://ttobak-assets-test/transcripts/victim-meeting/transcriptA.txt", "", true},
+		{"field mismatch rejected", "transcriptA", "s3://ttobak-assets-test/transcripts/m1/transcriptB.txt", "", true},
+		{"foreign bucket rejected", "transcriptA", "s3://attacker-bucket/transcripts/m1/transcriptA.txt", "", true},
+		{"own bucket but audio prefix rejected", "transcriptA", "s3://ttobak-assets-test/audio/other-user/m2/rec.webm", "", true},
+		{"path traversal rejected", "transcriptA", "s3://ttobak-assets-test/transcripts/../audio/other/rec.webm", "", true},
+		{"suffix smuggling rejected", "transcriptA", "s3://ttobak-assets-test/transcripts/m1/transcriptA.txt.evil", "", true},
+		{"malformed no key", "transcriptA", "s3://ttobak-assets-test", "", true},
+		{"malformed empty", "transcriptA", "s3://", "", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			bucket, key, err := validateTranscriptRef(own, c.ref)
+			bucket, key, err := validateTranscriptRef(own, "m1", c.field, c.ref)
 			if c.wantErr {
 				if err == nil {
 					t.Fatalf("expected error for %q, got bucket=%q key=%q", c.ref, bucket, key)
