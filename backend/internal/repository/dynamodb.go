@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
+	"unicode/utf16"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -202,7 +202,7 @@ func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key
 	return bucket, key, nil
 }
 
-// getStoredTranscriptInlineSizes returns the CURRENT inline size of each
+// getStoredInlineSizes returns the CURRENT inline size of each
 // transcript-family attribute on the meeting item (zero value for absent
 // fields and for values already spilled as s3:// refs). Used by the
 // partial-update overflow logic to budget incoming fields against siblings
@@ -215,21 +215,19 @@ func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key
 var nonSpillableSizedFields = []string{"content", "notes", "liveSummary", "actionItems"}
 
 // inlineFieldSize carries a stored String attribute's size in the two units
-// this package needs it in: bytes for the 400KB item-size budget (DynamoDB's
-// real limit is on the UTF-8-encoded item), and runes for asserting against
-// DynamoDB's own size() function in a ConditionExpression -- confirmed by
-// direct probing against a live item that size() on a String attribute
-// returns its Unicode code point (rune) count, NOT its UTF-8 byte length.
-// The two diverge by ~3x for Korean text (each Hangul syllable is 1 rune
-// but 3 UTF-8 bytes), so a guard condition built from byteLen instead of
-// runeLen never matches reality once the sizing read includes Korean
-// content/liveSummary/actionItems -- it fails deterministically on every
-// attempt (all maxSiblingAttempts retries recompute the same wrong value),
-// not just under a genuine concurrent-writer race. See the 2026-09-01
-// incident in CLAUDE.md Known Issues for how this was found.
+// this package needs it in, per the 2026-09-01 sibling-size-guard incident
+// (CLAUDE.md Known Issues has the full writeup, including the emoji probe
+// that told UTF-16 units apart from rune count): bytes for the 400KB
+// item-size budget (DynamoDB's real limit is on the UTF-8-encoded item),
+// and utf16Units for asserting against DynamoDB's own size() function in a
+// ConditionExpression, which returns the UTF-16 code unit count for a
+// String attribute -- NOT UTF-8 bytes, and NOT Unicode runes either (they
+// only coincide for BMP-only text like Korean; an astral character such as
+// an emoji is 1 rune but 2 UTF-16 units, so utf16.Encode is required, not
+// utf8.RuneCountInString).
 type inlineFieldSize struct {
-	bytes int
-	runes int
+	bytes      int
+	utf16Units int
 }
 
 func (r *DynamoDBRepository) getStoredInlineSizes(ctx context.Context, userID, meetingID string) (map[string]inlineFieldSize, error) {
@@ -266,7 +264,7 @@ func (r *DynamoDBRepository) getStoredInlineSizes(ctx context.Context, userID, m
 	for _, field := range append(append([]string{}, transcriptFamilyFields...), nonSpillableSizedFields...) {
 		if av, ok := out.Item[field]; ok {
 			if s, ok := av.(*types.AttributeValueMemberS); ok && !strings.HasPrefix(s.Value, "s3://") {
-				sizes[field] = inlineFieldSize{bytes: len(s.Value), runes: utf8.RuneCountInString(s.Value)}
+				sizes[field] = inlineFieldSize{bytes: len(s.Value), utf16Units: len(utf16.Encode([]rune(s.Value)))}
 			}
 		}
 	}
@@ -300,11 +298,11 @@ func siblingSizeCondition(carried map[string]bool, storedSizes map[string]inline
 			continue
 		}
 		if size, ok := storedSizes[field]; ok {
-			// DynamoDB's size() on a String attribute is rune-based -- see
-			// inlineFieldSize's doc comment. Using size.bytes here would
-			// make this assertion fail deterministically for any stored
-			// value containing multi-byte UTF-8 (Korean, etc).
-			add(expression.Name(field).Size().Equal(expression.Value(size.runes)))
+			// DynamoDB's size() on a String attribute counts UTF-16 code
+			// units -- see inlineFieldSize's doc comment. Using size.bytes
+			// here would make this assertion fail deterministically for
+			// any stored value containing multi-byte UTF-8 (Korean, etc).
+			add(expression.Name(field).Size().Equal(expression.Value(size.utf16Units)))
 		} else {
 			// Sizing read saw no inline value: either absent or already an
 			// s3:// ref — both contribute 0 inline bytes; assert it stayed
