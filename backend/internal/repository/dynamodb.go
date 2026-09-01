@@ -389,34 +389,38 @@ func (r *DynamoDBRepository) UpdateMeeting(ctx context.Context, meeting *model.M
 	// never touch the original, and the shared slices/maps are only read.
 	stored := *meeting
 
-	// Store large transcripts in S3 if S3 client is available
+	// Store large transcripts in S3 if S3 client is available. A value that
+	// already carries an s3:// prefix is passed through ONLY if it is
+	// exactly the server-generated ref for this meeting+field — a
+	// client-supplied s3:// string (TranscriptA is user-settable) must be
+	// rejected at write time too, or the stored item violates the "only
+	// server-generated refs are ever stored" invariant the read-side
+	// validator depends on.
 	if r.s3Client != nil && r.bucketName != "" {
-		// Store transcriptA if needed
-		if stored.TranscriptA != "" && !strings.HasPrefix(stored.TranscriptA, "s3://") {
-			ref, err := r.storeTranscript(ctx, stored.MeetingID, "transcriptA", stored.TranscriptA)
-			if err != nil {
-				return fmt.Errorf("failed to store transcriptA: %w", err)
+		for _, f := range []struct {
+			name string
+			val  *string
+		}{
+			{"transcriptA", &stored.TranscriptA},
+			{"transcriptB", &stored.TranscriptB},
+			// transcriptSegments spills at a lower threshold — see
+			// segmentsSizeThreshold: it shares the item with transcriptA.
+			{"transcriptSegments", &stored.TranscriptSegments},
+		} {
+			if *f.val == "" {
+				continue
 			}
-			stored.TranscriptA = ref
-		}
-
-		// Store transcriptB if needed
-		if stored.TranscriptB != "" && !strings.HasPrefix(stored.TranscriptB, "s3://") {
-			ref, err := r.storeTranscript(ctx, stored.MeetingID, "transcriptB", stored.TranscriptB)
-			if err != nil {
-				return fmt.Errorf("failed to store transcriptB: %w", err)
+			if strings.HasPrefix(*f.val, "s3://") {
+				if _, _, err := validateTranscriptRef(r.bucketName, stored.MeetingID, f.name, *f.val); err != nil {
+					return fmt.Errorf("rejecting %s write: %w", f.name, err)
+				}
+				continue
 			}
-			stored.TranscriptB = ref
-		}
-
-		// Store transcriptSegments if needed (lower threshold — see
-		// segmentsSizeThreshold: it shares the item with transcriptA)
-		if stored.TranscriptSegments != "" && !strings.HasPrefix(stored.TranscriptSegments, "s3://") {
-			ref, err := r.storeTranscript(ctx, stored.MeetingID, "transcriptSegments", stored.TranscriptSegments)
+			ref, err := r.storeTranscript(ctx, stored.MeetingID, f.name, *f.val)
 			if err != nil {
-				return fmt.Errorf("failed to store transcriptSegments: %w", err)
+				return fmt.Errorf("failed to store %s: %w", f.name, err)
 			}
-			stored.TranscriptSegments = ref
+			*f.val = ref
 		}
 	}
 
@@ -606,7 +610,16 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 	if r.s3Client != nil && r.bucketName != "" {
 		for _, field := range []string{"transcriptA", "transcriptB", "transcriptSegments"} {
 			if val, ok := fields[field]; ok {
-				if text, isStr := val.(string); isStr && text != "" && !strings.HasPrefix(text, "s3://") {
+				if text, isStr := val.(string); isStr && text != "" {
+					if strings.HasPrefix(text, "s3://") {
+						// Same write-time invariant as UpdateMeeting: only the
+						// server-generated ref for this meeting+field may be
+						// stored as-is; any other s3:// value is rejected.
+						if _, _, err := validateTranscriptRef(r.bucketName, meetingID, field, text); err != nil {
+							return fmt.Errorf("rejecting %s write: %w", field, err)
+						}
+						continue
+					}
 					ref, err := r.storeTranscript(ctx, meetingID, field, text)
 					if err != nil {
 						return fmt.Errorf("failed to store %s: %w", field, err)
