@@ -508,6 +508,14 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		fields["liveSummary"] = *req.LiveSummary
 	}
 	if req.TranscriptA != "" {
+		// s3:// values are repository-internal storage refs (large
+		// transcripts spill to S3 — see repository.validateTranscriptRef);
+		// legitimate client input is always the transcript TEXT. Accepting
+		// a client-supplied ref — even a well-formed one whose object
+		// doesn't exist — would poison every later read of this field.
+		if strings.HasPrefix(req.TranscriptA, "s3://") {
+			return nil, fmt.Errorf("%w: transcriptA must be transcript text, not a storage reference", ErrInvalidInput)
+		}
 		fields["transcriptA"] = req.TranscriptA
 	}
 	if req.SelectedTranscript != "" {

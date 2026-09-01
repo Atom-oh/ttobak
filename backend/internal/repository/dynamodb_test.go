@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/expression"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/ttobak/backend/internal/model"
 )
@@ -357,4 +358,181 @@ func TestProjectIDsUnchangedCondition(t *testing.T) {
 			t.Fatalf("expected the current projectIds to appear as the condition's String Set operand, got %v", expr.Values())
 		}
 	})
+}
+
+func TestTranscriptOverflowThreshold(t *testing.T) {
+	// transcriptA/B keep the historical 300KB threshold. transcriptSegments
+	// must spill to S3 much earlier: it coexists with transcriptA in the
+	// same item, and two fields individually under 300KB can still add up
+	// past DynamoDB's 400KB item limit (the 2026-08-31 meeting-797877d5
+	// incident class: 6h recording -> segments JSON + transcript together
+	// exceeded the item limit and flipped the meeting to error).
+	cases := []struct {
+		field string
+		want  int
+	}{
+		{"transcriptA", 300 * 1024},
+		{"transcriptB", 300 * 1024},
+		{"transcriptSegments", 100 * 1024},
+	}
+	for _, c := range cases {
+		if got := transcriptOverflowThreshold(c.field); got != c.want {
+			t.Errorf("transcriptOverflowThreshold(%q) = %d, want %d", c.field, got, c.want)
+		}
+	}
+}
+
+func TestSiblingSizeCondition(t *testing.T) {
+	t.Run("no siblings when every guarded field is carried", func(t *testing.T) {
+		_, ok := siblingSizeCondition(
+			map[string]bool{
+				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
+				"content": true, "notes": true, "liveSummary": true, "actionItems": true,
+			},
+			map[string]int{})
+		if ok {
+			t.Fatal("expected no condition when every guarded field is carried by the update")
+		}
+	})
+
+	t.Run("non-spillable sibling growth is guarded too", func(t *testing.T) {
+		cond, ok := siblingSizeCondition(
+			map[string]bool{
+				"transcriptA": true, "transcriptB": true, "transcriptSegments": true,
+				"content": true, "notes": true, "actionItems": true,
+			},
+			map[string]int{"liveSummary": 5000})
+		if !ok {
+			t.Fatal("expected a condition pinning the uncarried liveSummary")
+		}
+		expr, err := expression.NewBuilder().WithCondition(cond).Build()
+		if err != nil {
+			t.Fatalf("condition must build: %v", err)
+		}
+		found := false
+		for _, v := range expr.Values() {
+			if n, isN := v.(*types.AttributeValueMemberN); isN && n.Value == "5000" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected liveSummary's 5000 as a size() operand, got %v", expr.Values())
+		}
+	})
+
+	t.Run("stored sibling pins size, absent sibling pins absent-or-ref", func(t *testing.T) {
+		cond, ok := siblingSizeCondition(
+			map[string]bool{"transcriptB": true},
+			map[string]int{"transcriptA": 12345})
+		if !ok {
+			t.Fatal("expected a condition")
+		}
+		expr, err := expression.NewBuilder().WithCondition(cond).Build()
+		if err != nil {
+			t.Fatalf("condition must build: %v", err)
+		}
+		foundSize := false
+		for _, v := range expr.Values() {
+			if n, isN := v.(*types.AttributeValueMemberN); isN && n.Value == "12345" {
+				foundSize = true
+			}
+		}
+		if !foundSize {
+			t.Fatalf("expected the sizing read's 12345 to appear as a size() operand, got %v", expr.Values())
+		}
+		if !strings.Contains(*expr.Condition(), "attribute_not_exists") {
+			t.Fatalf("expected absent sibling (transcriptSegments) to be pinned absent-or-ref, got %s", *expr.Condition())
+		}
+	})
+}
+
+func TestPickTranscriptToSpill(t *testing.T) {
+	kb := func(n int) int { return n * 1024 }
+	cases := []struct {
+		name   string
+		inline map[string]int
+		fixed  int
+		want   string
+	}{
+		{"all small fits", map[string]int{"transcriptA": kb(50), "transcriptSegments": kb(40)}, 0, ""},
+		{"segments over own 100KB cap even when total fits", map[string]int{"transcriptA": kb(50), "transcriptSegments": kb(120)}, 0, "transcriptSegments"},
+		{"A over own 300KB cap", map[string]int{"transcriptA": kb(310)}, 0, "transcriptA"},
+		// The round-4 residual hole: A and B independent, each under 300KB,
+		// combined past the budget — largest spills.
+		{"A+B combined over budget spills largest", map[string]int{"transcriptA": kb(299), "transcriptB": kb(250)}, 0, "transcriptA"},
+		// Partial update: incoming B alone is fine, but a stored inline A
+		// (fixed baseline, unspillable here) pushes the total over — the
+		// incoming field must spill.
+		{"fixed baseline forces incoming spill", map[string]int{"transcriptB": kb(90)}, kb(250), "transcriptB"},
+		{"fixed baseline alone over budget but nothing spillable", map[string]int{}, kb(400), ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := pickTranscriptToSpill(c.inline, c.fixed); got != c.want {
+				t.Fatalf("pickTranscriptToSpill(%v, %d) = %q, want %q", c.inline, c.fixed, got, c.want)
+			}
+		})
+	}
+
+	t.Run("fixpoint loop drains until fit", func(t *testing.T) {
+		inline := map[string]int{"transcriptA": kb(200), "transcriptB": kb(200), "transcriptSegments": kb(90)}
+		var spilled []string
+		for len(inline) > 0 {
+			pick := pickTranscriptToSpill(inline, 0)
+			if pick == "" {
+				break
+			}
+			spilled = append(spilled, pick)
+			delete(inline, pick)
+		}
+		// 490KB total: spill one 200KB field -> 290KB remaining fits budget
+		// and each remainder is under its own threshold.
+		if len(spilled) != 1 {
+			t.Fatalf("expected exactly 1 spill, got %v", spilled)
+		}
+	})
+}
+
+func TestValidateTranscriptRef(t *testing.T) {
+	// The ref must match the ONE key storeTranscript writes for this
+	// meeting+field. Anything else — another meeting's transcript in the
+	// same bucket included — is a cross-tenant read primitive when combined
+	// with the user-settable TranscriptA passthrough and the api Lambda's
+	// bucket-wide grant, and must be rejected.
+	const own = "ttobak-assets-test"
+	cases := []struct {
+		name    string
+		field   string
+		ref     string
+		wantKey string
+		wantErr bool
+	}{
+		{"own meeting transcriptA", "transcriptA", "s3://ttobak-assets-test/transcripts/m1/transcriptA.txt", "transcripts/m1/transcriptA.txt", false},
+		{"own meeting segments", "transcriptSegments", "s3://ttobak-assets-test/transcripts/m1/transcriptSegments.txt", "transcripts/m1/transcriptSegments.txt", false},
+		{"ANOTHER meeting's transcript rejected", "transcriptA", "s3://ttobak-assets-test/transcripts/victim-meeting/transcriptA.txt", "", true},
+		{"field mismatch rejected", "transcriptA", "s3://ttobak-assets-test/transcripts/m1/transcriptB.txt", "", true},
+		{"foreign bucket rejected", "transcriptA", "s3://attacker-bucket/transcripts/m1/transcriptA.txt", "", true},
+		{"own bucket but audio prefix rejected", "transcriptA", "s3://ttobak-assets-test/audio/other-user/m2/rec.webm", "", true},
+		{"path traversal rejected", "transcriptA", "s3://ttobak-assets-test/transcripts/../audio/other/rec.webm", "", true},
+		{"suffix smuggling rejected", "transcriptA", "s3://ttobak-assets-test/transcripts/m1/transcriptA.txt.evil", "", true},
+		{"malformed no key", "transcriptA", "s3://ttobak-assets-test", "", true},
+		{"malformed empty", "transcriptA", "s3://", "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bucket, key, err := validateTranscriptRef(own, "m1", c.field, c.ref)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q, got bucket=%q key=%q", c.ref, bucket, key)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", c.ref, err)
+			}
+			if bucket != own || key != c.wantKey {
+				t.Fatalf("got bucket=%q key=%q, want bucket=%q key=%q", bucket, key, own, c.wantKey)
+			}
+		})
+	}
 }
