@@ -42,6 +42,18 @@ DIARIZATION_LOCAL_DIR = "/tmp/whisperx-diarization-model"
 BATCH_SIZE = int(os.environ.get("WHISPERX_BATCH_SIZE", "8"))
 SAMPLE_RATE = 16000  # whisperx.load_audio's fixed output rate
 
+# Whisperx 3.8.6's own VAD defaults (asr.py default_vad_options) — used to
+# fill whichever hysteresis knob the operator didn't override, and echoed in
+# operator-facing messages so code, errors, and runbook can't drift apart.
+# Re-verify against asr.py if the Dockerfile.whisperx pin is ever bumped:
+# a changed upstream default would silently shift the effective-pair check.
+VAD_DEFAULT_ONSET = 0.500
+VAD_DEFAULT_OFFSET = 0.363
+# Whisper's encoder consumes fixed 30-second windows; a merge window above
+# that silently truncates the tail of every merged chunk — a recall bench
+# poisoned in exactly the way _vad_config_from_env exists to prevent.
+VAD_MAX_CHUNK_SIZE = 30
+
 s3 = boto3.client("s3", region_name=REGION)
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 table = dynamodb.Table(TABLE)
@@ -242,17 +254,6 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
     return touched
 
 
-# Whisperx 3.8.6's own VAD defaults (asr.py default_vad_options) — used to
-# fill whichever hysteresis knob the operator didn't override, and echoed in
-# operator-facing messages so code, errors, and runbook can't drift apart.
-VAD_DEFAULT_ONSET = 0.500
-VAD_DEFAULT_OFFSET = 0.363
-# Whisper's encoder consumes fixed 30-second windows; a merge window above
-# that silently truncates the tail of every merged chunk — a recall bench
-# poisoned in exactly the way this function exists to prevent.
-VAD_MAX_CHUNK_SIZE = 30
-
-
 def _vad_config_from_env(env) -> "tuple[str | None, dict]":
     """Reads the operator-tunable VAD knobs for whisperx.load_model from
     env vars, returning (vad_method | None, vad_options dict). Exists
@@ -282,10 +283,13 @@ def _vad_config_from_env(env) -> "tuple[str | None, dict]":
     didn't ask for. Called from main() BEFORE any S3 download, per the
     BenchConfigError fail-fast contract. Self-contained for unit tests.
     """
-    method = (env.get("WHISPERX_VAD_METHOD") or "").strip().lower() or None
+    raw_method = (env.get("WHISPERX_VAD_METHOD") or "").strip()
+    method = raw_method.lower() or None
     if method is not None and method not in ("pyannote", "silero"):
+        # Echo the operator's original spelling, not the lowercased form,
+        # so a typo is diagnosable from the message alone.
         raise BenchConfigError(
-            f"WHISPERX_VAD_METHOD must be 'pyannote' or 'silero', got {method!r}")
+            f"WHISPERX_VAD_METHOD must be 'pyannote' or 'silero', got {raw_method!r}")
     options: dict = {}
     for env_name, key, lo, hi in (
         ("WHISPERX_VAD_ONSET", "vad_onset", 0.0, 1.0),
@@ -317,11 +321,16 @@ def _vad_config_from_env(env) -> "tuple[str | None, dict]":
         eff_onset = options.get("vad_onset", VAD_DEFAULT_ONSET)
         eff_offset = options.get("vad_offset", VAD_DEFAULT_OFFSET)
         if eff_offset >= eff_onset:
-            raise BenchConfigError(
-                f"effective vad_offset ({eff_offset}) must stay below "
-                f"vad_onset ({eff_onset}) to preserve hysteresis — when "
-                f"lowering WHISPERX_VAD_ONSET below the {VAD_DEFAULT_OFFSET} "
-                f"default offset, set WHISPERX_VAD_OFFSET lower still")
+            msg = (f"effective vad_offset ({eff_offset}) must stay below "
+                   f"vad_onset ({eff_onset}) to preserve hysteresis")
+            if "vad_offset" not in options:
+                # The default-offset hint only helps when the default is
+                # what tripped the check — with both knobs explicit it
+                # would point at the wrong remediation.
+                msg += (f" — when lowering WHISPERX_VAD_ONSET below the "
+                        f"{VAD_DEFAULT_OFFSET} default offset, set "
+                        f"WHISPERX_VAD_OFFSET lower still")
+            raise BenchConfigError(msg)
     raw = (env.get("WHISPERX_VAD_CHUNK_SIZE") or "").strip()
     if raw:
         try:
@@ -336,6 +345,21 @@ def _vad_config_from_env(env) -> "tuple[str | None, dict]":
                 f"window silently truncates chunk tails), got {chunk}")
         options["chunk_size"] = chunk
     return method, options
+
+
+def _transcribe_kwargs_from_vad_options(vad_options: dict) -> dict:
+    """Extra kwargs for model.transcribe() derived from the VAD config.
+
+    chunk_size must ALSO go to transcribe(): in whisperx 3.8.6 the merge
+    window is transcribe()'s own parameter (asr.py — merge_chunks(
+    vad_segments, chunk_size, ...)); the copy inside load_model's
+    vad_options only feeds silero's binarization (max_speech_duration_s).
+    Passing it in vad_options alone would be a silent no-op on the default
+    pyannote path — this helper exists so that invariant is unit-testable.
+    """
+    if "chunk_size" in vad_options:
+        return {"chunk_size": vad_options["chunk_size"]}
+    return {}
 
 
 def _load_wav_waveform(wav_path: str) -> dict:
@@ -764,7 +788,7 @@ def main():
     # NAME (e.g. WHISPERX_VAD_ONSETT) validates nothing and overrides
     # nothing, and this line is how an operator catches that the run is
     # actually on defaults. The runbook's §3b verification step greps for it.
-    print(f"VAD config override: method={vad_method or 'pyannote (default)'} "
+    print(f"VAD config: method={vad_method or 'pyannote (default)'} "
           f"options={vad_options or 'defaults'}")
 
     audio_key = os.environ.get("AUDIO_KEY")
@@ -810,15 +834,8 @@ def main():
     print("Transcribing (batched)...")
     start = time.time()
     audio = whisperx.load_audio(local_path)
-    # chunk_size must ALSO go to transcribe(): in whisperx 3.8.6 the merge
-    # window is transcribe()'s own parameter (asr.py — merge_chunks(vad_segments,
-    # chunk_size, ...)); the copy inside vad_options only feeds silero's
-    # binarization (max_speech_duration_s). Passing it in vad_options alone
-    # would be a silent no-op on the default pyannote path.
-    transcribe_kwargs = {}
-    if "chunk_size" in vad_options:
-        transcribe_kwargs["chunk_size"] = vad_options["chunk_size"]
-    tx = model.transcribe(audio, batch_size=BATCH_SIZE, **transcribe_kwargs)
+    tx = model.transcribe(audio, batch_size=BATCH_SIZE,
+                          **_transcribe_kwargs_from_vad_options(vad_options))
     segments = [
         {"start": seg["start"], "end": seg["end"], "text": seg["text"]}
         for seg in tx["segments"]

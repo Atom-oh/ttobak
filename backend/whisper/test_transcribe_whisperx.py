@@ -237,15 +237,15 @@ class TestTryAlign(unittest.TestCase):
             {'WHISPERX_VAD_OFFSET': '0'},
             {'WHISPERX_VAD_CHUNK_SIZE': '-3'},
             {'WHISPERX_VAD_CHUNK_SIZE': 'ten'},
-            # Round-2 MAJOR-2: Whisper's encoder window is 30s — a larger
-            # merge window silently truncates chunk tails, so cap at 30.
+            # VAD-PR round-2 MAJOR-2: Whisper's encoder window is 30s — a
+            # larger merge window silently truncates chunk tails, cap at 30.
             {'WHISPERX_VAD_CHUNK_SIZE': '60'},
         ):
             with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=env):
                 transcribe_whisperx._vad_config_from_env(env)
 
     def test_vad_config_rejects_inverted_hysteresis(self):
-        # Round-1 MAJOR-3: onset lowered below whisperx's default offset
+        # VAD-PR round-1 MAJOR-3: onset lowered below whisperx's default offset
         # (0.363) without also lowering offset inverts the hysteresis band
         # and Binarize oscillates — exactly the single-variable sweep the
         # runbook used to recommend. Defaults fill the unset knob.
@@ -262,7 +262,7 @@ class TestTryAlign(unittest.TestCase):
         self.assertEqual(options, {'vad_onset': 0.4})
 
     def test_vad_config_silero_skips_hysteresis_check(self):
-        # Round-2 MAJOR-1: silero consumes vad_onset only (no offset
+        # VAD-PR round-2 MAJOR-1: silero consumes vad_onset only (no offset
         # hysteresis in whisperx 3.8.6), so the pyannote-shaped inversion
         # check must not reject the runbook's silero sweep (e.g. onset 0.25
         # alone, which the default offset 0.363 would otherwise invert).
@@ -286,10 +286,43 @@ class TestTryAlign(unittest.TestCase):
             {'WHISPERX_VAD_METHOD': 'Silero'})
         self.assertEqual(method, 'silero')
 
+    def test_vad_config_silero_offset_prints_ignored_warning(self):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            transcribe_whisperx._vad_config_from_env({
+                'WHISPERX_VAD_METHOD': 'silero',
+                'WHISPERX_VAD_OFFSET': '0.25',
+            })
+        self.assertIn('WHISPERX_VAD_OFFSET is ignored', buf.getvalue())
+        # And no warning when offset isn't set.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            transcribe_whisperx._vad_config_from_env(
+                {'WHISPERX_VAD_METHOD': 'silero'})
+        self.assertEqual(buf.getvalue(), '')
+
+    def test_transcribe_kwargs_forward_chunk_size(self):
+        # The subtlest invariant in this file: load_model's vad_options does
+        # NOT reach the pyannote path's merge window — model.transcribe()
+        # must receive chunk_size separately (whisperx 3.8.6 asr.py).
+        self.assertEqual(
+            transcribe_whisperx._transcribe_kwargs_from_vad_options(
+                {'chunk_size': 20, 'vad_onset': 0.4}),
+            {'chunk_size': 20})
+        self.assertEqual(
+            transcribe_whisperx._transcribe_kwargs_from_vad_options(
+                {'vad_onset': 0.4}),
+            {})
+        self.assertEqual(
+            transcribe_whisperx._transcribe_kwargs_from_vad_options({}), {})
+
     def test_vad_config_error_has_no_exception_chain(self):
-        # `raise ... from None`: the message is operator-facing and safe to
-        # log verbatim — a chained ValueError traceback would drag raw env
-        # content into the log formatting path.
+        # `raise ... from None`: BenchConfigError messages are already
+        # safe-by-construction (format_fatal_error's contract) — the chain
+        # suppression just keeps the fatal log to the one operator-facing
+        # message instead of a redundant ValueError traceback.
         try:
             transcribe_whisperx._vad_config_from_env({'WHISPERX_VAD_ONSET': 'abc'})
         except transcribe_whisperx.BenchConfigError as e:

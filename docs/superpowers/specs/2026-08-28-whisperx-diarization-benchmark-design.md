@@ -4,7 +4,7 @@
 
 AWS announced Deep Learning Containers for WhisperX (3.8.6: faster-whisper 1.2.1, CTranslate2 4.8.0, **pyannote.audio 4.0.7**, PyTorch 2.8/CUDA 12.8, EC2+SageMaker images, AL2023/Python 3.12). The current Whisper batch pipeline (`backend/whisper/transcribe.py`, ECS GPU Spot g5.xlarge) uses `faster-whisper` directly plus `pyannote.audio>=3.1,<4` for speaker diarization (ADR-019).
 
-The primary motivation for evaluating WhisperX is **speaker diarization quality**, not transcription speed. WhisperX's VAD-batched inference and word-level forced alignment are not currently consumed anywhere downstream (the Go pipeline only reads segment-level `{start, end, text, speaker}`), so this spec scopes strictly to diarization.
+The primary motivation for evaluating WhisperX is **speaker diarization quality**, not transcription speed. WhisperX's VAD-batched inference and word-level forced alignment are not currently consumed anywhere downstream (the Go pipeline only reads segment-level `{start, end, text, speaker}`), so this spec scopes strictly to diarization. *(Post-design note, 2026-09-02: the first full bench run added ASR **recall** as a second evaluation axis — whisperx's default VAD dropped ~25% of real speech — tuned via per-run VAD env knobs; the operational procedure lives in the runbook `docs/runbooks/whisperx-benchmark.md` §3b, not this spec.)*
 
 Key constraint discovered during exploration: `internal/service/bedrock.go` (the only consumer of Whisper output) is fully decoupled from the diarization engine's internals. It only requires:
 - `whisper_metadata.segments[]` — each `{start, end, text, speaker}`, `speaker` normalized to `spk_N` in first-appearance order (or omitted if diarization unavailable)

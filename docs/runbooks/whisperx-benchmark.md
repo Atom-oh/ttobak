@@ -296,32 +296,56 @@ overrides to the whisperx `run-task` container overrides.
 the running image must already contain them (any image built after the PR
 adding `_vad_config_from_env` merged). An older image ignores the env vars
 silently. Rebuild once via the temporary `build-whisperx-image.yml`
-workflow (if that workflow has already been retired, rebuild/push the
-`Dockerfile.whisperx` image by hand per its old steps — this paragraph
-should be updated when it goes). The task definition references the
-mutable `latest` tag, so a pushed rebuild is picked up by the next
-`run-task` automatically — no task-definition change needed. Then verify
-the override actually applied by checking the task log for the
-`VAD config override: method=... options=...` line, which the engine now
-prints on every run (it shows `defaults` when no override is in effect —
-which is also how a typo'd env NAME, silently ignored, gets caught) —
-treat a run whose line doesn't echo your intended config as
-misconfigured, not as a data point. After that one rebuild, sweeping
-configs needs no further rebuilds.
+workflow. If that workflow has been retired, rebuild by hand from an
+x86_64 host (the image is amd64 CUDA — an ARM dev host cannot build it
+locally, which is why the workflow pins the `ttobak-x86` runner):
+
+```bash
+aws ecr get-login-password --region ap-northeast-2 | docker login --username AWS \
+  --password-stdin 180294183052.dkr.ecr.ap-northeast-2.amazonaws.com
+docker build --platform linux/amd64 -f backend/whisper/Dockerfile.whisperx \
+  -t 180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest backend/whisper
+# torchcodec smoke check BEFORE push (same gate as the workflow):
+docker run --rm --pull=never --entrypoint python3 \
+  180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest \
+  -c "import torchcodec; print('torchcodec OK')"
+docker push 180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest
+```
+
+The task definition references the mutable `latest` tag, so a pushed
+rebuild is picked up by the next `run-task` automatically — no
+task-definition change needed. Then verify the override actually applied
+by checking the task log for the `VAD config: method=... options=...`
+line, which the engine prints on every run (it shows `defaults` when no
+override is in effect — which is also how a typo'd env NAME, silently
+ignored, gets caught) — treat a run whose line doesn't echo your intended
+config as misconfigured, not as a data point. After that one rebuild,
+sweeping configs needs no further rebuilds. A rejected config
+(`BenchConfigError`) exits before any download or DynamoDB access — bench
+tasks never touch meeting rows regardless (`should_mark_meeting_error`
+returns false for bench keys), so a failed sweep attempt needs no cleanup.
 
 | env | meaning | valid range | default | try |
 |---|---|---|---|---|
 | `WHISPERX_VAD_ONSET` | speech-start sensitivity (lower = more eager, higher recall) | (0, 1) exclusive | 0.500 | 0.35 (with OFFSET 0.25), then 0.25 (with OFFSET 0.15) |
 | `WHISPERX_VAD_OFFSET` | speech-end sensitivity; must stay BELOW the effective onset on the pyannote path | (0, 1) exclusive | 0.363 | paired with ONSET above |
 | `WHISPERX_VAD_METHOD` | `pyannote` or `silero` (silero uses ONSET + CHUNK_SIZE only; OFFSET is ignored there — the engine warns and skips the hysteresis check) | those two values | pyannote | silero + ONSET 0.25 |
-| `WHISPERX_VAD_CHUNK_SIZE` | merge window (s); the engine forwards it to both `vad_options` and `model.transcribe()` — the latter is what governs the merge on the pyannote path | 1–30 (Whisper's encoder window is 30s; larger would truncate chunk tails) | 30 | — |
+| `WHISPERX_VAD_CHUNK_SIZE` | merge window (s); the engine forwards it to both `vad_options` and `model.transcribe()` — the latter is what governs the merge on the pyannote path | 1–30 (Whisper's encoder window is 30s; larger would truncate chunk tails) | 30 (`transcribe()`'s default; unset silero uses whisperx's own `vad_options` default) | — |
 
 Onset/offset are a hysteresis pair on the pyannote path: lowering
 `WHISPERX_VAD_ONSET` below the 0.363 default offset requires setting
 `WHISPERX_VAD_OFFSET` lower still (the engine fail-fasts with
 `BenchConfigError` on an inverted pair rather than producing oscillating
-micro-segments that would skew the comparison). Never set an onset/offset
-value alone below the other's default — use the pairs in the table.
+micro-segments that would skew the comparison). Don't move one knob alone
+across the other's default — lowering ONSET below 0.363 or raising OFFSET
+above 0.500 both invert the pair; use the pairs in the table. Example
+sweep-attempt overrides (add to the §3 `run-task` `--overrides` JSON's
+`environment` array, alongside a distinct `OUTPUT_KEY`):
+
+```json
+{"name": "WHISPERX_VAD_ONSET", "value": "0.35"},
+{"name": "WHISPERX_VAD_OFFSET", "value": "0.25"}
+```
 
 Use a distinct `OUTPUT_KEY` per configuration
 (`..._bench_whisperx_onset035.json` etc.) so attempts are comparable.
@@ -470,8 +494,16 @@ past the session: without the config and recall columns below, §7 cleanup
 would erase the evidence for which config converged, leaving the Phase-2
 go/no-go with no recorded basis.
 
-| Meeting ID | Duration | Participants | VAD config (method/onset/offset/chunk, "defaults" if none) | Real-content coverage gap vs legacy (s) | Legacy speakers detected | WhisperX speakers detected | Peak VRAM (WhisperX) | Wall-clock (legacy / whisperx) | Alignment repaired segments | Qualitative verdict |
-|---|---|---|---|---|---|---|---|---|---|---|
+| Meeting ID | Duration | Participants | Image digest (whisperx engine) | VAD config (method/onset/offset/chunk, "defaults" if none) | Real-content coverage gap vs legacy (s) | Legacy speakers detected | WhisperX speakers detected | Peak VRAM (WhisperX) | Wall-clock (legacy / whisperx) | Alignment repaired segments | Qualitative verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+
+"Image digest" pins which engine build produced the attempt — the task
+definition references the mutable `latest` tag and an older image ignores
+the VAD env knobs silently, so without the digest a sweep row is not
+reproducible evidence. Capture it per attempt from the task itself (the
+runtime log line disappears with the session):
+`aws ecs describe-tasks --cluster ttobak-whisper --tasks <task-id>
+--query 'tasks[0].containers[0].imageDigest' --output text`.
 
 "Real-content coverage gap" is §3b's recall metric: total seconds of
 legacy-covered speech with no whisperx segment, counting only gaps whose
