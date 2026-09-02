@@ -23,6 +23,7 @@ for name in ('whisperx', 'torch'):
 
 with mock.patch('boto3.client'), mock.patch('boto3.resource'):
     import transcribe_whisperx
+    import whisper_common
 
 
 class TestBuildResult(unittest.TestCase):
@@ -258,6 +259,37 @@ class TestTryAlign(unittest.TestCase):
         self.assertAlmostEqual(segs[2]['start'], 6.0)
         self.assertEqual(segs[2]['end'], 7.0)     # known side preserved
         self.assertLess(segs[1]['end'], segs[2]['start'])   # no overlap
+
+    def test_interpolation_abutting_neighbors_yield_counted_zero_width(self):
+        # Round-5 MAJOR (a): abutting known neighbors leave the missing run
+        # no temporal room — zero-width is the only non-overlapping answer.
+        # It must be kept (text preserved) and still speaker-assignable via
+        # the midpoint fallback.
+        segs = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': None, 'end': None, 'text': 'b'},
+            {'start': 1.0, 'end': 2.0, 'text': 'c'},
+        ]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 2.0)
+        self.assertEqual(touched, 1)
+        self.assertEqual(segs[1]['start'], 1.0)
+        self.assertEqual(segs[1]['end'], 1.0)
+        # midpoint fallback still assigns a speaker to the zero-width segment
+        labeled = whisper_common.assign_speakers(
+            [dict(segs[1])], [(0.0, 1.0, 'SPEAKER_00'), (1.0, 2.0, 'SPEAKER_01')])
+        self.assertIn('speaker', labeled[0])
+
+    def test_interpolation_normalizes_inverted_known_boundaries(self):
+        # Round-5 MAJOR (b): the aligner's own known values can be
+        # non-monotone (start 5.0, then a known end 4.0). The fill must not
+        # pass an inverted window through — normalize to (min, max).
+        segs = [
+            {'start': 0.0, 'end': 5.0, 'text': 'a'},
+            {'start': None, 'end': 4.0, 'text': 'b'},
+        ]
+        transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 6.0)
+        self.assertLessEqual(segs[1]['start'], segs[1]['end'])
+        self.assertEqual((segs[1]['start'], segs[1]['end']), (4.0, 5.0))
 
     def test_interpolation_all_missing_distributes_span(self):
         segs = [

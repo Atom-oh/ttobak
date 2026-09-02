@@ -123,9 +123,14 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
     [s0, e0, s1, e1, ...] as one monotone series: every maximal RUN of
     missing entries between two known values L and R (span edges at the
     extremes) is filled LINEARLY (L + k*(R-L)/(m+1)). Known values —
-    including a partially-missing segment's known side — are never
-    touched, and monotone non-decreasing output (no overlap, no
-    zero-length while L<R) holds by construction.
+    including a partially-missing segment's known side — are never used
+    as fill targets, and when the known inputs are themselves monotone the
+    output is monotone non-decreasing with no overlap by construction.
+    Two degenerate cases from the aligner's OWN boundaries are handled
+    explicitly (round-5 review): a segment whose known values are inverted
+    is normalized to (min, max), and zero-width segments (known neighbors
+    abut, so the run has no temporal room) are kept and counted — speaker
+    assignment covers them via raw_speaker_by_overlap's midpoint fallback.
     """
     n = len(segs)
     if n == 0:
@@ -156,13 +161,36 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
             bounds[run_start + j] = left + (j + 1) * step
 
     touched = 0
+    zero_width = 0
+    inverted = 0
     for idx, s in enumerate(segs):
         filled = s.get("start") is None or s.get("end") is None
         s["start"] = bounds[2 * idx]
         s["end"] = bounds[2 * idx + 1]
+        if s["end"] < s["start"]:
+            # Aligner-provided KNOWN values can themselves be non-monotone
+            # (e.g. start 5.0 with a known end 4.0 on the next boundary) —
+            # the linear fill never creates an inversion on its own, but it
+            # must not pass one through either. Normalize to (min, max):
+            # a valid window spanning the disputed region beats an inverted
+            # one that breaks every downstream overlap computation.
+            s["start"], s["end"] = s["end"], s["start"]
+            inverted += 1
+        if s["end"] == s["start"]:
+            # Zero width happens when the known neighbors abut (left ==
+            # right): the run genuinely has no temporal room, and any
+            # nonzero width would overlap a neighbor. Kept as-is — speaker
+            # assignment still works via raw_speaker_by_overlap's
+            # midpoint-distance fallback (whisper_common) — but counted so
+            # it is never invisible.
+            zero_width += 1
         if filled:
             s.pop("words", None)
             touched += 1
+    if inverted or zero_width:
+        print(f"Interpolation normalized {inverted} inverted and kept "
+              f"{zero_width} zero-width segment(s) (abutting/non-monotone "
+              f"aligner boundaries; midpoint fallback assigns speakers)")
     return touched
 
 
