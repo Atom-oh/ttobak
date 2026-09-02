@@ -47,7 +47,11 @@ class TestBenchOnlyOutputKey(unittest.TestCase):
                     f'transcripts/{self.MEETING}_part_001.json',
                     # startswith alone would pass this; the base validator's
                     # own traversal rejection must keep covering it.
-                    f'bench-transcripts/../transcripts/{self.MEETING}.json'):
+                    f'bench-transcripts/../transcripts/{self.MEETING}.json',
+                    # Another engine's suffix would overwrite that engine's
+                    # §6 evidence — blocked in code, not just runbook text.
+                    f'bench-transcripts/{self.MEETING}_bench_whisperx.json',
+                    f'bench-transcripts/{self.MEETING}_bench_legacy.json'):
             with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=bad):
                 transcribe_fw_p4.validate_bench_only_output_key(bad, self.MEETING)
 

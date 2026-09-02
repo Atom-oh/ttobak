@@ -76,6 +76,15 @@ def validate_bench_only_output_key(output_key: str, meeting_id: str) -> str:
         # is to reject traversal shapes outright rather than rely on that.
         raise wx.BenchConfigError(
             "transcribe_fw_p4 OUTPUT_KEY must not contain '..' segments")
+    for other in ("_bench_whisperx", "_bench_legacy"):
+        if other in key:
+            # §6 rows are keyed by engine; letting this engine write to
+            # another engine's suffix would silently overwrite that
+            # engine's evidence (the exact §3c copy-paste hazard the
+            # runbook warns about) -- block it in code, not just docs.
+            raise wx.BenchConfigError(
+                f"transcribe_fw_p4 OUTPUT_KEY must not use another "
+                f"engine's suffix ({other}); use _bench_fw_p4")
     return key
 
 
@@ -130,8 +139,11 @@ def main():
     if vocab_prompt:
         transcribe_kwargs["initial_prompt"] = vocab_prompt
     fw_segments, info = model.transcribe(local_path, **transcribe_kwargs)
+    # .strip() mirrors transcribe.py's segment post-processing exactly --
+    # faster-whisper text carries a leading space per segment that would
+    # otherwise show up as noise in §5 text comparisons.
     segments = [
-        {"start": seg.start, "end": seg.end, "text": seg.text}
+        {"start": seg.start, "end": seg.end, "text": seg.text.strip()}
         for seg in fw_segments
     ]
     elapsed = time.time() - start

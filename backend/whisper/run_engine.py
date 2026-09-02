@@ -39,9 +39,14 @@ def resolve_engine(argv: list, env) -> str:
         raise ValueError(
             "run_engine takes no arguments -- select the engine via the "
             "ENGINE env var ('whisperx' or 'fw_p4'), not a command override")
-    raw = (env.get("ENGINE") or "").strip()
-    name = raw.lower() or DEFAULT_ENGINE
+    raw = env.get("ENGINE")
+    if raw is None or raw == "":
+        return ENGINES[DEFAULT_ENGINE]
+    name = raw.strip().lower()
     if name not in ENGINES:
+        # Includes whitespace-only values: a SET-but-garbage ENGINE means
+        # the operator intended a selection, so fall back to nothing --
+        # fail loud instead (the unset/empty default above stays).
         raise ValueError(
             f"ENGINE must be one of {sorted(ENGINES)}, got {raw!r}")
     return ENGINES[name]

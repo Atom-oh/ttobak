@@ -40,10 +40,19 @@ jobs:
             GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
           done
 
-      - name: CDK deploy
+      - name: Infra unit tests (gate before any deploy)
+        # Security invariants live in these jest assertions (e.g.
+        # whisper-stack.test.ts's "no EntryPoint/Command on the whisperx
+        # task definition" guard) — deploying without running them would
+        # let a silently-bypassing CDK edit auto-ship on push-to-main.
         working-directory: infra
         run: |
           npm ci
+          npm test
+
+      - name: CDK deploy
+        working-directory: infra
+        run: |
           npx cdk diff 2>&1 || true
           # Never `--all` and never list stacks without `--exclusively`:
           # either one pulls in each named stack's full dependency closure,

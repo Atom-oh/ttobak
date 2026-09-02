@@ -15,6 +15,14 @@ class TestResolveEngine(unittest.TestCase):
             run_engine.resolve_engine(['run_engine.py'], {'ENGINE': ''}),
             'transcribe_whisperx.py')
 
+    def test_whitespace_only_engine_rejected_not_defaulted(self):
+        # A SET-but-blank ENGINE means the operator intended a selection —
+        # loud failure, not a silent whisperx fallback (runbook §3c's
+        # "fails fast and loud" contract).
+        for val in (' ', '\t', '  \n'):
+            with self.assertRaises(ValueError, msg=repr(val)):
+                run_engine.resolve_engine(['run_engine.py'], {'ENGINE': val})
+
     def test_fw_p4_selectable_case_insensitively(self):
         for val in ('fw_p4', 'FW_P4', ' fw_p4 '):
             self.assertEqual(

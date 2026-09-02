@@ -408,10 +408,14 @@ ignores the ENGINE env silently and runs whisperx — so before recording a
 
 Of the per-run override env vars, this engine reads only
 `MEETING_ID`/`USER_ID`/`OUTPUT_KEY`/`AUDIO_KEY`/`INITIAL_PROMPT`/
-`NUM_SPEAKERS` (task-definition-level vars like `BUCKET_NAME`/`VOCAB_KEY`
-apply as always) — the §3b `WHISPERX_VAD_*` knobs and alignment settings
-are whisperx-only and silently unused here, so drop them from the
-overrides JSON for hybrid runs.
+`NUM_SPEAKERS`. Task-definition-level vars stay required as always —
+`BUCKET_NAME`/`TABLE_NAME`/`VOCAB_KEY`, and notably `MODEL_S3_KEY` and
+`WHISPERX_DIARIZATION_S3_KEY`, which the hybrid uses too (same staged
+CT2 model dir, same community-1 bundle). Only the §3b `WHISPERX_VAD_*`
+knobs and alignment settings are whisperx-only and silently unused here —
+drop those from the overrides JSON for hybrid runs. §4's per-stage VRAM
+measurement applies to hybrid runs unchanged (same `GPU[stage]` log
+lines).
 
 **OUTPUT_KEY convention**: use the `_bench_fw_p4` suffix —
 `bench-transcripts/{meetingId}_bench_fw_p4.json`. The §3 snippet's
@@ -542,9 +546,9 @@ guessable name:
 
 ```bash
 WORKDIR=$(mktemp -d)
-# Add every suffix present for the meeting — e.g. `legacy whisperx fw_p4`
-# for a §3c hybrid comparison, or `whisperx_silero025`-style §3b sweep keys.
-for S in legacy whisperx; do
+# Include every suffix present for the meeting: drop fw_p4 if no §3c
+# hybrid run exists, add `whisperx_silero025`-style §3b sweep keys as used.
+for S in legacy whisperx fw_p4; do
   aws s3 cp "s3://ttobak-assets-180294183052/bench-transcripts/${MEETING_ID}_bench_${S}.json" "$WORKDIR/${S}.json"
   echo "== $S: speakers =="
   jq '[.whisper_metadata.segments[].speaker] | unique' "$WORKDIR/${S}.json"

@@ -1,0 +1,31 @@
+# PR-time counterpart of deploy-infra.yml's pre-deploy test gate: the CDK
+# jest assertions carry security invariants (e.g. whisper-stack.test.ts's
+# "no EntryPoint/Command on the whisperx task definition" guard), so a PR
+# that violates one must fail review-time CI, not first surface when
+# push-to-main tries to deploy.
+name: Test Infra
+
+on:
+  pull_request:
+    paths:
+      - 'infra/**'
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+
+jobs:
+  test:
+    runs-on: ttobak-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Infra unit tests
+        working-directory: infra
+        run: |
+          npm ci
+          npm test
