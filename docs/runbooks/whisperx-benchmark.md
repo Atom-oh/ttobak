@@ -361,6 +361,89 @@ already cover them, no per-sweep cleanup needed. Converge on the config
 with near-zero real-content gaps, then re-check speaker distribution
 didn't regress (§5).
 
+### 3c. Hybrid engine: legacy faster-whisper ASR + community-1 diarization
+
+The 2026-09-02 sweep left the two engines winning on different axes:
+legacy faster-whisper had the best ASR recall (whisperx's best config,
+silero onset 0.25, still left ~143s of real content uncovered vs legacy's
+~49s), while whisperx produced the clean speaker count. If the diarization
+win comes from the pyannote community-1 (4.x) model rather than from
+whisperx itself, "keep the existing whisper ASR, upgrade only diarization"
+beats a whisperx cutover under an accuracy-and-diarization-first decision
+rule. `transcribe_fw_p4.py` tests exactly that: legacy `transcribe.py`
+ASR parameters + the whisperx image's community-1 diarization.
+
+It ships inside the whisperx image (faster-whisper is already a whisperx
+dependency) — run it from the SAME task definition by adding one entry to
+the §3 `--overrides` JSON's `environment` array:
+
+```json
+{"name": "ENGINE", "value": "fw_p4"}
+```
+
+The image's ENTRYPOINT is pinned to `run_engine.py`, a dispatcher that
+allowlists the two engine scripts (`whisperx` default, `fw_p4`) and
+rejects ANY `containerOverrides` command arguments — a command override
+is deliberately a hard no-op channel, because with a plain
+`ENTRYPOINT ["python3"]` it would double as arbitrary-code execution on a
+host-networkMode task with all-users audio read access. For the same
+reason, never set `entryPoint`/`command` on the CDK task definition: a
+CDK `entryPoint` SILENTLY bypasses the pin — and CDK is the only bypass
+channel, since ECS RunTask `containerOverrides` has no `entryPoint` field
+at all — while a `command` is loudly rejected by the dispatcher, banned
+in CDK all the same so the surface stays declarative. `whisper-stack.ts`
+sets neither today; a `whisper-stack.test.ts` assertion (test-infra.yml
+at PR time, deploy-infra.yml pre-deploy) and a CLAUDE.md gotcha guard
+this.
+
+A bad `ENGINE` value fails fast and loud: `FATAL: ENGINE must be one
+of ['fw_p4', 'whisperx'] ...` on stderr, exit 1, before any model or S3
+work.
+
+**Precondition — one image rebuild** (same as §3b): the image must have
+been built after `run_engine.py`/`transcribe_fw_p4.py` landed; rebuild
+once via the §1 build procedure. An image built BEFORE the dispatcher
+ignores the ENGINE env silently and runs whisperx — so before recording a
+§6 row, verify in the task log that the run printed
+`run_engine: dispatching to transcribe_fw_p4.py` and
+`Transcribing (legacy sequential)...`, and check the output JSON's
+`whisper_metadata.engine` field is `fw-legacy-pyannote4-bench`, not
+`whisperx-large-v3-gpu`.
+
+Of the per-run override env vars, this engine reads only
+`MEETING_ID`/`USER_ID`/`OUTPUT_KEY`/`AUDIO_KEY`/`INITIAL_PROMPT`/
+`NUM_SPEAKERS`. Task-definition-level vars apply unchanged:
+`BUCKET_NAME`/`TABLE_NAME` are required at import time; `VOCAB_KEY`,
+`MODEL_S3_KEY` and `WHISPERX_DIARIZATION_S3_KEY` have code defaults but
+the task definition sets them, and the hybrid uses them too (same staged
+CT2 model dir, same community-1 bundle). Only the §3b `WHISPERX_VAD_*`
+knobs and alignment settings are whisperx-only and silently unused here —
+drop those from the overrides JSON for hybrid runs. §4's per-stage VRAM
+measurement applies to hybrid runs unchanged (same `GPU[stage]` log
+lines).
+
+**OUTPUT_KEY convention**: use the `_bench_fw_p4` suffix —
+`bench-transcripts/{meetingId}_bench_fw_p4.json`. The §3 snippet's
+`SUFFIX` derivation only knows `legacy`/`whisperx`; reusing it verbatim
+for a hybrid run would overwrite the meeting's `_bench_whisperx.json` and
+§5 would misread the hybrid output as whisperx. Set the suffix explicitly.
+
+Its `OUTPUT_KEY` must be under `bench-transcripts/` (the engine refuses
+anything else, including the real-pipeline key `validate_output_key`
+would allow — it is bench-only by construction and never marks meetings
+errored). Output rows carry `engine: fw-legacy-pyannote4-bench`. Compare
+against `bench_legacy` (same ASR, pyannote 3.x) for the diarization delta
+and against the best whisperx config for the recall delta, and record it
+as a §6 row like any other attempt. Known non-parity to keep in mind:
+this image's faster-whisper comes via whisperx 3.8.6 (1.2.1), while the
+legacy `Dockerfile` installs faster-whisper UNPINNED — the deployed legacy
+image has whatever was current at its last build. Check the running legacy
+image's actual version before attributing an ASR delta to anything else.
+
+Hybrid outputs are more PII transcript copies under `bench-transcripts/`
+— when the comparison series concludes, run the §7 cleanup rather than
+waiting out the 30-day lifecycle.
+
 ## 4. Resource measurement per WhisperX run
 
 This resolves the design doc's open VRAM/instance-sizing question.
@@ -468,8 +551,10 @@ guessable name:
 
 ```bash
 WORKDIR=$(mktemp -d)
-for S in legacy whisperx; do
-  aws s3 cp "s3://ttobak-assets-180294183052/bench-transcripts/${MEETING_ID}_bench_${S}.json" "$WORKDIR/${S}.json"
+# Include every suffix present for the meeting: drop fw_p4 if no §3c
+# hybrid run exists, add `whisperx_silero025`-style §3b sweep keys as used.
+for S in legacy whisperx fw_p4; do
+  aws s3 cp "s3://ttobak-assets-180294183052/bench-transcripts/${MEETING_ID}_bench_${S}.json" "$WORKDIR/${S}.json" || { echo "== $S: no bench output, skipping =="; continue; }
   echo "== $S: speakers =="
   jq '[.whisper_metadata.segments[].speaker] | unique' "$WORKDIR/${S}.json"
   echo "== $S: turn timeline =="
@@ -488,22 +573,29 @@ Judge qualitatively, per meeting:
 
 ## 6. Recording results
 
-Build one table row per meeting — and, for a §3b VAD sweep, one row per
-(meeting, VAD config) attempt, since this table is the ONLY thing retained
-past the session: without the config and recall columns below, §7 cleanup
-would erase the evidence for which config converged, leaving the Phase-2
-go/no-go with no recorded basis.
+Build one table row per (meeting, engine, config) attempt — the legacy
+baseline, each §3b VAD config, and each §3c hybrid run get their own row —
+since this table is the ONLY thing retained past the session: without the
+engine/config/recall columns below, §7 cleanup would erase the evidence
+for which attempt won, leaving the Phase-2 go/no-go with no recorded
+basis.
 
-| Meeting ID | Duration | Participants | Image digest (whisperx engine) | VAD config (method/onset/offset/chunk, "defaults" if none) | Real-content coverage gap vs legacy (s) | Legacy speakers detected | WhisperX speakers detected | Peak VRAM (WhisperX) | Wall-clock (legacy / whisperx) | Alignment repaired segments | Qualitative verdict |
+| Meeting ID | Duration | Participants | Engine (`whisper_metadata.engine`) | Image digest | VAD config (method/onset/offset/chunk, "defaults" if none; n/a for legacy and fw_p4) | Real-content coverage gap vs legacy (s) | Speakers detected | Peak VRAM | Wall-clock | Alignment repaired segments | Qualitative verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 
-"Image digest" pins which engine build produced the attempt — the task
+"Engine" is the output JSON's `whisper_metadata.engine`
+(`whisper-large-v3-gpu` / `whisperx-large-v3-gpu` /
+`fw-legacy-pyannote4-bench`) — with the §3c dispatcher, whisperx and
+fw_p4 rows come from the SAME image, so the digest alone cannot tell them
+apart. "Image digest" pins which build produced the attempt — the task
 definition references the mutable `latest` tag and an older image ignores
-the VAD env knobs silently, so without the digest a sweep row is not
-reproducible evidence. Capture it per attempt from the task itself (the
-runtime log line disappears with the session):
+the ENGINE/VAD env knobs silently, so without digest + engine a row is
+not reproducible evidence. Capture the digest per attempt from the task
+itself (the runtime log line disappears with the session):
 `aws ecs describe-tasks --cluster ttobak-whisper --tasks <task-id>
 --query 'tasks[0].containers[0].imageDigest' --output text`.
+
+"Alignment repaired segments" applies to whisperx rows only — record n/a for legacy and fw_p4 rows (both run with `alignment_enabled: false` by construction).
 
 "Real-content coverage gap" is §3b's recall metric: total seconds of
 legacy-covered speech with no whisperx segment, counting only gaps whose

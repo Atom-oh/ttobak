@@ -1,0 +1,50 @@
+# PR-time counterpart of deploy-infra.yml's pre-deploy test gate: the CDK
+# jest assertions carry security invariants (e.g. whisper-stack.test.ts's
+# "no EntryPoint/Command on the whisperx task definition" guard), so a PR
+# that violates one must fail review-time CI, not first surface when
+# push-to-main tries to deploy.
+name: Test Infra
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    paths:
+      - 'infra/**'
+      # Re-run on workflow changes so PRs that only touch CI still trigger
+      # the required check (same convention as test-backend.yml) — without
+      # this, a PR editing/neutering this gate would merge unverified.
+      - '.github/workflows/test-infra.yml'
+      - '.github/workflows/deploy-infra.yml'
+  # No push trigger: deploy-infra.yml runs the same synth+test suite as its
+  # own pre-deploy gate on push-to-main, so a push trigger here would just
+  # run the suite twice. This workflow is the PR-time counterpart only.
+
+jobs:
+  test:
+    runs-on: ttobak-arm
+    # This is a PUBLIC repo and ttobak-arm is a self-hosted runner whose
+    # host holds ambient (instance-profile) deploy credentials — running a
+    # fork PR's code here would hand those to the fork author via IMDS.
+    # Same-repo PRs only; fork PRs (none accepted today) would need an
+    # ephemeral, credential-less runner first.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Infra synth + unit tests
+        # `cdk synth` is part of the documented verification (CLAUDE.md:
+        # `npx cdk synth && npm test`) and is NOT redundant with jest:
+        # per-stack Template.fromStack synths against dummy envs and misses
+        # errors that only the full 11-stack app synth (cross-region
+        # references, context) surfaces.
+        working-directory: infra
+        run: |
+          npm ci
+          npx cdk synth
+          npm test

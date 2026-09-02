@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 70aef38dd7f0 · generated-at: 2026-09-01 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 5c02559b875e · generated-at: 2026-09-02 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -25,7 +25,7 @@ cd backend/python/crawler && python3 -m unittest test_crawlers -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
 cd backend/python/qa && python3 -m unittest test_handler -v    # mocks boto3 at import — no boto3<2 pin needed
 cd backend/python/sim && python3 -m unittest test_handler -v   # cost/sizing simulator worker (ADR-033)
-cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx -v   # stdlib unittest; heavy deps (torch/pyannote/whisperx) stubbed at import
+cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx test_transcribe_fw_p4 test_run_engine test_dockerfile_entrypoint -v   # stdlib unittest; heavy deps (torch/pyannote/whisperx/faster_whisper) stubbed at import
 cd infra && npx cdk synth && npm test
 ```
 
@@ -53,6 +53,7 @@ cd infra && npx cdk synth && npm test
 - **Secrets**: never in env vars or code — use Secrets Manager / SSM. PII in DynamoDB requires KMS encryption + TTL (PendingShare's `pendingShareExpiresAt` is what the table's TTL sweep is actually pointed at -- distinct attribute name from QA's own unrelated `TTL` rows, not a carve-out).
 - **Trust boundary is the API, not the client.** Validate client-supplied identifiers server-side (e.g. an S3 `sourceKey` must be proven to belong to the caller before use — ownership is encoded in the key's `{prefix}/{userID}/` segment). Reject path traversal (`..`).
 - **Route53** must not point directly at ALB/EC2 — always via CloudFront.
+- **whisperx task definition: never set `entryPoint`/`command` in CDK** — the image ENTRYPOINT is pinned to the `run_engine.py` allowlist dispatcher; engine selection is the `ENGINE` env var only (`whisperx`/`fw_p4`). A CDK `entryPoint` silently bypasses the pin (host networkMode + all-users audio read), and CDK is the only bypass channel: ECS RunTask `containerOverrides` has no `entryPoint` field, and a `command` override is loudly rejected (banned in CDK too). Both halves are CI-guarded: `whisper-stack.test.ts` (CDK) and `backend/whisper/test_dockerfile_entrypoint.py` (image ENTRYPOINT/no-CMD).
 
 ## Review Expectations
 - **Tool call parameters**: non-ASCII text (Korean, etc.) inside tool-call parameters (JSON) must be written as literal UTF-8, never as `\uXXXX` escapes — escaped output renders broken/mojibake text.

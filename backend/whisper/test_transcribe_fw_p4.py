@@ -1,0 +1,75 @@
+"""Unit tests for transcribe_fw_p4's pure config logic.
+
+Same stubbing convention as test_transcribe_whisperx.py: container-only
+deps are stubbed and required env vars set before import (transcribe_fw_p4
+imports transcribe_whisperx, which builds boto3 clients at import time)."""
+
+import os
+import sys
+import types
+import unittest
+from unittest import mock
+
+os.environ['BUCKET_NAME'] = 'test-bucket'
+os.environ['TABLE_NAME'] = 'test-table'
+
+for name in ('whisperx', 'torch', 'faster_whisper'):
+    if name not in sys.modules:
+        sys.modules[name] = types.ModuleType(name)
+
+with mock.patch('boto3.client'), mock.patch('boto3.resource'):
+    import transcribe_fw_p4
+    import transcribe_whisperx
+
+
+class TestBenchOnlyOutputKey(unittest.TestCase):
+    MEETING = 'a435a3dc-9d3c-41c0-86fe-816073547b23'
+
+    def test_accepts_bench_key_and_run_variants(self):
+        for key in (f'bench-transcripts/{self.MEETING}_bench_fw_p4.json',
+                    f'bench-transcripts/{self.MEETING}_bench_fw_p4_run2.json'):
+            self.assertEqual(
+                transcribe_fw_p4.validate_bench_only_output_key(key, self.MEETING),
+                key)
+
+    def test_rejects_real_pipeline_key_that_base_validator_allows(self):
+        # validate_output_key deliberately accepts the exact real-pipeline
+        # key as a Phase-2 escape hatch; this bench-only engine must not.
+        real_key = f'transcripts/{self.MEETING}.json'
+        self.assertEqual(
+            transcribe_whisperx.validate_output_key(real_key, self.MEETING),
+            real_key)  # precondition: the base validator DOES allow it
+        with self.assertRaises(transcribe_whisperx.BenchConfigError):
+            transcribe_fw_p4.validate_bench_only_output_key(
+                real_key, self.MEETING)
+
+    def test_rejects_empty_and_garbage_keys(self):
+        for bad in ('', 'other-prefix/x.json',
+                    f'transcripts/{self.MEETING}_part_001.json',
+                    # startswith alone would pass this; the base validator's
+                    # own traversal rejection must keep covering it.
+                    f'bench-transcripts/../transcripts/{self.MEETING}.json',
+                    # Another engine's suffix would overwrite that engine's
+                    # §6 evidence — blocked in code, not just runbook text.
+                    f'bench-transcripts/{self.MEETING}_bench_whisperx.json',
+                    f'bench-transcripts/{self.MEETING}_bench_legacy.json',
+                    # Cross-meeting: MEETING_ID and OUTPUT_KEY naming
+                    # different meetings (the copy-paste shape where only
+                    # MEETING_ID was edited) must not overwrite the other
+                    # meeting's evidence.
+                    'bench-transcripts/00000000-0000-0000-0000-000000000000_bench_fw_p4.json',
+                    # Suffix-less bench key: §5's comparison loop would
+                    # never find it — positive suffix requirement.
+                    f'bench-transcripts/{self.MEETING}.json'):
+            with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=bad):
+                transcribe_fw_p4.validate_bench_only_output_key(bad, self.MEETING)
+
+    def test_engine_name_marks_output_as_bench_hybrid(self):
+        # The engine string is how §6 rows and cmp tooling tell this run
+        # apart from both bench_legacy and bench_whisperx outputs.
+        self.assertEqual(transcribe_fw_p4.ENGINE_NAME, 'fw-legacy-pyannote4-bench')
+        self.assertNotIn('whisperx', transcribe_fw_p4.ENGINE_NAME)
+
+
+if __name__ == '__main__':
+    unittest.main()

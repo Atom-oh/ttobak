@@ -34,7 +34,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 
 # Whisper CT2 weights + diarization pipeline are loaded from S3 at runtime
 # (same pattern as the legacy image; see whisper_common.stream_extract_tar).
-COPY whisper_common.py transcribe_whisperx.py /app/
+COPY whisper_common.py transcribe_whisperx.py transcribe_fw_p4.py run_engine.py /app/
 WORKDIR /app
 
 # Non-root: the app only writes under /tmp (model/audio staging), so it
@@ -42,4 +42,16 @@ WORKDIR /app
 RUN useradd -m -u 10001 whisperx
 USER whisperx
 
-ENTRYPOINT ["python3", "transcribe_whisperx.py"]
+# Full ENTRYPOINT pinned to the dispatcher, deliberately with NO CMD: the
+# engine is selected via the ENGINE env var (allowlisted in run_engine.py),
+# never via a containerOverrides command. A bare `ENTRYPOINT ["python3"]` +
+# CMD split would promote the ECS command override into an arbitrary-code
+# channel (`"command": ["-c", ...]`) on a host-networkMode task with
+# all-users audio read access; run_engine also rejects any argv so a
+# command override is a hard, loud no-op. Do NOT set entryPoint/command in
+# the CDK task definition either: a CDK entryPoint SILENTLY bypasses this
+# pin, and CDK is the ONLY bypass channel -- ECS RunTask containerOverrides
+# has no entryPoint field at all (a command is loudly rejected by the
+# dispatcher, but banned in CDK too). A whisper-stack.test.ts assertion +
+# CLAUDE.md gotcha guard this invariant.
+ENTRYPOINT ["python3", "run_engine.py"]
