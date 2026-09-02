@@ -417,8 +417,10 @@ the WhisperX transcript JSON (§5) — the count of segments the aligner could
 not fully align, repaired to segment-level timestamps (copied from the
 same-index input when the aligner kept the input segmentation, or
 interpolated from neighbor boundaries when it re-split) with their words
-dropped. No segment text is ever discarded; wholesale text loss (<90%
-coverage) discards the aligned result entirely (`alignment_enabled: false`).
+dropped. No segment text is ever discarded — the re-split path requires the
+whitespace-stripped concatenated text to be IDENTICAL to the ASR input; any
+aligner-side loss, duplication, or reorder discards the aligned result
+entirely (`alignment_enabled: false`).
 Note (2026-09-02): whisperx.align() re-splitting segments (e.g. 43→117) is
 its normal behavior and the re-split output is now ACCEPTED — so the
 whisperx side of a bench pair typically has a DIFFERENT segment count from

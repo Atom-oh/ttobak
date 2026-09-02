@@ -204,9 +204,10 @@ class TestTryAlign(unittest.TestCase):
         # ALL text preserved — nothing dropped
         self.assertEqual([s['text'] for s in result_segments], ['a', 'b', 'c'])
         self.assertEqual(repaired, 1)
-        # middle segment interpolated: prev end (1.0) ~ next valid start (3.0)
-        self.assertEqual(result_segments[1]['start'], 1.0)
-        self.assertEqual(result_segments[1]['end'], 3.0)
+        # middle segment interpolated linearly inside the 1.0~3.0 gap —
+        # strictly between its neighbors, no overlap, no zero-length
+        self.assertAlmostEqual(result_segments[1]['start'], 1.0 + 2.0 / 3)
+        self.assertAlmostEqual(result_segments[1]['end'], 1.0 + 4.0 / 3)
         self.assertNotIn('words', result_segments[1])
         # neighbors keep their words
         self.assertIn('words', result_segments[0])
@@ -225,8 +226,15 @@ class TestTryAlign(unittest.TestCase):
         ]
         touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 4.0)
         self.assertEqual(touched, 2)
-        self.assertEqual((segs[1]['start'], segs[1]['end']), (1.0, 2.0))
-        self.assertEqual((segs[2]['start'], segs[2]['end']), (2.0, 3.0))
+        # Boundary sequence [0,1,N,N,N,N,3,4]: the 4-missing run fills
+        # linearly between 1.0 and 3.0 (step 0.4) — strictly monotone,
+        # no zero-length, no overlap.
+        self.assertAlmostEqual(segs[1]['start'], 1.4)
+        self.assertAlmostEqual(segs[1]['end'], 1.8)
+        self.assertAlmostEqual(segs[2]['start'], 2.2)
+        self.assertAlmostEqual(segs[2]['end'], 2.6)
+        self.assertLess(segs[1]['end'], segs[2]['start'])   # no overlap
+        self.assertLess(segs[1]['start'], segs[1]['end'])   # no zero-length
         self.assertNotIn('words', segs[1])
         self.assertNotIn('words', segs[2])
         self.assertIn('words', segs[0])
@@ -241,13 +249,15 @@ class TestTryAlign(unittest.TestCase):
         ]
         touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 8.0)
         self.assertEqual(touched, 2)
-        # Known sides preserved; missing sides filled from the SNAPSHOT of
-        # aligner-provided boundaries (either field of a neighbor), never
-        # from values this pass itself filled — fill order must not bleed.
+        # Known sides preserved; the missing-boundary run (b.end, c.start)
+        # fills linearly between the known 4.0 and 7.0 — monotone,
+        # NON-OVERLAPPING windows (round-3 MAJOR-1: the previous strategy
+        # gave b and c the same full window).
         self.assertEqual(segs[1]['start'], 4.0)   # known side preserved
-        self.assertEqual(segs[1]['end'], 7.0)     # next known boundary = c's end
+        self.assertAlmostEqual(segs[1]['end'], 5.0)
+        self.assertAlmostEqual(segs[2]['start'], 6.0)
         self.assertEqual(segs[2]['end'], 7.0)     # known side preserved
-        self.assertEqual(segs[2]['start'], 4.0)   # prev known boundary = b's start
+        self.assertLess(segs[1]['end'], segs[2]['start'])   # no overlap
 
     def test_interpolation_all_missing_distributes_span(self):
         segs = [
@@ -256,8 +266,12 @@ class TestTryAlign(unittest.TestCase):
         ]
         touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 10.0)
         self.assertEqual(touched, 2)
-        self.assertEqual((segs[0]['start'], segs[0]['end']), (0.0, 5.0))
-        self.assertEqual((segs[1]['start'], segs[1]['end']), (5.0, 10.0))
+        # All four boundaries fill linearly across the input span (step 2):
+        # monotone, non-overlapping, non-degenerate.
+        self.assertAlmostEqual(segs[0]['start'], 2.0)
+        self.assertAlmostEqual(segs[0]['end'], 4.0)
+        self.assertAlmostEqual(segs[1]['start'], 6.0)
+        self.assertAlmostEqual(segs[1]['end'], 8.0)
 
     def test_resplit_with_wholesale_text_loss_falls_back(self):
         # Coverage sanity: if the aligner returned meaningfully less TEXT

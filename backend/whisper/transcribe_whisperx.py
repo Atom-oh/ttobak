@@ -108,13 +108,6 @@ def _turns_from_diarization(diarization) -> list[tuple]:
     ]
 
 
-def _stripped_text_len(segs: list[dict]) -> int:
-    """Total non-space character count across segment texts — the coverage
-    metric the re-split sanity check compares (build_result joins segment
-    texts, so this is exactly the text that survives into the output)."""
-    return sum(len(s.get("text", "").replace(" ", "")) for s in segs)
-
-
 def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_end: float) -> int:
     """Fills missing start/end timestamps on re-split aligned segments,
     in place, and returns how many segments were touched (their `words`
@@ -122,81 +115,54 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
     voting). Pure function so the boundary math is unit-testable without
     whisperx.
 
-    Rules (round-2 review MAJORs 1+2 of PR #173):
-    - A partially-missing segment keeps its KNOWN side; only the missing
-      side is filled (a valid aligner-provided start must never be
-      overwritten by interpolation).
-    - A maximal run of consecutive fully-missing segments splits the gap
-      between its known neighbors (previous known end ~ next known start,
-      falling back to the input span edges) EVENLY — a naive per-segment
-      walk gives the first segment the whole gap and collapses the rest to
-      zero length, leaving them unable to overlap any diarization turn.
+    Design (round-3 review MAJOR-1 of PR #173): earlier per-segment /
+    per-run strategies produced zero-length segments (round 2) or fully
+    OVERLAPPING windows (round 3) in adjacent-missing cases — both break
+    diarization-turn overlap assignment, the very thing repaired segments
+    need. The robust construction treats the flattened boundary sequence
+    [s0, e0, s1, e1, ...] as one monotone series: every maximal RUN of
+    missing entries between two known values L and R (span edges at the
+    extremes) is filled LINEARLY (L + k*(R-L)/(m+1)). Known values —
+    including a partially-missing segment's known side — are never
+    touched, and monotone non-decreasing output (no overlap, no
+    zero-length while L<R) holds by construction.
     """
     n = len(segs)
-    touched = 0
+    if n == 0:
+        return 0
 
-    # Boundary lookups read a SNAPSHOT of the aligner-provided timestamps,
-    # never values this function already filled — otherwise fill order
-    # bleeds between segments (e.g. an interpolated end consuming the gap a
-    # later segment's start needed, re-creating the zero-length collapse
-    # this helper exists to prevent). Either known field of a neighbor
-    # bounds the gap.
-    snapshot = [(s.get("start"), s.get("end")) for s in segs]
+    # Flatten to the boundary sequence; remember which segments had a gap.
+    bounds: list = []
+    for s in segs:
+        bounds.append(s.get("start"))
+        bounds.append(s.get("end"))
 
-    def known_end_before(i: int) -> float:
-        for j in range(i - 1, -1, -1):
-            s0, e0 = snapshot[j]
-            if e0 is not None:
-                return e0
-            if s0 is not None:
-                return s0
-        return span_start
-
-    def known_start_after(i: int) -> float:
-        for j in range(i + 1, n):
-            s0, e0 = snapshot[j]
-            if s0 is not None:
-                return s0
-            if e0 is not None:
-                return e0
-        return span_end
-
+    m = len(bounds)
     i = 0
-    while i < n:
-        seg = segs[i]
-        has_start = seg.get("start") is not None
-        has_end = seg.get("end") is not None
-        if has_start and has_end:
+    while i < m:
+        if bounds[i] is not None:
             i += 1
             continue
-        if has_start or has_end:
-            # Partial: fill only the missing side from the nearest known
-            # boundary on that side, clamped so start <= end.
-            if not has_start:
-                seg["start"] = min(known_end_before(i), seg["end"])
-            else:
-                seg["end"] = max(known_start_after(i), seg["start"])
-            seg.pop("words", None)
-            touched += 1
+        run_start = i
+        while i < m and bounds[i] is None:
             i += 1
-            continue
-        # Fully-missing run: [i, run_end)
-        run_end = i
-        while run_end < n and segs[run_end].get("start") is None and segs[run_end].get("end") is None:
-            run_end += 1
-        gap_start = known_end_before(i)
-        gap_stop = known_start_after(run_end - 1)
-        if gap_stop < gap_start:
-            gap_stop = gap_start
-        k = run_end - i
-        width = (gap_stop - gap_start) / k
+        left = bounds[run_start - 1] if run_start > 0 else span_start
+        right = bounds[i] if i < m else span_end
+        if right < left:
+            right = left
+        k = i - run_start
+        step = (right - left) / (k + 1)
         for j in range(k):
-            s = segs[i + j]
-            s["start"] = gap_start + j * width
-            s["end"] = gap_start + (j + 1) * width
+            bounds[run_start + j] = left + (j + 1) * step
+
+    touched = 0
+    for idx, s in enumerate(segs):
+        filled = s.get("start") is None or s.get("end") is None
+        s["start"] = bounds[2 * idx]
+        s["end"] = bounds[2 * idx + 1]
+        if filled:
             s.pop("words", None)
             touched += 1
-        i = run_end
     return touched
 
 
@@ -330,10 +296,10 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
     is the number of segments the aligner couldn't fully align, repaired to
     segment-level timestamps (input-index copy on the count-match path,
     neighbor interpolation on the re-split path) with their words dropped.
-    No segment — and therefore no transcript TEXT, since build_result joins
-    segment texts — is ever silently discarded; wholesale content loss
-    trips the coverage check and falls back to the input instead. Surfaced
-    as alignment_repaired in whisper_metadata."""
+    No segment is ever silently discarded, and the re-split path requires
+    the whitespace-stripped concatenated text to be IDENTICAL to the input
+    (any aligner-side loss/duplication/reorder discards the aligned result
+    and falls back). Surfaced as alignment_repaired in whisper_metadata."""
     import contextlib
     import io
     stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
@@ -366,23 +332,22 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
             # evaluate — on every real run.
             #
             # Coverage sanity check FIRST: build_result derives the final
-            # transcript string by joining SEGMENT texts, so text the
-            # aligner loses (or duplicates) is a silent quality-comparison
-            # skew. Outside a ±10% tolerance band, discard and fall back;
-            # any loss INSIDE the band is accepted but logged so it is
-            # never invisible.
-            in_len = _stripped_text_len(segments)
-            out_len = _stripped_text_len(aligned_segments)
-            if in_len and not (0.9 * in_len <= out_len <= 1.1 * in_len):
-                direction = "lost" if out_len < in_len else "duplicated"
-                print(f"Alignment re-split output {direction} text beyond "
-                      f"the 10% tolerance ({out_len}/{in_len} non-space "
-                      f"chars); discarding aligned result, using "
-                      f"segment-level timestamps")
+            # transcript string by joining SEGMENT texts, so any text the
+            # aligner loses, duplicates, or reorders is a silent
+            # quality-comparison skew — and a total-character band can be
+            # fooled by loss and duplication cancelling out (round-3 review
+            # MAJOR-2). Require STRICT equality of the whitespace-stripped
+            # concatenated text: alignment re-segments the same recognized
+            # text, it must not change it. Any mismatch discards the
+            # aligned result (lengths logged, never content — PII).
+            in_text = "".join(s.get("text", "") for s in segments).replace(" ", "")
+            out_text = "".join(s.get("text", "") for s in aligned_segments).replace(" ", "")
+            if in_text != out_text:
+                print(f"Alignment re-split output text differs from input "
+                      f"({len(out_text)} vs {len(in_text)} non-space chars); "
+                      f"discarding aligned result, using segment-level "
+                      f"timestamps")
                 return segments, False, 0
-            if out_len < in_len:
-                print(f"Alignment re-split output carries {out_len}/{in_len} "
-                      f"non-space chars (within 10% tolerance, accepted)")
             # Accept the re-split output, preserving EVERY segment: index
             # mapping to the inputs is impossible across a re-split, so
             # missing timestamps are interpolated from neighboring known
