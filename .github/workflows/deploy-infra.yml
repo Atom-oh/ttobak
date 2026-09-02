@@ -40,20 +40,28 @@ jobs:
             GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o "$dir/bootstrap" "./$dir"
           done
 
-      - name: Infra unit tests (gate before any deploy)
+      - name: Infra synth + unit tests (gate before any deploy)
         # Security invariants live in these jest assertions (e.g.
         # whisper-stack.test.ts's "no EntryPoint/Command on the whisperx
         # task definition" guard) — deploying without running them would
         # let a silently-bypassing CDK edit auto-ship on push-to-main.
+        # `cdk synth` must gate here too: jest's per-stack synth uses dummy
+        # envs and misses full-app synth errors, and the deploy step's
+        # `cdk diff || true` swallows them — without this line they'd first
+        # surface mid-`cdk deploy`.
         working-directory: infra
         run: |
           npm ci
+          npx cdk synth
           npm test
 
       - name: CDK deploy
+        # Depends on the gate step above having run `npm ci` in this same
+        # job — `--no-install` makes that dependency loud if the steps are
+        # ever split into separate jobs.
         working-directory: infra
         run: |
-          npx cdk diff 2>&1 || true
+          npx --no-install cdk diff 2>&1 || true
           # Never `--all` and never list stacks without `--exclusively`:
           # either one pulls in each named stack's full dependency closure,
           # which includes TtobakKnowledgeStack -- it stages a deliberate,

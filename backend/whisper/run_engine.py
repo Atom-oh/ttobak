@@ -63,6 +63,13 @@ def main() -> None:
     # lost -- and §3c's engine-verification step greps for exactly this.
     print(f"run_engine: dispatching to {script}", flush=True)
     script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), script)
+    if not os.path.isfile(script_path):
+        # A mis-built image (COPY line dropped) should fail with the same
+        # operator-facing FATAL shape as a bad ENGINE, not a raw
+        # FileNotFoundError traceback from execv.
+        print(f"FATAL: engine script {script} missing from image -- "
+              f"rebuild from a source tree that includes it", file=sys.stderr)
+        sys.exit(1)
     # Replace the process rather than subprocess-wrapping it: the engine
     # keeps PID 1's signal handling (ECS stop -> SIGTERM reaches the
     # engine), and there's no parent left to leak file descriptors from.

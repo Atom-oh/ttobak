@@ -387,11 +387,14 @@ rejects ANY `containerOverrides` command arguments — a command override
 is deliberately a hard no-op channel, because with a plain
 `ENTRYPOINT ["python3"]` it would double as arbitrary-code execution on a
 host-networkMode task with all-users audio read access. For the same
-reason, never set `entryPoint`/`command` on the CDK task definition: an
-`entryPoint` SILENTLY bypasses the pin, while a `command` is loudly
-rejected by the dispatcher — banned all the same so the surface stays
-declarative. `whisper-stack.ts` sets neither today; a
-`whisper-stack.test.ts` assertion and a CLAUDE.md gotcha guard this.
+reason, never set `entryPoint`/`command` on the CDK task definition: a
+CDK `entryPoint` SILENTLY bypasses the pin — and CDK is the only bypass
+channel, since ECS RunTask `containerOverrides` has no `entryPoint` field
+at all — while a `command` is loudly rejected by the dispatcher, banned
+in CDK all the same so the surface stays declarative. `whisper-stack.ts`
+sets neither today; a `whisper-stack.test.ts` assertion (test-infra.yml
+at PR time, deploy-infra.yml pre-deploy) and a CLAUDE.md gotcha guard
+this.
 A bad `ENGINE` value fails fast and loud: `FATAL: ENGINE must be one
 of ['fw_p4', 'whisperx'] ...` on stderr, exit 1, before any model or S3
 work.

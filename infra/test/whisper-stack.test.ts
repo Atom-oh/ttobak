@@ -49,12 +49,14 @@ describe('WhisperStack whisperx benchmark additions', () => {
   });
 
   test('whisperx container sets neither EntryPoint nor Command', () => {
-    // Security invariant (PR #175): the image's ENTRYPOINT is pinned to
+    // Security invariant: the image's ENTRYPOINT is pinned to
     // run_engine.py, an allowlisting dispatcher — engine selection happens
     // ONLY via the ENGINE env var. A CDK-level EntryPoint would silently
-    // bypass that pin (a Command is loudly rejected by the dispatcher, but
-    // is banned too so the surface stays declarative). See CLAUDE.md
-    // "Important Gotchas" and Dockerfile.whisperx's ENTRYPOINT comment.
+    // bypass that pin, and CDK is the only bypass channel (ECS RunTask
+    // containerOverrides has no entryPoint field; a Command is loudly
+    // rejected by the dispatcher, but is banned here too so the surface
+    // stays declarative). See CLAUDE.md "Important Gotchas" and
+    // Dockerfile.whisperx's ENTRYPOINT comment.
     const template = synth();
     const taskDefs = template.findResources('AWS::ECS::TaskDefinition', {
       Properties: Match.objectLike({ Family: 'ttobak-whisperx' }),
