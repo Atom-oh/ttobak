@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE } from '@/lib/tauri';
+import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE, type TauriStatusResponse } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 /**
@@ -786,8 +786,18 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
           let finalized = false;
           for (let i = 0; i < 30; i++) {
             await new Promise((r) => setTimeout(r, 1000));
+            // Only the IPC call itself is inside the try: the checks below
+            // deliberately live OUTSIDE it, because this catch's `break`
+            // would otherwise swallow the version-skew throw too (it did,
+            // in an earlier revision — the fast-fail timing worked but the
+            // "update the app" message never reached the user).
+            let status: TauriStatusResponse;
             try {
-              const status = await getNativeRecordingStatus(tempPath);
+              status = await getNativeRecordingStatus(tempPath);
+            } catch {
+              break; // status unavailable — fall through to the error path
+            }
+            {
               // Check `finalizing` alone — NOT `!status.recording` too.
               // `status.finalizing` is now specific to `tempPath` (the Rust
               // side canonicalizes and checks THIS path), but
@@ -811,8 +821,9 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
               // build that doesn't send the field will never send it, so
               // waiting out the full window would only delay the same
               // error by 30s — fail fast with the version-skew guidance
-              // instead (the catch below appends the preserved-file
-              // recovery path). Only an explicit `false` counts as done.
+              // instead (the outer catch of this stop path appends the
+              // preserved-file recovery hint). Only an explicit `false`
+              // counts as done.
               if (status.finalizing === undefined) {
                 throw new Error(
                   `${VERSION_SKEW_MESSAGE} (녹음 종료 상태를 확인할 수 없어 대기를 중단합니다)`,
@@ -822,8 +833,6 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
                 finalized = true;
                 break;
               }
-            } catch {
-              break; // status unavailable — fall through to the error path
             }
           }
           if (!finalized) {

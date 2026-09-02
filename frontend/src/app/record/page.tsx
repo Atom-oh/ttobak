@@ -165,7 +165,10 @@ function RecordPageInner() {
   const leftovers = useLeftoverRecordings();
   const [leftoverBusy, setLeftoverBusy] = useState(false);
 
-  const handleLeftoverUpload = useCallback(async (item: TauriLeftoverRecording) => {
+  // Plain functions, like `handleRecordingStart` below (not useCallback):
+  // they close over `resetSessionStateForNewMeeting`, which is itself a
+  // per-render function, so memoizing would only add a stale-deps hazard.
+  const handleLeftoverUpload = async (item: TauriLeftoverRecording) => {
     const ok = window.confirm(
       `"${item.file_name}" (${formatFileSize(item.byte_size)}, ${formatLeftoverTime(item.modified_ms)})\n\n` +
       '이전 세션에서 남은 녹음 파일입니다. 이 Mac에서 이전에 로그인한 다른 사용자의 녹음일 수 있습니다.\n' +
@@ -178,16 +181,22 @@ function RecordPageInner() {
       // (falls back to create-at-upload inside resumeUploadFlow if this
       // fails), then hand the on-disk path to the notes step → upload →
       // cleanupRecording flow that already handles native files.
+      resetSessionStateForNewMeeting();
       await postRecording.createDraftMeeting();
       postRecording.handleNativeFileReady(item.path, item.byte_size);
       leftovers.remove(item.path);
     } finally {
       setLeftoverBusy(false);
     }
-  }, [postRecording, leftovers]);
+  };
 
-  const handleLeftoverDelete = useCallback(async (item: TauriLeftoverRecording) => {
-    if (!window.confirm(`"${item.file_name}" 을(를) 삭제할까요? 삭제하면 복구할 수 없습니다.`)) return;
+  const handleLeftoverDelete = async (item: TauriLeftoverRecording) => {
+    const ok = window.confirm(
+      `"${item.file_name}" (${formatFileSize(item.byte_size)}, ${formatLeftoverTime(item.modified_ms)})\n\n` +
+      '이전 세션에서 남은 녹음 파일입니다. 이 Mac에서 이전에 로그인한 다른 사용자의 녹음일 수 있습니다.\n' +
+      '삭제하면 복구할 수 없습니다. 삭제할까요?',
+    );
+    if (!ok) return;
     setLeftoverBusy(true);
     try {
       await cleanupRecording(item.path);
@@ -197,7 +206,7 @@ function RecordPageInner() {
     } finally {
       setLeftoverBusy(false);
     }
-  }, [leftovers, session]);
+  };
 
   // Serializes notes autosave PUTs: two in-flight requests could reach the
   // server out of order and let an older save's stale notes win the
@@ -461,11 +470,14 @@ function RecordPageInner() {
   if (!isAuthenticated && !session.isRecording) { router.push('/'); return null; }
 
   // --- Handlers ---
-  const handleRecordingStart = async (stream: MediaStream | null) => {
-    if (stream && audioSource === 'tab') {
-      const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
-      setTabSharingLabel(label);
-    }
+  // Everything a NEW meeting on this page must start from a clean slate —
+  // shared by a fresh recording (`handleRecordingStart`) and a leftover
+  // upload (`handleLeftoverUpload`). Both end in `resumeUploadFlow`, which
+  // persists `summary.liveSummaryRef` and prefills the notes step from this
+  // page's state; without this reset a leftover uploaded after an earlier
+  // recording on the same page visit failed back to idle would inherit that
+  // dead recording's live summary and notes.
+  const resetSessionStateForNewMeeting = () => {
     setAudioStalled(false);
     summary.reset();
     // New recording session — the previous recording's auto-fired proactive
@@ -492,6 +504,14 @@ function RecordPageInner() {
     // Clearing it on start would delete the very input the user just
     // typed. It's reset instead where a session actually ends and the
     // user returns to a fresh setup screen (see the dismiss handler below).
+  };
+
+  const handleRecordingStart = async (stream: MediaStream | null) => {
+    if (stream && audioSource === 'tab') {
+      const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
+      setTabSharingLabel(label);
+    }
+    resetSessionStateForNewMeeting();
     // Create draft meeting immediately so the post-recording flow has a
     // server meetingId to attach the audio to. This is required for both
     // browser (mic/tab) and Tauri native (system audio) modes — without it,

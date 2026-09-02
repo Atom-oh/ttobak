@@ -56,7 +56,9 @@ pub struct AudioRecorder {
 /// recording was assigned, plus the shared counter so `AudioOutput` can
 /// detect being superseded (see `AudioRecorder`'s `generation` field doc).
 pub struct StartReservation {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub generation: u64,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub generation_counter: Arc<AtomicU64>,
 }
 
@@ -124,7 +126,10 @@ impl AudioRecorder {
     }
 
     /// Complete a `begin_start()` reservation with the backend built off the
-    /// lock, installing the new recording.
+    /// lock, installing the new recording. Only called from `lib.rs`'s
+    /// `cfg(target_os = "macos")` block, hence the dead_code allowance on
+    /// other targets (same convention as `interleave_planes`).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn install(&mut self, path: PathBuf, #[cfg(target_os = "macos")] backend: macos::Backend) {
         self.inner = Some(RecordingHandle {
             path,
@@ -201,6 +206,9 @@ impl<'a> StartGuard<'a> {
     }
 
     /// The reservation was consumed by `install()`; nothing to cancel.
+    /// Only reached from `lib.rs`'s `cfg(target_os = "macos")` block, hence
+    /// the dead_code allowance on other targets.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub fn disarm(mut self) {
         self.armed = false;
     }
