@@ -252,12 +252,23 @@ def _vad_config_from_env(env) -> tuple:
 
     - WHISPERX_VAD_METHOD: 'pyannote' (whisperx default) or 'silero'
     - WHISPERX_VAD_ONSET / WHISPERX_VAD_OFFSET: floats in (0, 1) — lower
-      onset detects speech more eagerly (higher recall)
-    - WHISPERX_VAD_CHUNK_SIZE: int seconds (whisperx merge window)
+      onset detects speech more eagerly (higher recall). The effective pair
+      must keep whisperx's hysteresis orientation (offset < onset; defaults
+      0.500/0.363), or Binarize would oscillate in the inverted band and
+      spray micro-segments — the resulting bench numbers would silently
+      poison the Phase-2 go/no-go comparison, so it's rejected here instead.
+      Note: silero in whisperx 3.8.6 consumes vad_onset only (its detection
+      threshold); vad_offset is ignored on that path.
+    - WHISPERX_VAD_CHUNK_SIZE: int seconds. Consumed twice in 3.8.6: as
+      silero's max_speech_duration_s via vad_options, AND as the merge
+      window via model.transcribe(chunk_size=...) — main() passes it to
+      both, because vad_options alone does NOT reach the pyannote path's
+      merge_chunks (that one reads transcribe()'s own parameter).
 
     Invalid values raise BenchConfigError (operator-facing, safe to log
     verbatim) instead of silently benchmarking with a config the operator
-    didn't ask for. Self-contained for unit tests.
+    didn't ask for. Called from main() BEFORE any S3 download, per the
+    BenchConfigError fail-fast contract. Self-contained for unit tests.
     """
     method = (env.get("WHISPERX_VAD_METHOD") or "").strip() or None
     if method is not None and method not in ("pyannote", "silero"):
@@ -274,17 +285,29 @@ def _vad_config_from_env(env) -> tuple:
         try:
             val = float(raw)
         except ValueError:
-            raise BenchConfigError(f"{env_name} must be a float, got {raw!r}")
+            raise BenchConfigError(
+                f"{env_name} must be a float, got {raw!r}") from None
         if not (lo < val < hi):
             raise BenchConfigError(
                 f"{env_name} must be within ({lo}, {hi}) exclusive, got {val}")
         options[key] = val
+    if "vad_onset" in options or "vad_offset" in options:
+        # Whisperx 3.8.6 defaults fill whichever knob wasn't overridden.
+        eff_onset = options.get("vad_onset", 0.500)
+        eff_offset = options.get("vad_offset", 0.363)
+        if eff_offset >= eff_onset:
+            raise BenchConfigError(
+                f"effective vad_offset ({eff_offset}) must stay below "
+                f"vad_onset ({eff_onset}) to preserve hysteresis — when "
+                f"lowering WHISPERX_VAD_ONSET below the 0.363 default "
+                f"offset, set WHISPERX_VAD_OFFSET lower still")
     raw = (env.get("WHISPERX_VAD_CHUNK_SIZE") or "").strip()
     if raw:
         try:
             chunk = int(raw)
         except ValueError:
-            raise BenchConfigError(f"WHISPERX_VAD_CHUNK_SIZE must be an int, got {raw!r}")
+            raise BenchConfigError(
+                f"WHISPERX_VAD_CHUNK_SIZE must be an int, got {raw!r}") from None
         if chunk <= 0:
             raise BenchConfigError(f"WHISPERX_VAD_CHUNK_SIZE must be positive, got {chunk}")
         options["chunk_size"] = chunk
@@ -709,6 +732,13 @@ def main():
     # a bad OUTPUT_KEY (e.g. a typo'd bench key) must fail fast, not after an
     # entire GPU run's worth of download/transcription/alignment/diarization.
     output_key = validate_output_key(os.environ.get("OUTPUT_KEY", ""), meeting_id)
+    # VAD env validation lives up here with OUTPUT_KEY, per the BenchConfigError
+    # contract: every check that can raise it runs before any audio download or
+    # model/GPU work, so an env typo can't burn a Spot task's download+convert.
+    vad_method, vad_options = _vad_config_from_env(os.environ)
+    if vad_method or vad_options:
+        print(f"VAD config override: method={vad_method or 'default'} "
+              f"options={vad_options}")
 
     audio_key = os.environ.get("AUDIO_KEY")
     if audio_key:
@@ -740,10 +770,6 @@ def main():
     import whisperx
     print(f"Loading WhisperX large-v3 (GPU float16, batch_size={BATCH_SIZE})...")
     asr_options = {"initial_prompt": vocab_prompt} if vocab_prompt else None
-    vad_method, vad_options = _vad_config_from_env(os.environ)
-    if vad_method or vad_options:
-        print(f"VAD config override: method={vad_method or 'default'} "
-              f"options={vad_options or {}}")
     load_kwargs = {}
     if vad_method:
         load_kwargs["vad_method"] = vad_method
@@ -757,7 +783,15 @@ def main():
     print("Transcribing (batched)...")
     start = time.time()
     audio = whisperx.load_audio(local_path)
-    tx = model.transcribe(audio, batch_size=BATCH_SIZE)
+    # chunk_size must ALSO go to transcribe(): in whisperx 3.8.6 the merge
+    # window is transcribe()'s own parameter (asr.py — merge_chunks(vad_segments,
+    # chunk_size, ...)); the copy inside vad_options only feeds silero's
+    # binarization (max_speech_duration_s). Passing it in vad_options alone
+    # would be a silent no-op on the default pyannote path.
+    transcribe_kwargs = {}
+    if "chunk_size" in vad_options:
+        transcribe_kwargs["chunk_size"] = vad_options["chunk_size"]
+    tx = model.transcribe(audio, batch_size=BATCH_SIZE, **transcribe_kwargs)
     segments = [
         {"start": seg["start"], "end": seg["end"], "text": seg["text"]}
         for seg in tx["segments"]

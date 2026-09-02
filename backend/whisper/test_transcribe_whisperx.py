@@ -241,6 +241,35 @@ class TestTryAlign(unittest.TestCase):
             with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=env):
                 transcribe_whisperx._vad_config_from_env(env)
 
+    def test_vad_config_rejects_inverted_hysteresis(self):
+        # Round-1 MAJOR-3: onset lowered below whisperx's default offset
+        # (0.363) without also lowering offset inverts the hysteresis band
+        # and Binarize oscillates — exactly the single-variable sweep the
+        # runbook used to recommend. Defaults fill the unset knob.
+        for env in (
+            {'WHISPERX_VAD_ONSET': '0.35'},                               # vs default offset 0.363
+            {'WHISPERX_VAD_OFFSET': '0.55'},                              # vs default onset 0.500
+            {'WHISPERX_VAD_ONSET': '0.3', 'WHISPERX_VAD_OFFSET': '0.3'},  # equal is inverted too
+        ):
+            with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=env):
+                transcribe_whisperx._vad_config_from_env(env)
+        # Onset alone is fine while it stays above the default offset.
+        _, options = transcribe_whisperx._vad_config_from_env(
+            {'WHISPERX_VAD_ONSET': '0.4'})
+        self.assertEqual(options, {'vad_onset': 0.4})
+
+    def test_vad_config_error_has_no_exception_chain(self):
+        # `raise ... from None`: the message is operator-facing and safe to
+        # log verbatim — a chained ValueError traceback would drag raw env
+        # content into the log formatting path.
+        try:
+            transcribe_whisperx._vad_config_from_env({'WHISPERX_VAD_ONSET': 'abc'})
+        except transcribe_whisperx.BenchConfigError as e:
+            self.assertIsNone(e.__cause__)
+            self.assertTrue(e.__suppress_context__)
+        else:
+            self.fail('expected BenchConfigError')
+
     def test_interpolation_consecutive_run_splits_gap_evenly(self):
         # Round-2 MAJOR-1: a naive per-segment walk gave the first missing
         # segment the whole gap and collapsed the rest to zero length —
