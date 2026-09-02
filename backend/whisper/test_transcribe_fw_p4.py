@@ -25,11 +25,12 @@ with mock.patch('boto3.client'), mock.patch('boto3.resource'):
 class TestBenchOnlyOutputKey(unittest.TestCase):
     MEETING = 'a435a3dc-9d3c-41c0-86fe-816073547b23'
 
-    def test_accepts_bench_key(self):
-        key = f'bench-transcripts/{self.MEETING}_bench_fw_p4.json'
-        self.assertEqual(
-            transcribe_fw_p4.validate_bench_only_output_key(key, self.MEETING),
-            key)
+    def test_accepts_bench_key_and_run_variants(self):
+        for key in (f'bench-transcripts/{self.MEETING}_bench_fw_p4.json',
+                    f'bench-transcripts/{self.MEETING}_bench_fw_p4_run2.json'):
+            self.assertEqual(
+                transcribe_fw_p4.validate_bench_only_output_key(key, self.MEETING),
+                key)
 
     def test_rejects_real_pipeline_key_that_base_validator_allows(self):
         # validate_output_key deliberately accepts the exact real-pipeline
@@ -51,7 +52,15 @@ class TestBenchOnlyOutputKey(unittest.TestCase):
                     # Another engine's suffix would overwrite that engine's
                     # §6 evidence — blocked in code, not just runbook text.
                     f'bench-transcripts/{self.MEETING}_bench_whisperx.json',
-                    f'bench-transcripts/{self.MEETING}_bench_legacy.json'):
+                    f'bench-transcripts/{self.MEETING}_bench_legacy.json',
+                    # Cross-meeting: MEETING_ID and OUTPUT_KEY naming
+                    # different meetings (the copy-paste shape where only
+                    # MEETING_ID was edited) must not overwrite the other
+                    # meeting's evidence.
+                    'bench-transcripts/00000000-0000-0000-0000-000000000000_bench_fw_p4.json',
+                    # Suffix-less bench key: §5's comparison loop would
+                    # never find it — positive suffix requirement.
+                    f'bench-transcripts/{self.MEETING}.json'):
             with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=bad):
                 transcribe_fw_p4.validate_bench_only_output_key(bad, self.MEETING)
 

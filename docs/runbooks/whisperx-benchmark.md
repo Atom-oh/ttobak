@@ -552,7 +552,7 @@ WORKDIR=$(mktemp -d)
 # Include every suffix present for the meeting: drop fw_p4 if no §3c
 # hybrid run exists, add `whisperx_silero025`-style §3b sweep keys as used.
 for S in legacy whisperx fw_p4; do
-  aws s3 cp "s3://ttobak-assets-180294183052/bench-transcripts/${MEETING_ID}_bench_${S}.json" "$WORKDIR/${S}.json"
+  aws s3 cp "s3://ttobak-assets-180294183052/bench-transcripts/${MEETING_ID}_bench_${S}.json" "$WORKDIR/${S}.json" || { echo "== $S: no bench output, skipping =="; continue; }
   echo "== $S: speakers =="
   jq '[.whisper_metadata.segments[].speaker] | unique' "$WORKDIR/${S}.json"
   echo "== $S: turn timeline =="
@@ -592,6 +592,8 @@ not reproducible evidence. Capture the digest per attempt from the task
 itself (the runtime log line disappears with the session):
 `aws ecs describe-tasks --cluster ttobak-whisper --tasks <task-id>
 --query 'tasks[0].containers[0].imageDigest' --output text`.
+
+"Alignment repaired segments" applies to whisperx rows only — record n/a for legacy and fw_p4 rows (both run with `alignment_enabled: false` by construction).
 
 "Real-content coverage gap" is §3b's recall metric: total seconds of
 legacy-covered speech with no whisperx segment, counting only gaps whose

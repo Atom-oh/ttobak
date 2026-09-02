@@ -1,15 +1,17 @@
 """Fixed-ENTRYPOINT engine dispatcher for the whisperx bench image.
 
-Why this exists (PR #175 round-2, L3 MAJOR): selecting the engine via an
-ECS containerOverrides `command` requires splitting the Dockerfile's
-ENTRYPOINT from its CMD -- but that split promotes the command override
-into an arbitrary-code channel (`"command": ["-c", "<python>"]`), and this
-task runs with networkMode host (EC2 IMDS reachable) and read access to
-every user's original audio. Pinning the full ENTRYPOINT to this
-dispatcher and selecting the engine via the ENGINE env var keeps the
-selection on a surface operators could already override (environment)
-without widening what a compromised RunTask caller can execute: only the
-two allowlisted engine scripts can run, with no pass-through arguments.
+Why this exists: selecting the engine via an ECS containerOverrides
+`command` requires splitting the Dockerfile's ENTRYPOINT from its CMD --
+but that split promotes the command override into an arbitrary-code
+channel (`"command": ["-c", "<python>"]`), and this task runs with
+networkMode host (EC2 IMDS reachable) and read access to every user's
+original audio. Pinning the full ENTRYPOINT to this dispatcher and
+selecting the engine via the ENGINE env var keeps the selection on a
+surface operators could already override (environment) without widening
+what a compromised RunTask caller can execute: only the two allowlisted
+engine scripts can run, with no pass-through arguments. The narrow
+ecs:RunTask + iam:PassRole principal set on this task definition remains
+the primary control; this dispatcher removes the code-selection surface.
 
 Deliberately dependency-free (stdlib only, no boto3/env-derived clients)
 so a bad ENGINE value fails before anything else initializes, and
@@ -58,10 +60,6 @@ def main() -> None:
     except ValueError as e:
         print(f"FATAL: {e}", file=sys.stderr)
         sys.exit(1)
-    # flush=True is load-bearing: os.execv replaces this process image
-    # without running interpreter shutdown, so a buffered line would be
-    # lost -- and §3c's engine-verification step greps for exactly this.
-    print(f"run_engine: dispatching to {script}", flush=True)
     script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), script)
     if not os.path.isfile(script_path):
         # A mis-built image (COPY line dropped) should fail with the same
@@ -70,6 +68,18 @@ def main() -> None:
         print(f"FATAL: engine script {script} missing from image -- "
               f"rebuild from a source tree that includes it", file=sys.stderr)
         sys.exit(1)
+    # Defense-in-depth: environment is the one override surface RunTask
+    # callers legitimately have, and these variables would let it steer
+    # WHAT the interpreter executes rather than how the engine behaves.
+    # (LD_LIBRARY_PATH stays -- CUDA in this image relies on it.)
+    for var in ("PYTHONPATH", "PYTHONSTARTUP", "LD_PRELOAD"):
+        os.environ.pop(var, None)
+    # Logged only after the existence check so this line appearing means
+    # the dispatch actually happens -- the runbook's engine-verification
+    # step greps for it 1:1. flush=True is load-bearing: os.execv replaces
+    # this process image without interpreter shutdown, so a buffered line
+    # would be lost.
+    print(f"run_engine: dispatching to {script}", flush=True)
     # Replace the process rather than subprocess-wrapping it: the engine
     # keeps PID 1's signal handling (ECS stop -> SIGTERM reaches the
     # engine), and there's no parent left to leak file descriptors from.

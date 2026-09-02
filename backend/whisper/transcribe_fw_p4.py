@@ -59,32 +59,33 @@ ENGINE_NAME = "fw-legacy-pyannote4-bench"
 
 
 def validate_bench_only_output_key(output_key: str, meeting_id: str) -> str:
-    """validate_output_key, then refuse anything outside bench-transcripts/.
+    """validate_output_key, then bind the key to THIS meeting and THIS
+    engine: it must match bench-transcripts/{meeting_id}_bench_fw_p4*.json.
 
-    validate_output_key deliberately accepts exact real-pipeline keys as a
-    Phase-2 escape hatch; this engine is an experiment and must never write
-    where the summarize pipeline reads.
+    Three hazards this closes beyond the base validator (which accepts any
+    bench-transcripts/ key unchecked, plus the real-pipeline Phase-2 escape
+    hatch this engine must never use):
+    - cross-meeting: MEETING_ID=A with OUTPUT_KEY naming meeting B silently
+      overwrites B's evidence — the exact copy-paste shape the runbook's §3
+      snippet invites when only MEETING_ID is edited;
+    - cross-engine: a _bench_whisperx/_bench_legacy key would overwrite
+      another engine's §6 evidence (the positive suffix requirement
+      subsumes a blocklist);
+    - traversal shapes ('..'), rejected outright per CLAUDE.md's
+      trust-boundary rule even though S3/IAM treat keys literally.
+    The trailing wildcard before .json deliberately allows run variants
+    (…_bench_fw_p4_run2.json) so repeat attempts don't overwrite each other.
     """
     key = wx.validate_output_key(output_key, meeting_id)
-    if not key.startswith("bench-transcripts/"):
+    required_prefix = f"bench-transcripts/{meeting_id}_bench_fw_p4"
+    if not (key.startswith(required_prefix) and key.endswith(".json")):
         raise wx.BenchConfigError(
-            "transcribe_fw_p4 is bench-only: OUTPUT_KEY must be under "
-            "bench-transcripts/")
+            f"transcribe_fw_p4 OUTPUT_KEY must match "
+            f"{required_prefix}[...].json (bench-only, bound to this "
+            f"meeting and engine)")
     if ".." in key.split("/"):
-        # S3 and IAM treat keys literally, so 'bench-transcripts/../x' never
-        # actually escapes the prefix -- but CLAUDE.md's trust-boundary rule
-        # is to reject traversal shapes outright rather than rely on that.
         raise wx.BenchConfigError(
             "transcribe_fw_p4 OUTPUT_KEY must not contain '..' segments")
-    for other in ("_bench_whisperx", "_bench_legacy"):
-        if other in key:
-            # §6 rows are keyed by engine; letting this engine write to
-            # another engine's suffix would silently overwrite that
-            # engine's evidence (the exact §3c copy-paste hazard the
-            # runbook warns about) -- block it in code, not just docs.
-            raise wx.BenchConfigError(
-                f"transcribe_fw_p4 OUTPUT_KEY must not use another "
-                f"engine's suffix ({other}); use _bench_fw_p4")
     return key
 
 

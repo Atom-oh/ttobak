@@ -5,6 +5,9 @@
 # push-to-main tries to deploy.
 name: Test Infra
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     paths:
