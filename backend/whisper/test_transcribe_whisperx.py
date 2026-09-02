@@ -23,6 +23,7 @@ for name in ('whisperx', 'torch'):
 
 with mock.patch('boto3.client'), mock.patch('boto3.resource'):
     import transcribe_whisperx
+    import whisper_common
 
 
 class TestBuildResult(unittest.TestCase):
@@ -173,19 +174,21 @@ class TestTryAlign(unittest.TestCase):
         self.assertEqual(result_segments[1]['end'], 2.0)
         self.assertNotIn('words', result_segments[1])
 
-    def test_segment_count_mismatch_discards_aligned_result(self):
-        # Regression for FINDING 3: whisperx.align() may silently drop a
-        # segment (e.g. one it couldn't align at all). Returning a
-        # shorter/longer segment list than the input would skew the
-        # benchmark, so treat a length mismatch the same as any other
-        # alignment failure: discard and fall back to the original input
-        # segments with alignment_enabled=False.
+    def test_segment_count_mismatch_accepts_resplit_and_preserves_text(self):
+        # whisperx.align() re-splits segments along alignment boundaries as
+        # its NORMAL behavior (first real bench run: 43 inputs -> 117
+        # aligned). Re-split output must be ACCEPTED, and — since
+        # build_result joins SEGMENT texts into the final transcript — no
+        # segment may be dropped: timestamp-less ones are repaired by
+        # interpolating from neighbor boundaries and lose only their words.
         input_segments = [
-            {'start': 0.0, 'end': 1.0, 'text': 'a'},
-            {'start': 1.0, 'end': 2.0, 'text': 'b'},
+            {'start': 0.0, 'end': 2.0, 'text': 'a b'},
+            {'start': 2.0, 'end': 4.0, 'text': 'c'},
         ]
         aligned_segments = [
-            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': 0.0, 'end': 1.0, 'text': 'a', 'words': [{'word': 'a', 'start': 0.1, 'end': 0.9}]},
+            {'start': None, 'end': None, 'text': 'b', 'words': [{'word': 'b'}]},
+            {'start': 3.0, 'end': 4.0, 'text': 'c', 'words': [{'word': 'c', 'start': 3.1, 'end': 3.9}]},
         ]
 
         fake_whisperx = types.ModuleType('whisperx')
@@ -195,11 +198,404 @@ class TestTryAlign(unittest.TestCase):
             'segments': aligned_segments}
 
         with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
-            result_segments, alignment_enabled, _ = transcribe_whisperx._try_align(
+            result_segments, alignment_enabled, repaired = transcribe_whisperx._try_align(
+                input_segments, audio=object(), language='ko')
+
+        self.assertTrue(alignment_enabled)
+        # ALL text preserved — nothing dropped
+        self.assertEqual([s['text'] for s in result_segments], ['a', 'b', 'c'])
+        self.assertEqual(repaired, 1)
+        # middle segment interpolated linearly inside the 1.0~3.0 gap —
+        # strictly between its neighbors, no overlap, no zero-length
+        self.assertAlmostEqual(result_segments[1]['start'], 1.0 + 2.0 / 3)
+        self.assertAlmostEqual(result_segments[1]['end'], 1.0 + 4.0 / 3)
+        self.assertNotIn('words', result_segments[1])
+        # neighbors keep their words
+        self.assertIn('words', result_segments[0])
+        self.assertIn('words', result_segments[2])
+
+    def test_vad_config_defaults_empty(self):
+        method, options = transcribe_whisperx._vad_config_from_env({})
+        self.assertIsNone(method)
+        self.assertEqual(options, {})
+
+    def test_vad_config_reads_all_knobs(self):
+        method, options = transcribe_whisperx._vad_config_from_env({
+            'WHISPERX_VAD_METHOD': 'silero',
+            'WHISPERX_VAD_ONSET': '0.35',
+            'WHISPERX_VAD_OFFSET': '0.25',
+            'WHISPERX_VAD_CHUNK_SIZE': '20',
+        })
+        self.assertEqual(method, 'silero')
+        self.assertEqual(options, {'vad_onset': 0.35, 'vad_offset': 0.25, 'chunk_size': 20})
+
+    def test_vad_config_rejects_bad_values(self):
+        for env in (
+            {'WHISPERX_VAD_METHOD': 'webrtc'},
+            {'WHISPERX_VAD_ONSET': 'abc'},
+            {'WHISPERX_VAD_ONSET': '1.5'},
+            {'WHISPERX_VAD_OFFSET': '0'},
+            {'WHISPERX_VAD_CHUNK_SIZE': '-3'},
+            {'WHISPERX_VAD_CHUNK_SIZE': 'ten'},
+            # VAD-PR round-2 MAJOR-2: Whisper's encoder window is 30s — a
+            # larger merge window silently truncates chunk tails, cap at 30.
+            {'WHISPERX_VAD_CHUNK_SIZE': '60'},
+        ):
+            with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=env):
+                transcribe_whisperx._vad_config_from_env(env)
+
+    def test_vad_config_rejects_inverted_hysteresis(self):
+        # VAD-PR round-1 MAJOR-3: onset lowered below whisperx's default offset
+        # (0.363) without also lowering offset inverts the hysteresis band
+        # and Binarize oscillates — exactly the single-variable sweep the
+        # runbook used to recommend. Defaults fill the unset knob.
+        for env in (
+            {'WHISPERX_VAD_ONSET': '0.35'},                               # vs default offset 0.363
+            {'WHISPERX_VAD_OFFSET': '0.55'},                              # vs default onset 0.500
+            {'WHISPERX_VAD_ONSET': '0.3', 'WHISPERX_VAD_OFFSET': '0.3'},  # equal is inverted too
+        ):
+            with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=env):
+                transcribe_whisperx._vad_config_from_env(env)
+        # Onset alone is fine while it stays above the default offset.
+        _, options = transcribe_whisperx._vad_config_from_env(
+            {'WHISPERX_VAD_ONSET': '0.4'})
+        self.assertEqual(options, {'vad_onset': 0.4})
+
+    def test_vad_config_silero_skips_hysteresis_check(self):
+        # VAD-PR round-2 MAJOR-1: silero consumes vad_onset only (no offset
+        # hysteresis in whisperx 3.8.6), so the pyannote-shaped inversion
+        # check must not reject the runbook's silero sweep (e.g. onset 0.25
+        # alone, which the default offset 0.363 would otherwise invert).
+        method, options = transcribe_whisperx._vad_config_from_env({
+            'WHISPERX_VAD_METHOD': 'silero',
+            'WHISPERX_VAD_ONSET': '0.25',
+        })
+        self.assertEqual(method, 'silero')
+        self.assertEqual(options, {'vad_onset': 0.25})
+        # An explicit offset with silero passes too (ignored knob → warning,
+        # not BenchConfigError) and is still forwarded verbatim.
+        method, options = transcribe_whisperx._vad_config_from_env({
+            'WHISPERX_VAD_METHOD': 'silero',
+            'WHISPERX_VAD_ONSET': '0.25',
+            'WHISPERX_VAD_OFFSET': '0.4',
+        })
+        self.assertEqual(options, {'vad_onset': 0.25, 'vad_offset': 0.4})
+
+    def test_vad_config_method_is_case_insensitive(self):
+        method, _ = transcribe_whisperx._vad_config_from_env(
+            {'WHISPERX_VAD_METHOD': 'Silero'})
+        self.assertEqual(method, 'silero')
+
+    def test_vad_config_silero_offset_prints_ignored_warning(self):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            transcribe_whisperx._vad_config_from_env({
+                'WHISPERX_VAD_METHOD': 'silero',
+                'WHISPERX_VAD_OFFSET': '0.25',
+            })
+        self.assertIn('WHISPERX_VAD_OFFSET is ignored', buf.getvalue())
+        # And no warning when offset isn't set.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            transcribe_whisperx._vad_config_from_env(
+                {'WHISPERX_VAD_METHOD': 'silero'})
+        self.assertEqual(buf.getvalue(), '')
+
+    def test_transcribe_kwargs_forward_chunk_size(self):
+        # The subtlest invariant in this file: load_model's vad_options does
+        # NOT reach the pyannote path's merge window — model.transcribe()
+        # must receive chunk_size separately (whisperx 3.8.6 asr.py).
+        self.assertEqual(
+            transcribe_whisperx._transcribe_kwargs_from_vad_options(
+                {'chunk_size': 20, 'vad_onset': 0.4}),
+            {'chunk_size': 20})
+        self.assertEqual(
+            transcribe_whisperx._transcribe_kwargs_from_vad_options(
+                {'vad_onset': 0.4}),
+            {})
+        self.assertEqual(
+            transcribe_whisperx._transcribe_kwargs_from_vad_options({}), {})
+
+    def test_vad_config_error_has_no_exception_chain(self):
+        # `raise ... from None`: BenchConfigError messages are already
+        # safe-by-construction (format_fatal_error's contract) — the chain
+        # suppression just keeps the fatal log to the one operator-facing
+        # message instead of a redundant ValueError traceback.
+        try:
+            transcribe_whisperx._vad_config_from_env({'WHISPERX_VAD_ONSET': 'abc'})
+        except transcribe_whisperx.BenchConfigError as e:
+            self.assertIsNone(e.__cause__)
+            self.assertTrue(e.__suppress_context__)
+        else:
+            self.fail('expected BenchConfigError')
+
+    def test_interpolation_consecutive_run_splits_gap_evenly(self):
+        # Round-2 MAJOR-1: a naive per-segment walk gave the first missing
+        # segment the whole gap and collapsed the rest to zero length —
+        # zero-length segments overlap no diarization turn. A run must
+        # split its gap evenly.
+        segs = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a', 'words': []},
+            {'start': None, 'end': None, 'text': 'b', 'words': []},
+            {'start': None, 'end': None, 'text': 'c', 'words': []},
+            {'start': 3.0, 'end': 4.0, 'text': 'd', 'words': []},
+        ]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 4.0)
+        self.assertEqual(touched, 2)
+        # Boundary sequence [0,1,N,N,N,N,3,4]: the 4-missing run fills
+        # linearly between 1.0 and 3.0 (step 0.4) — strictly monotone,
+        # no zero-length, no overlap.
+        self.assertAlmostEqual(segs[1]['start'], 1.4)
+        self.assertAlmostEqual(segs[1]['end'], 1.8)
+        self.assertAlmostEqual(segs[2]['start'], 2.2)
+        self.assertAlmostEqual(segs[2]['end'], 2.6)
+        self.assertLess(segs[1]['end'], segs[2]['start'])   # no overlap
+        self.assertLess(segs[1]['start'], segs[1]['end'])   # no zero-length
+        self.assertNotIn('words', segs[1])
+        self.assertNotIn('words', segs[2])
+        self.assertIn('words', segs[0])
+
+    def test_interpolation_partial_missing_keeps_known_side(self):
+        # Round-2 MAJOR-2: a segment with a valid aligner-provided start
+        # must keep it — only the missing side is filled.
+        segs = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': 4.0, 'end': None, 'text': 'b'},
+            {'start': None, 'end': 7.0, 'text': 'c'},
+        ]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 8.0)
+        self.assertEqual(touched, 2)
+        # Known sides preserved; the missing-boundary run (b.end, c.start)
+        # fills linearly between the known 4.0 and 7.0 — monotone,
+        # NON-OVERLAPPING windows (round-3 MAJOR-1: the previous strategy
+        # gave b and c the same full window).
+        self.assertEqual(segs[1]['start'], 4.0)   # known side preserved
+        self.assertAlmostEqual(segs[1]['end'], 5.0)
+        self.assertAlmostEqual(segs[2]['start'], 6.0)
+        self.assertEqual(segs[2]['end'], 7.0)     # known side preserved
+        self.assertLess(segs[1]['end'], segs[2]['start'])   # no overlap
+
+    def test_interpolation_abutting_neighbors_yield_counted_zero_width(self):
+        # Round-5 MAJOR (a): abutting known neighbors leave the missing run
+        # no temporal room — zero-width is the only non-overlapping answer.
+        # It must be kept (text preserved) and still speaker-assignable via
+        # the midpoint fallback.
+        segs = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': None, 'end': None, 'text': 'b'},
+            {'start': 1.0, 'end': 2.0, 'text': 'c'},
+        ]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 2.0)
+        self.assertEqual(touched, 1)
+        self.assertEqual(segs[1]['start'], 1.0)
+        self.assertEqual(segs[1]['end'], 1.0)
+        # midpoint fallback still assigns a speaker to the zero-width segment
+        labeled = whisper_common.assign_speakers(
+            [dict(segs[1])], [(0.0, 1.0, 'SPEAKER_00'), (1.0, 2.0, 'SPEAKER_01')])
+        self.assertIn('speaker', labeled[0])
+
+    def test_interpolation_clamps_cross_segment_inversion_without_overlap(self):
+        # Round-6 MAJOR-1(a)/(c): the aligner's known values can be
+        # non-monotone ACROSS segments (end 5.0 followed by known end 4.0).
+        # The old post-fill swap produced a window fully overlapping its
+        # neighbor; the monotone clamp lifts the out-of-order known to the
+        # running max BEFORE the fill, so no overlap can be produced.
+        segs = [
+            {'start': 0.0, 'end': 5.0, 'text': 'a', 'words': []},
+            {'start': None, 'end': 4.0, 'text': 'b', 'words': []},
+        ]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 6.0)
+        # seg1's end lifted to 5.0; its start fills at 5.0 -> zero-width at
+        # the boundary, never overlapping seg0's window
+        self.assertEqual((segs[1]['start'], segs[1]['end']), (5.0, 5.0))
+        self.assertGreaterEqual(segs[1]['start'], segs[0]['end'])  # no overlap
+        self.assertEqual(touched, 1)
+        self.assertNotIn('words', segs[1])  # sanitized -> words dropped
+        self.assertIn('words', segs[0])
+
+    def test_interpolation_swaps_within_segment_inversion_and_counts_it(self):
+        # Round-6 MAJOR-1(b): a both-known inverted pair is normalized to
+        # (min, max) BEFORE the fill, its words are dropped and it counts
+        # toward the repaired total (previously it kept words and was
+        # invisible in alignment_repaired).
+        segs = [{'start': 3.0, 'end': 1.0, 'text': 'a', 'words': [{'word': 'a'}]}]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 4.0)
+        self.assertEqual((segs[0]['start'], segs[0]['end']), (1.0, 3.0))
+        self.assertEqual(touched, 1)
+        self.assertNotIn('words', segs[0])
+
+    def test_interpolation_span_start_beyond_first_known_cannot_invert(self):
+        # Round-7 MAJOR: span anchors used to sit outside the monotone
+        # clamp, so a span_start above the first known bound minted an
+        # inverted leading fill ({'start': None, 'end': 0.5} with
+        # span_start=1.0 -> (1.0, 0.5)). Span edges now join the frame.
+        segs = [{'start': None, 'end': 0.5, 'text': 'a', 'words': []}]
+        transcribe_whisperx._interpolate_missing_timestamps(segs, 1.0, 2.0)
+        self.assertLessEqual(segs[0]['start'], segs[0]['end'])
+        self.assertEqual(segs[0]['end'], 0.5)  # known side preserved
+
+    def test_interpolation_treats_non_finite_as_missing(self):
+        # Round-6 MAJOR-2: a NaN timestamp must never become a fill anchor
+        # (it silently poisons every comparison and propagates NaN through
+        # the run) — treat it as missing and fill it finitely.
+        import math
+        segs = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': float('nan'), 'end': None, 'text': 'b', 'words': []},
+            {'start': 3.0, 'end': 4.0, 'text': 'c'},
+        ]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 4.0)
+        self.assertTrue(math.isfinite(segs[1]['start']))
+        self.assertTrue(math.isfinite(segs[1]['end']))
+        self.assertGreaterEqual(segs[1]['start'], 1.0)
+        self.assertLessEqual(segs[1]['end'], 3.0)
+        self.assertEqual(touched, 1)
+        self.assertNotIn('words', segs[1])
+
+    def test_interpolation_all_missing_distributes_span(self):
+        segs = [
+            {'start': None, 'end': None, 'text': 'a'},
+            {'start': None, 'end': None, 'text': 'b'},
+        ]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 10.0)
+        self.assertEqual(touched, 2)
+        # All four boundaries fill linearly across the input span (step 2):
+        # monotone, non-overlapping, non-degenerate.
+        self.assertAlmostEqual(segs[0]['start'], 2.0)
+        self.assertAlmostEqual(segs[0]['end'], 4.0)
+        self.assertAlmostEqual(segs[1]['start'], 6.0)
+        self.assertAlmostEqual(segs[1]['end'], 8.0)
+
+    def test_resplit_mid_word_boundary_falls_back(self):
+        # Round-4 MAJOR: a stripped-text comparison passes a mid-word
+        # re-split (가방 -> 가|방) even though build_result's " ".join
+        # renders it as "가 방" — a changed transcript. The rendered-form
+        # comparison must reject it.
+        input_segments = [{'start': 0.0, 'end': 2.0, 'text': '가방'}]
+        aligned_segments = [
+            {'start': 0.0, 'end': 1.0, 'text': '가',
+             'words': [{'word': '가', 'start': 0.1, 'end': 0.9}]},
+            {'start': 1.0, 'end': 2.0, 'text': '방',
+             'words': [{'word': '방', 'start': 1.1, 'end': 1.9}]},
+        ]
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            object(), object())
+        fake_whisperx.align = lambda segments, model, metadata, audio, device: {
+            'segments': aligned_segments}
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            result_segments, alignment_enabled, repaired = transcribe_whisperx._try_align(
                 input_segments, audio=object(), language='ko')
 
         self.assertEqual(result_segments, input_segments)
         self.assertFalse(alignment_enabled)
+        self.assertEqual(repaired, 0)
+
+    def test_resplit_with_wholesale_text_loss_falls_back(self):
+        # Coverage sanity: if the aligner returned meaningfully less TEXT
+        # than it was given (wholesale content loss, not re-segmentation),
+        # the aligned result must be discarded — accepting it would skew the
+        # ASR-quality comparison the benchmark exists to make.
+        input_segments = [
+            {'start': 0.0, 'end': 2.0, 'text': 'aaaa bbbb'},
+            {'start': 2.0, 'end': 4.0, 'text': 'cccc'},
+        ]
+        aligned_segments = [
+            {'start': 0.0, 'end': 1.0, 'text': 'aaaa',
+             'words': [{'word': 'aaaa', 'start': 0.1, 'end': 0.9}]},
+        ]
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            object(), object())
+        fake_whisperx.align = lambda segments, model, metadata, audio, device: {
+            'segments': aligned_segments}
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            result_segments, alignment_enabled, repaired = transcribe_whisperx._try_align(
+                input_segments, audio=object(), language='ko')
+
+        self.assertEqual(result_segments, input_segments)
+        self.assertFalse(alignment_enabled)
+        self.assertEqual(repaired, 0)
+
+    def test_load_wav_waveform_contract(self):
+        # _load_wav_waveform must return pyannote's documented in-memory
+        # input shape ({'waveform', 'sample_rate'}) parsed from OUR OWN
+        # ffmpeg-written 16k mono s16le WAV — this is what bypasses the
+        # torchcodec decode path that broke the first bench run. numpy/torch
+        # are container-only; stub just the two calls the function makes.
+        import struct
+        import tempfile
+        import wave
+
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+            path = f.name
+        self.addCleanup(os.unlink, path)
+        with wave.open(path, 'wb') as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(struct.pack('<4h', 0, 1000, -1000, 32767))
+
+        class FakeArr:
+            def __init__(self, raw):
+                self.raw = raw
+            def astype(self, dtype):
+                return self
+            def __truediv__(self, other):
+                return self
+
+        class FakeTensor:
+            def unsqueeze(self, dim):
+                assert dim == 0
+                return 'TENSOR'
+
+        fake_np = types.ModuleType('numpy')
+        fake_np.int16 = 'int16'
+        fake_np.float32 = 'float32'
+        captured = {}
+        def frombuffer(raw, dtype):
+            captured['raw_len'] = len(raw)
+            return FakeArr(raw)
+        fake_np.frombuffer = frombuffer
+
+        fake_torch = types.ModuleType('torch')
+        fake_torch.from_numpy = lambda arr: FakeTensor()
+
+        with mock.patch.dict(sys.modules, {'numpy': fake_np, 'torch': fake_torch}):
+            out = transcribe_whisperx._load_wav_waveform(path)
+
+        self.assertEqual(out['sample_rate'], 16000)
+        self.assertEqual(out['waveform'], 'TENSOR')
+        self.assertEqual(captured['raw_len'], 8)  # 4 frames * 2 bytes
+
+    def test_resplit_with_no_timestamps_and_text_loss_falls_back(self):
+        # A degenerate aligned result that both re-splits AND loses text —
+        # the coverage check trips before interpolation even runs.
+        input_segments = [
+            {'start': 0.0, 'end': 2.0, 'text': 'a'},
+            {'start': 2.0, 'end': 4.0, 'text': 'b'},
+        ]
+        aligned_segments = [{'start': None, 'end': None, 'text': 'x'}]
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            object(), object())
+        fake_whisperx.align = lambda segments, model, metadata, audio, device: {
+            'segments': aligned_segments}
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            result_segments, alignment_enabled, repaired = transcribe_whisperx._try_align(
+                input_segments, audio=object(), language='ko')
+
+        self.assertEqual(result_segments, input_segments)
+        self.assertFalse(alignment_enabled)
+        self.assertEqual(repaired, 0)
 
     def test_all_numeric_timestamps_returns_aligned_result(self):
         input_segments = [{'start': 0.0, 'end': 1.0, 'text': 'a'}]

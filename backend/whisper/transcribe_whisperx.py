@@ -42,6 +42,18 @@ DIARIZATION_LOCAL_DIR = "/tmp/whisperx-diarization-model"
 BATCH_SIZE = int(os.environ.get("WHISPERX_BATCH_SIZE", "8"))
 SAMPLE_RATE = 16000  # whisperx.load_audio's fixed output rate
 
+# Whisperx 3.8.6's own VAD defaults (asr.py default_vad_options) — used to
+# fill whichever hysteresis knob the operator didn't override, and echoed in
+# operator-facing messages so code, errors, and runbook can't drift apart.
+# Re-verify against asr.py if the Dockerfile.whisperx pin is ever bumped:
+# a changed upstream default would silently shift the effective-pair check.
+VAD_DEFAULT_ONSET = 0.500
+VAD_DEFAULT_OFFSET = 0.363
+# Whisper's encoder consumes fixed 30-second windows; a merge window above
+# that silently truncates the tail of every merged chunk — a recall bench
+# poisoned in exactly the way _vad_config_from_env exists to prevent.
+VAD_MAX_CHUNK_SIZE = 30
+
 s3 = boto3.client("s3", region_name=REGION)
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 table = dynamodb.Table(TABLE)
@@ -108,6 +120,272 @@ def _turns_from_diarization(diarization) -> list[tuple]:
     ]
 
 
+def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_end: float) -> int:
+    """Fills missing start/end timestamps on re-split aligned segments,
+    in place, and returns how many segments were touched (their `words`
+    are dropped — interpolated boundaries are too coarse for word-majority
+    voting). Self-contained (no whisperx/AWS dependencies) so the boundary
+    math is unit-testable; mutates segs in place and prints one summary
+    line.
+
+    Design (round-3 review MAJOR-1 of PR #173): earlier per-segment /
+    per-run strategies produced zero-length segments (round 2) or fully
+    OVERLAPPING windows (round 3) in adjacent-missing cases — both break
+    diarization-turn overlap assignment, the very thing repaired segments
+    need. The robust construction treats the flattened boundary sequence
+    [s0, e0, s1, e1, ...] as one monotone series: every maximal RUN of
+    missing entries between two known values L and R (span edges at the
+    extremes) is filled LINEARLY (L + k*(R-L)/(m+1)).
+
+    The aligner's OWN boundaries are sanitized before the fill (round-5/6
+    reviews): a non-finite (NaN/inf) timestamp is treated as MISSING
+    (round-6 MAJOR-2 — a NaN anchor silently poisons every comparison and
+    propagates through the fill), a segment whose known pair is inverted is
+    normalized to (min, max), and any known value that would break global
+    monotonicity is lifted to the running maximum — so fill anchors are
+    monotone BY THE TIME the fill runs, inversion/overlap cannot be
+    produced or laundered, and every sanitized segment loses its words and
+    counts toward the repaired total. Zero-width segments (neighbors abut:
+    the run has no temporal room, any width would overlap) are kept and
+    counted — speaker assignment covers them via raw_speaker_by_overlap's
+    midpoint fallback.
+    """
+    import math
+
+    n = len(segs)
+    if n == 0:
+        return 0
+
+    def _ts(v):
+        # Non-finite counts as missing — never as an anchor.
+        if v is None or not isinstance(v, (int, float)) or not math.isfinite(v):
+            return None
+        return float(v)
+
+    adjusted = [False] * n
+
+    # Pass 1: per-segment sanitation — non-finite -> missing; inverted
+    # known pair -> (min, max).
+    for idx, s in enumerate(segs):
+        s0, e0 = _ts(s.get("start")), _ts(s.get("end"))
+        if (s0 is None) != (s.get("start") is None) or (e0 is None) != (s.get("end") is None):
+            adjusted[idx] = True  # a non-finite value was demoted to missing
+        if s0 is not None and e0 is not None and e0 < s0:
+            s0, e0 = e0, s0
+            adjusted[idx] = True
+        s["start"], s["end"] = s0, e0
+
+    # Pass 2: global monotone clamp of KNOWN boundaries — a known value
+    # below the running maximum is lifted to it, so the fill's anchors are
+    # non-decreasing and neither the fill nor a later segment can overlap
+    # an earlier one.
+    running = None
+    for idx, s in enumerate(segs):
+        for key in ("start", "end"):
+            v = s[key]
+            if v is None:
+                continue
+            if running is not None and v < running:
+                s[key] = running
+                adjusted[idx] = True
+            else:
+                running = v
+
+    # Pass 3: linear fill of missing boundaries between monotone anchors.
+    # The span edges join the monotone frame too (round-7 MAJOR): a
+    # span_start above the first known bound (or a span_end below the last)
+    # would otherwise anchor a leading/trailing run OUTSIDE the clamped
+    # sequence and mint an inversion the clamp never sees.
+    bounds: list = []
+    for s in segs:
+        bounds.append(s["start"])
+        bounds.append(s["end"])
+    known = [b for b in bounds if b is not None]
+    if known:
+        span_start = min(span_start, known[0])
+        span_end = max(span_end, known[-1])
+    if span_end < span_start:
+        span_end = span_start
+    m = len(bounds)
+    i = 0
+    while i < m:
+        if bounds[i] is not None:
+            i += 1
+            continue
+        run_start = i
+        while i < m and bounds[i] is None:
+            i += 1
+        left = bounds[run_start - 1] if run_start > 0 else span_start
+        right = bounds[i] if i < m else span_end
+        if right < left:
+            right = left
+        k = i - run_start
+        step = (right - left) / (k + 1)
+        for j in range(k):
+            bounds[run_start + j] = left + (j + 1) * step
+    # Unconditional belt: one final running-max clamp over the fully
+    # populated sequence makes monotone output an invariant of this
+    # function, not a property of any particular anchor analysis.
+    running_final = bounds[0]
+    for j in range(1, m):
+        if bounds[j] < running_final:
+            bounds[j] = running_final
+        else:
+            running_final = bounds[j]
+
+    touched = 0
+    zero_width = 0
+    for idx, s in enumerate(segs):
+        filled = s["start"] is None or s["end"] is None
+        s["start"] = bounds[2 * idx]
+        s["end"] = bounds[2 * idx + 1]
+        if filled or adjusted[idx]:
+            if s["end"] == s["start"]:
+                # counted only for segments THIS function touched — a
+                # zero-width window the aligner itself produced is not
+                # interpolation's doing and must not be logged as such
+                zero_width += 1
+            s.pop("words", None)
+            touched += 1
+    if zero_width:
+        print(f"Interpolation kept {zero_width} zero-width segment(s) "
+              f"(abutting aligner boundaries; midpoint fallback assigns "
+              f"speakers)")
+    return touched
+
+
+def _vad_config_from_env(env) -> "tuple[str | None, dict]":
+    """Reads the operator-tunable VAD knobs for whisperx.load_model from
+    env vars, returning (vad_method | None, vad_options dict). Exists
+    because the first full bench run showed whisperx's default VAD dropping
+    ~25% of real speech (252s of legacy-covered speech had no whisperx
+    segments on meeting a435a3dc) — recall tuning must be possible per
+    `aws ecs run-task` env override, without an image rebuild per attempt.
+
+    - WHISPERX_VAD_METHOD: 'pyannote' (whisperx default) or 'silero'
+    - WHISPERX_VAD_ONSET / WHISPERX_VAD_OFFSET: floats in (0, 1) — lower
+      onset detects speech more eagerly (higher recall). The effective pair
+      must keep whisperx's hysteresis orientation (offset < onset; defaults
+      0.500/0.363), or Binarize would oscillate in the inverted band and
+      spray micro-segments — the resulting bench numbers would silently
+      poison the Phase-2 go/no-go comparison, so it's rejected here instead.
+      The check applies to the pyannote path only: silero in whisperx 3.8.6
+      consumes vad_onset alone (its detection threshold) and ignores
+      vad_offset, so with METHOD=silero an offset override just warns.
+    - WHISPERX_VAD_CHUNK_SIZE: int seconds. Consumed twice in 3.8.6: as
+      silero's max_speech_duration_s via vad_options, AND as the merge
+      window via model.transcribe(chunk_size=...) — main() passes it to
+      both, because vad_options alone does NOT reach the pyannote path's
+      merge_chunks (that one reads transcribe()'s own parameter).
+
+    Invalid values raise BenchConfigError (operator-facing, safe to log
+    verbatim) instead of silently benchmarking with a config the operator
+    didn't ask for. Called from main() BEFORE any S3 download, per the
+    BenchConfigError fail-fast contract. Self-contained for unit tests.
+    """
+    raw_method = (env.get("WHISPERX_VAD_METHOD") or "").strip()
+    method = raw_method.lower() or None
+    if method is not None and method not in ("pyannote", "silero"):
+        # Echo the operator's original spelling, not the lowercased form,
+        # so a typo is diagnosable from the message alone.
+        raise BenchConfigError(
+            f"WHISPERX_VAD_METHOD must be 'pyannote' or 'silero', got {raw_method!r}")
+    options: dict = {}
+    for env_name, key, lo, hi in (
+        ("WHISPERX_VAD_ONSET", "vad_onset", 0.0, 1.0),
+        ("WHISPERX_VAD_OFFSET", "vad_offset", 0.0, 1.0),
+    ):
+        raw = (env.get(env_name) or "").strip()
+        if not raw:
+            continue
+        try:
+            val = float(raw)
+        except ValueError:
+            raise BenchConfigError(
+                f"{env_name} must be a float, got {raw!r}") from None
+        if not (lo < val < hi):
+            raise BenchConfigError(
+                f"{env_name} must be within ({lo}, {hi}) exclusive, got {val}")
+        options[key] = val
+    if method == "silero":
+        # Silero has no offset hysteresis in 3.8.6 (vad_onset is its sole
+        # detection threshold) — the pyannote-shaped check below would
+        # reject the runbook's own silero sweep over a knob silero never
+        # reads. Warn instead of failing: the run is still exactly what
+        # the operator configured.
+        if "vad_offset" in options:
+            print("WARNING: WHISPERX_VAD_OFFSET is ignored by the silero "
+                  "VAD path (silero consumes vad_onset only)")
+    elif "vad_onset" in options or "vad_offset" in options:
+        # Whisperx 3.8.6 defaults fill whichever knob wasn't overridden.
+        eff_onset = options.get("vad_onset", VAD_DEFAULT_ONSET)
+        eff_offset = options.get("vad_offset", VAD_DEFAULT_OFFSET)
+        if eff_offset >= eff_onset:
+            msg = (f"effective vad_offset ({eff_offset}) must stay below "
+                   f"vad_onset ({eff_onset}) to preserve hysteresis")
+            if "vad_offset" not in options:
+                # The default-offset hint only helps when the default is
+                # what tripped the check — with both knobs explicit it
+                # would point at the wrong remediation.
+                msg += (f" — when lowering WHISPERX_VAD_ONSET below the "
+                        f"{VAD_DEFAULT_OFFSET} default offset, set "
+                        f"WHISPERX_VAD_OFFSET lower still")
+            raise BenchConfigError(msg)
+    raw = (env.get("WHISPERX_VAD_CHUNK_SIZE") or "").strip()
+    if raw:
+        try:
+            chunk = int(raw)
+        except ValueError:
+            raise BenchConfigError(
+                f"WHISPERX_VAD_CHUNK_SIZE must be an int, got {raw!r}") from None
+        if not (0 < chunk <= VAD_MAX_CHUNK_SIZE):
+            raise BenchConfigError(
+                f"WHISPERX_VAD_CHUNK_SIZE must be in (0, {VAD_MAX_CHUNK_SIZE}] "
+                f"seconds (Whisper's encoder window is 30s — a larger merge "
+                f"window silently truncates chunk tails), got {chunk}")
+        options["chunk_size"] = chunk
+    return method, options
+
+
+def _transcribe_kwargs_from_vad_options(vad_options: dict) -> dict:
+    """Extra kwargs for model.transcribe() derived from the VAD config.
+
+    chunk_size must ALSO go to transcribe(): in whisperx 3.8.6 the merge
+    window is transcribe()'s own parameter (asr.py — merge_chunks(
+    vad_segments, chunk_size, ...)); the copy inside load_model's
+    vad_options only feeds silero's binarization (max_speech_duration_s).
+    Passing it in vad_options alone would be a silent no-op on the default
+    pyannote path — this helper exists so that invariant is unit-testable.
+    """
+    if "chunk_size" in vad_options:
+        return {"chunk_size": vad_options["chunk_size"]}
+    return {}
+
+
+def _load_wav_waveform(wav_path: str) -> dict:
+    """Reads the 16kHz mono s16le WAV our own ffmpeg call just wrote into
+    the in-memory {'waveform': (channel, time) tensor, 'sample_rate': int}
+    dict pyannote accepts. This BYPASSES pyannote 4.x's torchcodec decoding
+    path entirely — the first bench run failed with RuntimeError because
+    torchcodec's FFmpeg-6 variant links against libpython3.12.so.1.0, which
+    Ubuntu's `python3` package doesn't ship (Dockerfile.whisperx now
+    installs it — libpython3.12t64 with a libpython3.12 fallback — as
+    belt-and-suspenders; see the runbook for the smoke check). Passing a
+    preloaded waveform is pyannote's own documented workaround, and stdlib
+    `wave` suffices because we control the format (ffmpeg -ar 16000 -ac 1).
+    """
+    import wave
+
+    import numpy as np
+    import torch
+
+    with wave.open(wav_path, "rb") as w:
+        sample_rate = w.getframerate()
+        raw = w.readframes(w.getnframes())
+    pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    return {"waveform": torch.from_numpy(pcm).unsqueeze(0), "sample_rate": sample_rate}
+
+
 def _diarize(config_path: str, audio_path: str, num_speakers: int | None) -> list[tuple]:
     """pyannote 4.x diarization -> [(start, end, label)]. [] on any failure
     (caller falls back to unlabeled segments). NUM_SPEAKERS is a
@@ -125,7 +403,7 @@ def _diarize(config_path: str, audio_path: str, num_speakers: int | None) -> lis
         pipeline = Pipeline.from_pretrained(config_path)
         pipeline.to(torch.device("cuda"))
         kwargs = {"max_speakers": num_speakers} if num_speakers else {}
-        diarization = pipeline(wav_path, **kwargs)
+        diarization = pipeline(_load_wav_waveform(wav_path), **kwargs)
         # pyannote.audio 4.x may return a result wrapper whose Annotation
         # lives at .speaker_diarization (3.x returned the Annotation itself);
         # unwrap defensively so both shapes work.
@@ -211,7 +489,17 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
     buffer) but BEFORE the `finally` below drops the model reference --
     i.e. while the align model is still resident on the GPU.
 
-    Returns (segments, alignment_enabled, repaired_count)."""
+    Returns (segments, alignment_enabled, repaired_count) — repaired_count
+    is the number of segments the aligner couldn't fully align, repaired to
+    segment-level timestamps (input-index copy on the count-match path,
+    neighbor interpolation on the re-split path) with their words dropped.
+    No segment is ever silently discarded, and the re-split path requires
+    the whitespace-NORMALIZED RENDERED transcript (build_result's join
+    form) to be identical to the input's — a merely whitespace-stripped
+    comparison was rejected in round 4: it passes mid-word re-splits that
+    change the rendered output
+    (any aligner-side loss/duplication/reorder discards the aligned result
+    and falls back). Surfaced as alignment_repaired in whisper_metadata."""
     import contextlib
     import io
     stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
@@ -236,11 +524,51 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
                   f"(suppressed -- may contain transcript text)")
         aligned_segments = aligned["segments"]
         if len(aligned_segments) != len(segments):
-            print(f"Alignment returned {len(aligned_segments)} segment(s), "
-                  f"expected {len(segments)}; discarding aligned result "
-                  f"(would skew the benchmark), using segment-level "
-                  f"timestamps")
-            return segments, False, 0
+            # A count mismatch is whisperx.align()'s NORMAL behavior, not a
+            # failure: it re-splits segments along alignment boundaries (the
+            # first real bench run returned 117 for 43 inputs). The earlier
+            # all-or-nothing discard here silently killed word-majority
+            # speaker assignment — the thing this benchmark exists to
+            # evaluate — on every real run.
+            #
+            # Coverage sanity check FIRST, in RENDERED form: build_result
+            # produces `" ".join(text.strip() ...)`, so the invariant that
+            # matters is that the rendered transcript is unchanged. A
+            # whitespace-STRIPPED comparison misses exactly the dangerous
+            # case (round-4 review MAJOR): a mid-word re-split (가방 → 가|방)
+            # strips to the same characters but renders as "가 방". Compare
+            # the whitespace-NORMALIZED rendered strings instead — tolerant
+            # of how much whitespace separates words, strict about any
+            # loss, duplication, reorder, or word-boundary insertion. Any
+            # mismatch discards the aligned result (lengths logged, never
+            # content — PII).
+            def _rendered(segs: list[dict]) -> str:
+                return " ".join(" ".join(s.get("text", "") for s in segs).split())
+            in_text = _rendered(segments)
+            out_text = _rendered(aligned_segments)
+            if not aligned_segments or not out_text or in_text != out_text:
+                print(f"Alignment re-split output renders differently from "
+                      f"input ({len(out_text)} vs {len(in_text)} chars "
+                      f"normalized); discarding aligned result, using "
+                      f"segment-level timestamps")
+                return segments, False, 0
+            # Accept the re-split output, preserving EVERY segment: index
+            # mapping to the inputs is impossible across a re-split, so
+            # missing timestamps are interpolated from neighboring known
+            # boundaries (runs of fully-missing segments split their gap
+            # evenly; a partially-missing segment keeps its known side) and
+            # those segments lose only their words — symmetric with the
+            # count-match path's per-segment repair.
+            span_start = (segments[0].get("start") if segments else None) or 0.0
+            _last_end = segments[-1].get("end") if segments else None
+            span_end = _last_end if _last_end is not None else span_start
+            interpolated = _interpolate_missing_timestamps(
+                aligned_segments, span_start, span_end)
+            print(f"Alignment re-split {len(segments)} segment(s) into "
+                  f"{len(aligned_segments)} (kept all; {interpolated} "
+                  f"repaired via neighbor-interpolated timestamps, words "
+                  f"dropped for those only)")
+            return aligned_segments, True, interpolated
         repaired = 0
         for i, seg in enumerate(aligned_segments):
             if seg.get("start") is None or seg.get("end") is None:
@@ -452,6 +780,16 @@ def main():
     # a bad OUTPUT_KEY (e.g. a typo'd bench key) must fail fast, not after an
     # entire GPU run's worth of download/transcription/alignment/diarization.
     output_key = validate_output_key(os.environ.get("OUTPUT_KEY", ""), meeting_id)
+    # VAD env validation lives up here with OUTPUT_KEY, per the BenchConfigError
+    # contract: every check that can raise it runs before any audio download or
+    # model/GPU work, so an env typo can't burn a Spot task's download+convert.
+    vad_method, vad_options = _vad_config_from_env(os.environ)
+    # Always log the effective config, not just on override: a typo'd env
+    # NAME (e.g. WHISPERX_VAD_ONSETT) validates nothing and overrides
+    # nothing, and this line is how an operator catches that the run is
+    # actually on defaults. The runbook's §3b verification step greps for it.
+    print(f"VAD config: method={vad_method or 'pyannote (default)'} "
+          f"options={vad_options or 'defaults'}")
 
     audio_key = os.environ.get("AUDIO_KEY")
     if audio_key:
@@ -483,15 +821,21 @@ def main():
     import whisperx
     print(f"Loading WhisperX large-v3 (GPU float16, batch_size={BATCH_SIZE})...")
     asr_options = {"initial_prompt": vocab_prompt} if vocab_prompt else None
+    load_kwargs = {}
+    if vad_method:
+        load_kwargs["vad_method"] = vad_method
+    if vad_options:
+        load_kwargs["vad_options"] = vad_options
     model = whisperx.load_model(
         model_dir, device="cuda", compute_type="float16",
-        language="ko", asr_options=asr_options)
+        language="ko", asr_options=asr_options, **load_kwargs)
     _log_gpu_memory("model-loaded")
 
     print("Transcribing (batched)...")
     start = time.time()
     audio = whisperx.load_audio(local_path)
-    tx = model.transcribe(audio, batch_size=BATCH_SIZE)
+    tx = model.transcribe(audio, batch_size=BATCH_SIZE,
+                          **_transcribe_kwargs_from_vad_options(vad_options))
     segments = [
         {"start": seg["start"], "end": seg["end"], "text": seg["text"]}
         for seg in tx["segments"]

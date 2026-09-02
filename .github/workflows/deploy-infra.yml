@@ -14,8 +14,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Separate job (not a step) so failure gates EVERYTHING in deploy —
+  # including its `if: always()` OAC re-tighten step, which as a sibling
+  # step would still run after a failed in-job gate and deploy
+  # TtobakStorageStack on a red test suite.
+  infra-tests:
+    runs-on: ttobak-arm
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Infra synth + unit tests (gate before any deploy)
+        # Security invariants live in these jest assertions (e.g.
+        # whisper-stack.test.ts's "no EntryPoint/Command on the whisperx
+        # task definition" guard) — deploying without running them would
+        # let a silently-bypassing CDK edit auto-ship on push-to-main.
+        # `cdk synth` must gate here too: jest's per-stack synth uses dummy
+        # envs and misses full-app synth errors, and the deploy job's
+        # `cdk diff || true` swallows them — without this line they'd first
+        # surface mid-`cdk deploy`.
+        working-directory: infra
+        run: |
+          npm ci
+          npx cdk synth
+          npm test
+
   deploy:
     runs-on: ttobak-arm
+    needs: infra-tests
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6

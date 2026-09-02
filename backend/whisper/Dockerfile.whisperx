@@ -3,8 +3,22 @@
 # cu128 matches the DLC-validated combo (whisperx 3.8.x / torch 2.8 / CUDA 12.8).
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
+# libpython3.12: pyannote.audio 4.x decodes audio via torchcodec, whose
+# FFmpeg-6 variant (Ubuntu 24.04's apt ffmpeg is FFmpeg 6) links against
+# libpython3.12.so.1.0 -- Ubuntu's `python3` package ships only the
+# interpreter, not the shared library, so without this the first bench
+# run's diarization died with RuntimeError at decode time (2026-08-31).
+# On noble the shared library ships as the 64-bit-time_t transition
+# package `libpython3.12t64` (which Provides: libpython3.12) -- try the
+# real name first, fall back to the old name so the build works on either
+# packaging state. Verify the built image with the runbook's torchcodec
+# import smoke check, not `dpkg -s`.
+# transcribe_whisperx.py also bypasses torchcodec by passing a preloaded
+# waveform; this package makes the torchcodec path work regardless.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip ffmpeg && \
+    (apt-get install -y --no-install-recommends libpython3.12t64 || \
+     apt-get install -y --no-install-recommends libpython3.12) && \
     rm -rf /var/lib/apt/lists/*
 
 # whisperx pins its own torch/pyannote.audio(>=4)/faster-whisper/ctranslate2
@@ -20,7 +34,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 
 # Whisper CT2 weights + diarization pipeline are loaded from S3 at runtime
 # (same pattern as the legacy image; see whisper_common.stream_extract_tar).
-COPY whisper_common.py transcribe_whisperx.py /app/
+COPY whisper_common.py transcribe_whisperx.py transcribe_fw_p4.py run_engine.py /app/
 WORKDIR /app
 
 # Non-root: the app only writes under /tmp (model/audio staging), so it
@@ -28,4 +42,16 @@ WORKDIR /app
 RUN useradd -m -u 10001 whisperx
 USER whisperx
 
-ENTRYPOINT ["python3", "transcribe_whisperx.py"]
+# Full ENTRYPOINT pinned to the dispatcher, deliberately with NO CMD: the
+# engine is selected via the ENGINE env var (allowlisted in run_engine.py),
+# never via a containerOverrides command. A bare `ENTRYPOINT ["python3"]` +
+# CMD split would promote the ECS command override into an arbitrary-code
+# channel (`"command": ["-c", ...]`) on a host-networkMode task with
+# all-users audio read access; run_engine also rejects any argv so a
+# command override is a hard, loud no-op. Do NOT set entryPoint/command in
+# the CDK task definition either: a CDK entryPoint SILENTLY bypasses this
+# pin, and CDK is the ONLY bypass channel -- ECS RunTask containerOverrides
+# has no entryPoint field at all (a command is loudly rejected by the
+# dispatcher, but banned in CDK too). A whisper-stack.test.ts assertion +
+# CLAUDE.md gotcha guard this invariant.
+ENTRYPOINT ["python3", "run_engine.py"]
