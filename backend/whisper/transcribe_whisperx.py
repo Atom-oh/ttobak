@@ -122,26 +122,67 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
     need. The robust construction treats the flattened boundary sequence
     [s0, e0, s1, e1, ...] as one monotone series: every maximal RUN of
     missing entries between two known values L and R (span edges at the
-    extremes) is filled LINEARLY (L + k*(R-L)/(m+1)). Known values —
-    including a partially-missing segment's known side — are never used
-    as fill targets, and when the known inputs are themselves monotone the
-    output is monotone non-decreasing with no overlap by construction.
-    Two degenerate cases from the aligner's OWN boundaries are handled
-    explicitly (round-5 review): a segment whose known values are inverted
-    is normalized to (min, max), and zero-width segments (known neighbors
-    abut, so the run has no temporal room) are kept and counted — speaker
-    assignment covers them via raw_speaker_by_overlap's midpoint fallback.
+    extremes) is filled LINEARLY (L + k*(R-L)/(m+1)).
+
+    The aligner's OWN boundaries are sanitized before the fill (round-5/6
+    reviews): a non-finite (NaN/inf) timestamp is treated as MISSING
+    (round-6 MAJOR-2 — a NaN anchor silently poisons every comparison and
+    propagates through the fill), a segment whose known pair is inverted is
+    normalized to (min, max), and any known value that would break global
+    monotonicity is lifted to the running maximum — so fill anchors are
+    monotone BY THE TIME the fill runs, inversion/overlap cannot be
+    produced or laundered, and every sanitized segment loses its words and
+    counts toward the repaired total. Zero-width segments (neighbors abut:
+    the run has no temporal room, any width would overlap) are kept and
+    counted — speaker assignment covers them via raw_speaker_by_overlap's
+    midpoint fallback.
     """
+    import math
+
     n = len(segs)
     if n == 0:
         return 0
 
-    # Flatten to the boundary sequence; remember which segments had a gap.
+    def _ts(v):
+        # Non-finite counts as missing — never as an anchor.
+        if v is None or not isinstance(v, (int, float)) or not math.isfinite(v):
+            return None
+        return float(v)
+
+    adjusted = [False] * n
+
+    # Pass 1: per-segment sanitation — non-finite -> missing; inverted
+    # known pair -> (min, max).
+    for idx, s in enumerate(segs):
+        s0, e0 = _ts(s.get("start")), _ts(s.get("end"))
+        if (s0 is None) != (s.get("start") is None) or (e0 is None) != (s.get("end") is None):
+            adjusted[idx] = True  # a non-finite value was demoted to missing
+        if s0 is not None and e0 is not None and e0 < s0:
+            s0, e0 = e0, s0
+            adjusted[idx] = True
+        s["start"], s["end"] = s0, e0
+
+    # Pass 2: global monotone clamp of KNOWN boundaries — a known value
+    # below the running maximum is lifted to it, so the fill's anchors are
+    # non-decreasing and neither the fill nor a later segment can overlap
+    # an earlier one.
+    running = None
+    for idx, s in enumerate(segs):
+        for key in ("start", "end"):
+            v = s[key]
+            if v is None:
+                continue
+            if running is not None and v < running:
+                s[key] = running
+                adjusted[idx] = True
+            else:
+                running = v
+
+    # Pass 3: linear fill of missing boundaries between monotone anchors.
     bounds: list = []
     for s in segs:
-        bounds.append(s.get("start"))
-        bounds.append(s.get("end"))
-
+        bounds.append(s["start"])
+        bounds.append(s["end"])
     m = len(bounds)
     i = 0
     while i < m:
@@ -152,7 +193,7 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
         while i < m and bounds[i] is None:
             i += 1
         left = bounds[run_start - 1] if run_start > 0 else span_start
-        right = bounds[i] if i < m else span_end
+        right = bounds[i] if i < m else max(span_end, left)
         if right < left:
             right = left
         k = i - run_start
@@ -162,35 +203,19 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
 
     touched = 0
     zero_width = 0
-    inverted = 0
     for idx, s in enumerate(segs):
-        filled = s.get("start") is None or s.get("end") is None
+        filled = s["start"] is None or s["end"] is None
         s["start"] = bounds[2 * idx]
         s["end"] = bounds[2 * idx + 1]
-        if s["end"] < s["start"]:
-            # Aligner-provided KNOWN values can themselves be non-monotone
-            # (e.g. start 5.0 with a known end 4.0 on the next boundary) —
-            # the linear fill never creates an inversion on its own, but it
-            # must not pass one through either. Normalize to (min, max):
-            # a valid window spanning the disputed region beats an inverted
-            # one that breaks every downstream overlap computation.
-            s["start"], s["end"] = s["end"], s["start"]
-            inverted += 1
         if s["end"] == s["start"]:
-            # Zero width happens when the known neighbors abut (left ==
-            # right): the run genuinely has no temporal room, and any
-            # nonzero width would overlap a neighbor. Kept as-is — speaker
-            # assignment still works via raw_speaker_by_overlap's
-            # midpoint-distance fallback (whisper_common) — but counted so
-            # it is never invisible.
             zero_width += 1
-        if filled:
+        if filled or adjusted[idx]:
             s.pop("words", None)
             touched += 1
-    if inverted or zero_width:
-        print(f"Interpolation normalized {inverted} inverted and kept "
-              f"{zero_width} zero-width segment(s) (abutting/non-monotone "
-              f"aligner boundaries; midpoint fallback assigns speakers)")
+    if zero_width:
+        print(f"Interpolation kept {zero_width} zero-width segment(s) "
+              f"(abutting aligner boundaries; midpoint fallback assigns "
+              f"speakers)")
     return touched
 
 
@@ -326,7 +351,10 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
     segment-level timestamps (input-index copy on the count-match path,
     neighbor interpolation on the re-split path) with their words dropped.
     No segment is ever silently discarded, and the re-split path requires
-    the whitespace-stripped concatenated text to be IDENTICAL to the input
+    the whitespace-NORMALIZED RENDERED transcript (build_result's join
+    form) to be identical to the input's — a merely whitespace-stripped
+    comparison was rejected in round 4: it passes mid-word re-splits that
+    change the rendered output
     (any aligner-side loss/duplication/reorder discards the aligned result
     and falls back). Surfaced as alignment_repaired in whisper_metadata."""
     import contextlib
@@ -375,7 +403,7 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
                 return " ".join(" ".join(s.get("text", "") for s in segs).split())
             in_text = _rendered(segments)
             out_text = _rendered(aligned_segments)
-            if in_text != out_text:
+            if not aligned_segments or not out_text or in_text != out_text:
                 print(f"Alignment re-split output renders differently from "
                       f"input ({len(out_text)} vs {len(in_text)} chars "
                       f"normalized); discarding aligned result, using "
@@ -388,8 +416,9 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
             # evenly; a partially-missing segment keeps its known side) and
             # those segments lose only their words — symmetric with the
             # count-match path's per-segment repair.
-            span_start = segments[0]["start"] if segments else 0.0
-            span_end = segments[-1]["end"] if segments else 0.0
+            span_start = (segments[0].get("start") if segments else None) or 0.0
+            _last_end = segments[-1].get("end") if segments else None
+            span_end = _last_end if _last_end is not None else span_start
             interpolated = _interpolate_missing_timestamps(
                 aligned_segments, span_start, span_end)
             print(f"Alignment re-split {len(segments)} segment(s) into "

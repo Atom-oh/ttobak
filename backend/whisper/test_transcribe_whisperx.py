@@ -279,17 +279,53 @@ class TestTryAlign(unittest.TestCase):
             [dict(segs[1])], [(0.0, 1.0, 'SPEAKER_00'), (1.0, 2.0, 'SPEAKER_01')])
         self.assertIn('speaker', labeled[0])
 
-    def test_interpolation_normalizes_inverted_known_boundaries(self):
-        # Round-5 MAJOR (b): the aligner's own known values can be
-        # non-monotone (start 5.0, then a known end 4.0). The fill must not
-        # pass an inverted window through — normalize to (min, max).
+    def test_interpolation_clamps_cross_segment_inversion_without_overlap(self):
+        # Round-6 MAJOR-1(a)/(c): the aligner's known values can be
+        # non-monotone ACROSS segments (end 5.0 followed by known end 4.0).
+        # The old post-fill swap produced a window fully overlapping its
+        # neighbor; the monotone clamp lifts the out-of-order known to the
+        # running max BEFORE the fill, so no overlap can be produced.
         segs = [
-            {'start': 0.0, 'end': 5.0, 'text': 'a'},
-            {'start': None, 'end': 4.0, 'text': 'b'},
+            {'start': 0.0, 'end': 5.0, 'text': 'a', 'words': []},
+            {'start': None, 'end': 4.0, 'text': 'b', 'words': []},
         ]
-        transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 6.0)
-        self.assertLessEqual(segs[1]['start'], segs[1]['end'])
-        self.assertEqual((segs[1]['start'], segs[1]['end']), (4.0, 5.0))
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 6.0)
+        # seg1's end lifted to 5.0; its start fills at 5.0 -> zero-width at
+        # the boundary, never overlapping seg0's window
+        self.assertEqual((segs[1]['start'], segs[1]['end']), (5.0, 5.0))
+        self.assertGreaterEqual(segs[1]['start'], segs[0]['end'])  # no overlap
+        self.assertEqual(touched, 1)
+        self.assertNotIn('words', segs[1])  # sanitized -> words dropped
+        self.assertIn('words', segs[0])
+
+    def test_interpolation_swaps_within_segment_inversion_and_counts_it(self):
+        # Round-6 MAJOR-1(b): a both-known inverted pair is normalized to
+        # (min, max) BEFORE the fill, its words are dropped and it counts
+        # toward the repaired total (previously it kept words and was
+        # invisible in alignment_repaired).
+        segs = [{'start': 3.0, 'end': 1.0, 'text': 'a', 'words': [{'word': 'a'}]}]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 4.0)
+        self.assertEqual((segs[0]['start'], segs[0]['end']), (1.0, 3.0))
+        self.assertEqual(touched, 1)
+        self.assertNotIn('words', segs[0])
+
+    def test_interpolation_treats_non_finite_as_missing(self):
+        # Round-6 MAJOR-2: a NaN timestamp must never become a fill anchor
+        # (it silently poisons every comparison and propagates NaN through
+        # the run) — treat it as missing and fill it finitely.
+        import math
+        segs = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': float('nan'), 'end': None, 'text': 'b', 'words': []},
+            {'start': 3.0, 'end': 4.0, 'text': 'c'},
+        ]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 4.0)
+        self.assertTrue(math.isfinite(segs[1]['start']))
+        self.assertTrue(math.isfinite(segs[1]['end']))
+        self.assertGreaterEqual(segs[1]['start'], 1.0)
+        self.assertLessEqual(segs[1]['end'], 3.0)
+        self.assertEqual(touched, 1)
+        self.assertNotIn('words', segs[1])
 
     def test_interpolation_all_missing_distributes_span(self):
         segs = [
