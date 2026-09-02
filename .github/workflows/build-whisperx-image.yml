@@ -1,0 +1,70 @@
+# TEMPORARY, manual-only workflow for the WhisperX benchmark image
+# (Phase 1, docs/runbooks/whisperx-benchmark.md §1). The benchmark image is
+# deliberately NOT built by deploy-whisper.yml (its paths filter protects
+# the legacy production image); this workflow exists because the dev host
+# is ARM and cannot build the amd64 CUDA image locally. Dispatch by hand,
+# never on push. Delete after Phase 2 decides the engine's fate.
+name: Build WhisperX Benchmark Image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-whisperx-image
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+  WHISPERX_ECR_REPO: ttobak-whisperx
+
+jobs:
+  build-verify-push:
+    runs-on: ttobak-x86
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install AWS CLI
+        run: |
+          curl -s "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscli.zip
+          unzip -q /tmp/awscli.zip -d /tmp && /tmp/aws/install --install-dir $HOME/.local/aws-cli --bin-dir $HOME/.local/bin --update
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region "${AWS_REGION}" \
+            | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+      - name: Build image
+        working-directory: backend/whisper
+        env:
+          ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/ttobak-whisperx
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -f Dockerfile.whisperx \
+            -t "${ECR_URI}:latest" -t "${ECR_URI}:${IMAGE_TAG::8}" .
+
+      - name: Verify BEFORE push (torchcodec import smoke check)
+        # Runbook §1: a clean torchcodec import proves libpython3.12.so.1.0
+        # loads — the exact failure that wasted the 2026-08-31 bench run.
+        # --pull=never guarantees this runs the local build, not a stale
+        # remote layer. A failure here stops the job before anything is
+        # pushed.
+        env:
+          ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/ttobak-whisperx
+        run: |
+          docker run --rm --pull=never --entrypoint python3 "${ECR_URI}:latest" \
+            -c "import torchcodec; print('torchcodec OK')"
+
+      - name: Push image
+        env:
+          ECR_URI: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com/ttobak-whisperx
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker push "${ECR_URI}:latest"
+          docker push "${ECR_URI}:${IMAGE_TAG::8}"
+          echo "Pushed ${ECR_URI}:latest and :${IMAGE_TAG::8} — record the digest in the benchmark results table (§6):"
+          docker inspect --format='{{index .RepoDigests 0}}' "${ECR_URI}:latest" || true
