@@ -48,6 +48,25 @@ describe('WhisperStack whisperx benchmark additions', () => {
     });
   });
 
+  test('whisperx container sets neither EntryPoint nor Command', () => {
+    // Security invariant (PR #175): the image's ENTRYPOINT is pinned to
+    // run_engine.py, an allowlisting dispatcher — engine selection happens
+    // ONLY via the ENGINE env var. A CDK-level EntryPoint would silently
+    // bypass that pin (a Command is loudly rejected by the dispatcher, but
+    // is banned too so the surface stays declarative). See CLAUDE.md
+    // "Important Gotchas" and Dockerfile.whisperx's ENTRYPOINT comment.
+    const template = synth();
+    const taskDefs = template.findResources('AWS::ECS::TaskDefinition', {
+      Properties: Match.objectLike({ Family: 'ttobak-whisperx' }),
+    });
+    const defs = Object.values(taskDefs);
+    expect(defs).toHaveLength(1);
+    for (const container of defs[0].Properties.ContainerDefinitions) {
+      expect(container.EntryPoint).toBeUndefined();
+      expect(container.Command).toBeUndefined();
+    }
+  });
+
   test('legacy task definition family is untouched', () => {
     const template = synth();
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {

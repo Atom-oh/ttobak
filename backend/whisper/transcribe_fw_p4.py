@@ -181,6 +181,11 @@ def main():
         # No whisperx alignment stage in this engine.
         alignment_enabled=False, alignment_repaired=0)
     result["whisper_metadata"]["engine"] = ENGINE_NAME
+    # Additive field: build_result's diarization.enabled=bool(turns) folds
+    # "attempted but 0 turns" and "model bundle unavailable" together --
+    # for an engine whose whole point is the diarization comparison, a §6
+    # reader needs to tell an ASR-only run's cause apart.
+    result["whisper_metadata"]["diarization"]["model_available"] = bool(diarization_config)
 
     common.upload_transcript(wx.s3, wx.BUCKET, output_key, result)
     print(f"Uploaded s3://{wx.BUCKET}/{output_key}")

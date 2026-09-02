@@ -53,7 +53,10 @@ def main() -> None:
     except ValueError as e:
         print(f"FATAL: {e}", file=sys.stderr)
         sys.exit(1)
-    print(f"run_engine: dispatching to {script}")
+    # flush=True is load-bearing: os.execv replaces this process image
+    # without running interpreter shutdown, so a buffered line would be
+    # lost -- and §3c's engine-verification step greps for exactly this.
+    print(f"run_engine: dispatching to {script}", flush=True)
     script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), script)
     # Replace the process rather than subprocess-wrapping it: the engine
     # keeps PID 1's signal handling (ECS stop -> SIGTERM reaches the

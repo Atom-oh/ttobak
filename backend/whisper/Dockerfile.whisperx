@@ -49,5 +49,7 @@ USER whisperx
 # channel (`"command": ["-c", ...]`) on a host-networkMode task with
 # all-users audio read access; run_engine also rejects any argv so a
 # command override is a hard, loud no-op. Do NOT set entryPoint/command in
-# the CDK task definition either — that would silently bypass this pin.
+# the CDK task definition either: an entryPoint SILENTLY bypasses this pin
+# (a command is loudly rejected by the dispatcher, but banned too). A
+# whisper-stack.test.ts assertion + CLAUDE.md gotcha guard this invariant.
 ENTRYPOINT ["python3", "run_engine.py"]

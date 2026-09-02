@@ -387,9 +387,14 @@ rejects ANY `containerOverrides` command arguments — a command override
 is deliberately a hard no-op channel, because with a plain
 `ENTRYPOINT ["python3"]` it would double as arbitrary-code execution on a
 host-networkMode task with all-users audio read access. For the same
-reason, never set `entryPoint`/`command` on the CDK task definition —
-that would silently bypass the pin (today `whisper-stack.ts` sets
-neither).
+reason, never set `entryPoint`/`command` on the CDK task definition: an
+`entryPoint` SILENTLY bypasses the pin, while a `command` is loudly
+rejected by the dispatcher — banned all the same so the surface stays
+declarative. `whisper-stack.ts` sets neither today; a
+`whisper-stack.test.ts` assertion and a CLAUDE.md gotcha guard this.
+A bad `ENGINE` value fails fast and loud: `FATAL: ENGINE must be one
+of ['fw_p4', 'whisperx'] ...` on stderr, exit 1, before any model or S3
+work.
 
 **Precondition — one image rebuild** (same as §3b): the image must have
 been built after `run_engine.py`/`transcribe_fw_p4.py` landed; rebuild
@@ -401,10 +406,18 @@ ignores the ENGINE env silently and runs whisperx — so before recording a
 `whisper_metadata.engine` field is `fw-legacy-pyannote4-bench`, not
 `whisperx-large-v3-gpu`.
 
-This engine reads only `MEETING_ID`/`USER_ID`/`OUTPUT_KEY`/`AUDIO_KEY`/
-`INITIAL_PROMPT`/`NUM_SPEAKERS` — the §3b `WHISPERX_VAD_*` knobs and
-alignment settings are whisperx-only and silently unused here, so drop
-them from the overrides JSON for hybrid runs.
+Of the per-run override env vars, this engine reads only
+`MEETING_ID`/`USER_ID`/`OUTPUT_KEY`/`AUDIO_KEY`/`INITIAL_PROMPT`/
+`NUM_SPEAKERS` (task-definition-level vars like `BUCKET_NAME`/`VOCAB_KEY`
+apply as always) — the §3b `WHISPERX_VAD_*` knobs and alignment settings
+are whisperx-only and silently unused here, so drop them from the
+overrides JSON for hybrid runs.
+
+**OUTPUT_KEY convention**: use the `_bench_fw_p4` suffix —
+`bench-transcripts/{meetingId}_bench_fw_p4.json`. The §3 snippet's
+`SUFFIX` derivation only knows `legacy`/`whisperx`; reusing it verbatim
+for a hybrid run would overwrite the meeting's `_bench_whisperx.json` and
+§5 would misread the hybrid output as whisperx. Set the suffix explicitly.
 
 Its `OUTPUT_KEY` must be under `bench-transcripts/` (the engine refuses
 anything else, including the real-pipeline key `validate_output_key`
@@ -529,6 +542,8 @@ guessable name:
 
 ```bash
 WORKDIR=$(mktemp -d)
+# Add every suffix present for the meeting — e.g. `legacy whisperx fw_p4`
+# for a §3c hybrid comparison, or `whisperx_silero025`-style §3b sweep keys.
 for S in legacy whisperx; do
   aws s3 cp "s3://ttobak-assets-180294183052/bench-transcripts/${MEETING_ID}_bench_${S}.json" "$WORKDIR/${S}.json"
   echo "== $S: speakers =="
@@ -549,20 +564,25 @@ Judge qualitatively, per meeting:
 
 ## 6. Recording results
 
-Build one table row per meeting — and, for a §3b VAD sweep, one row per
-(meeting, VAD config) attempt, since this table is the ONLY thing retained
-past the session: without the config and recall columns below, §7 cleanup
-would erase the evidence for which config converged, leaving the Phase-2
-go/no-go with no recorded basis.
+Build one table row per (meeting, engine, config) attempt — the legacy
+baseline, each §3b VAD config, and each §3c hybrid run get their own row —
+since this table is the ONLY thing retained past the session: without the
+engine/config/recall columns below, §7 cleanup would erase the evidence
+for which attempt won, leaving the Phase-2 go/no-go with no recorded
+basis.
 
-| Meeting ID | Duration | Participants | Image digest (whisperx engine) | VAD config (method/onset/offset/chunk, "defaults" if none) | Real-content coverage gap vs legacy (s) | Legacy speakers detected | WhisperX speakers detected | Peak VRAM (WhisperX) | Wall-clock (legacy / whisperx) | Alignment repaired segments | Qualitative verdict |
+| Meeting ID | Duration | Participants | Engine (`whisper_metadata.engine`) | Image digest | VAD config (method/onset/offset/chunk, "defaults" if none; n/a for legacy and fw_p4) | Real-content coverage gap vs legacy (s) | Speakers detected | Peak VRAM | Wall-clock | Alignment repaired segments | Qualitative verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 
-"Image digest" pins which engine build produced the attempt — the task
+"Engine" is the output JSON's `whisper_metadata.engine`
+(`whisper-large-v3-gpu` / `whisperx-large-v3-gpu` /
+`fw-legacy-pyannote4-bench`) — with the §3c dispatcher, whisperx and
+fw_p4 rows come from the SAME image, so the digest alone cannot tell them
+apart. "Image digest" pins which build produced the attempt — the task
 definition references the mutable `latest` tag and an older image ignores
-the VAD env knobs silently, so without the digest a sweep row is not
-reproducible evidence. Capture it per attempt from the task itself (the
-runtime log line disappears with the session):
+the ENGINE/VAD env knobs silently, so without digest + engine a row is
+not reproducible evidence. Capture the digest per attempt from the task
+itself (the runtime log line disappears with the session):
 `aws ecs describe-tasks --cluster ttobak-whisper --tasks <task-id>
 --query 'tasks[0].containers[0].imageDigest' --output text`.
 
