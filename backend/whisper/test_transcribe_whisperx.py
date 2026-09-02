@@ -214,6 +214,123 @@ class TestTryAlign(unittest.TestCase):
         self.assertIn('words', result_segments[0])
         self.assertIn('words', result_segments[2])
 
+    def test_vad_config_defaults_empty(self):
+        method, options = transcribe_whisperx._vad_config_from_env({})
+        self.assertIsNone(method)
+        self.assertEqual(options, {})
+
+    def test_vad_config_reads_all_knobs(self):
+        method, options = transcribe_whisperx._vad_config_from_env({
+            'WHISPERX_VAD_METHOD': 'silero',
+            'WHISPERX_VAD_ONSET': '0.35',
+            'WHISPERX_VAD_OFFSET': '0.25',
+            'WHISPERX_VAD_CHUNK_SIZE': '20',
+        })
+        self.assertEqual(method, 'silero')
+        self.assertEqual(options, {'vad_onset': 0.35, 'vad_offset': 0.25, 'chunk_size': 20})
+
+    def test_vad_config_rejects_bad_values(self):
+        for env in (
+            {'WHISPERX_VAD_METHOD': 'webrtc'},
+            {'WHISPERX_VAD_ONSET': 'abc'},
+            {'WHISPERX_VAD_ONSET': '1.5'},
+            {'WHISPERX_VAD_OFFSET': '0'},
+            {'WHISPERX_VAD_CHUNK_SIZE': '-3'},
+            {'WHISPERX_VAD_CHUNK_SIZE': 'ten'},
+            # VAD-PR round-2 MAJOR-2: Whisper's encoder window is 30s — a
+            # larger merge window silently truncates chunk tails, cap at 30.
+            {'WHISPERX_VAD_CHUNK_SIZE': '60'},
+        ):
+            with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=env):
+                transcribe_whisperx._vad_config_from_env(env)
+
+    def test_vad_config_rejects_inverted_hysteresis(self):
+        # VAD-PR round-1 MAJOR-3: onset lowered below whisperx's default offset
+        # (0.363) without also lowering offset inverts the hysteresis band
+        # and Binarize oscillates — exactly the single-variable sweep the
+        # runbook used to recommend. Defaults fill the unset knob.
+        for env in (
+            {'WHISPERX_VAD_ONSET': '0.35'},                               # vs default offset 0.363
+            {'WHISPERX_VAD_OFFSET': '0.55'},                              # vs default onset 0.500
+            {'WHISPERX_VAD_ONSET': '0.3', 'WHISPERX_VAD_OFFSET': '0.3'},  # equal is inverted too
+        ):
+            with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=env):
+                transcribe_whisperx._vad_config_from_env(env)
+        # Onset alone is fine while it stays above the default offset.
+        _, options = transcribe_whisperx._vad_config_from_env(
+            {'WHISPERX_VAD_ONSET': '0.4'})
+        self.assertEqual(options, {'vad_onset': 0.4})
+
+    def test_vad_config_silero_skips_hysteresis_check(self):
+        # VAD-PR round-2 MAJOR-1: silero consumes vad_onset only (no offset
+        # hysteresis in whisperx 3.8.6), so the pyannote-shaped inversion
+        # check must not reject the runbook's silero sweep (e.g. onset 0.25
+        # alone, which the default offset 0.363 would otherwise invert).
+        method, options = transcribe_whisperx._vad_config_from_env({
+            'WHISPERX_VAD_METHOD': 'silero',
+            'WHISPERX_VAD_ONSET': '0.25',
+        })
+        self.assertEqual(method, 'silero')
+        self.assertEqual(options, {'vad_onset': 0.25})
+        # An explicit offset with silero passes too (ignored knob → warning,
+        # not BenchConfigError) and is still forwarded verbatim.
+        method, options = transcribe_whisperx._vad_config_from_env({
+            'WHISPERX_VAD_METHOD': 'silero',
+            'WHISPERX_VAD_ONSET': '0.25',
+            'WHISPERX_VAD_OFFSET': '0.4',
+        })
+        self.assertEqual(options, {'vad_onset': 0.25, 'vad_offset': 0.4})
+
+    def test_vad_config_method_is_case_insensitive(self):
+        method, _ = transcribe_whisperx._vad_config_from_env(
+            {'WHISPERX_VAD_METHOD': 'Silero'})
+        self.assertEqual(method, 'silero')
+
+    def test_vad_config_silero_offset_prints_ignored_warning(self):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            transcribe_whisperx._vad_config_from_env({
+                'WHISPERX_VAD_METHOD': 'silero',
+                'WHISPERX_VAD_OFFSET': '0.25',
+            })
+        self.assertIn('WHISPERX_VAD_OFFSET is ignored', buf.getvalue())
+        # And no warning when offset isn't set.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            transcribe_whisperx._vad_config_from_env(
+                {'WHISPERX_VAD_METHOD': 'silero'})
+        self.assertEqual(buf.getvalue(), '')
+
+    def test_transcribe_kwargs_forward_chunk_size(self):
+        # The subtlest invariant in this file: load_model's vad_options does
+        # NOT reach the pyannote path's merge window — model.transcribe()
+        # must receive chunk_size separately (whisperx 3.8.6 asr.py).
+        self.assertEqual(
+            transcribe_whisperx._transcribe_kwargs_from_vad_options(
+                {'chunk_size': 20, 'vad_onset': 0.4}),
+            {'chunk_size': 20})
+        self.assertEqual(
+            transcribe_whisperx._transcribe_kwargs_from_vad_options(
+                {'vad_onset': 0.4}),
+            {})
+        self.assertEqual(
+            transcribe_whisperx._transcribe_kwargs_from_vad_options({}), {})
+
+    def test_vad_config_error_has_no_exception_chain(self):
+        # `raise ... from None`: BenchConfigError messages are already
+        # safe-by-construction (format_fatal_error's contract) — the chain
+        # suppression just keeps the fatal log to the one operator-facing
+        # message instead of a redundant ValueError traceback.
+        try:
+            transcribe_whisperx._vad_config_from_env({'WHISPERX_VAD_ONSET': 'abc'})
+        except transcribe_whisperx.BenchConfigError as e:
+            self.assertIsNone(e.__cause__)
+            self.assertTrue(e.__suppress_context__)
+        else:
+            self.fail('expected BenchConfigError')
+
     def test_interpolation_consecutive_run_splits_gap_evenly(self):
         # Round-2 MAJOR-1: a naive per-segment walk gave the first missing
         # segment the whole gap and collapsed the rest to zero length —
