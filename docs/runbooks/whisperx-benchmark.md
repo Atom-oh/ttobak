@@ -68,13 +68,21 @@ docker build --platform linux/amd64 -f Dockerfile.whisperx \
 docker push 180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest
 ```
 
-> **재빌드 필수 (2026-09-02)**: 첫 벤치 런의 화자분리 실패(pyannote 4.x의
-> torchcodec가 `libpython3.12.so.1.0` 부재로 로드 실패 → RuntimeError)를
-> 고친 커밋 이후로는 이 이미지를 반드시 다시 빌드/푸시해야 합니다 —
-> `Dockerfile.whisperx`에 `libpython3.12`가 추가됐고,
-> `transcribe_whisperx.py`는 wav를 메모리로 미리 로드해 torchcodec 경로를
-> 아예 우회합니다. 2026-08-31에 푸시된 이미지로 돌린 벤치는 화자분리
-> 데이터가 없으므로 비교에 쓰지 마세요.
+> **Rebuild required (2026-09-02)**: the first bench run's diarization
+> failure (pyannote 4.x decodes via torchcodec, whose FFmpeg-6 variant
+> failed to load because `libpython3.12.so.1.0` was missing → RuntimeError)
+> is fixed from this commit on — `Dockerfile.whisperx` now installs
+> `libpython3.12`, and `transcribe_whisperx.py` preloads the WAV in-memory
+> so the torchcodec path is bypassed entirely. Rebuild and push before any
+> further bench runs; results produced by the image pushed on 2026-08-31
+> carry no diarization data and must not be used for comparison. Verify the
+> new image before pushing:
+>
+> ```bash
+> docker run --rm --entrypoint dpkg \
+>   180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest \
+>   -s libpython3.12 | head -3   # want: Status: install ok installed
+> ```
 
 ### Stage the diarization model bundle
 
@@ -402,8 +410,11 @@ Build one table row per meeting:
 
 "Alignment repaired segments" is `whisper_metadata.alignment_repaired` from
 the WhisperX transcript JSON (§5) — the count of segments the aligner could
-not fully align: repaired from segment-level timestamps when the aligner
-kept the input segmentation, or dropped individually when it re-split.
+not fully align, repaired to segment-level timestamps (copied from the
+same-index input when the aligner kept the input segmentation, or
+interpolated from neighbor boundaries when it re-split) with their words
+dropped. No segment text is ever discarded; wholesale text loss (<90%
+coverage) discards the aligned result entirely (`alignment_enabled: false`).
 Note (2026-09-02): whisperx.align() re-splitting segments (e.g. 43→117) is
 its normal behavior and the re-split output is now ACCEPTED — so the
 whisperx side of a bench pair typically has a DIFFERENT segment count from

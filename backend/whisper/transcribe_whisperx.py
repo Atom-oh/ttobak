@@ -234,11 +234,14 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
     buffer) but BEFORE the `finally` below drops the model reference --
     i.e. while the align model is still resident on the GPU.
 
-    Returns (segments, alignment_enabled, adjusted_count) — adjusted_count
-    is repaired segments on the count-match path, or dropped
-    timestamp-less segments on the re-split path (surfaced as
-    alignment_repaired in whisper_metadata either way: "segments the
-    aligner couldn't fully align")."""
+    Returns (segments, alignment_enabled, repaired_count) — repaired_count
+    is the number of segments the aligner couldn't fully align, repaired to
+    segment-level timestamps (input-index copy on the count-match path,
+    neighbor interpolation on the re-split path) with their words dropped.
+    No segment — and therefore no transcript TEXT, since build_result joins
+    segment texts — is ever silently discarded; wholesale content loss
+    trips the coverage check and falls back to the input instead. Surfaced
+    as alignment_repaired in whisper_metadata."""
     import contextlib
     import io
     stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
@@ -268,23 +271,54 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
             # first real bench run returned 117 for 43 inputs). The earlier
             # all-or-nothing discard here silently killed word-majority
             # speaker assignment — the thing this benchmark exists to
-            # evaluate — on every real run. Accept the re-split output;
-            # index mapping to the inputs is impossible, so segments lacking
-            # numeric timestamps can't be repaired and are dropped
-            # individually instead (their text still exists in the ASR
-            # transcript string; only their word-level granularity is lost).
-            valid = [s for s in aligned_segments
-                     if s.get("start") is not None and s.get("end") is not None]
-            dropped = len(aligned_segments) - len(valid)
-            if not valid:
-                print(f"Alignment returned {len(aligned_segments)} re-split "
-                      f"segment(s) but none carried timestamps; using "
-                      f"segment-level timestamps")
+            # evaluate — on every real run.
+            #
+            # Coverage sanity check FIRST: build_result derives the final
+            # transcript string by joining SEGMENT texts, so any segment
+            # this path loses is text lost from the ASR output itself — a
+            # silent quality-comparison skew. If the aligner returned
+            # meaningfully less text than it was given (wholesale content
+            # loss, not just re-segmentation), discard and fall back.
+            def _stripped_len(segs: list[dict]) -> int:
+                return sum(len(s.get("text", "").replace(" ", "")) for s in segs)
+            in_len = _stripped_len(segments)
+            out_len = _stripped_len(aligned_segments)
+            if in_len and out_len < 0.9 * in_len:
+                print(f"Alignment re-split output carries only {out_len}/"
+                      f"{in_len} non-space chars (<90%); discarding aligned "
+                      f"result, using segment-level timestamps")
                 return segments, False, 0
+            # Accept the re-split output, preserving EVERY segment: index
+            # mapping to the inputs is impossible across a re-split, so
+            # timestamp-less segments are repaired by interpolating from
+            # their neighbors' boundaries (prev end ~ next valid start;
+            # input span edges at the extremes) and lose only their words —
+            # symmetric with the count-match path's per-segment repair.
+            next_valid_start: list = [None] * len(aligned_segments)
+            nxt = None
+            for i in range(len(aligned_segments) - 1, -1, -1):
+                next_valid_start[i] = nxt
+                if aligned_segments[i].get("start") is not None:
+                    nxt = aligned_segments[i]["start"]
+            span_start = segments[0]["start"] if segments else 0.0
+            span_end = segments[-1]["end"] if segments else 0.0
+            prev_end = None
+            interpolated = 0
+            for i, seg in enumerate(aligned_segments):
+                if seg.get("start") is None or seg.get("end") is None:
+                    start = prev_end if prev_end is not None else span_start
+                    end = next_valid_start[i] if next_valid_start[i] is not None else span_end
+                    if end < start:
+                        end = start
+                    seg["start"], seg["end"] = start, end
+                    seg.pop("words", None)
+                    interpolated += 1
+                prev_end = seg["end"]
             print(f"Alignment re-split {len(segments)} segment(s) into "
-                  f"{len(aligned_segments)} (accepted {len(valid)}, dropped "
-                  f"{dropped} without timestamps)")
-            return valid, True, dropped
+                  f"{len(aligned_segments)} (kept all; {interpolated} "
+                  f"repaired via neighbor-interpolated timestamps, words "
+                  f"dropped for those only)")
+            return aligned_segments, True, interpolated
         repaired = 0
         for i, seg in enumerate(aligned_segments):
             if seg.get("start") is None or seg.get("end") is None:

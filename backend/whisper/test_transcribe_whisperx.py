@@ -173,23 +173,21 @@ class TestTryAlign(unittest.TestCase):
         self.assertEqual(result_segments[1]['end'], 2.0)
         self.assertNotIn('words', result_segments[1])
 
-    def test_segment_count_mismatch_accepts_resplit_result(self):
+    def test_segment_count_mismatch_accepts_resplit_and_preserves_text(self):
         # whisperx.align() re-splits segments along alignment boundaries as
         # its NORMAL behavior (first real bench run: 43 inputs -> 117
-        # aligned). The old all-or-nothing discard here silently degraded
-        # word-majority speaker assignment — the benchmark's whole purpose —
-        # to segment-overlap on every real run. Re-split output with valid
-        # timestamps must be ACCEPTED; only segments the aligner couldn't
-        # timestamp are dropped individually (index mapping to inputs is
-        # impossible when counts differ, so per-segment repair can't apply).
+        # aligned). Re-split output must be ACCEPTED, and — since
+        # build_result joins SEGMENT texts into the final transcript — no
+        # segment may be dropped: timestamp-less ones are repaired by
+        # interpolating from neighbor boundaries and lose only their words.
         input_segments = [
             {'start': 0.0, 'end': 2.0, 'text': 'a b'},
             {'start': 2.0, 'end': 4.0, 'text': 'c'},
         ]
         aligned_segments = [
             {'start': 0.0, 'end': 1.0, 'text': 'a', 'words': [{'word': 'a', 'start': 0.1, 'end': 0.9}]},
-            {'start': 1.0, 'end': 2.0, 'text': 'b', 'words': [{'word': 'b', 'start': 1.1, 'end': 1.9}]},
-            {'start': None, 'end': None, 'text': 'c'},
+            {'start': None, 'end': None, 'text': 'b', 'words': [{'word': 'b'}]},
+            {'start': 3.0, 'end': 4.0, 'text': 'c', 'words': [{'word': 'c', 'start': 3.1, 'end': 3.9}]},
         ]
 
         fake_whisperx = types.ModuleType('whisperx')
@@ -199,13 +197,48 @@ class TestTryAlign(unittest.TestCase):
             'segments': aligned_segments}
 
         with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
-            result_segments, alignment_enabled, adjusted = transcribe_whisperx._try_align(
+            result_segments, alignment_enabled, repaired = transcribe_whisperx._try_align(
                 input_segments, audio=object(), language='ko')
 
         self.assertTrue(alignment_enabled)
-        self.assertEqual(len(result_segments), 2)  # timestamp-less one dropped
-        self.assertEqual([s['text'] for s in result_segments], ['a', 'b'])
-        self.assertEqual(adjusted, 1)
+        # ALL text preserved — nothing dropped
+        self.assertEqual([s['text'] for s in result_segments], ['a', 'b', 'c'])
+        self.assertEqual(repaired, 1)
+        # middle segment interpolated: prev end (1.0) ~ next valid start (3.0)
+        self.assertEqual(result_segments[1]['start'], 1.0)
+        self.assertEqual(result_segments[1]['end'], 3.0)
+        self.assertNotIn('words', result_segments[1])
+        # neighbors keep their words
+        self.assertIn('words', result_segments[0])
+        self.assertIn('words', result_segments[2])
+
+    def test_resplit_with_wholesale_text_loss_falls_back(self):
+        # Coverage sanity: if the aligner returned meaningfully less TEXT
+        # than it was given (wholesale content loss, not re-segmentation),
+        # the aligned result must be discarded — accepting it would skew the
+        # ASR-quality comparison the benchmark exists to make.
+        input_segments = [
+            {'start': 0.0, 'end': 2.0, 'text': 'aaaa bbbb'},
+            {'start': 2.0, 'end': 4.0, 'text': 'cccc'},
+        ]
+        aligned_segments = [
+            {'start': 0.0, 'end': 1.0, 'text': 'aaaa',
+             'words': [{'word': 'aaaa', 'start': 0.1, 'end': 0.9}]},
+        ]
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            object(), object())
+        fake_whisperx.align = lambda segments, model, metadata, audio, device: {
+            'segments': aligned_segments}
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            result_segments, alignment_enabled, repaired = transcribe_whisperx._try_align(
+                input_segments, audio=object(), language='ko')
+
+        self.assertEqual(result_segments, input_segments)
+        self.assertFalse(alignment_enabled)
+        self.assertEqual(repaired, 0)
 
     def test_load_wav_waveform_contract(self):
         # _load_wav_waveform must return pyannote's documented in-memory
@@ -219,12 +252,12 @@ class TestTryAlign(unittest.TestCase):
 
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
             path = f.name
-        w = wave.open(path, 'wb')
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(16000)
-        w.writeframes(struct.pack('<4h', 0, 1000, -1000, 32767))
-        w.close()
+        self.addCleanup(os.unlink, path)
+        with wave.open(path, 'wb') as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(struct.pack('<4h', 0, 1000, -1000, 32767))
 
         class FakeArr:
             def __init__(self, raw):
@@ -258,7 +291,9 @@ class TestTryAlign(unittest.TestCase):
         self.assertEqual(out['waveform'], 'TENSOR')
         self.assertEqual(captured['raw_len'], 8)  # 4 frames * 2 bytes
 
-    def test_resplit_with_no_timestamps_at_all_falls_back(self):
+    def test_resplit_with_no_timestamps_and_text_loss_falls_back(self):
+        # A degenerate aligned result that both re-splits AND loses text —
+        # the coverage check trips before interpolation even runs.
         input_segments = [
             {'start': 0.0, 'end': 2.0, 'text': 'a'},
             {'start': 2.0, 'end': 4.0, 'text': 'b'},
@@ -272,11 +307,12 @@ class TestTryAlign(unittest.TestCase):
             'segments': aligned_segments}
 
         with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
-            result_segments, alignment_enabled, _ = transcribe_whisperx._try_align(
+            result_segments, alignment_enabled, repaired = transcribe_whisperx._try_align(
                 input_segments, audio=object(), language='ko')
 
         self.assertEqual(result_segments, input_segments)
         self.assertFalse(alignment_enabled)
+        self.assertEqual(repaired, 0)
 
     def test_all_numeric_timestamps_returns_aligned_result(self):
         input_segments = [{'start': 0.0, 'end': 1.0, 'text': 'a'}]
