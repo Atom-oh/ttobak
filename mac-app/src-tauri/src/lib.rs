@@ -9,6 +9,9 @@
 //! - `cleanup_recording(path)` — delete a temp WAV file and revoke whitelist entry
 //! - `recording_status(path)` — current capture state for the UI, plus
 //!   whether `path` specifically is still being finalized
+//! - `list_leftover_recordings()` — temp WAVs adopted at startup from a
+//!   previous run (crash / force quit), so the SPA can offer to upload or
+//!   delete them; see `leftover.rs` and `RecorderState::adopted_paths`
 //!
 //! `read_recording_bytes` (WAV bytes via IPC binary response) used to exist
 //! here and has been deliberately removed: on a real ~35-minute recording it
@@ -22,18 +25,19 @@
 
 mod audio;
 mod error;
+mod leftover;
 mod upload;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
-use crate::audio::AudioRecorder;
+use crate::audio::{AudioRecorder, StartGuard};
 use crate::error::AppError;
 
 /// How long `stop_recording` waits for ScreenCaptureKit's `stop_capture` to
@@ -53,6 +57,19 @@ const LEFTOVER_RECORDING_MAX_AGE: Duration = Duration::from_secs(48 * 3600);
 pub struct RecorderState {
     pub recorder: Mutex<AudioRecorder>,
     pub recorded_paths: Mutex<HashSet<PathBuf>>,
+    /// The subset of `recorded_paths` that was adopted at startup from a
+    /// PREVIOUS run (see `run()`'s `.setup()` and `leftover.rs`) rather than
+    /// created by a `start_recording` in this one. `list_leftover_recordings`
+    /// reports exactly this set so the SPA can surface "a recording from an
+    /// earlier session is still here" — and ONLY this set: a path this
+    /// session created is already known to the SPA (returned from
+    /// `start_recording`) and must never be offered as a leftover while its
+    /// own upload may be in flight. Kept as a parallel set (invariant:
+    /// `adopted_paths ⊆ recorded_paths`) rather than changing
+    /// `recorded_paths`' type, because `validate_recording_path` and
+    /// `upload_recording` consume the plain whitelist set by reference.
+    /// `cleanup_recording` removes from both.
+    pub adopted_paths: Mutex<HashSet<PathBuf>>,
     /// Paths of recordings whose `stop_and_finalize` is currently running —
     /// including any that outlived `STOP_CAPTURE_TIMEOUT` and kept going in
     /// the background. `recording_status(path)` reports whether THAT
@@ -113,9 +130,21 @@ pub struct StatusResponse {
     pub finalizing: bool,
 }
 
+/// One startup-adopted leftover recording, as reported by
+/// `list_leftover_recordings`. `path` is the canonical path — the exact
+/// string `upload_recording`/`cleanup_recording` accept.
+#[derive(Serialize)]
+pub struct LeftoverRecording {
+    pub path: String,
+    pub file_name: String,
+    pub byte_size: u64,
+    /// File mtime as Unix epoch milliseconds (0 if unavailable). For a
+    /// crash leftover this is roughly when the last flush checkpoint landed.
+    pub modified_ms: u64,
+}
+
 fn allowed_dir() -> PathBuf {
-    let base = std::fs::canonicalize(std::env::temp_dir())
-        .unwrap_or_else(|_| std::env::temp_dir());
+    let base = std::fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
     base.join("ttobak-mac")
 }
 
@@ -142,8 +171,8 @@ mod preflight_contract_tests {
 
     #[test]
     fn empty_path_rejection_is_not_mistaken_for_a_missing_command() {
-        let err = validate_recording_path("", &HashSet::new())
-            .expect_err("empty path must be rejected");
+        let err =
+            validate_recording_path("", &HashSet::new()).expect_err("empty path must be rejected");
         let message = err.to_string().to_lowercase();
         for needle in ["not found", "not allowed", "unknown command"] {
             assert!(
@@ -192,14 +221,16 @@ async fn start_recording(
         let mut rec = state.recorder.lock();
         rec.begin_start()?
     };
+    // From here until `install()` succeeds, EVERY exit — an early `?`/`return
+    // Err`, a panic, or this future being dropped at the `.await` below —
+    // must release the reservation, or `starting` stays true forever and
+    // every later start fails `AlreadyRunning`. The guard does that on drop;
+    // the success path disarms it after `install()`. Never hold
+    // `state.recorder`'s lock across a point where the guard could drop
+    // (parking_lot is not reentrant) — every lock here is a temporary.
+    let guard = StartGuard::new(&state.recorder);
 
-    let path = match audio::recording_path(&meeting_id) {
-        Ok(p) => p,
-        Err(e) => {
-            state.recorder.lock().cancel_start();
-            return Err(e);
-        }
-    };
+    let path = audio::recording_path(&meeting_id)?;
 
     #[cfg(target_os = "macos")]
     {
@@ -216,12 +247,8 @@ async fn start_recording(
 
         let backend = match build {
             Ok(Ok(backend)) => backend,
-            Ok(Err(e)) => {
-                state.recorder.lock().cancel_start();
-                return Err(e);
-            }
+            Ok(Err(e)) => return Err(e),
             Err(join_err) => {
-                state.recorder.lock().cancel_start();
                 return Err(AppError::Backend(format!(
                     "start_capture task panicked: {join_err}"
                 )));
@@ -229,6 +256,7 @@ async fn start_recording(
         };
 
         state.recorder.lock().install(path.clone(), backend);
+        guard.disarm();
 
         let canonical = std::fs::canonicalize(&path).unwrap_or(path);
         state.recorded_paths.lock().insert(canonical.clone());
@@ -244,8 +272,8 @@ async fn start_recording(
     // `unreachable_code` lint for on this platform.
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (&app, &reservation, &path);
-        state.recorder.lock().cancel_start();
+        let _ = (&app, &reservation, &path, &guard);
+        // `guard` drops here and cancels the reservation.
         Err(AppError::Unsupported)
     }
 }
@@ -366,14 +394,14 @@ fn recording_status(path: String, state: State<'_, RecorderState>) -> StatusResp
     // keep a LATER recording's own (already-finished) finalize looking
     // incomplete forever, so the frontend's post-timeout poll would exhaust
     // all its retries in exactly the overlapping-stop scenario this whole
-    // mechanism exists to handle. Canonicalize first: `finalizing`'s
-    // entries are canonical paths (see `stop_recording`), and `path` here
-    // is whatever raw string the frontend passed back — if it can't be
-    // canonicalized (e.g. the file no longer exists), there's nothing left
-    // to report as still-finalizing.
-    let finalizing = std::fs::canonicalize(&path)
-        .map(|canonical| state.finalizing.lock().contains(&canonical))
-        .unwrap_or(false);
+    // mechanism exists to handle. `path` is whatever raw string the WebView
+    // passed back, so containment is enforced BEFORE any filesystem access
+    // (see `leftover::finalizing_for_path` — without that, this sync command
+    // was a file-existence oracle for arbitrary paths).
+    let finalizing = {
+        let set = state.finalizing.lock();
+        leftover::finalizing_for_path(&path, &allowed_dir(), &set)
+    };
     StatusResponse {
         recording: snapshot.recording,
         temp_path: snapshot.path.map(|p| p.to_string_lossy().into_owned()),
@@ -383,17 +411,70 @@ fn recording_status(path: String, state: State<'_, RecorderState>) -> StatusResp
 }
 
 #[tauri::command]
-async fn cleanup_recording(
-    path: String,
-    state: State<'_, RecorderState>,
-) -> Result<(), AppError> {
+async fn cleanup_recording(path: String, state: State<'_, RecorderState>) -> Result<(), AppError> {
     let canonical = validate_recording_path(&path, &state.recorded_paths.lock())?;
     tokio::fs::remove_file(&canonical)
         .await
         .map_err(|e| AppError::Io(format!("remove {}: {e}", canonical.display())))?;
     state.recorded_paths.lock().remove(&canonical);
+    state.adopted_paths.lock().remove(&canonical);
     log::info!("cleaned up recording: {}", canonical.display());
     Ok(())
+}
+
+/// Leftover recordings adopted at startup from a previous run, newest first.
+///
+/// Reports ONLY `adopted_paths` (see its doc) — never a path this session's
+/// own `start_recording` created. Defensive filters: a path still in
+/// `finalizing` or currently being recorded is skipped (adopted files never
+/// go through `stop_recording`, so this can't actually happen today — it
+/// guards the invariant rather than a live case), and a path whose file has
+/// since vanished (deleted by hand in Finder) is dropped from both sets so it
+/// isn't offered again. Sync command: a handful of `stat` calls, no FFI, and
+/// no lock is held across them.
+#[tauri::command]
+fn list_leftover_recordings(state: State<'_, RecorderState>) -> Vec<LeftoverRecording> {
+    let adopted: Vec<PathBuf> = state.adopted_paths.lock().iter().cloned().collect();
+    let active = {
+        let rec = state.recorder.lock();
+        rec.snapshot().path
+    };
+    let mut out = Vec::with_capacity(adopted.len());
+    let mut vanished = Vec::new();
+    for path in adopted {
+        if active.as_ref() == Some(&path) || state.finalizing.lock().contains(&path) {
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(&path) else {
+            vanished.push(path);
+            continue;
+        };
+        let modified_ms = meta
+            .modified()
+            .ok()
+            .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        out.push(LeftoverRecording {
+            file_name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path: path.to_string_lossy().into_owned(),
+            byte_size: meta.len(),
+            modified_ms,
+        });
+    }
+    if !vanished.is_empty() {
+        let mut recorded = state.recorded_paths.lock();
+        let mut adopted = state.adopted_paths.lock();
+        for path in vanished {
+            recorded.remove(&path);
+            adopted.remove(&path);
+        }
+    }
+    out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
+    out
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -404,6 +485,7 @@ pub fn run() {
         .manage(RecorderState {
             recorder: Mutex::new(AudioRecorder::new()),
             recorded_paths: Mutex::new(HashSet::new()),
+            adopted_paths: Mutex::new(HashSet::new()),
             finalizing: Arc::new(Mutex::new(HashSet::new())),
         })
         .invoke_handler(tauri::generate_handler![
@@ -412,78 +494,48 @@ pub fn run() {
             recording_status,
             upload::upload_recording,
             cleanup_recording,
+            list_leftover_recordings,
         ])
         .setup(|app| {
             // Adopt any leftover temp WAVs from a previous run (crash, force
             // quit, or a stop that never got a chance to finalize) into
-            // `recorded_paths` so `upload_recording`/`cleanup_recording` can
-            // still reach them — otherwise `validate_recording_path` rejects
-            // them forever with "path was not created by this recording
-            // session", even though they already live inside the whitelisted
-            // directory and the /record?mode=upload recovery route the
-            // error messages point to doesn't go through these commands at
-            // all. Best-effort: any error here (directory doesn't exist yet
-            // on a fresh install, unreadable entry) just means nothing gets
-            // adopted, never a startup failure.
-            //
-            // Two hardenings beyond the bare "any *.wav in this dir" check:
-            // - `entry.file_type()` (which, unlike `Path::metadata()`, does
-            //   NOT follow symlinks) must report a regular file before this
-            //   whitelists it. This is defense-in-depth on top of
-            //   `validate_recording_path`'s existing `starts_with(allowed_dir)`
-            //   containment check (which already blocks a symlink pointing
-            //   outside this directory at upload/delete time regardless) —
-            //   it keeps the whitelist itself from ever holding anything but
-            //   an actual recording file in the first place.
-            // - a file whose mtime is older than
-            //   `LEFTOVER_RECORDING_MAX_AGE` is deleted outright instead of
-            //   adopted: raw meeting audio (PII) sitting unbounded in a temp
-            //   directory across every future launch is worse than losing
-            //   an unrecoverable, long-abandoned crash's tail.
+            // `recorded_paths` AND `adopted_paths`, so `upload_recording`/
+            // `cleanup_recording` can reach them and `list_leftover_recordings`
+            // can offer them to the SPA — otherwise `validate_recording_path`
+            // rejects them forever with "path was not created by this
+            // recording session", even though they already live inside the
+            // whitelisted directory. The scan itself (wav-only, regular files
+            // only — no symlinks, stale files older than
+            // `LEFTOVER_RECORDING_MAX_AGE` deleted instead of adopted) lives
+            // in `leftover::scan_leftover_dir` so it can be unit-tested
+            // without Tauri; see its doc for the rationale behind each rule.
+            // Best-effort and launch-time only: this is not a continuous
+            // sweep, so a file can outlive the 48h window while the app stays
+            // open — it's re-evaluated on the next launch.
             let dir = allowed_dir();
-            if let Ok(entries) = std::fs::read_dir(&dir) {
+            let scan =
+                leftover::scan_leftover_dir(&dir, SystemTime::now(), LEFTOVER_RECORDING_MAX_AGE);
+            let adopted = scan.adopt.len();
+            if adopted > 0 {
                 let state = app.state::<RecorderState>();
-                let mut paths = state.recorded_paths.lock();
-                let mut adopted = 0usize;
-                let mut deleted_stale = 0usize;
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) != Some("wav") {
-                        continue;
-                    }
-                    let is_regular_file = entry.file_type().map(|t| t.is_file()).unwrap_or(false);
-                    if !is_regular_file {
-                        continue;
-                    }
-                    let age = entry
-                        .metadata()
-                        .ok()
-                        .and_then(|m| m.modified().ok())
-                        .and_then(|modified| modified.elapsed().ok());
-                    if age.map(|a| a >= LEFTOVER_RECORDING_MAX_AGE).unwrap_or(false) {
-                        if std::fs::remove_file(&path).is_ok() {
-                            deleted_stale += 1;
-                        }
-                        continue;
-                    }
-                    if let Ok(canonical) = std::fs::canonicalize(&path) {
-                        paths.insert(canonical);
-                        adopted += 1;
-                    }
+                let mut recorded = state.recorded_paths.lock();
+                let mut adopted_set = state.adopted_paths.lock();
+                for path in scan.adopt {
+                    recorded.insert(path.clone());
+                    adopted_set.insert(path);
                 }
-                if adopted > 0 {
-                    log::info!(
-                        "adopted {adopted} leftover recording(s) from a previous run in {}",
-                        dir.display()
-                    );
-                }
-                if deleted_stale > 0 {
-                    log::info!(
-                        "deleted {deleted_stale} leftover recording(s) older than {:?} in {}",
-                        LEFTOVER_RECORDING_MAX_AGE,
-                        dir.display()
-                    );
-                }
+                log::info!(
+                    "adopted {adopted} leftover recording(s) from a previous run in {}",
+                    dir.display()
+                );
+            }
+            if scan.deleted_stale > 0 {
+                log::info!(
+                    "deleted {} leftover recording(s) older than {:?} in {}",
+                    scan.deleted_stale,
+                    LEFTOVER_RECORDING_MAX_AGE,
+                    dir.display()
+                );
             }
             Ok(())
         })

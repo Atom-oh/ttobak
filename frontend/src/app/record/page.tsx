@@ -19,14 +19,16 @@ import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingC
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
+import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
 import { supportsTabAudioCapture, hasMobileMicConflictRisk } from '@/lib/device';
-import { isTauri } from '@/lib/tauri';
+import { isTauri, cleanupRecording, type TauriLeftoverRecording } from '@/lib/tauri';
+import { useLeftoverRecordings } from '@/hooks/useLeftoverRecordings';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
 import { usePostRecording } from '@/hooks/usePostRecording';
 import { uploadsApi, meetingsApi, kbApi } from '@/lib/api';
-import { uploadFile, uploadToS3, notifyUploadComplete } from '@/lib/upload';
+import { uploadFile, uploadToS3, notifyUploadComplete, formatFileSize } from '@/lib/upload';
 import type { LiveSttProvider } from '@/lib/sttManager';
 
 export default function RecordPage() {
@@ -152,6 +154,50 @@ function RecordPageInner() {
   });
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
+
+  // Mac app only: temp WAVs the Rust side adopted at startup from a previous
+  // run (crash / force quit). Surfaced here, not app-wide, because acting on
+  // one reuses THIS page's post-recording flow (draft meeting → notes step →
+  // native upload → cleanup). Both actions below require an explicit
+  // per-file confirm that names the file and the cross-account caveat
+  // (ADR-024): the file may belong to a different ttobak account that used
+  // this Mac earlier, so a leftover must never be a one-click upload.
+  const leftovers = useLeftoverRecordings();
+  const [leftoverBusy, setLeftoverBusy] = useState(false);
+
+  const handleLeftoverUpload = useCallback(async (item: TauriLeftoverRecording) => {
+    const ok = window.confirm(
+      `"${item.file_name}" (${formatFileSize(item.byte_size)}, ${formatLeftoverTime(item.modified_ms)})\n\n` +
+      '이전 세션에서 남은 녹음 파일입니다. 이 Mac에서 이전에 로그인한 다른 사용자의 녹음일 수 있습니다.\n' +
+      '본인의 녹음이 맞다면 내 미팅으로 업로드합니다. 계속할까요?',
+    );
+    if (!ok) return;
+    setLeftoverBusy(true);
+    try {
+      // Same shape as a fresh native recording from here on: a draft meeting
+      // (falls back to create-at-upload inside resumeUploadFlow if this
+      // fails), then hand the on-disk path to the notes step → upload →
+      // cleanupRecording flow that already handles native files.
+      await postRecording.createDraftMeeting();
+      postRecording.handleNativeFileReady(item.path, item.byte_size);
+      leftovers.remove(item.path);
+    } finally {
+      setLeftoverBusy(false);
+    }
+  }, [postRecording, leftovers]);
+
+  const handleLeftoverDelete = useCallback(async (item: TauriLeftoverRecording) => {
+    if (!window.confirm(`"${item.file_name}" 을(를) 삭제할까요? 삭제하면 복구할 수 없습니다.`)) return;
+    setLeftoverBusy(true);
+    try {
+      await cleanupRecording(item.path);
+      leftovers.remove(item.path);
+    } catch (err) {
+      session.setSpeechError(err instanceof Error ? err.message : '녹음 파일 삭제에 실패했습니다.');
+    } finally {
+      setLeftoverBusy(false);
+    }
+  }, [leftovers, session]);
 
   // Serializes notes autosave PUTs: two in-flight requests could reach the
   // server out of order and let an older save's stale notes win the
@@ -795,6 +841,15 @@ function RecordPageInner() {
         {/* Config Controls — visible only when idle (record mode) */}
         {!isUploadMode && !postRecording.step && !session.isRecording && (
           <div className="flex flex-col items-center gap-3">
+            {isTauri() && (
+              <LeftoverRecordingsCard
+                items={leftovers.leftovers}
+                onUpload={handleLeftoverUpload}
+                onDelete={handleLeftoverDelete}
+                onDismiss={leftovers.dismissAll}
+                busy={leftoverBusy}
+              />
+            )}
             {/* Desktop: editable title */}
             <div className="hidden lg:block mb-4">
               <input

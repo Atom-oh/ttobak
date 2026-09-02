@@ -6,13 +6,21 @@
 //! desktop meetings. No video frames are decoded — we only consume the audio
 //! sample buffer output.
 //!
-//! Non-macOS builds provide a stub that returns `Unsupported`. This is here so
-//! `cargo check` works on Linux dev machines (e.g. CI lint).
+//! Non-macOS builds provide a stub that returns `Unsupported`, so `cargo
+//! check`/`cargo test` run on Linux dev machines; only the ScreenCaptureKit
+//! backend inside `mod macos` is `cfg`-gated to a real Mac. Note that
+//! `interleave_planes` below is generalized to N planes, but everything
+//! downstream of it (the WAV writer's `channels: CHANNELS`, the
+//! `chunks_exact(CHANNELS)` downmix) is hard-wired to stereo — the capture
+//! callback logs a warning (once) if a buffer ever arrives with a different
+//! plane count, since that would mis-frame the whole recording.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+use parking_lot::Mutex;
 
 use crate::error::AppError;
 
@@ -160,6 +168,52 @@ impl AudioRecorder {
     }
 }
 
+/// RAII release for a `begin_start()` reservation.
+///
+/// `start_recording` (lib.rs) holds its reservation across an `.await`
+/// (the off-lock `spawn_blocking` backend construction). Every failure path
+/// used to call `cancel_start()` by hand — four sites, easy to miss when a
+/// new one is added — and a command future dropped at that `.await` (Tauri
+/// normally runs async commands to completion, but nothing guarantees it)
+/// would have released nothing at all, leaving `starting = true` forever and
+/// every later start wedged behind a false `AlreadyRunning`. The guard makes
+/// release unconditional: drop it without `disarm()` and the reservation is
+/// cancelled; call `disarm()` after `install()` and it does nothing.
+///
+/// The guard takes the recorder lock inside `Drop`. `parking_lot::Mutex` is
+/// NOT reentrant, so a guard must never be dropped while its owner is still
+/// holding `RecorderState.recorder` — keep every lock in the owning function
+/// a temporary or a tightly scoped block, as `start_recording` already does.
+pub struct StartGuard<'a> {
+    recorder: &'a Mutex<AudioRecorder>,
+    armed: bool,
+}
+
+impl<'a> StartGuard<'a> {
+    /// Arm a guard for a reservation just taken via `begin_start()` on
+    /// `recorder`. The caller must have already released the lock it used
+    /// for `begin_start()`.
+    pub fn new(recorder: &'a Mutex<AudioRecorder>) -> Self {
+        Self {
+            recorder,
+            armed: true,
+        }
+    }
+
+    /// The reservation was consumed by `install()`; nothing to cancel.
+    pub fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StartGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.recorder.lock().cancel_start();
+        }
+    }
+}
+
 /// `pub(crate)` so `lib.rs`'s `start_recording` command can compute the path
 /// before reserving/spawning the (now off-lock) backend construction — see
 /// `AudioRecorder::begin_start`'s doc comment.
@@ -296,6 +350,7 @@ pub mod macos {
                     callbacks: Arc::clone(&callbacks),
                     samples_written: Arc::clone(&samples_written),
                     logged_first: Arc::new(AtomicU64::new(0)),
+                    logged_plane_mismatch: Arc::new(AtomicU64::new(0)),
                     app,
                     last_emit_ms: Arc::new(AtomicU64::new(0)),
                     since_flush: Arc::new(AtomicU64::new(0)),
@@ -435,6 +490,10 @@ pub mod macos {
         /// Tracks whether we have logged the first buffer's metadata. Cheap
         /// AtomicU64 instead of `Once` so we can keep `AudioOutput: Send`.
         logged_first: Arc<AtomicU64>,
+        /// One-shot flag for the plane-count warning in
+        /// `did_output_sample_buffer` — the callback fires ~50×/s, so a
+        /// mismatch must not log on every buffer.
+        logged_plane_mismatch: Arc<AtomicU64>,
         /// Used to emit `native-audio-level` events to the WebView so the UI
         /// can show a real meter in System Audio mode (where we have no
         /// MediaStream / AnalyserNode on the JS side).
@@ -491,7 +550,11 @@ pub mod macos {
             // buffer layout against actual ScreenCaptureKit output. If the
             // user later sees a "non-empty callbacks but zero samples"
             // error, this log narrows it to a format-conversion bug.
-            if self.logged_first.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+            if self
+                .logged_first
+                .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
                 let buf_count = list.iter().count();
                 let total_bytes: usize = list.iter().map(|b| b.data().len()).sum();
                 let layout = if buf_count <= 1 {
@@ -532,6 +595,27 @@ pub mod macos {
                 })
                 .collect();
 
+            // `interleave_planes` is generalized to N planes, but everything
+            // after it is hard-wired to `CHANNELS` (the WAV writer's
+            // `channels: CHANNELS`, `emit_pcm_chunks`' `chunks_exact(CHANNELS)`
+            // downmix). A planar buffer with any other plane count would be
+            // interleaved "correctly" and then silently mis-framed by both —
+            // make that loud, once. A single buffer is always the
+            // already-interleaved layout and is fine regardless.
+            if planes.len() > 1
+                && planes.len() != CHANNELS as usize
+                && self
+                    .logged_plane_mismatch
+                    .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+            {
+                log::warn!(
+                    "audio callback delivered {} planar buffers but CHANNELS={CHANNELS}; \
+                     the WAV writer and PCM downmix assume {CHANNELS} channels, so this \
+                     recording will be mis-framed",
+                    planes.len()
+                );
+            }
             let samples_f32: Vec<f32> = super::interleave_planes(planes);
 
             // RMS over this buffer for the level meter event. Computed once,
@@ -698,7 +782,9 @@ pub mod macos {
 /// silently produces a double-speed, channel-swapped recording (planar
 /// samples treated as interleaved) — see the "first audio buffer" log
 /// line in `did_output_sample_buffer` to confirm which layout is actually
-/// in play on real hardware.
+/// in play on real hardware. This function itself accepts any plane count;
+/// the caller is what warns (once per recording) when that count isn't
+/// `CHANNELS`, since only the caller knows the downstream framing.
 ///
 /// Deliberately NOT inside `mod macos`'s `#[cfg(target_os = "macos")]`
 /// gate, even though its only real caller (`macos::did_output_sample_buffer`)
@@ -748,8 +834,8 @@ fn interleave_planes(planes: Vec<Vec<f32>>) -> Vec<f32> {
 }
 
 #[cfg(test)]
-mod interleave_tests {
-    use super::interleave_planes;
+mod tests {
+    use super::*;
 
     #[test]
     fn single_buffer_passes_through_unchanged_as_already_interleaved() {
@@ -809,5 +895,62 @@ mod interleave_tests {
             interleave_planes(planes),
             vec![1.0, 10.0, 100.0, 2.0, 20.0, 200.0]
         );
+    }
+
+    // --- StartGuard -------------------------------------------------------
+
+    #[test]
+    fn dropped_guard_releases_reservation() {
+        let recorder = Mutex::new(AudioRecorder::new());
+        recorder.lock().begin_start().unwrap();
+        {
+            let _guard = StartGuard::new(&recorder);
+            assert!(
+                matches!(recorder.lock().begin_start(), Err(AppError::AlreadyRunning)),
+                "reservation must be held while the guard is alive"
+            );
+        }
+        // Guard dropped without disarm (the failure / cancelled-future path).
+        assert!(
+            recorder.lock().begin_start().is_ok(),
+            "drop must cancel the reservation"
+        );
+    }
+
+    #[test]
+    fn disarmed_guard_keeps_reservation() {
+        let recorder = Mutex::new(AudioRecorder::new());
+        recorder.lock().begin_start().unwrap();
+        let guard = StartGuard::new(&recorder);
+        guard.disarm();
+        assert!(
+            matches!(recorder.lock().begin_start(), Err(AppError::AlreadyRunning)),
+            "disarm must leave the reservation in place (install() owns it now)"
+        );
+    }
+
+    #[test]
+    fn guard_releases_on_early_return() {
+        fn fallible(recorder: &Mutex<AudioRecorder>, fail: bool) -> Result<(), AppError> {
+            recorder.lock().begin_start()?;
+            let guard = StartGuard::new(recorder);
+            if fail {
+                return Err(AppError::Io("simulated backend failure".into()));
+            }
+            guard.disarm();
+            Ok(())
+        }
+        let recorder = Mutex::new(AudioRecorder::new());
+        assert!(fallible(&recorder, true).is_err());
+        assert!(
+            recorder.lock().begin_start().is_ok(),
+            "early `return Err` must release via Drop"
+        );
+        recorder.lock().cancel_start();
+        assert!(fallible(&recorder, false).is_ok());
+        assert!(matches!(
+            recorder.lock().begin_start(),
+            Err(AppError::AlreadyRunning)
+        ));
     }
 }

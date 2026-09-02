@@ -181,8 +181,9 @@ async fn stream_file_to_url(
             on_progress(loaded, total);
 
             if loaded >= total {
-                let deadline = *full_send_deadline
-                    .get_or_insert_with(|| tokio::time::Instant::now() + response_deadline_after_full_send);
+                let deadline = *full_send_deadline.get_or_insert_with(|| {
+                    tokio::time::Instant::now() + response_deadline_after_full_send
+                });
                 if tokio::time::Instant::now() >= deadline {
                     return format!(
                         "no response from the server within {}s after the full body ({loaded} \
@@ -263,7 +264,10 @@ pub async fn upload_recording(
         // `validate_recording_path` above), or this check would silently
         // never match on a real Mac. See `stop_recording`'s matching
         // canonicalize for the `finalizing` set, same reasoning.
-        let active_canonical = snapshot.path.as_ref().and_then(|p| std::fs::canonicalize(p).ok());
+        let active_canonical = snapshot
+            .path
+            .as_ref()
+            .and_then(|p| std::fs::canonicalize(p).ok());
         if snapshot.recording && active_canonical.as_deref() == Some(canonical.as_path()) {
             return Err(AppError::Backend(
                 "refusing to upload — this path is the currently active recording".into(),
@@ -357,8 +361,12 @@ mod tests {
                 "{response_status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 response_body.len()
             );
-            stream.write_all(response.as_bytes()).expect("write status line");
-            stream.write_all(response_body).expect("write response body");
+            stream
+                .write_all(response.as_bytes())
+                .expect("write status line");
+            stream
+                .write_all(response_body)
+                .expect("write response body");
 
             let _ = tx.send(RecordedRequest { headers, body });
         });
@@ -383,8 +391,13 @@ mod tests {
 
     async fn write_temp_file(name: &str, contents: &[u8]) -> std::path::PathBuf {
         let mut path = std::env::temp_dir();
-        path.push(format!("ttobak-mac-upload-test-{name}-{}", std::process::id()));
-        tokio::fs::write(&path, contents).await.expect("write temp file");
+        path.push(format!(
+            "ttobak-mac-upload-test-{name}-{}",
+            std::process::id()
+        ));
+        tokio::fs::write(&path, contents)
+            .await
+            .expect("write temp file");
         path
     }
 
@@ -464,7 +477,10 @@ mod tests {
         .expect_err("a 403 response must be surfaced as an error, not swallowed");
 
         let message = err.to_string();
-        assert!(message.contains("403"), "error should mention the status code: {message}");
+        assert!(
+            message.contains("403"),
+            "error should mention the status code: {message}"
+        );
         assert!(
             message.contains("AccessDenied"),
             "error should include a snippet of the response body: {message}"
@@ -525,8 +541,12 @@ mod tests {
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 response_body.len()
             );
-            stream.write_all(response.as_bytes()).expect("write status line");
-            stream.write_all(response_body).expect("write response body");
+            stream
+                .write_all(response.as_bytes())
+                .expect("write status line");
+            stream
+                .write_all(response_body)
+                .expect("write response body");
         });
 
         let url = reqwest::Url::parse(&format!("http://127.0.0.1:{port}/put-target"))
@@ -635,7 +655,10 @@ mod tests {
         let result = validate_upload_url(&format!(
             "https://{EXPECTED_BUCKET_HOST}/audio/foo.wav?X-Amz-Signature=abc",
         ));
-        assert!(result.is_ok(), "expected a valid S3 presigned URL to pass: {result:?}");
+        assert!(
+            result.is_ok(),
+            "expected a valid S3 presigned URL to pass: {result:?}"
+        );
     }
 
     #[test]
@@ -659,6 +682,9 @@ mod tests {
         let result = validate_upload_url(
             "https://attacker-owned-bucket.s3.us-east-1.amazonaws.com/audio/foo.wav",
         );
-        assert!(result.is_err(), "a different (even if AWS-hosted) bucket must be rejected");
+        assert!(
+            result.is_err(),
+            "a different (even if AWS-hosted) bucket must be rejected"
+        );
     }
 }

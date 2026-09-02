@@ -89,9 +89,33 @@ export interface TauriStatusResponse {
    * `undefined` as "unknown", never as `false`: every consumer must check
    * `=== false` explicitly (not `!status.finalizing`), or an old build's
    * missing field reads as "already finalized" on the very first poll and
-   * uploads a WAV that's still being written. See `RecordButton.tsx`'s
-   * stop-timed-out poll loop for the one place this actually matters. */
+   * uploads a WAV that's still being written. `RecordButton.tsx`'s
+   * stop-timed-out poll loop — the one place this matters — fails fast with
+   * `VERSION_SKEW_MESSAGE` on the first `undefined` rather than burning its
+   * whole wait window against a build that will never send the field. */
   finalizing?: boolean;
+}
+
+/**
+ * One temp WAV the Rust side adopted at app startup from a PREVIOUS run
+ * (crash, force quit, or a stop that never finalized) — see
+ * `mac-app/src-tauri/src/leftover.rs`. `path` is the canonical path that
+ * `uploadRecording`/`cleanupRecording` accept. Never includes a recording
+ * this session started (the SPA already knows those from
+ * `startNativeRecording`).
+ *
+ * Ownership caveat (ADR-024): adoption is scoped to the macOS user's temp
+ * directory, not to a Cognito login — a leftover may belong to a DIFFERENT
+ * ttobak account that used this Mac earlier. Any UI offering to upload one
+ * must say so and require an explicit, per-file confirmation that is
+ * distinct from the fresh-recording flow.
+ */
+export interface TauriLeftoverRecording {
+  path: string;
+  file_name: string;
+  byte_size: number;
+  /** File mtime, Unix epoch ms (0 if unknown) — roughly the last flush checkpoint. */
+  modified_ms: number;
 }
 
 export interface TauriUploadProgress {
@@ -271,6 +295,21 @@ export async function assertUploadRecordingAvailable(): Promise<void> {
 
 export function cleanupRecording(path: string): Promise<void> {
   return invoke<void>('cleanup_recording', { path });
+}
+
+/**
+ * Leftover recordings adopted at app startup, newest first. Resolves to an
+ * empty list against an installed Rust build that predates the command
+ * (version skew) — there is nothing the SPA could do about those files
+ * anyway, so an old build simply shows no card rather than an error.
+ */
+export async function listLeftoverRecordings(): Promise<TauriLeftoverRecording[]> {
+  try {
+    return await invoke<TauriLeftoverRecording[]>('list_leftover_recordings');
+  } catch (err) {
+    if (isCommandNotFound(err)) return [];
+    throw err;
+  }
 }
 
 /**

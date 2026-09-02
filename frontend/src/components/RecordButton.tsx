@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable } from '@/lib/tauri';
+import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 /**
@@ -805,18 +805,19 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
               //
               // `status.finalizing` is optional (older Rust builds don't
               // send it, see TauriStatusResponse's doc comment) — `undefined`
-              // must NOT be treated as "not finalizing". `!undefined` is
-              // `true`, so a naive `!status.finalizing` would pass on the
-              // very first poll against such a build and hand off a file
-              // that's still being written (the exact bug this wait exists
-              // to prevent). Only an explicit `false` counts as done; any
-              // other value (including undefined) keeps waiting out the
-              // full 30s window instead — that's never WORSE than the old
-              // bug (it can only over-wait, not under-wait), but against a
-              // build that truly never sends this field it doesn't actually
-              // resolve anything either: the loop just runs its full
-              // 30 iterations and falls through to the timeout error below,
-              // since it has no other signal to go on.
+              // must NOT be treated as "not finalizing": `!undefined` is
+              // `true`, so a naive `!status.finalizing` would hand off a
+              // file that's still being written on the very first poll. A
+              // build that doesn't send the field will never send it, so
+              // waiting out the full window would only delay the same
+              // error by 30s — fail fast with the version-skew guidance
+              // instead (the catch below appends the preserved-file
+              // recovery path). Only an explicit `false` counts as done.
+              if (status.finalizing === undefined) {
+                throw new Error(
+                  `${VERSION_SKEW_MESSAGE} (녹음 종료 상태를 확인할 수 없어 대기를 중단합니다)`,
+                );
+              }
               if (status.finalizing === false) {
                 finalized = true;
                 break;
