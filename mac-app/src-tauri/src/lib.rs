@@ -127,7 +127,15 @@ pub struct StatusResponse {
     /// `stop_timed_out` stop, the frontend polls until this goes false
     /// before uploading — `recording` is already false at that point and
     /// cannot express "still writing".
-    pub finalizing: bool,
+    ///
+    /// Named `finalizing_for_path`, NOT `finalizing`, on purpose: an earlier
+    /// shipped build sent a field called `finalizing` that was a GLOBAL
+    /// "any recording still finalizing" bool, which an unrelated recording's
+    /// finalize could clear out from under this one. The SPA fails fast with
+    /// a version-skew error when this field is `undefined`; keeping the old
+    /// name would have let that stale build pass the check and be misread as
+    /// per-path. Don't rename this back.
+    pub finalizing_for_path: bool,
 }
 
 /// One startup-adopted leftover recording, as reported by
@@ -406,7 +414,7 @@ fn recording_status(path: String, state: State<'_, RecorderState>) -> StatusResp
         recording: snapshot.recording,
         temp_path: snapshot.path.map(|p| p.to_string_lossy().into_owned()),
         elapsed_ms: snapshot.elapsed_ms,
-        finalizing,
+        finalizing_for_path: finalizing,
     }
 }
 

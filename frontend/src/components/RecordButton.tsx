@@ -776,7 +776,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
           // Content-Length at its current size (upload.rs measures at open)
           // and silently drop everything appended after — so wait (bounded)
           // for the background finalize to actually finish first. That is
-          // signalled by `finalizing` going false: `recording` is ALREADY
+          // signalled by `finalizing_for_path` going false: `recording` is ALREADY
           // false here (the stop command emptied the recorder before the
           // timeout fired), so polling it would pass instantly and
           // guarantee nothing. Once finalize completes, upload.rs's
@@ -798,8 +798,8 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
               break; // status unavailable — fall through to the error path
             }
             {
-              // Check `finalizing` alone — NOT `!status.recording` too.
-              // `status.finalizing` is now specific to `tempPath` (the Rust
+              // Check `finalizing_for_path` alone — NOT `!status.recording` too.
+              // `status.finalizing_for_path` is specific to `tempPath` (the Rust
               // side canonicalizes and checks THIS path), but
               // `status.recording` is still the recorder's GLOBAL state: by
               // the time this loop runs, `stop_recording` has already taken
@@ -810,26 +810,28 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
               // recording. Gating on it too would make this loop spin for
               // the full 30s and then error out even though tempPath's own
               // WAV had already finished finalizing — exactly the
-              // overlapping-recording bug this per-path `finalizing` field
-              // exists to avoid.
+              // overlapping-recording bug this per-path field exists to
+              // avoid.
               //
-              // `status.finalizing` is optional (older Rust builds don't
-              // send it, see TauriStatusResponse's doc comment) — `undefined`
-              // must NOT be treated as "not finalizing": `!undefined` is
-              // `true`, so a naive `!status.finalizing` would hand off a
-              // file that's still being written on the very first poll. A
-              // build that doesn't send the field will never send it, so
-              // waiting out the full window would only delay the same
-              // error by 30s — fail fast with the version-skew guidance
-              // instead (the outer catch of this stop path appends the
-              // preserved-file recovery hint). Only an explicit `false`
+              // `status.finalizing_for_path` is optional: older Rust builds
+              // either send no such field, or send a GLOBAL bool under the
+              // old name `finalizing` (see TauriStatusResponse's doc comment
+              // — the rename is what makes both read as `undefined` here).
+              // `undefined` must NOT be treated as "not finalizing":
+              // `!undefined` is `true`, so a naive negation would hand off
+              // a file that's still being written on the very first poll.
+              // Neither old generation can ever answer this question
+              // correctly, so waiting out the full window would only delay
+              // the same error by 30s — fail fast with the version-skew
+              // guidance instead (the outer catch of this stop path appends
+              // the preserved-file recovery hint). Only an explicit `false`
               // counts as done.
-              if (status.finalizing === undefined) {
+              if (status.finalizing_for_path === undefined) {
                 throw new Error(
                   `${VERSION_SKEW_MESSAGE} (녹음 종료 상태를 확인할 수 없어 대기를 중단합니다)`,
                 );
               }
-              if (status.finalizing === false) {
+              if (status.finalizing_for_path === false) {
                 finalized = true;
                 break;
               }

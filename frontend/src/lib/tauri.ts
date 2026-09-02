@@ -84,16 +84,18 @@ export interface TauriStatusResponse {
    * finalize looking incomplete forever whenever the two overlapped —
    * exactly the scenario per-path tracking exists to get right.
    *
-   * Optional only for wire-compatibility with an older installed Rust build
-   * that predates this field — a *current* build always sends it. Treat
-   * `undefined` as "unknown", never as `false`: every consumer must check
-   * `=== false` explicitly (not `!status.finalizing`), or an old build's
-   * missing field reads as "already finalized" on the very first poll and
-   * uploads a WAV that's still being written. `RecordButton.tsx`'s
-   * stop-timed-out poll loop — the one place this matters — fails fast with
-   * `VERSION_SKEW_MESSAGE` on the first `undefined` rather than burning its
-   * whole wait window against a build that will never send the field. */
-  finalizing?: boolean;
+   * Optional only for wire-compatibility with older installed Rust builds —
+   * a *current* build always sends it. Two older generations exist: one that
+   * sent no such field at all, and one that sent a field named `finalizing`
+   * holding the GLOBAL any-path bool described above. This field is
+   * deliberately named `finalizing_for_path` so BOTH generations read as
+   * `undefined` here — reusing the old name would have let the global-bool
+   * build pass as if it were per-path. Treat `undefined` as "unknown",
+   * never as `false`: every consumer must check `=== false` explicitly (not
+   * `!status.finalizing_for_path`). `RecordButton.tsx`'s stop-timed-out
+   * poll loop — the one place this matters — fails fast with
+   * `VERSION_SKEW_MESSAGE` on the first `undefined`. */
+  finalizing_for_path?: boolean;
 }
 
 /**
@@ -132,10 +134,10 @@ export function stopNativeRecording(): Promise<TauriStopResponse> {
 }
 
 /**
- * `path` is required — the Rust side reports `finalizing` for exactly this
- * path, not "is any recording anywhere still finalizing" (see
- * TauriStatusResponse.finalizing's doc comment for why that global version
- * was reverted). Callers must pass the specific temp WAV path they're
+ * `path` is required — the Rust side reports `finalizing_for_path` for
+ * exactly this path, not "is any recording anywhere still finalizing" (see
+ * TauriStatusResponse.finalizing_for_path's doc comment for why that global
+ * version was reverted). Callers must pass the specific temp WAV path they're
  * waiting on.
  */
 export function getNativeRecordingStatus(path: string): Promise<TauriStatusResponse> {
