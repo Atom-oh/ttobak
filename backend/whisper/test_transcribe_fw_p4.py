@@ -43,7 +43,11 @@ class TestBenchOnlyOutputKey(unittest.TestCase):
                 real_key, self.MEETING)
 
     def test_rejects_empty_and_garbage_keys(self):
-        for bad in ('', 'other-prefix/x.json', f'transcripts/{self.MEETING}_part_001.json'):
+        for bad in ('', 'other-prefix/x.json',
+                    f'transcripts/{self.MEETING}_part_001.json',
+                    # startswith alone would pass this; the base validator's
+                    # own traversal rejection must keep covering it.
+                    f'bench-transcripts/../transcripts/{self.MEETING}.json'):
             with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=bad):
                 transcribe_fw_p4.validate_bench_only_output_key(bad, self.MEETING)
 

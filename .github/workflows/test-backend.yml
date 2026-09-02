@@ -65,4 +65,4 @@ jobs:
         # The workflow's path trigger has always included backend/whisper/**,
         # but these suites were only documented in CLAUDE.md, never run here.
         run: |
-          cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx test_transcribe_fw_p4 -v
+          cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx test_transcribe_fw_p4 test_run_engine -v

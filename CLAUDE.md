@@ -37,7 +37,7 @@ cd backend/python/crawler && python3 -m unittest test_crawlers -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
 cd backend/python/qa && python3 -m unittest test_handler -v    # mocks boto3 at import -- no boto3<2 pin needed
 cd backend/python/sim && python3 -m unittest test_handler -v
-cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx test_transcribe_fw_p4 -v
+cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx test_transcribe_fw_p4 test_run_engine -v
 
 # CDK
 cd infra && npx cdk synth        # synthesize all 11 stacks

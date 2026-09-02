@@ -374,25 +374,32 @@ rule. `transcribe_fw_p4.py` tests exactly that: legacy `transcribe.py`
 ASR parameters + the whisperx image's community-1 diarization.
 
 It ships inside the whisperx image (faster-whisper is already a whisperx
-dependency) — run it from the SAME task definition with a per-run command
-override added to the §3 `--overrides` JSON's container entry:
+dependency) — run it from the SAME task definition by adding one entry to
+the §3 `--overrides` JSON's `environment` array:
 
 ```json
-"command": ["transcribe_fw_p4.py"]
+{"name": "ENGINE", "value": "fw_p4"}
 ```
 
-This selects the engine because `Dockerfile.whisperx` splits
-`ENTRYPOINT ["python3"]` from `CMD ["transcribe_whisperx.py"]` — ECS
-command overrides replace only the CMD.
+The image's ENTRYPOINT is pinned to `run_engine.py`, a dispatcher that
+allowlists the two engine scripts (`whisperx` default, `fw_p4`) and
+rejects ANY `containerOverrides` command arguments — a command override
+is deliberately a hard no-op channel, because with a plain
+`ENTRYPOINT ["python3"]` it would double as arbitrary-code execution on a
+host-networkMode task with all-users audio read access. For the same
+reason, never set `entryPoint`/`command` on the CDK task definition —
+that would silently bypass the pin (today `whisper-stack.ts` sets
+neither).
 
 **Precondition — one image rebuild** (same as §3b): the image must have
-been built after this file and the ENTRYPOINT/CMD split landed; rebuild
-once via the §1 build procedure. An image with the split but missing the
-file fails loudly (`can't open file`), but an image built BEFORE the
-split silently ignores the override and runs whisperx — so before
-recording a §6 row, verify in the task log that the run says
-`Transcribing (legacy sequential)...` and check the output JSON's
-`engine` field is `fw-legacy-pyannote4-bench`, not `whisperx-large-v3-gpu`.
+been built after `run_engine.py`/`transcribe_fw_p4.py` landed; rebuild
+once via the §1 build procedure. An image built BEFORE the dispatcher
+ignores the ENGINE env silently and runs whisperx — so before recording a
+§6 row, verify in the task log that the run printed
+`run_engine: dispatching to transcribe_fw_p4.py` and
+`Transcribing (legacy sequential)...`, and check the output JSON's
+`whisper_metadata.engine` field is `fw-legacy-pyannote4-bench`, not
+`whisperx-large-v3-gpu`.
 
 This engine reads only `MEETING_ID`/`USER_ID`/`OUTPUT_KEY`/`AUDIO_KEY`/
 `INITIAL_PROMPT`/`NUM_SPEAKERS` — the §3b `WHISPERX_VAD_*` knobs and
@@ -410,6 +417,10 @@ this image's faster-whisper comes via whisperx 3.8.6 (1.2.1), while the
 legacy `Dockerfile` installs faster-whisper UNPINNED — the deployed legacy
 image has whatever was current at its last build. Check the running legacy
 image's actual version before attributing an ASR delta to anything else.
+
+Hybrid outputs are more PII transcript copies under `bench-transcripts/`
+— when the comparison series concludes, run the §7 cleanup rather than
+waiting out the 30-day lifecycle.
 
 ## 4. Resource measurement per WhisperX run
 

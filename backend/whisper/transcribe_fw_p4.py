@@ -16,14 +16,15 @@ and diarization over speed.
 It runs from the SAME image and task definition as transcribe_whisperx.py
 (the whisperx image already contains faster-whisper as a whisperx
 dependency, the same S3-staged large-v3 model dir, and the community-1
-diarization bundle), invoked per run via an ECS containerOverrides command:
-    "command": ["transcribe_fw_p4.py"]
-This works because Dockerfile.whisperx splits ENTRYPOINT ["python3"] from
-CMD ["transcribe_whisperx.py"] — ECS command overrides replace only the
-CMD. No new task definition or IAM change; the existing Dockerfile gains
-one COPY entry plus that split, so ONE image rebuild is required before
-the first hybrid run (an image without this file fails loudly with
-"can't open file").
+diarization bundle), selected per run via an ECS environment override:
+    {"name": "ENGINE", "value": "fw_p4"}
+The image's ENTRYPOINT is pinned to run_engine.py, which allowlists the
+two engine scripts and rejects command-override arguments outright (see
+its docstring for the security rationale). No new task definition or IAM
+change; the existing Dockerfile gains COPY entries plus the dispatcher
+ENTRYPOINT, so ONE image rebuild is required before the first hybrid run
+(an older image has no run_engine/ENGINE handling — verify the engine per
+the runbook §3c before recording results).
 
 Deliberately bench-only, enforced two ways: OUTPUT_KEY goes through
 validate_output_key AND must additionally sit under bench-transcripts/ --
@@ -69,6 +70,12 @@ def validate_bench_only_output_key(output_key: str, meeting_id: str) -> str:
         raise wx.BenchConfigError(
             "transcribe_fw_p4 is bench-only: OUTPUT_KEY must be under "
             "bench-transcripts/")
+    if ".." in key.split("/"):
+        # S3 and IAM treat keys literally, so 'bench-transcripts/../x' never
+        # actually escapes the prefix -- but CLAUDE.md's trust-boundary rule
+        # is to reject traversal shapes outright rather than rely on that.
+        raise wx.BenchConfigError(
+            "transcribe_fw_p4 OUTPUT_KEY must not contain '..' segments")
     return key
 
 
@@ -157,6 +164,13 @@ def main():
                   f"{num_speakers_detected} speaker(s) detected")
         else:
             print("Diarization produced no turns; segments left unlabeled")
+    elif not diarization_config:
+        # Loud skip: a §6 row from a run whose diarization silently never
+        # ran would be recorded as a hybrid data point when it's really
+        # ASR-only.
+        print("Diarization model unavailable; segments left unlabeled")
+    else:
+        print("No ASR segments; diarization skipped")
 
     result = wx.build_result(
         segments=segments, language=info.language,
