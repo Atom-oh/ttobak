@@ -284,6 +284,30 @@ Successful benchmark runs never touch DynamoDB — only the fatal-error path doe
 
 Repeat for each selected meeting.
 
+### 3b. VAD recall tuning (per-run env overrides, no rebuild)
+
+The first full bench pair (2026-09-02, a435a3dc) showed whisperx's default
+VAD dropping ~25% of real speech: 252s of legacy-covered speech time had NO
+whisperx segments, and sampled gap text was clearly real meeting content.
+Speaker separation won; ASR recall lost. Tune recall by adding VAD env
+overrides to the whisperx `run-task` container overrides — the engine reads
+them per run, so no image rebuild per attempt:
+
+| env | meaning | default | try |
+|---|---|---|---|
+| `WHISPERX_VAD_ONSET` | speech-start sensitivity (lower = more eager, higher recall) | 0.500 | 0.35, 0.25 |
+| `WHISPERX_VAD_OFFSET` | speech-end sensitivity | 0.363 | 0.25 |
+| `WHISPERX_VAD_METHOD` | `pyannote` or `silero` | pyannote | silero |
+| `WHISPERX_VAD_CHUNK_SIZE` | merge window (s) | 30 | — |
+
+Use a distinct `OUTPUT_KEY` per configuration
+(`..._bench_whisperx_onset035.json` etc.) so attempts are comparable.
+Measure recall per attempt by time-coverage gap against the legacy output:
+merge each engine's segment intervals, subtract whisperx's coverage from
+legacy's, and inspect the >5s gaps' legacy text (real content vs
+hallucination). Converge on the config with near-zero real-content gaps,
+then re-check speaker distribution didn't regress (§5).
+
 ## 4. Resource measurement per WhisperX run
 
 This resolves the design doc's open VRAM/instance-sizing question.

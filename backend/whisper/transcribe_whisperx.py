@@ -242,6 +242,55 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
     return touched
 
 
+def _vad_config_from_env(env) -> tuple:
+    """Reads the operator-tunable VAD knobs for whisperx.load_model from
+    env vars, returning (vad_method | None, vad_options dict). Exists
+    because the first full bench run showed whisperx's default VAD dropping
+    ~25% of real speech (252s of legacy-covered speech had no whisperx
+    segments on meeting a435a3dc) — recall tuning must be possible per
+    `aws ecs run-task` env override, without an image rebuild per attempt.
+
+    - WHISPERX_VAD_METHOD: 'pyannote' (whisperx default) or 'silero'
+    - WHISPERX_VAD_ONSET / WHISPERX_VAD_OFFSET: floats in (0, 1) — lower
+      onset detects speech more eagerly (higher recall)
+    - WHISPERX_VAD_CHUNK_SIZE: int seconds (whisperx merge window)
+
+    Invalid values raise BenchConfigError (operator-facing, safe to log
+    verbatim) instead of silently benchmarking with a config the operator
+    didn't ask for. Self-contained for unit tests.
+    """
+    method = (env.get("WHISPERX_VAD_METHOD") or "").strip() or None
+    if method is not None and method not in ("pyannote", "silero"):
+        raise BenchConfigError(
+            f"WHISPERX_VAD_METHOD must be 'pyannote' or 'silero', got {method!r}")
+    options: dict = {}
+    for env_name, key, lo, hi in (
+        ("WHISPERX_VAD_ONSET", "vad_onset", 0.0, 1.0),
+        ("WHISPERX_VAD_OFFSET", "vad_offset", 0.0, 1.0),
+    ):
+        raw = (env.get(env_name) or "").strip()
+        if not raw:
+            continue
+        try:
+            val = float(raw)
+        except ValueError:
+            raise BenchConfigError(f"{env_name} must be a float, got {raw!r}")
+        if not (lo < val < hi):
+            raise BenchConfigError(
+                f"{env_name} must be within ({lo}, {hi}) exclusive, got {val}")
+        options[key] = val
+    raw = (env.get("WHISPERX_VAD_CHUNK_SIZE") or "").strip()
+    if raw:
+        try:
+            chunk = int(raw)
+        except ValueError:
+            raise BenchConfigError(f"WHISPERX_VAD_CHUNK_SIZE must be an int, got {raw!r}")
+        if chunk <= 0:
+            raise BenchConfigError(f"WHISPERX_VAD_CHUNK_SIZE must be positive, got {chunk}")
+        options["chunk_size"] = chunk
+    return method, options
+
+
 def _load_wav_waveform(wav_path: str) -> dict:
     """Reads the 16kHz mono s16le WAV our own ffmpeg call just wrote into
     the in-memory {'waveform': (channel, time) tensor, 'sample_rate': int}
@@ -691,9 +740,18 @@ def main():
     import whisperx
     print(f"Loading WhisperX large-v3 (GPU float16, batch_size={BATCH_SIZE})...")
     asr_options = {"initial_prompt": vocab_prompt} if vocab_prompt else None
+    vad_method, vad_options = _vad_config_from_env(os.environ)
+    if vad_method or vad_options:
+        print(f"VAD config override: method={vad_method or 'default'} "
+              f"options={vad_options or {}}")
+    load_kwargs = {}
+    if vad_method:
+        load_kwargs["vad_method"] = vad_method
+    if vad_options:
+        load_kwargs["vad_options"] = vad_options
     model = whisperx.load_model(
         model_dir, device="cuda", compute_type="float16",
-        language="ko", asr_options=asr_options)
+        language="ko", asr_options=asr_options, **load_kwargs)
     _log_gpu_memory("model-loaded")
 
     print("Transcribing (batched)...")

@@ -214,6 +214,33 @@ class TestTryAlign(unittest.TestCase):
         self.assertIn('words', result_segments[0])
         self.assertIn('words', result_segments[2])
 
+    def test_vad_config_defaults_empty(self):
+        method, options = transcribe_whisperx._vad_config_from_env({})
+        self.assertIsNone(method)
+        self.assertEqual(options, {})
+
+    def test_vad_config_reads_all_knobs(self):
+        method, options = transcribe_whisperx._vad_config_from_env({
+            'WHISPERX_VAD_METHOD': 'silero',
+            'WHISPERX_VAD_ONSET': '0.35',
+            'WHISPERX_VAD_OFFSET': '0.25',
+            'WHISPERX_VAD_CHUNK_SIZE': '20',
+        })
+        self.assertEqual(method, 'silero')
+        self.assertEqual(options, {'vad_onset': 0.35, 'vad_offset': 0.25, 'chunk_size': 20})
+
+    def test_vad_config_rejects_bad_values(self):
+        for env in (
+            {'WHISPERX_VAD_METHOD': 'webrtc'},
+            {'WHISPERX_VAD_ONSET': 'abc'},
+            {'WHISPERX_VAD_ONSET': '1.5'},
+            {'WHISPERX_VAD_OFFSET': '0'},
+            {'WHISPERX_VAD_CHUNK_SIZE': '-3'},
+            {'WHISPERX_VAD_CHUNK_SIZE': 'ten'},
+        ):
+            with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=env):
+                transcribe_whisperx._vad_config_from_env(env)
+
     def test_interpolation_consecutive_run_splits_gap_evenly(self):
         # Round-2 MAJOR-1: a naive per-segment walk gave the first missing
         # segment the whole gap and collapsed the rest to zero length —
