@@ -173,20 +173,97 @@ class TestTryAlign(unittest.TestCase):
         self.assertEqual(result_segments[1]['end'], 2.0)
         self.assertNotIn('words', result_segments[1])
 
-    def test_segment_count_mismatch_discards_aligned_result(self):
-        # Regression for FINDING 3: whisperx.align() may silently drop a
-        # segment (e.g. one it couldn't align at all). Returning a
-        # shorter/longer segment list than the input would skew the
-        # benchmark, so treat a length mismatch the same as any other
-        # alignment failure: discard and fall back to the original input
-        # segments with alignment_enabled=False.
+    def test_segment_count_mismatch_accepts_resplit_result(self):
+        # whisperx.align() re-splits segments along alignment boundaries as
+        # its NORMAL behavior (first real bench run: 43 inputs -> 117
+        # aligned). The old all-or-nothing discard here silently degraded
+        # word-majority speaker assignment — the benchmark's whole purpose —
+        # to segment-overlap on every real run. Re-split output with valid
+        # timestamps must be ACCEPTED; only segments the aligner couldn't
+        # timestamp are dropped individually (index mapping to inputs is
+        # impossible when counts differ, so per-segment repair can't apply).
         input_segments = [
-            {'start': 0.0, 'end': 1.0, 'text': 'a'},
-            {'start': 1.0, 'end': 2.0, 'text': 'b'},
+            {'start': 0.0, 'end': 2.0, 'text': 'a b'},
+            {'start': 2.0, 'end': 4.0, 'text': 'c'},
         ]
         aligned_segments = [
-            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': 0.0, 'end': 1.0, 'text': 'a', 'words': [{'word': 'a', 'start': 0.1, 'end': 0.9}]},
+            {'start': 1.0, 'end': 2.0, 'text': 'b', 'words': [{'word': 'b', 'start': 1.1, 'end': 1.9}]},
+            {'start': None, 'end': None, 'text': 'c'},
         ]
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            object(), object())
+        fake_whisperx.align = lambda segments, model, metadata, audio, device: {
+            'segments': aligned_segments}
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            result_segments, alignment_enabled, adjusted = transcribe_whisperx._try_align(
+                input_segments, audio=object(), language='ko')
+
+        self.assertTrue(alignment_enabled)
+        self.assertEqual(len(result_segments), 2)  # timestamp-less one dropped
+        self.assertEqual([s['text'] for s in result_segments], ['a', 'b'])
+        self.assertEqual(adjusted, 1)
+
+    def test_load_wav_waveform_contract(self):
+        # _load_wav_waveform must return pyannote's documented in-memory
+        # input shape ({'waveform', 'sample_rate'}) parsed from OUR OWN
+        # ffmpeg-written 16k mono s16le WAV — this is what bypasses the
+        # torchcodec decode path that broke the first bench run. numpy/torch
+        # are container-only; stub just the two calls the function makes.
+        import struct
+        import tempfile
+        import wave
+
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+            path = f.name
+        w = wave.open(path, 'wb')
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(struct.pack('<4h', 0, 1000, -1000, 32767))
+        w.close()
+
+        class FakeArr:
+            def __init__(self, raw):
+                self.raw = raw
+            def astype(self, dtype):
+                return self
+            def __truediv__(self, other):
+                return self
+
+        class FakeTensor:
+            def unsqueeze(self, dim):
+                assert dim == 0
+                return 'TENSOR'
+
+        fake_np = types.ModuleType('numpy')
+        fake_np.int16 = 'int16'
+        fake_np.float32 = 'float32'
+        captured = {}
+        def frombuffer(raw, dtype):
+            captured['raw_len'] = len(raw)
+            return FakeArr(raw)
+        fake_np.frombuffer = frombuffer
+
+        fake_torch = types.ModuleType('torch')
+        fake_torch.from_numpy = lambda arr: FakeTensor()
+
+        with mock.patch.dict(sys.modules, {'numpy': fake_np, 'torch': fake_torch}):
+            out = transcribe_whisperx._load_wav_waveform(path)
+
+        self.assertEqual(out['sample_rate'], 16000)
+        self.assertEqual(out['waveform'], 'TENSOR')
+        self.assertEqual(captured['raw_len'], 8)  # 4 frames * 2 bytes
+
+    def test_resplit_with_no_timestamps_at_all_falls_back(self):
+        input_segments = [
+            {'start': 0.0, 'end': 2.0, 'text': 'a'},
+            {'start': 2.0, 'end': 4.0, 'text': 'b'},
+        ]
+        aligned_segments = [{'start': None, 'end': None, 'text': 'x'}]
 
         fake_whisperx = types.ModuleType('whisperx')
         fake_whisperx.load_align_model = lambda language_code, device: (

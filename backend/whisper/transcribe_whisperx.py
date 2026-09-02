@@ -108,6 +108,29 @@ def _turns_from_diarization(diarization) -> list[tuple]:
     ]
 
 
+def _load_wav_waveform(wav_path: str) -> dict:
+    """Reads the 16kHz mono s16le WAV our own ffmpeg call just wrote into
+    the in-memory {'waveform': (channel, time) tensor, 'sample_rate': int}
+    dict pyannote accepts. This BYPASSES pyannote 4.x's torchcodec decoding
+    path entirely — the first bench run failed with RuntimeError because
+    torchcodec's FFmpeg-6 variant links against libpython3.12.so.1.0, which
+    Ubuntu's `python3` package doesn't ship (it lives in `libpython3.12`,
+    now installed in Dockerfile.whisperx as belt-and-suspenders). Passing a
+    preloaded waveform is pyannote's own documented workaround, and stdlib
+    `wave` suffices because we control the format (ffmpeg -ar 16000 -ac 1).
+    """
+    import wave
+
+    import numpy as np
+    import torch
+
+    with wave.open(wav_path, "rb") as w:
+        sample_rate = w.getframerate()
+        raw = w.readframes(w.getnframes())
+    pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    return {"waveform": torch.from_numpy(pcm).unsqueeze(0), "sample_rate": sample_rate}
+
+
 def _diarize(config_path: str, audio_path: str, num_speakers: int | None) -> list[tuple]:
     """pyannote 4.x diarization -> [(start, end, label)]. [] on any failure
     (caller falls back to unlabeled segments). NUM_SPEAKERS is a
@@ -125,7 +148,7 @@ def _diarize(config_path: str, audio_path: str, num_speakers: int | None) -> lis
         pipeline = Pipeline.from_pretrained(config_path)
         pipeline.to(torch.device("cuda"))
         kwargs = {"max_speakers": num_speakers} if num_speakers else {}
-        diarization = pipeline(wav_path, **kwargs)
+        diarization = pipeline(_load_wav_waveform(wav_path), **kwargs)
         # pyannote.audio 4.x may return a result wrapper whose Annotation
         # lives at .speaker_diarization (3.x returned the Annotation itself);
         # unwrap defensively so both shapes work.
@@ -211,7 +234,11 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
     buffer) but BEFORE the `finally` below drops the model reference --
     i.e. while the align model is still resident on the GPU.
 
-    Returns (segments, alignment_enabled, repaired_count)."""
+    Returns (segments, alignment_enabled, adjusted_count) — adjusted_count
+    is repaired segments on the count-match path, or dropped
+    timestamp-less segments on the re-split path (surfaced as
+    alignment_repaired in whisper_metadata either way: "segments the
+    aligner couldn't fully align")."""
     import contextlib
     import io
     stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
@@ -236,11 +263,28 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
                   f"(suppressed -- may contain transcript text)")
         aligned_segments = aligned["segments"]
         if len(aligned_segments) != len(segments):
-            print(f"Alignment returned {len(aligned_segments)} segment(s), "
-                  f"expected {len(segments)}; discarding aligned result "
-                  f"(would skew the benchmark), using segment-level "
-                  f"timestamps")
-            return segments, False, 0
+            # A count mismatch is whisperx.align()'s NORMAL behavior, not a
+            # failure: it re-splits segments along alignment boundaries (the
+            # first real bench run returned 117 for 43 inputs). The earlier
+            # all-or-nothing discard here silently killed word-majority
+            # speaker assignment — the thing this benchmark exists to
+            # evaluate — on every real run. Accept the re-split output;
+            # index mapping to the inputs is impossible, so segments lacking
+            # numeric timestamps can't be repaired and are dropped
+            # individually instead (their text still exists in the ASR
+            # transcript string; only their word-level granularity is lost).
+            valid = [s for s in aligned_segments
+                     if s.get("start") is not None and s.get("end") is not None]
+            dropped = len(aligned_segments) - len(valid)
+            if not valid:
+                print(f"Alignment returned {len(aligned_segments)} re-split "
+                      f"segment(s) but none carried timestamps; using "
+                      f"segment-level timestamps")
+                return segments, False, 0
+            print(f"Alignment re-split {len(segments)} segment(s) into "
+                  f"{len(aligned_segments)} (accepted {len(valid)}, dropped "
+                  f"{dropped} without timestamps)")
+            return valid, True, dropped
         repaired = 0
         for i, seg in enumerate(aligned_segments):
             if seg.get("start") is None or seg.get("end") is None:
