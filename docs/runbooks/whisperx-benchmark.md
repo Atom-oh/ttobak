@@ -296,24 +296,32 @@ overrides to the whisperx `run-task` container overrides.
 the running image must already contain them (any image built after the PR
 adding `_vad_config_from_env` merged). An older image ignores the env vars
 silently. Rebuild once via the temporary `build-whisperx-image.yml`
-workflow, then verify the override actually applied by checking the task
-log for the `VAD config override: method=... options=...` line — treat a
-run without that line as misconfigured, not as a data point. After that
-one rebuild, sweeping configs needs no further rebuilds.
+workflow (if that workflow has already been retired, rebuild/push the
+`Dockerfile.whisperx` image by hand per its old steps — this paragraph
+should be updated when it goes). The task definition references the
+mutable `latest` tag, so a pushed rebuild is picked up by the next
+`run-task` automatically — no task-definition change needed. Then verify
+the override actually applied by checking the task log for the
+`VAD config override: method=... options=...` line, which the engine now
+prints on every run (it shows `defaults` when no override is in effect —
+which is also how a typo'd env NAME, silently ignored, gets caught) —
+treat a run whose line doesn't echo your intended config as
+misconfigured, not as a data point. After that one rebuild, sweeping
+configs needs no further rebuilds.
 
-| env | meaning | default | try |
-|---|---|---|---|
-| `WHISPERX_VAD_ONSET` | speech-start sensitivity (lower = more eager, higher recall) | 0.500 | 0.35, 0.25 |
-| `WHISPERX_VAD_OFFSET` | speech-end sensitivity; must stay BELOW the effective onset | 0.363 | 0.25, 0.15 |
-| `WHISPERX_VAD_METHOD` | `pyannote` or `silero` (silero uses ONSET + CHUNK_SIZE only; OFFSET is ignored on that path) | pyannote | silero |
-| `WHISPERX_VAD_CHUNK_SIZE` | merge window (s); the engine forwards it to both `vad_options` and `model.transcribe()` — the latter is what governs the merge on the pyannote path | 30 | — |
+| env | meaning | valid range | default | try |
+|---|---|---|---|---|
+| `WHISPERX_VAD_ONSET` | speech-start sensitivity (lower = more eager, higher recall) | (0, 1) exclusive | 0.500 | 0.35 (with OFFSET 0.25), then 0.25 (with OFFSET 0.15) |
+| `WHISPERX_VAD_OFFSET` | speech-end sensitivity; must stay BELOW the effective onset on the pyannote path | (0, 1) exclusive | 0.363 | paired with ONSET above |
+| `WHISPERX_VAD_METHOD` | `pyannote` or `silero` (silero uses ONSET + CHUNK_SIZE only; OFFSET is ignored there — the engine warns and skips the hysteresis check) | those two values | pyannote | silero + ONSET 0.25 |
+| `WHISPERX_VAD_CHUNK_SIZE` | merge window (s); the engine forwards it to both `vad_options` and `model.transcribe()` — the latter is what governs the merge on the pyannote path | 1–30 (Whisper's encoder window is 30s; larger would truncate chunk tails) | 30 | — |
 
-Onset/offset are a hysteresis pair: lowering `WHISPERX_VAD_ONSET` below the
-0.363 default offset requires setting `WHISPERX_VAD_OFFSET` lower still
-(the engine fail-fasts with `BenchConfigError` on an inverted pair rather
-than producing oscillating micro-segments that would skew the comparison).
-Recommended sweep pairs: onset 0.35 + offset 0.25, then onset 0.25 +
-offset 0.15.
+Onset/offset are a hysteresis pair on the pyannote path: lowering
+`WHISPERX_VAD_ONSET` below the 0.363 default offset requires setting
+`WHISPERX_VAD_OFFSET` lower still (the engine fail-fasts with
+`BenchConfigError` on an inverted pair rather than producing oscillating
+micro-segments that would skew the comparison). Never set an onset/offset
+value alone below the other's default — use the pairs in the table.
 
 Use a distinct `OUTPUT_KEY` per configuration
 (`..._bench_whisperx_onset035.json` etc.) so attempts are comparable.
@@ -322,8 +330,12 @@ merge each engine's segment intervals, subtract whisperx's coverage from
 legacy's, and inspect the >5s gaps' legacy text (real content vs
 hallucination) under the §5 handling rules (mktemp throwaway dir; it is
 meeting PII — keep only aggregate numbers per §6, never the text itself).
-Converge on the config with near-zero real-content gaps, then re-check
-speaker distribution didn't regress (§5).
+Record each attempt as its own §6 row (VAD config + real-content gap
+columns). Sweep outputs are additional PII copies under
+`bench-transcripts/` — §7's recursive cleanup + the 30-day lifecycle
+already cover them, no per-sweep cleanup needed. Converge on the config
+with near-zero real-content gaps, then re-check speaker distribution
+didn't regress (§5).
 
 ## 4. Resource measurement per WhisperX run
 
@@ -452,10 +464,19 @@ Judge qualitatively, per meeting:
 
 ## 6. Recording results
 
-Build one table row per meeting:
+Build one table row per meeting — and, for a §3b VAD sweep, one row per
+(meeting, VAD config) attempt, since this table is the ONLY thing retained
+past the session: without the config and recall columns below, §7 cleanup
+would erase the evidence for which config converged, leaving the Phase-2
+go/no-go with no recorded basis.
 
-| Meeting ID | Duration | Participants | Legacy speakers detected | WhisperX speakers detected | Peak VRAM (WhisperX) | Wall-clock (legacy / whisperx) | Alignment repaired segments | Qualitative verdict |
-|---|---|---|---|---|---|---|---|---|
+| Meeting ID | Duration | Participants | VAD config (method/onset/offset/chunk, "defaults" if none) | Real-content coverage gap vs legacy (s) | Legacy speakers detected | WhisperX speakers detected | Peak VRAM (WhisperX) | Wall-clock (legacy / whisperx) | Alignment repaired segments | Qualitative verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+
+"Real-content coverage gap" is §3b's recall metric: total seconds of
+legacy-covered speech with no whisperx segment, counting only gaps whose
+legacy text was judged real content (not hallucination) — record the
+aggregate seconds and gap count, never the text itself.
 
 "Alignment repaired segments" is `whisper_metadata.alignment_repaired` from
 the WhisperX transcript JSON (§5) — the count of segments the aligner could

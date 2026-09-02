@@ -237,6 +237,9 @@ class TestTryAlign(unittest.TestCase):
             {'WHISPERX_VAD_OFFSET': '0'},
             {'WHISPERX_VAD_CHUNK_SIZE': '-3'},
             {'WHISPERX_VAD_CHUNK_SIZE': 'ten'},
+            # Round-2 MAJOR-2: Whisper's encoder window is 30s — a larger
+            # merge window silently truncates chunk tails, so cap at 30.
+            {'WHISPERX_VAD_CHUNK_SIZE': '60'},
         ):
             with self.assertRaises(transcribe_whisperx.BenchConfigError, msg=env):
                 transcribe_whisperx._vad_config_from_env(env)
@@ -257,6 +260,31 @@ class TestTryAlign(unittest.TestCase):
         _, options = transcribe_whisperx._vad_config_from_env(
             {'WHISPERX_VAD_ONSET': '0.4'})
         self.assertEqual(options, {'vad_onset': 0.4})
+
+    def test_vad_config_silero_skips_hysteresis_check(self):
+        # Round-2 MAJOR-1: silero consumes vad_onset only (no offset
+        # hysteresis in whisperx 3.8.6), so the pyannote-shaped inversion
+        # check must not reject the runbook's silero sweep (e.g. onset 0.25
+        # alone, which the default offset 0.363 would otherwise invert).
+        method, options = transcribe_whisperx._vad_config_from_env({
+            'WHISPERX_VAD_METHOD': 'silero',
+            'WHISPERX_VAD_ONSET': '0.25',
+        })
+        self.assertEqual(method, 'silero')
+        self.assertEqual(options, {'vad_onset': 0.25})
+        # An explicit offset with silero passes too (ignored knob → warning,
+        # not BenchConfigError) and is still forwarded verbatim.
+        method, options = transcribe_whisperx._vad_config_from_env({
+            'WHISPERX_VAD_METHOD': 'silero',
+            'WHISPERX_VAD_ONSET': '0.25',
+            'WHISPERX_VAD_OFFSET': '0.4',
+        })
+        self.assertEqual(options, {'vad_onset': 0.25, 'vad_offset': 0.4})
+
+    def test_vad_config_method_is_case_insensitive(self):
+        method, _ = transcribe_whisperx._vad_config_from_env(
+            {'WHISPERX_VAD_METHOD': 'Silero'})
+        self.assertEqual(method, 'silero')
 
     def test_vad_config_error_has_no_exception_chain(self):
         # `raise ... from None`: the message is operator-facing and safe to

@@ -242,7 +242,18 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
     return touched
 
 
-def _vad_config_from_env(env) -> tuple:
+# Whisperx 3.8.6's own VAD defaults (asr.py default_vad_options) — used to
+# fill whichever hysteresis knob the operator didn't override, and echoed in
+# operator-facing messages so code, errors, and runbook can't drift apart.
+VAD_DEFAULT_ONSET = 0.500
+VAD_DEFAULT_OFFSET = 0.363
+# Whisper's encoder consumes fixed 30-second windows; a merge window above
+# that silently truncates the tail of every merged chunk — a recall bench
+# poisoned in exactly the way this function exists to prevent.
+VAD_MAX_CHUNK_SIZE = 30
+
+
+def _vad_config_from_env(env) -> "tuple[str | None, dict]":
     """Reads the operator-tunable VAD knobs for whisperx.load_model from
     env vars, returning (vad_method | None, vad_options dict). Exists
     because the first full bench run showed whisperx's default VAD dropping
@@ -257,8 +268,9 @@ def _vad_config_from_env(env) -> tuple:
       0.500/0.363), or Binarize would oscillate in the inverted band and
       spray micro-segments — the resulting bench numbers would silently
       poison the Phase-2 go/no-go comparison, so it's rejected here instead.
-      Note: silero in whisperx 3.8.6 consumes vad_onset only (its detection
-      threshold); vad_offset is ignored on that path.
+      The check applies to the pyannote path only: silero in whisperx 3.8.6
+      consumes vad_onset alone (its detection threshold) and ignores
+      vad_offset, so with METHOD=silero an offset override just warns.
     - WHISPERX_VAD_CHUNK_SIZE: int seconds. Consumed twice in 3.8.6: as
       silero's max_speech_duration_s via vad_options, AND as the merge
       window via model.transcribe(chunk_size=...) — main() passes it to
@@ -270,7 +282,7 @@ def _vad_config_from_env(env) -> tuple:
     didn't ask for. Called from main() BEFORE any S3 download, per the
     BenchConfigError fail-fast contract. Self-contained for unit tests.
     """
-    method = (env.get("WHISPERX_VAD_METHOD") or "").strip() or None
+    method = (env.get("WHISPERX_VAD_METHOD") or "").strip().lower() or None
     if method is not None and method not in ("pyannote", "silero"):
         raise BenchConfigError(
             f"WHISPERX_VAD_METHOD must be 'pyannote' or 'silero', got {method!r}")
@@ -291,16 +303,25 @@ def _vad_config_from_env(env) -> tuple:
             raise BenchConfigError(
                 f"{env_name} must be within ({lo}, {hi}) exclusive, got {val}")
         options[key] = val
-    if "vad_onset" in options or "vad_offset" in options:
+    if method == "silero":
+        # Silero has no offset hysteresis in 3.8.6 (vad_onset is its sole
+        # detection threshold) — the pyannote-shaped check below would
+        # reject the runbook's own silero sweep over a knob silero never
+        # reads. Warn instead of failing: the run is still exactly what
+        # the operator configured.
+        if "vad_offset" in options:
+            print("WARNING: WHISPERX_VAD_OFFSET is ignored by the silero "
+                  "VAD path (silero consumes vad_onset only)")
+    elif "vad_onset" in options or "vad_offset" in options:
         # Whisperx 3.8.6 defaults fill whichever knob wasn't overridden.
-        eff_onset = options.get("vad_onset", 0.500)
-        eff_offset = options.get("vad_offset", 0.363)
+        eff_onset = options.get("vad_onset", VAD_DEFAULT_ONSET)
+        eff_offset = options.get("vad_offset", VAD_DEFAULT_OFFSET)
         if eff_offset >= eff_onset:
             raise BenchConfigError(
                 f"effective vad_offset ({eff_offset}) must stay below "
                 f"vad_onset ({eff_onset}) to preserve hysteresis — when "
-                f"lowering WHISPERX_VAD_ONSET below the 0.363 default "
-                f"offset, set WHISPERX_VAD_OFFSET lower still")
+                f"lowering WHISPERX_VAD_ONSET below the {VAD_DEFAULT_OFFSET} "
+                f"default offset, set WHISPERX_VAD_OFFSET lower still")
     raw = (env.get("WHISPERX_VAD_CHUNK_SIZE") or "").strip()
     if raw:
         try:
@@ -308,8 +329,11 @@ def _vad_config_from_env(env) -> tuple:
         except ValueError:
             raise BenchConfigError(
                 f"WHISPERX_VAD_CHUNK_SIZE must be an int, got {raw!r}") from None
-        if chunk <= 0:
-            raise BenchConfigError(f"WHISPERX_VAD_CHUNK_SIZE must be positive, got {chunk}")
+        if not (0 < chunk <= VAD_MAX_CHUNK_SIZE):
+            raise BenchConfigError(
+                f"WHISPERX_VAD_CHUNK_SIZE must be in (0, {VAD_MAX_CHUNK_SIZE}] "
+                f"seconds (Whisper's encoder window is 30s — a larger merge "
+                f"window silently truncates chunk tails), got {chunk}")
         options["chunk_size"] = chunk
     return method, options
 
@@ -736,9 +760,12 @@ def main():
     # contract: every check that can raise it runs before any audio download or
     # model/GPU work, so an env typo can't burn a Spot task's download+convert.
     vad_method, vad_options = _vad_config_from_env(os.environ)
-    if vad_method or vad_options:
-        print(f"VAD config override: method={vad_method or 'default'} "
-              f"options={vad_options}")
+    # Always log the effective config, not just on override: a typo'd env
+    # NAME (e.g. WHISPERX_VAD_ONSETT) validates nothing and overrides
+    # nothing, and this line is how an operator catches that the run is
+    # actually on defaults. The runbook's §3b verification step greps for it.
+    print(f"VAD config override: method={vad_method or 'pyannote (default)'} "
+          f"options={vad_options or 'defaults'}")
 
     audio_key = os.environ.get("AUDIO_KEY")
     if audio_key:
