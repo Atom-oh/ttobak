@@ -79,9 +79,13 @@ docker push 180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:la
 > new image before pushing:
 >
 > ```bash
-> docker run --rm --entrypoint dpkg \
+> # Smoke-check the actual failure mode (torchcodec import), not the package
+> # name — on Ubuntu 24.04 the shared library may resolve via the t64
+> # transition package, so `dpkg -s libpython3.12` can report not-installed
+> # on a healthy image. A clean import proves libpython3.12.so.1.0 loads.
+> docker run --rm --entrypoint python3 \
 >   180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest \
->   -s libpython3.12 | head -3   # want: Status: install ok installed
+>   -c "import torchcodec; print('torchcodec OK')"
 > ```
 
 ### Stage the diarization model bundle

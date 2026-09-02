@@ -212,6 +212,53 @@ class TestTryAlign(unittest.TestCase):
         self.assertIn('words', result_segments[0])
         self.assertIn('words', result_segments[2])
 
+    def test_interpolation_consecutive_run_splits_gap_evenly(self):
+        # Round-2 MAJOR-1: a naive per-segment walk gave the first missing
+        # segment the whole gap and collapsed the rest to zero length —
+        # zero-length segments overlap no diarization turn. A run must
+        # split its gap evenly.
+        segs = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a', 'words': []},
+            {'start': None, 'end': None, 'text': 'b', 'words': []},
+            {'start': None, 'end': None, 'text': 'c', 'words': []},
+            {'start': 3.0, 'end': 4.0, 'text': 'd', 'words': []},
+        ]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 4.0)
+        self.assertEqual(touched, 2)
+        self.assertEqual((segs[1]['start'], segs[1]['end']), (1.0, 2.0))
+        self.assertEqual((segs[2]['start'], segs[2]['end']), (2.0, 3.0))
+        self.assertNotIn('words', segs[1])
+        self.assertNotIn('words', segs[2])
+        self.assertIn('words', segs[0])
+
+    def test_interpolation_partial_missing_keeps_known_side(self):
+        # Round-2 MAJOR-2: a segment with a valid aligner-provided start
+        # must keep it — only the missing side is filled.
+        segs = [
+            {'start': 0.0, 'end': 1.0, 'text': 'a'},
+            {'start': 4.0, 'end': None, 'text': 'b'},
+            {'start': None, 'end': 7.0, 'text': 'c'},
+        ]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 8.0)
+        self.assertEqual(touched, 2)
+        # Known sides preserved; missing sides filled from the SNAPSHOT of
+        # aligner-provided boundaries (either field of a neighbor), never
+        # from values this pass itself filled — fill order must not bleed.
+        self.assertEqual(segs[1]['start'], 4.0)   # known side preserved
+        self.assertEqual(segs[1]['end'], 7.0)     # next known boundary = c's end
+        self.assertEqual(segs[2]['end'], 7.0)     # known side preserved
+        self.assertEqual(segs[2]['start'], 4.0)   # prev known boundary = b's start
+
+    def test_interpolation_all_missing_distributes_span(self):
+        segs = [
+            {'start': None, 'end': None, 'text': 'a'},
+            {'start': None, 'end': None, 'text': 'b'},
+        ]
+        touched = transcribe_whisperx._interpolate_missing_timestamps(segs, 0.0, 10.0)
+        self.assertEqual(touched, 2)
+        self.assertEqual((segs[0]['start'], segs[0]['end']), (0.0, 5.0))
+        self.assertEqual((segs[1]['start'], segs[1]['end']), (5.0, 10.0))
+
     def test_resplit_with_wholesale_text_loss_falls_back(self):
         # Coverage sanity: if the aligner returned meaningfully less TEXT
         # than it was given (wholesale content loss, not re-segmentation),

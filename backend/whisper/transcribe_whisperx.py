@@ -108,6 +108,98 @@ def _turns_from_diarization(diarization) -> list[tuple]:
     ]
 
 
+def _stripped_text_len(segs: list[dict]) -> int:
+    """Total non-space character count across segment texts — the coverage
+    metric the re-split sanity check compares (build_result joins segment
+    texts, so this is exactly the text that survives into the output)."""
+    return sum(len(s.get("text", "").replace(" ", "")) for s in segs)
+
+
+def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_end: float) -> int:
+    """Fills missing start/end timestamps on re-split aligned segments,
+    in place, and returns how many segments were touched (their `words`
+    are dropped — interpolated boundaries are too coarse for word-majority
+    voting). Pure function so the boundary math is unit-testable without
+    whisperx.
+
+    Rules (round-2 review MAJORs 1+2 of PR #173):
+    - A partially-missing segment keeps its KNOWN side; only the missing
+      side is filled (a valid aligner-provided start must never be
+      overwritten by interpolation).
+    - A maximal run of consecutive fully-missing segments splits the gap
+      between its known neighbors (previous known end ~ next known start,
+      falling back to the input span edges) EVENLY — a naive per-segment
+      walk gives the first segment the whole gap and collapses the rest to
+      zero length, leaving them unable to overlap any diarization turn.
+    """
+    n = len(segs)
+    touched = 0
+
+    # Boundary lookups read a SNAPSHOT of the aligner-provided timestamps,
+    # never values this function already filled — otherwise fill order
+    # bleeds between segments (e.g. an interpolated end consuming the gap a
+    # later segment's start needed, re-creating the zero-length collapse
+    # this helper exists to prevent). Either known field of a neighbor
+    # bounds the gap.
+    snapshot = [(s.get("start"), s.get("end")) for s in segs]
+
+    def known_end_before(i: int) -> float:
+        for j in range(i - 1, -1, -1):
+            s0, e0 = snapshot[j]
+            if e0 is not None:
+                return e0
+            if s0 is not None:
+                return s0
+        return span_start
+
+    def known_start_after(i: int) -> float:
+        for j in range(i + 1, n):
+            s0, e0 = snapshot[j]
+            if s0 is not None:
+                return s0
+            if e0 is not None:
+                return e0
+        return span_end
+
+    i = 0
+    while i < n:
+        seg = segs[i]
+        has_start = seg.get("start") is not None
+        has_end = seg.get("end") is not None
+        if has_start and has_end:
+            i += 1
+            continue
+        if has_start or has_end:
+            # Partial: fill only the missing side from the nearest known
+            # boundary on that side, clamped so start <= end.
+            if not has_start:
+                seg["start"] = min(known_end_before(i), seg["end"])
+            else:
+                seg["end"] = max(known_start_after(i), seg["start"])
+            seg.pop("words", None)
+            touched += 1
+            i += 1
+            continue
+        # Fully-missing run: [i, run_end)
+        run_end = i
+        while run_end < n and segs[run_end].get("start") is None and segs[run_end].get("end") is None:
+            run_end += 1
+        gap_start = known_end_before(i)
+        gap_stop = known_start_after(run_end - 1)
+        if gap_stop < gap_start:
+            gap_stop = gap_start
+        k = run_end - i
+        width = (gap_stop - gap_start) / k
+        for j in range(k):
+            s = segs[i + j]
+            s["start"] = gap_start + j * width
+            s["end"] = gap_start + (j + 1) * width
+            s.pop("words", None)
+            touched += 1
+        i = run_end
+    return touched
+
+
 def _load_wav_waveform(wav_path: str) -> dict:
     """Reads the 16kHz mono s16le WAV our own ffmpeg call just wrote into
     the in-memory {'waveform': (channel, time) tensor, 'sample_rate': int}
@@ -274,46 +366,34 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
             # evaluate — on every real run.
             #
             # Coverage sanity check FIRST: build_result derives the final
-            # transcript string by joining SEGMENT texts, so any segment
-            # this path loses is text lost from the ASR output itself — a
-            # silent quality-comparison skew. If the aligner returned
-            # meaningfully less text than it was given (wholesale content
-            # loss, not just re-segmentation), discard and fall back.
-            def _stripped_len(segs: list[dict]) -> int:
-                return sum(len(s.get("text", "").replace(" ", "")) for s in segs)
-            in_len = _stripped_len(segments)
-            out_len = _stripped_len(aligned_segments)
-            if in_len and out_len < 0.9 * in_len:
-                print(f"Alignment re-split output carries only {out_len}/"
-                      f"{in_len} non-space chars (<90%); discarding aligned "
-                      f"result, using segment-level timestamps")
+            # transcript string by joining SEGMENT texts, so text the
+            # aligner loses (or duplicates) is a silent quality-comparison
+            # skew. Outside a ±10% tolerance band, discard and fall back;
+            # any loss INSIDE the band is accepted but logged so it is
+            # never invisible.
+            in_len = _stripped_text_len(segments)
+            out_len = _stripped_text_len(aligned_segments)
+            if in_len and not (0.9 * in_len <= out_len <= 1.1 * in_len):
+                direction = "lost" if out_len < in_len else "duplicated"
+                print(f"Alignment re-split output {direction} text beyond "
+                      f"the 10% tolerance ({out_len}/{in_len} non-space "
+                      f"chars); discarding aligned result, using "
+                      f"segment-level timestamps")
                 return segments, False, 0
+            if out_len < in_len:
+                print(f"Alignment re-split output carries {out_len}/{in_len} "
+                      f"non-space chars (within 10% tolerance, accepted)")
             # Accept the re-split output, preserving EVERY segment: index
             # mapping to the inputs is impossible across a re-split, so
-            # timestamp-less segments are repaired by interpolating from
-            # their neighbors' boundaries (prev end ~ next valid start;
-            # input span edges at the extremes) and lose only their words —
-            # symmetric with the count-match path's per-segment repair.
-            next_valid_start: list = [None] * len(aligned_segments)
-            nxt = None
-            for i in range(len(aligned_segments) - 1, -1, -1):
-                next_valid_start[i] = nxt
-                if aligned_segments[i].get("start") is not None:
-                    nxt = aligned_segments[i]["start"]
+            # missing timestamps are interpolated from neighboring known
+            # boundaries (runs of fully-missing segments split their gap
+            # evenly; a partially-missing segment keeps its known side) and
+            # those segments lose only their words — symmetric with the
+            # count-match path's per-segment repair.
             span_start = segments[0]["start"] if segments else 0.0
             span_end = segments[-1]["end"] if segments else 0.0
-            prev_end = None
-            interpolated = 0
-            for i, seg in enumerate(aligned_segments):
-                if seg.get("start") is None or seg.get("end") is None:
-                    start = prev_end if prev_end is not None else span_start
-                    end = next_valid_start[i] if next_valid_start[i] is not None else span_end
-                    if end < start:
-                        end = start
-                    seg["start"], seg["end"] = start, end
-                    seg.pop("words", None)
-                    interpolated += 1
-                prev_end = seg["end"]
+            interpolated = _interpolate_missing_timestamps(
+                aligned_segments, span_start, span_end)
             print(f"Alignment re-split {len(segments)} segment(s) into "
                   f"{len(aligned_segments)} (kept all; {interpolated} "
                   f"repaired via neighbor-interpolated timestamps, words "
