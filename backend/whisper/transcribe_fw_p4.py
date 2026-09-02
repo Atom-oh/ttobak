@@ -18,7 +18,12 @@ It runs from the SAME image and task definition as transcribe_whisperx.py
 dependency, the same S3-staged large-v3 model dir, and the community-1
 diarization bundle), invoked per run via an ECS containerOverrides command:
     "command": ["transcribe_fw_p4.py"]
-No new Dockerfile, task definition, or IAM change.
+This works because Dockerfile.whisperx splits ENTRYPOINT ["python3"] from
+CMD ["transcribe_whisperx.py"] — ECS command overrides replace only the
+CMD. No new task definition or IAM change; the existing Dockerfile gains
+one COPY entry plus that split, so ONE image rebuild is required before
+the first hybrid run (an image without this file fails loudly with
+"can't open file").
 
 Deliberately bench-only, enforced two ways: OUTPUT_KEY goes through
 validate_output_key AND must additionally sit under bench-transcripts/ --
@@ -29,10 +34,11 @@ by a task-definition edit alone.
 ASR parameters mirror transcribe.py's exactly (language=ko, beam_size=5,
 vad_filter=True with min_silence_duration_ms=500, word_timestamps=True,
 initial_prompt from the custom vocab). One known non-parity: this image
-pins faster-whisper 1.2.1 (whisperx 3.8.6's dependency), which may be a
-different faster-whisper version than the legacy image builds -- treat a
-surprising ASR delta vs bench_legacy as possibly version-driven and check
-the legacy image's pin before concluding anything about the parameters.
+pins faster-whisper 1.2.1 (whisperx 3.8.6's dependency), while the legacy
+Dockerfile installs faster-whisper UNPINNED (whatever was current at its
+last build) -- treat a surprising ASR delta vs bench_legacy as possibly
+version-driven and check the running legacy container's actually installed
+version before concluding anything about the parameters.
 
 PII hygiene follows transcribe_whisperx.py: transcript text never reaches
 logs; fatal logging is type-only via format_fatal_error.

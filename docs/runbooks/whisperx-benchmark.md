@@ -381,6 +381,24 @@ override added to the §3 `--overrides` JSON's container entry:
 "command": ["transcribe_fw_p4.py"]
 ```
 
+This selects the engine because `Dockerfile.whisperx` splits
+`ENTRYPOINT ["python3"]` from `CMD ["transcribe_whisperx.py"]` — ECS
+command overrides replace only the CMD.
+
+**Precondition — one image rebuild** (same as §3b): the image must have
+been built after this file and the ENTRYPOINT/CMD split landed; rebuild
+once via the §1 build procedure. An image with the split but missing the
+file fails loudly (`can't open file`), but an image built BEFORE the
+split silently ignores the override and runs whisperx — so before
+recording a §6 row, verify in the task log that the run says
+`Transcribing (legacy sequential)...` and check the output JSON's
+`engine` field is `fw-legacy-pyannote4-bench`, not `whisperx-large-v3-gpu`.
+
+This engine reads only `MEETING_ID`/`USER_ID`/`OUTPUT_KEY`/`AUDIO_KEY`/
+`INITIAL_PROMPT`/`NUM_SPEAKERS` — the §3b `WHISPERX_VAD_*` knobs and
+alignment settings are whisperx-only and silently unused here, so drop
+them from the overrides JSON for hybrid runs.
+
 Its `OUTPUT_KEY` must be under `bench-transcripts/` (the engine refuses
 anything else, including the real-pipeline key `validate_output_key`
 would allow — it is bench-only by construction and never marks meetings

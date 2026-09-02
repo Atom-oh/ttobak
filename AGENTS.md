@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 70aef38dd7f0 · generated-at: 2026-09-01 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: f36f69f09e57 · generated-at: 2026-09-02 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -25,7 +25,7 @@ cd backend/python/crawler && python3 -m unittest test_crawlers -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
 cd backend/python/qa && python3 -m unittest test_handler -v    # mocks boto3 at import — no boto3<2 pin needed
 cd backend/python/sim && python3 -m unittest test_handler -v   # cost/sizing simulator worker (ADR-033)
-cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx -v   # stdlib unittest; heavy deps (torch/pyannote/whisperx) stubbed at import
+cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx test_transcribe_fw_p4 -v   # stdlib unittest; heavy deps (torch/pyannote/whisperx) stubbed at import
 cd infra && npx cdk synth && npm test
 ```
 

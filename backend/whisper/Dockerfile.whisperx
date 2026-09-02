@@ -42,4 +42,10 @@ WORKDIR /app
 RUN useradd -m -u 10001 whisperx
 USER whisperx
 
-ENTRYPOINT ["python3", "transcribe_whisperx.py"]
+# ENTRYPOINT/CMD split (not a single ENTRYPOINT list) because ECS RunTask's
+# containerOverrides can only replace the CMD part — the §3c hybrid bench
+# engine (transcribe_fw_p4.py) is selected per run via
+# `"command": ["transcribe_fw_p4.py"]`, which with a combined ENTRYPOINT
+# would silently run transcribe_whisperx.py with an ignored extra argument.
+ENTRYPOINT ["python3"]
+CMD ["transcribe_whisperx.py"]
