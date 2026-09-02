@@ -395,6 +395,7 @@ in CDK all the same so the surface stays declarative. `whisper-stack.ts`
 sets neither today; a `whisper-stack.test.ts` assertion (test-infra.yml
 at PR time, deploy-infra.yml pre-deploy) and a CLAUDE.md gotcha guard
 this.
+
 A bad `ENGINE` value fails fast and loud: `FATAL: ENGINE must be one
 of ['fw_p4', 'whisperx'] ...` on stderr, exit 1, before any model or S3
 work.
@@ -411,9 +412,10 @@ ignores the ENGINE env silently and runs whisperx — so before recording a
 
 Of the per-run override env vars, this engine reads only
 `MEETING_ID`/`USER_ID`/`OUTPUT_KEY`/`AUDIO_KEY`/`INITIAL_PROMPT`/
-`NUM_SPEAKERS`. Task-definition-level vars stay required as always —
-`BUCKET_NAME`/`TABLE_NAME`/`VOCAB_KEY`, and notably `MODEL_S3_KEY` and
-`WHISPERX_DIARIZATION_S3_KEY`, which the hybrid uses too (same staged
+`NUM_SPEAKERS`. Task-definition-level vars apply unchanged:
+`BUCKET_NAME`/`TABLE_NAME` are required at import time; `VOCAB_KEY`,
+`MODEL_S3_KEY` and `WHISPERX_DIARIZATION_S3_KEY` have code defaults but
+the task definition sets them, and the hybrid uses them too (same staged
 CT2 model dir, same community-1 bundle). Only the §3b `WHISPERX_VAD_*`
 knobs and alignment settings are whisperx-only and silently unused here —
 drop those from the overrides JSON for hybrid runs. §4's per-stage VRAM

@@ -72,7 +72,8 @@ def main() -> None:
     # callers legitimately have, and these variables would let it steer
     # WHAT the interpreter executes rather than how the engine behaves.
     # (LD_LIBRARY_PATH stays -- CUDA in this image relies on it.)
-    for var in ("PYTHONPATH", "PYTHONSTARTUP", "LD_PRELOAD"):
+    for var in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME",
+                "PYTHONUSERBASE", "LD_PRELOAD", "LD_AUDIT"):
         os.environ.pop(var, None)
     # Logged only after the existence check so this line appearing means
     # the dispatch actually happens -- the runbook's engine-verification

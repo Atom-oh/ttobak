@@ -177,13 +177,16 @@ def main():
                   f"{num_speakers_detected} speaker(s) detected")
         else:
             print("Diarization produced no turns; segments left unlabeled")
-    elif not diarization_config:
+    elif not segments:
+        # Checked first: with zero segments the run is broken regardless of
+        # whether the model bundle was also unavailable, and that's the
+        # cause a §6 reader needs to see.
+        print("No ASR segments; diarization skipped")
+    else:
         # Loud skip: a §6 row from a run whose diarization silently never
         # ran would be recorded as a hybrid data point when it's really
         # ASR-only.
         print("Diarization model unavailable; segments left unlabeled")
-    else:
-        print("No ASR segments; diarization skipped")
 
     result = wx.build_result(
         segments=segments, language=info.language,

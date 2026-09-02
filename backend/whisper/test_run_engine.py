@@ -52,10 +52,21 @@ class TestResolveEngine(unittest.TestCase):
 class TestMain(unittest.TestCase):
     def test_dispatch_log_only_after_existence_check_then_execv(self):
         buf = io.StringIO()
-        with mock.patch.object(run_engine.os, 'execv') as execv, \
+        # Snapshot the environment AT exec time via the mock's side effect:
+        # asserting on os.environ after the `with` block would be vacuous —
+        # mock.patch.dict restores the original dict on exit, so that would
+        # test the runner's environment, not main()'s scrub.
+        env_at_exec = {}
+
+        def capture_env(*_args):
+            env_at_exec.update(run_engine.os.environ)
+
+        with mock.patch.object(run_engine.os, 'execv',
+                               side_effect=capture_env) as execv, \
                 mock.patch.object(run_engine.sys, 'argv', ['run_engine.py']), \
                 mock.patch.dict(run_engine.os.environ,
-                                {'ENGINE': 'fw_p4', 'PYTHONPATH': '/evil'}), \
+                                {'ENGINE': 'fw_p4', 'PYTHONPATH': '/evil',
+                                 'LD_PRELOAD': '/evil.so'}), \
                 contextlib.redirect_stdout(buf):
             run_engine.main()
         execv.assert_called_once()
@@ -63,8 +74,10 @@ class TestMain(unittest.TestCase):
         self.assertTrue(argv[1].endswith('transcribe_fw_p4.py'))
         self.assertIn('run_engine: dispatching to transcribe_fw_p4.py',
                       buf.getvalue())
-        # Interpreter-steering env scrubbed before the engine execs.
-        self.assertNotIn('PYTHONPATH', run_engine.os.environ)
+        # Interpreter-steering env was scrubbed before the engine exec'd.
+        self.assertNotIn('PYTHONPATH', env_at_exec)
+        self.assertNotIn('LD_PRELOAD', env_at_exec)
+        self.assertEqual(env_at_exec.get('ENGINE'), 'fw_p4')
 
     def test_missing_script_fatals_without_dispatch_log(self):
         out, err = io.StringIO(), io.StringIO()

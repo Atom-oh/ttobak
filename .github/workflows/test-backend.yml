@@ -26,6 +26,10 @@ permissions:
 jobs:
   test:
     runs-on: ttobak-arm
+    # Public repo + self-hosted runner with ambient deploy credentials:
+    # never run fork-PR code here (see test-infra.yml's identical guard).
+    # push events have no pull_request context, so let them through.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6

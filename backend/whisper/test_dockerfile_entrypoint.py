@@ -20,12 +20,16 @@ DOCKERFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 def _instructions(name: str) -> list:
-    """All values of a Dockerfile instruction, in order (continuation lines
-    joined; comments skipped)."""
+    """All values of a Dockerfile instruction, in order.
+
+    Mirrors Docker's own parse order: comment lines are removed BEFORE
+    backslash continuations are joined — so a `# comment \\` line followed
+    by `CMD [...]` is a real CMD to Docker, and must be one to this guard
+    too (comment-stripping after joining would hide it)."""
     with open(DOCKERFILE) as f:
-        raw = f.read()
-    # Join backslash continuations so multi-line instructions parse whole.
-    joined = re.sub(r'\\\s*\n', ' ', raw)
+        lines = [ln for ln in f.read().splitlines()
+                 if not ln.lstrip().startswith('#')]
+    joined = re.sub(r'\\\s*\n', ' ', '\n'.join(lines))
     values = []
     for line in joined.splitlines():
         stripped = line.strip()

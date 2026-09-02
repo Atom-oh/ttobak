@@ -16,6 +16,7 @@ on:
       # the required check (same convention as test-backend.yml) — without
       # this, a PR editing/neutering this gate would merge unverified.
       - '.github/workflows/test-infra.yml'
+      - '.github/workflows/deploy-infra.yml'
   # No push trigger: deploy-infra.yml runs the same synth+test suite as its
   # own pre-deploy gate on push-to-main, so a push trigger here would just
   # run the suite twice. This workflow is the PR-time counterpart only.
@@ -23,6 +24,12 @@ on:
 jobs:
   test:
     runs-on: ttobak-arm
+    # This is a PUBLIC repo and ttobak-arm is a self-hosted runner whose
+    # host holds ambient (instance-profile) deploy credentials — running a
+    # fork PR's code here would hand those to the fork author via IMDS.
+    # Same-repo PRs only; fork PRs (none accepted today) would need an
+    # ephemeral, credential-less runner first.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v6
 
