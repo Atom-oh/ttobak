@@ -65,8 +65,32 @@ aws ecr get-login-password --region ap-northeast-2 \
 cd backend/whisper
 docker build --platform linux/amd64 -f Dockerfile.whisperx \
   -t 180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest .
+
+# VERIFY the just-built LOCAL image BEFORE pushing (--pull=never makes sure
+# this runs the local build, not a stale remote layer). A clean torchcodec
+# import proves libpython3.12.so.1.0 loads — the exact failure that wasted
+# the 2026-08-31 bench run.
+docker run --rm --pull=never --entrypoint python3 \
+  180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest \
+  -c "import torchcodec; print('torchcodec OK')"
+
+# Push only after the verification above prints "torchcodec OK".
 docker push 180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest
 ```
+
+> **Rebuild required (2026-09-02)**: the first bench run's diarization
+> failure (pyannote 4.x decodes via torchcodec, whose FFmpeg-6 variant
+> failed to load because `libpython3.12.so.1.0` was missing → RuntimeError)
+> is fixed from this commit on — `Dockerfile.whisperx` now installs
+> the shared library (`libpython3.12t64`, `libpython3.12` fallback), and `transcribe_whisperx.py` preloads the WAV in-memory
+> so the torchcodec path is bypassed entirely. Rebuild, VERIFY (the
+> torchcodec import smoke check in the build block above — run against the
+> local image before pushing), and only then push; results produced by the
+> image pushed on 2026-08-31 carry no diarization data and must not be used
+> for comparison. The smoke check exists because `dpkg -s libpython3.12`
+> is unreliable across the noble t64 transition (the Dockerfile installs
+> `libpython3.12t64` with a `libpython3.12` fallback) — checking the actual
+> import is what proves libpython3.12.so.1.0 loads.
 
 ### Stage the diarization model bundle
 
@@ -393,8 +417,19 @@ Build one table row per meeting:
 |---|---|---|---|---|---|---|---|---|
 
 "Alignment repaired segments" is `whisper_metadata.alignment_repaired` from
-the WhisperX transcript JSON (§5) — the count of segments `_try_align` had
-to repair from segment-level timestamps after a partial alignment failure.
+the WhisperX transcript JSON (§5) — the count of segments the aligner could
+not fully align, repaired to segment-level timestamps (copied from the
+same-index input when the aligner kept the input segmentation, or
+interpolated from neighbor boundaries when it re-split) with their words
+dropped. No segment text is ever discarded — the re-split path requires the
+whitespace-normalized RENDERED transcript (segment texts joined by single
+spaces, as build_result produces) to be identical to the ASR input's; any
+aligner-side loss, duplication, reorder, or mid-word boundary insertion
+discards the aligned result entirely (`alignment_enabled: false`).
+Note (2026-09-02): whisperx.align() re-splitting segments (e.g. 43→117) is
+its normal behavior and the re-split output is now ACCEPTED — so the
+whisperx side of a bench pair typically has a DIFFERENT segment count from
+the legacy side; compare speaker turns by time ranges, not by index.
 A nonzero value flags a partial-repair run so it isn't silently read as
 equivalent to a clean, fully-aligned one.
 
