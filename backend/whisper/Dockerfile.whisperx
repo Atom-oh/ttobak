@@ -34,7 +34,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 
 # Whisper CT2 weights + diarization pipeline are loaded from S3 at runtime
 # (same pattern as the legacy image; see whisper_common.stream_extract_tar).
-COPY whisper_common.py transcribe_whisperx.py /app/
+COPY whisper_common.py transcribe_whisperx.py transcribe_fw_p4.py /app/
 WORKDIR /app
 
 # Non-root: the app only writes under /tmp (model/audio staging), so it

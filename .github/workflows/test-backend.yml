@@ -59,3 +59,9 @@ jobs:
           cd backend/python/crawler && python3 -m unittest test_crawlers -v
           cd ../research-agent && python3 -m unittest test_tools -v
           cd ../qa && python3 -m unittest test_handler -v
+
+      - name: Run whisper engine tests
+        # The workflow's path trigger has always included backend/whisper/**,
+        # but these suites were only documented in CLAUDE.md, never run here.
+        run: |
+          cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx test_transcribe_fw_p4 -v

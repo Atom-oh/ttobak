@@ -361,6 +361,38 @@ already cover them, no per-sweep cleanup needed. Converge on the config
 with near-zero real-content gaps, then re-check speaker distribution
 didn't regress (§5).
 
+### 3c. Hybrid engine: legacy faster-whisper ASR + community-1 diarization
+
+The 2026-09-02 sweep left the two engines winning on different axes:
+legacy faster-whisper had the best ASR recall (whisperx's best config,
+silero onset 0.25, still left ~143s of real content uncovered vs legacy's
+~49s), while whisperx produced the clean speaker count. If the diarization
+win comes from the pyannote community-1 (4.x) model rather than from
+whisperx itself, "keep the existing whisper ASR, upgrade only diarization"
+beats a whisperx cutover under an accuracy-and-diarization-first decision
+rule. `transcribe_fw_p4.py` tests exactly that: legacy `transcribe.py`
+ASR parameters + the whisperx image's community-1 diarization.
+
+It ships inside the whisperx image (faster-whisper is already a whisperx
+dependency) — run it from the SAME task definition with a per-run command
+override added to the §3 `--overrides` JSON's container entry:
+
+```json
+"command": ["transcribe_fw_p4.py"]
+```
+
+Its `OUTPUT_KEY` must be under `bench-transcripts/` (the engine refuses
+anything else, including the real-pipeline key `validate_output_key`
+would allow — it is bench-only by construction and never marks meetings
+errored). Output rows carry `engine: fw-legacy-pyannote4-bench`. Compare
+against `bench_legacy` (same ASR, pyannote 3.x) for the diarization delta
+and against the best whisperx config for the recall delta, and record it
+as a §6 row like any other attempt. Known non-parity to keep in mind:
+this image's faster-whisper comes via whisperx 3.8.6 (1.2.1), while the
+legacy `Dockerfile` installs faster-whisper UNPINNED — the deployed legacy
+image has whatever was current at its last build. Check the running legacy
+image's actual version before attributing an ASR delta to anything else.
+
 ## 4. Resource measurement per WhisperX run
 
 This resolves the design doc's open VRAM/instance-sizing question.
