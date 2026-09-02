@@ -273,6 +273,33 @@ class TestTryAlign(unittest.TestCase):
         self.assertAlmostEqual(segs[1]['start'], 6.0)
         self.assertAlmostEqual(segs[1]['end'], 8.0)
 
+    def test_resplit_mid_word_boundary_falls_back(self):
+        # Round-4 MAJOR: a stripped-text comparison passes a mid-word
+        # re-split (가방 -> 가|방) even though build_result's " ".join
+        # renders it as "가 방" — a changed transcript. The rendered-form
+        # comparison must reject it.
+        input_segments = [{'start': 0.0, 'end': 2.0, 'text': '가방'}]
+        aligned_segments = [
+            {'start': 0.0, 'end': 1.0, 'text': '가',
+             'words': [{'word': '가', 'start': 0.1, 'end': 0.9}]},
+            {'start': 1.0, 'end': 2.0, 'text': '방',
+             'words': [{'word': '방', 'start': 1.1, 'end': 1.9}]},
+        ]
+
+        fake_whisperx = types.ModuleType('whisperx')
+        fake_whisperx.load_align_model = lambda language_code, device: (
+            object(), object())
+        fake_whisperx.align = lambda segments, model, metadata, audio, device: {
+            'segments': aligned_segments}
+
+        with mock.patch.dict(sys.modules, {'whisperx': fake_whisperx}):
+            result_segments, alignment_enabled, repaired = transcribe_whisperx._try_align(
+                input_segments, audio=object(), language='ko')
+
+        self.assertEqual(result_segments, input_segments)
+        self.assertFalse(alignment_enabled)
+        self.assertEqual(repaired, 0)
+
     def test_resplit_with_wholesale_text_loss_falls_back(self):
         # Coverage sanity: if the aligner returned meaningfully less TEXT
         # than it was given (wholesale content loss, not re-segmentation),

@@ -172,8 +172,9 @@ def _load_wav_waveform(wav_path: str) -> dict:
     dict pyannote accepts. This BYPASSES pyannote 4.x's torchcodec decoding
     path entirely — the first bench run failed with RuntimeError because
     torchcodec's FFmpeg-6 variant links against libpython3.12.so.1.0, which
-    Ubuntu's `python3` package doesn't ship (it lives in `libpython3.12`,
-    now installed in Dockerfile.whisperx as belt-and-suspenders). Passing a
+    Ubuntu's `python3` package doesn't ship (Dockerfile.whisperx now
+    installs it — libpython3.12t64 with a libpython3.12 fallback — as
+    belt-and-suspenders; see the runbook for the smoke check). Passing a
     preloaded waveform is pyannote's own documented workaround, and stdlib
     `wave` suffices because we control the format (ffmpeg -ar 16000 -ac 1).
     """
@@ -331,22 +332,26 @@ def _try_align(segments: list[dict], audio, language: str) -> tuple[list[dict], 
             # speaker assignment — the thing this benchmark exists to
             # evaluate — on every real run.
             #
-            # Coverage sanity check FIRST: build_result derives the final
-            # transcript string by joining SEGMENT texts, so any text the
-            # aligner loses, duplicates, or reorders is a silent
-            # quality-comparison skew — and a total-character band can be
-            # fooled by loss and duplication cancelling out (round-3 review
-            # MAJOR-2). Require STRICT equality of the whitespace-stripped
-            # concatenated text: alignment re-segments the same recognized
-            # text, it must not change it. Any mismatch discards the
-            # aligned result (lengths logged, never content — PII).
-            in_text = "".join(s.get("text", "") for s in segments).replace(" ", "")
-            out_text = "".join(s.get("text", "") for s in aligned_segments).replace(" ", "")
+            # Coverage sanity check FIRST, in RENDERED form: build_result
+            # produces `" ".join(text.strip() ...)`, so the invariant that
+            # matters is that the rendered transcript is unchanged. A
+            # whitespace-STRIPPED comparison misses exactly the dangerous
+            # case (round-4 review MAJOR): a mid-word re-split (가방 → 가|방)
+            # strips to the same characters but renders as "가 방". Compare
+            # the whitespace-NORMALIZED rendered strings instead — tolerant
+            # of how much whitespace separates words, strict about any
+            # loss, duplication, reorder, or word-boundary insertion. Any
+            # mismatch discards the aligned result (lengths logged, never
+            # content — PII).
+            def _rendered(segs: list[dict]) -> str:
+                return " ".join(" ".join(s.get("text", "") for s in segs).split())
+            in_text = _rendered(segments)
+            out_text = _rendered(aligned_segments)
             if in_text != out_text:
-                print(f"Alignment re-split output text differs from input "
-                      f"({len(out_text)} vs {len(in_text)} non-space chars); "
-                      f"discarding aligned result, using segment-level "
-                      f"timestamps")
+                print(f"Alignment re-split output renders differently from "
+                      f"input ({len(out_text)} vs {len(in_text)} chars "
+                      f"normalized); discarding aligned result, using "
+                      f"segment-level timestamps")
                 return segments, False, 0
             # Accept the re-split output, preserving EVERY segment: index
             # mapping to the inputs is impossible across a re-split, so
