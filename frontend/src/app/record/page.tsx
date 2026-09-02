@@ -1002,7 +1002,12 @@ function RecordPageInner() {
             meetingId={clientMeetingId}
             meetingTitle={meetingTitle || 'Untitled Meeting'}
             audioSource={audioSource}
-            disabled={!!postRecording.step}
+            // `leftoverBusy` too: while a leftover upload is between its
+            // confirm and `handleNativeFileReady` (the `createDraftMeeting`
+            // await, up to 15s), `step` is still null — without this a
+            // recording started in that window would race the leftover flow
+            // for serverMeetingId/pendingAudioRef.
+            disabled={!!postRecording.step || leftoverBusy}
             deviceId={audioSource === 'mic' ? (selectedDeviceId || undefined) : undefined}
             onRecordingComplete={postRecording.handleRecordingComplete}
             onBlobReady={postRecording.handleBlobReady}
