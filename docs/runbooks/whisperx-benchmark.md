@@ -65,6 +65,16 @@ aws ecr get-login-password --region ap-northeast-2 \
 cd backend/whisper
 docker build --platform linux/amd64 -f Dockerfile.whisperx \
   -t 180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest .
+
+# VERIFY the just-built LOCAL image BEFORE pushing (--pull=never makes sure
+# this runs the local build, not a stale remote layer). A clean torchcodec
+# import proves libpython3.12.so.1.0 loads — the exact failure that wasted
+# the 2026-08-31 bench run.
+docker run --rm --pull=never --entrypoint python3 \
+  180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest \
+  -c "import torchcodec; print('torchcodec OK')"
+
+# Push only after the verification above prints "torchcodec OK".
 docker push 180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest
 ```
 
@@ -72,21 +82,15 @@ docker push 180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:la
 > failure (pyannote 4.x decodes via torchcodec, whose FFmpeg-6 variant
 > failed to load because `libpython3.12.so.1.0` was missing → RuntimeError)
 > is fixed from this commit on — `Dockerfile.whisperx` now installs
-> `libpython3.12`, and `transcribe_whisperx.py` preloads the WAV in-memory
-> so the torchcodec path is bypassed entirely. Rebuild and push before any
-> further bench runs; results produced by the image pushed on 2026-08-31
-> carry no diarization data and must not be used for comparison. Verify the
-> new image before pushing:
->
-> ```bash
-> # Smoke-check the actual failure mode (torchcodec import), not the package
-> # name — on Ubuntu 24.04 the shared library may resolve via the t64
-> # transition package, so `dpkg -s libpython3.12` can report not-installed
-> # on a healthy image. A clean import proves libpython3.12.so.1.0 loads.
-> docker run --rm --entrypoint python3 \
->   180294183052.dkr.ecr.ap-northeast-2.amazonaws.com/ttobak-whisperx:latest \
->   -c "import torchcodec; print('torchcodec OK')"
-> ```
+> the shared library (`libpython3.12t64`, `libpython3.12` fallback), and `transcribe_whisperx.py` preloads the WAV in-memory
+> so the torchcodec path is bypassed entirely. Rebuild, VERIFY (the
+> torchcodec import smoke check in the build block above — run against the
+> local image before pushing), and only then push; results produced by the
+> image pushed on 2026-08-31 carry no diarization data and must not be used
+> for comparison. The smoke check exists because `dpkg -s libpython3.12`
+> is unreliable across the noble t64 transition (the Dockerfile installs
+> `libpython3.12t64` with a `libpython3.12` fallback) — checking the actual
+> import is what proves libpython3.12.so.1.0 loads.
 
 ### Stage the diarization model bundle
 

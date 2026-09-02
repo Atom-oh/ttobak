@@ -112,8 +112,9 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
     """Fills missing start/end timestamps on re-split aligned segments,
     in place, and returns how many segments were touched (their `words`
     are dropped — interpolated boundaries are too coarse for word-majority
-    voting). Pure function so the boundary math is unit-testable without
-    whisperx.
+    voting). Self-contained (no whisperx/AWS dependencies) so the boundary
+    math is unit-testable; mutates segs in place and prints one summary
+    line.
 
     Design (round-3 review MAJOR-1 of PR #173): earlier per-segment /
     per-run strategies produced zero-length segments (round 2) or fully
@@ -179,10 +180,20 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
                 running = v
 
     # Pass 3: linear fill of missing boundaries between monotone anchors.
+    # The span edges join the monotone frame too (round-7 MAJOR): a
+    # span_start above the first known bound (or a span_end below the last)
+    # would otherwise anchor a leading/trailing run OUTSIDE the clamped
+    # sequence and mint an inversion the clamp never sees.
     bounds: list = []
     for s in segs:
         bounds.append(s["start"])
         bounds.append(s["end"])
+    known = [b for b in bounds if b is not None]
+    if known:
+        span_start = min(span_start, known[0])
+        span_end = max(span_end, known[-1])
+    if span_end < span_start:
+        span_end = span_start
     m = len(bounds)
     i = 0
     while i < m:
@@ -193,13 +204,22 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
         while i < m and bounds[i] is None:
             i += 1
         left = bounds[run_start - 1] if run_start > 0 else span_start
-        right = bounds[i] if i < m else max(span_end, left)
+        right = bounds[i] if i < m else span_end
         if right < left:
             right = left
         k = i - run_start
         step = (right - left) / (k + 1)
         for j in range(k):
             bounds[run_start + j] = left + (j + 1) * step
+    # Unconditional belt: one final running-max clamp over the fully
+    # populated sequence makes monotone output an invariant of this
+    # function, not a property of any particular anchor analysis.
+    running_final = bounds[0]
+    for j in range(1, m):
+        if bounds[j] < running_final:
+            bounds[j] = running_final
+        else:
+            running_final = bounds[j]
 
     touched = 0
     zero_width = 0
@@ -207,9 +227,12 @@ def _interpolate_missing_timestamps(segs: list[dict], span_start: float, span_en
         filled = s["start"] is None or s["end"] is None
         s["start"] = bounds[2 * idx]
         s["end"] = bounds[2 * idx + 1]
-        if s["end"] == s["start"]:
-            zero_width += 1
         if filled or adjusted[idx]:
+            if s["end"] == s["start"]:
+                # counted only for segments THIS function touched — a
+                # zero-width window the aligner itself produced is not
+                # interpolation's doing and must not be logged as such
+                zero_width += 1
             s.pop("words", None)
             touched += 1
     if zero_width:

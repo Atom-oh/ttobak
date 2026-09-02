@@ -309,6 +309,16 @@ class TestTryAlign(unittest.TestCase):
         self.assertEqual(touched, 1)
         self.assertNotIn('words', segs[0])
 
+    def test_interpolation_span_start_beyond_first_known_cannot_invert(self):
+        # Round-7 MAJOR: span anchors used to sit outside the monotone
+        # clamp, so a span_start above the first known bound minted an
+        # inverted leading fill ({'start': None, 'end': 0.5} with
+        # span_start=1.0 -> (1.0, 0.5)). Span edges now join the frame.
+        segs = [{'start': None, 'end': 0.5, 'text': 'a', 'words': []}]
+        transcribe_whisperx._interpolate_missing_timestamps(segs, 1.0, 2.0)
+        self.assertLessEqual(segs[0]['start'], segs[0]['end'])
+        self.assertEqual(segs[0]['end'], 0.5)  # known side preserved
+
     def test_interpolation_treats_non_finite_as_missing(self):
         # Round-6 MAJOR-2: a NaN timestamp must never become a fill anchor
         # (it silently poisons every comparison and propagates NaN through
