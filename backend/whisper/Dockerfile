@@ -35,12 +35,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # a435a3dc/3804e0f5 against operator-provided ground truth). Its
 # torchcodec dependency is decode-path only and bypassed by
 # transcribe.py's waveform preload.
+# torchcodec is exact-pinned too: it is hard-coupled to the torch version
+# (0.7.x <-> torch 2.8), and if left floating a future torchcodec release
+# could make the second install SILENTLY replace the cu128 torch pinned by
+# the first -- the verify step below is what makes any such replacement a
+# loud build failure instead ("pins must not move" is this file's whole
+# invariant). Maintenance rule (replaces the old "bump together" note):
+# ASR pins stay frozen; torch/torchaudio/torchcodec move ONLY when the
+# pyannote pin moves, all four together.
 RUN pip3 install --no-cache-dir --break-system-packages \
     torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128 && \
     pip3 install --no-cache-dir --break-system-packages \
     faster-whisper==1.2.1 ctranslate2==4.8.1 onnxruntime==1.29.0 \
     av==18.1.0 tokenizers==0.23.1 huggingface-hub==1.29.0 \
-    boto3 "pyannote.audio==4.0.7" pyyaml
+    torchcodec==0.7.0 boto3 "pyannote.audio==4.0.7" pyyaml
+
+# Build fails loudly if any pin above didn't survive dependency resolution
+# (e.g. a floating transitive dep replacing the cu128 torch), plus a full
+# `pip check` for metadata-level conflicts.
+COPY verify_pins.py /tmp/verify_pins.py
+RUN python3 /tmp/verify_pins.py && pip3 check && rm /tmp/verify_pins.py
 
 # Whisper + diarization models are loaded from S3 at runtime (~30s same-region
 # transfer each). Keeps the image itself free of model weights and allows

@@ -3,16 +3,17 @@ name: Deploy Whisper STT
 on:
   push:
     branches: [main]
-    # Scoped to only what the legacy Dockerfile actually consumes: it COPYs
-    # just transcribe.py, and its pip deps (faster-whisper, pyannote<4, boto3)
-    # are unpinned -- rebuilding on unrelated sibling-file changes (e.g. the
-    # whisperx benchmark engine files) could silently produce a different
-    # production image. The whisperx image is built manually per
+    # Scoped to only what the production Dockerfile actually consumes: it
+    # COPYs transcribe.py + verify_pins.py, and since ADR-035 every pip dep
+    # on the ASR path is exact-pinned (verify_pins.py fails the build if a
+    # pin doesn't survive resolution) -- rebuilding on unrelated
+    # sibling-file changes (e.g. the whisperx benchmark engine files) would
+    # just churn the image. The whisperx image is built manually per
     # docs/runbooks/whisperx-benchmark.md, not by this workflow.
-    # Phase-2 tripwire: once transcribe.py starts importing whisper_common.py
-    # (the Phase 2 cutover), add whisper_common.py to these paths too, or
-    # shared-module changes will stop triggering this production rebuild.
-    paths: ['backend/whisper/transcribe.py', 'backend/whisper/Dockerfile']
+    # Tripwire: if transcribe.py ever starts importing whisper_common.py,
+    # add whisper_common.py to these paths too, or shared-module changes
+    # will stop triggering this production rebuild.
+    paths: ['backend/whisper/transcribe.py', 'backend/whisper/Dockerfile', 'backend/whisper/verify_pins.py']
   workflow_dispatch:
 
 permissions:

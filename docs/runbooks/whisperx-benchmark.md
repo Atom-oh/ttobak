@@ -1,8 +1,9 @@
 # WhisperX Diarization Benchmark Runbook
 
-> **Phase 2 landed (2026-09-03)**: the production engine now runs the
-> pyannote 4.x community-1 diarization this runbook benchmarked (legacy
-> ASR stack unchanged, pins locked — see `Dockerfile`'s comment). The
+> **Phase 2 landed (2026-09-03, ADR-035)**: the production engine now runs
+> the pyannote 4.x community-1 diarization this runbook benchmarked
+> (ASR-path packages unchanged and now exact-pinned; torch moved with the
+> pyannote floor — see `backend/whisper/Dockerfile`'s comment). The
 > procedures below remain valid for future engine comparisons; "legacy"
 > descriptions of pyannote 3.1 refer to the pre-Phase-2 state.
 

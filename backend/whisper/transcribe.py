@@ -135,6 +135,12 @@ def _load_wav_waveform(wav_path: str) -> dict:
     import torch
 
     with wave.open(wav_path, "rb") as w:
+        # We wrote this file ourselves (ffmpeg -ar 16000 -ac 1, s16le) --
+        # assert the assumptions the int16 decode below depends on, so a
+        # future ffmpeg-flag change fails loudly instead of degrading
+        # diarization quality silently through a wrong scale/shape.
+        assert w.getnchannels() == 1, w.getnchannels()
+        assert w.getsampwidth() == 2, w.getsampwidth()
         sample_rate = w.getframerate()
         raw = w.readframes(w.getnframes())
     pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
@@ -144,8 +150,12 @@ def _load_wav_waveform(wav_path: str) -> dict:
 def _turns_from_diarization(diarization) -> list[tuple]:
     """Extracts (start, end, label) turns from a pyannote result. 4.x may
     return a wrapper whose Annotation lives at .speaker_diarization (3.x
-    returned the Annotation itself) -- unwrap defensively so both work."""
+    returned the Annotation itself) -- unwrap defensively so both work.
+    A wrapper carrying an explicit None (no speech found) is a legitimate
+    empty result, not a failure to route through _diarize's except path."""
     annotation = getattr(diarization, "speaker_diarization", diarization)
+    if annotation is None:
+        return []
     return [
         (turn.start, turn.end, label)
         for turn, _, label in annotation.itertracks(yield_label=True)

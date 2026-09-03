@@ -152,6 +152,67 @@ class TestTurnsFromDiarization(unittest.TestCase):
             transcribe._turns_from_diarization(wrapper),
             [(0.0, 2.0, 'SPEAKER_00')])
 
+    def test_wrapper_with_none_annotation_is_empty_not_error(self):
+        # An explicit None (no speech found) is a legitimate empty result --
+        # it must not surface as an AttributeError routed through _diarize's
+        # failure logging.
+        wrapper = types.SimpleNamespace(speaker_diarization=None)
+        self.assertEqual(transcribe._turns_from_diarization(wrapper), [])
+
+
+class TestLoadWavWaveform(unittest.TestCase):
+    """_load_wav_waveform decodes the ffmpeg-written 16kHz mono s16le WAV
+    into the dict pyannote accepts. numpy is real; torch is the import-time
+    stub, so give it a from_numpy that passes the array through."""
+
+    def _write_wav(self, path, channels=1, sampwidth=2, framerate=16000,
+                   samples=(0, 16384, -16384, 32767)):
+        import struct
+        import wave
+        with wave.open(path, 'wb') as w:
+            w.setnchannels(channels)
+            w.setsampwidth(sampwidth)
+            w.setframerate(framerate)
+            frames = b''.join(struct.pack('<h', s) for s in samples)
+            w.writeframes(frames * channels if channels == 1 else frames)
+
+    def _patch_torch(self):
+        class _Tensor:
+            def __init__(self, arr):
+                self.arr = arr
+
+            def unsqueeze(self, dim):
+                self.unsqueezed = dim
+                return self
+
+        torch_stub = types.SimpleNamespace(from_numpy=_Tensor)
+        return mock.patch.dict(sys.modules, {'torch': torch_stub})
+
+    def test_decodes_scale_and_rate(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = f'{d}/t.wav'
+            self._write_wav(path)
+            with self._patch_torch():
+                out = transcribe._load_wav_waveform(path)
+        self.assertEqual(out['sample_rate'], 16000)
+        arr = out['waveform'].arr
+        self.assertEqual(out['waveform'].unsqueezed, 0)
+        self.assertAlmostEqual(float(arr[1]), 0.5, places=3)
+        self.assertAlmostEqual(float(arr[2]), -0.5, places=3)
+        self.assertTrue(abs(float(arr[3])) <= 1.0)
+
+    def test_rejects_unexpected_format_loudly(self):
+        # A future ffmpeg-flag change (stereo, non-16-bit) must fail the
+        # assert, not silently mis-scale the waveform.
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = f'{d}/stereo.wav'
+            self._write_wav(path, channels=2)
+            with self._patch_torch():
+                with self.assertRaises(AssertionError):
+                    transcribe._load_wav_waveform(path)
+
 
 if __name__ == '__main__':
     unittest.main()

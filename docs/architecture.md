@@ -92,7 +92,7 @@ TTOBAK(또박)은 한국어 AI 회의 어시스턴트입니다. 브라우저에�
 → EventBridge → Summarize Lambda → Bedrock Claude → DynamoDB → 프론트엔드 표시
 ```
 
-같은 GPU 클러스터에 기존 파이프라인을 건드리지 않는 additive(추가적) 방식으로 `ttobak-whisperx` ECS 태스크 정의(WhisperX + pyannote 4.x)가 추가되었습니다 — 어떤 파이프라인도 자동으로 호출하지 않는 Phase 1 벤치마크 전용이며 운영자가 수동으로만 실행합니다. 절차는 `docs/runbooks/whisperx-benchmark.md` 참고.
+Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x community-1 모델을 사용합니다(ASR은 기존 faster-whisper 스택을 exact-pin으로 동결한 채 유지 — 벤치 결과 유령 화자 제거의 원천은 whisperx가 아닌 community-1 모델이었음). 같은 GPU 클러스터의 `ttobak-whisperx` ECS 태스크 정의(WhisperX + pyannote 4.x)는 벤치마크 전용으로 남아 있으며 어떤 파이프라인도 자동으로 호출하지 않습니다. 절차는 `docs/runbooks/whisperx-benchmark.md` 참고.
 
 ### CDK 스택 구성
 
@@ -204,7 +204,7 @@ Browser Recording → S3 Upload → EventBridge → Transcribe Lambda → Whispe
 → EventBridge → Summarize Lambda → Bedrock Claude → DynamoDB → Frontend Display
 ```
 
-An additive `ttobak-whisperx` ECS task definition (WhisperX + pyannote 4.x) shares the same GPU cluster without touching the production pipeline above — it is Phase 1 benchmark-only, never invoked automatically, and run manually by operators only. See `docs/runbooks/whisperx-benchmark.md` for the procedure.
+Since Phase 2 (2026-09-03, ADR-035) the production pipeline's diarization runs the pyannote 4.x community-1 model (the ASR stays on the exact-pinned legacy faster-whisper stack — benches showed the phantom-speaker fix came from the model, not whisperx). The `ttobak-whisperx` ECS task definition (WhisperX + pyannote 4.x) on the same GPU cluster remains benchmark-only, never invoked automatically. See `docs/runbooks/whisperx-benchmark.md` for the procedure.
 
 ### CDK Stack Composition
 
