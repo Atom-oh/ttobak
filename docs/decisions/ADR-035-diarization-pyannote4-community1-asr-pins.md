@@ -57,9 +57,13 @@ whisper 유지"였다.
 부분 되돌리기는 동작하지 않는다 — **이 변경의 커밋을 통째로 revert**하는
 것이 유일하게 as-written으로 성립하는 절차다. 이유:
 
-- 번들 키(`whisper-stack.ts`의 `DIARIZATION_S3_KEY`, CDK 하드코딩 — 스택
-  재배포 필요)와 이미지 pin은 함께 움직여야 한다. 4.0.7 코드가 3.1 번들을
-  로드하면(또는 그 반대) config/체크포인트 비호환으로 실패한다.
+- 번들 키와 이미지 pin은 함께 움직여야 한다(4.0.7 코드가 3.1 번들을
+  로드하면, 또는 그 반대면, config/체크포인트 비호환으로 실패한다). 이
+  결정 이후 키의 source of truth는 `transcribe.py`의 in-image 기본값이고
+  CDK는 키를 설정하지 않으므로, 전체 revert는 (a) 이미지 쪽(핀 + in-image
+  기본값 3.1 복원 — deploy-whisper.yml 재빌드)과 (b) CDK 쪽(revert가
+  `whisper-stack.ts`의 3.1 env 라인과 그 시절 가드 테스트를 함께 복원 —
+  deploy-infra.yml 재배포) **둘 다** 실행되어야 완결된다.
 - Dockerfile에서 pyannote/torch pin만 손으로 되돌리면 **빌드가
   `verify_pins.py` 게이트에서 실패한다**(torch 2.8.0+cu128 / torchaudio /
   torchcodec 0.7.0 / pyannote 4.0.7을 하드코딩 검증). torchcodec은 torch
@@ -84,10 +88,17 @@ revert 후에도 이미지 재빌드(deploy-whisper.yml)와 스택 재배포
   배포되므로, merge push에서 deploy-whisper.yml과 deploy-infra.yml이
   병렬로 돌아도 조용한 mismatch 조합이 만들어지지 않는다 — 남는 과도기는
   (a) CDK가 먼저 끝난 경우: 구 이미지 + 구 in-image 기본값(3.1)으로 자기
-  일관, (b) 이미지가 먼저 끝난 경우: 구 CDK env(3.1)가 신 이미지에 남아
-  precheck가 **loud하게** 스킵 — 어느 쪽도 조용히 저하되지 않는다.
+  일관, (b) 이미지가 먼저 끝난 경우: clone-strip이 stale env를 제거해
+  신 이미지가 자신의 in-image 기본값으로 실행 — 역시 자기 일관이다.
   `whisper-stack.test.ts` assertion이 env 재추가를 막고, per-run 실험은
   RunTask env override로 여전히 가능하다(그 경우에도 precheck가 지킨다).
+- **deploy-whisper.yml의 clone-strip**: 이미지 배포 워크플로의 task-def
+  복제 스텝이 복사하는 env에서 `DIARIZATION_S3_KEY`를 제거한다 — 복제
+  스텝은 현재 revision의 env를 통째로 계승하므로, 이 strip이 없으면
+  pre-ADR-035 시절의 stale env가 CDK 배포를 지나서도 살아남아 이미지
+  기본값을 override할 수 있다. 이 strip 덕분에 위 (b)의 "이미지 먼저"
+  과도기도 loud-skip이 아니라 **자기 일관**으로 수렴한다: 어느 워크플로가
+  먼저/나중이든 조용한 mismatch 조합이 존재하지 않는다.
 
 ## Consequences
 

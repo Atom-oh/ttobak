@@ -189,6 +189,13 @@ class TestBundlePyannoteMismatch(unittest.TestCase):
         self.assertIsNone(transcribe._bundle_pyannote_mismatch(
             'models/diarization-20270101.tar.gz', '4.0.7'))
 
+    def test_future_short_generation_still_flagged(self):
+        # diarization-5 on a 4.x runtime is a real generation mismatch, not
+        # a naming scheme to wave through.
+        msg = transcribe._bundle_pyannote_mismatch(
+            'models/pyannote-diarization-5.tar.gz', '4.0.7')
+        self.assertIn('MISMATCH', msg)
+
 
 class TestDiarizeKwargsPassthrough(unittest.TestCase):
     def test_max_speakers_reaches_pipeline_call(self):

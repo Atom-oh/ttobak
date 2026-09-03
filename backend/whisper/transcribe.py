@@ -110,11 +110,12 @@ def _bundle_pyannote_mismatch(bundle_key: str, installed_version: str) -> str | 
     if not m:
         return None
     expected = m.group(1)
-    if expected not in ("3", "4"):
-        # A future naming scheme (e.g. diarization-20270101) is not a
-        # generation marker this check understands -- skip rather than
-        # false-flag it (the docstring's "never block a future bundle
-        # naming scheme" contract).
+    if len(expected) > 2:
+        # A long number (e.g. diarization-20270101) is a date-style naming
+        # scheme, not a generation marker -- skip rather than false-flag it
+        # (the docstring's "never block a future bundle naming scheme"
+        # contract). Short numbers ARE treated as generations, so a future
+        # diarization-5 bundle on a 4.x runtime still trips the check.
         return None
     if installed_major != expected:
         return (f"DIARIZATION BUNDLE/RUNTIME MISMATCH: bundle {bundle_key!r} "
@@ -137,10 +138,11 @@ def _ensure_diarization_model() -> str | None:
         if mismatch:
             print(mismatch)
             return None
-    except Exception:
-        # The precheck must never become its own failure mode -- fall
-        # through to the normal load, whose failure path already logs.
-        pass
+    except Exception as e:
+        # The precheck must never become its own failure mode -- note it
+        # (type-only) and fall through to the normal load, whose failure
+        # path already logs.
+        print(f"Diarization bundle precheck skipped: {type(e).__name__}")
     config_path = os.path.join(DIARIZATION_LOCAL_DIR, "pipeline", "config.yaml")
     if os.path.exists(config_path):
         print("Diarization model already cached locally")

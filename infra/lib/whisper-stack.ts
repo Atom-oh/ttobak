@@ -184,8 +184,9 @@ export class WhisperStack extends cdk.Stack {
         // race on merge pushes (a mismatched pairing degrades diarization
         // to a fallback). Setting it here again would resurrect that race;
         // per-run experiments can still override it via RunTask env.
-        // Rollback: revert the whole ADR-035 commit — a partial pin/key
-        // revert fails the image's verify_pins.py gate (see ADR-035).
+        // Rollback: revert the whole ADR-035 commit — a partial PIN revert
+        // fails the image's verify_pins.py gate; a key-only revert builds
+        // but loud-skips diarization at runtime (see ADR-035 Rollback).
       },
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'whisper',

@@ -75,9 +75,17 @@ class TestLegacyPinLockstep(unittest.TestCase):
     so adding/changing a pin in one file without the other fails a PR."""
 
     def _dockerfile_pins(self) -> dict:
+        # Comment lines are stripped first so a future `pkg==ver` mention in
+        # prose can't inject a phantom pin, and duplicate package names fail
+        # instead of silently last-one-wins.
         with open(LEGACY_DOCKERFILE) as f:
-            text = f.read()
-        return dict(re.findall(r'([A-Za-z0-9_.\-]+)==([A-Za-z0-9+.]+)', text))
+            lines = [ln for ln in f.read().splitlines()
+                     if not ln.lstrip().startswith('#')]
+        pairs = re.findall(r'([A-Za-z0-9_.\-]+)==([A-Za-z0-9+.]+)',
+                           '\n'.join(lines))
+        names = [n for n, _ in pairs]
+        assert len(names) == len(set(names)), f'duplicate pins: {names}'
+        return dict(pairs)
 
     def _verify_pins(self) -> dict:
         import ast
