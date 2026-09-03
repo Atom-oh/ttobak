@@ -121,5 +121,201 @@ class TestSafeDiarize(unittest.TestCase):
         self.assertEqual(result, [(0.0, 1.0, 'SPEAKER_00')])
 
 
+class TestTurnsFromDiarization(unittest.TestCase):
+    """Phase 2 (pyannote 3.x -> 4.x community-1): 4.x may return a result
+    wrapper whose Annotation lives at .speaker_diarization, while 3.x
+    returned the Annotation itself -- _turns_from_diarization must unwrap
+    both shapes (same helper the whisperx bench engine validated)."""
+
+    class _FakeTurn:
+        def __init__(self, start, end):
+            self.start, self.end = start, end
+
+    class _FakeAnnotation:
+        def __init__(self, turns):
+            self._turns = turns
+
+        def itertracks(self, yield_label=False):
+            for start, end, label in self._turns:
+                yield TestTurnsFromDiarization._FakeTurn(start, end), None, label
+
+    def test_3x_annotation_returned_directly(self):
+        ann = self._FakeAnnotation([(0.0, 1.5, 'SPEAKER_00'), (1.5, 3.0, 'SPEAKER_01')])
+        self.assertEqual(
+            transcribe._turns_from_diarization(ann),
+            [(0.0, 1.5, 'SPEAKER_00'), (1.5, 3.0, 'SPEAKER_01')])
+
+    def test_4x_wrapper_unwrapped_via_speaker_diarization(self):
+        ann = self._FakeAnnotation([(0.0, 2.0, 'SPEAKER_00')])
+        wrapper = types.SimpleNamespace(speaker_diarization=ann)
+        self.assertEqual(
+            transcribe._turns_from_diarization(wrapper),
+            [(0.0, 2.0, 'SPEAKER_00')])
+
+    def test_wrapper_with_none_annotation_is_empty_not_error(self):
+        # An explicit None (no speech found) is a legitimate empty result --
+        # it must not surface as an AttributeError routed through _diarize's
+        # failure logging.
+        wrapper = types.SimpleNamespace(speaker_diarization=None)
+        self.assertEqual(transcribe._turns_from_diarization(wrapper), [])
+
+
+class TestBundlePyannoteMismatch(unittest.TestCase):
+    """ADR-035 deploy-ordering guard: a half-deployed state (new image +
+    old bundle, or the reverse) must produce one loud line and a skip, not
+    a swallowed config-incompatibility inside _diarize."""
+
+    def test_matching_pairs_pass(self):
+        for key, ver in (('models/whisperx-diarization-4.x.tar.gz', '4.0.7'),
+                         ('models/pyannote-diarization-3.1.tar.gz', '3.4.0')):
+            self.assertIsNone(
+                transcribe._bundle_pyannote_mismatch(key, ver), msg=key)
+
+    def test_mismatched_pairs_flagged_both_directions(self):
+        msg = transcribe._bundle_pyannote_mismatch(
+            'models/pyannote-diarization-3.1.tar.gz', '4.0.7')
+        self.assertIn('MISMATCH', msg)
+        msg = transcribe._bundle_pyannote_mismatch(
+            'models/whisperx-diarization-4.x.tar.gz', '3.4.0')
+        self.assertIn('MISMATCH', msg)
+        self.assertIn('ADR-035', msg)
+
+    def test_unrecognized_key_skips_check(self):
+        # No marker at all, and a numeric marker outside the known
+        # generations (a future date-based scheme) — both skip, never
+        # false-flag.
+        self.assertIsNone(transcribe._bundle_pyannote_mismatch(
+            'models/some-future-bundle.tar.gz', '4.0.7'))
+        self.assertIsNone(transcribe._bundle_pyannote_mismatch(
+            'models/diarization-20270101.tar.gz', '4.0.7'))
+
+    def test_future_short_generation_still_flagged(self):
+        # diarization-5 on a 4.x runtime is a real generation mismatch, not
+        # a naming scheme to wave through.
+        msg = transcribe._bundle_pyannote_mismatch(
+            'models/pyannote-diarization-5.tar.gz', '4.0.7')
+        self.assertIn('MISMATCH', msg)
+
+
+class TestDiarizeKwargsPassthrough(unittest.TestCase):
+    def test_max_speakers_reaches_pipeline_call(self):
+        # NUM_SPEAKERS flows as max_speakers; if a pyannote major ever
+        # rejects that kwarg it becomes a swallowed TypeError -> [] only on
+        # meetings WITH Participants set — a nasty partial regression. Pin
+        # the passthrough with a stub Pipeline.
+        captured = {}
+
+        class FakePipeline:
+            @staticmethod
+            def from_pretrained(config_path):
+                return FakePipeline()
+
+            def to(self, device):
+                return self
+
+            def __call__(self, waveform, **kwargs):
+                captured.update(kwargs)
+                return types.SimpleNamespace(speaker_diarization=None)
+
+        fake_torch = types.ModuleType('torch')
+        fake_torch.device = lambda name: name
+        fake_pa = types.ModuleType('pyannote.audio')
+        fake_pa.Pipeline = FakePipeline
+        fake_pyannote = types.ModuleType('pyannote')
+        fake_pyannote.audio = fake_pa
+        modules = {'torch': fake_torch, 'pyannote': fake_pyannote,
+                   'pyannote.audio': fake_pa}
+        with mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(transcribe, '_load_wav_waveform',
+                                  return_value={'waveform': 'W',
+                                                'sample_rate': 16000}):
+            out = transcribe._diarize('config.yaml', '/tmp/a.wav', 5)
+        self.assertEqual(out, [])  # None annotation -> legitimate empty
+        self.assertEqual(captured, {'max_speakers': 5})
+
+
+class TestLoadWavWaveform(unittest.TestCase):
+    """_load_wav_waveform decodes the ffmpeg-written 16kHz mono s16le WAV
+    into the dict pyannote accepts. numpy and torch are NOT installed on
+    the CI runner (test_transcribe_whisperx stubs them for the same helper
+    — that precedent is the contract), so both are stubbed here too; the
+    numeric int16->float32 scale is exercised in the container, not here."""
+
+    def _write_wav(self, path, channels=1, sampwidth=2, framerate=16000,
+                   samples=(0, 16384, -16384, 32767)):
+        import struct
+        import wave
+        with wave.open(path, 'wb') as w:
+            w.setnchannels(channels)
+            w.setsampwidth(sampwidth)
+            w.setframerate(framerate)
+            frames = b''.join(struct.pack('<h', s) for s in samples)
+            # `samples` is a flat sample list: for stereo, 4 samples = 2
+            # frames; for mono, duplicate nothing. writeframes just needs
+            # a whole number of frames either way.
+            w.writeframes(frames)
+
+    def _patch_np_torch(self, captured):
+        class FakeArr:
+            def __init__(self, raw):
+                self.raw = raw
+
+            def astype(self, dtype):
+                return self
+
+            def __itruediv__(self, other):
+                # transcribe uses in-place division (avoids a second float32
+                # copy of the waveform) — capture the scale here.
+                captured['divisor'] = other
+                return self
+
+        class FakeTensor:
+            def unsqueeze(self, dim):
+                assert dim == 0
+                return 'TENSOR'
+
+        fake_np = types.ModuleType('numpy')
+        fake_np.int16 = 'int16'
+        fake_np.float32 = 'float32'
+
+        def frombuffer(raw, dtype):
+            captured['raw_len'] = len(raw)
+            captured['dtype'] = dtype
+            return FakeArr(raw)
+
+        fake_np.frombuffer = frombuffer
+        fake_torch = types.ModuleType('torch')
+        fake_torch.from_numpy = lambda arr: FakeTensor()
+        return mock.patch.dict(sys.modules, {'numpy': fake_np, 'torch': fake_torch})
+
+    def test_decodes_rate_bytes_and_scale_divisor(self):
+        import tempfile
+        captured = {}
+        with tempfile.TemporaryDirectory() as d:
+            path = f'{d}/t.wav'
+            self._write_wav(path)
+            with self._patch_np_torch(captured):
+                out = transcribe._load_wav_waveform(path)
+        self.assertEqual(out['sample_rate'], 16000)
+        self.assertEqual(out['waveform'], 'TENSOR')
+        self.assertEqual(captured['raw_len'], 8)  # 4 samples * 2 bytes
+        self.assertEqual(captured['dtype'], 'int16')
+        self.assertEqual(captured['divisor'], 32768.0)
+
+    def test_rejects_unexpected_format_loudly(self):
+        # A future ffmpeg-flag change (stereo, non-16-bit) must raise an
+        # explicit ValueError (before any numpy use; survives -O, unlike a
+        # bare assert), not silently mis-scale the waveform.
+        import tempfile
+        captured = {}
+        with tempfile.TemporaryDirectory() as d:
+            path = f'{d}/stereo.wav'
+            self._write_wav(path, channels=2)
+            with self._patch_np_torch(captured):
+                with self.assertRaises(ValueError):
+                    transcribe._load_wav_waveform(path)
+        self.assertNotIn('raw_len', captured)
+
+
 if __name__ == '__main__':
     unittest.main()

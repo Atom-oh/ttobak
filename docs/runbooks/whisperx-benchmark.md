@@ -1,5 +1,16 @@
 # WhisperX Diarization Benchmark Runbook
 
+> **Phase 2 landed (2026-09-03, ADR-035)**: the production engine now runs
+> the pyannote 4.x community-1 diarization this runbook benchmarked
+> (ASR-path packages unchanged and now exact-pinned; torch moved with the
+> pyannote floor — see `backend/whisper/Dockerfile`'s comment). The
+> procedures below remain valid for future engine comparisons; "legacy"
+> descriptions of pyannote 3.1 refer to the pre-Phase-2 state. NOTE: a
+> fresh §3 run of `ttobak-whisper` now produces community-1 output — its
+> `SUFFIX=legacy` label no longer means "3.1 baseline". To reproduce a
+> true 3.1 baseline, run a pre-Phase-2 task-definition revision (or the
+> pre-Phase-2 image tag) and record the row as historical.
+
 Phase 1 benchmark procedure for comparing the legacy Whisper+pyannote 3.1 pipeline
 (task def `ttobak-whisper`, container `whisper`) against the WhisperX+pyannote 4.x
 pipeline (task def `ttobak-whisperx`, container `whisperx`) on real, already-`done`

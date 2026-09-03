@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,7 +20,16 @@ TABLE = os.environ["TABLE_NAME"]
 VOCAB_KEY = os.environ.get("VOCAB_KEY", "config/custom-vocabulary.txt")
 MODEL_S3_KEY = os.environ.get("MODEL_S3_KEY", "models/faster-whisper-large-v3.tar.gz")
 MODEL_LOCAL_DIR = "/tmp/whisper-model"
-DIARIZATION_S3_KEY = os.environ.get("DIARIZATION_S3_KEY", "models/pyannote-diarization-3.1.tar.gz")
+# Phase 2 (2026-09-03): diarization upgraded to pyannote 4.x community-1 --
+# the a435a3dc/3804e0f5 benches showed the community-1 MODEL (not whisperx)
+# is what fixes phantom speakers (legacy 8-with-phantoms -> 4 clean, matching
+# operator-confirmed ground truth). Same self-contained bundle the whisperx
+# bench image stages. This in-image default is the key's SOURCE OF TRUTH
+# (ADR-035): the CDK task definition deliberately does not set it, so the
+# bundle generation always ships atomically with this image's pyannote pin.
+# The 3.1 bundle stays in S3, but rolling back means reverting the whole
+# ADR-035 commit and rebuilding -- not editing env or this line alone.
+DIARIZATION_S3_KEY = os.environ.get("DIARIZATION_S3_KEY", "models/whisperx-diarization-4.x.tar.gz")
 DIARIZATION_LOCAL_DIR = "/tmp/diarization-model"
 
 # Audio discovery filters — exclude empty/placeholder uploads and progress/checkpoint sidecars.
@@ -82,10 +92,57 @@ def _ensure_model() -> str:
     return MODEL_LOCAL_DIR
 
 
+def _bundle_pyannote_mismatch(bundle_key: str, installed_version: str) -> str | None:
+    """Returns an operator-facing error line if the diarization bundle's
+    generation (from its key name) can't work with the installed
+    pyannote.audio major, else None. Pure and unit-testable.
+
+    Why (ADR-035): the bundle key is image-owned (the CDK task definition
+    deliberately doesn't set it), but a stale pre-ADR-035 env on an old
+    task-def revision or a per-run RunTask override can still pair a 4.x
+    runtime with the 3.1 bundle (or the reverse). Loading such a pair fails
+    config-incompatible and _diarize would swallow it into a silent
+    unlabeled fallback; this precheck turns that into one loud, greppable
+    line naming both sides. Keys without a recognizable generation marker
+    skip the check (never block a future bundle naming scheme)."""
+    installed_major = installed_version.split(".")[0]
+    m = re.search(r"diarization-(\d+)", bundle_key.rsplit("/", 1)[-1])
+    if not m:
+        return None
+    expected = m.group(1)
+    if len(expected) > 2:
+        # A long number (e.g. diarization-20270101) is a date-style naming
+        # scheme, not a generation marker -- skip rather than false-flag it
+        # (the docstring's "never block a future bundle naming scheme"
+        # contract). Short numbers ARE treated as generations, so a future
+        # diarization-5 bundle on a 4.x runtime still trips the check.
+        return None
+    if installed_major != expected:
+        return (f"DIARIZATION BUNDLE/RUNTIME MISMATCH: bundle {bundle_key!r} "
+                f"expects pyannote.audio {expected}.x but {installed_version} "
+                f"is installed -- check for a stale DIARIZATION_S3_KEY env "
+                f"or RunTask override (ADR-035); skipping diarization")
+    return None
+
+
 def _ensure_diarization_model() -> str | None:
     """Returns the local pipeline config.yaml path, or None if the S3 bundle
-    is missing/unreadable. Diarization is best-effort: transcription must
-    never fail because the diarization bundle isn't there yet."""
+    is missing/unreadable or generation-incompatible with the installed
+    pyannote (see _bundle_pyannote_mismatch). Diarization is best-effort:
+    transcription must never fail because the diarization bundle isn't
+    there yet."""
+    try:
+        import importlib.metadata as _md
+        mismatch = _bundle_pyannote_mismatch(
+            DIARIZATION_S3_KEY, _md.version("pyannote.audio"))
+        if mismatch:
+            print(mismatch)
+            return None
+    except Exception as e:
+        # The precheck must never become its own failure mode -- note it
+        # (type-only) and fall through to the normal load, whose failure
+        # path already logs.
+        print(f"Diarization bundle precheck skipped: {type(e).__name__}")
     config_path = os.path.join(DIARIZATION_LOCAL_DIR, "pipeline", "config.yaml")
     if os.path.exists(config_path):
         print("Diarization model already cached locally")
@@ -114,10 +171,67 @@ def _to_mono16k_wav(input_path: str) -> str:
     return wav_path
 
 
+class WavFormatError(ValueError):
+    """Raised only by _load_wav_waveform's own format check -- the message
+    is built exclusively from WAV header numbers (channel count, sample
+    width), never file content, so _diarize may safely log it verbatim
+    where library exceptions get type-only treatment."""
+
+
+def _load_wav_waveform(wav_path: str) -> dict:
+    """Reads the 16kHz mono s16le WAV _to_mono16k_wav just wrote into the
+    in-memory {'waveform': (channel, time) tensor, 'sample_rate': int} dict
+    pyannote accepts. This BYPASSES pyannote 4.x's torchcodec decoding path
+    entirely -- torchcodec's FFmpeg-6 variant needs libpython3.12.so.1.0
+    (the Dockerfile installs it as belt-and-suspenders), and passing a
+    preloaded waveform is pyannote's own documented workaround, proven in
+    the whisperx bench image (transcribe_whisperx.py has the same helper).
+    stdlib `wave` suffices because we control the format (ffmpeg -ar 16000
+    -ac 1)."""
+    import wave
+
+    import numpy as np
+    import torch
+
+    with wave.open(wav_path, "rb") as w:
+        # We wrote this file ourselves (ffmpeg -ar 16000 -ac 1, s16le) --
+        # verify the assumptions the int16 decode below depends on with an
+        # explicit raise (a bare assert would vanish under -O, and the
+        # numbers are format facts, not PII), so a future ffmpeg-flag
+        # change surfaces as a distinct error line via _diarize's handler
+        # instead of degrading quality through a wrong scale/shape.
+        if w.getnchannels() != 1 or w.getsampwidth() != 2:
+            raise WavFormatError(
+                f"unexpected WAV format for diarization: channels="
+                f"{w.getnchannels()} sampwidth={w.getsampwidth()} "
+                f"(expected mono s16le)")
+        sample_rate = w.getframerate()
+        raw = w.readframes(w.getnframes())
+    pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+    pcm /= 32768.0  # in-place: avoids a second float32 copy of the waveform
+    return {"waveform": torch.from_numpy(pcm).unsqueeze(0), "sample_rate": sample_rate}
+
+
+def _turns_from_diarization(diarization) -> list[tuple]:
+    """Extracts (start, end, label) turns from a pyannote result. 4.x may
+    return a wrapper whose Annotation lives at .speaker_diarization (3.x
+    returned the Annotation itself) -- unwrap defensively so both work.
+    A wrapper carrying an explicit None (no speech found) is a legitimate
+    empty result, not a failure to route through _diarize's except path."""
+    annotation = getattr(diarization, "speaker_diarization", diarization)
+    if annotation is None:
+        return []
+    return [
+        (turn.start, turn.end, label)
+        for turn, _, label in annotation.itertracks(yield_label=True)
+    ]
+
+
 def _diarize(config_path: str, wav_path: str, num_speakers: int | None):
-    """Runs pyannote diarization. Returns a list of (start, end, label)
-    turns, or [] if diarization fails for any reason (caller falls back to
-    unlabeled segments -- never let this abort the transcription)."""
+    """Runs pyannote (4.x community-1) diarization. Returns a list of
+    (start, end, label) turns, or [] if diarization fails for any reason
+    (caller falls back to unlabeled segments -- never let this abort the
+    transcription)."""
     try:
         import torch
         from pyannote.audio import Pipeline
@@ -129,13 +243,22 @@ def _diarize(config_path: str, wav_path: str, num_speakers: int | None):
         # within) rather than num_speakers (which would force exactly that many
         # clusters and over-split when fewer people actually spoke).
         kwargs = {"max_speakers": num_speakers} if num_speakers else {}
-        diarization = pipeline(wav_path, **kwargs)
-        return [
-            (turn.start, turn.end, label)
-            for turn, _, label in diarization.itertracks(yield_label=True)
-        ]
+        diarization = pipeline(_load_wav_waveform(wav_path), **kwargs)
+        return _turns_from_diarization(diarization)
+    except WavFormatError as e:
+        # Our own exception, message safe-by-construction (header numbers
+        # only) -- print it verbatim so the ffmpeg-flag regression it exists
+        # to catch is actually diagnosable from the log.
+        print(f"Diarization skipped: {e}")
+        return []
     except Exception as e:
-        print(f"Diarization failed, falling back to unlabeled segments: {e}")
+        # Type-only logging: a library exception's str() can embed transcript
+        # fragments or file metadata, and this log group retains entries --
+        # same PII rule the whisperx bench engine follows. The module path
+        # is kept for diagnosability (it distinguishes a pyannote config
+        # error from a torch/CUDA one without any message content).
+        print(f"Diarization failed, falling back to unlabeled segments: "
+              f"{type(e).__module__}.{type(e).__name__}")
         return []
 
 
@@ -149,7 +272,13 @@ def _safe_diarize(config_path: str, local_path: str, num_speakers: int | None) -
         wav_path = _to_mono16k_wav(local_path)
         return _diarize(config_path, wav_path, num_speakers)
     except Exception as e:
-        print(f"Audio conversion for diarization failed, skipping diarization: {e}")
+        # Type-only: ffmpeg's failure output embeds container/file metadata
+        # (meeting PII) -- log module+class and the non-PII returncode (when
+        # present), never the message. Same rule as _diarize's handler.
+        returncode = getattr(e, "returncode", None)
+        rc = f" (rc={returncode})" if returncode is not None else ""
+        print(f"Audio conversion for diarization failed, skipping "
+              f"diarization: {type(e).__module__}.{type(e).__name__}{rc}")
         return []
 
 
