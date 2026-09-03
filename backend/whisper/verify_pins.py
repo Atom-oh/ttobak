@@ -21,13 +21,15 @@ def fail(msg: str) -> None:
 # cu128 wheel with a same-version +cpu / default-PyPI wheel, which would
 # only surface at GPU-task runtime as a swallowed _diarize failure
 # (silent unlabeled fallback) -- exactly what this gate exists to prevent.
-if not torch.__version__.startswith("2.8.0"):
-    fail(f"torch version moved: {torch.__version__}")
+if torch.__version__ != "2.8.0+cu128":
+    fail(f"torch moved: {torch.__version__!r} (want exactly '2.8.0+cu128' -- "
+         f"version AND local wheel label)")
 if torch.version.cuda != "12.8":
     fail(f"torch CUDA variant moved: cuda={torch.version.cuda!r} "
          f"(want 12.8 / the cu128 wheel)")
 
 PINS = (
+    ("torchaudio", "2.8.0+cu128"),
     ("faster-whisper", "1.2.1"),
     ("ctranslate2", "4.8.1"),
     ("onnxruntime", "1.29.0"),

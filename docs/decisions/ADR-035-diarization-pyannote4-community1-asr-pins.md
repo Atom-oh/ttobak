@@ -54,14 +54,31 @@ whisper 유지"였다.
 
 ## Rollback
 
-번들 키와 이미지 pin은 **함께** 롤백해야 한다: `whisper-stack.ts`의
-`DIARIZATION_S3_KEY`를 `models/pyannote-diarization-3.1.tar.gz`로 되돌리는
-것(CDK 하드코딩 값 — 스택 재배포 필요)만으로는 부족하고, Dockerfile의
-`pyannote.audio==4.0.7`/torch 2.8 pin도 함께 되돌려 이미지를 재빌드해야
-한다. 4.0.7 코드가 3.1 번들을 로드하면(또는 그 반대) config/체크포인트
-비호환으로 실패하고 `_diarize`가 예외를 삼켜 **unlabeled fallback으로
-조용히 저하**되기 때문이다. 배포 순서 주의사항은 INFRA-SPEC §7과 runbook을
-따른다.
+부분 되돌리기는 동작하지 않는다 — **이 변경의 커밋을 통째로 revert**하는
+것이 유일하게 as-written으로 성립하는 절차다. 이유:
+
+- 번들 키(`whisper-stack.ts`의 `DIARIZATION_S3_KEY`, CDK 하드코딩 — 스택
+  재배포 필요)와 이미지 pin은 함께 움직여야 한다. 4.0.7 코드가 3.1 번들을
+  로드하면(또는 그 반대) config/체크포인트 비호환으로 실패한다.
+- Dockerfile에서 pyannote/torch pin만 손으로 되돌리면 **빌드가
+  `verify_pins.py` 게이트에서 실패한다**(torch 2.8.0+cu128 / torchaudio /
+  torchcodec 0.7.0 / pyannote 4.0.7을 하드코딩 검증). torchcodec은 torch
+  버전에 하드커플이라 torch를 2.5로 내리면 함께 내려야 한다. 커밋 revert는
+  verify_pins.py와 pin 세트를 원자적으로 함께 되돌리므로 이 함정이 없다.
+
+revert 후에도 이미지 재빌드(deploy-whisper.yml)와 스택 재배포
+(deploy-infra.yml)를 연속 실행해야 한다 — 한쪽만 롤백된 기간의 mismatch
+동작은 아래 Consequences 참조.
+
+## 강제 수단 (이 결정과 함께 추가됨)
+
+- `backend/whisper/verify_pins.py` — 빌드 시 이미지 안에서 모든 pin
+  (torch의 버전+cu128 variant 포함)을 검증, 하나라도 이동하면 빌드 실패.
+- `transcribe.py`의 `_bundle_pyannote_mismatch` — 런타임에 번들 키의 세대
+  표기와 설치된 pyannote major를 대조, 불일치 시 양쪽을 명시한 grep 가능한
+  한 줄을 남기고 diarization을 스킵. **새 이미지 방향만 커버한다**: 구
+  이미지(3.4) + 신 번들 조합은 precheck가 없어 여전히 조용한 fallback이다
+  — 배포 순서(이미지 먼저, env 다음)가 그 방향을 피하는 이유.
 
 ## Consequences
 

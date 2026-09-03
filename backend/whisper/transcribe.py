@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -23,7 +24,9 @@ MODEL_LOCAL_DIR = "/tmp/whisper-model"
 # the a435a3dc/3804e0f5 benches showed the community-1 MODEL (not whisperx)
 # is what fixes phantom speakers (legacy 8-with-phantoms -> 4 clean, matching
 # operator-confirmed ground truth). Same self-contained bundle the whisperx
-# bench image stages; the 3.1 bundle stays in S3 for rollback via this env var.
+# bench image stages. The 3.1 bundle stays in S3 for rollback, but this
+# value is CDK-hardcoded (whisper-stack.ts) and pin-coupled to the image --
+# rolling back means reverting the whole ADR-035 commit, not editing env.
 DIARIZATION_S3_KEY = os.environ.get("DIARIZATION_S3_KEY", "models/whisperx-diarization-4.x.tar.gz")
 DIARIZATION_LOCAL_DIR = "/tmp/diarization-model"
 
@@ -99,15 +102,15 @@ def _bundle_pyannote_mismatch(bundle_key: str, installed_version: str) -> str | 
     config-incompatible and _diarize would swallow it into a silent
     unlabeled fallback; this precheck turns that into one loud, greppable
     line naming both sides. Keys without a recognizable generation marker
-    skip the check (never block a future bundle naming scheme)."""
+    skip the check (never block a future bundle naming scheme). Coverage
+    is one-directional by nature: only an image carrying this code can
+    run it, so an OLD image + new bundle still degrades silently -- which
+    is why the deploy order is image first, env second (ADR-035)."""
     installed_major = installed_version.split(".")[0]
-    key = bundle_key.rsplit("/", 1)[-1]
-    if "diarization-4" in key:
-        expected = "4"
-    elif "diarization-3" in key:
-        expected = "3"
-    else:
+    m = re.search(r"diarization-(\d+)", bundle_key.rsplit("/", 1)[-1])
+    if not m:
         return None
+    expected = m.group(1)
     if installed_major != expected:
         return (f"DIARIZATION BUNDLE/RUNTIME MISMATCH: bundle {bundle_key!r} "
                 f"expects pyannote.audio {expected}.x but {installed_version} "
@@ -244,9 +247,12 @@ def _safe_diarize(config_path: str, local_path: str, num_speakers: int | None) -
         return _diarize(config_path, wav_path, num_speakers)
     except Exception as e:
         # Type-only: ffmpeg's failure output embeds container/file metadata
-        # (meeting PII) -- log the class, not the message.
+        # (meeting PII) -- log module+class and the non-PII returncode (when
+        # present), never the message. Same rule as _diarize's handler.
+        returncode = getattr(e, "returncode", None)
+        rc = f" (rc={returncode})" if returncode is not None else ""
         print(f"Audio conversion for diarization failed, skipping "
-              f"diarization: {type(e).__name__}")
+              f"diarization: {type(e).__module__}.{type(e).__name__}{rc}")
         return []
 
 

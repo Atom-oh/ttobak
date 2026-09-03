@@ -52,9 +52,10 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 
 # Build fails loudly if any pin above didn't survive dependency resolution
 # (e.g. a floating transitive dep replacing the cu128 torch), plus a full
-# `pip check` for metadata-level conflicts.
+# `pip check` for metadata-level conflicts. (The verifier file itself stays
+# in its COPY layer regardless -- no rm here, it wouldn't shrink the image.)
 COPY verify_pins.py /tmp/verify_pins.py
-RUN python3 /tmp/verify_pins.py && pip3 check && rm /tmp/verify_pins.py
+RUN python3 /tmp/verify_pins.py && pip3 check
 
 # Whisper + diarization models are loaded from S3 at runtime (~30s same-region
 # transfer each). Keeps the image itself free of model weights and allows
