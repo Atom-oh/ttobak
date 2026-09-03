@@ -3,12 +3,30 @@
 Fails the docker build if any exact-pinned package didn't survive pip's
 dependency resolution -- the guard that makes "pins must not move" a loud
 invariant instead of a comment. Keep this list in lockstep with the
-Dockerfile's pip install pins."""
+Dockerfile's pip install pins.
+
+Deliberately raises SystemExit rather than using bare asserts: a build
+gate must not be silently disabled by PYTHONOPTIMIZE/-O ever reaching the
+invocation."""
 import importlib.metadata as md
 
 import torch
 
-assert torch.__version__.startswith("2.8.0"), f"torch moved: {torch.__version__}"
+
+def fail(msg: str) -> None:
+    raise SystemExit(f"PIN VERIFICATION FAILED: {msg}")
+
+
+# Version AND CUDA variant: a floating transitive dep could replace the
+# cu128 wheel with a same-version +cpu / default-PyPI wheel, which would
+# only surface at GPU-task runtime as a swallowed _diarize failure
+# (silent unlabeled fallback) -- exactly what this gate exists to prevent.
+if not torch.__version__.startswith("2.8.0"):
+    fail(f"torch version moved: {torch.__version__}")
+if torch.version.cuda != "12.8":
+    fail(f"torch CUDA variant moved: cuda={torch.version.cuda!r} "
+         f"(want 12.8 / the cu128 wheel)")
+
 PINS = (
     ("faster-whisper", "1.2.1"),
     ("ctranslate2", "4.8.1"),
@@ -21,5 +39,6 @@ PINS = (
 )
 for pkg, want in PINS:
     got = md.version(pkg)
-    assert got == want, f"{pkg} moved: {got} != {want}"
-print("pins verified")
+    if got != want:
+        fail(f"{pkg} moved: {got} != {want}")
+print("pins verified (incl. torch cu128 variant)")

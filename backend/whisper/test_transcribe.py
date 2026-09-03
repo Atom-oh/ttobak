@@ -160,10 +160,37 @@ class TestTurnsFromDiarization(unittest.TestCase):
         self.assertEqual(transcribe._turns_from_diarization(wrapper), [])
 
 
+class TestBundlePyannoteMismatch(unittest.TestCase):
+    """ADR-035 deploy-ordering guard: a half-deployed state (new image +
+    old bundle, or the reverse) must produce one loud line and a skip, not
+    a swallowed config-incompatibility inside _diarize."""
+
+    def test_matching_pairs_pass(self):
+        for key, ver in (('models/whisperx-diarization-4.x.tar.gz', '4.0.7'),
+                         ('models/pyannote-diarization-3.1.tar.gz', '3.4.0')):
+            self.assertIsNone(
+                transcribe._bundle_pyannote_mismatch(key, ver), msg=key)
+
+    def test_mismatched_pairs_flagged_both_directions(self):
+        msg = transcribe._bundle_pyannote_mismatch(
+            'models/pyannote-diarization-3.1.tar.gz', '4.0.7')
+        self.assertIn('MISMATCH', msg)
+        msg = transcribe._bundle_pyannote_mismatch(
+            'models/whisperx-diarization-4.x.tar.gz', '3.4.0')
+        self.assertIn('MISMATCH', msg)
+        self.assertIn('ADR-035', msg)
+
+    def test_unrecognized_key_skips_check(self):
+        self.assertIsNone(transcribe._bundle_pyannote_mismatch(
+            'models/some-future-bundle.tar.gz', '4.0.7'))
+
+
 class TestLoadWavWaveform(unittest.TestCase):
     """_load_wav_waveform decodes the ffmpeg-written 16kHz mono s16le WAV
-    into the dict pyannote accepts. numpy is real; torch is the import-time
-    stub, so give it a from_numpy that passes the array through."""
+    into the dict pyannote accepts. numpy and torch are NOT installed on
+    the CI runner (test_transcribe_whisperx stubs them for the same helper
+    — that precedent is the contract), so both are stubbed here too; the
+    numeric int16->float32 scale is exercised in the container, not here."""
 
     def _write_wav(self, path, channels=1, sampwidth=2, framerate=16000,
                    samples=(0, 16384, -16384, 32767)):
@@ -174,44 +201,69 @@ class TestLoadWavWaveform(unittest.TestCase):
             w.setsampwidth(sampwidth)
             w.setframerate(framerate)
             frames = b''.join(struct.pack('<h', s) for s in samples)
-            w.writeframes(frames * channels if channels == 1 else frames)
+            # `samples` is a flat sample list: for stereo, 4 samples = 2
+            # frames; for mono, duplicate nothing. writeframes just needs
+            # a whole number of frames either way.
+            w.writeframes(frames)
 
-    def _patch_torch(self):
-        class _Tensor:
-            def __init__(self, arr):
-                self.arr = arr
+    def _patch_np_torch(self, captured):
+        class FakeArr:
+            def __init__(self, raw):
+                self.raw = raw
 
-            def unsqueeze(self, dim):
-                self.unsqueezed = dim
+            def astype(self, dtype):
                 return self
 
-        torch_stub = types.SimpleNamespace(from_numpy=_Tensor)
-        return mock.patch.dict(sys.modules, {'torch': torch_stub})
+            def __truediv__(self, other):
+                captured['divisor'] = other
+                return self
 
-    def test_decodes_scale_and_rate(self):
+        class FakeTensor:
+            def unsqueeze(self, dim):
+                assert dim == 0
+                return 'TENSOR'
+
+        fake_np = types.ModuleType('numpy')
+        fake_np.int16 = 'int16'
+        fake_np.float32 = 'float32'
+
+        def frombuffer(raw, dtype):
+            captured['raw_len'] = len(raw)
+            captured['dtype'] = dtype
+            return FakeArr(raw)
+
+        fake_np.frombuffer = frombuffer
+        fake_torch = types.ModuleType('torch')
+        fake_torch.from_numpy = lambda arr: FakeTensor()
+        return mock.patch.dict(sys.modules, {'numpy': fake_np, 'torch': fake_torch})
+
+    def test_decodes_rate_bytes_and_scale_divisor(self):
         import tempfile
+        captured = {}
         with tempfile.TemporaryDirectory() as d:
             path = f'{d}/t.wav'
             self._write_wav(path)
-            with self._patch_torch():
+            with self._patch_np_torch(captured):
                 out = transcribe._load_wav_waveform(path)
         self.assertEqual(out['sample_rate'], 16000)
-        arr = out['waveform'].arr
-        self.assertEqual(out['waveform'].unsqueezed, 0)
-        self.assertAlmostEqual(float(arr[1]), 0.5, places=3)
-        self.assertAlmostEqual(float(arr[2]), -0.5, places=3)
-        self.assertTrue(abs(float(arr[3])) <= 1.0)
+        self.assertEqual(out['waveform'], 'TENSOR')
+        self.assertEqual(captured['raw_len'], 8)  # 4 samples * 2 bytes
+        self.assertEqual(captured['dtype'], 'int16')
+        self.assertEqual(captured['divisor'], 32768.0)
 
     def test_rejects_unexpected_format_loudly(self):
         # A future ffmpeg-flag change (stereo, non-16-bit) must fail the
-        # assert, not silently mis-scale the waveform.
+        # format assert (which runs before any numpy use), not silently
+        # mis-scale the waveform.
         import tempfile
+        captured = {}
         with tempfile.TemporaryDirectory() as d:
             path = f'{d}/stereo.wav'
             self._write_wav(path, channels=2)
-            with self._patch_torch():
+            with self._patch_np_torch(captured):
                 with self.assertRaises(AssertionError):
                     transcribe._load_wav_waveform(path)
+        self.assertNotIn('raw_len', captured)
 
 
 if __name__ == '__main__':

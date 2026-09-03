@@ -87,10 +87,52 @@ def _ensure_model() -> str:
     return MODEL_LOCAL_DIR
 
 
+def _bundle_pyannote_mismatch(bundle_key: str, installed_version: str) -> str | None:
+    """Returns an operator-facing error line if the diarization bundle's
+    generation (from its key name) can't work with the installed
+    pyannote.audio major, else None. Pure and unit-testable.
+
+    Why (ADR-035): the bundle key ships via CDK (deploy-infra.yml) and the
+    pyannote pin ships via the image (deploy-whisper.yml) -- two
+    uncoordinated workflows, so a half-deployed state pairs a 4.x runtime
+    with the 3.1 bundle (or the reverse). Loading such a pair fails
+    config-incompatible and _diarize would swallow it into a silent
+    unlabeled fallback; this precheck turns that into one loud, greppable
+    line naming both sides. Keys without a recognizable generation marker
+    skip the check (never block a future bundle naming scheme)."""
+    installed_major = installed_version.split(".")[0]
+    key = bundle_key.rsplit("/", 1)[-1]
+    if "diarization-4" in key:
+        expected = "4"
+    elif "diarization-3" in key:
+        expected = "3"
+    else:
+        return None
+    if installed_major != expected:
+        return (f"DIARIZATION BUNDLE/RUNTIME MISMATCH: bundle {bundle_key!r} "
+                f"expects pyannote.audio {expected}.x but {installed_version} "
+                f"is installed -- image and task-def env must roll together "
+                f"(ADR-035); skipping diarization")
+    return None
+
+
 def _ensure_diarization_model() -> str | None:
     """Returns the local pipeline config.yaml path, or None if the S3 bundle
-    is missing/unreadable. Diarization is best-effort: transcription must
-    never fail because the diarization bundle isn't there yet."""
+    is missing/unreadable or generation-incompatible with the installed
+    pyannote (see _bundle_pyannote_mismatch). Diarization is best-effort:
+    transcription must never fail because the diarization bundle isn't
+    there yet."""
+    try:
+        import importlib.metadata as _md
+        mismatch = _bundle_pyannote_mismatch(
+            DIARIZATION_S3_KEY, _md.version("pyannote.audio"))
+        if mismatch:
+            print(mismatch)
+            return None
+    except Exception:
+        # The precheck must never become its own failure mode -- fall
+        # through to the normal load, whose failure path already logs.
+        pass
     config_path = os.path.join(DIARIZATION_LOCAL_DIR, "pipeline", "config.yaml")
     if os.path.exists(config_path):
         print("Diarization model already cached locally")
@@ -183,9 +225,11 @@ def _diarize(config_path: str, wav_path: str, num_speakers: int | None):
     except Exception as e:
         # Type-only logging: a library exception's str() can embed transcript
         # fragments or file metadata, and this log group retains entries --
-        # same PII rule the whisperx bench engine follows.
+        # same PII rule the whisperx bench engine follows. The module path
+        # is kept for diagnosability (it distinguishes a pyannote config
+        # error from a torch/CUDA one without any message content).
         print(f"Diarization failed, falling back to unlabeled segments: "
-              f"{type(e).__name__}")
+              f"{type(e).__module__}.{type(e).__name__}")
         return []
 
 

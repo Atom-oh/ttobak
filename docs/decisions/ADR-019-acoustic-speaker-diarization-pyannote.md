@@ -1,5 +1,11 @@
 # ADR-019: Adopt pyannote.audio for Acoustic Speaker Diarization
 
+> **Partially superseded by [ADR-035](ADR-035-diarization-pyannote4-community1-asr-pins.md)
+> (2026-09-03)**: the model-choice portion (pyannote 3.1 bundle) is
+> superseded — production now runs pyannote 4.x community-1. Everything
+> else here (same-GPU post-transcription diarization, `max_speakers`
+> semantics, preserve-mode refine, `spk_N` namespacing) remains in force.
+
 <a href="#english"><img src="https://img.shields.io/badge/lang-English-blue.svg" alt="English"></a>
 <a href="#korean"><img src="https://img.shields.io/badge/lang-한국어-red.svg" alt="Korean"></a>
 
