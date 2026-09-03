@@ -47,6 +47,14 @@ interface RecordButtonProps {
    */
   onError?: (error: string, opts?: { terminal?: boolean }) => void;
   onRecordingStart?: (stream: MediaStream | null) => void | Promise<void>;
+  /** Fires synchronously with `true` the moment a start click is accepted
+   * (BEFORE any permission prompt / preflight / `onRecordingStart`), and
+   * with `false` when that start attempt has fully resolved or failed.
+   * Lets the parent treat the whole click→prompt→start window as "a
+   * meeting flow is starting" — `onRecordingStart` alone fires only after
+   * the (unbounded, human-scale) permission prompt, leaving a window where
+   * nothing on the parent knows a start is under way. */
+  onStartAttempt?: (inFlight: boolean) => void;
   onRecordingPause?: () => void;
   onRecordingResume?: () => void;
   onRecordingStop?: () => void;
@@ -104,6 +112,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   onNativePcmChunk,
   onError,
   onRecordingStart,
+  onStartAttempt,
   onRecordingPause,
   onRecordingResume,
   onRecordingStop,
@@ -409,10 +418,12 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
     // UI/STT while capture keeps running.
     if (startInFlightRef.current) return;
     startInFlightRef.current = true;
+    onStartAttempt?.(true);
     try {
       await startRecordingInner();
     } finally {
       startInFlightRef.current = false;
+      onStartAttempt?.(false);
     }
   };
 

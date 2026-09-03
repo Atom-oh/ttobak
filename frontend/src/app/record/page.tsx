@@ -171,12 +171,25 @@ function RecordPageInner() {
   // that window and two drafts race for serverMeetingId/pendingAudioRef.
   // Bound to RecordButton's `disabled` AND the card's `busy`, and re-checked
   // via the ref at handler entry (state alone is a render-time snapshot).
-  const [meetingFlowBusy, setMeetingFlowBusy] = useState(false);
-  const meetingFlowBusyRef = useRef(false);
+  // Two sources, OR-ed: `flowBusy` is this page's own draft-creation window
+  // (both entry points), `recordStartInFlight` is RecordButton's whole
+  // click→permission-prompt→start window (`onStartAttempt`) — the latter
+  // matters because `onRecordingStart` only fires AFTER the user answers
+  // the permission prompt, which can take as long as they like.
+  const [flowBusy, setFlowBusyState] = useState(false);
+  const [recordStartInFlight, setRecordStartInFlightState] = useState(false);
+  const flowBusyRef = useRef(false);
+  const recordStartInFlightRef = useRef(false);
   const setFlowBusy = (busy: boolean) => {
-    meetingFlowBusyRef.current = busy;
-    setMeetingFlowBusy(busy);
+    flowBusyRef.current = busy;
+    setFlowBusyState(busy);
   };
+  const setRecordStartInFlight = (inFlight: boolean) => {
+    recordStartInFlightRef.current = inFlight;
+    setRecordStartInFlightState(inFlight);
+  };
+  const meetingFlowBusy = flowBusy || recordStartInFlight;
+  const isMeetingFlowBusy = () => flowBusyRef.current || recordStartInFlightRef.current;
 
   // Plain functions, like `handleRecordingStart` below (not useCallback):
   // they close over `resetSessionStateForNewMeeting`, which is itself a
@@ -187,7 +200,7 @@ function RecordPageInner() {
       '이전 세션에서 남은 녹음 파일입니다. 이 Mac에서 이전에 로그인한 다른 사용자의 녹음일 수 있습니다.\n' +
       '본인의 녹음이 맞다면 내 미팅으로 업로드합니다. 계속할까요?',
     );
-    if (!ok || meetingFlowBusyRef.current) return;
+    if (!ok || isMeetingFlowBusy()) return;
     setFlowBusy(true);
     try {
       // Same shape as a fresh native recording from here on: a draft meeting
@@ -209,7 +222,7 @@ function RecordPageInner() {
       '이전 세션에서 남은 녹음 파일입니다. 이 Mac에서 이전에 로그인한 다른 사용자의 녹음일 수 있습니다.\n' +
       '삭제하면 복구할 수 없습니다. 삭제할까요?',
     );
-    if (!ok || meetingFlowBusyRef.current) return;
+    if (!ok || isMeetingFlowBusy()) return;
     setFlowBusy(true);
     try {
       await cleanupRecording(item.path);
@@ -1080,6 +1093,7 @@ function RecordPageInner() {
               }
             }}
             onRecordingStart={handleRecordingStart}
+            onStartAttempt={setRecordStartInFlight}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
             onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); }}
