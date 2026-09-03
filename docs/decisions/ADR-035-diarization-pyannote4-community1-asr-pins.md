@@ -76,17 +76,25 @@ revert 후에도 이미지 재빌드(deploy-whisper.yml)와 스택 재배포
   (torch의 버전+cu128 variant 포함)을 검증, 하나라도 이동하면 빌드 실패.
 - `transcribe.py`의 `_bundle_pyannote_mismatch` — 런타임에 번들 키의 세대
   표기와 설치된 pyannote major를 대조, 불일치 시 양쪽을 명시한 grep 가능한
-  한 줄을 남기고 diarization을 스킵. **새 이미지 방향만 커버한다**: 구
-  이미지(3.4) + 신 번들 조합은 precheck가 없어 여전히 조용한 fallback이다
-  — 배포 순서(이미지 먼저, env 다음)가 그 방향을 피하는 이유.
+  한 줄을 남기고 diarization을 스킵(새 이미지에서만 실행되는 코드라는
+  본질적 한계는 아래의 이미지-소유 키 결정이 보완한다).
+- **번들 키는 이미지가 소유한다**: `DIARIZATION_S3_KEY`를 CDK task
+  definition에서 제거하고 `transcribe.py`의 in-image 기본값을 source of
+  truth로 삼는다. 번들 세대와 pyannote pin이 같은 이미지로 원자적으로
+  배포되므로, merge push에서 deploy-whisper.yml과 deploy-infra.yml이
+  병렬로 돌아도 조용한 mismatch 조합이 만들어지지 않는다 — 남는 과도기는
+  (a) CDK가 먼저 끝난 경우: 구 이미지 + 구 in-image 기본값(3.1)으로 자기
+  일관, (b) 이미지가 먼저 끝난 경우: 구 CDK env(3.1)가 신 이미지에 남아
+  precheck가 **loud하게** 스킵 — 어느 쪽도 조용히 저하되지 않는다.
+  `whisper-stack.test.ts` assertion이 env 재추가를 막고, per-run 실험은
+  RunTask env override로 여전히 가능하다(그 경우에도 precheck가 지킨다).
 
 ## Consequences
 
 - 유령 화자 제거(ground-truth 검증), 레거시 ASR recall 그대로 유지.
-- 이미지(`deploy-whisper.yml`)와 task-def env(`deploy-infra.yml`)가 별개
-  워크플로로 배포되므로, 한쪽만 배포된 기간에는 구/신 조합 비호환으로
-  diarization이 조용히 비활성화된다 — 두 워크플로를 연속 실행해 창을
-  최소화하고, 사전에 프로덕션 버킷에 community-1 번들 존재를 확인한다.
+- 이미지와 CDK가 병렬 배포되어도 위의 이미지-소유 키 결정 덕분에 조용한
+  mismatch는 없다(과도기는 자기 일관이거나 loud-skip). 배포 전 프로덕션
+  버킷에 community-1 번들이 존재하는지만 확인한다.
 - pyannote 3.1 번들과 `upload-diarization-model.sh`는 롤백 경로로 S3/repo에
   유지한다. community-1 스테이징은 `upload-whisperx-diarization-model.sh`.
 - 벤치 상세와 재현 절차는 `docs/runbooks/whisperx-benchmark.md` §3b/§3c/§6.

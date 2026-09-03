@@ -111,6 +111,12 @@ def _bundle_pyannote_mismatch(bundle_key: str, installed_version: str) -> str | 
     if not m:
         return None
     expected = m.group(1)
+    if expected not in ("3", "4"):
+        # A future naming scheme (e.g. diarization-20270101) is not a
+        # generation marker this check understands -- skip rather than
+        # false-flag it (the docstring's "never block a future bundle
+        # naming scheme" contract).
+        return None
     if installed_major != expected:
         return (f"DIARIZATION BUNDLE/RUNTIME MISMATCH: bundle {bundle_key!r} "
                 f"expects pyannote.audio {expected}.x but {installed_version} "
@@ -181,11 +187,16 @@ def _load_wav_waveform(wav_path: str) -> dict:
 
     with wave.open(wav_path, "rb") as w:
         # We wrote this file ourselves (ffmpeg -ar 16000 -ac 1, s16le) --
-        # assert the assumptions the int16 decode below depends on, so a
-        # future ffmpeg-flag change fails loudly instead of degrading
-        # diarization quality silently through a wrong scale/shape.
-        assert w.getnchannels() == 1, w.getnchannels()
-        assert w.getsampwidth() == 2, w.getsampwidth()
+        # verify the assumptions the int16 decode below depends on with an
+        # explicit raise (a bare assert would vanish under -O, and the
+        # numbers are format facts, not PII), so a future ffmpeg-flag
+        # change surfaces as a distinct error line via _diarize's handler
+        # instead of degrading quality through a wrong scale/shape.
+        if w.getnchannels() != 1 or w.getsampwidth() != 2:
+            raise ValueError(
+                f"unexpected WAV format for diarization: channels="
+                f"{w.getnchannels()} sampwidth={w.getsampwidth()} "
+                f"(expected mono s16le)")
         sample_rate = w.getframerate()
         raw = w.readframes(w.getnframes())
     pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0

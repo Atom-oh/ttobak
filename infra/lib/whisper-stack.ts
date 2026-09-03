@@ -176,10 +176,16 @@ export class WhisperStack extends cdk.Stack {
         AWS_REGION: cdk.Aws.REGION,
         VOCAB_KEY: 'config/custom-vocabulary.txt',
         MODEL_S3_KEY: 'models/faster-whisper-large-v3.tar.gz',
-        // Phase 2 (2026-09-03): pyannote 4.x community-1 bundle — the same
-        // one the whisperx bench task stages. The 3.1 bundle stays in S3;
-        // rolling back is this one line (plus the image's pyannote pin).
-        DIARIZATION_S3_KEY: 'models/whisperx-diarization-4.x.tar.gz',
+        // DIARIZATION_S3_KEY is deliberately NOT set here (ADR-035): the
+        // bundle key's source of truth is transcribe.py's in-image default,
+        // so the bundle generation and the image's pyannote pin ship
+        // ATOMICALLY — a CDK-set key would deploy through deploy-infra.yml
+        // while the image ships through deploy-whisper.yml, and the two
+        // race on merge pushes (a mismatched pairing degrades diarization
+        // to a fallback). Setting it here again would resurrect that race;
+        // per-run experiments can still override it via RunTask env.
+        // Rollback: revert the whole ADR-035 commit — a partial pin/key
+        // revert fails the image's verify_pins.py gate (see ADR-035).
       },
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'whisper',

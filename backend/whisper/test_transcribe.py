@@ -181,8 +181,48 @@ class TestBundlePyannoteMismatch(unittest.TestCase):
         self.assertIn('ADR-035', msg)
 
     def test_unrecognized_key_skips_check(self):
+        # No marker at all, and a numeric marker outside the known
+        # generations (a future date-based scheme) — both skip, never
+        # false-flag.
         self.assertIsNone(transcribe._bundle_pyannote_mismatch(
             'models/some-future-bundle.tar.gz', '4.0.7'))
+        self.assertIsNone(transcribe._bundle_pyannote_mismatch(
+            'models/diarization-20270101.tar.gz', '4.0.7'))
+
+
+class TestDiarizeKwargsPassthrough(unittest.TestCase):
+    def test_max_speakers_reaches_pipeline_call(self):
+        # NUM_SPEAKERS flows as max_speakers; if a pyannote major ever
+        # rejects that kwarg it becomes a swallowed TypeError -> [] only on
+        # meetings WITH Participants set — a nasty partial regression. Pin
+        # the passthrough with a stub Pipeline.
+        captured = {}
+
+        class FakePipeline:
+            @staticmethod
+            def from_pretrained(config_path):
+                return FakePipeline()
+
+            def to(self, device):
+                return self
+
+            def __call__(self, waveform, **kwargs):
+                captured.update(kwargs)
+                return types.SimpleNamespace(speaker_diarization=None)
+
+        fake_torch = types.ModuleType('torch')
+        fake_torch.device = lambda name: name
+        fake_pa = types.ModuleType('pyannote.audio')
+        fake_pa.Pipeline = FakePipeline
+        fake_pyannote = types.ModuleType('pyannote')
+        fake_pyannote.audio = fake_pa
+        with mock.patch.dict(sys.modules, {
+                'torch': fake_torch, 'pyannote': fake_pyannote,
+                'pyannote.audio': fake_pa}),              mock.patch.object(transcribe, '_load_wav_waveform',
+                               return_value={'waveform': 'W', 'sample_rate': 16000}):
+            out = transcribe._diarize('config.yaml', '/tmp/a.wav', 5)
+        self.assertEqual(out, [])  # None annotation -> legitimate empty
+        self.assertEqual(captured, {'max_speakers': 5})
 
 
 class TestLoadWavWaveform(unittest.TestCase):
@@ -252,16 +292,16 @@ class TestLoadWavWaveform(unittest.TestCase):
         self.assertEqual(captured['divisor'], 32768.0)
 
     def test_rejects_unexpected_format_loudly(self):
-        # A future ffmpeg-flag change (stereo, non-16-bit) must fail the
-        # format assert (which runs before any numpy use), not silently
-        # mis-scale the waveform.
+        # A future ffmpeg-flag change (stereo, non-16-bit) must raise an
+        # explicit ValueError (before any numpy use; survives -O, unlike a
+        # bare assert), not silently mis-scale the waveform.
         import tempfile
         captured = {}
         with tempfile.TemporaryDirectory() as d:
             path = f'{d}/stereo.wav'
             self._write_wav(path, channels=2)
             with self._patch_np_torch(captured):
-                with self.assertRaises(AssertionError):
+                with self.assertRaises(ValueError):
                     transcribe._load_wav_waveform(path)
         self.assertNotIn('raw_len', captured)
 
