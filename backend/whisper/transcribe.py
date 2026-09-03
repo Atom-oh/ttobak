@@ -19,7 +19,12 @@ TABLE = os.environ["TABLE_NAME"]
 VOCAB_KEY = os.environ.get("VOCAB_KEY", "config/custom-vocabulary.txt")
 MODEL_S3_KEY = os.environ.get("MODEL_S3_KEY", "models/faster-whisper-large-v3.tar.gz")
 MODEL_LOCAL_DIR = "/tmp/whisper-model"
-DIARIZATION_S3_KEY = os.environ.get("DIARIZATION_S3_KEY", "models/pyannote-diarization-3.1.tar.gz")
+# Phase 2 (2026-09-03): diarization upgraded to pyannote 4.x community-1 --
+# the a435a3dc/3804e0f5 benches showed the community-1 MODEL (not whisperx)
+# is what fixes phantom speakers (legacy 8-with-phantoms -> 4 clean, matching
+# operator-confirmed ground truth). Same self-contained bundle the whisperx
+# bench image stages; the 3.1 bundle stays in S3 for rollback via this env var.
+DIARIZATION_S3_KEY = os.environ.get("DIARIZATION_S3_KEY", "models/whisperx-diarization-4.x.tar.gz")
 DIARIZATION_LOCAL_DIR = "/tmp/diarization-model"
 
 # Audio discovery filters — exclude empty/placeholder uploads and progress/checkpoint sidecars.
@@ -114,10 +119,44 @@ def _to_mono16k_wav(input_path: str) -> str:
     return wav_path
 
 
+def _load_wav_waveform(wav_path: str) -> dict:
+    """Reads the 16kHz mono s16le WAV _to_mono16k_wav just wrote into the
+    in-memory {'waveform': (channel, time) tensor, 'sample_rate': int} dict
+    pyannote accepts. This BYPASSES pyannote 4.x's torchcodec decoding path
+    entirely -- torchcodec's FFmpeg-6 variant needs libpython3.12.so.1.0
+    (the Dockerfile installs it as belt-and-suspenders), and passing a
+    preloaded waveform is pyannote's own documented workaround, proven in
+    the whisperx bench image (transcribe_whisperx.py has the same helper).
+    stdlib `wave` suffices because we control the format (ffmpeg -ar 16000
+    -ac 1)."""
+    import wave
+
+    import numpy as np
+    import torch
+
+    with wave.open(wav_path, "rb") as w:
+        sample_rate = w.getframerate()
+        raw = w.readframes(w.getnframes())
+    pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    return {"waveform": torch.from_numpy(pcm).unsqueeze(0), "sample_rate": sample_rate}
+
+
+def _turns_from_diarization(diarization) -> list[tuple]:
+    """Extracts (start, end, label) turns from a pyannote result. 4.x may
+    return a wrapper whose Annotation lives at .speaker_diarization (3.x
+    returned the Annotation itself) -- unwrap defensively so both work."""
+    annotation = getattr(diarization, "speaker_diarization", diarization)
+    return [
+        (turn.start, turn.end, label)
+        for turn, _, label in annotation.itertracks(yield_label=True)
+    ]
+
+
 def _diarize(config_path: str, wav_path: str, num_speakers: int | None):
-    """Runs pyannote diarization. Returns a list of (start, end, label)
-    turns, or [] if diarization fails for any reason (caller falls back to
-    unlabeled segments -- never let this abort the transcription)."""
+    """Runs pyannote (4.x community-1) diarization. Returns a list of
+    (start, end, label) turns, or [] if diarization fails for any reason
+    (caller falls back to unlabeled segments -- never let this abort the
+    transcription)."""
     try:
         import torch
         from pyannote.audio import Pipeline
@@ -129,13 +168,14 @@ def _diarize(config_path: str, wav_path: str, num_speakers: int | None):
         # within) rather than num_speakers (which would force exactly that many
         # clusters and over-split when fewer people actually spoke).
         kwargs = {"max_speakers": num_speakers} if num_speakers else {}
-        diarization = pipeline(wav_path, **kwargs)
-        return [
-            (turn.start, turn.end, label)
-            for turn, _, label in diarization.itertracks(yield_label=True)
-        ]
+        diarization = pipeline(_load_wav_waveform(wav_path), **kwargs)
+        return _turns_from_diarization(diarization)
     except Exception as e:
-        print(f"Diarization failed, falling back to unlabeled segments: {e}")
+        # Type-only logging: a library exception's str() can embed transcript
+        # fragments or file metadata, and this log group retains entries --
+        # same PII rule the whisperx bench engine follows.
+        print(f"Diarization failed, falling back to unlabeled segments: "
+              f"{type(e).__name__}")
         return []
 
 
@@ -149,7 +189,10 @@ def _safe_diarize(config_path: str, local_path: str, num_speakers: int | None) -
         wav_path = _to_mono16k_wav(local_path)
         return _diarize(config_path, wav_path, num_speakers)
     except Exception as e:
-        print(f"Audio conversion for diarization failed, skipping diarization: {e}")
+        # Type-only: ffmpeg's failure output embeds container/file metadata
+        # (meeting PII) -- log the class, not the message.
+        print(f"Audio conversion for diarization failed, skipping "
+              f"diarization: {type(e).__name__}")
         return []
 
 

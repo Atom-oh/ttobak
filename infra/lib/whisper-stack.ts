@@ -176,7 +176,10 @@ export class WhisperStack extends cdk.Stack {
         AWS_REGION: cdk.Aws.REGION,
         VOCAB_KEY: 'config/custom-vocabulary.txt',
         MODEL_S3_KEY: 'models/faster-whisper-large-v3.tar.gz',
-        DIARIZATION_S3_KEY: 'models/pyannote-diarization-3.1.tar.gz',
+        // Phase 2 (2026-09-03): pyannote 4.x community-1 bundle — the same
+        // one the whisperx bench task stages. The 3.1 bundle stays in S3;
+        // rolling back is this one line (plus the image's pyannote pin).
+        DIARIZATION_S3_KEY: 'models/whisperx-diarization-4.x.tar.gz',
       },
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'whisper',

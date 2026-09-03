@@ -121,5 +121,37 @@ class TestSafeDiarize(unittest.TestCase):
         self.assertEqual(result, [(0.0, 1.0, 'SPEAKER_00')])
 
 
+class TestTurnsFromDiarization(unittest.TestCase):
+    """Phase 2 (pyannote 3.x -> 4.x community-1): 4.x may return a result
+    wrapper whose Annotation lives at .speaker_diarization, while 3.x
+    returned the Annotation itself -- _turns_from_diarization must unwrap
+    both shapes (same helper the whisperx bench engine validated)."""
+
+    class _FakeTurn:
+        def __init__(self, start, end):
+            self.start, self.end = start, end
+
+    class _FakeAnnotation:
+        def __init__(self, turns):
+            self._turns = turns
+
+        def itertracks(self, yield_label=False):
+            for start, end, label in self._turns:
+                yield TestTurnsFromDiarization._FakeTurn(start, end), None, label
+
+    def test_3x_annotation_returned_directly(self):
+        ann = self._FakeAnnotation([(0.0, 1.5, 'SPEAKER_00'), (1.5, 3.0, 'SPEAKER_01')])
+        self.assertEqual(
+            transcribe._turns_from_diarization(ann),
+            [(0.0, 1.5, 'SPEAKER_00'), (1.5, 3.0, 'SPEAKER_01')])
+
+    def test_4x_wrapper_unwrapped_via_speaker_diarization(self):
+        ann = self._FakeAnnotation([(0.0, 2.0, 'SPEAKER_00')])
+        wrapper = types.SimpleNamespace(speaker_diarization=ann)
+        self.assertEqual(
+            transcribe._turns_from_diarization(wrapper),
+            [(0.0, 2.0, 'SPEAKER_00')])
+
+
 if __name__ == '__main__':
     unittest.main()

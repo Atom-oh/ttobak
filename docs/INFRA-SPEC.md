@@ -302,7 +302,7 @@ ECS infra for Whisper GPU batch transcription. After a recording completes, `tto
 ### Task Definition
 - **Family**: `ttobak-whisper`
 - **Network mode**: HOST
-- **Container**: `whisper` — image `ttobak-whisper:latest` (ECR); memory 12,288 MiB (reserves 4GB for OS/ECS agent); GPU: 1; env `BUCKET_NAME`, `TABLE_NAME`, `AWS_REGION`, `VOCAB_KEY`, `MODEL_S3_KEY`, `DIARIZATION_S3_KEY` (default `models/pyannote-diarization-3.1.tar.gz` — the pyannote diarization model bundle S3 key, downloaded once per task and unpacked to `/tmp/diarization-model`; see ADR-019); logging: CloudWatch (`whisper` prefix)
+- **Container**: `whisper` — image `ttobak-whisper:latest` (ECR); memory 12,288 MiB (reserves 4GB for OS/ECS agent); GPU: 1; env `BUCKET_NAME`, `TABLE_NAME`, `AWS_REGION`, `VOCAB_KEY`, `MODEL_S3_KEY`, `DIARIZATION_S3_KEY` (default `models/whisperx-diarization-4.x.tar.gz` since Phase 2, 2026-09-03 — the pyannote 4.x community-1 bundle, downloaded once per task and unpacked to `/tmp/diarization-model`; the 3.1 bundle stays in S3 as the env-var rollback path; see ADR-019); logging: CloudWatch (`whisper` prefix)
 
 ### IAM Roles
 - **Execution role**: `ttobak-whisper-execution-role` (ECS task execution policy)
