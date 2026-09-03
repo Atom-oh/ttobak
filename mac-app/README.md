@@ -4,8 +4,10 @@ Native macOS desktop app for **system audio capture** (Zoom, Teams, etc.) using
 [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit).
 Implements **Sub-project 2** of [ADR-006](../docs/decisions/ADR-006-tab-audio-capture-and-tauri-mac-app.md).
 
-> Status: **scaffold / MVP in progress.** Builds and runs only on macOS 13+.
-> Linux/Windows builds are not supported and will fail at link time.
+> Status: **scaffold / MVP in progress.** Runs only on macOS 13+ (ScreenCaptureKit).
+> `screencapturekit` is macOS-target-gated in `Cargo.toml`, so `cargo check`/`cargo test`
+> do build on Linux (given Tauri's own native deps — webkit2gtk-4.1, gtk3, dbus); only the
+> `mod macos` backend and its tests need a real Mac. Linux/Windows are not supported *targets*.
 
 ---
 
@@ -36,7 +38,8 @@ native commands for audio capture.
 |      +-- lib.rs     Tauri commands:                        |
 |                       start_recording(meeting_id)          |
 |                       stop_recording()                     |
-|                       recording_status()                   |
+|                       recording_status(path)               |
+|                       list_leftover_recordings()           |
 |                       upload_recording(path, url, ct)      |
 |                       cleanup_recording(path)              |
 +------------------------------------------------------------+
@@ -216,7 +219,9 @@ mac-app/
     └── src/
         ├── main.rs
         ├── lib.rs            # Tauri commands + state
-        ├── audio.rs          # ScreenCaptureKit recorder
+        ├── audio.rs          # ScreenCaptureKit recorder (+ StartGuard, interleave_planes)
+        ├── leftover.rs       # startup leftover-WAV scan + recording_status path containment
+        ├── upload.rs         # streaming WAV → presigned S3 upload (ADR-024)
         └── error.rs          # AppError
 ```
 

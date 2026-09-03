@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable } from '@/lib/tauri';
+import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE, type TauriStatusResponse } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 /**
@@ -47,6 +47,14 @@ interface RecordButtonProps {
    */
   onError?: (error: string, opts?: { terminal?: boolean }) => void;
   onRecordingStart?: (stream: MediaStream | null) => void | Promise<void>;
+  /** Fires synchronously with `true` the moment a start click is accepted
+   * (BEFORE any permission prompt / preflight / `onRecordingStart`), and
+   * with `false` when that start attempt has fully resolved or failed.
+   * Lets the parent treat the whole click→prompt→start window as "a
+   * meeting flow is starting" — `onRecordingStart` alone fires only after
+   * the (unbounded, human-scale) permission prompt, leaving a window where
+   * nothing on the parent knows a start is under way. */
+  onStartAttempt?: (inFlight: boolean) => void;
   onRecordingPause?: () => void;
   onRecordingResume?: () => void;
   onRecordingStop?: () => void;
@@ -104,6 +112,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   onNativePcmChunk,
   onError,
   onRecordingStart,
+  onStartAttempt,
   onRecordingPause,
   onRecordingResume,
   onRecordingStop,
@@ -409,10 +418,12 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
     // UI/STT while capture keeps running.
     if (startInFlightRef.current) return;
     startInFlightRef.current = true;
+    onStartAttempt?.(true);
     try {
       await startRecordingInner();
     } finally {
       startInFlightRef.current = false;
+      onStartAttempt?.(false);
     }
   };
 
@@ -776,7 +787,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
           // Content-Length at its current size (upload.rs measures at open)
           // and silently drop everything appended after — so wait (bounded)
           // for the background finalize to actually finish first. That is
-          // signalled by `finalizing` going false: `recording` is ALREADY
+          // signalled by `finalizing_for_path` going false: `recording` is ALREADY
           // false here (the stop command emptied the recorder before the
           // timeout fired), so polling it would pass instantly and
           // guarantee nothing. Once finalize completes, upload.rs's
@@ -786,14 +797,55 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
           let finalized = false;
           for (let i = 0; i < 30; i++) {
             await new Promise((r) => setTimeout(r, 1000));
+            // Only the IPC call itself is inside the try: the checks below
+            // deliberately live OUTSIDE it, because this catch's `break`
+            // would otherwise swallow the version-skew throw too (it did,
+            // in an earlier revision — the fast-fail timing worked but the
+            // "update the app" message never reached the user).
+            let status: TauriStatusResponse;
             try {
-              const status = await getNativeRecordingStatus();
-              if (!status.recording && !status.finalizing) {
+              status = await getNativeRecordingStatus(tempPath);
+            } catch {
+              break; // status unavailable — fall through to the error path
+            }
+            {
+              // Check `finalizing_for_path` alone — NOT `!status.recording` too.
+              // `status.finalizing_for_path` is specific to `tempPath` (the Rust
+              // side canonicalizes and checks THIS path), but
+              // `status.recording` is still the recorder's GLOBAL state: by
+              // the time this loop runs, `stop_recording` has already taken
+              // the handle for `tempPath`, so nothing here is "recording"
+              // for tempPath specifically — but the user could have started
+              // a brand-new recording while this loop was waiting, which
+              // would make `status.recording` true again for THAT unrelated
+              // recording. Gating on it too would make this loop spin for
+              // the full 30s and then error out even though tempPath's own
+              // WAV had already finished finalizing — exactly the
+              // overlapping-recording bug this per-path field exists to
+              // avoid.
+              //
+              // `status.finalizing_for_path` is optional: older Rust builds
+              // either send no such field, or send a GLOBAL bool under the
+              // old name `finalizing` (see TauriStatusResponse's doc comment
+              // — the rename is what makes both read as `undefined` here).
+              // `undefined` must NOT be treated as "not finalizing":
+              // `!undefined` is `true`, so a naive negation would hand off
+              // a file that's still being written on the very first poll.
+              // Neither old generation can ever answer this question
+              // correctly, so waiting out the full window would only delay
+              // the same error by 30s — fail fast with the version-skew
+              // guidance instead (the outer catch of this stop path appends
+              // the preserved-file recovery hint). Only an explicit `false`
+              // counts as done.
+              if (status.finalizing_for_path === undefined) {
+                throw new Error(
+                  `${VERSION_SKEW_MESSAGE} (녹음 종료 상태를 확인할 수 없어 대기를 중단합니다)`,
+                );
+              }
+              if (status.finalizing_for_path === false) {
                 finalized = true;
                 break;
               }
-            } catch {
-              break; // status unavailable — fall through to the error path
             }
           }
           if (!finalized) {

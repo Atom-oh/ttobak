@@ -74,11 +74,50 @@ export interface TauriStatusResponse {
   recording: boolean;
   temp_path: string | null;
   elapsed_ms: number;
-  /** True while a stop's background finalize is still writing the WAV.
-   * `recording` flips false the moment the stop command takes the handle,
-   * so after `stop_timed_out` this — not `recording` — is what signals the
-   * file is safe to upload. Optional: older Rust builds don't send it. */
-  finalizing?: boolean;
+  /** True while the SPECIFIC path passed to `getNativeRecordingStatus`
+   * (not "any recording anywhere") is still being finalized in the
+   * background. `recording` flips false the moment the stop command takes
+   * the handle, so after `stop_timed_out` this — not `recording` — is what
+   * signals the file is safe to upload. A global (any-path) aggregate was
+   * tried first and reverted: an unrelated, still-wedged-past-timeout stop
+   * from an EARLIER recording kept a LATER recording's own already-finished
+   * finalize looking incomplete forever whenever the two overlapped —
+   * exactly the scenario per-path tracking exists to get right.
+   *
+   * Optional only for wire-compatibility with older installed Rust builds —
+   * a *current* build always sends it. Two older generations exist: one that
+   * sent no such field at all, and one that sent a field named `finalizing`
+   * holding the GLOBAL any-path bool described above. This field is
+   * deliberately named `finalizing_for_path` so BOTH generations read as
+   * `undefined` here — reusing the old name would have let the global-bool
+   * build pass as if it were per-path. Treat `undefined` as "unknown",
+   * never as `false`: every consumer must check `=== false` explicitly (not
+   * `!status.finalizing_for_path`). `RecordButton.tsx`'s stop-timed-out
+   * poll loop — the one place this matters — fails fast with
+   * `VERSION_SKEW_MESSAGE` on the first `undefined`. */
+  finalizing_for_path?: boolean;
+}
+
+/**
+ * One temp WAV the Rust side adopted at app startup from a PREVIOUS run
+ * (crash, force quit, or a stop that never finalized) — see
+ * `mac-app/src-tauri/src/leftover.rs`. `path` is the canonical path that
+ * `uploadRecording`/`cleanupRecording` accept. Never includes a recording
+ * this session started (the SPA already knows those from
+ * `startNativeRecording`).
+ *
+ * Ownership caveat (ADR-024): adoption is scoped to the macOS user's temp
+ * directory, not to a Cognito login — a leftover may belong to a DIFFERENT
+ * ttobak account that used this Mac earlier. Any UI offering to upload one
+ * must say so and require an explicit, per-file confirmation that is
+ * distinct from the fresh-recording flow.
+ */
+export interface TauriLeftoverRecording {
+  path: string;
+  file_name: string;
+  byte_size: number;
+  /** File mtime, Unix epoch ms (0 if unknown) — roughly the last flush checkpoint. */
+  modified_ms: number;
 }
 
 export interface TauriUploadProgress {
@@ -94,8 +133,15 @@ export function stopNativeRecording(): Promise<TauriStopResponse> {
   return invoke<TauriStopResponse>('stop_recording');
 }
 
-export function getNativeRecordingStatus(): Promise<TauriStatusResponse> {
-  return invoke<TauriStatusResponse>('recording_status');
+/**
+ * `path` is required — the Rust side reports `finalizing_for_path` for
+ * exactly this path, not "is any recording anywhere still finalizing" (see
+ * TauriStatusResponse.finalizing_for_path's doc comment for why that global
+ * version was reverted). Callers must pass the specific temp WAV path they're
+ * waiting on.
+ */
+export function getNativeRecordingStatus(path: string): Promise<TauriStatusResponse> {
+  return invoke<TauriStatusResponse>('recording_status', { path });
 }
 
 /**
@@ -251,6 +297,21 @@ export async function assertUploadRecordingAvailable(): Promise<void> {
 
 export function cleanupRecording(path: string): Promise<void> {
   return invoke<void>('cleanup_recording', { path });
+}
+
+/**
+ * Leftover recordings adopted at app startup, newest first. Resolves to an
+ * empty list against an installed Rust build that predates the command
+ * (version skew) — there is nothing the SPA could do about those files
+ * anyway, so an old build simply shows no card rather than an error.
+ */
+export async function listLeftoverRecordings(): Promise<TauriLeftoverRecording[]> {
+  try {
+    return await invoke<TauriLeftoverRecording[]>('list_leftover_recordings');
+  } catch (err) {
+    if (isCommandNotFound(err)) return [];
+    throw err;
+  }
 }
 
 /**

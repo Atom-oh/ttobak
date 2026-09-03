@@ -19,14 +19,16 @@ import { RecordingConfig, LiveSttSelector } from '@/components/record/RecordingC
 import { PostRecordingBanner } from '@/components/record/PostRecordingBanner';
 import { LiveNotes, type NotesSaveStatus } from '@/components/record/LiveNotes';
 import { MeetingContextInput } from '@/components/record/MeetingContextInput';
+import { LeftoverRecordingsCard, formatLeftoverTime } from '@/components/record/LeftoverRecordingsCard';
 import { supportsTabAudioCapture, hasMobileMicConflictRisk } from '@/lib/device';
-import { isTauri } from '@/lib/tauri';
+import { isTauri, cleanupRecording, type TauriLeftoverRecording } from '@/lib/tauri';
+import { useLeftoverRecordings } from '@/hooks/useLeftoverRecordings';
 import { useAudioDevices } from '@/hooks/useAudioDevices';
 import { useRecordingSession } from '@/hooks/useRecordingSession';
 import { useLiveSummary } from '@/hooks/useLiveSummary';
 import { usePostRecording } from '@/hooks/usePostRecording';
 import { uploadsApi, meetingsApi, kbApi } from '@/lib/api';
-import { uploadFile, uploadToS3, notifyUploadComplete } from '@/lib/upload';
+import { uploadFile, uploadToS3, notifyUploadComplete, formatFileSize } from '@/lib/upload';
 import type { LiveSttProvider } from '@/lib/sttManager';
 
 export default function RecordPage() {
@@ -152,6 +154,85 @@ function RecordPageInner() {
   });
 
   const clientMeetingId = postRecording.serverMeetingId || clientMeetingIdBase;
+
+  // Mac app only: temp WAVs the Rust side adopted at startup from a previous
+  // run (crash / force quit). Surfaced here, not app-wide, because acting on
+  // one reuses THIS page's post-recording flow (draft meeting → notes step →
+  // native upload → cleanup). Both actions below require an explicit
+  // per-file confirm that names the file and the cross-account caveat
+  // (ADR-024): the file may belong to a different ttobak account that used
+  // this Mac earlier, so a leftover must never be a one-click upload.
+  const leftovers = useLeftoverRecordings();
+  // ONE page-level "a meeting flow is being started" flag shared by both
+  // entry points — a fresh recording (`handleRecordingStart`) and a leftover
+  // upload/delete. Each `await postRecording.createDraftMeeting()` (up to
+  // 15s) runs while `postRecording.step` is still null and nothing is
+  // recording yet, so without this the OTHER entry point stays clickable in
+  // that window and two drafts race for serverMeetingId/pendingAudioRef.
+  // Bound to RecordButton's `disabled` AND the card's `busy`, and re-checked
+  // via the ref at handler entry (state alone is a render-time snapshot).
+  // Two sources, OR-ed: `flowBusy` is this page's own draft-creation window
+  // (both entry points), `recordStartInFlight` is RecordButton's whole
+  // click→permission-prompt→start window (`onStartAttempt`) — the latter
+  // matters because `onRecordingStart` only fires AFTER the user answers
+  // the permission prompt, which can take as long as they like.
+  const [flowBusy, setFlowBusyState] = useState(false);
+  const [recordStartInFlight, setRecordStartInFlightState] = useState(false);
+  const flowBusyRef = useRef(false);
+  const recordStartInFlightRef = useRef(false);
+  const setFlowBusy = (busy: boolean) => {
+    flowBusyRef.current = busy;
+    setFlowBusyState(busy);
+  };
+  const setRecordStartInFlight = (inFlight: boolean) => {
+    recordStartInFlightRef.current = inFlight;
+    setRecordStartInFlightState(inFlight);
+  };
+  const meetingFlowBusy = flowBusy || recordStartInFlight;
+  const isMeetingFlowBusy = () => flowBusyRef.current || recordStartInFlightRef.current;
+
+  // Plain functions, like `handleRecordingStart` below (not useCallback):
+  // they close over `resetSessionStateForNewMeeting`, which is itself a
+  // per-render function, so memoizing would only add a stale-deps hazard.
+  const handleLeftoverUpload = async (item: TauriLeftoverRecording) => {
+    const ok = window.confirm(
+      `"${item.file_name}" (${formatFileSize(item.byte_size)}, ${formatLeftoverTime(item.modified_ms)})\n\n` +
+      '이전 세션에서 남은 녹음 파일입니다. 이 Mac에서 이전에 로그인한 다른 사용자의 녹음일 수 있습니다.\n' +
+      '본인의 녹음이 맞다면 내 미팅으로 업로드합니다. 계속할까요?',
+    );
+    if (!ok || isMeetingFlowBusy()) return;
+    setFlowBusy(true);
+    try {
+      // Same shape as a fresh native recording from here on: a draft meeting
+      // (falls back to create-at-upload inside resumeUploadFlow if this
+      // fails), then hand the on-disk path to the notes step → upload →
+      // cleanupRecording flow that already handles native files.
+      resetSessionStateForNewMeeting();
+      await postRecording.createDraftMeeting();
+      postRecording.handleNativeFileReady(item.path, item.byte_size);
+      leftovers.remove(item.path);
+    } finally {
+      setFlowBusy(false);
+    }
+  };
+
+  const handleLeftoverDelete = async (item: TauriLeftoverRecording) => {
+    const ok = window.confirm(
+      `"${item.file_name}" (${formatFileSize(item.byte_size)}, ${formatLeftoverTime(item.modified_ms)})\n\n` +
+      '이전 세션에서 남은 녹음 파일입니다. 이 Mac에서 이전에 로그인한 다른 사용자의 녹음일 수 있습니다.\n' +
+      '삭제하면 복구할 수 없습니다. 삭제할까요?',
+    );
+    if (!ok || isMeetingFlowBusy()) return;
+    setFlowBusy(true);
+    try {
+      await cleanupRecording(item.path);
+      leftovers.remove(item.path);
+    } catch (err) {
+      session.setSpeechError(err instanceof Error ? err.message : '녹음 파일 삭제에 실패했습니다.');
+    } finally {
+      setFlowBusy(false);
+    }
+  };
 
   // Serializes notes autosave PUTs: two in-flight requests could reach the
   // server out of order and let an older save's stale notes win the
@@ -415,11 +496,14 @@ function RecordPageInner() {
   if (!isAuthenticated && !session.isRecording) { router.push('/'); return null; }
 
   // --- Handlers ---
-  const handleRecordingStart = async (stream: MediaStream | null) => {
-    if (stream && audioSource === 'tab') {
-      const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
-      setTabSharingLabel(label);
-    }
+  // Everything a NEW meeting on this page must start from a clean slate —
+  // shared by a fresh recording (`handleRecordingStart`) and a leftover
+  // upload (`handleLeftoverUpload`). Both end in `resumeUploadFlow`, which
+  // persists `summary.liveSummaryRef` and prefills the notes step from this
+  // page's state; without this reset a leftover uploaded after an earlier
+  // recording on the same page visit failed back to idle would inherit that
+  // dead recording's live summary and notes.
+  const resetSessionStateForNewMeeting = () => {
     setAudioStalled(false);
     summary.reset();
     // New recording session — the previous recording's auto-fired proactive
@@ -446,11 +530,27 @@ function RecordPageInner() {
     // Clearing it on start would delete the very input the user just
     // typed. It's reset instead where a session actually ends and the
     // user returns to a fresh setup screen (see the dismiss handler below).
+  };
+
+  const handleRecordingStart = async (stream: MediaStream | null) => {
+    if (stream && audioSource === 'tab') {
+      const label = stream.getAudioTracks()[0]?.label || 'Tab Audio';
+      setTabSharingLabel(label);
+    }
+    resetSessionStateForNewMeeting();
     // Create draft meeting immediately so the post-recording flow has a
     // server meetingId to attach the audio to. This is required for both
     // browser (mic/tab) and Tauri native (system audio) modes — without it,
     // the meeting stays stuck in 'recording' status with no linked audioKey.
-    await postRecording.createDraftMeeting();
+    // Hold `meetingFlowBusy` across the await so the leftover card can't
+    // start a competing draft in this window (the mirror of the guard the
+    // card's handlers hold against RecordButton).
+    setFlowBusy(true);
+    try {
+      await postRecording.createDraftMeeting();
+    } finally {
+      setFlowBusy(false);
+    }
     if (stream) {
       setIsNativeRecording(false);
       const cleanupPreview = () => {
@@ -795,6 +895,15 @@ function RecordPageInner() {
         {/* Config Controls — visible only when idle (record mode) */}
         {!isUploadMode && !postRecording.step && !session.isRecording && (
           <div className="flex flex-col items-center gap-3">
+            {isTauri() && (
+              <LeftoverRecordingsCard
+                items={leftovers.leftovers}
+                onUpload={handleLeftoverUpload}
+                onDelete={handleLeftoverDelete}
+                onDismiss={leftovers.dismissAll}
+                busy={meetingFlowBusy}
+              />
+            )}
             {/* Desktop: editable title */}
             <div className="hidden lg:block mb-4">
               <input
@@ -927,7 +1036,10 @@ function RecordPageInner() {
             meetingId={clientMeetingId}
             meetingTitle={meetingTitle || 'Untitled Meeting'}
             audioSource={audioSource}
-            disabled={!!postRecording.step}
+            // `meetingFlowBusy` too — see its declaration: while either
+            // entry point is inside its `createDraftMeeting` await, `step`
+            // is still null and a second start would race it.
+            disabled={!!postRecording.step || meetingFlowBusy}
             deviceId={audioSource === 'mic' ? (selectedDeviceId || undefined) : undefined}
             onRecordingComplete={postRecording.handleRecordingComplete}
             onBlobReady={postRecording.handleBlobReady}
@@ -981,6 +1093,7 @@ function RecordPageInner() {
               }
             }}
             onRecordingStart={handleRecordingStart}
+            onStartAttempt={setRecordStartInFlight}
             onRecordingPause={session.pauseSession}
             onRecordingResume={session.resumeSession}
             onRecordingStop={() => { session.stopSession(); setTabSharingLabel(null); setIsNativeRecording(false); setAudioStalled(false); }}
