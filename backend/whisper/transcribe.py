@@ -24,9 +24,11 @@ MODEL_LOCAL_DIR = "/tmp/whisper-model"
 # the a435a3dc/3804e0f5 benches showed the community-1 MODEL (not whisperx)
 # is what fixes phantom speakers (legacy 8-with-phantoms -> 4 clean, matching
 # operator-confirmed ground truth). Same self-contained bundle the whisperx
-# bench image stages. The 3.1 bundle stays in S3 for rollback, but this
-# value is CDK-hardcoded (whisper-stack.ts) and pin-coupled to the image --
-# rolling back means reverting the whole ADR-035 commit, not editing env.
+# bench image stages. This in-image default is the key's SOURCE OF TRUTH
+# (ADR-035): the CDK task definition deliberately does not set it, so the
+# bundle generation always ships atomically with this image's pyannote pin.
+# The 3.1 bundle stays in S3, but rolling back means reverting the whole
+# ADR-035 commit and rebuilding -- not editing env or this line alone.
 DIARIZATION_S3_KEY = os.environ.get("DIARIZATION_S3_KEY", "models/whisperx-diarization-4.x.tar.gz")
 DIARIZATION_LOCAL_DIR = "/tmp/diarization-model"
 
@@ -95,17 +97,14 @@ def _bundle_pyannote_mismatch(bundle_key: str, installed_version: str) -> str | 
     generation (from its key name) can't work with the installed
     pyannote.audio major, else None. Pure and unit-testable.
 
-    Why (ADR-035): the bundle key ships via CDK (deploy-infra.yml) and the
-    pyannote pin ships via the image (deploy-whisper.yml) -- two
-    uncoordinated workflows, so a half-deployed state pairs a 4.x runtime
-    with the 3.1 bundle (or the reverse). Loading such a pair fails
+    Why (ADR-035): the bundle key is image-owned (the CDK task definition
+    deliberately doesn't set it), but a stale pre-ADR-035 env on an old
+    task-def revision or a per-run RunTask override can still pair a 4.x
+    runtime with the 3.1 bundle (or the reverse). Loading such a pair fails
     config-incompatible and _diarize would swallow it into a silent
     unlabeled fallback; this precheck turns that into one loud, greppable
     line naming both sides. Keys without a recognizable generation marker
-    skip the check (never block a future bundle naming scheme). Coverage
-    is one-directional by nature: only an image carrying this code can
-    run it, so an OLD image + new bundle still degrades silently -- which
-    is why the deploy order is image first, env second (ADR-035)."""
+    skip the check (never block a future bundle naming scheme)."""
     installed_major = installed_version.split(".")[0]
     m = re.search(r"diarization-(\d+)", bundle_key.rsplit("/", 1)[-1])
     if not m:
@@ -120,8 +119,8 @@ def _bundle_pyannote_mismatch(bundle_key: str, installed_version: str) -> str | 
     if installed_major != expected:
         return (f"DIARIZATION BUNDLE/RUNTIME MISMATCH: bundle {bundle_key!r} "
                 f"expects pyannote.audio {expected}.x but {installed_version} "
-                f"is installed -- image and task-def env must roll together "
-                f"(ADR-035); skipping diarization")
+                f"is installed -- check for a stale DIARIZATION_S3_KEY env "
+                f"or RunTask override (ADR-035); skipping diarization")
     return None
 
 
@@ -170,6 +169,13 @@ def _to_mono16k_wav(input_path: str) -> str:
     return wav_path
 
 
+class WavFormatError(ValueError):
+    """Raised only by _load_wav_waveform's own format check -- the message
+    is built exclusively from WAV header numbers (channel count, sample
+    width), never file content, so _diarize may safely log it verbatim
+    where library exceptions get type-only treatment."""
+
+
 def _load_wav_waveform(wav_path: str) -> dict:
     """Reads the 16kHz mono s16le WAV _to_mono16k_wav just wrote into the
     in-memory {'waveform': (channel, time) tensor, 'sample_rate': int} dict
@@ -193,13 +199,14 @@ def _load_wav_waveform(wav_path: str) -> dict:
         # change surfaces as a distinct error line via _diarize's handler
         # instead of degrading quality through a wrong scale/shape.
         if w.getnchannels() != 1 or w.getsampwidth() != 2:
-            raise ValueError(
+            raise WavFormatError(
                 f"unexpected WAV format for diarization: channels="
                 f"{w.getnchannels()} sampwidth={w.getsampwidth()} "
                 f"(expected mono s16le)")
         sample_rate = w.getframerate()
         raw = w.readframes(w.getnframes())
-    pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+    pcm /= 32768.0  # in-place: avoids a second float32 copy of the waveform
     return {"waveform": torch.from_numpy(pcm).unsqueeze(0), "sample_rate": sample_rate}
 
 
@@ -236,6 +243,12 @@ def _diarize(config_path: str, wav_path: str, num_speakers: int | None):
         kwargs = {"max_speakers": num_speakers} if num_speakers else {}
         diarization = pipeline(_load_wav_waveform(wav_path), **kwargs)
         return _turns_from_diarization(diarization)
+    except WavFormatError as e:
+        # Our own exception, message safe-by-construction (header numbers
+        # only) -- print it verbatim so the ffmpeg-flag regression it exists
+        # to catch is actually diagnosable from the log.
+        print(f"Diarization skipped: {e}")
+        return []
     except Exception as e:
         # Type-only logging: a library exception's str() can embed transcript
         # fragments or file metadata, and this log group retains entries --

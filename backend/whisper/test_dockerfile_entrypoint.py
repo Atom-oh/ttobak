@@ -61,5 +61,47 @@ class TestDispatcherPin(unittest.TestCase):
             self.assertIn(script, copies)
 
 
+LEGACY_DOCKERFILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 'Dockerfile')
+VERIFY_PINS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           'verify_pins.py')
+
+
+class TestLegacyPinLockstep(unittest.TestCase):
+    """ADR-035's "pins must not move" invariant is enforced at build time by
+    verify_pins.py — but only for packages that file lists. This guard keeps
+    the Dockerfile's exact pins and verify_pins.py's PINS in lockstep (the
+    same dual-guard convention as the dispatcher ENTRYPOINT tests above),
+    so adding/changing a pin in one file without the other fails a PR."""
+
+    def _dockerfile_pins(self) -> dict:
+        with open(LEGACY_DOCKERFILE) as f:
+            text = f.read()
+        return dict(re.findall(r'([A-Za-z0-9_.\-]+)==([A-Za-z0-9+.]+)', text))
+
+    def _verify_pins(self) -> dict:
+        import ast
+        with open(VERIFY_PINS) as f:
+            tree = ast.parse(f.read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and any(
+                    getattr(t, 'id', None) == 'PINS' for t in node.targets):
+                return dict(ast.literal_eval(node.value))
+        raise AssertionError('PINS assignment not found in verify_pins.py')
+
+    def test_every_dockerfile_pin_is_verified(self):
+        docker = self._dockerfile_pins()
+        verified = self._verify_pins()
+        # torch is verified via torch.__version__ (exact, incl. +cu128), not
+        # PINS; torchaudio appears in PINS with the cu128 local label the
+        # index actually installs, while the Dockerfile pins the bare
+        # version — compare on the public version part.
+        self.assertEqual(docker.pop('torch'), '2.8.0')
+        self.assertEqual(verified.pop('torchaudio').split('+')[0],
+                         docker.pop('torchaudio'))
+        docker_rest = {k: v for k, v in docker.items()}
+        self.assertEqual(docker_rest, verified)
+
+
 if __name__ == '__main__':
     unittest.main()

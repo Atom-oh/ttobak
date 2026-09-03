@@ -4,11 +4,11 @@ on:
   push:
     branches: [main]
     # Scoped to only what the production Dockerfile actually consumes: it
-    # COPYs transcribe.py + verify_pins.py, and since ADR-035 every pip dep
-    # on the ASR path is exact-pinned (verify_pins.py fails the build if a
-    # pin doesn't survive resolution) -- rebuilding on unrelated
-    # sibling-file changes (e.g. the whisperx benchmark engine files) would
-    # just churn the image. The whisperx image is built manually per
+    # COPYs transcribe.py + verify_pins.py, and since ADR-035 every ASR-path
+    # pip dep is exact-pinned (verify_pins.py fails the build if a pin
+    # doesn't survive resolution; boto3/pyyaml, off that path, still
+    # float) -- rebuilding on unrelated sibling-file changes (e.g. the
+    # whisperx benchmark engine files) would just churn the image. The whisperx image is built manually per
     # docs/runbooks/whisperx-benchmark.md, not by this workflow.
     # Tripwire: if transcribe.py ever starts importing whisper_common.py,
     # add whisper_common.py to these paths too, or shared-module changes
@@ -68,6 +68,16 @@ jobs:
           for c in td['containerDefinitions']:
               if c['name'] == 'whisper':
                   c['image'] = '${ECR_URI}:${IMAGE_TAG::8}'
+                  # ADR-035 image-owned-key invariant: the diarization bundle
+                  # key's source of truth is transcribe.py's in-image default.
+                  # This clone step copies the CURRENT revision's environment,
+                  # so without this strip a stale CDK-era DIARIZATION_S3_KEY
+                  # could outlive the CDK deploy that removed it and override
+                  # the new image's default — re-minting the exact mismatch
+                  # the invariant closed.
+                  c['environment'] = [
+                      e for e in c.get('environment', [])
+                      if e.get('name') != 'DIARIZATION_S3_KEY']
           for k in ['taskDefinitionArn','revision','status','requiresAttributes','compatibilities','registeredAt','registeredBy']:
               td.pop(k, None)
           print(json.dumps(td))")

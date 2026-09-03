@@ -97,4 +97,9 @@ revert 후에도 이미지 재빌드(deploy-whisper.yml)와 스택 재배포
   버킷에 community-1 번들이 존재하는지만 확인한다.
 - pyannote 3.1 번들과 `upload-diarization-model.sh`는 롤백 경로로 S3/repo에
   유지한다. community-1 스테이징은 `upload-whisperx-diarization-model.sh`.
+- "never bump"의 예외는 보안 패치다: `av`(FFmpeg 계열)·`onnxruntime` 등
+  미디어 파서에 CVE가 나오면, 후보 버전으로 이 runbook의 벤치(대표 회의
+  1개 이상, coverage-gap 비교)를 통과시킨 뒤 Dockerfile 핀과
+  `verify_pins.py`를 함께 올린다 — 무벤치 bump는 5분 무음 누락 같은 조용한
+  회귀를 재도입할 수 있다.
 - 벤치 상세와 재현 절차는 `docs/runbooks/whisperx-benchmark.md` §3b/§3c/§6.

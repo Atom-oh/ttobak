@@ -216,10 +216,12 @@ class TestDiarizeKwargsPassthrough(unittest.TestCase):
         fake_pa.Pipeline = FakePipeline
         fake_pyannote = types.ModuleType('pyannote')
         fake_pyannote.audio = fake_pa
-        with mock.patch.dict(sys.modules, {
-                'torch': fake_torch, 'pyannote': fake_pyannote,
-                'pyannote.audio': fake_pa}),              mock.patch.object(transcribe, '_load_wav_waveform',
-                               return_value={'waveform': 'W', 'sample_rate': 16000}):
+        modules = {'torch': fake_torch, 'pyannote': fake_pyannote,
+                   'pyannote.audio': fake_pa}
+        with mock.patch.dict(sys.modules, modules), \
+                mock.patch.object(transcribe, '_load_wav_waveform',
+                                  return_value={'waveform': 'W',
+                                                'sample_rate': 16000}):
             out = transcribe._diarize('config.yaml', '/tmp/a.wav', 5)
         self.assertEqual(out, [])  # None annotation -> legitimate empty
         self.assertEqual(captured, {'max_speakers': 5})
@@ -254,7 +256,9 @@ class TestLoadWavWaveform(unittest.TestCase):
             def astype(self, dtype):
                 return self
 
-            def __truediv__(self, other):
+            def __itruediv__(self, other):
+                # transcribe uses in-place division (avoids a second float32
+                # copy of the waveform) — capture the scale here.
                 captured['divisor'] = other
                 return self
 
