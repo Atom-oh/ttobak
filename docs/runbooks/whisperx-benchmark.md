@@ -306,10 +306,12 @@ overrides to the whisperx `run-task` container overrides.
 **Precondition — one image rebuild.** The knobs are read by engine code, so
 the running image must already contain them (any image built after the PR
 adding `_vad_config_from_env` merged). An older image ignores the env vars
-silently. Rebuild once via the temporary `build-whisperx-image.yml`
-workflow. If that workflow has been retired, rebuild by hand from an
-x86_64 host (the image is amd64 CUDA — an ARM dev host cannot build it
-locally, which is why the workflow pins the `ttobak-x86` runner):
+silently. The temporary `build-whisperx-image.yml` workflow used during the
+Phase 1/2 bench series has been retired (post-ADR-035 cleanup) — rebuild by
+hand from an x86_64 host (the image is amd64 CUDA — an ARM dev host cannot
+build it locally, which is why that workflow pinned the `ttobak-x86`
+runner), or resurrect the workflow from git history if a longer bench
+series justifies it:
 
 ```bash
 aws ecr get-login-password --region ap-northeast-2 | docker login --username AWS \
