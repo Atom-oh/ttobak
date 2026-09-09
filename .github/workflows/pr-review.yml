@@ -6,7 +6,10 @@ name: AI Code Review
 #   - pull_request_target base-ref 체크아웃(M1): PR head 코드 미실행, diff 는 데이터로만
 #   - 매트릭스 fan-out: scripts/pr-review/run-panel.sh(3모델×4lens=12셀) → synthesize.sh
 #   - 인증: EKS Pod Identity(ci-runner) SigV4 + ai-panel-keys(KIRO)
-#   - 리전: us-east-1 (Claude us. geo / codex gpt-5.6-sol bedrock-mantle In-Region)
+#   - 리전: 고정 없음 — 의장 모델이 global.anthropic.claude-fable-5-1(글로벌 추론 프로필)로
+#     바뀌어 codex의 global.openai.gpt-6-astra(amazon-bedrock-runtime)와 마찬가지로 더 이상
+#     AWS_REGION 을 endpoint 와 맞출 필요가 없음. ANTHROPIC_BEDROCK_BASE_URL 은 가까운
+#     실제 리전(ap-northeast-2/Seoul) 진입점만 가리킨다.
 
 on:
   pull_request_target:
@@ -33,11 +36,14 @@ jobs:
       pull-requests: write
       contents: read
     env:
-      # us-east-1 통일: Claude us. geo(on-demand) + codex gpt-5.6-sol mantle(In-Region).
-      ANTHROPIC_MODEL: us.anthropic.claude-fable-5
+      # claude-fable-5-1 is a global inference profile (like Codex's global.openai.gpt-6-astra)
+      # — no AWS_REGION pinning needed anymore. ANTHROPIC_BEDROCK_BASE_URL still names a real
+      # regional bedrock-runtime endpoint as the entry point; the "global." prefix on the
+      # model ID is what lets Bedrock route the request to wherever has capacity, so this can
+      # point at the nearest region (ap-northeast-2/Seoul) instead of us-east-1.
+      ANTHROPIC_MODEL: global.anthropic.claude-fable-5-1
       CLAUDE_CODE_USE_BEDROCK: 1
-      ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.us-east-1.amazonaws.com
-      AWS_REGION: us-east-1
+      ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.ap-northeast-2.amazonaws.com
     steps:
       # 보안(M1): pull_request_target 는 시크릿/쓰기권한 컨텍스트 → base(신뢰됨) 체크아웃.
       - uses: actions/checkout@v4

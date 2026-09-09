@@ -107,8 +107,8 @@ PROMPT_EOF
 # step/용도에도 쓰일 수 있고, repo 마다 다르게 고정돼 있을 수 있어(예: 아직
 # opus-4-8 로 고정된 repo) 그대로 재사용하면 PRIMARY==FALLBACK 으로 붕괴해
 # fallback 자체가 무력화된다. chair 전용 CHAIR_PRIMARY_MODEL 로 완전히 분리.
-PRIMARY_MODEL="${CHAIR_PRIMARY_MODEL:-us.anthropic.claude-fable-5}"
-FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-5}"
+PRIMARY_MODEL="${CHAIR_PRIMARY_MODEL:-global.anthropic.claude-fable-5-1}"
+FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-global.anthropic.claude-opus-5}"
 # 의장 캡 산정 — 플릿 실측(2026-07-28, 패널 16/16 정상인 실행들):
 #
 #   repo                 diff    패널      체어      리뷰      체어 처리량
@@ -135,9 +135,10 @@ FALLBACK_MODEL="${CHAIR_FALLBACK_MODEL:-us.anthropic.claude-opus-5}"
 CHAIR_TIMEOUT="${CHAIR_TIMEOUT:-1500}"
 
 chair_label() { case "$1" in
-  *fable-5*)  echo "Claude Fable 5" ;;
-  *opus-5*)   echo "Claude Opus 5" ;;
-  *)          echo "$1" ;;
+  *fable-5-1*) echo "Claude Fable 5.1" ;;
+  *fable-5*)   echo "Claude Fable 5" ;;
+  *opus-5*)    echo "Claude Opus 5" ;;
+  *)           echo "$1" ;;
 esac ; }
 
 # CHAIR_RC / CHAIR_ELAPSED 를 남긴다 — timeout(124)과 그 밖의 실패를 구분해야 fallback
