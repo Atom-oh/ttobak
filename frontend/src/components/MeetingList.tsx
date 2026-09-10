@@ -229,19 +229,20 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
 export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting }: MeetingListProps) {
   const [activeTab, setActiveTab] = useState<MeetingListFilter['tab']>('all');
   // The desktop header's search box writes `?q=` (see DesktopHeader's
-  // HeaderSearch); this list is what actually filters on it. The URL param
-  // seeds and re-syncs the query so header, mobile bar, and back/forward all
-  // agree. Callers must render this component inside a <Suspense> boundary
+  // HeaderSearch); this list is what actually filters on it. URL → list is
+  // one-way: the mobile bar below edits local state only and does not write
+  // the URL (the two inputs are never visible at the same breakpoint).
+  // Callers must render this component inside a <Suspense> boundary
   // (useSearchParams requirement under static export).
   const urlQuery = useSearchParams().get('q') ?? '';
   const [searchQuery, setSearchQuery] = useState(urlQuery);
   // Re-sync from the URL only when it actually changes (adjust-state-during-
-  // render pattern, not an effect), so the mobile bar's local typing wins
-  // between URL changes.
+  // render pattern, not an effect) and only if it differs from what's shown,
+  // so a URL that merely echoes the current text can't rewind typing.
   const [seenUrlQuery, setSeenUrlQuery] = useState(urlQuery);
   if (seenUrlQuery !== urlQuery) {
     setSeenUrlQuery(urlQuery);
-    setSearchQuery(urlQuery);
+    if (searchQuery.trim() !== urlQuery) setSearchQuery(urlQuery);
   }
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [showTagFilter, setShowTagFilter] = useState(false);

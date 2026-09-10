@@ -28,9 +28,11 @@ interface DesktopHeaderProps {
  * - on `/` every keystroke (debounced) rewrites `?q=` in place and
  *   `MeetingList` filters live off that param;
  * - on any other page, Enter navigates to `/?q=<query>`.
- * The URL is the single source of truth so the mobile search bar, browser
- * back/forward, and a shared link all agree. This used to be a dead input
- * that only wrote to local state — "Search notes..." did nothing at all.
+ * The URL is the source of truth for header → list, back/forward, and
+ * shared links. (The mobile bar in MeetingList still filters via its own
+ * local state and does not write the URL; the two are never visible at the
+ * same breakpoint.) This used to be a dead input that only wrote to local
+ * state — "Search notes..." did nothing at all.
  *
  * Client-side filter over the loaded meeting pages (title / summary /
  * tags), same as the mobile bar — there is no server-side meeting search
@@ -44,29 +46,43 @@ function HeaderSearch() {
   const onHome = pathname === '/';
   const [value, setValue] = useState(onHome ? urlQuery : '');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The trimmed query this component itself last wrote to the URL. A URL
+  // change that merely echoes our own push must NOT re-sync the box: the
+  // push is trimmed ("AWS " → "AWS") and commits asynchronously, so an
+  // unconditional re-sync erased the trailing space (making two-word
+  // searches impossible) and rewound characters typed during the commit.
+  // State, not a ref: it is read during render (the React compiler forbids
+  // reading refs there) and only written from event handlers.
+  const [lastPushed, setLastPushed] = useState<string | null>(null);
 
-  // Keep the box in step with the URL on home (back/forward, tag clicks that
-  // rewrite ?q=), and clear it when leaving home so a stale query from the
-  // list doesn't follow the user onto a meeting page. "Adjust state during
-  // render" pattern (not an effect): re-sync only when the external key
-  // changes, so typing isn't clobbered and no extra render cascade occurs.
+  // Keep the box in step with EXTERNAL URL changes on home (back/forward,
+  // a tag click that rewrites ?q=), and clear it when leaving home so a
+  // stale query doesn't follow the user onto a meeting page. "Adjust state
+  // during render" pattern (not an effect): re-sync only when the external
+  // key changes AND the change isn't our own echo.
   const externalKey = `${onHome ? 1 : 0}:${urlQuery}`;
   const [seenKey, setSeenKey] = useState(externalKey);
   if (seenKey !== externalKey) {
     setSeenKey(externalKey);
-    setValue(onHome ? urlQuery : '');
+    const isOwnEcho = onHome && urlQuery === lastPushed;
+    if (!isOwnEcho) setValue(onHome ? urlQuery : '');
   }
 
   useEffect(() => () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
   }, []);
 
+  const pushHome = (raw: string, mode: 'replace' | 'push') => {
+    const trimmed = raw.trim();
+    setLastPushed(trimmed);
+    const href = trimmed ? `/?q=${encodeURIComponent(trimmed)}` : '/';
+    if (mode === 'replace') router.replace(href, { scroll: false });
+    else router.push(href);
+  };
+
   const applyOnHome = (next: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      const trimmed = next.trim();
-      router.replace(trimmed ? `/?q=${encodeURIComponent(trimmed)}` : '/', { scroll: false });
-    }, 150);
+    debounceRef.current = setTimeout(() => pushHome(next, 'replace'), 150);
   };
 
   return (
@@ -82,13 +98,14 @@ function HeaderSearch() {
           if (onHome) applyOnHome(e.target.value);
         }}
         onKeyDown={(e) => {
-          if (e.key !== 'Enter') return;
-          const trimmed = value.trim();
+          // isComposing: the Enter that commits a Hangul/IME composition
+          // must not fire a search with a half-composed query.
+          if (e.nativeEvent.isComposing || e.key !== 'Enter') return;
           if (onHome) {
             if (debounceRef.current) clearTimeout(debounceRef.current);
-            router.replace(trimmed ? `/?q=${encodeURIComponent(trimmed)}` : '/', { scroll: false });
-          } else if (trimmed) {
-            router.push(`/?q=${encodeURIComponent(trimmed)}`);
+            pushHome(value, 'replace');
+          } else if (value.trim()) {
+            pushHome(value, 'push');
           }
         }}
         aria-label="미팅 검색"
@@ -141,7 +158,7 @@ export function DesktopHeader({ activePath, breadcrumbs, isRecording }: DesktopH
         {/* Search Input — useSearchParams needs a Suspense boundary under
             static export; the fallback is the same box, just inert until
             the params are available (one frame). */}
-        <Suspense fallback={<div className="relative w-64"><input type="search" disabled className="w-full pl-10 pr-4 py-1.5 text-sm bg-slate-100 dark:bg-white/5 border border-transparent rounded-lg" placeholder="미팅 검색" /></div>}>
+        <Suspense fallback={<div className="relative w-64"><span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xl">search</span><input type="search" disabled className="w-full pl-10 pr-4 py-1.5 text-sm bg-slate-100 dark:bg-white/5 border border-transparent dark:border-white/10 rounded-lg" placeholder="미팅 검색" /></div>}>
           <HeaderSearch />
         </Suspense>
 
