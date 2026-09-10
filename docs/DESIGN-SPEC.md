@@ -284,6 +284,8 @@ Layout:
         - Export button
 ```
 
+**Header search (desktop, `layout/DesktopHeader.tsx` → `HeaderSearch`)** — the top-right box is wired to the meeting list through the URL: on `/` each keystroke (150 ms debounce) rewrites `?q=` in place and `MeetingList` filters live (title · summary · tags, client-side over the loaded pages — there is no server search endpoint); on any other page, Enter navigates to `/?q=<query>`. URL → list is one-way (the mobile bar filters via local state only and never writes the URL; the two inputs never share a breakpoint); back/forward and shared links work through the URL; leaving `/` clears the box. The box ignores URL changes that merely echo its own push (`lastPushedRef`), so trimming and async navigation commits never rewind in-progress typing, and Enter is ignored while an IME composition is in progress. Both `HeaderSearch` and `MeetingList` use `useSearchParams` and sit inside `<Suspense>` boundaries (static-export requirement). The notification and help icons next to the box are still inert placeholders.
+
 ### 2.6a Post-Recording Banner & System Audio Mode (current implementation, ADR-024)
 
 `components/record/PostRecordingBanner.tsx` — a fixed top toast shown while `usePostRecording`'s `step` is non-null (`creating` → `notes` → `saving` → `uploading` → `redirecting`, or `error`; `notes` pauses the flow for the notes-input dialog before save/upload resumes).
