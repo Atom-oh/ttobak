@@ -73,6 +73,12 @@ export class AuthStack extends cdk.Stack {
     }
 
     // Cognito User Pool with email/password sign-up/sign-in
+    // Bare app domain (e.g. ttobak.atomai.click) for the invite email's login
+    // link. Same context key gateway-stack.ts requires; falls back to the
+    // production domain here only so a bare `new cdk.App()` in unit tests
+    // still synthesizes (this stack has no other reason to hard-fail on it).
+    const domainName: string = this.node.tryGetContext('ttobak:domainName') ?? 'ttobak.atomai.click';
+
     this.userPool = new cognito.UserPool(this, 'TtobakUserPool', {
       userPoolName: 'ttobak-user-pool',
       // Company security policy: self sign-up is FORBIDDEN. Accounts are created
@@ -101,6 +107,9 @@ export class AuthStack extends cdk.Stack {
         requireUppercase: false,
         requireDigits: true,
         requireSymbols: false,
+        // Explicit (this is Cognito's default) because the invite email body
+        // below states "7일간 유효" — change both together or the mail lies.
+        tempPasswordValidity: cdk.Duration.days(7),
       },
       lambdaTriggers: {
         preSignUp: preSignUpFn,
@@ -108,6 +117,30 @@ export class AuthStack extends cdk.Stack {
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
+      // Invite email for AdminCreateUser (the ONLY onboarding mail an invited
+      // user gets -- there is no sign-up form). Without this block Cognito
+      // sends its default English one-liner, "Your username is {username} and
+      // temporary password is {####}." -- no link to the app, and the trailing
+      // period sits right against the password, which several invitees typed
+      // as part of it. Cognito requires both {username} and {####} in the
+      // body; the password gets its own box with nothing after it.
+      userInvitation: {
+        emailSubject: 'TTOBAK 초대 - 임시 비밀번호 안내',
+        emailBody:
+          '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:40px 24px;background:#ffffff">' +
+          '<div style="text-align:center;margin-bottom:32px"><div style="display:inline-block;background:#3211d4;border-radius:12px;padding:12px;width:56px;height:56px"></div>' +
+          '<h1 style="color:#1a1a2e;font-size:24px;font-weight:700;margin:16px 0 4px">또박</h1><p style="color:#6b7280;font-size:14px;margin:0">AI Meeting Assistant</p></div>' +
+          '<div style="background:#f8f7ff;border:1px solid #e5e2f3;border-radius:16px;padding:32px;text-align:center">' +
+          '<p style="color:#1a1a2e;font-size:18px;font-weight:700;margin:0 0 8px">TTOBAK에 초대되었습니다</p>' +
+          '<p style="color:#374151;font-size:14px;margin:0 0 24px">아래 버튼으로 접속해 이 메일을 받은 주소와 임시 비밀번호로 로그인하세요.<br>첫 로그인 시 새 비밀번호를 설정하게 됩니다.</p>' +
+          `<a href="https://${domainName}" style="display:inline-block;background:#3211d4;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;padding:12px 28px;border-radius:10px">TTOBAK 로그인</a>` +
+          `<p style="color:#9ca3af;font-size:12px;margin:12px 0 28px">https://${domainName}</p>` +
+          '<p style="color:#6b7280;font-size:13px;margin:0 0 8px">임시 비밀번호</p>' +
+          '<div style="background:#ffffff;border:2px solid #3211d4;color:#1a1a2e;font-family:SFMono-Regular,Menlo,Consolas,monospace;font-size:24px;font-weight:700;letter-spacing:2px;padding:14px 24px;border-radius:12px;display:inline-block">{####}</div>' +
+          '<p style="color:#9ca3af;font-size:12px;margin:16px 0 0">위 상자 안의 문자만 입력하세요. 앞뒤 공백이나 문장부호는 비밀번호에 포함되지 않습니다.<br>임시 비밀번호는 7일간 유효합니다.</p>' +
+          '</div>' +
+          '<p style="color:#9ca3af;font-size:11px;text-align:center;margin-top:24px">계정 ID: {username}<br>본인이 요청하지 않은 초대라면 이 이메일을 무시하세요.</p></div>',
+      },
       userVerification: {
         emailSubject: 'TTOBAK 인증 코드',
         emailBody: '<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:40px 24px;background:#ffffff"><div style="text-align:center;margin-bottom:32px"><div style="display:inline-block;background:#3211d4;border-radius:12px;padding:12px;width:56px;height:56px"></div><h1 style="color:#1a1a2e;font-size:24px;font-weight:700;margin:16px 0 4px">또박</h1><p style="color:#6b7280;font-size:14px;margin:0">AI Meeting Assistant</p></div><div style="background:#f8f7ff;border:1px solid #e5e2f3;border-radius:16px;padding:32px;text-align:center"><p style="color:#374151;font-size:15px;margin:0 0 20px">회원가입을 위한 인증 코드입니다</p><div style="background:#3211d4;color:white;font-size:32px;font-weight:700;letter-spacing:8px;padding:16px 32px;border-radius:12px;display:inline-block">{####}</div><p style="color:#9ca3af;font-size:12px;margin:20px 0 0">이 코드는 24시간 동안 유효합니다</p></div><p style="color:#9ca3af;font-size:11px;text-align:center;margin-top:24px">본인이 요청하지 않은 경우 이 이메일을 무시하세요.</p></div>',
