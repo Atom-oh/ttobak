@@ -36,14 +36,15 @@ jobs:
       pull-requests: write
       contents: read
     env:
-      # claude-fable-5-1 is a global inference profile (like Codex's global.openai.gpt-6-astra)
-      # — no AWS_REGION pinning needed anymore. ANTHROPIC_BEDROCK_BASE_URL still names a real
-      # regional bedrock-runtime endpoint as the entry point; the "global." prefix on the
-      # model ID is what lets Bedrock route the request to wherever has capacity, so this can
-      # point at the nearest region (ap-northeast-2/Seoul) instead of us-east-1.
+      # claude-fable-5-1 is a global inference profile, but "global." only affects Bedrock's
+      # routing after the request lands, not the SigV4 signing region — that must still
+      # match ANTHROPIC_BEDROCK_BASE_URL's endpoint or signing fails (unlike Codex's
+      # amazon-bedrock-runtime provider, which has no such constraint). Both moved as a
+      # matched pair from us-east-1 to the nearest region (ap-northeast-2/Seoul).
       ANTHROPIC_MODEL: global.anthropic.claude-fable-5-1
       CLAUDE_CODE_USE_BEDROCK: 1
       ANTHROPIC_BEDROCK_BASE_URL: https://bedrock-runtime.ap-northeast-2.amazonaws.com
+      AWS_REGION: ap-northeast-2
     steps:
       # 보안(M1): pull_request_target 는 시크릿/쓰기권한 컨텍스트 → base(신뢰됨) 체크아웃.
       - uses: actions/checkout@v4
