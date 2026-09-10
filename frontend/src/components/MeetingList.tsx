@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useMemo } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { meetingsApi } from '@/lib/api';
 import type { Meeting, MeetingListFilter } from '@/types/meeting';
 import { SkeletonCard } from '@/components/ui/Skeleton';
@@ -227,7 +228,21 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
 
 export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting }: MeetingListProps) {
   const [activeTab, setActiveTab] = useState<MeetingListFilter['tab']>('all');
-  const [searchQuery, setSearchQuery] = useState('');
+  // The desktop header's search box writes `?q=` (see DesktopHeader's
+  // HeaderSearch); this list is what actually filters on it. The URL param
+  // seeds and re-syncs the query so header, mobile bar, and back/forward all
+  // agree. Callers must render this component inside a <Suspense> boundary
+  // (useSearchParams requirement under static export).
+  const urlQuery = useSearchParams().get('q') ?? '';
+  const [searchQuery, setSearchQuery] = useState(urlQuery);
+  // Re-sync from the URL only when it actually changes (adjust-state-during-
+  // render pattern, not an effect), so the mobile bar's local typing wins
+  // between URL changes.
+  const [seenUrlQuery, setSeenUrlQuery] = useState(urlQuery);
+  if (seenUrlQuery !== urlQuery) {
+    setSeenUrlQuery(urlQuery);
+    setSearchQuery(urlQuery);
+  }
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [showTagFilter, setShowTagFilter] = useState(false);
   const [sortBy, setSortBy] = useState<'newest' | 'name'>('newest');
@@ -299,7 +314,8 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
 
   return (
     <div className="space-y-4">
-      {/* Search Bar — mobile only (desktop has search in header) */}
+      {/* Search Bar — mobile only (desktop uses the header search, which
+          drives the same filter through ?q=) */}
       <div className="px-4 lg:hidden">
         <label className="flex flex-col min-w-40 h-11 w-full">
           <div className="flex w-full flex-1 items-stretch rounded-xl h-full shadow-sm">

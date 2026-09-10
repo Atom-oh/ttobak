@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 const pathLabels: Record<string, string> = {
   '/': 'Meetings',
@@ -22,8 +23,83 @@ interface DesktopHeaderProps {
   isRecording?: boolean;
 }
 
+/**
+ * Header search, wired to the meeting list through the URL (`/?q=`):
+ * - on `/` every keystroke (debounced) rewrites `?q=` in place and
+ *   `MeetingList` filters live off that param;
+ * - on any other page, Enter navigates to `/?q=<query>`.
+ * The URL is the single source of truth so the mobile search bar, browser
+ * back/forward, and a shared link all agree. This used to be a dead input
+ * that only wrote to local state — "Search notes..." did nothing at all.
+ *
+ * Client-side filter over the loaded meeting pages (title / summary /
+ * tags), same as the mobile bar — there is no server-side meeting search
+ * endpoint yet.
+ */
+function HeaderSearch() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const urlQuery = searchParams.get('q') ?? '';
+  const onHome = pathname === '/';
+  const [value, setValue] = useState(onHome ? urlQuery : '');
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keep the box in step with the URL on home (back/forward, tag clicks that
+  // rewrite ?q=), and clear it when leaving home so a stale query from the
+  // list doesn't follow the user onto a meeting page. "Adjust state during
+  // render" pattern (not an effect): re-sync only when the external key
+  // changes, so typing isn't clobbered and no extra render cascade occurs.
+  const externalKey = `${onHome ? 1 : 0}:${urlQuery}`;
+  const [seenKey, setSeenKey] = useState(externalKey);
+  if (seenKey !== externalKey) {
+    setSeenKey(externalKey);
+    setValue(onHome ? urlQuery : '');
+  }
+
+  useEffect(() => () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+  }, []);
+
+  const applyOnHome = (next: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      const trimmed = next.trim();
+      router.replace(trimmed ? `/?q=${encodeURIComponent(trimmed)}` : '/', { scroll: false });
+    }, 150);
+  };
+
+  return (
+    <div className="relative w-64">
+      <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xl">
+        search
+      </span>
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          if (onHome) applyOnHome(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter') return;
+          const trimmed = value.trim();
+          if (onHome) {
+            if (debounceRef.current) clearTimeout(debounceRef.current);
+            router.replace(trimmed ? `/?q=${encodeURIComponent(trimmed)}` : '/', { scroll: false });
+          } else if (trimmed) {
+            router.push(`/?q=${encodeURIComponent(trimmed)}`);
+          }
+        }}
+        aria-label="미팅 검색"
+        className="w-full pl-10 pr-4 py-1.5 text-sm bg-slate-100 dark:bg-white/5 border border-transparent dark:border-white/10 rounded-lg focus:ring-2 focus:ring-primary/20 placeholder:text-slate-500 dark:placeholder:text-text-muted text-slate-900 dark:text-text-main"
+        placeholder={onHome ? '미팅 검색 (제목·요약·태그)' : '미팅 검색 후 Enter'}
+      />
+    </div>
+  );
+}
+
 export function DesktopHeader({ activePath, breadcrumbs, isRecording }: DesktopHeaderProps) {
-  const [searchQuery, setSearchQuery] = useState('');
 
   // Dynamic routes (e.g. /meeting/[id]) pass explicit breadcrumbs;
   // static routes resolve automatically from pathLabels.
@@ -62,19 +138,12 @@ export function DesktopHeader({ activePath, breadcrumbs, isRecording }: DesktopH
 
       {/* Right Actions */}
       <div className="flex items-center gap-4">
-        {/* Search Input */}
-        <div className="relative w-64">
-          <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xl">
-            search
-          </span>
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-1.5 text-sm bg-slate-100 dark:bg-white/5 border border-transparent dark:border-white/10 rounded-lg focus:ring-2 focus:ring-primary/20 placeholder:text-slate-500 dark:placeholder:text-text-muted text-slate-900 dark:text-text-main"
-            placeholder="Search notes..."
-          />
-        </div>
+        {/* Search Input — useSearchParams needs a Suspense boundary under
+            static export; the fallback is the same box, just inert until
+            the params are available (one frame). */}
+        <Suspense fallback={<div className="relative w-64"><input type="search" disabled className="w-full pl-10 pr-4 py-1.5 text-sm bg-slate-100 dark:bg-white/5 border border-transparent rounded-lg" placeholder="미팅 검색" /></div>}>
+          <HeaderSearch />
+        </Suspense>
 
         {/* Notifications */}
         <button className="p-2 text-slate-500 dark:text-text-muted hover:text-primary dark:hover:text-primary transition-colors">

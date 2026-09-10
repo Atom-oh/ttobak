@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { Suspense, useState, useEffect, useRef } from 'react';
+import { SkeletonCard } from '@/components/ui/Skeleton';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { LoginForm } from '@/components/auth/LoginForm';
@@ -285,7 +286,10 @@ export default function HomePage() {
 
         {/* Meeting List */}
         <div className="lg:px-8 lg:max-w-7xl lg:mx-auto lg:w-full">
-          <MeetingList meetings={meetings} isLoading={isFetching} onTabChange={handleTabChange} onDeleteMeeting={handleDeleteMeeting} />
+          {/* Suspense: MeetingList reads ?q= via useSearchParams (header search). */}
+          <Suspense fallback={<div className="px-4 lg:px-0 space-y-3"><SkeletonCard /><SkeletonCard /></div>}>
+            <MeetingList meetings={meetings} isLoading={isFetching} onTabChange={handleTabChange} onDeleteMeeting={handleDeleteMeeting} />
+          </Suspense>
 
           {/* Load More Button */}
           {nextCursor && !isFetching && (
