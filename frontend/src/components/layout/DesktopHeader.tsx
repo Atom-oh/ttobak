@@ -65,7 +65,15 @@ function HeaderSearch() {
   if (seenKey !== externalKey) {
     setSeenKey(externalKey);
     const isOwnEcho = onHome && urlQuery === lastPushed;
-    if (!isOwnEcho) setValue(onHome ? urlQuery : '');
+    if (isOwnEcho) {
+      // Consume the marker: a push yields exactly one URL change. Leaving it
+      // set would make a later, genuinely external arrival at the same
+      // query (sidebar "Meetings" → browser back) look like an echo and
+      // leave the box empty while the list filters.
+      setLastPushed(null);
+    } else {
+      setValue(onHome ? urlQuery : '');
+    }
   }
 
   useEffect(() => () => {
@@ -74,7 +82,11 @@ function HeaderSearch() {
 
   const pushHome = (raw: string, mode: 'replace' | 'push') => {
     const trimmed = raw.trim();
-    setLastPushed(trimmed);
+    // Only arm the echo marker when the URL will actually change — a push
+    // to the current query (Enter on an already-applied search) produces no
+    // searchParams change to consume, and a stale marker would swallow the
+    // next real external change to that value.
+    if (!(onHome && trimmed === urlQuery)) setLastPushed(trimmed);
     const href = trimmed ? `/?q=${encodeURIComponent(trimmed)}` : '/';
     if (mode === 'replace') router.replace(href, { scroll: false });
     else router.push(href);
