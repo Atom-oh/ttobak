@@ -107,6 +107,9 @@ export class AuthStack extends cdk.Stack {
         requireUppercase: false,
         requireDigits: true,
         requireSymbols: false,
+        // Explicit (this is Cognito's default) because the invite email body
+        // below states "7일간 유효" — change both together or the mail lies.
+        tempPasswordValidity: cdk.Duration.days(7),
       },
       lambdaTriggers: {
         preSignUp: preSignUpFn,

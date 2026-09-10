@@ -25,9 +25,8 @@ Exact dependency graph: root `CLAUDE.md`'s "CDK Stack Dependency Order" (source 
 
 ## 2. AuthStack
 
-- **Invite email template** (`userInvitation`, `auth-stack.ts`): custom Korean HTML mail for `AdminCreateUser` with a login button to `https://${ttobak:domainName}` and the temporary password in its own box with no trailing punctuation. Before this, no template was set and Cognito's default sentence ("…temporary password is {####}.") went out — no app link, and the trailing period was routinely mistaken for part of the password.
-
 ### Cognito User Pool
+- **Invite email template** (`userInvitation`, `auth-stack.ts`): custom Korean HTML mail for `AdminCreateUser` with a login button to `https://${ttobak:domainName}` and the temporary password in its own box with no trailing punctuation. Before this, no template was set and Cognito's default sentence ("…temporary password is {####}.") went out — no app link, and the trailing period was routinely mistaken for part of the password.
 - **Self-signup**: disabled (`selfSignUpEnabled: false` / `AllowAdminCreateUserOnly: true` — company security policy, accounts are admin-created only via `AdminCreateUser`/`InviteUser`)
 - **Sign-in aliases**: email
 - **Password policy**: min 8 chars, require lowercase + digits (uppercase/symbols not required)

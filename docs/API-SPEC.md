@@ -1444,7 +1444,7 @@ Response: 204 No Content
 
 #### Invite User (admin-only)
 
-Creates a Cognito user with a system-generated temporary password. Cognito emails the invite directly (default template: username + temp password — no login link, since no `userInvitation` template is configured in `infra/lib/auth-stack.ts`) — no SES/templating on our side. The admin who invited the user is responsible for sharing the sign-in URL separately. The invitee's first sign-in returns a `NEW_PASSWORD_REQUIRED` challenge, handled client-side by `completeNewPassword()` in `frontend/src/lib/auth.ts`.
+Creates a Cognito user with a system-generated temporary password. Cognito emails the invite directly using the custom `userInvitation` template in `infra/lib/auth-stack.ts` (Korean HTML: a login button to `https://${ttobak:domainName}`, the temporary password alone in its own box with no trailing punctuation, 7-day validity note) — no SES/templating on our side. The admin no longer needs to share the sign-in URL separately. The invitee's first sign-in returns a `NEW_PASSWORD_REQUIRED` challenge, handled client-side by `completeNewPassword()` in `frontend/src/lib/auth.ts`.
 
 Requires the caller's JWT `cognito:groups` claim to contain `admins` (enforced by `middleware.RequireAdmin`, backed by JWKS-verified signature checking in `middleware.ParseVerifiedJWT`).
 

@@ -6,7 +6,10 @@ describe('AuthStack', () => {
   let template: Template;
 
   beforeAll(() => {
-    const app = new cdk.App();
+    // Same convention as gateway-stack.test.ts: inject the domain context so
+    // the invite-template assertion pins that the context value is actually
+    // wired into the login link, not merely that a fallback constant exists.
+    const app = new cdk.App({ context: { 'ttobak:domainName': 'ttobak.example.com' } });
     const stack = new AuthStack(app, 'TestAuthStack');
     template = Template.fromStack(stack);
   });
@@ -31,7 +34,8 @@ describe('AuthStack', () => {
     expect(invite).toBeDefined();
     expect(invite!.EmailSubject).toContain('TTOBAK');
     const body = invite!.EmailMessage!;
-    expect(body).toContain('https://ttobak.atomai.click');
+    expect(body).toContain('https://ttobak.example.com');
+    expect(body).not.toContain('ttobak.atomai.click');
     expect(body).toContain('{username}');
     expect(body).toContain('{####}');
     // No punctuation may directly follow the password placeholder -- that is
@@ -39,6 +43,18 @@ describe('AuthStack', () => {
     expect(body).not.toMatch(/\{####\}\s*[.,;:!]/);
     // And it must not be Cognito's default sentence.
     expect(body).not.toContain('temporary password is {####}.');
+  });
+
+  // The fallback exists only so a bare `new cdk.App()` (no cdk.json context,
+  // e.g. an ad-hoc synth in a test) still produces a usable link; real
+  // deploys always carry the context. Pin it separately so the main test
+  // above stays a test of the wiring.
+  test('invite link falls back to the production domain when no context is given', () => {
+    const app = new cdk.App();
+    const stack = new AuthStack(app, 'FallbackAuthStack');
+    const pools = Template.fromStack(stack).findResources('AWS::Cognito::UserPool');
+    const pool = Object.values(pools)[0] as { Properties: { AdminCreateUserConfig: { InviteMessageTemplate: { EmailMessage: string } } } };
+    expect(pool.Properties.AdminCreateUserConfig.InviteMessageTemplate.EmailMessage).toContain('https://ttobak.atomai.click');
   });
 
   test('self sign-up is disabled: AllowAdminCreateUserOnly must be true', () => {
