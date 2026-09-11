@@ -340,6 +340,13 @@ func TestListMeetingsForAccounts_RejectsMalformedCursorState(t *testing.T) {
 			})
 			c.Stage, c.Team = "team", *team
 		}},
+		{"overlong ref sort key", func(c *meetingFilterCursor) {
+			team, _ := encodeTeamMeetingCursor(teamMeetingCursor{
+				UserID: "viewer", Tab: "shared", Selected: []string{"acc-a"}, Accounts: []string{"acc-a"},
+				RefCursor: rawFilterCursor(map[string]string{"PK": "ACCOUNT#acc-a", "SK": "MEETINGREF#" + strings.Repeat("x", 1024)}),
+			})
+			c.Stage, c.Team = "team", *team
+		}},
 		{"inner filter mismatch", func(c *meetingFilterCursor) {
 			team, _ := encodeTeamMeetingCursor(teamMeetingCursor{
 				UserID: "viewer", Tab: "shared", Selected: []string{"acc-b"}, Accounts: []string{"acc-b"},

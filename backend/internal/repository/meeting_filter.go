@@ -59,8 +59,12 @@ func decodeMeetingKey(cursor string, size int) (map[string]string, error) {
 	if err := json.Unmarshal(data, &key); err != nil || len(key) != size {
 		return nil, ErrInvalidMeetingCursor
 	}
-	for _, v := range key {
-		if v == "" || len(v) > 2048 || strings.ContainsAny(v, "\x00\r\n") {
+	for name, v := range key {
+		limit := 2048
+		if name == "SK" || name == "GSI1SK" {
+			limit = 1024
+		}
+		if v == "" || len(v) > limit || strings.ContainsAny(v, "\x00\r\n") {
 			return nil, ErrInvalidMeetingCursor
 		}
 	}

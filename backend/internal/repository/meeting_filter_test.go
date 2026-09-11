@@ -116,3 +116,78 @@ func TestValidateMeetingListCursor_AcceptsSparseMembershipPositions(t *testing.T
 		}
 	}
 }
+
+func TestDecodeMeetingKey_ByteLimits(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		limit int
+	}{
+		{"PK", 2048},
+		{"GSI1PK", 2048},
+		{"SK", 1024},
+		{"GSI1SK", 1024},
+	} {
+		for _, multibyte := range []bool{false, true} {
+			for _, extra := range []int{0, 1} {
+				t.Run(fmt.Sprintf("%s/multibyte=%t/extra=%d", tt.name, multibyte, extra), func(t *testing.T) {
+					length := tt.limit + extra
+					value := strings.Repeat("x", length)
+					if multibyte {
+						value = strings.Repeat("가", length/3) + strings.Repeat("x", length%3)
+					}
+					key := map[string]string{"PK": "p", "SK": "s", "GSI1PK": "p", "GSI1SK": "s"}
+					key[tt.name] = value
+					data, err := json.Marshal(key)
+					if err != nil {
+						t.Fatal(err)
+					}
+					got, err := decodeMeetingKey(base64.StdEncoding.EncodeToString(data), 4)
+					if extra == 0 {
+						if err != nil || got[tt.name] != value {
+							t.Fatalf("%s at %d bytes should be accepted: %v", tt.name, length, err)
+						}
+					} else if !errors.Is(err, ErrInvalidMeetingCursor) {
+						t.Fatalf("%s at %d bytes should be rejected: %v", tt.name, length, err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestListMeetings_RejectsOverlongSortKeysBeforeStorage(t *testing.T) {
+	for _, tt := range []struct {
+		name, tab, field, value string
+	}{
+		{"direct share", "shared", "SK", "SHARED#" + strings.Repeat("x", 1024)},
+		{"owned base sort key", "all", "SK", "MEETING#" + strings.Repeat("x", 1024)},
+		{"owned index sort key", "all", "GSI1SK", strings.Repeat("x", 1025)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			key := map[string]string{"PK": "USER#viewer", "SK": "SHARED#meeting"}
+			if tt.tab == "all" {
+				key["SK"], key["GSI1PK"], key["GSI1SK"] = "MEETING#meeting", "USER#viewer", "2026-09-11"
+			}
+			key[tt.field] = tt.value
+			data, err := json.Marshal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			client := dynamodb.New(dynamodb.Options{
+				Region: "ap-northeast-2", Credentials: aws.AnonymousCredentials{},
+				HTTPClient: meetingListHTTPClientFunc(func(*http.Request) (*http.Response, error) {
+					calls++
+					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}}, Body: io.NopCloser(strings.NewReader(`{"Items":[]}`))}, nil
+				}),
+			})
+			r := NewDynamoDBRepository(client, "test")
+			_, err = r.ListMeetings(context.Background(), ListMeetingsParams{
+				UserID: "viewer", Tab: tt.tab, AccountIDs: []string{}, Cursor: base64.StdEncoding.EncodeToString(data),
+			})
+			if !errors.Is(err, ErrInvalidMeetingCursor) || calls != 0 {
+				t.Fatalf("overlong sort key reached storage: calls=%d, error=%v", calls, err)
+			}
+		})
+	}
+}
