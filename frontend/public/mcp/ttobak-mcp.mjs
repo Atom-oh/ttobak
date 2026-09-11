@@ -21363,6 +21363,7 @@ var TtobakApi = class {
           }
         },
         (res) => {
+          res.setEncoding("utf8");
           let chunks = "";
           res.on("data", (c) => chunks += c);
           res.on("end", () => {

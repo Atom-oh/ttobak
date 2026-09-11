@@ -8,7 +8,7 @@ CognitoAuth.prototype.loadTokens = function () {};
 const saved = new Map();
 TtobakApi.prototype.request = async function (method, path, body) {
   if (path.endsWith('/shared-doc') && method === 'PUT') throw new Error('HTTP 404: NOT_FOUND');
-  const request = { method, path, body };
+  const request = { method, path, body: body === undefined ? undefined : JSON.parse(JSON.stringify(body)) };
   if (path === '/api/documents' && method === 'POST') {
     const doc = { docId: 'doc-1', title: body.title, content: body.markdown };
     saved.set(doc.docId, doc);

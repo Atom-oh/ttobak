@@ -198,7 +198,7 @@ in `accountIds`. Keep that same filter while following pagination cursors.
 | `ttobak_kb_delete_file` | Delete a KB file by ID (stays in the search index until the next ingestion run) | "Delete that old KB file" |
 | `ttobak_upload_document` | Upload a local file (pdf/pptx/ppt) as a document, personal or account-shared | "Upload this deck to Hana Bank" |
 | `ttobak_create_account` | Create an account, optionally under `parentAccountId` | "Create Hana Bank under Hana Financial Group" |
-| `ttobak_add_account_member` | Add a teammate to an account (AM/TAM/SSA) | "Add jane@x.com to Hana Bank as TAM" |
+| `ttobak_add_account_member` | Any existing member can add a teammate as AM/TAM/SSA/SA/SA Manager/AM Manager | "Add jane@x.com to Hana Bank as TAM" |
 | `ttobak_create_project` | Create a Project (SFDC Opportunity) | "Create a project for the Hana Bank renewal" |
 | `ttobak_list_projects` | List projects you own, are directly invited to, or reach via a linked Account's membership | "Show my projects" |
 | `ttobak_get_project` | Project detail: members, linked accounts | "Show the Hana renewal project" |
@@ -436,7 +436,7 @@ Account 공유 공간을 사용합니다. 직접 공유받은 개인 문서는 �
 | `ttobak_kb_delete_file` | KB 파일 ID로 삭제 (다음 인제스천까지는 검색 인덱스에 잔존) | "그 오래된 KB 파일 삭제해줘" |
 | `ttobak_upload_document` | 로컬 파일(pdf/pptx/ppt)을 문서로 업로드(개인 또는 Account 공유) | "이 덱을 하나은행에 업로드해줘" |
 | `ttobak_create_account` | `parentAccountId`로 상위 그룹을 지정해 Account 생성 | "하나금융그룹 아래 하나은행을 만들어줘" |
-| `ttobak_add_account_member` | Account에 팀원 추가(AM/TAM/SSA) | "jane@x.com을 하나은행에 TAM으로 추가해줘" |
+| `ttobak_add_account_member` | 기존 멤버 누구나 팀원 추가(AM/TAM/SSA/SA/SA Manager/AM Manager) | "jane@x.com을 하나은행에 TAM으로 추가해줘" |
 | `ttobak_create_project` | Project(SFDC Opportunity) 생성 | "하나은행 갱신 프로젝트 만들어줘" |
 | `ttobak_list_projects` | 내가 소유하거나 직접 초대되었거나 연결된 Account 멤버십으로 접근 가능한 프로젝트 목록 | "내 프로젝트 목록 보여줘" |
 | `ttobak_get_project` | 프로젝트 상세: 멤버, 연결 Account | "하나은행 갱신 프로젝트 보여줘" |
