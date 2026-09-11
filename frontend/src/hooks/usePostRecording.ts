@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 
 import { useRouter } from 'next/navigation';
 import { meetingsApi, uploadsApi } from '@/lib/api';
 import { putWithProgress, type UploadProgress } from '@/lib/upload';
-import { uploadRecordingWithRetry, onNativeUploadProgress, cleanupRecording, isCommandNotFound, VERSION_SKEW_MESSAGE } from '@/lib/tauri';
+import { uploadRecordingWithRetry, onNativeUploadProgress, cleanupRecording, releaseRecordingPower, isCommandNotFound, VERSION_SKEW_MESSAGE } from '@/lib/tauri';
 import type { PostRecordingStep } from '@/components/record/PostRecordingBanner';
 
 function formatDefaultTitle(date: Date): string {
@@ -54,6 +54,13 @@ type PendingAudio =
   | { kind: 'blob'; blob: Blob; mimeType: string }
   | { kind: 'native'; path: string; byteSize: number };
 
+function releasePendingPower(pending: PendingAudio | null) {
+  if (pending?.kind !== 'native') return;
+  void releaseRecordingPower(pending.path).catch((err) => {
+    console.warn('Unable to release abandoned recording idle-sleep protection:', err);
+  });
+}
+
 interface UsePostRecordingOptions {
   meetingTitle: string;
   /** Live summary built during recording (useLiveSummary's liveSummaryRef) — persisted at save time when non-empty */
@@ -81,6 +88,7 @@ export function usePostRecording({
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
 
   const pendingAudioRef = useRef<PendingAudio | null>(null);
+  const mountedRef = useRef(true);
   // Set once the PUT to S3 has actually succeeded, so a retry that only
   // needs to redo `notifyComplete` (e.g. that call timed out, or the app
   // was closed right after a successful upload) never re-uploads the whole
@@ -102,7 +110,9 @@ export function usePostRecording({
   const flowGenerationRef = useRef(0);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       // Bump generation FIRST: abort() alone only cancels the offline wait
       // -- an already-in-flight PUT keeps running, and without the bump
       // its eventual success would still pass isCurrent() and fire
@@ -114,6 +124,7 @@ export function usePostRecording({
       // eslint-disable-next-line react-hooks/exhaustive-deps
       flowGenerationRef.current++;
       uploadAbortRef.current?.abort();
+      releasePendingPower(pendingAudioRef.current);
     };
   }, []);
 
@@ -126,6 +137,7 @@ export function usePostRecording({
     // same goes for the meeting id: if creation below fails, a lingering
     // previous id would route THIS recording's audio into the old meeting.
     setServerMeetingId(null);
+    releasePendingPower(pendingAudioRef.current);
     pendingAudioRef.current = null;
     putDoneRef.current = null;
     uploadAbortRef.current?.abort();
@@ -323,7 +335,15 @@ export function usePostRecording({
    * path instead of a Blob so the WAV's bytes never need to enter the
    * WebView (see `lib/tauri.ts`'s `uploadRecording`). */
   const handleNativeFileReady = useCallback((path: string, byteSize: number) => {
-    pendingAudioRef.current = { kind: 'native', path, byteSize };
+    const pending: PendingAudio = { kind: 'native', path, byteSize };
+    // RecordButton can disappear when switching to upload mode while this
+    // parent hook is still mounted. Always accept that completed file.
+    // Only a full page unmount abandons a late native stop completion.
+    if (!mountedRef.current) {
+      releasePendingPower(pending);
+      return;
+    }
+    pendingAudioRef.current = pending;
     putDoneRef.current = null;
     setStep('notes');
   }, []);
@@ -430,6 +450,7 @@ export function usePostRecording({
     setStep(null);
     setErrorMessage(null);
     setUploadProgress(null);
+    releasePendingPower(pendingAudioRef.current);
     pendingAudioRef.current = null;
     putDoneRef.current = null;
     // Cancels a native upload's offline wait if one is still pending --

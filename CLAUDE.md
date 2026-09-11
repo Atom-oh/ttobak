@@ -43,11 +43,12 @@ cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common te
 # `cargo test` itself runs on any platform that has Tauri's own native deps
 # (on Linux: webkit2gtk-4.1/gtk3/dbus dev packages -- Amazon Linux 2023 ships
 # no webkit2gtk, so there run the Tauri-free modules' tests -- error.rs,
-# audio.rs, leftover.rs -- from a scratch crate that `#[path]`-includes them,
-# with deps thiserror/log/parking_lot/serde); only the ScreenCaptureKit-adjacent
-# tests nested inside audio.rs's `#[cfg(target_os = "macos")]` module require
-# an actual Mac to execute (see mac-app/CLAUDE.md for the full build/sign flow).
-# No CI covers this module, so run all three locally before pushing.
+# audio.rs, leftover.rs, power.rs -- from a scratch crate that `#[path]`-includes
+# them, with deps thiserror/log/parking_lot/serde); only the ScreenCaptureKit-
+# adjacent tests nested inside audio.rs's/power.rs's `#[cfg(target_os = "macos")]`
+# modules require an actual Mac to execute (see mac-app/CLAUDE.md for the full
+# build/sign flow). No CI covers this module, so run all three locally before
+# pushing.
 cd mac-app/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 
 # CDK

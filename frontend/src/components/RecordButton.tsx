@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { getPreferredMimeType, supportsMediaRecorder, supportsTabAudioCapture } from '@/lib/device';
 import { uploadAudioBlob } from '@/lib/upload';
-import { isTauri, startNativeRecording, stopNativeRecording, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE, type TauriStatusResponse } from '@/lib/tauri';
+import { isTauri, startNativeRecording, stopNativeRecording, releaseRecordingPower, getNativeRecordingStatus, onNativeAudioLevel, onNativePcmChunk as subscribeNativePcmChunk, assertUploadRecordingAvailable, VERSION_SKEW_MESSAGE, type TauriStatusResponse } from '@/lib/tauri';
 import { CameraCapture } from '@/components/CameraCapture';
 
 /**
@@ -152,6 +152,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   const barsContainerRef = useRef<HTMLDivElement>(null);
   const [showCamera, setShowCamera] = useState(false);
   const nativeTempPathRef = useRef<string | null>(null);
+  const nativeStopInFlightRef = useRef(false);
   // Blocks double-starts during startRecording's async window (see the
   // guard at its entry) — must be a ref: state wouldn't flip synchronously.
   const startInFlightRef = useRef(false);
@@ -744,6 +745,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   };
 
   const stopRecording = async () => {
+    if (nativeStopInFlightRef.current) return;
     isRecordingRef.current = false;
     releaseWakeLock();
     if (timerRef.current) {
@@ -770,6 +772,7 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
     // $TMPDIR/ttobak-mac/ (std::env::temp_dir()), recoverable via
     // /record?mode=upload if something goes wrong before that.
     if (nativeTempPathRef.current) {
+      nativeStopInFlightRef.current = true;
       const tempPath = nativeTempPathRef.current;
       // Stop receiving level/PCM events; the Rust side won't emit any more
       // after stop_capture, but unsubscribe defensively.
@@ -860,12 +863,17 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
         // Clear the ref: the file is preserved on disk (message below), but
         // keeping the ref would let a re-record silently overwrite it.
         nativeTempPathRef.current = null;
+        void releaseRecordingPower(tempPath).catch((releaseError) => {
+          console.warn('Unable to release failed recording idle-sleep protection:', releaseError);
+        });
         const message = err instanceof Error ? err.message : 'Native recording stop failed';
         onError?.(
           `${message} — 녹음 파일은 보존되어 있습니다: ${tempPath}. /record?mode=upload 에서 직접 업로드할 수 있습니다.`,
         );
         setRecordingState('idle');
         setElapsedTime(0);
+      } finally {
+        nativeStopInFlightRef.current = false;
       }
       return;
     }

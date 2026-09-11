@@ -7,6 +7,7 @@
 //!   straight from disk to a presigned S3 URL (bulk audio bytes never cross
 //!   the IPC bridge to the WebView — see `upload.rs` module docs)
 //! - `cleanup_recording(path)` — delete a temp WAV file and revoke whitelist entry
+//! - `release_recording_power(path)` — release idle-sleep protection without deleting audio
 //! - `recording_status(path)` — current capture state for the UI, plus
 //!   whether `path` specifically is still being finalized
 //! - `list_leftover_recordings()` — temp WAVs adopted at startup from a
@@ -26,6 +27,8 @@
 mod audio;
 mod error;
 mod leftover;
+#[cfg(any(target_os = "macos", test))]
+mod power;
 mod upload;
 
 use std::collections::HashSet;
@@ -97,6 +100,11 @@ pub struct RecorderState {
     /// overlap, which is exactly the scenario this whole mechanism exists to
     /// handle correctly.
     pub finalizing: Arc<Mutex<HashSet<PathBuf>>>,
+    /// Pending canonical paths and their shared idle-sleep assertion are
+    /// changed under one lock; an older cleanup must not release a newer
+    /// recording's protection.
+    #[cfg(target_os = "macos")]
+    recording_power: Mutex<power::RecordingPower<power::PowerAssertion>>,
 }
 
 #[derive(Serialize)]
@@ -263,11 +271,15 @@ async fn start_recording(
             }
         };
 
-        state.recorder.lock().install(path.clone(), backend);
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        state.recording_power.lock().protect(canonical.clone(), || {
+            power::PowerAssertion::acquire("TTOBAK recording awaiting upload")
+        });
+        state.recorder.lock().install(path, backend);
         guard.disarm();
 
-        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
         state.recorded_paths.lock().insert(canonical.clone());
+
         return Ok(StartResponse {
             temp_path: canonical.to_string_lossy().into_owned(),
         });
@@ -419,14 +431,47 @@ fn recording_status(path: String, state: State<'_, RecorderState>) -> StatusResp
 }
 
 #[tauri::command]
+async fn release_recording_power(
+    path: String,
+    state: State<'_, RecorderState>,
+) -> Result<(), AppError> {
+    let canonical = validate_recording_path(&path, &state.recorded_paths.lock())?;
+    #[cfg(target_os = "macos")]
+    state.recording_power.lock().finish(&canonical);
+    #[cfg(not(target_os = "macos"))]
+    let _ = canonical;
+    Ok(())
+}
+
+#[tauri::command]
 async fn cleanup_recording(path: String, state: State<'_, RecorderState>) -> Result<(), AppError> {
     let canonical = validate_recording_path(&path, &state.recorded_paths.lock())?;
+    {
+        let snapshot = state.recorder.lock().snapshot();
+        let active = snapshot.path.and_then(|p| std::fs::canonicalize(p).ok());
+        if snapshot.recording && active.as_ref() == Some(&canonical) {
+            return Err(AppError::Backend(
+                "refusing to clean up an active recording".into(),
+            ));
+        }
+        if state.finalizing.lock().contains(&canonical) {
+            return Err(AppError::Backend(
+                "refusing to clean up a recording that is still being finalized".into(),
+            ));
+        }
+    }
+    // This command signals completed upload or explicit discard. Release
+    // before deleting: a filesystem error must still be returned (and leave
+    // the file whitelisted for retry), but need not keep an idle Mac awake.
+    #[cfg(target_os = "macos")]
+    state.recording_power.lock().finish(&canonical);
     tokio::fs::remove_file(&canonical)
         .await
         .map_err(|e| AppError::Io(format!("remove {}: {e}", canonical.display())))?;
     state.recorded_paths.lock().remove(&canonical);
     state.adopted_paths.lock().remove(&canonical);
     log::info!("cleaned up recording: {}", canonical.display());
+
     Ok(())
 }
 
@@ -495,6 +540,8 @@ pub fn run() {
             recorded_paths: Mutex::new(HashSet::new()),
             adopted_paths: Mutex::new(HashSet::new()),
             finalizing: Arc::new(Mutex::new(HashSet::new())),
+            #[cfg(target_os = "macos")]
+            recording_power: Mutex::new(power::RecordingPower::new()),
         })
         .invoke_handler(tauri::generate_handler![
             start_recording,
@@ -502,6 +549,7 @@ pub fn run() {
             recording_status,
             upload::upload_recording,
             cleanup_recording,
+            release_recording_power,
             list_leftover_recordings,
         ])
         .setup(|app| {
