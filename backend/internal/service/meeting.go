@@ -528,8 +528,13 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 	// Only render segments verified against A, the detail view's raw fallback.
 	// Legacy edits or the B pipeline may have left unrelated shared segments.
 	var transcription json.RawMessage
-	if len(transcriptSegmentsForText(meeting.TranscriptA, meeting.TranscriptSegments)) > 0 {
-		transcription = json.RawMessage(meeting.TranscriptSegments)
+	if segments := transcriptSegmentsForText(meeting.TranscriptA, meeting.TranscriptSegments); len(segments) > 0 {
+		// Legacy Transcribe segments may have been reconstructed with current
+		// punctuation. Render that verified text while retaining IDs/timestamps.
+		transcription, err = json.Marshal(segments)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode transcript segments: %w", err)
+		}
 	}
 
 	// The owner's exported Notion page is private to their own export — a

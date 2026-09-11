@@ -190,6 +190,14 @@ Error: 403 Forbidden (if not owner and not shared)
 Error: 404 Not Found
 ```
 
+> `transcription` contains speaker segments only when they cover the complete
+> current `transcriptA`. Legacy Transcribe segments may omit sentence/clause
+> punctuation at word boundaries; verified segment text is reconstructed from
+> the current source, retaining its punctuation and the original segment IDs
+> and timestamps. Word changes, internal numeric/symbol differences, and partial
+> coverage fall back to raw text without segment anchors. Reconstruction is
+> read-only and does not rewrite stored transcripts.
+
 #### Update Meeting
 
 ```
@@ -221,8 +229,9 @@ Error: 403 Forbidden (shared users with "read" permission cannot edit)
 > cause summary generation to fail explicitly rather than silently omit content.
 > Changing `transcriptA` invalidates its previous speaker segments in the same
 > update; resending unchanged text preserves them. Summary generation honors
-> the selected transcript and uses A's segments only when their complete text
-> matches A. B selections do not reuse A's anchors.
+> the selected transcript and uses A's segments only after complete source
+> verification, including the legacy punctuation reconstruction described above.
+> B selections do not reuse A's anchors.
 
 #### Delete Meeting
 

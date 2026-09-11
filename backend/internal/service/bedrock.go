@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -367,8 +368,9 @@ func buildSummarizeUserPrompt(transcript, priorContext string, segments []speake
 // transcriptSegmentsForText accepts only a complete match to the current text.
 // The pipeline's shared segment field can be written alongside A or B, and older
 // A edits may have left it stale. Support both plain STT text and the grouped
-// [speaker] format produced by RefineTranscript/mergePartTranscripts. Normalize
-// whitespace only: dropping punctuation could turn "1.5" into "15".
+// [speaker] format produced by RefineTranscript/mergePartTranscripts. Legacy
+// Transcribe segments omit punctuation items: align their exact words and
+// reconstruct the text from the current source, never strip its punctuation.
 func transcriptSegmentsForText(transcript, rawSegments string) []speakerSegment {
 	if strings.TrimSpace(transcript) == "" || rawSegments == "" {
 		return nil
@@ -397,7 +399,42 @@ func transcriptSegmentsForText(transcript, rawSegments string) []speakerSegment 
 		return strings.Join(strings.Fields(text), " ")
 	}
 	text := normalize(transcript)
-	if text != normalize(plain.String()) && text != normalize(grouped.String()) {
+	if text == normalize(plain.String()) || text == normalize(grouped.String()) {
+		return segments
+	}
+	return alignLegacyTranscriptSegments(transcript, segments)
+}
+
+// alignLegacyTranscriptSegments permits only sentence/clause punctuation added
+// at the END of a complete whitespace-delimited word in the current source.
+// Internal punctuation and symbols must still match exactly (1.5 != 15,
+// 12,000 != 12000, -5 != 5, C++ != C). All words must match in order and the
+// entire source must be consumed, so partial/stale segments cannot earn anchors.
+// segments is the private slice decoded by transcriptSegmentsForText.
+func alignLegacyTranscriptSegments(transcript string, segments []speakerSegment) []speakerSegment {
+	const boundaryPunctuation = ".,!?;:。！？、，；：…"
+	remaining := transcript
+	for i := range segments {
+		remaining = strings.TrimLeftFunc(remaining, unicode.IsSpace)
+		start := len(transcript) - len(remaining)
+		for _, word := range strings.Fields(segments[i].Text) {
+			remaining = strings.TrimLeftFunc(remaining, unicode.IsSpace)
+			end := strings.IndexFunc(remaining, unicode.IsSpace)
+			if end < 0 {
+				end = len(remaining)
+			}
+			currentWord := remaining[:end]
+			if currentWord != word {
+				suffix, ok := strings.CutPrefix(currentWord, word)
+				if !ok || strings.Trim(suffix, boundaryPunctuation) != "" {
+					return nil
+				}
+			}
+			remaining = remaining[end:]
+		}
+		segments[i].Text = transcript[start : len(transcript)-len(remaining)]
+	}
+	if strings.TrimSpace(remaining) != "" {
 		return nil
 	}
 	return segments
