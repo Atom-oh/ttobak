@@ -4,7 +4,7 @@ Tauri 2 + Rust desktop wrapper that adds native macOS system-audio capture to th
 
 ## Build only on macOS
 
-The app itself runs only on macOS (ScreenCaptureKit). `screencapturekit` is macOS-target-gated in `Cargo.toml`, so `cargo check`/`cargo test`/`cargo clippy` DO build on Linux as long as Tauri's own native deps are present (webkit2gtk-4.1, gtk3, dbus dev packages — Amazon Linux 2023 has no webkit2gtk, so there only the Tauri-free modules `error.rs`/`audio.rs`/`leftover.rs` can be tested, via a scratch crate that `#[path]`-includes them). **No CI**: built and signed locally on a developer Mac (ad-hoc signing needs the Apple toolchain), so run the lint/test block below yourself before pushing.
+The app itself runs only on macOS (ScreenCaptureKit). `screencapturekit` is macOS-target-gated in `Cargo.toml`, so `cargo check`/`cargo test`/`cargo clippy` DO build on Linux as long as Tauri's own native deps are present (webkit2gtk-4.1, gtk3, dbus dev packages — Amazon Linux 2023 has no webkit2gtk, so there only the Tauri-free modules `error.rs`/`audio.rs`/`leftover.rs`/`power.rs` can be tested, via a scratch crate that `#[path]`-includes them). **No CI**: built and signed locally on a developer Mac (ad-hoc signing needs the Apple toolchain), so run the lint/test block below yourself before pushing.
 
 ```bash
 cd mac-app

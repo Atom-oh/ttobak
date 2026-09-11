@@ -1032,8 +1032,11 @@ function RecordPageInner() {
           </div>
         )}
 
-        {/* Keep native start/stop state mounted when switching modes. */}
-        <div className={`${isUploadMode ? 'hidden' : 'flex'} flex-col items-center justify-center mb-8`}>
+        {/* Keep native start/stop state mounted when switching modes. Stay
+            visible while a native recording is live even in upload mode --
+            otherwise the upload UI's own `!isNativeRecording` guard above
+            hides IT too, leaving no Stop control on screen at all. */}
+        <div className={`${isUploadMode && !isNativeRecording ? 'hidden' : 'flex'} flex-col items-center justify-center mb-8`}>
           <RecordButton
             ref={recordButtonRef}
             meetingId={clientMeetingId}
