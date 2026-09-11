@@ -412,7 +412,10 @@ Layout:
       - side-by-side vs. stacked switches on measured row width (ResizeObserver),
         not a viewport breakpoint — auto-stacks when the min width + reserve won't fit
     - Attachments Gallery (4-column grid, hover overlay)
-    - Full Transcription (timestamp badges + speaker entries)
+    - Full Transcription (timestamp badges + speaker entries). Raw transcript
+      edits remain open with an inline error and the user's draft when saving
+      fails. Save success updates the displayed text; controls are disabled
+      during saving, and an empty replacement is rejected.
     - Floating Audio Player (sticky bottom-6, rounded-full, backdrop-blur)
   reference aside (right side, drag-resizable 280-640px, localStorage
     `ttobak:meetingAsideWidth`) — same w-2 divider pattern

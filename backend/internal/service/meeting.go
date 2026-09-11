@@ -19,6 +19,10 @@ import (
 	"github.com/ttobak/backend/internal/speaker"
 )
 
+// Saved notes enter the final-summary prompt, with the same character budget
+// as liveSummary. Enforce this on both edits and summary reads.
+const maxMeetingNotesRunes = model.MaxLiveSummaryRunes
+
 // Auto-expiry thresholds for meetings stuck in an in-progress status with no
 // further updates. Recording is user-controlled and open-ended (a
 // legitimate meeting can run for hours), so it needs a much longer threshold
@@ -46,6 +50,13 @@ const (
 	// to actually fire before that happens.
 	summarizeRetryEligibleThreshold = 20 * time.Minute
 )
+
+func validateMeetingNotes(notes string) error {
+	if len([]rune(notes)) > maxMeetingNotesRunes {
+		return fmt.Errorf("%w: notes exceeds %d characters", ErrInvalidInput, maxMeetingNotesRunes)
+	}
+	return nil
+}
 
 // isStuck reports whether a meeting's status has been sitting unchanged past
 // its auto-expiry threshold.
@@ -514,9 +525,10 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		}
 	}
 
-	// Parse transcript segments for speaker diarization
+	// Only render segments verified against A, the detail view's raw fallback.
+	// Legacy edits or the B pipeline may have left unrelated shared segments.
 	var transcription json.RawMessage
-	if meeting.TranscriptSegments != "" {
+	if len(transcriptSegmentsForText(meeting.TranscriptA, meeting.TranscriptSegments)) > 0 {
 		transcription = json.RawMessage(meeting.TranscriptSegments)
 	}
 
@@ -585,6 +597,9 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		fields["content"] = req.Content
 	}
 	if req.Notes != nil {
+		if err := validateMeetingNotes(*req.Notes); err != nil {
+			return nil, err
+		}
 		fields["notes"] = *req.Notes
 	}
 	if req.LiveSummary != nil {
@@ -606,7 +621,12 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		if strings.HasPrefix(req.TranscriptA, "s3://") {
 			return nil, fmt.Errorf("%w: transcriptA must be transcript text, not a storage reference", ErrInvalidInput)
 		}
-		fields["transcriptA"] = req.TranscriptA
+		if req.TranscriptA != meeting.TranscriptA {
+			fields["transcriptA"] = req.TranscriptA
+			// Invalidate in the SAME partial write, including when our read
+			// saw no segments but a pipeline writer has since supplied them.
+			fields["transcriptSegments"] = ""
+		}
 	}
 	if req.SelectedTranscript != "" {
 		fields["selectedTranscript"] = req.SelectedTranscript

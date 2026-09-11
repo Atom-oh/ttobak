@@ -438,6 +438,9 @@ function MeetingDetailContent() {
     );
   }
 
+  const usingTranscriptB = Boolean(meeting.transcriptB && (meeting.selectedTranscript === 'B' || !meeting.transcriptA));
+  const displayedTranscript = usingTranscriptB ? meeting.transcriptB : meeting.transcriptA;
+
   return (
     <AppLayout activePath="/">
       {/* Mobile Header */}
@@ -638,12 +641,17 @@ function MeetingDetailContent() {
           )}
 
           {/* Full Transcription */}
-          {((meeting.transcription?.length ?? 0) > 0 || meeting.transcriptA) && (
+          {((!usingTranscriptB && (meeting.transcription?.length ?? 0) > 0) || displayedTranscript) && (
             <TranscriptSection
-              transcription={meeting.transcription || []}
-              rawTranscript={meeting.transcriptA}
-              onSaveRawTranscript={async (text) => {
+              transcription={usingTranscriptB ? [] : meeting.transcription || []}
+              rawTranscript={displayedTranscript}
+              onSaveRawTranscript={usingTranscriptB || meeting.permission === 'read' ? undefined : async (text) => {
                 await meetingsApi.update(meeting.meetingId, { transcriptA: text });
+                setMeeting((current) => current?.meetingId === meeting.meetingId ? {
+                  ...current,
+                  transcriptA: text,
+                  transcription: text === current.transcriptA ? current.transcription : [],
+                } : current);
               }}
             />
           )}

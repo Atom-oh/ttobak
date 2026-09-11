@@ -215,6 +215,15 @@ Error: 403 Forbidden (shared users with "read" permission cannot edit)
 
 > `notes` and `liveSummary` are the only fields with omit-vs-explicit-empty semantics: omitting the key entirely leaves the stored value untouched, while sending an explicit `""` clears it. Every other field in this request follows the older "empty/omitted string means don't touch this field" convention (a plain `string`, not a pointer) — so e.g. sending `"title": ""` does NOT clear the title, it's treated the same as omitting it. `liveSummary` is the markdown (incl. mermaid) summary built incrementally during recording — the frontend sends it at save time (both the normal and retry update paths, when present), and the summarize pipeline feeds it into final-summary generation as prior context. Capped server-side at 32,000 characters (`400 BAD_REQUEST` beyond that).
 
+> Saved `notes` also have a 32,000-character limit and enter final summarization
+> as a separate user-authored source. Note-only statements must not be presented
+> as transcript evidence or receive transcript anchors. Legacy oversized notes
+> cause summary generation to fail explicitly rather than silently omit content.
+> Changing `transcriptA` invalidates its previous speaker segments in the same
+> update; resending unchanged text preserves them. Summary generation honors
+> the selected transcript and uses A's segments only when their complete text
+> matches A. B selections do not reuse A's anchors.
+
 #### Delete Meeting
 
 ```
@@ -651,7 +660,7 @@ Error: 404 Not Found (document doesn't exist)
 
 #### Personal Documents (not account-scoped — owner only)
 
-Personal notes/blogs/slides for `ttobak_ask`/Document Hub v2. Stored under `PK: USER#{my userId}`, so ownership is inherent in the key and no account-membership check is needed. Request/response schemas match Account documents (just without the accountId path segment).
+Personal notes/blogs/slides for Document Hub v2. Stored under `PK: USER#{my userId}`, so ownership is inherent in the key and no account-membership check is needed. Request/response schemas match Account documents (just without the accountId path segment). Document Hub notes are not automatically indexed for `ttobak_ask`; MCP document list/get tools read their current contents directly.
 
 ```
 POST   /api/documents                 { "title": "...", "markdown": "...", "docType": "note" }
