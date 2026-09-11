@@ -23,3 +23,17 @@ Use the repository CI deployment sequence; never `cdk deploy --all`.
 For the permission follow-up, the guarded Lambda is already live before
 AiStack applies the new permission, so the usual AiStack → GatewayStack order
 and a GatewayStack rollback remain safe.
+
+The role belongs to AiStack; QA code and environment belong to GatewayStack.
+After the successful guard deployment, a deployment identity can record the
+running artifact without printing secret environment variables:
+
+```bash
+aws lambda get-function-configuration \
+  --function-name ttobak-qa --region ap-northeast-2 \
+  --query '{CodeSha256:CodeSha256,State:State,LastUpdateStatus:LastUpdateStatus,LastModified:LastModified,Bucket:Environment.Variables.BUCKET_NAME}'
+```
+
+Require `Active` / `Successful` and the expected assets bucket. Correlate the
+artifact with the successful guard deployment; any later replacement must also
+retain the guard. Do not infer deployed code merely from a merged PR.

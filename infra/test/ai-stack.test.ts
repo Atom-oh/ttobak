@@ -50,6 +50,22 @@ describe('AiStack', () => {
     });
   });
 
+  test('qa can read only transcript objects, without bucket listing or writes', () => {
+    const policies = Object.values(template.findResources('AWS::IAM::Policy'));
+    const statements = policies
+      .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakQaRole'))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
+    const s3Statements = statements.filter((statement) =>
+      [statement.Action].flat().some((action: string) => action.startsWith('s3:')));
+    expect(s3Statements).toHaveLength(1);
+    expect(s3Statements[0]).toEqual({
+      Sid: 'ReadMeetingTranscripts',
+      Effect: 'Allow',
+      Action: 's3:GetObject',
+      Resource: { 'Fn::Join': ['', [expect.any(Object), '/transcripts/*']] },
+    });
+  });
+
   test('api role CognitoAdminUserManagement grant includes the admin user-management actions, scoped to the pool ARN', () => {
     // Admin panel (list/delete/enable/disable/resend-invite/reset-password)
     // additions to the pre-existing invite-only statement -- must stay

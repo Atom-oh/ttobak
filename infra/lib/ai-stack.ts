@@ -487,6 +487,14 @@ export class AiStack extends cdk.Stack {
 
     props.table.grantReadWriteData(this.qaRole);
 
+    // Deploy the exact per-meeting transcript-reference guard first.
+    // See docs/runbooks/qa-transcript-read-rollout.md for rollout/rollback order.
+    this.qaRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'ReadMeetingTranscripts',
+      actions: ['s3:GetObject'],
+      resources: [props.bucket.arnForObjects('transcripts/*')],
+    }));
+
     this.qaRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'BedrockInvokeModel',
