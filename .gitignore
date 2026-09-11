@@ -69,5 +69,8 @@ review/*.png
 # Codex CLI session state
 .codex
 
+# Local linked Git worktrees
+.worktrees/
+
 # Graphify analysis output
 graphify-out/
