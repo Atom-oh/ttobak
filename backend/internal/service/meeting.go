@@ -293,6 +293,16 @@ func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID stri
 // supplies discovery hints from grants materialized in this request; the team
 // stream still re-checks membership and never treats those hints as grants.
 func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor, accountID string, limit int32, joinedAccountIDs ...string) (*model.MeetingListResponse, error) {
+	if strings.HasPrefix(cursor, meetingFilterCursorPrefix) {
+		return nil, ErrInvalidInput
+	}
+	if accountID != "" {
+		ids, err := repository.NormalizeMeetingAccountIDs([]string{accountID})
+		if err != nil {
+			return nil, ErrInvalidInput
+		}
+		accountID = ids[0]
+	}
 	if limit <= 0 {
 		limit = 20
 	}
@@ -344,16 +354,25 @@ func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor, 
 }
 
 func (s *MeetingService) listMeetingsPage(ctx context.Context, userID, tab, cursor, accountID string, limit int32) (*model.MeetingListResponse, error) {
-	result, err := s.repo.ListMeetings(ctx, repository.ListMeetingsParams{
+	return s.listMeetingsFilteredPage(ctx, repository.ListMeetingsParams{
 		UserID:    userID,
 		Tab:       tab,
 		Cursor:    cursor,
 		Limit:     limit,
 		AccountID: accountID,
 	})
+}
+
+func (s *MeetingService) listMeetingsFilteredPage(ctx context.Context, params repository.ListMeetingsParams) (*model.MeetingListResponse, error) {
+	result, err := s.repo.ListMeetings(ctx, params)
 	if err != nil {
+		if errors.Is(err, repository.ErrInvalidMeetingCursor) || errors.Is(err, repository.ErrInvalidMeetingFilter) {
+			return nil, ErrInvalidInput
+		}
 		return nil, err
 	}
+	userID := params.UserID
+	filter := meetingAccountFilter{AccountID: params.AccountID, AccountIDs: params.AccountIDs}
 
 	response := &model.MeetingListResponse{
 		Meetings:   []model.MeetingListItem{},
@@ -361,12 +380,14 @@ func (s *MeetingService) listMeetingsPage(ctx context.Context, userID, tab, curs
 	}
 
 	// Add owned meetings
+	listed := make(map[string]bool)
 	for _, m := range result.Meetings {
-		if accountID != "" && m.AccountID != accountID {
+		if !filter.matches(m.AccountID) || listed[m.MeetingID] {
 			continue
 		}
 		item := model.ToMeetingListItem(&m, false, nil, nil)
 		response.Meetings = append(response.Meetings, item)
+		listed[m.MeetingID] = true
 	}
 
 	// Add shared meetings (single BatchGetItem call)
@@ -394,7 +415,8 @@ func (s *MeetingService) listMeetingsPage(ctx context.Context, userID, tab, curs
 				if !ok {
 					continue
 				}
-				if accountID != "" && meeting.AccountID != accountID {
+				if !filter.matches(meeting.AccountID) || listed[meeting.MeetingID] ||
+					params.AccountIDs != nil && meeting.UserID == userID {
 					continue
 				}
 				// Same read-time re-verification as checkAccess/resolveSharedAccess
@@ -415,6 +437,9 @@ func (s *MeetingService) listMeetingsPage(ctx context.Context, userID, tab, curs
 					if !cached {
 						member, err := s.repo.GetMember(ctx, meeting.AccountID, userID)
 						if err != nil {
+							if params.AccountIDs != nil {
+								return nil, fmt.Errorf("check shared meeting membership: %w", err)
+							}
 							// Don't cache a transient error as "not a member" --
 							// that would suppress every meeting for this account
 							// on this page, not just the one call that failed.
@@ -433,6 +458,7 @@ func (s *MeetingService) listMeetingsPage(ctx context.Context, userID, tab, curs
 				perm := share.Permission
 				item := model.ToMeetingListItem(meeting, true, &share.OwnerEmail, &perm)
 				response.Meetings = append(response.Meetings, item)
+				listed[meeting.MeetingID] = true
 			}
 		} else {
 			return nil, fmt.Errorf("failed to load shared meetings: %w", err)
