@@ -284,7 +284,7 @@ class TestMeetingRetrieval(unittest.TestCase):
             'location': {'s3Location': {'uri': 's3://synthetic/meetings/owner/m1.md'}},
         }]}
         first = handler.retrieve_from_kb('private answer', user_id='reader')
-        self.assertEqual(first[0]['text'], 'private account excerpt')
+        self.assertEqual(first[0]['meeting']['content'], 'stored summary')
         self.runtime.retrieve.return_value = {'retrievalResults': []}
         del self.table.items[('ACCOUNT#acc', 'MEMBER#reader')]
         self.assertEqual(handler.retrieve_from_kb('private answer', user_id='reader'), [])
@@ -503,6 +503,153 @@ class TestMeetingRetrieval(unittest.TestCase):
         with self.assertLogs(handler.logger, level='INFO') as logs:
             handler.retrieve_from_kb(question, user_id='reader')
         self.assertNotIn(question, '\n'.join(logs.output))
+
+    def kb_hit(self, uri='s3://synthetic/meetings/reader/m1.md', text='STALE_INDEX_SNAPSHOT'):
+        return {'score': 0.9, 'content': {'text': text},
+                'location': {'s3Location': {'uri': uri}}}
+
+    def test_kb_refreshes_warm_candidates_and_deduplicates_current_records(self):
+        row = self.meeting(owner='reader', notes='old note', content='old content', updatedAt='revision-1')
+        self.runtime.retrieve.return_value = {'retrievalResults': [self.kb_hit(), self.kb_hit()]}
+        first = handler.retrieve_from_kb('saved correction', user_id='reader')
+        self.assertEqual(len(first), 1)
+        self.assertEqual(first[0]['meeting']['notes'], 'old note')
+        cache = next(v for (pk, _), v in self.table.items.items() if pk.startswith('CACHE#KB#'))
+        self.assertTrue(all(set(c) == {'uri', 'score'} for c in json.loads(cache['results'])))
+        row.update(notes='corrected note', content='corrected content', updatedAt='revision-2')
+        second = handler.retrieve_from_kb('saved correction', user_id='reader')
+        self.assertEqual(second[0]['meeting']['notes'], 'corrected note')
+        self.assertEqual(second[0]['meeting']['content'], 'corrected content')
+        self.assertEqual(second[0]['meeting']['updatedAt'], 'revision-2')
+        self.assertEqual(self.runtime.retrieve.call_count, 1)
+        reads = [r for r in self.table.reads if r[0] == ('USER#reader', 'MEETING#m1')]
+        self.assertEqual(len(reads), 2, 'one canonical read per identity per response')
+        self.assertTrue(all(options['ConsistentRead'] for _, options in reads))
+
+    def test_legacy_cached_snapshot_is_ignored_even_when_current_fields_are_empty(self):
+        self.meeting(owner='reader', notes='', content='')
+        self.table.put_item(Item={
+            'PK': handler._kb_cache_key('legacy', 5, 'reader'), 'SK': 'V1',
+            'TTL': int(time.time()) + 600, 'accessSignature': handler._shared_access_signature([]),
+            'results': json.dumps([{'uri': 's3://synthetic/meetings/reader/m1.md',
+                                    'score': 0.9, 'text': 'LEGACY_PRIVATE_TEXT'}]),
+        })
+        results = handler.retrieve_from_kb('legacy', user_id='reader')
+        self.assertEqual(results[0]['meeting']['notes'], '')
+        self.assertEqual(results[0]['meeting']['content'], '')
+        self.assertNotIn('LEGACY_PRIVATE_TEXT', json.dumps(results))
+        self.runtime.retrieve.assert_not_called()
+
+    def test_deleted_or_revoked_hits_remove_text_and_citations(self):
+        import tools
+        for state in ('deleted', 'revoked'):
+            with self.subTest(state=state):
+                self.table.items.clear()
+                handler._shared_meetings_cache.clear()
+                handler._shared_meetings_cache_expiry.clear()
+                owner = 'reader' if state == 'deleted' else 'owner'
+                self.meeting(owner=owner, published=False, notes='PRIVATE_CURRENT_NOTE')
+                if state == 'revoked':
+                    self.share()
+                self.runtime.retrieve.return_value = {
+                    'retrievalResults': [self.kb_hit(f's3://synthetic/meetings/{owner}/m1.md')]}
+                self.assertEqual(len(handler.retrieve_from_kb(state, user_id='reader')), 1)
+                del self.table.items[('USER#reader', 'MEETING#m1' if state == 'deleted' else 'SHARED#m1')]
+                text, sources = tools.execute_tool('search_knowledge_base', {'query': state}, {
+                    'retrieve_from_kb': lambda q, n: handler.retrieve_from_kb(q, n, user_id='reader'),
+                })
+                self.assertEqual(sources, [])
+                self.assertNotIn('PRIVATE_CURRENT_NOTE', text)
+                self.assertNotIn('STALE_INDEX_SNAPSHOT', text)
+
+    def test_failed_current_read_returns_tool_error_without_stale_fallback(self):
+        import tools
+        self.meeting(owner='reader')
+        self.runtime.retrieve.return_value = {'retrievalResults': [self.kb_hit()]}
+        handler.retrieve_from_kb('warm read failure', user_id='reader')
+        self.table.fail_key = ('USER#reader', 'MEETING#m1')
+        for query in ('warm read failure', 'cold read failure'):
+            with self.subTest(query=query):
+                text, sources = tools.execute_tool('search_knowledge_base', {'query': query}, {
+                    'retrieve_from_kb': lambda q, n: handler.retrieve_from_kb(q, n, user_id='reader'),
+                })
+                self.assertIn('Tool error:', text)
+                self.assertEqual(sources, [])
+                self.assertNotIn('STALE_INDEX_SNAPSHOT', text)
+
+    def test_retrieve_failure_differs_from_empty_success_without_query_logging(self):
+        import tools
+        query = 'SYNTHETIC_PRIVATE_CUSTOMER_QUERY'
+        context = {'retrieve_from_kb': lambda q, n: handler.retrieve_from_kb(q, n, user_id='reader')}
+        self.runtime.retrieve.side_effect = RuntimeError(f'upstream rejected {query}')
+        with self.assertLogs(handler.logger, level='WARNING') as logs:
+            failed, sources = tools.execute_tool('search_knowledge_base', {'query': query}, context)
+        self.assertIn('Tool error:', failed)
+        self.assertEqual(sources, [])
+        self.assertNotIn(query, failed + '\n'.join(logs.output))
+        # A failure must not poison the cache with a fabricated empty success.
+        self.runtime.retrieve.side_effect = None
+        self.runtime.retrieve.return_value = {'retrievalResults': []}
+        empty, sources = tools.execute_tool('search_knowledge_base', {'query': query}, context)
+        self.assertNotIn('Tool error:', empty)
+        self.assertIn('관련 문서를 찾지 못했습니다', empty)
+        self.assertEqual(sources, [])
+        self.assertEqual(self.runtime.retrieve.call_count, 2)
+
+    def test_cache_hit_rechecks_grant_after_cache_lookup(self):
+        self.meeting(published=False)
+        self.share()
+        self.runtime.retrieve.return_value = {
+            'retrievalResults': [self.kb_hit('s3://synthetic/meetings/owner/m1.md')]}
+        self.assertEqual(len(handler.retrieve_from_kb('race', user_id='reader')), 1)
+        original = handler._kb_cache_get
+
+        def revoke_after_cache_lookup(*args):
+            cached = original(*args)
+            self.assertIsNotNone(cached)
+            del self.table.items[('USER#reader', 'SHARED#m1')]
+            return cached
+
+        with mock.patch.object(handler, '_kb_cache_get', side_effect=revoke_after_cache_lookup):
+            self.assertEqual(handler.retrieve_from_kb('race', user_id='reader'), [])
+        self.assertEqual(self.runtime.retrieve.call_count, 1)
+
+    def test_current_kb_excerpts_preserve_notes_after_800_and_report_coverage(self):
+        import tools
+        notes = 'n' * 900 + 'CURRENT_CORRECTION' + 'n' * 1800
+        content = 'c' * 3000
+        self.meeting(owner='reader', notes=notes, content=content, updatedAt='2026-09-11T12:00:00Z')
+        self.runtime.retrieve.return_value = {'retrievalResults': [self.kb_hit()]}
+        text = tools.format_kb_results(handler.retrieve_from_kb('correction', user_id='reader'))
+        self.assertIn('CURRENT_CORRECTION', text)
+        self.assertNotIn('STALE_INDEX_SNAPSHOT', text)
+        snapshot = json.loads(text.split('\n')[-1])
+        self.assertEqual(snapshot['meetingId'], 'm1')
+        self.assertEqual(snapshot['updatedAt'], '2026-09-11T12:00:00Z')
+        for field, full in (('notes', notes), ('content', content)):
+            self.assertEqual(snapshot[field]['totalCharacters'], len(full))
+            self.assertEqual(snapshot[field]['includedCharacters'], len(snapshot[field]['text']))
+            self.assertTrue(snapshot[field]['partial'])
+            self.assertLess(len(snapshot[field]['text']), len(full))
+        self.assertIn('get_meeting_detail', text)
+        self.assertIn('Index relevance', text)
+
+    def test_noncanonical_meeting_like_uris_stay_ordinary_documents(self):
+        import tools
+        uris = [
+            's3://synthetic/kb/reader/upload.md',
+            's3://synthetic/kb/reader/meetings/reader/m1.md',
+            's3://synthetic/meetings/reader/m1.md.backup',
+            's3://synthetic/meetings/reader/m1.md?query=1',
+            's3://synthetic/meetings/../m1.md',
+        ]
+        self.runtime.retrieve.return_value = {'retrievalResults': [self.kb_hit(u, 'ordinary text') for u in uris]}
+        first = handler.retrieve_from_kb('ordinary', user_id='reader')
+        second = handler.retrieve_from_kb('ordinary', user_id='reader')
+        self.assertEqual(first, second)
+        self.assertEqual(first, [{'uri': u, 'score': 0.9, 'text': 'ordinary text'} for u in uris])
+        self.assertEqual(tools.format_kb_results(first[:1]), f'[Score: 0.90] {uris[0]}\nordinary text')
+        self.assertFalse(any(key[1].startswith('MEETING#') for key, _ in self.table.reads))
 
 
 def _stored(messages):
