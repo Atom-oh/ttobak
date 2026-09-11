@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 
 import { useRouter } from 'next/navigation';
 import { meetingsApi, uploadsApi } from '@/lib/api';
 import { putWithProgress, type UploadProgress } from '@/lib/upload';
-import { uploadRecordingWithRetry, onNativeUploadProgress, cleanupRecording, isCommandNotFound, VERSION_SKEW_MESSAGE } from '@/lib/tauri';
+import { uploadRecordingWithRetry, onNativeUploadProgress, cleanupRecording, releaseRecordingPower, isCommandNotFound, VERSION_SKEW_MESSAGE } from '@/lib/tauri';
 import type { PostRecordingStep } from '@/components/record/PostRecordingBanner';
 
 function formatDefaultTitle(date: Date): string {
@@ -53,6 +53,13 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): 
 type PendingAudio =
   | { kind: 'blob'; blob: Blob; mimeType: string }
   | { kind: 'native'; path: string; byteSize: number };
+
+function releasePendingPower(pending: PendingAudio | null) {
+  if (pending?.kind !== 'native') return;
+  void releaseRecordingPower(pending.path).catch((err) => {
+    console.warn('Unable to release abandoned recording idle-sleep protection:', err);
+  });
+}
 
 interface UsePostRecordingOptions {
   meetingTitle: string;
@@ -114,6 +121,7 @@ export function usePostRecording({
       // eslint-disable-next-line react-hooks/exhaustive-deps
       flowGenerationRef.current++;
       uploadAbortRef.current?.abort();
+      releasePendingPower(pendingAudioRef.current);
     };
   }, []);
 
@@ -126,6 +134,7 @@ export function usePostRecording({
     // same goes for the meeting id: if creation below fails, a lingering
     // previous id would route THIS recording's audio into the old meeting.
     setServerMeetingId(null);
+    releasePendingPower(pendingAudioRef.current);
     pendingAudioRef.current = null;
     putDoneRef.current = null;
     uploadAbortRef.current?.abort();
@@ -430,6 +439,7 @@ export function usePostRecording({
     setStep(null);
     setErrorMessage(null);
     setUploadProgress(null);
+    releasePendingPower(pendingAudioRef.current);
     pendingAudioRef.current = null;
     putDoneRef.current = null;
     // Cancels a native upload's offline wait if one is still pending --

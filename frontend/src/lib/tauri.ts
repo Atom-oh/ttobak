@@ -299,6 +299,17 @@ export function cleanupRecording(path: string): Promise<void> {
   return invoke<void>('cleanup_recording', { path });
 }
 
+/** Abandon pending idle-sleep protection while preserving the WAV for recovery.
+ * Older binaries have no pending power assertion and no release command. */
+export async function releaseRecordingPower(path: string): Promise<void> {
+  try {
+    await invoke<void>('release_recording_power', { path });
+  } catch (err) {
+    if (isCommandNotFound(err)) return;
+    throw err;
+  }
+}
+
 /**
  * Leftover recordings adopted at app startup, newest first. Resolves to an
  * empty list against an installed Rust build that predates the command

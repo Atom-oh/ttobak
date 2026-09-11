@@ -7,6 +7,7 @@
 //!   straight from disk to a presigned S3 URL (bulk audio bytes never cross
 //!   the IPC bridge to the WebView — see `upload.rs` module docs)
 //! - `cleanup_recording(path)` — delete a temp WAV file and revoke whitelist entry
+//! - `release_recording_power(path)` — release idle-sleep protection without deleting audio
 //! - `recording_status(path)` — current capture state for the UI, plus
 //!   whether `path` specifically is still being finalized
 //! - `list_leftover_recordings()` — temp WAVs adopted at startup from a
@@ -430,11 +431,23 @@ fn recording_status(path: String, state: State<'_, RecorderState>) -> StatusResp
 }
 
 #[tauri::command]
+async fn release_recording_power(
+    path: String,
+    state: State<'_, RecorderState>,
+) -> Result<(), AppError> {
+    let canonical = validate_recording_path(&path, &state.recorded_paths.lock())?;
+    #[cfg(target_os = "macos")]
+    state.recording_power.lock().finish(&canonical);
+    #[cfg(not(target_os = "macos"))]
+    let _ = canonical;
+    Ok(())
+}
+
+#[tauri::command]
 async fn cleanup_recording(path: String, state: State<'_, RecorderState>) -> Result<(), AppError> {
     let canonical = validate_recording_path(&path, &state.recorded_paths.lock())?;
     {
-        let rec = state.recorder.lock();
-        let snapshot = rec.snapshot();
+        let snapshot = state.recorder.lock().snapshot();
         let active = snapshot.path.and_then(|p| std::fs::canonicalize(p).ok());
         if snapshot.recording && active.as_ref() == Some(&canonical) {
             return Err(AppError::Backend(
@@ -536,6 +549,7 @@ pub fn run() {
             recording_status,
             upload::upload_recording,
             cleanup_recording,
+            release_recording_power,
             list_leftover_recordings,
         ])
         .setup(|app| {
