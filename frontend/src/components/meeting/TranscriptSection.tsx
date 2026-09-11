@@ -248,14 +248,14 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
             <textarea
               value={rawValue}
               disabled={saving}
-              onChange={(e) => setRawValue(e.target.value)}
+              onChange={(e) => { setRawValue(e.target.value); setSaveError(null); }}
               className="w-full min-h-[300px] text-[15px] leading-relaxed text-slate-600 dark:text-gray-400 bg-white dark:bg-surface-lowest border border-primary/20 rounded-lg px-4 py-3 resize-y focus:outline-none focus:ring-1 focus:ring-primary/40"
             />
             {saveError && <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">{saveError}</p>}
             <div className="flex justify-end gap-2 mt-3">
               <button
                 disabled={saving}
-                onClick={() => { setRawValue(rawTranscript); setSaveError(null); setEditingRaw(false); }}
+                onClick={() => { setRawValue(rawTranscript || ''); setSaveError(null); setEditingRaw(false); }}
                 className="px-3 py-1.5 text-xs font-semibold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
               >
                 Cancel

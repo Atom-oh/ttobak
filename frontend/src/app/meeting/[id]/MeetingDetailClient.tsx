@@ -438,8 +438,8 @@ function MeetingDetailContent() {
     );
   }
 
-  const usingTranscriptB = Boolean(meeting.transcriptB && (meeting.selectedTranscript === 'B' || !meeting.transcriptA));
-  const displayedTranscript = usingTranscriptB ? meeting.transcriptB : meeting.transcriptA;
+  const usingTranscriptB = Boolean(meeting.transcriptB?.trim() && (meeting.selectedTranscript === 'B' || !meeting.transcriptA?.trim()));
+  const displayedTranscript = usingTranscriptB ? meeting.transcriptB : (meeting.transcriptA?.trim() ? meeting.transcriptA : undefined);
 
   return (
     <AppLayout activePath="/">
@@ -641,9 +641,9 @@ function MeetingDetailContent() {
           )}
 
           {/* Full Transcription */}
-          {((!usingTranscriptB && (meeting.transcription?.length ?? 0) > 0) || displayedTranscript) && (
+          {((meeting.transcription?.length ?? 0) > 0 || displayedTranscript) && (
             <TranscriptSection
-              transcription={usingTranscriptB ? [] : meeting.transcription || []}
+              transcription={meeting.transcription || []}
               rawTranscript={displayedTranscript}
               onSaveRawTranscript={usingTranscriptB || meeting.permission === 'read' ? undefined : async (text) => {
                 await meetingsApi.update(meeting.meetingId, { transcriptA: text });
@@ -651,6 +651,20 @@ function MeetingDetailContent() {
                   ...current,
                   transcriptA: text,
                   transcription: text === current.transcriptA ? current.transcription : [],
+                } : current);
+                let refreshed: MeetingDetail;
+                try {
+                  refreshed = await meetingsApi.get(meeting.meetingId) as MeetingDetail;
+                } catch {
+                  throw new Error('원문은 저장했지만 최신 미팅을 불러오지 못했습니다. 새로고침해주세요.');
+                }
+                setMeeting((current) => current?.meetingId === meeting.meetingId ? {
+                  ...current,
+                  transcriptA: refreshed.transcriptA,
+                  transcriptB: refreshed.transcriptB,
+                  selectedTranscript: refreshed.selectedTranscript,
+                  transcription: refreshed.transcription || [],
+                  updatedAt: refreshed.updatedAt,
                 } : current);
               }}
             />

@@ -642,17 +642,8 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 		return "", fmt.Errorf("meeting not found: %s", meetingID)
 	}
 
-	// Use the selected transcript, or default to A, or B if A not available
-	transcript := meeting.TranscriptA
-	usingB := false
-	if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-		usingB = true
-	} else if transcript == "" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-		usingB = true
-	}
-	if strings.TrimSpace(transcript) == "" {
+	transcript, _ := selectMeetingTranscript(meeting)
+	if transcript == "" {
 		return "", fmt.Errorf("no transcript available for meeting: %s", meetingID)
 	}
 	if err := validateMeetingNotes(meeting.Notes); err != nil {
@@ -703,13 +694,9 @@ ADR-013 — 트랜스크립트 딥 링크:
 - 마커는 본문 텍스트와 분리된 형태로(문장 끝, 마침표 또는 따옴표 뒤) 적고, 그 외 형식의 시간 표기(예: "5분 30초")는 따로 만들지 말 것.
 - 한 항목에 여러 발언이 묶인 경우 가장 핵심 발언의 시점 하나만 표기.`
 
-	// The detail view renders A. B must never borrow its text or anchors, even
-	// when A and B happen to contain identical words. For A, verify the shared
-	// segment field still matches before using it for both input and links.
-	var parsedSegments []speakerSegment
-	if !usingB {
-		parsedSegments = transcriptSegmentsForText(transcript, meeting.TranscriptSegments)
-	}
+	// Use candidates for either variant only after verifying the selected text.
+	// The same verified segments drive both the prompt and transcript anchors.
+	parsedSegments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments)
 	userPrompt := buildSummarizeUserPrompt(transcript, priorContext, parsedSegments)
 	if meeting.Notes != "" {
 		// JSON string encoding preserves the text while escaping angle brackets,
@@ -1522,12 +1509,7 @@ func (s *BedrockService) ExtractActionItems(ctx context.Context, meetingID strin
 	// Fall back to transcript if summary isn't available yet.
 	source := meeting.Content
 	if source == "" {
-		source = meeting.TranscriptA
-		if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
-			source = meeting.TranscriptB
-		} else if source == "" && meeting.TranscriptB != "" {
-			source = meeting.TranscriptB
-		}
+		source, _ = selectMeetingTranscript(meeting)
 	}
 	if source == "" {
 		return "[]", nil
@@ -1627,12 +1609,7 @@ func (s *BedrockService) ExtractInsights(ctx context.Context, meetingID string, 
 
 	source := meeting.Content
 	if source == "" {
-		source = meeting.TranscriptA
-		if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
-			source = meeting.TranscriptB
-		} else if source == "" && meeting.TranscriptB != "" {
-			source = meeting.TranscriptB
-		}
+		source, _ = selectMeetingTranscript(meeting)
 	}
 	if source == "" {
 		return "[]", nil
@@ -1716,28 +1693,14 @@ func (s *BedrockService) ExtractSimRequirements(ctx context.Context, meeting *mo
 		return nil, fmt.Errorf("meeting is required")
 	}
 
-	var segments []speakerSegment
-	if meeting.TranscriptSegments != "" {
-		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err != nil {
-			log.Printf("ExtractSimRequirements: failed to parse TranscriptSegments for meeting %s: %v", meeting.MeetingID, err)
-		}
-	}
-
 	// Deliberately the raw transcript, not meeting.Content: by the time a
 	// note is stored, resolveTranscriptAnchors has already rewritten every
 	// [TS:NNN] marker into a `transcript://{id}` link, and the note's prose
 	// can paraphrase away an exact number a speaker actually said. The raw
 	// transcript is also where a [TS:NNN] marker can still be *added*
 	// against real segment start times below.
-	transcript := meeting.TranscriptA
-	usingSelectedB := false
-	if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-		usingSelectedB = true
-	} else if transcript == "" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-		usingSelectedB = true
-	}
+	transcript, _ := selectMeetingTranscript(meeting)
+	segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments)
 	if transcript == "" && meeting.Content != "" {
 		// No raw transcript at all (e.g. a manually-created meeting) --
 		// fall back to the note body with no TS-marker expectation.
@@ -1747,16 +1710,6 @@ func (s *BedrockService) ExtractSimRequirements(ctx context.Context, meeting *mo
 	if transcript == "" {
 		return []model.SimRequirement{}, nil
 	}
-	// TranscriptSegments is produced against TranscriptA (the batch STT
-	// merge/diarization pipeline) -- it has no relationship to TranscriptB
-	// (Nova Sonic). If the user explicitly selected B, using segments here
-	// would silently extract from the wrong transcript entirely, defeating
-	// the point of SelectTranscript. Only trust segments when we're
-	// actually using A.
-	if usingSelectedB {
-		segments = nil
-	}
-
 	var sourceText string
 	if len(segments) > 0 {
 		var sb strings.Builder
@@ -1828,13 +1781,7 @@ func (s *BedrockService) ExtractTags(ctx context.Context, meetingID string, user
 		return nil, fmt.Errorf("meeting not found: %s", meetingID)
 	}
 
-	// Use the selected transcript, or default to A, or B if A not available
-	transcript := meeting.TranscriptA
-	if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-	} else if transcript == "" && meeting.TranscriptB != "" {
-		transcript = meeting.TranscriptB
-	}
+	transcript, _ := selectMeetingTranscript(meeting)
 	if transcript == "" {
 		return []string{}, nil
 	}
@@ -1852,16 +1799,13 @@ Rules:
 	// Build prompt with speaker segments if available
 	userPrompt := fmt.Sprintf("Extract topic tags from this meeting transcript:\n\n%s", transcript)
 
-	if meeting.TranscriptSegments != "" {
-		var segments []speakerSegment
-		if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
-			var sb strings.Builder
-			sb.WriteString("Extract topic tags from this speaker-labeled meeting transcript:\n\n")
-			for _, seg := range segments {
-				sb.WriteString(fmt.Sprintf("[%s] %s\n", seg.Speaker, seg.Text))
-			}
-			userPrompt = sb.String()
+	if segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments); len(segments) > 0 {
+		var sb strings.Builder
+		sb.WriteString("Extract topic tags from this speaker-labeled meeting transcript:\n\n")
+		for _, seg := range segments {
+			sb.WriteString(fmt.Sprintf("[%s] %s\n", seg.Speaker, seg.Text))
 		}
+		userPrompt = sb.String()
 	}
 
 	request := ClaudeRequest{
@@ -1962,26 +1906,18 @@ Output the single word, lowercase, no punctuation, no quotes, no explanation.`
 		userPrompt = sb.String()
 	} else {
 		// Fallback path: summary not yet generated — use transcript directly.
-		transcript := meeting.TranscriptA
-		if meeting.SelectedTranscript == "B" && meeting.TranscriptB != "" {
-			transcript = meeting.TranscriptB
-		} else if transcript == "" && meeting.TranscriptB != "" {
-			transcript = meeting.TranscriptB
-		}
+		transcript, _ := selectMeetingTranscript(meeting)
 		if transcript == "" {
 			return "", nil
 		}
 		userPrompt = fmt.Sprintf("Classify the overall tone of this meeting transcript:\n\n%s", transcript)
-		if meeting.TranscriptSegments != "" {
-			var segments []speakerSegment
-			if err := json.Unmarshal([]byte(meeting.TranscriptSegments), &segments); err == nil && len(segments) > 0 {
-				var sb strings.Builder
-				sb.WriteString("Classify the overall tone of this speaker-labeled meeting transcript:\n\n")
-				for _, seg := range segments {
-					sb.WriteString(fmt.Sprintf("[%s] %s\n", seg.Speaker, seg.Text))
-				}
-				userPrompt = sb.String()
+		if segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments); len(segments) > 0 {
+			var sb strings.Builder
+			sb.WriteString("Classify the overall tone of this speaker-labeled meeting transcript:\n\n")
+			for _, seg := range segments {
+				sb.WriteString(fmt.Sprintf("[%s] %s\n", seg.Speaker, seg.Text))
 			}
+			userPrompt = sb.String()
 		}
 	}
 

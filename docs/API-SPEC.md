@@ -191,7 +191,9 @@ Error: 404 Not Found
 ```
 
 > `transcription` contains speaker segments only when they cover the complete
-> current `transcriptA`. Legacy Transcribe segments may omit sentence/clause
+> effective selected transcript (A or B). Detail `selectedTranscript` identifies
+> the available variant after resolving the stored preference; whitespace-only
+> variants are unavailable. Legacy Transcribe segments may omit sentence/clause
 > punctuation at word boundaries; verified segment text is reconstructed from
 > the current source, retaining its punctuation and the original segment IDs
 > and timestamps. Word changes, internal numeric/symbol differences, and partial
@@ -230,11 +232,12 @@ Error: 403 Forbidden (shared users with "read" permission cannot edit)
 > as a separate user-authored source. Note-only statements must not be presented
 > as transcript evidence or receive transcript anchors. Legacy oversized notes
 > cause summary generation to fail explicitly rather than silently omit content.
-> Changing `transcriptA` invalidates its previous speaker segments in the same
-> update; resending unchanged text preserves them. Summary generation honors
-> the selected transcript and uses A's segments only after complete source
-> verification, including the legacy punctuation reconstruction described above.
-> B selections do not reuse A's anchors.
+> Changing `transcriptA` preserves shared segment candidates, which may belong
+> to B or a concurrent producer. Every transcript consumer verifies candidates
+> against the selected current text before using them; stale words cannot
+> override an edit. Matching A or B segments retain their speaker view and
+> anchors, including Nova Sonic B-only meetings. Whitespace-only nonempty A
+> updates are rejected with `400 BAD_REQUEST`; an empty string remains a no-op.
 
 #### Delete Meeting
 

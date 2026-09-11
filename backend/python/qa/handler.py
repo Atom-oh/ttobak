@@ -1179,9 +1179,9 @@ def _meeting_context_text(item, meeting_id, include_notes=True):
         parts.append(f"## 저장된 요약\n{item['content']}")
     selected = 'transcriptB' if item.get('selectedTranscript') == 'B' else 'transcriptA'
     fallback = 'transcriptA' if selected == 'transcriptB' else 'transcriptB'
-    field = selected if item.get(selected) else fallback
+    field = selected if (item.get(selected) or '').strip() else fallback
     transcript = item.get(field)
-    if transcript:
+    if transcript and transcript.strip():
         parts.append(f"## 트랜스크립트\n{resolve_s3_ref(transcript, meeting_id, field)}")
     return '\n\n'.join(parts)
 

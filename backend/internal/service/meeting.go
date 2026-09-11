@@ -525,10 +525,11 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		}
 	}
 
-	// Only render segments verified against A, the detail view's raw fallback.
-	// Legacy edits or the B pipeline may have left unrelated shared segments.
+	// The shared candidates may describe either variant or a previous edit.
+	// Only render those verified against the currently selected text.
+	transcript, variant := selectMeetingTranscript(meeting)
 	var transcription json.RawMessage
-	if segments := transcriptSegmentsForText(meeting.TranscriptA, meeting.TranscriptSegments); len(segments) > 0 {
+	if segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments); len(segments) > 0 {
 		// Legacy Transcribe segments may have been reconstructed with current
 		// punctuation. Render that verified text while retaining IDs/timestamps.
 		transcription, err = json.Marshal(segments)
@@ -557,7 +558,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		LiveSummary:        meeting.LiveSummary,
 		TranscriptA:        meeting.TranscriptA,
 		TranscriptB:        meeting.TranscriptB,
-		SelectedTranscript: strPtr(meeting.SelectedTranscript),
+		SelectedTranscript: strPtr(variant),
 		AudioKey:           meeting.AudioKey,
 		AudioKeys:          meeting.AudioKeys,
 		AudioPartCount:     meeting.AudioPartCount,
@@ -618,6 +619,9 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		fields["liveSummary"] = *req.LiveSummary
 	}
 	if req.TranscriptA != "" {
+		if strings.TrimSpace(req.TranscriptA) == "" {
+			return nil, fmt.Errorf("%w: transcriptA must contain non-whitespace text", ErrInvalidInput)
+		}
 		// s3:// values are repository-internal storage refs (large
 		// transcripts spill to S3 — see repository.validateTranscriptRef);
 		// legitimate client input is always the transcript TEXT. Accepting
@@ -628,9 +632,9 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		}
 		if req.TranscriptA != meeting.TranscriptA {
 			fields["transcriptA"] = req.TranscriptA
-			// Invalidate in the SAME partial write, including when our read
-			// saw no segments but a pipeline writer has since supplied them.
-			fields["transcriptSegments"] = ""
+			// Preserve shared candidate metadata: it may describe B, including
+			// a concurrent B producer. Every consumer verifies against the
+			// selected current text, so stale A words cannot override this edit.
 		}
 	}
 	if req.SelectedTranscript != "" {

@@ -417,7 +417,10 @@ Layout:
       fails. Save success updates the displayed text; controls are disabled
       during saving, and an empty replacement is rejected. Editing applies to
       raw A without verified segments and is hidden for read-only viewers.
-      A selected/fallback B transcript is displayed as read-only raw text.
+      A selected/fallback B transcript is read-only and uses verified speaker
+      segments when available, otherwise raw text. Successful A saves refresh
+      the server-verified transcript view; a refresh failure is distinguished
+      from a failed save.
     - Floating Audio Player (sticky bottom-6, rounded-full, backdrop-blur)
   reference aside (right side, drag-resizable 280-640px, localStorage
     `ttobak:meetingAsideWidth`) — same w-2 divider pattern

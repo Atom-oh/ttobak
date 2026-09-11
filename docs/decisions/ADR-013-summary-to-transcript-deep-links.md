@@ -69,7 +69,7 @@ This follows the same protocol pattern established by `attachment://` for image 
 
 ## Source fidelity addendum (2026-09-11)
 
-- Summary anchors use segments verified against the current A transcript. Selecting B does not reuse A's anchors; changing A atomically invalidates its old segments. Legacy Transcribe punctuation is reconstructed from the current source. Grouped comparison tolerates repeated same-speaker headers after speaker merging while preserving all body text, labels, IDs, and timestamps.
+- Summary anchors use segments verified against the effective selected transcript, A or B. Editing A preserves shared candidates because they may describe B; every consumer rejects candidates that do not match its current selected text. Nova Sonic B-only meetings retain matching speaker segments and anchors. Legacy Transcribe punctuation is reconstructed from the current source. Grouped comparison tolerates repeated same-speaker headers after speaker merging while preserving all body text, labels, IDs, and timestamps.
 - Saved user notes are a separate, untrusted source. Note-only corrections and uncertainty must be distinguished from recorded speech and must not receive transcript anchors.
 - Final summary generation rejects incomplete or blank model responses before saving a completed note. This strict check applies only to summarization; auxiliary image analysis and refinement retain their existing parsing contracts.
 
@@ -145,7 +145,7 @@ Bedrock 요약 프롬프트는 이미 타임스탬프가 포함된 전체 트랜
 
 ## 원문 충실성 보완 (2026-09-11)
 
-- 요약 앵커는 현재 A 원문과 대조한 세그먼트만 사용합니다. B 선택 시 A의 앵커를 재사용하지 않으며, A 변경은 이전 세그먼트를 같은 업데이트에서 무효화합니다. 레거시 Transcribe의 문장부호는 현재 원문에서 복원합니다. 화자 병합 후 같은 화자 헤더의 반복은 grouped 비교에서만 허용하고 본문·라벨·ID·타임스탬프는 보존합니다.
+- 요약 앵커는 실제 선택된 A/B 원문과 대조한 세그먼트만 사용합니다. A를 편집해도 B의 구간일 수 있는 공유 후보는 보존하고, 모든 소비 지점에서 현재 선택 원문과 맞지 않는 후보를 제외합니다. Nova Sonic처럼 B만 있는 미팅도 일치하는 화자 구간과 앵커를 유지합니다. 레거시 Transcribe의 문장부호는 현재 원문에서 복원합니다. 화자 병합 후 같은 화자 헤더의 반복은 grouped 비교에서만 허용하고 본문·라벨·ID·타임스탬프는 보존합니다.
 - 저장된 사용자 메모는 별도의 비신뢰 출처입니다. 메모에만 있는 정정·불확실성은 실제 발언과 구분하며 트랜스크립트 앵커를 붙이지 않습니다.
 - 최종 요약은 불완전하거나 빈 모델 응답을 완료 노트로 저장하지 않습니다. 이 엄격한 검사는 요약에만 적용하며 이미지 분석·전사 정제의 기존 파싱 계약은 유지합니다.
 

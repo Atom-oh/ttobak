@@ -200,6 +200,8 @@ class TestMeetingRetrieval(unittest.TestCase):
             ('A', 'chosen A', 'other B', 'chosen A', 'other B'),
             ('B', 'fallback A', '', 'fallback A', 'unused'),
             ('A', '', 'fallback B', 'fallback B', 'unused'),
+            ('B', 'fallback A', ' \n', 'fallback A', 'unused'),
+            ('A', ' \t', 'fallback B', 'fallback B', 'unused'),
         ]:
             with self.subTest(selected=selected, expected=expected):
                 self.meeting(owner='reader', selectedTranscript=selected, transcriptA=a, transcriptB=b)
