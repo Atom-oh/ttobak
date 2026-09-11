@@ -181,14 +181,15 @@ func toAccountResponse(a *model.Account, members []model.AccountMember) *model.A
 		dtos = append(dtos, model.AccountMemberDTO{UserID: m.UserID, Email: m.Email, Role: m.Role})
 	}
 	return &model.AccountResponse{
-		AccountID:   a.AccountID,
-		Name:        a.Name,
-		Aliases:     a.Aliases,
-		Domains:     a.Domains,
-		Industry:    a.Industry,
-		OwnerUserID: a.OwnerUserID,
-		Members:     dtos,
-		CreatedAt:   a.CreatedAt,
+		AccountID:       a.AccountID,
+		ParentAccountID: a.ParentAccountID,
+		Name:            a.Name,
+		Aliases:         a.Aliases,
+		Domains:         a.Domains,
+		Industry:        a.Industry,
+		OwnerUserID:     a.OwnerUserID,
+		Members:         dtos,
+		CreatedAt:       a.CreatedAt,
 	}
 }
 
@@ -199,17 +200,18 @@ func (s *AccountService) CreateAccount(ctx context.Context, ownerUserID, ownerEm
 	now := time.Now().UTC()
 	accountID := uuid.NewString()
 	account := &model.Account{
-		PK:          model.PrefixAccount + accountID,
-		SK:          model.SKAccountMeta,
-		AccountID:   accountID,
-		Name:        strings.TrimSpace(req.Name),
-		Aliases:     req.Aliases,
-		Domains:     req.Domains,
-		Industry:    req.Industry,
-		OwnerUserID: ownerUserID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		EntityType:  model.EntityTypeAccount,
+		PK:              model.PrefixAccount + accountID,
+		SK:              model.SKAccountMeta,
+		AccountID:       accountID,
+		ParentAccountID: req.ParentAccountID,
+		Name:            strings.TrimSpace(req.Name),
+		Aliases:         req.Aliases,
+		Domains:         req.Domains,
+		Industry:        req.Industry,
+		OwnerUserID:     ownerUserID,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		EntityType:      model.EntityTypeAccount,
 	}
 	owner := &model.AccountMember{
 		PK:         model.PrefixAccount + accountID,
@@ -223,7 +225,16 @@ func (s *AccountService) CreateAccount(ctx context.Context, ownerUserID, ownerEm
 		GSI1SK:     model.PrefixAccount + accountID,
 		EntityType: model.EntityTypeAccountMember,
 	}
-	if err := s.repo.CreateAccount(ctx, account, owner); err != nil {
+	var err error
+	if account.ParentAccountID != "" {
+		err = s.createAccountWithParent(ctx, account, owner)
+	} else {
+		err = s.repo.CreateAccount(ctx, account, owner)
+		if errors.Is(err, repository.ErrConditionFailed) {
+			err = ErrAccountHierarchyConflict
+		}
+	}
+	if err != nil {
 		return nil, err
 	}
 	return account, nil
@@ -273,7 +284,7 @@ func (s *AccountService) ListAccounts(ctx context.Context, userID string) ([]mod
 		if account == nil {
 			continue // membership dangling after account deletion
 		}
-		out = append(out, model.AccountSummary{AccountID: account.AccountID, Name: account.Name, Role: m.Role})
+		out = append(out, model.AccountSummary{AccountID: account.AccountID, ParentAccountID: account.ParentAccountID, Name: account.Name, Role: m.Role})
 	}
 	return out, nil
 }

@@ -214,7 +214,18 @@ Error: 403 Forbidden (only owner can delete)
 
 ### Accounts
 
-An Account (customer) is a first-class entity shared by a team. Its creator automatically becomes the `owner` member, and only the owner can add members. Membership (role: owner/AM/TAM/SSA/SA/SA Manager/AM Manager — the assignable list is `model.AssignableRoles`) is the access control mechanism. All endpoints require auth.
+An Account (customer or group) is a first-class entity shared by a team. Its
+creator automatically becomes the `owner` member; existing members can add
+members under ADR-034. Membership (role: owner/AM/TAM/SSA/SA/SA Manager/AM Manager —
+the assignable list is `model.AssignableRoles`) remains the access control
+mechanism. All endpoints require auth.
+
+Accounts have an optional `parentAccountId`, forming a hierarchy such as
+`토스 → 토스증권` or `하나금융그룹 → 하나은행`. Existing records without the field
+remain roots. Parent relationships are organization metadata: they do not grant
+membership or access to a parent/child's meetings, documents, research, or
+projects. Each user's account tree contains only their visible accounts; a node
+whose parent is not visible is presented as a root.
 
 #### List Accounts (my accounts)
 
@@ -227,6 +238,7 @@ Response: 200 OK
     {
       "accountId": "uuid",
       "name": "Acme Bank",
+      "parentAccountId": "group-uuid", // optional; omitted for roots
       "role": "owner"            // owner | AM | TAM | SSA | SA | SA Manager | AM Manager
     }
   ]
@@ -242,6 +254,7 @@ POST /api/accounts
 Request:
 {
   "name": "Acme Bank",
+  "parentAccountId": "group-uuid", // optional; creator must belong to this parent
   "aliases": ["Acme Financial"], // optional, tag-alias mapping
   "domains": ["acmebank.com"],   // optional
   "industry": "Finance"          // optional
@@ -251,6 +264,7 @@ Response: 201 Created
 {
   "accountId": "uuid",
   "name": "Acme Bank",
+  "parentAccountId": "group-uuid", // optional
   "aliases": ["Acme Financial"],
   "domains": ["acmebank.com"],
   "industry": "Finance",
@@ -264,7 +278,10 @@ Response: 201 Created
 Error: 400 Bad Request (empty name)
 ```
 
-The creator automatically becomes an `owner` member.
+The creator automatically becomes an `owner` member. Creating under a parent
+validates that parent's existence and current membership. The account, owner
+membership, and checked parent ancestry are written atomically. Parent validation
+may additionally return `403`, `404`, or a retryable `409` conflict.
 
 #### Get Account Detail
 
@@ -275,6 +292,7 @@ Response: 200 OK
 {
   "accountId": "uuid",
   "name": "Acme Bank",
+  "parentAccountId": "group-uuid", // optional
   "aliases": ["Acme Financial"],
   "domains": ["acmebank.com"],
   "industry": "Finance",
@@ -289,6 +307,33 @@ Response: 200 OK
 Error: 403 Forbidden (not a member)
 Error: 404 Not Found (account doesn't exist)
 ```
+
+#### Change Account Parent (owner only — ADR-036)
+
+```
+PUT /api/accounts/{accountId}/parent
+Request:
+{ "parentAccountId": "group-uuid" }
+
+Response: 200 OK
+{ "accountId": "uuid", "parentAccountId": "group-uuid" }
+
+# Detach into the root level:
+Request: { "parentAccountId": "" }
+Response: { "accountId": "uuid" }
+```
+
+The field is required; omitting it or supplying `null` is not a detach request.
+The caller must own the account being moved and belong to the new parent.
+Self-parenting, cycles, and ancestry walks exceeding 64 nodes are rejected.
+The service checks ancestor parent links in the same transaction as the partial
+parent update, so opposing concurrent moves cannot form a cycle. Conditional
+conflicts are retried from fresh reads before returning `409 CONFLICT`.
+No other account fields or memberships are replaced.
+
+Errors: `400 BAD_REQUEST` (invalid/missing input or invalid hierarchy),
+`403 FORBIDDEN` (not the child owner or not a member of the parent),
+`404 NOT_FOUND` (missing account/parent), `409 CONFLICT` (concurrent change).
 
 #### Add Member (any account member — ADR-034)
 

@@ -37,25 +37,9 @@ func (r *DynamoDBRepository) queryAllPages(ctx context.Context, input *dynamodb.
 
 // CreateAccount writes the account META item and the owner member item.
 func (r *DynamoDBRepository) CreateAccount(ctx context.Context, account *model.Account, ownerMember *model.AccountMember) error {
-	accItem, err := attributevalue.MarshalMap(account)
-	if err != nil {
-		return fmt.Errorf("marshal account: %w", err)
-	}
-	memItem, err := attributevalue.MarshalMap(ownerMember)
-	if err != nil {
-		return fmt.Errorf("marshal owner member: %w", err)
-	}
-	// Atomic two-item write: an account must never exist without its owner member
-	// (a missing owner would make GetMember deny everyone, orphaning the account).
-	if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
-		TransactItems: []types.TransactWriteItem{
-			{Put: &types.Put{TableName: aws.String(r.tableName), Item: accItem}},
-			{Put: &types.Put{TableName: aws.String(r.tableName), Item: memItem}},
-		},
-	}); err != nil {
-		return fmt.Errorf("create account transaction: %w", err)
-	}
-	return nil
+	// Parent-bearing creates must supply the observed ancestor path through
+	// CreateAccountWithParent; this legacy entry point handles roots only.
+	return r.CreateAccountWithParent(ctx, account, ownerMember, nil)
 }
 
 func (r *DynamoDBRepository) GetAccount(ctx context.Context, accountID string) (*model.Account, error) {
