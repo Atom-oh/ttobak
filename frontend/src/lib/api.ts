@@ -243,10 +243,10 @@ interface QAResponse {
 }
 
 export const qaApi = {
-  ask: (question: string, context?: string, sessionId?: string) =>
+  ask: (question: string, context?: string, sessionId?: string, meetingId?: string) =>
     api.post<QAResponse>(
       '/api/qa/ask',
-      { question, context, sessionId }
+      { question, context, sessionId, meetingId }
     ),
 
   askMeeting: (meetingId: string, question: string, sessionId?: string) =>

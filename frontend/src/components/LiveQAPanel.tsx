@@ -424,7 +424,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     // Fallback to HTTP sync
     try {
       setQaHistory(prev => prev.map(e => e.id === entryId ? { ...e, isStreaming: false } : e));
-      const response = await qaApi.ask(q.trim(), transcriptContext, sessionId);
+      const response = await qaApi.ask(q.trim(), transcriptContext, sessionId, meetingId);
       recordProactiveAsked(entryId);
       setQaHistory((prev) =>
         prev.map((entry) =>
