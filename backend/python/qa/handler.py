@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import base64
 import logging
 import threading
@@ -333,6 +334,54 @@ def _shared_access_signature(shared_meetings):
     return hashlib.sha256('|'.join(ids).encode('utf-8')).hexdigest()
 
 
+def _canonical_meeting_uri(uri):
+    """Only the exact exporter key is a meeting, never an upload substring."""
+    if not isinstance(uri, str):
+        return None
+    match = re.fullmatch(
+        r's3://[a-z0-9][a-z0-9.-]*/meetings/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)\.md', uri,
+    )
+    return match.groups() if match else None
+
+
+def _refresh_kb_meetings(candidates, user_id):
+    """Resolve index candidates against current records, including on cache hits.
+
+    No index/cached meeting text survives this boundary. Missing or revoked
+    records disappear; read failures abort visibly instead of returning stale
+    or silently incomplete data. This refresh cannot discover unindexed terms.
+    """
+    results, seen = [], set()
+    for candidate in candidates:
+        identity = _canonical_meeting_uri(candidate.get('uri'))
+        if identity is None:
+            results.append(candidate)
+            continue
+        if identity in seen:
+            continue
+        seen.add(identity)
+        owner_id, meeting_id = identity
+        try:
+            item = table.get_item(
+                Key={'PK': f'USER#{owner_id}', 'SK': f'MEETING#{meeting_id}'},
+                ProjectionExpression='meetingId, userId, accountId, sharedToAccount, #n, #c, updatedAt',
+                ExpressionAttributeNames={'#n': 'notes', '#c': 'content'},
+                ConsistentRead=True,
+            ).get('Item')
+            if not item or item.get('meetingId') != meeting_id or item.get('userId') != owner_id:
+                continue
+            if not _has_meeting_access(user_id, owner_id, meeting_id, item):
+                continue
+        except Exception as exc:
+            raise RuntimeError('Current meeting retrieval failed; cached meeting text was not used.') from exc
+        results.append({
+            'uri': candidate['uri'], 'score': candidate.get('score', 0),
+            'meeting': {'meetingId': meeting_id, 'updatedAt': item.get('updatedAt'),
+                        'notes': item.get('notes') or '', 'content': item.get('content') or ''},
+        })
+    return results
+
+
 def _kb_cache_get(question, number_of_results, user_id=None, access_signature=None):
     """Look up a cached KB retrieve() response. Returns list or None."""
     if KB_CACHE_TTL_SECONDS <= 0:
@@ -353,14 +402,19 @@ def _kb_cache_get(question, number_of_results, user_id=None, access_signature=No
 
 
 def _kb_cache_put(question, number_of_results, results, user_id=None, access_signature=None):
-    """Store KB retrieve() response with TTL, tagged with the access signature it was built under."""
+    """Cache meeting identities/scores only; ordinary document snippets stay unchanged."""
     if KB_CACHE_TTL_SECONDS <= 0:
         return
     try:
+        candidates = [
+            {'uri': r['uri'], 'score': r.get('score', 0)}
+            if _canonical_meeting_uri(r.get('uri')) else r
+            for r in results
+        ]
         table.put_item(Item={
             "PK": _kb_cache_key(question, number_of_results, user_id),
             "SK": "V1",
-            "results": json.dumps(results, ensure_ascii=False),
+            "results": json.dumps(candidates, ensure_ascii=False),
             "accessSignature": access_signature,
             "TTL": int(time.time()) + KB_CACHE_TTL_SECONDS,
         })
@@ -580,7 +634,12 @@ def list_meetings_for_user(user_id, date_from=None, date_to=None, tag=None, keyw
 
 
 def retrieve_from_kb(question, number_of_results=5, user_id=None):
-    """Retrieve relevant documents from Bedrock Knowledge Base, with short-lived DynamoDB cache."""
+    """Retrieve KB candidates, then refresh current meeting data.
+
+    There is no disabled-KB empty-success mode: on a cache miss, invalid or
+    unconfigured KB_ID and service failures surface as tool errors. The
+    existing KB_ID default and cache lookup behavior are unchanged.
+    """
     if not user_id:
         raise ValueError('Authenticated user is required for KB retrieval')
     capped = min(number_of_results, 10)
@@ -596,7 +655,7 @@ def retrieve_from_kb(question, number_of_results=5, user_id=None):
     cached = _kb_cache_get(question, capped, user_id, access_signature)
     if cached is not None:
         logger.info("KB cache hit: n=%d", capped)
-        return cached
+        return _refresh_kb_meetings(cached, user_id)
 
     try:
         retrieval_config = {
@@ -631,13 +690,15 @@ def retrieve_from_kb(question, number_of_results=5, user_id=None):
             if score >= 0.5:
                 text = item.get('content', {}).get('text', '')
                 uri = item.get('location', {}).get('s3Location', {}).get('uri', '')
-                if text:
+                if text or _canonical_meeting_uri(uri):
                     results.append({'text': text, 'uri': uri, 'score': score})
         _kb_cache_put(question, capped, results, user_id, access_signature)
-        return results
     except Exception as e:
-        logger.warning(f'KB retrieve failed: {e}')
-        return []
+        # SDK exception messages can echo the query. Do not log or chain them.
+        logger.warning('KB retrieve failed (%s)', type(e).__name__)
+        raise RuntimeError('Knowledge Base retrieval failed; search results are unavailable.') from None
+    # Canonical read failures likewise reach the tool error path.
+    return _refresh_kb_meetings(results, user_id)
 
 
 def load_session(session_id, user_id=None):
