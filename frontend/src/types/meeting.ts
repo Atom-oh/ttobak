@@ -3,6 +3,7 @@ export interface Meeting {
   SK: string;
   meetingId: string;
   userId: string;
+  accountId?: string;
   title: string;
   description?: string;
   date: string;
@@ -131,6 +132,7 @@ export interface TranscriptComparison {
 
 export interface MeetingListFilter {
   tab: 'all' | 'recent' | 'shared' | 'favorites';
+  accountId?: string;
   search?: string;
   tags?: string[];
   dateRange?: {
@@ -164,7 +166,6 @@ export interface MeetingDetail extends Meeting {
   isShared?: boolean;
   sharedBy?: string | null;
   permission?: 'read' | 'edit' | null;
-  accountId?: string;
   sharedToAccount?: boolean;
 }
 

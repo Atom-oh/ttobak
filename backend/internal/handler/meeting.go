@@ -73,9 +73,10 @@ func (h *MeetingHandler) LinkToAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"accountId": req.AccountID})
 }
 
-// ListMeetings handles GET /api/meetings?tab={all|shared}&cursor={lastKey}&limit={20}.
+// ListMeetings handles GET /api/meetings?tab={all|shared}&accountId={id}&cursor={lastKey}&limit={20}.
 // `tab` defaults to "all"; "shared" returns meetings shared with the caller.
-// `cursor` is the opaque last-evaluated-key from a previous page; `limit` caps
+// `accountId` optionally narrows that caller-scoped list to one account.
+// `cursor` is the opaque owned/share or team continuation from a previous page; `limit` caps
 // page size at 20 items by default.
 func (h *MeetingHandler) ListMeetings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -84,13 +85,12 @@ func (h *MeetingHandler) ListMeetings(w http.ResponseWriter, r *http.Request) {
 	// Ensure user profile exists
 	email := middleware.GetUserEmail(ctx)
 	name := middleware.GetUserName(ctx)
+	var joinedAccountIDs []string
 	if email != "" {
-		// Void by design (see its doc comment) -- errors from this call are
-		// not swallowed silently: GetOrCreateUser failures are logged
-		// inside it, and MaterializePendingShares logs per-item failures
-		// of its own as it iterates. Nothing here needs to check a return
-		// value because there isn't one to check.
-		h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
+		// Failures are logged inside the materializer. Carry freshly joined
+		// account IDs to the list so GSI propagation cannot hide this
+		// request's newly granted team membership.
+		joinedAccountIDs = h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
 	}
 
 	tab := r.URL.Query().Get("tab")
@@ -102,8 +102,12 @@ func (h *MeetingHandler) ListMeetings(w http.ResponseWriter, r *http.Request) {
 	var limit int32 = 20
 	// Could parse limit from query if needed
 
-	result, err := h.meetingService.ListMeetings(ctx, userID, tab, cursor, limit)
+	result, err := h.meetingService.ListMeetings(ctx, userID, tab, cursor, r.URL.Query().Get("accountId"), limit, joinedAccountIDs...)
 	if err != nil {
+		if errors.Is(err, service.ErrInvalidInput) {
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid meeting cursor")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
 	}

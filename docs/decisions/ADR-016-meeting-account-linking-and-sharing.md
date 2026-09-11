@@ -24,6 +24,7 @@ Listing "all meetings shared into this account" must not require a cross-partiti
 - **Link** sets `Meeting.AccountID` only (owner + account-member gated). No sharing, no team visibility.
 - **Share** sets `AccountID` + `SharedToAccount=true`, writes a lightweight **`MeetingRef`** into the account partition (`PK=ACCOUNT#{id}`, `SK=MEETINGREF#{occurredAt}#{meetingId}`), then grants a read `Share` to every account member except the owner.
 - **MeetingRef** lets `ListAccountMeetings` return the account's shared meetings with a single partition query (newest-first), no cross-partition scan.
+- **Later team members inherit list visibility**: `ListMeetings` discovers inherited meetings through current memberships and account `MeetingRef` pages. After the owned/individual-share stream is exhausted, it fills remaining page slots from this inherited stream and resumes with an opaque team cursor. Each request reads at most 25 reference pages and re-verifies membership plus canonical `SharedToAccount`/`AccountID`. Individual shares retain their permissions and are excluded from the inherited stream. Freshly materialized account IDs travel through the first-login request to cover membership-GSI propagation lag. Joining after publication needs no Share backfill or manual re-share.
 - **Write order is deliberate and non-transactional**: `UpdateMeeting` → `PutMeetingRef` → (insight fan-out) → per-member `CreateShare`. The `MeetingRef` is written **before** the share loop so a list-visible record always exists even if a later `CreateShare` fails; every write targets a fixed key, so a client retry converges. `TransactWriteItems` was rejected because its 100-item limit would cap account team size.
 
 ## Consequences
@@ -68,6 +69,7 @@ Listing "all meetings shared into this account" must not require a cross-partiti
 - **연결**은 `Meeting.AccountID`만 설정(소유자 + Account 멤버 게이트). 공유·팀 가시성 없음.
 - **공유**는 `AccountID` + `SharedToAccount=true` 설정 후, Account 파티션에 경량 **`MeetingRef`**(`PK=ACCOUNT#{id}`, `SK=MEETINGREF#{occurredAt}#{meetingId}`)를 기록하고, 소유자를 제외한 전 멤버에게 읽기 `Share` 부여.
 - **`MeetingRef`** 덕분에 `ListAccountMeetings`가 단일 파티션 쿼리(최신순)로 공유 미팅을 반환, 교차 스캔 불필요.
+- **나중에 합류한 팀원의 목록 가시성도 자동 상속**: `ListMeetings`는 현재 멤버십과 어카운트별 `MeetingRef` 페이지에서 기존 팀 공유 미팅을 찾는다. 본인 미팅/개인별 공유 조회가 끝나면 남은 페이지 공간에 상속 미팅을 채우고, 별도 팀 커서로 이어서 읽는다. 요청마다 최대 25개 참조 페이지를 읽으며 현재 멤버십과 원본 `SharedToAccount`/`AccountID`를 재검증한다. 직접 공유의 권한은 보존하고 상속 조회에서는 제외한다. 첫 로그인에서 확정한 어카운트 ID는 같은 요청에 전달해 멤버십 GSI 반영 지연을 보완한다. 공유 이후 합류한 사용자도 Share 재생성이나 수동 재공유가 필요 없다.
 - **쓰기 순서는 의도적·비트랜잭션**: `UpdateMeeting` → `PutMeetingRef` → (인사이트 팬아웃) → 멤버별 `CreateShare`. share 루프 **전에** `MeetingRef`를 먼저 기록 — 이후 `CreateShare`가 실패해도 목록에 보이는 레코드는 항상 존재. 모든 쓰기가 고정 키 대상이라 클라이언트 재시도로 수렴. `TransactWriteItems`는 100개 한도가 팀 크기를 제약해 기각.
 
 ## 결과

@@ -58,8 +58,10 @@ DynamoDB 스로틀이 전체 사용자의 로그인 차단으로 직결된다. �
 ### 3. 비밀번호 처리는 상태별로 분기하고, 찾기 UI를 함께 구현했다
 
 - `FORCE_CHANGE_PASSWORD`(초대 후 첫 로그인 전) → "초대 메일 재발송"
-  (`AdminCreateUser` + `MessageAction=RESEND`, `Username`은 반드시 sub —
-  이메일 alias로는 기존 사용자 대상 작업이 통하지 않는다)
+  (`AdminCreateUser` + `MessageAction=RESEND`). 이 풀은
+  `UsernameAttributes=["email"]`이므로 재발송 요청의 `Username`은 이메일이어야 한다.
+  API는 대상 `sub`로 `AdminGetUser`를 호출해 상태를 확인한 뒤, 반환된 `email`을
+  `Username`과 이메일 전송 속성에 넣는다. 클라이언트의 이메일 지정은 받지 않는다.
 - `CONFIRMED`(가입 완료) → "비밀번호 강제 재설정" (`AdminResetUserPassword`)
 
 **탐색 중 발견한 선행 결함**: `frontend/src/lib/auth.ts`의 `forgotPassword`/

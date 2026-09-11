@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,14 @@ type mockMeetingRepo struct {
 	// verify a transient GetMember failure in ListMeetings isn't cached as
 	// "not a member" (which would incorrectly suppress every other meeting
 	// for the same account on the same page).
-	getMemberErrCount int
+	getMemberErrCount         int
+	listMeetingsFn            func(repository.ListMeetingsParams) (*repository.ListMeetingsResult, error)
+	batchMeetingsErr          error
+	listAccountMembershipsErr error
+	listAccountRefsErr        error
+	staleMemberships          []model.AccountMember
+	membershipIndexLag        bool
+	teamRefPageCalls          int
 }
 
 func newMockMeetingRepo() *mockMeetingRepo {
@@ -183,9 +191,12 @@ func (m *mockMeetingRepo) ListSharesForMeeting(_ context.Context, meetingID stri
 }
 
 func (m *mockMeetingRepo) ListMeetings(_ context.Context, params repository.ListMeetingsParams) (*repository.ListMeetingsResult, error) {
+	if m.listMeetingsFn != nil {
+		return m.listMeetingsFn(params)
+	}
 	var meetings []model.Meeting
 	for _, mtg := range m.meetings {
-		if mtg.UserID == params.UserID {
+		if mtg.UserID == params.UserID && params.Tab != "shared" {
 			meetings = append(meetings, *mtg)
 		}
 	}
@@ -199,6 +210,9 @@ func (m *mockMeetingRepo) ListMeetings(_ context.Context, params repository.List
 }
 
 func (m *mockMeetingRepo) BatchGetMeetings(_ context.Context, keys []repository.MeetingKey) ([]*model.Meeting, error) {
+	if m.batchMeetingsErr != nil {
+		return nil, m.batchMeetingsErr
+	}
 	var result []*model.Meeting
 	for _, key := range keys {
 		if mtg, ok := m.meetings[meetingKey(key.OwnerID, key.MeetingID)]; ok {
@@ -422,6 +436,41 @@ func (m *mockMeetingRepo) ListAccountMembers(_ context.Context, accountID string
 		}
 	}
 	return out, nil
+}
+
+func (m *mockMeetingRepo) ListAccountsForUser(_ context.Context, userID string) ([]model.AccountMember, error) {
+	if m.listAccountMembershipsErr != nil {
+		return nil, m.listAccountMembershipsErr
+	}
+	if m.membershipIndexLag {
+		return nil, nil
+	}
+	out := append([]model.AccountMember(nil), m.staleMemberships...)
+	for _, member := range m.members {
+		if member.UserID == userID {
+			out = append(out, *member)
+		}
+	}
+	return out, nil
+}
+
+func (m *mockMeetingRepo) ListMeetingRefsForAccountPage(_ context.Context, accountID, cursor string, limit int32) ([]model.MeetingRef, *string, error) {
+	m.teamRefPageCalls++
+	if m.listAccountRefsErr != nil {
+		return nil, nil, m.listAccountRefsErr
+	}
+	start, _ := strconv.Atoi(cursor)
+	refs := m.meetingRefs[accountID]
+	if start >= len(refs) {
+		return nil, nil, nil
+	}
+	end := min(start+int(limit), len(refs))
+	var next *string
+	if end < len(refs) {
+		value := strconv.Itoa(end)
+		next = &value
+	}
+	return refs[start:end], next, nil
 }
 
 func (m *mockMeetingRepo) PutMeetingRef(_ context.Context, ref *model.MeetingRef) error {
@@ -1847,7 +1896,7 @@ func TestListMeetings_StaleAccountShareOmittedAfterMembershipRemoved(t *testing.
 	}
 	// "removed-1" is NOT in repo.members -- membership already deleted.
 
-	resp, err := svc.ListMeetings(context.Background(), "removed-1", "", "", 20)
+	resp, err := svc.ListMeetings(context.Background(), "removed-1", "", "", "", 20)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1868,7 +1917,7 @@ func TestListMeetings_ValidAccountShareIncluded(t *testing.T) {
 		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
 	}
 
-	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", 20)
+	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", "", 20)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1899,7 +1948,7 @@ func TestListMeetings_UnsharedFromAccountOmittedDespiteLingeringShareAndMembersh
 		Permission: model.PermissionRead, Origin: model.ShareOriginAccount,
 	}
 
-	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", 20)
+	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", "", 20)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1933,7 +1982,7 @@ func TestListMeetings_TransientGetMemberErrorNotCachedAsNonMember(t *testing.T) 
 	}
 	repo.getMemberErrCount = 1 // exactly one GetMember call fails
 
-	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", 20)
+	resp, err := svc.ListMeetings(context.Background(), "member-1", "", "", "", 20)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1951,7 +2000,7 @@ func TestListMeetings_DirectShareIncludedRegardlessOfMembership(t *testing.T) {
 		Permission: model.PermissionRead,
 	}
 
-	resp, err := svc.ListMeetings(context.Background(), "direct-1", "", "", 20)
+	resp, err := svc.ListMeetings(context.Background(), "direct-1", "", "", "", 20)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

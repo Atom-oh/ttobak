@@ -440,14 +440,28 @@ func (s *UserAdminService) ResendInvite(ctx context.Context, targetUserID string
 		return ErrInvalidStatusForAction
 	}
 
-	// MessageAction=RESEND requires the same immutable Username used at
-	// creation time -- since this pool aliases email as a sign-in attribute,
-	// that immutable value is the sub, not the email address.
+	// This pool uses UsernameAttributes=["email"]. AdminGetUser accepts a
+	// sub, but AdminCreateUser (including RESEND) requires an email address.
+	// Resolve it from Cognito, never from caller-supplied delivery details.
+	var email string
+	for _, attr := range current.UserAttributes {
+		if aws.ToString(attr.Name) == "email" {
+			email = aws.ToString(attr.Value)
+			break
+		}
+	}
+	if email == "" {
+		return fmt.Errorf("failed to resend invite: user has no email attribute")
+	}
+
 	if _, err := s.cognito.AdminCreateUser(ctx, &cognitoidp.AdminCreateUserInput{
 		UserPoolId:             aws.String(s.poolID),
-		Username:               aws.String(targetUserID),
+		Username:               aws.String(email),
 		MessageAction:          cognitoidptypes.MessageActionTypeResend,
 		DesiredDeliveryMediums: []cognitoidptypes.DeliveryMediumType{cognitoidptypes.DeliveryMediumTypeEmail},
+		UserAttributes: []cognitoidptypes.AttributeType{
+			{Name: aws.String("email"), Value: aws.String(email)},
+		},
 	}); err != nil {
 		return fmt.Errorf("failed to resend invite: %w", err)
 	}

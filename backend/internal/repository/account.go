@@ -271,6 +271,42 @@ func (r *DynamoDBRepository) ListMeetingRefsForAccount(ctx context.Context, acco
 	return refs, nil
 }
 
+// ListMeetingRefsForAccountPage reads one newest-first page of an account's
+// meeting references, leaving continuation to the caller.
+func (r *DynamoDBRepository) ListMeetingRefsForAccountPage(ctx context.Context, accountID, cursor string, limit int32) ([]model.MeetingRef, *string, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	keyEx := expression.Key("PK").Equal(expression.Value(model.PrefixAccount + accountID)).
+		And(expression.Key("SK").BeginsWith(model.PrefixMeetingRef))
+	expr, err := expression.NewBuilder().WithKeyCondition(keyEx).Build()
+	if err != nil {
+		return nil, nil, fmt.Errorf("build meeting refs page query: %w", err)
+	}
+	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:                 aws.String(r.tableName),
+		KeyConditionExpression:    expr.KeyCondition(),
+		ExpressionAttributeNames:  expr.Names(),
+		ExpressionAttributeValues: expr.Values(),
+		ScanIndexForward:          aws.Bool(false),
+		Limit:                     aws.Int32(limit),
+		ExclusiveStartKey:         decodeCursor(cursor),
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("query meeting refs page: %w", err)
+	}
+	refs := []model.MeetingRef{}
+	if err := attributevalue.UnmarshalListOfMaps(result.Items, &refs); err != nil {
+		return nil, nil, fmt.Errorf("unmarshal meeting refs page: %w", err)
+	}
+	var nextCursor *string
+	if len(result.LastEvaluatedKey) > 0 {
+		next := encodeCursor(result.LastEvaluatedKey)
+		nextCursor = &next
+	}
+	return refs, nextCursor, nil
+}
+
 // PutResearchRef writes a ResearchRef item (caller builds PK/SK).
 func (r *DynamoDBRepository) PutResearchRef(ctx context.Context, ref *model.ResearchRef) error {
 	item, err := attributevalue.MarshalMap(ref)

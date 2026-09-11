@@ -1402,10 +1402,11 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 
 // ListMeetingsParams contains parameters for listing meetings
 type ListMeetingsParams struct {
-	UserID string
-	Tab    string // "all" or "shared"
-	Cursor string // base64-encoded LastEvaluatedKey
-	Limit  int32
+	UserID    string
+	AccountID string // optional exact account match within the caller's meetings
+	Tab       string // "all" or "shared"
+	Cursor    string // base64-encoded LastEvaluatedKey
+	Limit     int32
 }
 
 // ListMeetingsResult contains the result of listing meetings
@@ -1486,6 +1487,9 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 		// partition is exhausted in this scan direction.
 		keyEx := expression.Key("GSI1PK").Equal(expression.Value(model.PrefixUser + params.UserID))
 		filterEx := expression.Name("entityType").Equal(expression.Value("MEETING"))
+		if params.AccountID != "" {
+			filterEx = filterEx.And(expression.Name("accountId").Equal(expression.Value(params.AccountID)))
+		}
 		proj := expression.NamesList(
 			expression.Name("PK"), expression.Name("SK"),
 			expression.Name("meetingId"), expression.Name("userId"),
@@ -1498,6 +1502,7 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 			expression.Name("GSI1SK"), expression.Name("audioKey"),
 			expression.Name("selectedTranscript"), expression.Name("duration"),
 			expression.Name("sentiment"),
+			expression.Name("accountId"),
 		)
 		expr, err := expression.NewBuilder().
 			WithKeyCondition(keyEx).
@@ -1509,7 +1514,7 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 		}
 
 		var meetings []model.Meeting
-		const maxPages = 25 // defensive bound -- this GSI1PK partition only ever mixes in a user's own (typically few) account memberships
+		const maxPages = 25 // retain a cursor when a sparse account filter reaches this work bound
 		for i := 0; i < maxPages; i++ {
 			queryResult, err := r.client.Query(ctx, &dynamodb.QueryInput{
 				TableName:                 aws.String(r.tableName),
@@ -2251,7 +2256,7 @@ func (r *DynamoDBRepository) ListSharesForUser(ctx context.Context, userID strin
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
 
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	items, err := r.queryAllPages(ctx, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
@@ -2262,7 +2267,7 @@ func (r *DynamoDBRepository) ListSharesForUser(ctx context.Context, userID strin
 	}
 
 	var shares []model.Share
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &shares); err != nil {
+	if err := attributevalue.UnmarshalListOfMaps(items, &shares); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal shares: %w", err)
 	}
 

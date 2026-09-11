@@ -56,7 +56,12 @@ func (s *stubCognitoAdminAPI) ListUsersInGroup(_ context.Context, _ *cognitoidp.
 }
 
 func (s *stubCognitoAdminAPI) AdminGetUser(_ context.Context, _ *cognitoidp.AdminGetUserInput, _ ...func(*cognitoidp.Options)) (*cognitoidp.AdminGetUserOutput, error) {
-	return &cognitoidp.AdminGetUserOutput{UserStatus: s.getUserStatus}, nil
+	return &cognitoidp.AdminGetUserOutput{
+		UserStatus: s.getUserStatus,
+		UserAttributes: []cognitoidptypes.AttributeType{
+			{Name: aws.String("email"), Value: aws.String("invitee@example.com")},
+		},
+	}, nil
 }
 
 func (s *stubCognitoAdminAPI) AdminCreateUser(_ context.Context, _ *cognitoidp.AdminCreateUserInput, _ ...func(*cognitoidp.Options)) (*cognitoidp.AdminCreateUserOutput, error) {

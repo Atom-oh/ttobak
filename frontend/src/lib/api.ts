@@ -130,14 +130,16 @@ export const api = {
 
 // Meeting API endpoints
 export const meetingsApi = {
-  list: (params?: { tab?: 'all' | 'shared'; cursor?: string; limit?: number }) => {
+  list: (params?: { tab?: 'all' | 'shared'; accountId?: string; cursor?: string; limit?: number }, options?: { signal?: AbortSignal }) => {
     const query = new URLSearchParams();
     if (params?.tab) query.set('tab', params.tab);
+    if (params?.accountId) query.set('accountId', params.accountId);
     if (params?.cursor) query.set('cursor', params.cursor);
     if (params?.limit) query.set('limit', params.limit.toString());
     const queryStr = query.toString();
     return api.get<{ meetings: import('@/types/meeting').Meeting[]; nextCursor: string | null }>(
-      `/api/meetings${queryStr ? `?${queryStr}` : ''}`
+      `/api/meetings${queryStr ? `?${queryStr}` : ''}`,
+      options,
     );
   },
 

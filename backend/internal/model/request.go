@@ -105,12 +105,13 @@ type UploadCompleteResponse struct {
 // MeetingListResponse represents the response for listing meetings
 type MeetingListResponse struct {
 	Meetings   []MeetingListItem `json:"meetings"`
-	NextCursor *string           `json:"nextCursor"` // base64-encoded LastEvaluatedKey or null
+	NextCursor *string           `json:"nextCursor"` // opaque continuation cursor or null
 }
 
 // MeetingListItem represents a meeting in list view
 type MeetingListItem struct {
 	MeetingID    string   `json:"meetingId"`
+	AccountID    string   `json:"accountId,omitempty"`
 	Title        string   `json:"title"`
 	Date         string   `json:"date"`
 	Status       string   `json:"status"`
@@ -528,6 +529,7 @@ func ToMeetingListItem(m *Meeting, isShared bool, sharedBy *string, permission *
 
 	return MeetingListItem{
 		MeetingID:    m.MeetingID,
+		AccountID:    m.AccountID,
 		Title:        m.Title,
 		Date:         m.Date.Format(time.RFC3339),
 		Status:       m.Status,

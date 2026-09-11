@@ -52,14 +52,15 @@ func newStubMeetingHandler() (*MeetingHandler, *mockHandlerMeetingRepo) {
 
 // mockHandlerMeetingRepo implements service.MeetingRepo for handler tests.
 type mockHandlerMeetingRepo struct {
-	meetings     map[string]*model.Meeting
-	meetingsByID map[string]*model.Meeting
-	shares       map[string]*model.Share
-	attachments  map[string][]model.Attachment
-	users        map[string]*model.User
-	members      map[string]*model.AccountMember // "accountID|userID"
-	meetingRefs  map[string][]model.MeetingRef   // accountID -> refs
-	accountInsights []model.AccountInsight
+	meetings           map[string]*model.Meeting
+	meetingsByID       map[string]*model.Meeting
+	shares             map[string]*model.Share
+	attachments        map[string][]model.Attachment
+	users              map[string]*model.User
+	members            map[string]*model.AccountMember // "accountID|userID"
+	meetingRefs        map[string][]model.MeetingRef   // accountID -> refs
+	accountInsights    []model.AccountInsight
+	listMeetingsParams []repository.ListMeetingsParams
 }
 
 func newMockHandlerMeetingRepo() *mockHandlerMeetingRepo {
@@ -163,7 +164,20 @@ func (m *mockHandlerMeetingRepo) ListSharesForMeeting(_ context.Context, meeting
 	return nil, nil
 }
 func (m *mockHandlerMeetingRepo) ListMeetings(_ context.Context, params repository.ListMeetingsParams) (*repository.ListMeetingsResult, error) {
+	m.listMeetingsParams = append(m.listMeetingsParams, params)
 	return &repository.ListMeetingsResult{}, nil
+}
+func (m *mockHandlerMeetingRepo) ListAccountsForUser(_ context.Context, userID string) ([]model.AccountMember, error) {
+	var out []model.AccountMember
+	for _, member := range m.members {
+		if member.UserID == userID {
+			out = append(out, *member)
+		}
+	}
+	return out, nil
+}
+func (m *mockHandlerMeetingRepo) ListMeetingRefsForAccountPage(_ context.Context, accountID, cursor string, limit int32) ([]model.MeetingRef, *string, error) {
+	return m.meetingRefs[accountID], nil, nil
 }
 func (m *mockHandlerMeetingRepo) BatchGetMeetings(_ context.Context, _ []repository.MeetingKey) ([]*model.Meeting, error) {
 	return nil, nil
