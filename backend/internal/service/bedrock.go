@@ -569,7 +569,7 @@ Your output MUST follow this exact structure:
 # 회의록
 
 ## 참석자
-- 화자별 식별 및 주요 역할 추정
+- 녹취록에서 명시적으로 확인된 이름과 역할만 기재. 확인되지 않은 이름은 화자 라벨을 유지하고 역할은 추정하지 말 것.
 
 ## 개요
 회의 핵심 요약을 3-5문장의 자연스러운 문단으로 서술 (불릿 사용 금지)
@@ -588,10 +588,11 @@ Your output MUST follow this exact structure:
 - mermaid 작성 규칙: 노드 라벨에 괄호·슬래시·특수문자가 들어가면 반드시 큰따옴표로 감쌀 것 (예: A["API Gateway (HTTP)"]). 회의에서 언급되지 않은 컴포넌트를 지어내지 말 것. 다이어그램은 섹션당 1개만.
 
 ## 결정 사항
-- 합의된 결정들
+- 명시적으로 합의된 결정만 기재. 제안·검토 중인 사항·반대 의견·미확정 사항은 주요 논의 사항에서 구분하고 결정으로 바꾸지 말 것.
 
 ## 액션 아이템
 - [ ] 담당자(Speaker Label): 할 일 내용
+- 담당자와 기한은 명시된 경우에만 기재하고, 없으면 미정으로 표시. 임의로 담당자를 배정하거나 날짜를 만들지 말 것.
 
 Format in Korean unless the transcript is entirely in English.
 결정 사항과 액션 아이템만 bullet/checkbox 리스트로 작성하고, 그 외 섹션(개요/화자별 발언/논의 사항)은 문단 형태로 서술해 불필요한 불릿 나열을 피할 것. Include timestamps where available.
