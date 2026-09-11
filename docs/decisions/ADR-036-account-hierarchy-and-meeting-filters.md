@@ -11,9 +11,8 @@ for several related customer accounts together.
 
 ## Delivery stages
 
-This phase implements the hierarchy API. The multi-account filter API and tree
-UI described below are the agreed design for the dependent PRs. Each phase is
-reviewed separately before its successor is integrated.
+The hierarchy and multi-account filter APIs are implemented in the first two
+PRs. The tree and checkbox UI follows in the dependent frontend PR.
 
 ## Decision
 
@@ -36,7 +35,7 @@ Use this same tree for parent pickers and meeting checkbox filters. Parent
 selection expands to accessible descendants, while partial group selections and
 removable chips make the effective selection visible.
 
-A dependent change adds `accountIds` to the meeting API, a normalized OR selection of up to 100
+The meeting API accepts `accountIds`, a normalized OR selection of up to 100
 distinct explicit IDs. It preserves the existing single `accountId` contract,
 rejects ambiguous requests, filters all existing meeting access streams, and
 binds new continuation cursors to the user, tab, and selected-ID set.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -73,14 +74,34 @@ func (h *MeetingHandler) LinkToAccount(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"accountId": req.AccountID})
 }
 
-// ListMeetings handles GET /api/meetings?tab={all|shared}&accountId={id}&cursor={lastKey}&limit={20}.
+// ListMeetings handles GET /api/meetings?tab={all|shared}&accountIds={id1,id2}&cursor={lastKey}.
 // `tab` defaults to "all"; "shared" returns meetings shared with the caller.
-// `accountId` optionally narrows that caller-scoped list to one account.
+// `accountIds` is an OR selection; `accountId` remains a legacy alternative.
 // `cursor` is the opaque owned/share or team continuation from a previous page; `limit` caps
 // page size at 20 items by default.
 func (h *MeetingHandler) ListMeetings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := middleware.GetUserID(ctx)
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid meeting query")
+		return
+	}
+	if query.Has("accountId") && query.Has("accountIds") ||
+		len(query["accountId"]) > 1 || len(query["accountIds"]) > 1 {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Specify either accountId or accountIds once")
+		return
+	}
+	var accountIDs []string
+	if query.Has("accountIds") {
+		accountIDs, err = service.ParseMeetingAccountIDs(query.Get("accountIds"))
+	} else if query.Get("accountId") != "" {
+		_, err = repository.NormalizeMeetingAccountIDs([]string{query.Get("accountId")})
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid meeting account filter")
+		return
+	}
 
 	// Ensure user profile exists
 	email := middleware.GetUserEmail(ctx)
@@ -93,19 +114,24 @@ func (h *MeetingHandler) ListMeetings(w http.ResponseWriter, r *http.Request) {
 		joinedAccountIDs = h.meetingService.EnsureProfileAndMaterializePendingShares(ctx, userID, email, name, middleware.GetEmailVerified(ctx))
 	}
 
-	tab := r.URL.Query().Get("tab")
+	tab := query.Get("tab")
 	if tab == "" {
 		tab = "all"
 	}
-	cursor := r.URL.Query().Get("cursor")
+	cursor := query.Get("cursor")
 
 	var limit int32 = 20
 	// Could parse limit from query if needed
 
-	result, err := h.meetingService.ListMeetings(ctx, userID, tab, cursor, r.URL.Query().Get("accountId"), limit, joinedAccountIDs...)
+	var result *model.MeetingListResponse
+	if query.Has("accountIds") {
+		result, err = h.meetingService.ListMeetingsForAccounts(ctx, userID, tab, cursor, accountIDs, limit, joinedAccountIDs...)
+	} else {
+		result, err = h.meetingService.ListMeetings(ctx, userID, tab, cursor, query.Get("accountId"), limit, joinedAccountIDs...)
+	}
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidInput) {
-			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid meeting cursor")
+			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid meeting filter or cursor")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())

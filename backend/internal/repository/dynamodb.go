@@ -1402,11 +1402,12 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 
 // ListMeetingsParams contains parameters for listing meetings
 type ListMeetingsParams struct {
-	UserID    string
-	AccountID string // optional exact account match within the caller's meetings
-	Tab       string // "all" or "shared"
-	Cursor    string // base64-encoded LastEvaluatedKey
-	Limit     int32
+	UserID     string
+	AccountID  string   // optional exact account match within the caller's meetings
+	AccountIDs []string // non-nil: OR selection; owned and direct shares paginate separately
+	Tab        string   // "all" or "shared"
+	Cursor     string   // base64-encoded LastEvaluatedKey
+	Limit      int32
 }
 
 // ListMeetingsResult contains the result of listing meetings
@@ -1453,8 +1454,21 @@ func paginateMeetingsPage(meetings []model.Meeting, limit int32, lastEvaluatedKe
 // and other large fields (actionItems, notes) to stay within DynamoDB's 1MB per-query limit.
 // content IS included because ToMeetingListItem uses it for the 200-char summary preview.
 func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetingsParams) (*ListMeetingsResult, error) {
-	if params.Limit == 0 {
+	if params.Limit <= 0 {
 		params.Limit = 20
+	}
+	if params.AccountIDs != nil && params.AccountID != "" {
+		return nil, ErrInvalidMeetingFilter
+	}
+	if params.AccountIDs != nil {
+		ids, err := NormalizeMeetingAccountIDs(params.AccountIDs)
+		if err != nil {
+			return nil, err
+		}
+		params.AccountIDs = ids
+	}
+	if err := ValidateMeetingListCursor(params.Cursor, params.UserID, params.Tab); err != nil {
+		return nil, err
 	}
 
 	result := &ListMeetingsResult{}
@@ -1489,6 +1503,12 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 		filterEx := expression.Name("entityType").Equal(expression.Value("MEETING"))
 		if params.AccountID != "" {
 			filterEx = filterEx.And(expression.Name("accountId").Equal(expression.Value(params.AccountID)))
+		} else if len(params.AccountIDs) > 0 {
+			values := make([]expression.OperandBuilder, len(params.AccountIDs))
+			for i, id := range params.AccountIDs {
+				values[i] = expression.Value(id)
+			}
+			filterEx = filterEx.And(expression.Name("accountId").In(values[0], values[1:]...))
 		}
 		proj := expression.NamesList(
 			expression.Name("PK"), expression.Name("SK"),
@@ -1551,7 +1571,7 @@ func (r *DynamoDBRepository) ListMeetings(ctx context.Context, params ListMeetin
 			result.NextCursor = &cursor
 		}
 
-		if params.Tab != "shared" {
+		if params.AccountIDs == nil {
 			shares, err := r.ListSharesForUser(ctx, params.UserID)
 			if err != nil {
 				return nil, fmt.Errorf("failed to list shares: %w", err)

@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -21,13 +23,23 @@ type teamMeetingCursor struct {
 	UserID        string   `json:"user"`
 	Tab           string   `json:"tab"`
 	AccountID     string   `json:"account,omitempty"`
-	Accounts      []string `json:"accounts"`
+	Selected      []string `json:"-"` // normalized request, never cursor authority
+	Selection     string   `json:"selection,omitempty"`
+	Accounts      []string `json:"accounts,omitempty"`
 	Index         int      `json:"index"`
 	RefCursor     string   `json:"refs,omitempty"`
 	RegularCursor string   `json:"regular,omitempty"`
 }
 
 func encodeTeamMeetingCursor(cursor teamMeetingCursor) (*string, error) {
+	if cursor.Selected != nil {
+		cursor.Selection = meetingSelectionDigest(cursor.Selected)
+		if len(cursor.Selected) > 0 && slices.Equal(cursor.Accounts, cursor.Selected) {
+			// The selected IDs can be reconstructed from the request after
+			// validating its digest. Unfiltered discovery still stores hints.
+			cursor.Accounts = nil
+		}
+	}
 	data, err := json.Marshal(cursor)
 	if err != nil {
 		return nil, fmt.Errorf("encode team meeting cursor: %w", err)
@@ -37,24 +49,72 @@ func encodeTeamMeetingCursor(cursor teamMeetingCursor) (*string, error) {
 }
 
 func decodeTeamMeetingCursor(encoded, userID, tab, accountID string) (teamMeetingCursor, error) {
+	return decodeTeamMeetingCursorForFilter(encoded, userID, tab, meetingAccountFilter{AccountID: accountID})
+}
+
+func decodeTeamMeetingCursorForFilter(encoded, userID, tab string, filter meetingAccountFilter) (teamMeetingCursor, error) {
 	var cursor teamMeetingCursor
-	data, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(encoded, teamMeetingCursorPrefix))
+	if !strings.HasPrefix(encoded, teamMeetingCursorPrefix) || len(encoded) > 192*1024 {
+		return cursor, ErrInvalidInput
+	}
+	data, err := base64.RawURLEncoding.Strict().DecodeString(strings.TrimPrefix(encoded, teamMeetingCursorPrefix))
 	if err != nil {
 		return cursor, ErrInvalidInput
 	}
-	if err := json.Unmarshal(data, &cursor); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cursor); err != nil {
 		return cursor, ErrInvalidInput
 	}
-	if cursor.UserID != userID || cursor.Tab != tab || cursor.AccountID != accountID || cursor.Index < 0 || cursor.Index > len(cursor.Accounts) {
+	if err := decoder.Decode(new(any)); err != io.EOF {
 		return cursor, ErrInvalidInput
+	}
+	if filter.AccountIDs != nil {
+		if cursor.Selection != meetingSelectionDigest(filter.AccountIDs) {
+			return cursor, ErrInvalidInput
+		}
+		cursor.Selected = filter.AccountIDs
+		if cursor.Accounts == nil && len(filter.AccountIDs) > 0 {
+			cursor.Accounts = slices.Clone(filter.AccountIDs)
+		}
+	} else if cursor.Selection != "" {
+		return cursor, ErrInvalidInput
+	}
+	if cursor.UserID != userID || cursor.Tab != tab || cursor.AccountID != filter.AccountID ||
+		cursor.Index < 0 || cursor.Index > len(cursor.Accounts) ||
+		cursor.RefCursor != "" && cursor.Index == len(cursor.Accounts) ||
+		cursor.RegularCursor != "" && (cursor.Index != 0 || cursor.RefCursor != "") {
+		return cursor, ErrInvalidInput
+	}
+	if filter.AccountIDs != nil {
+		if cursor.RegularCursor != "" {
+			return cursor, ErrInvalidInput
+		}
+		if cursor.RefCursor != "" {
+			if err := repository.ValidateMeetingRefCursor(cursor.RefCursor, cursor.Accounts[cursor.Index]); err != nil {
+				return cursor, ErrInvalidInput
+			}
+		}
+	}
+	seen := make(map[string]bool, len(cursor.Accounts))
+	for _, id := range cursor.Accounts {
+		normalized, err := repository.NormalizeMeetingAccountIDs([]string{id})
+		if err != nil || normalized[0] != id || seen[id] {
+			return cursor, ErrInvalidInput
+		}
+		seen[id] = true
 	}
 	return cursor, nil
 }
 
-func (s *MeetingService) newTeamMeetingCursor(ctx context.Context, userID, tab, accountID string, joinedAccountIDs []string) (teamMeetingCursor, error) {
-	cursor := teamMeetingCursor{UserID: userID, Tab: tab, AccountID: accountID}
-	if accountID != "" {
-		cursor.Accounts = []string{accountID}
+func (s *MeetingService) newTeamMeetingCursor(ctx context.Context, userID, tab string, filter meetingAccountFilter, joinedAccountIDs []string) (teamMeetingCursor, error) {
+	cursor := teamMeetingCursor{UserID: userID, Tab: tab, AccountID: filter.AccountID, Selected: filter.AccountIDs}
+	if filter.AccountID != "" {
+		cursor.Accounts = []string{filter.AccountID}
+		return cursor, nil
+	}
+	if len(filter.AccountIDs) > 0 {
+		cursor.Accounts = slices.Clone(filter.AccountIDs)
 		return cursor, nil
 	}
 	memberships, err := s.repo.ListAccountsForUser(ctx, userID)
@@ -82,12 +142,16 @@ func (s *MeetingService) newTeamMeetingCursor(ctx context.Context, userID, tab, 
 // reference pages. Existing individual shares are left to the regular stream,
 // preserving direct edit permissions and avoiding duplicate team grants.
 func (s *MeetingService) listTeamSharedMeetings(ctx context.Context, userID, tab, accountID string, limit int32, encodedCursor string, joinedAccountIDs []string) (*model.MeetingListResponse, error) {
+	return s.listTeamSharedMeetingsForFilter(ctx, userID, tab, meetingAccountFilter{AccountID: accountID}, limit, encodedCursor, joinedAccountIDs)
+}
+
+func (s *MeetingService) listTeamSharedMeetingsForFilter(ctx context.Context, userID, tab string, filter meetingAccountFilter, limit int32, encodedCursor string, joinedAccountIDs []string) (*model.MeetingListResponse, error) {
 	var cursor teamMeetingCursor
 	var err error
 	if encodedCursor == "" {
-		cursor, err = s.newTeamMeetingCursor(ctx, userID, tab, accountID, joinedAccountIDs)
+		cursor, err = s.newTeamMeetingCursor(ctx, userID, tab, filter, joinedAccountIDs)
 	} else {
-		cursor, err = decodeTeamMeetingCursor(encodedCursor, userID, tab, accountID)
+		cursor, err = decodeTeamMeetingCursorForFilter(encodedCursor, userID, tab, filter)
 	}
 	if err != nil {
 		return nil, err
@@ -97,7 +161,7 @@ func (s *MeetingService) listTeamSharedMeetings(ctx context.Context, userID, tab
 	const maxRefPages = 25
 	for page := 0; page < maxRefPages && cursor.Index < len(cursor.Accounts) && int32(len(response.Meetings)) < limit; page++ {
 		id := cursor.Accounts[cursor.Index]
-		if id == "" || (accountID != "" && id != accountID) {
+		if id == "" || !filter.matches(id) {
 			cursor.Index++
 			cursor.RefCursor = ""
 			continue

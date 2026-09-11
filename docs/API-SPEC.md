@@ -49,7 +49,8 @@ Response: 200 OK
 #### List Meetings
 
 ```
-GET /api/meetings?tab={all|shared}&accountId={accountId}&cursor={lastKey}&limit={20}
+GET /api/meetings?tab={all|shared}&accountIds={id1,id2}&cursor={lastKey}&limit={20}
+# Legacy single-account clients may still use accountId={accountId}.
 
 Response: 200 OK
 {
@@ -76,8 +77,15 @@ Response: 200 OK
 }
 ```
 
-`accountId` is optional. When supplied, it filters the caller's existing owned/shared
-meeting list by the meeting's canonical account ID; account membership alone does
+`accountIds` is an optional comma-separated OR filter over at most 100 distinct
+account IDs. Ordering and duplicates do not change the selection. Empty selection
+means no account filter. Malformed IDs, oversized selections, or supplying both
+`accountIds` and legacy `accountId` return `400 BAD_REQUEST`.
+
+The UI expands selected account groups into accessible descendant IDs before
+calling this endpoint; the API filters the explicit IDs and does not infer access
+from hierarchy. The filter applies to the caller's existing owned/shared
+meeting list by each meeting's canonical account ID; account membership alone does
 not grant access to otherwise private meetings. Shared meetings retain the usual
 read-time access checks. An unknown or inaccessible account with no readable
 meetings produces an empty list.
@@ -103,8 +111,13 @@ mismatched team cursors return `400 BAD_REQUEST`.
 Owned meetings are filtered in the paginated DynamoDB query. Shared rows are
 resolved to meetings before filtering; empty shared pages are advanced up to a
 25-page work limit. A non-null `nextCursor` always means more data can be checked,
-even when this response has no matches. Keep the same `tab` and `accountId` when
-loading the next page; restart without a cursor when either changes.
+even when this response has no matches. Multi-account continuation cursors bind
+the caller, tab, and normalized account-ID set across both regular and team
+streams. Keep that selection when loading the next page; restart without a
+cursor when it changes. A cursor from another caller, tab, or selection returns
+`400 BAD_REQUEST`. Legacy clients keep using `accountId`. New `all` pages traverse owned meetings,
+then direct shares, then inherited team references. Each stream retains its
+existing order; this is not a global chronological merge across streams.
 
 #### Create Meeting
 
@@ -224,8 +237,9 @@ Accounts have an optional `parentAccountId`, forming a hierarchy such as
 `토스 → 토스증권` or `하나금융그룹 → 하나은행`. Existing records without the field
 remain roots. Parent relationships are organization metadata: they do not grant
 membership or access to a parent/child's meetings, documents, research, or
-projects. Each user's account tree contains only their visible accounts; a node
-whose parent is not visible is presented as a root.
+projects. Lists still contain only the caller's accounts. Clients can build the tree from
+these IDs and render an account whose parent is not visible as a root, without
+fetching that parent's name.
 
 #### List Accounts (my accounts)
 
@@ -275,7 +289,7 @@ Response: 201 Created
   "createdAt": "2026-05-30T10:00:00Z"
 }
 
-Error: 400 Bad Request (empty name)
+Error: 400 Bad Request (empty name / invalid parent ID)
 ```
 
 The creator automatically becomes an `owner` member. Creating under a parent
@@ -833,7 +847,7 @@ Response: 201 Created
   "createdAt": "2026-07-21T00:00:00Z", "updatedAt": "2026-07-21T00:00:00Z"
 }
 
-Error: 400 Bad Request (empty name)
+Error: 400 Bad Request (empty name / invalid parent ID)
 ```
 
 #### Get / Update / Delete Project
