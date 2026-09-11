@@ -71,3 +71,6 @@ review/*.png
 
 # Graphify analysis output
 graphify-out/
+
+# Local linked Git worktrees
+.worktrees/
