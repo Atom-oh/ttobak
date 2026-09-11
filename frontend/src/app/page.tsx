@@ -91,7 +91,7 @@ export default function HomePage() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [isFetching, setIsFetching] = useState(true);
   const [activeTab, setActiveTab] = useState<MeetingListFilter['tab']>('all');
-  const [selectedAccountId, setSelectedAccountId] = useState('');
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [accounts, setAccounts] = useState<AccountSummary[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
   const [accountsError, setAccountsError] = useState<string | null>(null);
@@ -119,7 +119,7 @@ export default function HomePage() {
     try {
       const result = await meetingsApi.list({
         tab: apiTab,
-        accountId: selectedAccountId || undefined,
+        accountIds: selectedAccountIds.length ? selectedAccountIds : undefined,
         cursor,
       }, { signal: controller.signal });
       // Guard even if a response finished parsing just before cancellation.
@@ -140,7 +140,7 @@ export default function HomePage() {
         requestRef.current = null;
       }
     }
-  }, [apiTab, selectedAccountId]);
+  }, [apiTab, selectedAccountIds]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -189,10 +189,11 @@ export default function HomePage() {
     setActiveTab(tab);
   };
 
-  const handleAccountChange = (accountId: string) => {
-    if (accountId === selectedAccountId) return;
+  const handleAccountChange = (accountIds: string[]) => {
+    const normalized = [...new Set(accountIds)].sort();
+    if (normalized.join(',') === selectedAccountIds.join(',')) return;
     resetMeetings();
-    setSelectedAccountId(accountId);
+    setSelectedAccountIds(normalized);
   };
 
   const handleRetryAccounts = () => {
@@ -373,7 +374,7 @@ export default function HomePage() {
               isLoading={isFetching}
               activeTab={activeTab}
               onTabChange={handleTabChange}
-              selectedAccountId={selectedAccountId}
+              selectedAccountIds={selectedAccountIds}
               onAccountChange={handleAccountChange}
               accounts={accounts}
               isLoadingAccounts={isLoadingAccounts}

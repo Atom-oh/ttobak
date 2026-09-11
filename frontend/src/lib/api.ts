@@ -130,10 +130,11 @@ export const api = {
 
 // Meeting API endpoints
 export const meetingsApi = {
-  list: (params?: { tab?: 'all' | 'shared'; accountId?: string; cursor?: string; limit?: number }, options?: { signal?: AbortSignal }) => {
+  list: (params?: { tab?: 'all' | 'shared'; accountId?: string; accountIds?: string[]; cursor?: string; limit?: number }, options?: { signal?: AbortSignal }) => {
     const query = new URLSearchParams();
     if (params?.tab) query.set('tab', params.tab);
-    if (params?.accountId) query.set('accountId', params.accountId);
+    if (params?.accountIds?.length) query.set('accountIds', [...new Set(params.accountIds)].sort().join(','));
+    else if (params?.accountId) query.set('accountId', params.accountId);
     if (params?.cursor) query.set('cursor', params.cursor);
     if (params?.limit) query.set('limit', params.limit.toString());
     const queryStr = query.toString();
@@ -465,8 +466,10 @@ export const researchChatApi = {
 export const accountApi = {
   list: () => api.get<{ accounts: AccountSummary[] }>('/api/accounts'),
   get: (id: string) => api.get<Account>(`/api/accounts/${encodeURIComponent(id)}`),
-  create: (data: { name: string; aliases?: string[]; domains?: string[]; industry?: string }) =>
+  create: (data: { name: string; aliases?: string[]; domains?: string[]; industry?: string; parentAccountId?: string }) =>
     api.post<Account>('/api/accounts', data),
+  updateParent: (id: string, data: { parentAccountId: string }) =>
+    api.put<{ accountId: string; parentAccountId?: string }>(`/api/accounts/${encodeURIComponent(id)}/parent`, data),
   addMember: (id: string, data: { email: string; role: string }) =>
     api.post<AccountMember>(`/api/accounts/${encodeURIComponent(id)}/members`, data),
   // Cancels a queued PendingShare invite (see `addMember`'s `pending: true`

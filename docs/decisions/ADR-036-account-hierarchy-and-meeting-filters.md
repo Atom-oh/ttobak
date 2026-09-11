@@ -11,8 +11,9 @@ for several related customer accounts together.
 
 ## Delivery stages
 
-The hierarchy and multi-account filter APIs are implemented in the first two
-PRs. The tree and checkbox UI follows in the dependent frontend PR.
+The hierarchy and multi-account filter APIs are integrated before the tree and
+checkbox UI. Complete the backend deployment before rolling out the frontend
+so existing clients remain compatible during the transition.
 
 ## Decision
 
