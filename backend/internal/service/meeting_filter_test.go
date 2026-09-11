@@ -458,3 +458,61 @@ func TestListMeetingsForAccounts_HundredIDsHaveCompactTeamContinuation(t *testin
 		t.Fatalf("compact continuation lost its position or selection: %+v, err=%v", next, err)
 	}
 }
+
+func TestListMeetingsForAccounts_FilteredInviteHintsKeepOwnedContinuationCompact(t *testing.T) {
+	r := &filterMeetingRepo{newMockMeetingRepo()}
+	s := newMeetingServiceWithRepo(r)
+	ids := make([]string, 100)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("00000000-0000-0000-0000-%012d", i)
+		r.addMember(ids[i], "viewer", model.RoleSA)
+	}
+	// Materialization has completed, but the membership GSI still has no rows.
+	r.membershipIndexLag = true
+	for i := 0; i < 2; i++ {
+		r.addMeeting(&model.Meeting{
+			MeetingID: fmt.Sprintf("own-%d", i), UserID: "viewer", AccountID: ids[0],
+			Date: time.Date(2026, 9, 11-i, 0, 0, 0, 0, time.UTC),
+		})
+	}
+	r.addMeeting(&model.Meeting{
+		MeetingID: "inherited", UserID: "owner", AccountID: ids[99], SharedToAccount: true,
+	})
+	r.meetingRefs[ids[99]] = []model.MeetingRef{{MeetingID: "inherited", OwnerUserID: "owner"}}
+
+	cursor := ""
+	var seen []string
+	for page := 0; ; page++ {
+		if page >= 10 {
+			t.Fatal("pagination did not terminate")
+		}
+		var joined []string
+		if page == 0 {
+			joined = ids
+		}
+		got, err := s.ListMeetingsForAccounts(context.Background(), "viewer", "all", cursor, ids, 1, joined...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Meetings) > 1 {
+			t.Fatalf("page exceeded limit: %+v", got)
+		}
+		for _, m := range got.Meetings {
+			seen = append(seen, m.MeetingID)
+		}
+		if page == 0 && (len(got.Meetings) != 1 || got.Meetings[0].MeetingID != "own-0" || got.NextCursor == nil) {
+			t.Fatalf("fixture did not produce an owned continuation: %+v", got)
+		}
+		if got.NextCursor == nil {
+			break
+		}
+		requestURL := "/api/meetings?accountIds=" + strings.Join(ids, ",") + "&cursor=" + url.QueryEscape(*got.NextCursor)
+		if len(requestURL) > 8192 {
+			t.Fatalf("100 selected/newly joined UUIDs exceed the 8KB URL budget on page %d: %d bytes", page, len(requestURL))
+		}
+		cursor = *got.NextCursor
+	}
+	if !slices.Equal(seen, []string{"own-0", "own-1", "inherited"}) {
+		t.Fatalf("filtered first-login pagination lost or duplicated meetings: %v", seen)
+	}
+}

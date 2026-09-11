@@ -150,10 +150,12 @@ func (s *MeetingService) ListMeetingsForAccounts(ctx context.Context, userID, ta
 			return nil, err
 		}
 	}
-	// Only hints needed before discovery are retained; they never authorize a
-	// result. Deduplicate without imposing the selection's 100-account limit
-	// on users who belong to more accounts.
-	if c.Stage != "team" {
+	// Explicit selections already supply team discovery candidates. Retaining
+	// duplicate first-login hints can push the continuation URL over its budget.
+	// Unfiltered discovery still needs hints while the membership GSI catches up.
+	if len(ids) > 0 {
+		c.Joined = nil
+	} else if c.Stage != "team" {
 		c.Joined = mergeMeetingDiscoveryHints(c.Joined, joinedAccountIDs)
 	}
 	filter := meetingAccountFilter{AccountIDs: ids}
