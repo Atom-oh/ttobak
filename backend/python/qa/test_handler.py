@@ -16,6 +16,7 @@ Covers:
 import copy
 import io
 import json
+import io
 import os
 import sys
 import time
@@ -115,6 +116,7 @@ class TestMeetingRetrieval(unittest.TestCase):
         self.table = RetrievalTable()
         for patcher in (
             mock.patch.object(handler, 'table', self.table),
+            mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'),
             mock.patch('socket.socket', side_effect=AssertionError('live network forbidden')),
         ):
             patcher.start()
@@ -442,6 +444,8 @@ class TestMeetingRetrieval(unittest.TestCase):
                 self.assertIsNotNone(api.call_args)
                 system = '\n'.join(block['text'] for block in api.call_args.kwargs['system'])
                 self.assertIn(marker, system)
+                self.assertIn('"meetingId": "m1"', system)
+                self.assertIn('get_meeting_detail(offset=0)', system)
                 self.assertIn('"truncated": true', system)
                 self.assertIn('"source": "saved_user_notes"', system)
 
@@ -505,6 +509,80 @@ def _stored(messages):
     """DynamoDB get_item response holding the given conversation history."""
     return {'Item': {'PK': 'SESSION#u1#s1', 'SK': 'MESSAGES',
                      'messages': json.dumps(messages, ensure_ascii=False)}}
+
+
+class TestTranscriptReadGuard(unittest.TestCase):
+    def read_meeting(self, **fields):
+        item = {'meetingId': 'm1', **fields}
+        with mock.patch.object(handler.table, 'get_item', return_value={'Item': item}):
+            return handler.load_meeting_context('reader', 'm1')
+
+    def test_editable_summary_is_never_an_s3_read_instruction(self):
+        with mock.patch.object(handler, 's3_client') as s3:
+            s3.get_object.return_value = {'Body': io.BytesIO(b'foreign secret')}
+            text, err = self.read_meeting(content='s3://synthetic/transcripts/other/transcriptA.txt')
+        self.assertIsNone(err)
+        self.assertIn('s3://synthetic/transcripts/other/transcriptA.txt', text)
+        s3.get_object.assert_not_called()
+
+    def test_foreign_or_malformed_transcript_refs_never_reach_s3(self):
+        refs = [
+            's3://other-bucket/transcripts/m1/transcriptA.txt',
+            's3://synthetic/transcripts/m2/transcriptA.txt',
+            's3://synthetic/transcripts/m10/transcriptA.txt',
+            's3://synthetic/transcripts/m1/transcriptB.txt',
+            's3://synthetic/transcripts/m1/../m2/transcriptA.txt',
+            's3://synthetic/transcripts/m1/transcriptA.txt?versionId=old',
+            's3://synthetic/transcripts/m1/transcriptA.txt#fragment',
+            's3://synthetic/transcripts/%6d1/transcriptA.txt',
+            's3://synthetic',
+        ]
+        for value in refs:
+            with self.subTest(value=value), mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
+                s3.get_object.return_value = {'Body': io.BytesIO(b'foreign secret')}
+                text, err = self.read_meeting(transcriptA=value)
+                self.assertIsNone(text)
+                self.assertEqual(err['status'], 500)
+                s3.get_object.assert_not_called()
+
+    def test_exact_authorized_transcript_ref_is_read_and_closed(self):
+        body = io.BytesIO('내 회의 원문'.encode())
+        with mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
+            s3.get_object.return_value = {'Body': body}
+            text, err = self.read_meeting(transcriptA='s3://synthetic/transcripts/m1/transcriptA.txt')
+        self.assertIsNone(err)
+        self.assertIn('내 회의 원문', text)
+        s3.get_object.assert_called_once_with(Bucket='synthetic', Key='transcripts/m1/transcriptA.txt')
+        self.assertTrue(body.closed)
+
+    def test_missing_bucket_configuration_fails_closed(self):
+        with mock.patch.object(handler, 'BUCKET_NAME', ''), mock.patch.object(handler, 's3_client') as s3:
+            text, err = self.read_meeting(transcriptA='s3://synthetic/transcripts/m1/transcriptA.txt')
+        self.assertIsNone(text)
+        self.assertEqual(err['status'], 500)
+        s3.get_object.assert_not_called()
+
+    def test_storage_guard_is_bound_to_authorized_id_not_stored_metadata(self):
+        with mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
+            text, err = self.read_meeting(meetingId='other', transcriptA='s3://synthetic/transcripts/other/transcriptA.txt')
+        self.assertIsNone(text)
+        self.assertEqual(err['status'], 500)
+        s3.get_object.assert_not_called()
+
+    def test_storage_validation_is_pure_and_rejects_invalid_identifiers_and_fields(self):
+        from transcript_storage import validate_transcript_ref
+        for field in ('transcriptA', 'transcriptB'):
+            key = f'transcripts/m1/{field}.txt'
+            self.assertEqual(validate_transcript_ref(
+                f's3://synthetic/{key}', bucket_name='synthetic', meeting_id='m1', field=field,
+            ), key)
+        for meeting_id, field in [('', 'transcriptA'), ('../m1', 'transcriptA'),
+                                  ('m1', 'notes'), ('m1', '../transcriptA')]:
+            with self.subTest(meeting_id=meeting_id, field=field), self.assertRaises(ValueError):
+                validate_transcript_ref(
+                    f's3://synthetic/transcripts/{meeting_id}/{field}.txt',
+                    bucket_name='synthetic', meeting_id=meeting_id, field=field,
+                )
 
 
 class TestLoadSessionTrimsTrailingUser(unittest.TestCase):

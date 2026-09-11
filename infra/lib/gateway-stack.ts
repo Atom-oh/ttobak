@@ -267,6 +267,7 @@ export class GatewayStack extends cdk.Stack {
       role: props.qaRole as iam.Role,
       environment: {
         TABLE_NAME: props.table.tableName,
+        BUCKET_NAME: props.bucket.bucketName,
         KB_ID: props.knowledgeBaseId || '',
         BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-5',
         DETECT_MODEL_ID: 'qwen.qwen3-32b-v1:0',
