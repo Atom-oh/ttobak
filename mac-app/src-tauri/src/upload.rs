@@ -283,6 +283,13 @@ pub async fn upload_recording(
 
     let url = validate_upload_url(&upload_url)?;
 
+    // An adopted recording has no start_recording assertion in this
+    // process. Hold a separate guard for this upload attempt, including
+    // the server response wait; success, error, or cancellation drops it.
+    // This also protects an in-flight transfer if cleanup is concurrent.
+    #[cfg(target_os = "macos")]
+    let _upload_power = crate::power::PowerAssertion::acquire("TTOBAK recording upload");
+
     stream_file_to_url(
         &canonical,
         url,
