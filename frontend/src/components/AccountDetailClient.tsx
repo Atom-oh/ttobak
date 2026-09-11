@@ -61,7 +61,7 @@ export default function AccountDetailClient() {
   }, [accountId]);
 
   const fetchAll = useCallback(async () => {
-    if (!accountId || accountId === '_') return;
+    if (!accountId || accountId === '_' || activeAccountIdRef.current !== accountId) return;
     const myAccountId = accountId;
     setLoading(true);
     setError(null);

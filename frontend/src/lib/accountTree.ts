@@ -60,6 +60,27 @@ export function accountSubtreeIds(node: AccountNode): string[] {
   return ids;
 }
 
+/** Includes self and known descendants even when self is absent from the list. */
+export function accountDescendantIds(accounts: AccountSummary[], accountId: string): string[] {
+  const children = new Map<string, string[]>();
+  for (const account of accounts) {
+    if (!account.parentAccountId) continue;
+    const siblings = children.get(account.parentAccountId) ?? [];
+    siblings.push(account.accountId);
+    children.set(account.parentAccountId, siblings);
+  }
+  const found = new Set([accountId]);
+  const pending = [accountId];
+  while (pending.length) {
+    for (const child of children.get(pending.pop()!) ?? []) {
+      if (found.has(child)) continue;
+      found.add(child);
+      pending.push(child);
+    }
+  }
+  return [...found];
+}
+
 export function accountSelectionChips(tree: AccountNode[], selectedIds: string[]) {
   const selected = new Set(selectedIds);
   const known = new Set<string>();

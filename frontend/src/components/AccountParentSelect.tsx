@@ -2,7 +2,7 @@
 
 import { useId, useMemo } from 'react';
 import type { AccountSummary } from '@/types/meeting';
-import { accountSubtreeIds, buildAccountTree, flattenAccountTree } from '@/lib/accountTree';
+import { accountDescendantIds, buildAccountTree, flattenAccountTree } from '@/lib/accountTree';
 
 export function AccountParentSelect({ accounts, value, onChange, accountId, disabled }: {
   accounts: AccountSummary[];
@@ -13,8 +13,7 @@ export function AccountParentSelect({ accounts, value, onChange, accountId, disa
 }) {
   const id = useId();
   const rows = useMemo(() => flattenAccountTree(buildAccountTree(accounts)), [accounts]);
-  const ownNode = rows.find(row => row.node.accountId === accountId)?.node;
-  const excluded = new Set(ownNode ? accountSubtreeIds(ownNode) : accountId ? [accountId] : []);
+  const excluded = useMemo(() => new Set(accountId ? accountDescendantIds(accounts, accountId) : []), [accounts, accountId]);
   const options = rows.filter(row => !excluded.has(row.node.accountId));
   return (
     <div className="min-w-0 space-y-1.5">
