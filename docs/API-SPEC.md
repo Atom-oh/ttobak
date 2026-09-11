@@ -94,9 +94,10 @@ Both `all` and `shared` also discover meetings published to the caller's current
 account teams. Members added after
 publication inherit read access and list visibility without a personal Share row
 or a manual re-share; queued invitees qualify after their verified first-login
-membership is materialized; newly joined account IDs are carried through the same
-request and subsequent continuation cursors so GSI propagation does not hide that
-grant. Memberships and meeting references are paginated,
+membership is materialized. Unfiltered requests retain newly joined account IDs
+as discovery hints through regular continuation pages; explicit account selections
+already supply those candidates directly. Both paths recheck current membership
+so GSI propagation does not hide a grant. Memberships and meeting references are paginated,
 then checked against live membership and each canonical meeting's `accountId` /
 `sharedToAccount`. Deleted, moved, and link-only meetings are excluded. Existing
 direct-share permissions take precedence. After owned meetings / individual
@@ -847,7 +848,7 @@ Response: 201 Created
   "createdAt": "2026-07-21T00:00:00Z", "updatedAt": "2026-07-21T00:00:00Z"
 }
 
-Error: 400 Bad Request (empty name / invalid parent ID)
+Error: 400 Bad Request (empty name)
 ```
 
 #### Get / Update / Delete Project
