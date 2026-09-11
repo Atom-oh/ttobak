@@ -402,7 +402,69 @@ func transcriptSegmentsForText(transcript, rawSegments string) []speakerSegment 
 	if text == normalize(plain.String()) || text == normalize(grouped.String()) {
 		return segments
 	}
+	if matchesGroupedTranscript(transcript, segments) {
+		return segments
+	}
 	return alignLegacyTranscriptSegments(transcript, segments)
+}
+
+// matchesGroupedTranscript normalizes only redundant same-speaker headers at
+// segment boundaries. UpdateSpeakers can merge labels without merging the raw
+// text's blocks. Match body words first so bracketed text inside a segment is
+// never stripped as a header; different/unknown labels cannot be skipped.
+func matchesGroupedTranscript(transcript string, segments []speakerSegment) bool {
+	offset := 0
+	for i, segment := range segments {
+		sameSpeaker := i > 0 && segment.Speaker == segments[i-1].Speaker
+		if !sameSpeaker {
+			var ok bool
+			offset, ok = consumeTranscriptSpeakerHeader(transcript, offset, segment.Speaker)
+			if !ok {
+				return false
+			}
+		}
+		next, ok := consumeExactTranscriptText(transcript, offset, segment.Text)
+		if !ok && sameSpeaker {
+			if afterHeader, found := consumeTranscriptSpeakerHeader(transcript, offset, segment.Speaker); found {
+				next, ok = consumeExactTranscriptText(transcript, afterHeader, segment.Text)
+			}
+		}
+		if !ok {
+			return false
+		}
+		offset = next
+	}
+	return strings.TrimSpace(transcript[offset:]) == ""
+}
+
+func consumeTranscriptSpeakerHeader(transcript string, offset int, speaker string) (int, bool) {
+	remaining := strings.TrimLeftFunc(transcript[offset:], unicode.IsSpace)
+	start := len(transcript) - len(remaining)
+	// A bracketed phrase following text on the same line is body text.
+	if offset > 0 && !strings.ContainsAny(transcript[offset:start], "\r\n") {
+		return offset, false
+	}
+	end := strings.IndexAny(remaining, "\r\n")
+	if end < 0 || strings.TrimSpace(remaining[:end]) != "["+speaker+"]" {
+		return offset, false
+	}
+	return start + end + 1, true
+}
+
+func consumeExactTranscriptText(transcript string, offset int, text string) (int, bool) {
+	for _, word := range strings.Fields(text) {
+		remaining := strings.TrimLeftFunc(transcript[offset:], unicode.IsSpace)
+		start := len(transcript) - len(remaining)
+		end := strings.IndexFunc(remaining, unicode.IsSpace)
+		if end < 0 {
+			end = len(remaining)
+		}
+		if remaining[:end] != word {
+			return offset, false
+		}
+		offset = start + end
+	}
+	return offset, true
 }
 
 // alignLegacyTranscriptSegments permits only sentence/clause punctuation added
@@ -689,7 +751,7 @@ ADR-013 — 트랜스크립트 딥 링크:
 		},
 	}
 
-	content, err := s.invokeClaudeModelWithID(ctx, request, ClaudeOpusModelID)
+	content, err := s.invokeCompleteSummary(ctx, request)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate content: %w", err)
 	}
@@ -1352,11 +1414,31 @@ func (s *BedrockService) invokeClaudeModel(ctx context.Context, request ClaudeRe
 	return s.invokeClaudeModelWithID(ctx, request, ClaudeOpusModelID)
 }
 
-// invokeClaudeModelWithID sends a request to Claude via Bedrock using a specific model ID
+// invokeClaudeModelWithID preserves the auxiliary callers' legacy contract:
+// return available text blocks even if the model stopped at its token budget.
 func (s *BedrockService) invokeClaudeModelWithID(ctx context.Context, request ClaudeRequest, modelID string) (string, error) {
+	body, err := s.invokeClaudeResponseBody(ctx, request, modelID)
+	if err != nil {
+		return "", err
+	}
+	text, _, err := decodeClaudeTextResponse(body)
+	return text, err
+}
+
+// invokeCompleteSummary is the strict completion path used only when generating
+// a final meeting note. Auxiliary image/refinement callers keep their own policy.
+func (s *BedrockService) invokeCompleteSummary(ctx context.Context, request ClaudeRequest) (string, error) {
+	body, err := s.invokeClaudeResponseBody(ctx, request, ClaudeOpusModelID)
+	if err != nil {
+		return "", err
+	}
+	return parseClaudeTextResponse(body)
+}
+
+func (s *BedrockService) invokeClaudeResponseBody(ctx context.Context, request ClaudeRequest, modelID string) ([]byte, error) {
 	requestBody, err := json.Marshal(request)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	output, err := s.bedrockClient.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
@@ -1366,43 +1448,47 @@ func (s *BedrockService) invokeClaudeModelWithID(ctx context.Context, request Cl
 		Body:        requestBody,
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to invoke model: %w", err)
+		return nil, fmt.Errorf("failed to invoke model: %w", err)
 	}
 
-	return parseClaudeTextResponse(output.Body)
+	return output.Body, nil
 }
 
-// parseClaudeTextResponse decodes the final-text completion contract shared by
-// summaries, refinement, image analysis and structured extraction callers.
-func parseClaudeTextResponse(body []byte) (string, error) {
+// decodeClaudeTextResponse retains the existing available-text parsing behavior;
+// callers decide whether the stop reason and nonblank text are required.
+func decodeClaudeTextResponse(body []byte) (text, stopReason string, err error) {
 	var response ClaudeResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", fmt.Errorf("failed to unmarshal response: %w", err)
+		return "", "", fmt.Errorf("failed to unmarshal response: %w", err)
 	}
-	switch response.StopReason {
-	case "end_turn", "stop_sequence":
-		// These callers request a final text result, with no tool-use loop.
-	default:
-		return "", fmt.Errorf("incomplete model response: stop_reason=%q", response.StopReason)
-	}
-
 	if len(response.Content) == 0 {
-		return "", fmt.Errorf("empty response from model")
+		return "", "", fmt.Errorf("empty response from model")
 	}
-
-	// Preserve all final text blocks (and ignore auxiliary blocks as before),
-	// but never persist a non-text-only or blank result as a completed note.
 	var result strings.Builder
 	for _, block := range response.Content {
 		if block.Type == "text" {
 			result.WriteString(block.Text)
 		}
 	}
-	if strings.TrimSpace(result.String()) == "" {
+	return result.String(), response.StopReason, nil
+}
+
+// parseClaudeTextResponse enforces final meeting-note completion. Only the
+// summary invocation uses this gate; it must not persist a partial/blank note.
+func parseClaudeTextResponse(body []byte) (string, error) {
+	text, stopReason, err := decodeClaudeTextResponse(body)
+	if err != nil {
+		return "", err
+	}
+	switch stopReason {
+	case "end_turn", "stop_sequence":
+	default:
+		return "", fmt.Errorf("incomplete model response: stop_reason=%q", stopReason)
+	}
+	if strings.TrimSpace(text) == "" {
 		return "", fmt.Errorf("empty text response from model")
 	}
-
-	return result.String(), nil
+	return text, nil
 }
 
 // ActionItem represents an extracted action item from a meeting transcript

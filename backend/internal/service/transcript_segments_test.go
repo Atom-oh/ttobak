@@ -196,3 +196,134 @@ func TestSummarizeTranscript_LegacySegmentsPreservePunctuationAndAnchors(t *test
 		t.Errorf("legacy transcript anchor lost: %q", content)
 	}
 }
+
+func TestUpdateSpeakers_MergedNamesRetainDetailAndSummaryAnchors(t *testing.T) {
+	const source = "[spk_0]\n예산은 1.5억원입니다.\n\n[spk_1]\n승인하지 않았습니다!\n\n[spk_2]\nC++ 비용은 -5%입니다.\n\n[spk_0]\n다음 주에 확인합니다."
+	const merged = "[Kim]\n예산은 1.5억원입니다.\n\n[Kim]\n승인하지 않았습니다!\n\n[Lee]\nC++ 비용은 -5%입니다.\n\n[Kim]\n다음 주에 확인합니다."
+	segments := []speakerSegment{
+		{ID: "a-12", Speaker: "spk_0", Text: "예산은 1.5억원입니다.", StartTime: 12, EndTime: 20},
+		{ID: "a-22", Speaker: "spk_1", Text: "승인하지 않았습니다!", StartTime: 22, EndTime: 24},
+		{ID: "a-26", Speaker: "spk_2", Text: "C++ 비용은 -5%입니다.", StartTime: 26, EndTime: 30},
+		{ID: "a-32", Speaker: "spk_0", Text: "다음 주에 확인합니다.", StartTime: 32, EndTime: 34},
+	}
+	raw, err := json.Marshal(segments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := newMockMeetingRepo()
+	repo.addMeeting(&model.Meeting{
+		MeetingID: "m-1", UserID: "owner-1", Status: model.StatusDone,
+		TranscriptA: source, TranscriptSegments: string(raw),
+	})
+	svc := newMeetingServiceWithRepo(repo)
+	_, err = svc.UpdateSpeakers(context.Background(), "owner-1", "m-1", &model.UpdateSpeakersRequest{
+		SpeakerMap: map[string]string{"spk_0": "Kim", "spk_1": "Kim", "spk_2": "Lee"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := repo.meetingsByID["m-1"]
+	if stored.TranscriptA != merged {
+		t.Fatalf("fixture must exercise the real repeated-header write: %q", stored.TranscriptA)
+	}
+	segments[0].Speaker, segments[1].Speaker, segments[2].Speaker, segments[3].Speaker = "Kim", "Kim", "Lee", "Kim"
+	detail, err := svc.GetMeetingDetail(context.Background(), "owner-1", "m-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rendered []speakerSegment
+	if err := json.Unmarshal(detail.Transcription, &rendered); err != nil {
+		t.Fatalf("merging speakers hid the detail segments: %v", err)
+	}
+	if !reflect.DeepEqual(rendered, segments) {
+		t.Errorf("merging speakers changed text, IDs or timestamps: %+v", rendered)
+	}
+	request, content, _, err := summarizeNoteSourceResponse(t, stored,
+		`{"content":[{"type":"text","text":"첫 내용 [TS:12]\n둘째 내용 [TS:22]\n검토 [TS:32]"}],"stop_reason":"end_turn"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, anchor := range []string{"[00:12](transcript://a-12)", "[00:22](transcript://a-22)", "[00:32](transcript://a-32)"} {
+		if !strings.Contains(content, anchor) {
+			t.Errorf("merged speaker lost summary anchor %q: %q", anchor, content)
+		}
+	}
+	prompt := request.Messages[0].Content[0].Text
+	for _, line := range []string{
+		"[Kim 12초~20초] 예산은 1.5억원입니다.",
+		"[Kim 22초~24초] 승인하지 않았습니다!",
+		"[Lee 26초~30초] C++ 비용은 -5%입니다.",
+	} {
+		if !strings.Contains(prompt, line) {
+			t.Errorf("merged speaker source missing from prompt: %q", prompt)
+		}
+	}
+	if detail.TranscriptA != merged || stored.TranscriptA != merged {
+		t.Fatal("comparison normalization must not rewrite stored or returned raw text")
+	}
+}
+
+func TestTranscriptSegmentsForText_RepeatedGroupedHeaderValidation(t *testing.T) {
+	segments := []speakerSegment{
+		{ID: "first", Speaker: "Kim", Text: "Budget is 1.5.", StartTime: 0, EndTime: 2},
+		{ID: "second", Speaker: "Kim", Text: "Not approved!", StartTime: 2, EndTime: 4},
+		{ID: "third", Speaker: "Lee", Text: "C++ stays.", StartTime: 4, EndTime: 6},
+		{ID: "fourth", Speaker: "Kim", Text: "Later.", StartTime: 6, EndTime: 8},
+	}
+	raw, err := json.Marshal(segments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const repeated = "[Kim]\nBudget is 1.5.\n\n[Kim]\nNot approved!\n\n[Lee]\nC++ stays.\n\n[Kim]\nLater."
+	for _, tt := range []struct {
+		name, source string
+		valid        bool
+	}{
+		{"merged adjacent blocks", repeated, true},
+		{"canonical grouped form", "[Kim]\nBudget is 1.5. Not approved!\n\n[Lee]\nC++ stays.\n\n[Kim]\nLater.", true},
+		{"CRLF headers", strings.ReplaceAll(repeated, "\n", "\r\n"), true},
+		{"different recognized speaker", strings.Replace(repeated, "[Kim]\nNot", "[Lee]\nNot", 1), false},
+		{"unknown speaker", strings.Replace(repeated, "[Kim]\nNot", "[Unknown]\nNot", 1), false},
+		{"changed first speaker", strings.Replace(repeated, "[Kim]", "[Park]", 1), false},
+		{"case changed speaker", strings.Replace(repeated, "[Kim]\nNot", "[kim]\nNot", 1), false},
+		{"reordered labels", "[Lee]\nBudget is 1.5.\n\n[Kim]\nNot approved! C++ stays. Later.", false},
+		{"inline bracket text is not a redundant header", strings.Replace(repeated, "1.5.\n\n[Kim]", "1.5. [Kim]", 1), false},
+		{"unknown bracketed content cannot disappear", strings.Replace(repeated, "Not approved!", "[Decision]\nNot approved!", 1), false},
+		{"same header inside a sentence cannot disappear", strings.Replace(repeated, "Not approved!", "Not [Kim] approved!", 1), false},
+		{"numeric edit", strings.Replace(repeated, "1.5", "15", 1), false},
+		{"symbol edit", strings.Replace(repeated, "C++", "C", 1), false},
+		{"negation edit", strings.Replace(repeated, "Not approved!", "Approved!", 1), false},
+		{"punctuation edit", strings.Replace(repeated, "Not approved!", "Not approved?", 1), false},
+		{"partial text", strings.TrimSuffix(repeated, "Later."), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := transcriptSegmentsForText(tt.source, string(raw))
+			if tt.valid {
+				if !reflect.DeepEqual(got, segments) {
+					t.Errorf("valid merged groups lost original segment data: %+v", got)
+				}
+			} else if got != nil {
+				t.Errorf("changed headers or body were accepted: %+v", got)
+			}
+		})
+	}
+}
+
+func TestTranscriptSegmentsForText_GroupedLiteralBracketsRemainText(t *testing.T) {
+	segments := []speakerSegment{
+		{ID: "first", Speaker: "Kim", Text: "The slide says:\n[Kim]\n[Decision]\nBudget is 1.5.", StartTime: 0, EndTime: 2},
+		{ID: "second", Speaker: "Kim", Text: "[Kim]\nNot approved!", StartTime: 2, EndTime: 4},
+	}
+	raw, err := json.Marshal(segments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const source = "[Kim]\nThe slide says:\n[Kim]\n[Decision]\nBudget is 1.5.\n\n[Kim]\n[Kim]\nNot approved!"
+	if got := transcriptSegmentsForText(source, string(raw)); !reflect.DeepEqual(got, segments) {
+		t.Errorf("literal bracketed body text was discarded as speaker headers: %+v", got)
+	}
+	plain := "The slide says:\n[Kim]\n[Decision]\nBudget is 1.5.\n[Kim]\nNot approved!"
+	if got := transcriptSegmentsForText(plain, string(raw)); !reflect.DeepEqual(got, segments) {
+		t.Errorf("group normalization affected plain bracketed body text: %+v", got)
+	}
+}

@@ -197,6 +197,9 @@ Error: 404 Not Found
 > and timestamps. Word changes, internal numeric/symbol differences, and partial
 > coverage fall back to raw text without segment anchors. Reconstruction is
 > read-only and does not rewrite stored transcripts.
+> When speaker renaming merges adjacent blocks into the same speaker, grouped
+> comparison permits redundant headers for that speaker at segment boundaries.
+> Different/unknown labels and bracketed body text are not removed.
 
 #### Update Meeting
 
@@ -669,7 +672,7 @@ Error: 404 Not Found (document doesn't exist)
 
 #### Personal Documents (not account-scoped — owner only)
 
-Personal notes/blogs/slides for Document Hub v2. Stored under `PK: USER#{my userId}`, so ownership is inherent in the key and no account-membership check is needed. Request/response schemas match Account documents (just without the accountId path segment). Document Hub notes are not automatically indexed for `ttobak_ask`; MCP document list/get tools read their current contents directly.
+Personal notes/blogs/slides for Document Hub v2. Stored under `PK: USER#{my userId}`, so ownership is inherent in the key and no account-membership check is needed. Request/response schemas match Account documents (just without the accountId path segment). Document Hub notes are not automatically indexed for `ttobak_ask`; `ttobak_list_documents` lists metadata and `ttobak_get_document` reads current contents directly.
 
 ```
 POST   /api/documents                 { "title": "...", "markdown": "...", "docType": "note" }

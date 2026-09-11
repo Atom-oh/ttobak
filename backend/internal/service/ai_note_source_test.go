@@ -466,6 +466,55 @@ func TestSummarizeTranscript_IncompleteResponseNeverSavesDone(t *testing.T) {
 	}
 }
 
+func TestAnalyzeByClassification_PreservesLegacyCompletionContract(t *testing.T) {
+	for _, tt := range []struct {
+		name, body, want string
+		wantErr          bool
+	}{
+		{
+			name: "partial image analysis remains usable",
+			body: `{"content":[{"type":"text","text":"Whiteboard: "},{"type":"text","text":"partial analysis"}],"stop_reason":"max_tokens"}`,
+			want: "Whiteboard: partial analysis",
+		},
+		{
+			name: "legacy response without stop reason",
+			body: `{"content":[{"type":"text","text":"image analysis"}]}`,
+			want: "image analysis",
+		},
+		{
+			name: "non-text blocks retain legacy empty-text behavior",
+			body: `{"content":[{"type":"thinking","thinking":"auxiliary block"}],"stop_reason":"end_turn"}`,
+			want: "",
+		},
+		{
+			name:    "missing content still reports failure",
+			body:    `{"content":[],"stop_reason":"end_turn"}`,
+			wantErr: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := bedrockruntime.New(bedrockruntime.Options{
+				Region: "ap-northeast-2",
+				Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+					return aws.Credentials{AccessKeyID: "test-key", SecretAccessKey: "test-secret"}, nil
+				}),
+				HTTPClient: noteSourceHTTPClient(func(*http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     http.Header{"Content-Type": {"application/json"}},
+						Body:       io.NopCloser(strings.NewReader(tt.body)),
+					}, nil
+				}),
+			})
+			svc := NewBedrockService(client, nil, nil)
+			got, err := svc.analyzeByClassification(context.Background(), "aW1hZ2U=", "image/png", model.AttachTypeWhiteboard)
+			if (err != nil) != tt.wantErr || got != tt.want {
+				t.Fatalf("auxiliary image completion changed: text=%q err=%v, want text=%q error=%v", got, err, tt.want, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestParseClaudeTextResponse_CompletionContract(t *testing.T) {
 	for _, tt := range incompleteNoteResponses {
 		t.Run(tt.name, func(t *testing.T) {
