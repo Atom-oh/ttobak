@@ -99,6 +99,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
   const [editingRaw, setEditingRaw] = useState(false);
   const [rawValue, setRawValue] = useState(rawTranscript || '');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const hasSegments = transcription && transcription.length > 0;
 
@@ -117,16 +118,25 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
 
   if (!hasSegments && !rawTranscript) return null;
 
-  const handleRawSave = () => {
+  const handleRawSave = async () => {
     if (!onSaveRawTranscript || rawValue === rawTranscript) {
       setEditingRaw(false);
       return;
     }
+    if (!rawValue.trim()) {
+      setSaveError('원문은 비울 수 없습니다.');
+      return;
+    }
     setSaving(true);
-    onSaveRawTranscript(rawValue).finally(() => {
-      setSaving(false);
+    setSaveError(null);
+    try {
+      await onSaveRawTranscript(rawValue);
       setEditingRaw(false);
-    });
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : '저장하지 못했습니다. 다시 시도해주세요.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -139,7 +149,12 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
         <div className="flex gap-2">
           {onSaveRawTranscript && !hasSegments && (
             <button
-              onClick={() => setEditingRaw(!editingRaw)}
+              disabled={saving}
+              onClick={() => {
+                if (!editingRaw) setRawValue(rawTranscript || '');
+                setSaveError(null);
+                setEditingRaw(!editingRaw);
+              }}
               className={`px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-2 transition-colors ${
                 editingRaw
                   ? 'border-primary text-primary bg-primary/5'
@@ -232,12 +247,15 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
           <div>
             <textarea
               value={rawValue}
-              onChange={(e) => setRawValue(e.target.value)}
+              disabled={saving}
+              onChange={(e) => { setRawValue(e.target.value); setSaveError(null); }}
               className="w-full min-h-[300px] text-[15px] leading-relaxed text-slate-600 dark:text-gray-400 bg-white dark:bg-surface-lowest border border-primary/20 rounded-lg px-4 py-3 resize-y focus:outline-none focus:ring-1 focus:ring-primary/40"
             />
+            {saveError && <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">{saveError}</p>}
             <div className="flex justify-end gap-2 mt-3">
               <button
-                onClick={() => { setRawValue(rawTranscript); setEditingRaw(false); }}
+                disabled={saving}
+                onClick={() => { setRawValue(rawTranscript || ''); setSaveError(null); setEditingRaw(false); }}
                 className="px-3 py-1.5 text-xs font-semibold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
               >
                 Cancel

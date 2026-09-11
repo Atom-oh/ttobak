@@ -190,6 +190,19 @@ Error: 403 Forbidden (if not owner and not shared)
 Error: 404 Not Found
 ```
 
+> `transcription` contains speaker segments only when they cover the complete
+> effective selected transcript (A or B). Detail `selectedTranscript` identifies
+> the available variant after resolving the stored preference; whitespace-only
+> variants are unavailable. Legacy Transcribe segments may omit sentence/clause
+> punctuation at word boundaries; verified segment text is reconstructed from
+> the current source, retaining its punctuation and the original segment IDs
+> and timestamps. Word changes, internal numeric/symbol differences, and partial
+> coverage fall back to raw text without segment anchors. Reconstruction is
+> read-only and does not rewrite stored transcripts.
+> When speaker renaming merges adjacent blocks into the same speaker, grouped
+> comparison permits redundant headers for that speaker at segment boundaries.
+> Different/unknown labels and bracketed body text are not removed.
+
 #### Update Meeting
 
 ```
@@ -214,6 +227,17 @@ Error: 403 Forbidden (shared users with "read" permission cannot edit)
 > `content` must be **Markdown**, not HTML. The web editor (TipTap) edits in HTML but converts back to Markdown before saving, because the summary is consumed as Markdown downstream (Notion/Obsidian export). Exporters also normalize any stray HTML to Markdown as a safety net for legacy records.
 
 > `notes` and `liveSummary` are the only fields with omit-vs-explicit-empty semantics: omitting the key entirely leaves the stored value untouched, while sending an explicit `""` clears it. Every other field in this request follows the older "empty/omitted string means don't touch this field" convention (a plain `string`, not a pointer) — so e.g. sending `"title": ""` does NOT clear the title, it's treated the same as omitting it. `liveSummary` is the markdown (incl. mermaid) summary built incrementally during recording — the frontend sends it at save time (both the normal and retry update paths, when present), and the summarize pipeline feeds it into final-summary generation as prior context. Capped server-side at 32,000 characters (`400 BAD_REQUEST` beyond that).
+
+> Saved `notes` also have a 32,000-character limit and enter final summarization
+> as a separate user-authored source. Note-only statements must not be presented
+> as transcript evidence or receive transcript anchors. Legacy oversized notes
+> cause summary generation to fail explicitly rather than silently omit content.
+> Changing `transcriptA` preserves shared segment candidates, which may belong
+> to B or a concurrent producer. Every transcript consumer verifies candidates
+> against the selected current text before using them; stale words cannot
+> override an edit. Matching A or B segments retain their speaker view and
+> anchors, including Nova Sonic B-only meetings. Whitespace-only nonempty A
+> updates are rejected with `400 BAD_REQUEST`; an empty string remains a no-op.
 
 #### Delete Meeting
 
@@ -651,7 +675,7 @@ Error: 404 Not Found (document doesn't exist)
 
 #### Personal Documents (not account-scoped — owner only)
 
-Personal notes/blogs/slides for `ttobak_ask`/Document Hub v2. Stored under `PK: USER#{my userId}`, so ownership is inherent in the key and no account-membership check is needed. Request/response schemas match Account documents (just without the accountId path segment).
+Personal notes/blogs/slides for Document Hub v2. Stored under `PK: USER#{my userId}`, so ownership is inherent in the key and no account-membership check is needed. Request/response schemas match Account documents (just without the accountId path segment). Document Hub notes are not automatically indexed for `ttobak_ask`; `ttobak_list_documents` lists metadata and `ttobak_get_document` reads current contents directly.
 
 ```
 POST   /api/documents                 { "title": "...", "markdown": "...", "docType": "note" }

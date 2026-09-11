@@ -19,6 +19,10 @@ import (
 	"github.com/ttobak/backend/internal/speaker"
 )
 
+// Saved notes enter the final-summary prompt, with the same character budget
+// as liveSummary. Enforce this on both edits and summary reads.
+const maxMeetingNotesRunes = model.MaxLiveSummaryRunes
+
 // Auto-expiry thresholds for meetings stuck in an in-progress status with no
 // further updates. Recording is user-controlled and open-ended (a
 // legitimate meeting can run for hours), so it needs a much longer threshold
@@ -46,6 +50,13 @@ const (
 	// to actually fire before that happens.
 	summarizeRetryEligibleThreshold = 20 * time.Minute
 )
+
+func validateMeetingNotes(notes string) error {
+	if len([]rune(notes)) > maxMeetingNotesRunes {
+		return fmt.Errorf("%w: notes exceeds %d characters", ErrInvalidInput, maxMeetingNotesRunes)
+	}
+	return nil
+}
 
 // isStuck reports whether a meeting's status has been sitting unchanged past
 // its auto-expiry threshold.
@@ -514,10 +525,17 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		}
 	}
 
-	// Parse transcript segments for speaker diarization
+	// The shared candidates may describe either variant or a previous edit.
+	// Only render those verified against the currently selected text.
+	transcript, variant := selectMeetingTranscript(meeting)
 	var transcription json.RawMessage
-	if meeting.TranscriptSegments != "" {
-		transcription = json.RawMessage(meeting.TranscriptSegments)
+	if segments := transcriptSegmentsForText(transcript, meeting.TranscriptSegments); len(segments) > 0 {
+		// Legacy Transcribe segments may have been reconstructed with current
+		// punctuation. Render that verified text while retaining IDs/timestamps.
+		transcription, err = json.Marshal(segments)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode transcript segments: %w", err)
+		}
 	}
 
 	// The owner's exported Notion page is private to their own export — a
@@ -540,7 +558,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		LiveSummary:        meeting.LiveSummary,
 		TranscriptA:        meeting.TranscriptA,
 		TranscriptB:        meeting.TranscriptB,
-		SelectedTranscript: strPtr(meeting.SelectedTranscript),
+		SelectedTranscript: strPtr(variant),
 		AudioKey:           meeting.AudioKey,
 		AudioKeys:          meeting.AudioKeys,
 		AudioPartCount:     meeting.AudioPartCount,
@@ -585,6 +603,9 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		fields["content"] = req.Content
 	}
 	if req.Notes != nil {
+		if err := validateMeetingNotes(*req.Notes); err != nil {
+			return nil, err
+		}
 		fields["notes"] = *req.Notes
 	}
 	if req.LiveSummary != nil {
@@ -598,6 +619,9 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		fields["liveSummary"] = *req.LiveSummary
 	}
 	if req.TranscriptA != "" {
+		if strings.TrimSpace(req.TranscriptA) == "" {
+			return nil, fmt.Errorf("%w: transcriptA must contain non-whitespace text", ErrInvalidInput)
+		}
 		// s3:// values are repository-internal storage refs (large
 		// transcripts spill to S3 — see repository.validateTranscriptRef);
 		// legitimate client input is always the transcript TEXT. Accepting
@@ -606,7 +630,12 @@ func (s *MeetingService) UpdateMeeting(ctx context.Context, userID, meetingID st
 		if strings.HasPrefix(req.TranscriptA, "s3://") {
 			return nil, fmt.Errorf("%w: transcriptA must be transcript text, not a storage reference", ErrInvalidInput)
 		}
-		fields["transcriptA"] = req.TranscriptA
+		if req.TranscriptA != meeting.TranscriptA {
+			fields["transcriptA"] = req.TranscriptA
+			// Preserve shared candidate metadata: it may describe B, including
+			// a concurrent B producer. Every consumer verifies against the
+			// selected current text, so stale A words cannot override this edit.
+		}
 	}
 	if req.SelectedTranscript != "" {
 		fields["selectedTranscript"] = req.SelectedTranscript
