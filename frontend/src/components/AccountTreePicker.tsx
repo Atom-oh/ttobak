@@ -10,18 +10,24 @@ interface Props {
   onChange: (ids: string[]) => void;
   disabled?: boolean;
   loading?: boolean;
+  statusId?: string;
 }
 
 function TreeCheckbox({ label, checked, partial, onChange }: {
-  label: string; checked: boolean; partial: boolean; onChange: () => void;
+  label: string; checked: boolean; partial: boolean; onChange: () => boolean;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { if (ref.current) ref.current.indeterminate = partial; }, [partial]);
   return <input ref={ref} type="checkbox" checked={checked} aria-label={label} aria-checked={partial ? 'mixed' : checked}
-    onChange={onChange} className="h-4 w-4 shrink-0 accent-primary" />;
+    onChange={event => {
+      if (!onChange()) {
+        event.currentTarget.checked = checked;
+        event.currentTarget.indeterminate = partial;
+      }
+    }} className="h-4 w-4 shrink-0 accent-primary" />;
 }
 
-export function AccountTreePicker({ accounts, selectedIds, onChange, disabled, loading }: Props) {
+export function AccountTreePicker({ accounts, selectedIds, onChange, disabled, loading, statusId }: Props) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -66,16 +72,17 @@ export function AccountTreePicker({ accounts, selectedIds, onChange, disabled, l
     else ids.forEach(id => next.add(id));
     if (next.size > MAX_ACCOUNT_FILTERS) {
       setLimitErrorFor(selectionKey);
-      return;
+      return false;
     }
     setLimitErrorFor(null);
     onChange([...next].sort());
+    return true;
   };
 
   return (
     <div className="min-w-0 max-w-full space-y-2">
       <div ref={container} className="relative">
-        <button ref={trigger} type="button" disabled={disabled} aria-expanded={open} aria-controls={panelId} aria-busy={loading}
+        <button ref={trigger} type="button" disabled={disabled} aria-expanded={open} aria-controls={panelId} aria-busy={loading} aria-describedby={statusId}
           onClick={() => { setOpen(!open); setLimitErrorFor(null); }}
           className="inline-flex max-w-full items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50 dark:border-white/10 dark:bg-surface-lowest dark:text-text-secondary">
           <span className="material-symbols-outlined text-lg" aria-hidden="true">account_tree</span>

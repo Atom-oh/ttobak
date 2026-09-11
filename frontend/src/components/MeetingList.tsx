@@ -367,7 +367,8 @@ export function MeetingList({
           </div>
           <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-2 pb-2">
             <AccountTreePicker accounts={accounts} selectedIds={selectedAccountIds} onChange={onAccountChange}
-              loading={isLoadingAccounts} disabled={isLoadingAccounts && accounts.length === 0} />
+              loading={isLoadingAccounts} disabled={isLoadingAccounts && accounts.length === 0}
+              statusId={isLoadingAccounts || accountsError || accounts.length === 0 ? 'meeting-account-status' : undefined} />
             {selectedAccountIds.length > 0 && (
               <button
                 onClick={() => onAccountChange([])}
