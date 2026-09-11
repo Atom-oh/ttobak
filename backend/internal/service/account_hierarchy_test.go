@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -17,6 +18,7 @@ import (
 type hierarchyRepo struct {
 	*mockAccountRepo
 	mu       sync.Mutex
+	reads    int
 	writes   int
 	before   func()
 	writeErr error
@@ -38,13 +40,22 @@ func (r *hierarchyRepo) grant(account, user string) {
 func (r *hierarchyRepo) GetAccount(ctx context.Context, id string) (*model.Account, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.reads++
 	return r.mockAccountRepo.GetAccount(ctx, id)
 }
 
 func (r *hierarchyRepo) GetMember(ctx context.Context, id, user string) (*model.AccountMember, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.reads++
 	return r.mockAccountRepo.GetMember(ctx, id, user)
+}
+
+func (r *hierarchyRepo) CreateAccount(ctx context.Context, a *model.Account, owner *model.AccountMember) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.writes++
+	return r.mockAccountRepo.CreateAccount(ctx, a, owner)
 }
 
 func (r *hierarchyRepo) checkParent(user, parent string, ancestors []repository.AccountParentLink) error {
@@ -164,6 +175,103 @@ func TestAccountHierarchyRequiredParent(t *testing.T) {
 		if _, err := s.UpdateAccountParent(context.Background(), "owner", "child", req); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("missing parent accepted: %v", err)
 		}
+	}
+}
+
+func TestAccountHierarchyRejectsMalformedIDsBeforeRepositoryAccess(t *testing.T) {
+	for _, tc := range []struct {
+		name, id string
+	}{
+		{"empty child", ""},
+		{"traversal", ".."},
+		{"slash", "/"},
+		{"path", "account/a"},
+		{"backslash", `account\a`},
+		{"dot", "account.a"},
+		{"spaces only", "   "},
+		{"tab only", "\t"},
+		{"newline only", "\n"},
+		{"leading whitespace", " account-a"},
+		{"trailing whitespace", "account-a "},
+		{"internal whitespace", "account a"},
+		{"encoded separator", "account%2Fa"},
+		{"non-ASCII", "계정"},
+		{"null byte", "account\x00"},
+		{"DEL byte", "account\x7f"},
+		{"129 bytes", strings.Repeat("a", 129)},
+		{"oversized DynamoDB key", strings.Repeat("a", 2049)},
+	} {
+		for _, operation := range []string{"update child", "update parent", "create parent"} {
+			// The exact empty parent is allowed for both detach and root creation.
+			if tc.id == "" && operation != "update child" {
+				continue
+			}
+			t.Run(tc.name+"/"+operation, func(t *testing.T) {
+				r := newHierarchyRepo()
+				r.seed("account-a", "", "owner")
+				r.seed("parent-a", "", "owner")
+				s := newAccountServiceWithRepo(r)
+				var err error
+				if operation == "create parent" {
+					_, err = s.CreateAccount(context.Background(), "owner", "owner@example.com",
+						&model.CreateAccountRequest{Name: "Account", ParentAccountID: tc.id})
+				} else {
+					child, parent := "account-a", "parent-a"
+					if operation == "update child" {
+						child = tc.id
+					} else {
+						parent = tc.id
+					}
+					_, err = s.UpdateAccountParent(context.Background(), "owner", child,
+						&model.UpdateAccountParentRequest{ParentAccountID: &parent})
+				}
+				if !errors.Is(err, ErrInvalidInput) {
+					t.Errorf("error=%v, want ErrInvalidInput", err)
+				}
+				if r.reads != 0 || r.writes != 0 {
+					t.Errorf("malformed ID reached repository: reads=%d writes=%d", r.reads, r.writes)
+				}
+			})
+		}
+	}
+}
+
+func TestAccountHierarchyAcceptsValidIDBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, child, parent string
+	}{
+		{"fixture IDs", "account-a", "account-b"},
+		{"ASCII alphabet", "Account_09-A", "Parent_B2-03"},
+		{"UUIDs", "69e04b41-c359-42c4-b6b1-c0ec35d046d2", "60983978-8d47-4d98-9bc2-33183a84b704"},
+		{"single character", "a", "B"},
+		{"128 bytes", strings.Repeat("a", 128), strings.Repeat("b", 128)},
+		{"exact empty parent", "account-a", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newHierarchyRepo()
+			r.seed(tc.child, "", "owner")
+			if tc.parent != "" {
+				r.seed(tc.parent, "", "owner")
+			}
+			s := newAccountServiceWithRepo(r)
+			response, err := s.UpdateAccountParent(context.Background(), "owner", tc.child,
+				&model.UpdateAccountParentRequest{ParentAccountID: &tc.parent})
+			if err != nil {
+				t.Fatalf("valid update rejected: %v", err)
+			}
+			if response.AccountID != tc.child || response.ParentAccountID != tc.parent ||
+				r.accounts[tc.child].ParentAccountID != tc.parent {
+				t.Fatalf("update normalized or lost IDs: %+v", response)
+			}
+			created, err := s.CreateAccount(context.Background(), "owner", "owner@example.com",
+				&model.CreateAccountRequest{Name: "Account", ParentAccountID: tc.parent})
+			if err != nil {
+				t.Fatalf("valid creation rejected: %v", err)
+			}
+			if created.ParentAccountID != tc.parent || r.accounts[created.AccountID].ParentAccountID != tc.parent {
+				t.Fatalf("creation normalized or lost parent: %+v", created)
+			}
+		})
 	}
 }
 

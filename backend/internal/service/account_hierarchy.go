@@ -20,6 +20,27 @@ type accountHierarchyRepo interface {
 	UpdateAccountParent(ctx context.Context, accountID, requesterID, expectedParentID, parentID string, ancestors []repository.AccountParentLink) error
 }
 
+// Only an exactly empty parent means root/detach. IDs are never normalized.
+func validateAccountHierarchyIDs(accountID, parentID string) error {
+	if accountID == "" {
+		return ErrInvalidInput
+	}
+	for _, id := range []string{accountID, parentID} {
+		if len(id) > 128 {
+			return ErrInvalidInput
+		}
+		for i := 0; i < len(id); i++ {
+			c := id[i]
+			if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+				c >= '0' && c <= '9' || c == '_' || c == '-' {
+				continue
+			}
+			return ErrInvalidInput
+		}
+	}
+	return nil
+}
+
 // observeAccountAncestors always reads fresh, strongly consistent META/member
 // records. Only the immediate parent's membership is required. Ancestor names
 // and other metadata are never exposed to the requester.
@@ -54,6 +75,9 @@ func (s *AccountService) observeAccountAncestors(ctx context.Context, userID, ch
 }
 
 func (s *AccountService) createAccountWithParent(ctx context.Context, account *model.Account, owner *model.AccountMember) error {
+	if err := validateAccountHierarchyIDs(account.AccountID, account.ParentAccountID); err != nil {
+		return err
+	}
 	repo, ok := s.repo.(accountHierarchyRepo)
 	if !ok {
 		return fmt.Errorf("account hierarchy persistence unavailable")
@@ -74,8 +98,11 @@ func (s *AccountService) createAccountWithParent(ctx context.Context, account *m
 // UpdateAccountParent only organizes accounts; it neither inherits nor changes
 // grants. Detaching requires no access to the old parent.
 func (s *AccountService) UpdateAccountParent(ctx context.Context, requesterID, accountID string, req *model.UpdateAccountParentRequest) (*model.UpdateAccountParentResponse, error) {
-	if req == nil || req.ParentAccountID == nil || accountID == "" {
+	if req == nil || req.ParentAccountID == nil {
 		return nil, ErrInvalidInput
+	}
+	if err := validateAccountHierarchyIDs(accountID, *req.ParentAccountID); err != nil {
+		return nil, err
 	}
 	repo, ok := s.repo.(accountHierarchyRepo)
 	if !ok {
