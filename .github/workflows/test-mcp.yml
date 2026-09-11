@@ -1,0 +1,29 @@
+name: Test MCP
+
+on:
+  push:
+    branches: [main]
+    paths: ['mcp-server/**', 'frontend/public/mcp/ttobak-mcp.mjs', '.github/workflows/test-mcp.yml']
+  pull_request:
+    paths: ['mcp-server/**', 'frontend/public/mcp/ttobak-mcp.mjs', '.github/workflows/test-mcp.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  mcp-test:
+    runs-on: ttobak-arm
+    # Match the backend gate: fork PRs cannot execute on this self-hosted runner.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Test protocol and verify published bundle
+        working-directory: mcp-server
+        run: |
+          npm ci
+          npm test
+          npm run bundle
+          cmp dist/ttobak-mcp.mjs ../frontend/public/mcp/ttobak-mcp.mjs

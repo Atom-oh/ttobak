@@ -114,7 +114,7 @@ ttobak
           ttobak_get_meeting, ttobak_list_accounts, ttobak_get_account,
           ttobak_get_account_meetings, ttobak_get_account_insights,
           ttobak_get_account_brief, ttobak_export_vault,
-          ttobak_put_document, ttobak_list_documents, ttobak_get_document,
+          ttobak_put_document, ttobak_list_documents, ttobak_get_document, ttobak_update_document,
           ttobak_ask, ttobak_kb_upload, ttobak_kb_sync,
           ttobak_kb_list_files, ttobak_kb_delete_file,
           ttobak_upload_document, ttobak_create_account,
@@ -164,11 +164,22 @@ Use the ttobak_login tool to authenticate.
 
 ### Available Tools
 
+For document tools, omit `accountId` for your personal Document Hub; supplying it
+explicitly selects an account's shared space. Directly-shared personal documents
+can be read, but only their owner can revise them. `put_document` always creates a
+new ID; use `update_document` with the existing ID and title for revisions.
+Document Hub notes are not automatically indexed by `ttobak_ask`: use the document
+list/read tools for their current contents.
+
+Account filters are explicit: obtain `parentAccountId` relationships from
+`ttobak_list_accounts`, then include the group and its accessible descendant IDs
+in `accountIds`. Keep that same filter while following pagination cursors.
+
 | Tool | Description | Example Prompt |
 |------|-------------|----------------|
 | `ttobak_login` | Authenticate via browser | "Log in to TTOBAK" |
 | `ttobak_status` | Check auth status and config | "Check TTOBAK connection status" |
-| `ttobak_list_meetings` | List meetings (paginated) | "Show my recent meetings" |
+| `ttobak_list_meetings` | List meetings with explicit `accountIds` filters and pagination | "Show meetings for Toss and its subsidiaries" |
 | `ttobak_get_meeting` | Full meeting detail | "Get the details of meeting X" |
 | `ttobak_list_accounts` | List accounts you belong to | "Show my accounts" |
 | `ttobak_get_account` | Account detail and members | "Show the Hana Bank account info" |
@@ -176,16 +187,17 @@ Use the ttobak_login tool to authenticate.
 | `ttobak_get_account_insights` | Typed insights by period/type | "Hana Bank's May risk and opportunity insights" |
 | `ttobak_get_account_brief` | Bundled account raw material | "Give me Hana Bank's quarterly brief in one shot" |
 | `ttobak_export_vault` | Export meetings as Obsidian markdown files | "Export my meetings to my vault" |
-| `ttobak_put_document` | Ingest a local document into an account | "Add this prep note to Hana Bank" |
-| `ttobak_list_documents` | List ingested documents for an account | "List Hana Bank's ingested documents" |
-| `ttobak_get_document` | Get an ingested document with content | "Show the Hana Bank prep doc" |
+| `ttobak_put_document` | Create a personal note, or explicitly share to an account | "Save this prep note privately" |
+| `ttobak_list_documents` | List personal/directly-shared or account documents | "Find my prep notes" |
+| `ttobak_get_document` | Read current document content | "Show the Hana Bank prep doc" |
+| `ttobak_update_document` | Revise the same document; omitted body is preserved | "Correct that note without making a copy" |
 | `ttobak_ask` | RAG Q&A across meetings and the Knowledge Base | "What decisions were made about the API redesign?" |
 | `ttobak_kb_upload` | Upload a local file (pdf/md/pptx/docx) into your Knowledge Base space (retrieval is scoped to your own uploads) | "Upload this whitepaper to the KB" |
 | `ttobak_kb_sync` | Trigger a full-data-source Knowledge Base ingestion job (returns "skipped" on a deployment without the KB env vars configured — see tool description) | "Sync the KB now" |
 | `ttobak_kb_list_files` | List your uploaded KB files | "What have I uploaded to the KB?" |
 | `ttobak_kb_delete_file` | Delete a KB file by ID (stays in the search index until the next ingestion run) | "Delete that old KB file" |
 | `ttobak_upload_document` | Upload a local file (pdf/pptx/ppt) as a document, personal or account-shared | "Upload this deck to Hana Bank" |
-| `ttobak_create_account` | Create a new customer account | "Create an account for Hana Bank" |
+| `ttobak_create_account` | Create an account, optionally under `parentAccountId` | "Create Hana Bank under Hana Financial Group" |
 | `ttobak_add_account_member` | Add a teammate to an account (AM/TAM/SSA) | "Add jane@x.com to Hana Bank as TAM" |
 | `ttobak_create_project` | Create a Project (SFDC Opportunity) | "Create a project for the Hana Bank renewal" |
 | `ttobak_list_projects` | List projects you own, are directly invited to, or reach via a linked Account's membership | "Show my projects" |
@@ -341,7 +353,7 @@ ttobak
           ttobak_get_meeting, ttobak_list_accounts, ttobak_get_account,
           ttobak_get_account_meetings, ttobak_get_account_insights,
           ttobak_get_account_brief, ttobak_export_vault,
-          ttobak_put_document, ttobak_list_documents, ttobak_get_document,
+          ttobak_put_document, ttobak_list_documents, ttobak_get_document, ttobak_update_document,
           ttobak_ask, ttobak_kb_upload, ttobak_kb_sync,
           ttobak_kb_list_files, ttobak_kb_delete_file,
           ttobak_upload_document, ttobak_create_account,
@@ -391,11 +403,21 @@ TTOBAK에 로그인해줘
 
 ### 사용 가능한 도구
 
+문서 도구에서 `accountId`를 생략하면 개인 문서함을 사용하고, 지정하면 해당
+Account 공유 공간을 사용합니다. 직접 공유받은 개인 문서는 읽기 전용입니다.
+`put_document`는 항상 새 ID를 만들므로 수정할 때는 기존 ID와 제목을
+`update_document`에 전달하세요. 개인 문서함의 노트는 `ttobak_ask`에 자동
+색인되지 않으며, 문서 목록·읽기 도구로 현재 내용을 조회할 수 있습니다.
+
+그룹 필터는 `ttobak_list_accounts`의 `parentAccountId` 관계를 따라 그룹과
+접근 가능한 하위 계열사 ID를 모두 `accountIds`에 넣습니다.
+다음 페이지를 조회할 때도 동일한 필터를 유지해야 합니다.
+
 | 도구 | 설명 | 예시 프롬프트 |
 |------|------|---------------|
 | `ttobak_login` | 브라우저를 통한 인증 | "TTOBAK에 로그인해줘" |
 | `ttobak_status` | 인증 상태 및 설정 확인 | "TTOBAK 연결 상태 확인해줘" |
-| `ttobak_list_meetings` | 미팅 목록 조회 (페이지네이션) | "최근 미팅 목록 보여줘" |
+| `ttobak_list_meetings` | `accountIds` 필터와 페이지네이션으로 미팅 조회 | "토스와 계열사 미팅 보여줘" |
 | `ttobak_get_meeting` | 미팅 상세 정보 | "미팅 X의 상세 내용을 가져와줘" |
 | `ttobak_list_accounts` | 내 Account 목록 | "내 어카운트 목록 보여줘" |
 | `ttobak_get_account` | Account 상세/멤버 | "하나은행 어카운트 정보" |
@@ -403,16 +425,17 @@ TTOBAK에 로그인해줘
 | `ttobak_get_account_insights` | 기간·유형별 인사이트 | "하나은행 5월 리스크/기회 인사이트" |
 | `ttobak_get_account_brief` | 묶음 원재료 | "하나은행 분기 브리프 한 번에" |
 | `ttobak_export_vault` | 미팅을 Obsidian 마크다운 파일로 내보내기 | "내 미팅을 vault로 내보내줘" |
-| `ttobak_put_document` | 로컬 문서를 Account로 인제스트 | "이 prep 노트를 하나은행에 추가해줘" |
-| `ttobak_list_documents` | Account 인제스트 문서 목록 | "하나은행 인제스트 문서 목록" |
-| `ttobak_get_document` | 인제스트 문서 전체 내용 조회 | "하나은행 prep 문서 보여줘" |
+| `ttobak_put_document` | 개인 노트 생성 또는 지정 Account에 공유 | "이 회의 준비 노트를 개인 문서로 저장해줘" |
+| `ttobak_list_documents` | 개인·직접 공유받은 문서 또는 Account 문서 목록 | "내가 적은 준비 노트 찾아줘" |
+| `ttobak_get_document` | 문서의 현재 내용 조회 | "하나은행 prep 문서 보여줘" |
+| `ttobak_update_document` | 동일 문서 수정, 생략한 본문 보존 | "복사본 만들지 말고 이 노트의 납기를 수정해줘" |
 | `ttobak_ask` | 미팅 + Knowledge Base 기반 RAG Q&A | "API 재설계에 대해 어떤 결정이 있었어?" |
 | `ttobak_kb_upload` | 로컬 파일(pdf/md/pptx/docx)을 내 Knowledge Base 공간에 업로드 (검색은 본인 업로드로 스코프됨) | "이 백서를 KB에 올려줘" |
 | `ttobak_kb_sync` | 전체 데이터소스 대상 Knowledge Base 인제스천 실행 (KB env 미설정 배포에서는 "skipped" 반환 — 도구 설명 참조) | "지금 KB 동기화해줘" |
 | `ttobak_kb_list_files` | 내가 업로드한 KB 파일 목록 | "내가 KB에 뭐 올렸었지?" |
 | `ttobak_kb_delete_file` | KB 파일 ID로 삭제 (다음 인제스천까지는 검색 인덱스에 잔존) | "그 오래된 KB 파일 삭제해줘" |
 | `ttobak_upload_document` | 로컬 파일(pdf/pptx/ppt)을 문서로 업로드(개인 또는 Account 공유) | "이 덱을 하나은행에 업로드해줘" |
-| `ttobak_create_account` | 신규 고객 Account 생성 | "하나은행 Account 만들어줘" |
+| `ttobak_create_account` | `parentAccountId`로 상위 그룹을 지정해 Account 생성 | "하나금융그룹 아래 하나은행을 만들어줘" |
 | `ttobak_add_account_member` | Account에 팀원 추가(AM/TAM/SSA) | "jane@x.com을 하나은행에 TAM으로 추가해줘" |
 | `ttobak_create_project` | Project(SFDC Opportunity) 생성 | "하나은행 갱신 프로젝트 만들어줘" |
 | `ttobak_list_projects` | 내가 소유하거나 직접 초대되었거나 연결된 Account 멤버십으로 접근 가능한 프로젝트 목록 | "내 프로젝트 목록 보여줘" |

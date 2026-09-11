@@ -125,17 +125,65 @@ export function mergeProjectUpdate(
   return merged;
 }
 
+function identifier(value: string, name: string): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) {
+    throw new Error(`${name} must be a non-empty ID (letters, digits, "_" or "-", at most 128 characters).`);
+  }
+  return encodeURIComponent(value);
+}
+
+function documentsPath(accountId?: string): string {
+  return accountId === undefined
+    ? '/api/documents'
+    : `/api/accounts/${identifier(accountId, 'accountId')}/documents`;
+}
+
+export type DocumentInput = {
+  title: string;
+  markdown?: string;
+  docType?: string;
+  path?: string;
+};
+
+// HTTP success is mandatory even when the gateway returns JSON without the
+// application's usual {error:{code,message}} envelope.
+export function parseApiResponse(status: number, body: string): unknown {
+  if (status === 204) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new Error(`HTTP ${status}: invalid JSON response`);
+  }
+  if (status < 200 || status >= 300 || parsed?.error) {
+    const detail = parsed?.error;
+    throw new Error(
+      detail?.message
+        ? `HTTP ${status} ${detail.code || 'API_ERROR'}: ${detail.message}`
+        : `HTTP ${status}: TTOBAK request failed`,
+    );
+  }
+  return parsed;
+}
+
 export class TtobakApi {
   constructor(
     private auth: CognitoAuth,
     private baseUrl: string,
   ) {}
 
-  async listMeetings(opts?: { cursor?: string; limit?: number; tab?: string }) {
+  async listMeetings(opts?: { cursor?: string; limit?: number; tab?: string; accountIds?: string[] }) {
     const q = new URLSearchParams();
     if (opts?.cursor) q.set('cursor', opts.cursor);
     if (opts?.limit) q.set('limit', String(opts.limit));
     if (opts?.tab) q.set('tab', opts.tab);
+    if (opts?.accountIds !== undefined) {
+      if (!Array.isArray(opts.accountIds) || opts.accountIds.length === 0 || opts.accountIds.length > 100) {
+        throw new Error('accountIds must contain 1-100 account IDs. Omit it to list all accounts.');
+      }
+      opts.accountIds.forEach((id) => identifier(id, 'accountId'));
+      q.set('accountIds', [...new Set(opts.accountIds)].join(','));
+    }
     const qs = q.toString();
     return this.get(`/api/meetings${qs ? '?' + qs : ''}`);
   }
@@ -264,21 +312,25 @@ export class TtobakApi {
   }
 
   async putDocument(
-    accountId: string,
+    accountId: string | undefined,
     doc: { title: string; markdown: string; docType?: string; path?: string },
   ) {
-    return this.post(`/api/accounts/${accountId}/documents`, doc);
+    return this.post(documentsPath(accountId), doc);
   }
 
-  async listDocuments(accountId: string, docType?: string) {
+  async listDocuments(accountId?: string, docType?: string) {
     const q = new URLSearchParams();
     if (docType) q.set('docType', docType);
     const qs = q.toString();
-    return this.get(`/api/accounts/${accountId}/documents${qs ? '?' + qs : ''}`);
+    return this.get(`${documentsPath(accountId)}${qs ? '?' + qs : ''}`);
   }
 
-  async getDocument(accountId: string, docId: string) {
-    return this.get(`/api/accounts/${accountId}/documents/${docId}`);
+  async getDocument(accountId: string | undefined, docId: string) {
+    return this.get(`${documentsPath(accountId)}/${identifier(docId, 'docId')}`);
+  }
+
+  async updateDocument(accountId: string | undefined, docId: string, doc: DocumentInput) {
+    return this.put(`${documentsPath(accountId)}/${identifier(docId, 'docId')}`, doc);
   }
 
   /** Upload a local file into the global Knowledge Base. Ingestion doesn't
@@ -346,6 +398,7 @@ export class TtobakApi {
     aliases?: string[];
     domains?: string[];
     industry?: string;
+    parentAccountId?: string;
   }) {
     return this.post('/api/accounts', input);
   }
@@ -413,8 +466,10 @@ export class TtobakApi {
       const req = httpsRequest(
         {
           hostname: url.hostname,
+          port: url.port || undefined,
           path: url.pathname + url.search,
           method,
+          timeout: 120_000,
           headers: {
             Authorization: `Bearer ${idToken}`,
             'Content-Type': 'application/json',
@@ -425,20 +480,15 @@ export class TtobakApi {
           let chunks = '';
           res.on('data', (c) => (chunks += c));
           res.on('end', () => {
-            if (res.statusCode === 204) return resolve({});
             try {
-              const parsed = JSON.parse(chunks);
-              if (parsed.error) {
-                reject(new Error(`${parsed.error.code}: ${parsed.error.message}`));
-              } else {
-                resolve(parsed);
-              }
-            } catch {
-              reject(new Error(`HTTP ${res.statusCode}: ${chunks.slice(0, 300)}`));
+              resolve(parseApiResponse(res.statusCode || 0, chunks));
+            } catch (error) {
+              reject(error);
             }
           });
         },
       );
+      req.on('timeout', () => req.destroy(new Error('TTOBAK request timed out after 120s')));
       req.on('error', reject);
       if (data) req.write(data);
       req.end();
