@@ -14,6 +14,7 @@ Covers:
   not be served once the caller's access has changed).
 """
 import json
+import io
 import os
 import sys
 import time
@@ -43,6 +44,57 @@ def _stored(messages):
     """DynamoDB get_item response holding the given conversation history."""
     return {'Item': {'PK': 'SESSION#u1#s1', 'SK': 'MESSAGES',
                      'messages': json.dumps(messages, ensure_ascii=False)}}
+
+
+class TestTranscriptReadGuard(unittest.TestCase):
+    def read_meeting(self, **fields):
+        item = {'meetingId': 'm1', **fields}
+        with mock.patch.object(handler.table, 'get_item', return_value={'Item': item}):
+            return handler.load_meeting_context('reader', 'm1')
+
+    def test_editable_summary_is_never_an_s3_read_instruction(self):
+        with mock.patch.object(handler, 's3_client') as s3:
+            s3.get_object.return_value = {'Body': io.BytesIO(b'foreign secret')}
+            text, err = self.read_meeting(content='s3://synthetic/transcripts/other/transcriptA.txt')
+        self.assertIsNone(err)
+        self.assertIn('s3://synthetic/transcripts/other/transcriptA.txt', text)
+        s3.get_object.assert_not_called()
+
+    def test_foreign_or_malformed_transcript_refs_never_reach_s3(self):
+        refs = [
+            's3://other-bucket/transcripts/m1/transcriptA.txt',
+            's3://synthetic/transcripts/m2/transcriptA.txt',
+            's3://synthetic/transcripts/m10/transcriptA.txt',
+            's3://synthetic/transcripts/m1/transcriptB.txt',
+            's3://synthetic/transcripts/m1/../m2/transcriptA.txt',
+            's3://synthetic/transcripts/m1/transcriptA.txt?versionId=old',
+            's3://synthetic/transcripts/m1/transcriptA.txt#fragment',
+            's3://synthetic/transcripts/%6d1/transcriptA.txt',
+            's3://synthetic',
+        ]
+        for value in refs:
+            with self.subTest(value=value), mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
+                s3.get_object.return_value = {'Body': io.BytesIO(b'foreign secret')}
+                text, err = self.read_meeting(transcriptA=value)
+                self.assertIsNone(err)  # preserve the existing degraded-read contract for this rollout
+                self.assertNotIn('foreign secret', text)
+                s3.get_object.assert_not_called()
+
+    def test_exact_authorized_transcript_ref_is_read_and_closed(self):
+        body = io.BytesIO('내 회의 원문'.encode())
+        with mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
+            s3.get_object.return_value = {'Body': body}
+            text, err = self.read_meeting(transcriptA='s3://synthetic/transcripts/m1/transcriptA.txt')
+        self.assertIsNone(err)
+        self.assertIn('내 회의 원문', text)
+        s3.get_object.assert_called_once_with(Bucket='synthetic', Key='transcripts/m1/transcriptA.txt')
+        self.assertTrue(body.closed)
+
+    def test_missing_bucket_configuration_fails_closed(self):
+        with mock.patch.object(handler, 'BUCKET_NAME', ''), mock.patch.object(handler, 's3_client') as s3:
+            text, err = self.read_meeting(transcriptA='s3://synthetic/transcripts/m1/transcriptA.txt')
+        self.assertIsNone(err)
+        s3.get_object.assert_not_called()
 
 
 class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
