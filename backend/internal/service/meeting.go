@@ -105,6 +105,8 @@ type meetingRepo interface {
 	DeleteShare(ctx context.Context, sharedToID, meetingID string) error
 	GetMember(ctx context.Context, accountID, userID string) (*model.AccountMember, error)
 	ListAccountMembers(ctx context.Context, accountID string) ([]model.AccountMember, error)
+	ListAccountsForUser(ctx context.Context, userID string) ([]model.AccountMember, error)
+	ListMeetingRefsForAccountPage(ctx context.Context, accountID, cursor string, limit int32) ([]model.MeetingRef, *string, error)
 	PutMeetingRef(ctx context.Context, ref *model.MeetingRef) error
 	PutAccountInsights(ctx context.Context, insights []model.AccountInsight) error
 	PutPendingShare(ctx context.Context, share *model.PendingShare) error
@@ -287,13 +289,67 @@ func (s *MeetingService) checkAccess(ctx context.Context, userID, meetingID stri
 	return resolveSharedAccess(ctx, s.repo, userID, meetingID)
 }
 
-// ListMeetings lists meetings for a user with pagination
-func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor string, limit int32) (*model.MeetingListResponse, error) {
+// ListMeetings lists meetings for a user with pagination. joinedAccountIDs
+// supplies discovery hints from grants materialized in this request; the team
+// stream still re-checks membership and never treats those hints as grants.
+func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor, accountID string, limit int32, joinedAccountIDs ...string) (*model.MeetingListResponse, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if strings.HasPrefix(cursor, teamMeetingCursorPrefix) {
+		continuation, err := decodeTeamMeetingCursor(cursor, userID, tab, accountID)
+		if err != nil {
+			return nil, err
+		}
+		if continuation.RegularCursor == "" {
+			return s.listTeamSharedMeetings(ctx, userID, tab, accountID, limit, cursor, nil)
+		}
+		cursor = continuation.RegularCursor
+		joinedAccountIDs = append(joinedAccountIDs, continuation.Accounts...)
+	}
+	// Share rows do not contain accountId. Resolve their canonical meetings
+	// and advance empty filtered pages here; owned-meeting filtering happens
+	// in the repository's GSI query. Keep a cursor if the work bound is hit.
+	const maxSharedPages = 25
+	for page := 0; ; page++ {
+		response, err := s.listMeetingsPage(ctx, userID, tab, cursor, accountID, limit)
+		if err != nil {
+			return nil, err
+		}
+		if accountID == "" || tab != "shared" || len(response.Meetings) > 0 ||
+			response.NextCursor == nil || page+1 >= maxSharedPages {
+			if response.NextCursor == nil {
+				team, err := s.listTeamSharedMeetings(ctx, userID, tab, accountID, limit-int32(len(response.Meetings)), "", joinedAccountIDs)
+				if err != nil {
+					return nil, err
+				}
+				response.Meetings = append(response.Meetings, team.Meetings...)
+				response.NextCursor = team.NextCursor
+			} else if len(joinedAccountIDs) > 0 {
+				// Retain first-login discovery hints while the caller pages
+				// through regular results before reaching inherited meetings.
+				wrapped, err := encodeTeamMeetingCursor(teamMeetingCursor{
+					UserID: userID, Tab: tab, AccountID: accountID,
+					Accounts: joinedAccountIDs, RegularCursor: *response.NextCursor,
+				})
+				if err != nil {
+					return nil, err
+				}
+				response.NextCursor = wrapped
+			}
+			return response, nil
+		}
+		cursor = *response.NextCursor
+	}
+}
+
+func (s *MeetingService) listMeetingsPage(ctx context.Context, userID, tab, cursor, accountID string, limit int32) (*model.MeetingListResponse, error) {
 	result, err := s.repo.ListMeetings(ctx, repository.ListMeetingsParams{
-		UserID: userID,
-		Tab:    tab,
-		Cursor: cursor,
-		Limit:  limit,
+		UserID:    userID,
+		Tab:       tab,
+		Cursor:    cursor,
+		Limit:     limit,
+		AccountID: accountID,
 	})
 	if err != nil {
 		return nil, err
@@ -306,6 +362,9 @@ func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor s
 
 	// Add owned meetings
 	for _, m := range result.Meetings {
+		if accountID != "" && m.AccountID != accountID {
+			continue
+		}
 		item := model.ToMeetingListItem(&m, false, nil, nil)
 		response.Meetings = append(response.Meetings, item)
 	}
@@ -333,6 +392,9 @@ func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor s
 			for _, share := range result.Shares {
 				meeting, ok := meetingMap[share.MeetingID]
 				if !ok {
+					continue
+				}
+				if accountID != "" && meeting.AccountID != accountID {
 					continue
 				}
 				// Same read-time re-verification as checkAccess/resolveSharedAccess
@@ -372,6 +434,8 @@ func (s *MeetingService) ListMeetings(ctx context.Context, userID, tab, cursor s
 				item := model.ToMeetingListItem(meeting, true, &share.OwnerEmail, &perm)
 				response.Meetings = append(response.Meetings, item)
 			}
+		} else {
+			return nil, fmt.Errorf("failed to load shared meetings: %w", err)
 		}
 	}
 
@@ -871,18 +935,20 @@ func emailHasPendingInvite(ctx context.Context, client cognitoAdminAPI, poolID, 
 // GetOrCreateUser's created flag -- see MaterializePendingShares' doc
 // comment below for why. Errors from GetOrCreateUser are logged, not
 // surfaced -- called from handler/meeting.go's ListMeetings/CreateMeeting,
-// which this must never block.
-func (s *MeetingService) EnsureProfileAndMaterializePendingShares(ctx context.Context, userID, email, name string, emailVerified bool) {
+// which this must never block. Returns newly joined account IDs so this
+// request can discover team meetings before the membership GSI catches up.
+func (s *MeetingService) EnsureProfileAndMaterializePendingShares(ctx context.Context, userID, email, name string, emailVerified bool) []string {
 	if _, _, err := s.repo.GetOrCreateUser(ctx, userID, email, name); err != nil {
 		log.Printf("EnsureProfileAndMaterializePendingShares: GetOrCreateUser failed for user %s: %v", userID, err)
-		return
+		return nil
 	}
-	s.MaterializePendingShares(ctx, userID, email, emailVerified)
+	return s.MaterializePendingShares(ctx, userID, email, emailVerified)
 }
 
 // MaterializePendingShares turns every PendingShare queued for email into a
 // real AccountMember or Share row for the now-known userID, then deletes
-// the queued row. Called from handler/meeting.go on every ListMeetings/
+// the queued row and returns successfully joined account IDs.
+// Called from handler/meeting.go on every ListMeetings/
 // CreateMeeting request (not gated on GetOrCreateUser's created flag --
 // this is a cheap, idempotent Query that's almost always empty, and gating
 // on "first PROFILE-creating call only" would make a materialization
@@ -906,12 +972,13 @@ func (s *MeetingService) EnsureProfileAndMaterializePendingShares(ctx context.Co
 // email -- matching docs/superpowers/specs/2026-08-04-pending-email-
 // invites-design.md's explicit design intent ("logged and skipped, not
 // fatal"). It stays queued and is retried on the next call.
-func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, email string, emailVerified bool) {
+func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, email string, emailVerified bool) []string {
 	pending, err := s.repo.ListPendingShares(ctx, email)
 	if err != nil {
 		log.Printf("MaterializePendingShares: failed to list pending shares for %s: %v", email, err)
-		return
+		return nil
 	}
+	var joinedAccountIDs []string
 	now := time.Now().Unix()
 	for i := range pending {
 		p := &pending[i]
@@ -957,6 +1024,9 @@ func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, e
 			// "transient" from a bare ConditionalCheckFailed.
 			continue
 		}
+		if p.Kind == model.PendingShareKindAccount {
+			joinedAccountIDs = append(joinedAccountIDs, p.AccountID)
+		}
 		// Nothing left to do here: materializeOne's transactional
 		// primitives already deleted the pending row as part of their own
 		// successful transaction (or, for the default/unknown-kind branch,
@@ -967,6 +1037,7 @@ func (s *MeetingService) MaterializePendingShares(ctx context.Context, userID, e
 		// this call, exactly the race the versioned delete exists to
 		// prevent.
 	}
+	return joinedAccountIDs
 }
 
 // materializeOne atomically re-verifies one queued grant's inviter (still
@@ -1310,12 +1381,12 @@ func BuildAccountInsights(accountID string, meeting *model.Meeting) ([]model.Acc
 	out := make([]model.AccountInsight, 0, len(parsed))
 	for i, p := range parsed {
 		out = append(out, model.AccountInsight{
-			PK:           model.PrefixAccount + accountID,
-			SK:           fmt.Sprintf("%s%s#%s#%d", model.PrefixInsight, occurred, meeting.MeetingID, i),
-			AccountID:    accountID,
-			InsightID:    fmt.Sprintf("%s_%d", meeting.MeetingID, i),
-			Type: p.Type,
-			Text: p.Text,
+			PK:        model.PrefixAccount + accountID,
+			SK:        fmt.Sprintf("%s%s#%s#%d", model.PrefixInsight, occurred, meeting.MeetingID, i),
+			AccountID: accountID,
+			InsightID: fmt.Sprintf("%s_%d", meeting.MeetingID, i),
+			Type:      p.Type,
+			Text:      p.Text,
 			// Evidence (near-verbatim meeting quotes) is deliberately NOT
 			// fanned out here -- account members without access to the
 			// source meeting would otherwise be able to read direct quotes

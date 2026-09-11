@@ -49,13 +49,14 @@ Response: 200 OK
 #### List Meetings
 
 ```
-GET /api/meetings?tab={all|shared}&cursor={lastKey}&limit={20}
+GET /api/meetings?tab={all|shared}&accountId={accountId}&cursor={lastKey}&limit={20}
 
 Response: 200 OK
 {
   "meetings": [
     {
       "meetingId": "uuid",
+      "accountId": "account-uuid", // omitted when not linked to an account
       "title": "Product Strategy Sync",
       "date": "2026-03-05T10:00:00Z",
       "status": "done",           // recording | transcribing | summarizing | done | error
@@ -71,9 +72,39 @@ Response: 200 OK
       "updatedAt": "2026-03-05T11:30:00Z"
     }
   ],
-  "nextCursor": "base64-encoded-lastEvaluatedKey or null"
+  "nextCursor": "opaque-continuation-cursor or null"
 }
 ```
+
+`accountId` is optional. When supplied, it filters the caller's existing owned/shared
+meeting list by the meeting's canonical account ID; account membership alone does
+not grant access to otherwise private meetings. Shared meetings retain the usual
+read-time access checks. An unknown or inaccessible account with no readable
+meetings produces an empty list.
+
+Both `all` and `shared` also discover meetings published to the caller's current
+account teams. Members added after
+publication inherit read access and list visibility without a personal Share row
+or a manual re-share; queued invitees qualify after their verified first-login
+membership is materialized; newly joined account IDs are carried through the same
+request and subsequent continuation cursors so GSI propagation does not hide that
+grant. Memberships and meeting references are paginated,
+then checked against live membership and each canonical meeting's `accountId` /
+`sharedToAccount`. Deleted, moved, and link-only meetings are excluded. Existing
+direct-share permissions take precedence. After owned meetings / individual
+shares are exhausted, inherited meetings fill any remaining page slots, then
+continue through an opaque team cursor. Reference reads are bounded to 25 pages
+per request and inherited items respect the page limit. Existing individual
+shares are excluded from the inherited stream. The team cursor is bound to the
+caller, tab, and account filter; every page re-checks membership. Invalid or
+mismatched team cursors return `400 BAD_REQUEST`.
+`sharedBy` is omitted for inherited access without an individual Share row.
+
+Owned meetings are filtered in the paginated DynamoDB query. Shared rows are
+resolved to meetings before filtering; empty shared pages are advanced up to a
+25-page work limit. A non-null `nextCursor` always means more data can be checked,
+even when this response has no matches. Keep the same `tab` and `accountId` when
+loading the next page; restart without a cursor when either changes.
 
 #### Create Meeting
 
@@ -1528,6 +1559,8 @@ Response: 200 OK
 { "userId": "..." }
 ```
 Only valid when the target's Cognito status is `FORCE_CHANGE_PASSWORD` (never completed first login) — re-sends the invite email with a fresh temporary password (`AdminCreateUser` with `MessageAction=RESEND`). `400 BAD_REQUEST` otherwise.
+
+The route keeps the Cognito user ID (`sub`). The service uses that ID for `AdminGetUser`, then supplies the returned `email` as `AdminCreateUser.Username` and the email delivery attribute. This pool uses `UsernameAttributes=["email"]`, so sending a `sub` as the resend username is rejected by Cognito. The destination is resolved server-side; the request accepts no email override.
 
 ```
 POST /api/settings/users/{userId}/reset-password

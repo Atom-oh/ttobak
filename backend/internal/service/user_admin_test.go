@@ -463,26 +463,94 @@ func TestResendInvite_RejectsWrongStatus(t *testing.T) {
 	}
 }
 
-func TestResendInvite_SuccessUsesUsernameNotEmail(t *testing.T) {
+func TestResendInvite_UsesEmailFromCurrentUser(t *testing.T) {
+	const targetID = "target-sub"
+	const email = "invitee@example.com"
 	cognito := &fakeCognitoAdminAPI{
-		adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
-			return &cognitoidp.AdminGetUserOutput{UserStatus: cognitoidptypes.UserStatusTypeForceChangePassword}, nil
+		adminGetUserFn: func(_ context.Context, in *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+			if aws.ToString(in.Username) != targetID {
+				t.Fatalf("status lookup must use the requested user ID, got %q", aws.ToString(in.Username))
+			}
+			return &cognitoidp.AdminGetUserOutput{
+				Username:   aws.String(targetID),
+				UserStatus: cognitoidptypes.UserStatusTypeForceChangePassword,
+				UserAttributes: []cognitoidptypes.AttributeType{
+					{Name: aws.String("sub"), Value: aws.String(targetID)},
+					{Name: aws.String("email"), Value: aws.String(email)},
+					{Name: aws.String("email_verified"), Value: aws.String("false")},
+				},
+			}, nil
+		},
+		adminCreateUserFn: func(_ context.Context, in *cognitoidp.AdminCreateUserInput) (*cognitoidp.AdminCreateUserOutput, error) {
+			// The deployed pool uses UsernameAttributes=["email"]. Cognito
+			// rejects a sub here even though AdminGetUser accepts it.
+			if aws.ToString(in.Username) != email {
+				return nil, &cognitoidptypes.InvalidParameterException{
+					Message: aws.String("Username should be an email."),
+				}
+			}
+			return &cognitoidp.AdminCreateUserOutput{}, nil
 		},
 	}
 	svc := newTestUserAdminService(cognito, &fakeUserAdminRepo{})
 
-	if err := svc.ResendInvite(context.Background(), "target-sub"); err != nil {
+	if err := svc.ResendInvite(context.Background(), targetID); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(cognito.createUserCalls) != 1 {
 		t.Fatalf("expected exactly one AdminCreateUser call, got %d", len(cognito.createUserCalls))
 	}
 	call := cognito.createUserCalls[0]
-	if aws.ToString(call.Username) != "target-sub" {
-		t.Errorf("expected Username to be the immutable sub, got %q", aws.ToString(call.Username))
+	if aws.ToString(call.Username) != email {
+		t.Errorf("expected Username to be the current user's email, got %q", aws.ToString(call.Username))
 	}
 	if call.MessageAction != cognitoidptypes.MessageActionTypeResend {
 		t.Errorf("expected MessageAction=RESEND, got %q", call.MessageAction)
+	}
+	if len(call.DesiredDeliveryMediums) != 1 || call.DesiredDeliveryMediums[0] != cognitoidptypes.DeliveryMediumTypeEmail {
+		t.Errorf("expected email delivery, got %v", call.DesiredDeliveryMediums)
+	}
+	if len(call.UserAttributes) != 1 ||
+		aws.ToString(call.UserAttributes[0].Name) != "email" ||
+		aws.ToString(call.UserAttributes[0].Value) != email {
+		t.Errorf("resend must supply only the existing email without changing verification or other attributes, got %v", call.UserAttributes)
+	}
+}
+
+func TestResendInvite_RejectsMissingEmail(t *testing.T) {
+	tests := []struct {
+		name  string
+		attrs []cognitoidptypes.AttributeType
+	}{
+		{name: "no attributes"},
+		{name: "no email", attrs: []cognitoidptypes.AttributeType{
+			{Name: aws.String("sub"), Value: aws.String("target-sub")},
+		}},
+		{name: "empty email", attrs: []cognitoidptypes.AttributeType{
+			{Name: aws.String("email"), Value: aws.String("")},
+		}},
+		{name: "nil email", attrs: []cognitoidptypes.AttributeType{
+			{Name: aws.String("email")},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cognito := &fakeCognitoAdminAPI{
+				adminGetUserFn: func(_ context.Context, _ *cognitoidp.AdminGetUserInput) (*cognitoidp.AdminGetUserOutput, error) {
+					return &cognitoidp.AdminGetUserOutput{
+						UserStatus:     cognitoidptypes.UserStatusTypeForceChangePassword,
+						UserAttributes: tt.attrs,
+					}, nil
+				},
+			}
+			svc := newTestUserAdminService(cognito, &fakeUserAdminRepo{})
+			if err := svc.ResendInvite(context.Background(), "target-sub"); err == nil {
+				t.Fatal("expected an error when the current user has no email")
+			}
+			if len(cognito.createUserCalls) != 0 {
+				t.Fatal("AdminCreateUser must not be called without the current user's email")
+			}
+		})
 	}
 }
 

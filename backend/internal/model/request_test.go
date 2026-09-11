@@ -15,6 +15,7 @@ func TestToMeetingListItemCarriesSentimentAndDuration(t *testing.T) {
 		Title:     "Quarterly Review",
 		Sentiment: "positive",
 		Duration:  1830,
+		AccountID: "acc-001",
 		Date:      ts,
 		CreatedAt: ts,
 		UpdatedAt: ts,
@@ -27,5 +28,8 @@ func TestToMeetingListItemCarriesSentimentAndDuration(t *testing.T) {
 	}
 	if item.Duration != 1830 {
 		t.Errorf("Duration = %d, want %d", item.Duration, 1830)
+	}
+	if item.AccountID != "acc-001" {
+		t.Errorf("AccountID = %q, want acc-001", item.AccountID)
 	}
 }

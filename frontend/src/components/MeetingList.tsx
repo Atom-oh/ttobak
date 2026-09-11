@@ -4,13 +4,23 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { meetingsApi } from '@/lib/api';
-import type { Meeting, MeetingListFilter } from '@/types/meeting';
+import type { AccountSummary, Meeting, MeetingListFilter } from '@/types/meeting';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 
 interface MeetingListProps {
   meetings: Meeting[];
   isLoading?: boolean;
-  onTabChange?: (tab: string) => void;
+  activeTab: MeetingListFilter['tab'];
+  onTabChange: (tab: MeetingListFilter['tab']) => void;
+  selectedAccountId: string;
+  onAccountChange: (accountId: string) => void;
+  accounts: AccountSummary[];
+  isLoadingAccounts: boolean;
+  accountsError: string | null;
+  onRetryAccounts: () => void;
+  hasMore: boolean;
+  error: string | null;
+  onRetry: () => void;
   onDeleteMeeting?: (meetingId: string) => void;
 }
 
@@ -226,8 +236,11 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
   );
 }
 
-export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting }: MeetingListProps) {
-  const [activeTab, setActiveTab] = useState<MeetingListFilter['tab']>('all');
+export function MeetingList({
+  meetings, isLoading, activeTab, onTabChange, selectedAccountId, onAccountChange,
+  accounts, isLoadingAccounts, accountsError, onRetryAccounts, hasMore, error,
+  onRetry, onDeleteMeeting,
+}: MeetingListProps) {
   // The desktop header's search box writes `?q=` (see DesktopHeader's
   // HeaderSearch); this list is what actually filters on it. URL → list is
   // one-way: the mobile bar below edits local state only and does not write
@@ -247,17 +260,21 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [showTagFilter, setShowTagFilter] = useState(false);
   const [sortBy, setSortBy] = useState<'newest' | 'name'>('newest');
+  const [filterTime, setFilterTime] = useState(() => Date.now());
 
   const allTags = useMemo(() => {
-    const tagSet = new Set<string>();
+    // Keep active tags removable even when a new account/page has none of them.
+    const tagSet = new Set(selectedTags);
     meetings.forEach(m => m.tags?.forEach(t => tagSet.add(t)));
     return Array.from(tagSet).sort();
-  }, [meetings]);
+  }, [meetings, selectedTags]);
+  const selectedAccount = accounts.find(account => account.accountId === selectedAccountId);
+  const hasActiveFilters = Boolean(selectedAccountId || selectedTags.length > 0 || searchQuery);
 
   const filteredMeetings = meetings.filter((meeting) => {
     // Tab-based filtering: 'recent' shows only last 7 days
     if (activeTab === 'recent') {
-      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const weekAgo = new Date(filterTime - 7 * 24 * 60 * 60 * 1000);
       if (new Date(meeting.date) < weekAgo) return false;
     }
 
@@ -288,7 +305,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
     ? (sortedMeetings.length > 0 ? { '': sortedMeetings } : {})
     : sortedMeetings.reduce((acc, meeting) => {
         const date = new Date(meeting.date);
-        const now = new Date();
+        const now = new Date(filterTime);
         const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
         let group = 'Older';
@@ -302,16 +319,6 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
         acc[group].push(meeting);
         return acc;
       }, {} as Record<string, Meeting[]>);
-
-  if (isLoading) {
-    return (
-      <div className="px-4 lg:px-0 space-y-4 lg:grid lg:grid-cols-3 lg:gap-6 lg:space-y-0">
-        {[0, 1, 2].map((i) => (
-          <SkeletonCard key={i} />
-        ))}
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-4">
@@ -335,15 +342,16 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
 
       {/* Tabs + Filter */}
       <div className="px-4 lg:px-0">
-        <div className="flex items-center justify-between border-b border-slate-200 dark:border-white/10">
-          <div className="flex gap-6">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-slate-200 dark:border-white/10">
+          <div className="flex shrink-0 gap-6">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => {
-                  setActiveTab(tab.key);
-                  onTabChange?.(tab.key);
+                  setFilterTime(Date.now());
+                  onTabChange(tab.key);
                 }}
+                aria-pressed={activeTab === tab.key}
                 className={`pb-3 border-b-2 text-sm font-semibold transition-colors ${
                   activeTab === tab.key
                     ? 'border-primary text-primary'
@@ -354,10 +362,41 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-3 pb-2">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-2 pb-2">
+            <div className="flex min-w-0 max-w-full items-center gap-2">
+              <label htmlFor="meeting-account-filter" className="shrink-0 text-sm font-medium text-slate-600 dark:text-text-secondary">
+                어카운트
+              </label>
+              <select
+                id="meeting-account-filter"
+                value={selectedAccountId}
+                onChange={(e) => onAccountChange(e.target.value)}
+                disabled={isLoadingAccounts && accounts.length === 0}
+                aria-busy={isLoadingAccounts}
+                aria-describedby={isLoadingAccounts || accountsError || accounts.length === 0 ? 'meeting-account-status' : undefined}
+                className="min-w-0 w-40 sm:w-48 px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-surface-lowest border border-slate-200 dark:border-white/10 text-slate-700 dark:text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
+              >
+                <option value="">전체 어카운트</option>
+                {selectedAccountId && !selectedAccount && (
+                  <option value={selectedAccountId}>선택한 어카운트</option>
+                )}
+                {accounts.map(account => (
+                  <option key={account.accountId} value={account.accountId}>{account.name}</option>
+                ))}
+              </select>
+            </div>
+            {selectedAccountId && (
+              <button
+                onClick={() => onAccountChange('')}
+                className="text-xs font-semibold text-primary hover:underline"
+              >
+                어카운트 해제
+              </button>
+            )}
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as 'newest' | 'name')}
+              aria-label="미팅 정렬"
               className="px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-surface-lowest border border-slate-200 dark:border-white/10 text-slate-700 dark:text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30"
             >
               <option value="newest">최신순</option>
@@ -366,6 +405,8 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
             {allTags.length > 0 && (
               <button
                 onClick={() => setShowTagFilter(!showTagFilter)}
+                aria-label="태그 필터"
+                aria-expanded={showTagFilter}
                 className={`flex items-center gap-1.5 text-sm transition-colors ${
                   selectedTags.length > 0
                     ? 'text-primary'
@@ -382,6 +423,23 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
             )}
           </div>
         </div>
+
+        {isLoadingAccounts ? (
+          <p id="meeting-account-status" role="status" className="pt-2 text-xs text-slate-500 dark:text-text-muted">
+            어카운트 목록을 불러오는 중…
+          </p>
+        ) : accountsError ? (
+          <div id="meeting-account-status" role="alert" className="flex flex-wrap items-center gap-2 pt-2 text-xs text-red-600 dark:text-red-400">
+            <span>{accountsError}</span>
+            <button onClick={onRetryAccounts} className="font-semibold hover:underline">
+              다시 시도
+            </button>
+          </div>
+        ) : accounts.length === 0 ? (
+          <p id="meeting-account-status" className="pt-2 text-xs text-slate-500 dark:text-text-muted">
+            사용 가능한 어카운트가 없습니다.
+          </p>
+        ) : null}
 
         {/* Tag filter chips */}
         {showTagFilter && allTags.length > 0 && (
@@ -418,7 +476,22 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
         )}
       </div>
 
-      {/* Meeting Cards - Mobile: stacked, Desktop: grid */}
+      {error && (
+        <div role="alert" className="mx-4 lg:mx-0 flex flex-wrap items-center gap-2 text-sm text-red-600 dark:text-red-400">
+          <span>{error}</span>
+          <button onClick={onRetry} className="font-semibold hover:underline">다시 시도</button>
+        </div>
+      )}
+
+      {/* Keep filters mounted and usable while replacing the result set. */}
+      {isLoading ? (
+        <div role="status" className="px-4 lg:px-0">
+          <span className="sr-only">미팅 목록을 불러오는 중…</span>
+          <div className="space-y-4 lg:grid lg:grid-cols-3 lg:gap-6 lg:space-y-0">
+            {[0, 1, 2].map((i) => <SkeletonCard key={i} />)}
+          </div>
+        </div>
+      ) : (
       <div className="px-4 lg:px-0 space-y-6">
         {Object.entries(groupedMeetings).map(([group, groupMeetings], groupIndex, arr) => (
           <div key={group}>
@@ -444,33 +517,46 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
           </div>
         ))}
 
-        {filteredMeetings.length === 0 && (
+        {filteredMeetings.length === 0 && !error && (
           <div className="flex flex-col items-center justify-center py-16 text-center">
-            {selectedTags.length > 0 ? (
+            {hasMore ? (
               <>
-                <span className="material-symbols-outlined text-5xl text-slate-300 dark:text-slate-600 mb-3">label_off</span>
+                <span className="material-symbols-outlined text-5xl text-slate-300 dark:text-slate-600 mb-3">more_horiz</span>
                 <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">
-                  No meetings with selected tags
+                  아직 표시할 미팅이 없습니다
                 </h3>
-                <p className="text-sm text-slate-500 max-w-xs mb-4">
-                  Try selecting different tags or clear the filter.
+                <p role="status" className="text-sm text-slate-500 max-w-xs">
+                  더 확인할 미팅이 있습니다. Load More로 다음 결과를 불러오세요.
                 </p>
-                <button
-                  onClick={() => setSelectedTags([])}
-                  className="text-sm font-semibold text-primary hover:underline"
-                >
-                  Clear filter
-                </button>
               </>
-            ) : searchQuery ? (
+            ) : hasActiveFilters ? (
               <>
                 <span className="material-symbols-outlined text-5xl text-slate-300 dark:text-slate-600 mb-3">search_off</span>
                 <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">
-                  No results for &lsquo;{searchQuery}&rsquo;
+                  선택한 조건에 맞는 미팅이 없습니다
                 </h3>
-                <p className="text-sm text-slate-500 max-w-xs">
-                  Try adjusting your search terms or browse all meetings.
+                <p className="text-sm text-slate-500 max-w-xs mb-4">
+                  {selectedAccountId
+                    ? `${selectedAccount?.name || '선택한 어카운트'}에서 다른 태그나 검색어를 사용하거나 어카운트 필터를 해제해 보세요.`
+                    : '태그나 검색어를 변경해 보세요.'}
                 </p>
+                <div className="flex flex-wrap justify-center gap-3">
+                  {selectedAccountId && (
+                    <button onClick={() => onAccountChange('')} className="text-sm font-semibold text-primary hover:underline">
+                      어카운트 해제
+                    </button>
+                  )}
+                  {selectedTags.length > 0 && (
+                    <button onClick={() => setSelectedTags([])} className="text-sm font-semibold text-primary hover:underline">
+                      태그 해제
+                    </button>
+                  )}
+                  {searchQuery && (
+                    <button onClick={() => setSearchQuery('')} className="text-sm font-semibold text-primary hover:underline">
+                      검색어 지우기
+                    </button>
+                  )}
+                </div>
               </>
             ) : activeTab === 'recent' ? (
               <>
@@ -503,6 +589,7 @@ export function MeetingList({ meetings, isLoading, onTabChange, onDeleteMeeting 
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

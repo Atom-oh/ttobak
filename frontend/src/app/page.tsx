@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState, useEffect, useRef } from 'react';
+import { Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import { SkeletonCard } from '@/components/ui/Skeleton';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth/AuthProvider';
@@ -8,8 +8,15 @@ import { LoginForm } from '@/components/auth/LoginForm';
 import { ForgotPasswordForm } from '@/components/auth/ForgotPasswordForm';
 import { MeetingList } from '@/components/MeetingList';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { meetingsApi } from '@/lib/api';
-import type { Meeting } from '@/types/meeting';
+import { accountApi, meetingsApi } from '@/lib/api';
+import type { AccountSummary, Meeting, MeetingListFilter } from '@/types/meeting';
+
+function mergeMeetings(existing: Meeting[], incoming: Meeting[]): Meeting[] {
+  // The all tab can repeat shared meetings on every owned-meeting page.
+  const byId = new Map(existing.map(meeting => [meeting.meetingId, meeting]));
+  incoming.forEach(meeting => byId.set(meeting.meetingId, meeting));
+  return Array.from(byId.values());
+}
 
 // Self sign-up is forbidden by company security policy (the User Pool sets
 // AllowAdminCreateUserOnly), so there is no sign-up form to switch to --
@@ -83,56 +90,129 @@ export default function HomePage() {
   const { user, isLoading, isAuthenticated } = useAuth();
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [isFetching, setIsFetching] = useState(true);
-  const [activeTab, setActiveTab] = useState('all');
+  const [activeTab, setActiveTab] = useState<MeetingListFilter['tab']>('all');
+  const [selectedAccountId, setSelectedAccountId] = useState('');
+  const [accounts, setAccounts] = useState<AccountSummary[]>([]);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
+  const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [accountRetry, setAccountRetry] = useState(0);
   const [showNewMenu, setShowNewMenu] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const fetchInProgressRef = useRef(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [meetingsError, setMeetingsError] = useState<string | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
+  // Recent is a local date filter over all meetings, including after Shared.
+  const apiTab = activeTab === 'shared' ? 'shared' : 'all';
+  const userId = user?.userId;
+
+  const fetchMeetings = useCallback(async (cursor?: string) => {
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setMeetingsError(null);
+    setIsLoadingMore(Boolean(cursor));
+    if (!cursor) {
+      setIsFetching(true);
+      setMeetings([]);
+      setNextCursor(null);
+    }
+    try {
+      const result = await meetingsApi.list({
+        tab: apiTab,
+        accountId: selectedAccountId || undefined,
+        cursor,
+      }, { signal: controller.signal });
+      // Guard even if a response finished parsing just before cancellation.
+      if (controller.signal.aborted) return;
+      setMeetings(prev => mergeMeetings(cursor ? prev : [], result.meetings));
+      setNextCursor(result.nextCursor);
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      console.error('Failed to fetch meetings:', err);
+      setMeetingsError(cursor
+        ? '추가 미팅을 불러오지 못했습니다.'
+        : '미팅 목록을 불러오지 못했습니다.');
+    } finally {
+      // A cancelled request must not clear the newer request's loading state.
+      if (!controller.signal.aborted) {
+        setIsFetching(false);
+        setIsLoadingMore(false);
+        requestRef.current = null;
+      }
+    }
+  }, [apiTab, selectedAccountId]);
 
   useEffect(() => {
-    // 'recent' is client-side filtered — skip API refetch
-    if (activeTab === 'recent') return;
-    if (isAuthenticated && !fetchInProgressRef.current) {
-      fetchInProgressRef.current = true;
-      const fetchMeetings = async () => {
-        try {
-          const result = await meetingsApi.list({ tab: activeTab === 'shared' ? 'shared' : undefined });
-          setMeetings(result.meetings);
-          setNextCursor(result.nextCursor);
-        } catch (err) {
-          console.error('Failed to fetch meetings:', err);
-        } finally {
-          setIsFetching(false);
-          fetchInProgressRef.current = false;
-        }
-      };
-      fetchMeetings();
-    }
-  }, [isAuthenticated, activeTab]);
+    if (!isAuthenticated) return;
+    void fetchMeetings();
+    return () => requestRef.current?.abort();
+  }, [isAuthenticated, userId, fetchMeetings]);
 
-  const handleTabChange = (tab: string) => {
-    setActiveTab(tab);
-    // 'recent' is a client-side filter on existing data — no need to re-fetch
-    if (tab !== 'recent') {
-      setIsFetching(true);
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let ignore = false;
+    const fetchAccounts = async () => {
+      try {
+        const result = await accountApi.list();
+        if (!ignore) {
+          setAccounts([...result.accounts].sort((a, b) => a.name.localeCompare(b.name, 'ko')));
+          setAccountsError(null);
+        }
+      } catch (err) {
+        if (!ignore) {
+          console.error('Failed to fetch accounts:', err);
+          setAccountsError('어카운트 목록을 불러오지 못했습니다.');
+        }
+      } finally {
+        if (!ignore) setIsLoadingAccounts(false);
+      }
+    };
+    void fetchAccounts();
+    return () => { ignore = true; };
+  }, [isAuthenticated, userId, accountRetry]);
+
+  const resetMeetings = () => {
+    // Invalidate synchronously, before the next filter effect starts.
+    requestRef.current?.abort();
+    requestRef.current = null;
+    setMeetings([]);
+    setNextCursor(null);
+    setMeetingsError(null);
+    setIsFetching(true);
+    setIsLoadingMore(false);
+  };
+
+  const handleTabChange = (tab: MeetingListFilter['tab']) => {
+    if ((tab === 'shared' ? 'shared' : 'all') !== apiTab) {
+      resetMeetings();
     }
+    setActiveTab(tab);
+  };
+
+  const handleAccountChange = (accountId: string) => {
+    if (accountId === selectedAccountId) return;
+    resetMeetings();
+    setSelectedAccountId(accountId);
+  };
+
+  const handleRetryAccounts = () => {
+    setIsLoadingAccounts(true);
+    setAccountsError(null);
+    setAccountRetry(prev => prev + 1);
   };
 
   const handleDeleteMeeting = (meetingId: string) => {
     setMeetings((prev) => prev.filter((m) => m.meetingId !== meetingId));
   };
 
-  const handleLoadMore = async () => {
-    if (!nextCursor) return;
-    try {
-      const result = await meetingsApi.list({
-        tab: activeTab === 'shared' ? 'shared' : undefined,
-        cursor: nextCursor
-      });
-      setMeetings((prev) => [...prev, ...result.meetings]);
-      setNextCursor(result.nextCursor);
-    } catch (err) {
-      console.error('Failed to load more meetings:', err);
-    }
+  const handleLoadMore = () => {
+    if (!nextCursor || isFetching || requestRef.current) return;
+    void fetchMeetings(nextCursor);
+  };
+
+  const handleRetryMeetings = () => {
+    if (requestRef.current) return;
+    void fetchMeetings(nextCursor || undefined);
   };
 
   if (isLoading) {
@@ -288,7 +368,22 @@ export default function HomePage() {
         <div className="lg:px-8 lg:max-w-7xl lg:mx-auto lg:w-full">
           {/* Suspense: MeetingList reads ?q= via useSearchParams (header search). */}
           <Suspense fallback={<div className="px-4 lg:px-0 space-y-3"><SkeletonCard /><SkeletonCard /></div>}>
-            <MeetingList meetings={meetings} isLoading={isFetching} onTabChange={handleTabChange} onDeleteMeeting={handleDeleteMeeting} />
+            <MeetingList
+              meetings={meetings}
+              isLoading={isFetching}
+              activeTab={activeTab}
+              onTabChange={handleTabChange}
+              selectedAccountId={selectedAccountId}
+              onAccountChange={handleAccountChange}
+              accounts={accounts}
+              isLoadingAccounts={isLoadingAccounts}
+              accountsError={accountsError}
+              onRetryAccounts={handleRetryAccounts}
+              hasMore={Boolean(nextCursor)}
+              error={meetingsError}
+              onRetry={handleRetryMeetings}
+              onDeleteMeeting={handleDeleteMeeting}
+            />
           </Suspense>
 
           {/* Load More Button */}
@@ -296,10 +391,11 @@ export default function HomePage() {
             <div className="flex justify-center py-6">
               <button
                 onClick={handleLoadMore}
-                className="px-6 py-2.5 bg-white dark:bg-transparent border border-slate-200 dark:border-white/10 rounded-lg text-sm font-semibold text-slate-700 dark:text-text-secondary hover:bg-slate-50 dark:hover:bg-white/5 dark:hover:border-primary/30 transition-colors flex items-center gap-2"
+                disabled={isLoadingMore}
+                className="px-6 py-2.5 bg-white dark:bg-transparent border border-slate-200 dark:border-white/10 rounded-lg text-sm font-semibold text-slate-700 dark:text-text-secondary hover:bg-slate-50 dark:hover:bg-white/5 dark:hover:border-primary/30 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-wait"
               >
                 <span className="material-symbols-outlined text-lg">expand_more</span>
-                Load More
+                {isLoadingMore ? '불러오는 중…' : 'Load More'}
               </button>
             </div>
           )}
