@@ -188,8 +188,11 @@ function RecordPageInner() {
     recordStartInFlightRef.current = inFlight;
     setRecordStartInFlightState(inFlight);
   };
-  const meetingFlowBusy = flowBusy || recordStartInFlight;
-  const isMeetingFlowBusy = () => flowBusyRef.current || recordStartInFlightRef.current;
+  // The native flag stays set through Stop/finalize until the completed
+  // WAV is handed off. Keep that reservation in the parent across mode
+  // changes so another draft cannot replace this recording's meeting ID.
+  const meetingFlowBusy = flowBusy || recordStartInFlight || isNativeRecording;
+  const isMeetingFlowBusy = () => flowBusyRef.current || recordStartInFlightRef.current || isNativeRecordingRef.current;
 
   // Plain functions, like `handleRecordingStart` below (not useCallback):
   // they close over `resetSessionStateForNewMeeting`, which is itself a
@@ -842,7 +845,7 @@ function RecordPageInner() {
       <div className="flex flex-1 min-h-0">
       <main className="flex-1 flex flex-col px-6 lg:px-8 pt-8 lg:pt-8 pb-32 lg:pb-8 overflow-y-auto">
         {/* Upload Mode — audio file upload flow */}
-        {isUploadMode && !postRecording.step && !session.isRecording && (
+        {isUploadMode && !postRecording.step && !session.isRecording && !isNativeRecording && (
           <div className="flex flex-col items-center gap-6 py-8">
             <div className="hidden lg:block mb-2">
               <input
@@ -893,7 +896,7 @@ function RecordPageInner() {
         )}
 
         {/* Config Controls — visible only when idle (record mode) */}
-        {!isUploadMode && !postRecording.step && !session.isRecording && (
+        {!isUploadMode && !postRecording.step && !session.isRecording && !isNativeRecording && (
           <div className="flex flex-col items-center gap-3">
             {isTauri() && (
               <LeftoverRecordingsCard
@@ -1029,8 +1032,8 @@ function RecordPageInner() {
           </div>
         )}
 
-        {/* Recording Section — hidden in upload mode */}
-        {!isUploadMode && <div className="flex flex-col items-center justify-center mb-8">
+        {/* Keep native start/stop state mounted when switching modes. */}
+        <div className={`${isUploadMode ? 'hidden' : 'flex'} flex-col items-center justify-center mb-8`}>
           <RecordButton
             ref={recordButtonRef}
             meetingId={clientMeetingId}
@@ -1104,7 +1107,7 @@ function RecordPageInner() {
             onAudioStalled={() => setAudioStalled(true)}
             onAudioRecovered={() => setAudioStalled(false)}
           />
-        </div>}
+        </div>
 
         {/* Desktop: Summary (hero) + Notes side by side, transcript as collapsible strip */}
         {session.isRecording && (

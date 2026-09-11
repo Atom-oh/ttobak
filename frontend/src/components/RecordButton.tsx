@@ -152,7 +152,6 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   const barsContainerRef = useRef<HTMLDivElement>(null);
   const [showCamera, setShowCamera] = useState(false);
   const nativeTempPathRef = useRef<string | null>(null);
-  const nativePowerGenerationRef = useRef(0);
   const nativeStopInFlightRef = useRef(false);
   // Blocks double-starts during startRecording's async window (see the
   // guard at its entry) — must be a ref: state wouldn't flip synchronously.
@@ -334,15 +333,6 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      // This is a mutable generation counter, not a DOM ref: cleanup must
-      // invalidate the latest generation rather than a captured value.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      nativePowerGenerationRef.current++;
-      if (nativeTempPathRef.current) {
-        void releaseRecordingPower(nativeTempPathRef.current).catch((err) => {
-          console.warn('Unable to release native recording idle-sleep protection:', err);
-        });
-      }
       if (timerRef.current) clearInterval(timerRef.current);
       if (checkpointTimerRef.current) clearInterval(checkpointTimerRef.current);
       cleanupAudioResources();
@@ -452,7 +442,6 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
     // 'transcribing' and uploads under the server meetingId (not the client
     // temp ID).
     if (audioSource === 'system' && isTauri()) {
-      const powerGeneration = nativePowerGenerationRef.current;
       try {
         // Fail BEFORE anything is created or recorded if the installed app
         // is too old to upload (see ADR-024 for the incident this guards
@@ -484,12 +473,6 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
           : null;
 
         const resp = await startNativeRecording(meetingId);
-        // A permission/start await can finish after this component left.
-        // The abandoned start must not retain a new idle-sleep assertion.
-        if (nativePowerGenerationRef.current !== powerGeneration) {
-          await releaseRecordingPower(resp.temp_path);
-          return;
-        }
         nativeTempPathRef.current = resp.temp_path;
         isRecordingRef.current = true;
         setRecordingState('recording');
@@ -791,7 +774,6 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
     if (nativeTempPathRef.current) {
       nativeStopInFlightRef.current = true;
       const tempPath = nativeTempPathRef.current;
-      const powerGeneration = nativePowerGenerationRef.current;
       // Stop receiving level/PCM events; the Rust side won't emit any more
       // after stop_capture, but unsubscribe defensively.
       nativeUnlistenRef.current?.();
@@ -872,10 +854,6 @@ export const RecordButton = forwardRef<RecordButtonHandle, RecordButtonProps>(fu
           if (!finalized) {
             throw new Error('녹음 종료가 완료되지 않았습니다 (finalize 대기 시간 초과)');
           }
-        }
-        if (nativePowerGenerationRef.current !== powerGeneration) {
-          await releaseRecordingPower(tempPath);
-          return;
         }
         onRecordingStop?.();
         setRecordingState('idle');
