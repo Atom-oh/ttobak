@@ -21106,6 +21106,31 @@ function mergeProjectUpdate(current, patch) {
   }
   return merged;
 }
+function identifier(value, name) {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) {
+    throw new Error(`${name} must be a non-empty ID (letters, digits, "_" or "-", at most 128 characters).`);
+  }
+  return encodeURIComponent(value);
+}
+function documentsPath(accountId) {
+  return accountId === void 0 ? "/api/documents" : `/api/accounts/${identifier(accountId, "accountId")}/documents`;
+}
+function parseApiResponse(status, body) {
+  if (status === 204) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new Error(`HTTP ${status}: invalid JSON response`);
+  }
+  if (status < 200 || status >= 300 || parsed?.error) {
+    const detail = parsed?.error;
+    throw new Error(
+      detail?.message ? `HTTP ${status} ${detail.code || "API_ERROR"}: ${detail.message}` : `HTTP ${status}: TTOBAK request failed`
+    );
+  }
+  return parsed;
+}
 var TtobakApi = class {
   constructor(auth2, baseUrl) {
     this.auth = auth2;
@@ -21118,6 +21143,13 @@ var TtobakApi = class {
     if (opts?.cursor) q.set("cursor", opts.cursor);
     if (opts?.limit) q.set("limit", String(opts.limit));
     if (opts?.tab) q.set("tab", opts.tab);
+    if (opts?.accountIds !== void 0) {
+      if (!Array.isArray(opts.accountIds) || opts.accountIds.length === 0 || opts.accountIds.length > 100) {
+        throw new Error("accountIds must contain 1-100 account IDs. Omit it to list all accounts.");
+      }
+      opts.accountIds.forEach((id) => identifier(id, "accountId"));
+      q.set("accountIds", [...new Set(opts.accountIds)].join(","));
+    }
     const qs = q.toString();
     return this.get(`/api/meetings${qs ? "?" + qs : ""}`);
   }
@@ -21204,16 +21236,19 @@ var TtobakApi = class {
     return this.get("/api/vault/export");
   }
   async putDocument(accountId, doc) {
-    return this.post(`/api/accounts/${accountId}/documents`, doc);
+    return this.post(documentsPath(accountId), doc);
   }
   async listDocuments(accountId, docType) {
     const q = new URLSearchParams();
     if (docType) q.set("docType", docType);
     const qs = q.toString();
-    return this.get(`/api/accounts/${accountId}/documents${qs ? "?" + qs : ""}`);
+    return this.get(`${documentsPath(accountId)}${qs ? "?" + qs : ""}`);
   }
   async getDocument(accountId, docId) {
-    return this.get(`/api/accounts/${accountId}/documents/${docId}`);
+    return this.get(`${documentsPath(accountId)}/${identifier(docId, "docId")}`);
+  }
+  async updateDocument(accountId, docId, doc) {
+    return this.put(`${documentsPath(accountId)}/${identifier(docId, "docId")}`, doc);
   }
   /** Upload a local file into the global Knowledge Base. Ingestion doesn't
    * start until syncKB() is called (upload can be batched, then synced once). */
@@ -21317,8 +21352,10 @@ var TtobakApi = class {
       const req = httpsRequest2(
         {
           hostname: url2.hostname,
+          port: url2.port || void 0,
           path: url2.pathname + url2.search,
           method,
+          timeout: 12e4,
           headers: {
             Authorization: `Bearer ${idToken}`,
             "Content-Type": "application/json",
@@ -21326,23 +21363,19 @@ var TtobakApi = class {
           }
         },
         (res) => {
+          res.setEncoding("utf8");
           let chunks = "";
           res.on("data", (c) => chunks += c);
           res.on("end", () => {
-            if (res.statusCode === 204) return resolve({});
             try {
-              const parsed = JSON.parse(chunks);
-              if (parsed.error) {
-                reject(new Error(`${parsed.error.code}: ${parsed.error.message}`));
-              } else {
-                resolve(parsed);
-              }
-            } catch {
-              reject(new Error(`HTTP ${res.statusCode}: ${chunks.slice(0, 300)}`));
+              resolve(parseApiResponse(res.statusCode || 0, chunks));
+            } catch (error3) {
+              reject(error3);
             }
           });
         }
       );
+      req.on("timeout", () => req.destroy(new Error("TTOBAK request timed out after 120s")));
       req.on("error", reject);
       if (data) req.write(data);
       req.end();
@@ -21380,13 +21413,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "ttobak_list_meetings",
-      description: "List meetings with title, date, status, and participants. Supports pagination.",
+      description: "List meetings with title, date, status, and participants. Follow the returned cursor for remaining results. accountIds uses OR matching: to include a group, pass the group and all accessible descendant IDs from ttobak_list_accounts; parent selection alone does not expand descendants.",
       inputSchema: {
         type: "object",
         properties: {
           limit: { type: "number", description: "Max results (default 20)" },
           cursor: { type: "string", description: "Pagination cursor from previous response" },
-          tab: { type: "string", enum: ["all", "shared"], description: "all (default) or shared-with-me" }
+          tab: { type: "string", enum: ["all", "shared"], description: "all (default) or shared-with-me" },
+          accountIds: { type: "array", minItems: 1, maxItems: 100, items: { type: "string" }, description: "Optional explicit account IDs. Omit for all accounts; retain the same IDs when paging." }
         }
       }
     },
@@ -21403,7 +21437,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "ttobak_list_accounts",
-      description: "List customer accounts you belong to (id, name, your role). Entry point for account-scoped queries.",
+      description: "List customer accounts you belong to (id, name, parentAccountId, your role). Build group/subsidiary trees using parentAccountId. Hierarchy does not grant access to other accounts.",
       inputSchema: { type: "object", properties: {} }
     },
     {
@@ -21556,41 +21590,60 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "ttobak_put_document",
-      description: "Ingest a locally-authored document (email/calendar/prep notes) into an account so teammates can read it in TTOBAK. Rejects docs that originated from TTOBAK (loop guard).",
+      description: "Create a new Markdown note in TTOBAK. Omit accountId to save privately in your Document Hub; set accountId only to share with that account team. Always creates a new docId: use ttobak_update_document for revisions. Rejects TTOBAK export markers (loop guard).",
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       inputSchema: {
         type: "object",
         properties: {
-          accountId: { type: "string", description: "Account ID" },
+          accountId: { type: "string", minLength: 1, description: "Optional: explicit account sharing destination; omit for personal notes" },
           title: { type: "string", description: "Document title" },
           markdown: { type: "string", description: "Markdown content (<=300KB)" },
           docType: { type: "string", description: "Optional: prep | reference | ..." },
           path: { type: "string", description: "Optional: original vault path" }
         },
-        required: ["accountId", "title", "markdown"]
+        required: ["title", "markdown"]
       }
     },
     {
       name: "ttobak_list_documents",
-      description: "List ingested documents for an account (docId, title, docType).",
+      description: "List document metadata (docId, title, docType). Omit accountId for your personal Document Hub, including notes shared directly with you (sharedBy); set it for account documents. Use ttobak_get_document to read current contents. These notes are not automatically indexed in ttobak_ask.",
+      annotations: { readOnlyHint: true },
       inputSchema: {
         type: "object",
         properties: {
-          accountId: { type: "string", description: "Account ID" },
+          accountId: { type: "string", minLength: 1, description: "Optional account scope; omit for the personal Document Hub" },
           docType: { type: "string", description: "Optional docType filter" }
-        },
-        required: ["accountId"]
+        }
       }
     },
     {
       name: "ttobak_get_document",
-      description: "Get an ingested document with full content.",
+      description: "Read the current document content. Omit accountId for a personal or directly-shared document; use the same accountId as its listing for an account document. Shared personal documents are read-only. File documents return download/preview links; their file contents are not extracted.",
+      annotations: { readOnlyHint: true },
       inputSchema: {
         type: "object",
         properties: {
-          accountId: { type: "string", description: "Account ID" },
+          accountId: { type: "string", minLength: 1, description: "Optional account scope; omit for a personal or directly-shared document" },
           docId: { type: "string", description: "Document ID" }
         },
-        required: ["accountId", "docId"]
+        required: ["docId"]
+      }
+    },
+    {
+      name: "ttobak_update_document",
+      description: 'Revise an existing document without creating a duplicate. Read it first, retain its scope and resend its title. Omit markdown to keep the body; provide markdown to replace it ("" clears a text note). Personal documents shared by others are read-only. Updates do not automatically index the note in ttobak_ask.',
+      annotations: { readOnlyHint: false, destructiveHint: true },
+      inputSchema: {
+        type: "object",
+        properties: {
+          accountId: { type: "string", minLength: 1, description: "Optional account scope; omit for your own personal document" },
+          docId: { type: "string", minLength: 1, description: "Existing document ID" },
+          title: { type: "string", minLength: 1, description: "Document title (required, even when unchanged)" },
+          markdown: { type: "string", description: "Optional replacement body (<=300KB); omit to preserve it" },
+          docType: { type: "string", description: "Optional type; omitted or empty preserves it" },
+          path: { type: "string", description: "Optional original vault path; omitted or empty preserves it" }
+        },
+        required: ["docId", "title"]
       }
     },
     {
@@ -21664,20 +21717,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           name: { type: "string", description: "Account name" },
           aliases: { type: "array", items: { type: "string" }, description: "Optional: alternate names" },
           domains: { type: "array", items: { type: "string" }, description: "Optional: email domains" },
-          industry: { type: "string", description: "Optional: industry" }
+          industry: { type: "string", description: "Optional: industry" },
+          parentAccountId: { type: "string", description: "Optional parent group account ID; you must be a member of that account" }
         },
         required: ["name"]
       }
     },
     {
       name: "ttobak_add_account_member",
-      description: "Add a teammate to an account by email. Only the account owner can do this. role must be AM, TAM, or SSA.",
+      description: "Add a teammate to an account by email. Any existing account member can do this (ADR-034), not just the owner. If the email belongs to an invited-but-not-yet-logged-in user, the grant is queued and applies automatically on their first login. role must be AM, TAM, SSA, SA, SA Manager, or AM Manager.",
       inputSchema: {
         type: "object",
         properties: {
           accountId: { type: "string", description: "Account ID" },
           email: { type: "string", description: "TTOBAK email of the teammate to add" },
-          role: { type: "string", enum: ["AM", "TAM", "SSA"], description: "Role to assign" }
+          // keep in sync with backend/internal/model/account.go's AssignableRoles
+          role: { type: "string", enum: ["AM", "TAM", "SSA", "SA", "SA Manager", "AM Manager"], description: "Role to assign" }
         },
         required: ["accountId", "email", "role"]
       }
@@ -21799,23 +21854,27 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
       }
       case "ttobak_put_document": {
         const { accountId, title, markdown, docType, path } = args;
-        if (!accountId) return error2("accountId is required");
-        if (!title) return error2("title is required");
-        if (!markdown) return error2("markdown is required");
+        if (typeof title !== "string" || !title.trim()) return error2("title is required");
+        if (typeof markdown !== "string" || !markdown.trim()) return error2("markdown is required");
         const result = await api.putDocument(accountId, { title, markdown, docType, path });
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_list_documents": {
         const { accountId, docType } = args;
-        if (!accountId) return error2("accountId is required");
         const result = await api.listDocuments(accountId, docType);
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_get_document": {
         const { accountId, docId } = args;
-        if (!accountId) return error2("accountId is required");
         if (!docId) return error2("docId is required");
         const result = await api.getDocument(accountId, docId);
+        return text(JSON.stringify(result, null, 2));
+      }
+      case "ttobak_update_document": {
+        const { accountId, docId, title, markdown, docType, path } = args;
+        if (typeof title !== "string" || !title.trim()) return error2("title is required");
+        if (markdown !== void 0 && typeof markdown !== "string") return error2("markdown must be a string");
+        const result = await api.updateDocument(accountId, docId, { title, markdown, docType, path });
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_ask": {
@@ -21863,9 +21922,9 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_create_account": {
-        const { name: name2, aliases, domains, industry } = args;
+        const { name: name2, aliases, domains, industry, parentAccountId } = args;
         if (!name2) return error2("name is required");
-        const result = await api.createAccount({ name: name2, aliases, domains, industry });
+        const result = await api.createAccount({ name: name2, aliases, domains, industry, parentAccountId });
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_add_account_member": {
