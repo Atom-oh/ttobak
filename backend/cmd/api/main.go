@@ -190,6 +190,7 @@ func init() {
 		r.Get("/api/accounts", accountHandler.ListAccounts)
 		r.Post("/api/accounts", accountHandler.CreateAccount)
 		r.Get("/api/accounts/{accountId}", accountHandler.GetAccount)
+		r.Put("/api/accounts/{accountId}/parent", accountHandler.UpdateAccountParent)
 		r.Post("/api/accounts/{accountId}/members", accountHandler.AddMember)
 		r.Delete("/api/accounts/{accountId}/members/pending", accountHandler.RevokePendingMember)
 		r.Put("/api/accounts/{accountId}/members/{userId}", accountHandler.UpdateMemberRole)

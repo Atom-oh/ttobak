@@ -36,6 +36,7 @@ type Account struct {
 	PK              string    `dynamodbav:"PK"` // ACCOUNT#{accountId}
 	SK              string    `dynamodbav:"SK"` // META
 	AccountID       string    `dynamodbav:"accountId"`
+	ParentAccountID string    `dynamodbav:"parentAccountId,omitempty" json:"parentAccountId,omitempty"`
 	Name            string    `dynamodbav:"name"`
 	Aliases         []string  `dynamodbav:"aliases,omitempty"` // tag mapping e.g. ["하나은행","Hana Bank"]
 	Domains         []string  `dynamodbav:"domains,omitempty"`
@@ -64,10 +65,21 @@ type AccountMember struct {
 // --- Request / Response DTOs ---
 
 type CreateAccountRequest struct {
-	Name     string   `json:"name"`
-	Aliases  []string `json:"aliases,omitempty"`
-	Domains  []string `json:"domains,omitempty"`
-	Industry string   `json:"industry,omitempty"`
+	ParentAccountID string   `json:"parentAccountId,omitempty"`
+	Name            string   `json:"name"`
+	Aliases         []string `json:"aliases,omitempty"`
+	Domains         []string `json:"domains,omitempty"`
+	Industry        string   `json:"industry,omitempty"`
+}
+
+// ParentAccountID is required; an explicit empty string detaches the account.
+type UpdateAccountParentRequest struct {
+	ParentAccountID *string `json:"parentAccountId"`
+}
+
+type UpdateAccountParentResponse struct {
+	AccountID       string `json:"accountId"`
+	ParentAccountID string `json:"parentAccountId,omitempty"`
 }
 
 type AddMemberRequest struct {
@@ -90,21 +102,23 @@ type AccountMemberDTO struct {
 }
 
 type AccountResponse struct {
-	AccountID   string             `json:"accountId"`
-	Name        string             `json:"name"`
-	Aliases     []string           `json:"aliases,omitempty"`
-	Domains     []string           `json:"domains,omitempty"`
-	Industry    string             `json:"industry,omitempty"`
-	OwnerUserID string             `json:"ownerUserId"`
-	Members     []AccountMemberDTO `json:"members"`
-	CreatedAt   time.Time          `json:"createdAt"`
+	AccountID       string             `json:"accountId"`
+	ParentAccountID string             `json:"parentAccountId,omitempty"`
+	Name            string             `json:"name"`
+	Aliases         []string           `json:"aliases,omitempty"`
+	Domains         []string           `json:"domains,omitempty"`
+	Industry        string             `json:"industry,omitempty"`
+	OwnerUserID     string             `json:"ownerUserId"`
+	Members         []AccountMemberDTO `json:"members"`
+	CreatedAt       time.Time          `json:"createdAt"`
 }
 
 // AccountSummary is the list-view item for "my accounts".
 type AccountSummary struct {
-	AccountID string `json:"accountId"`
-	Name      string `json:"name"`
-	Role      string `json:"role"`
+	AccountID       string `json:"accountId"`
+	ParentAccountID string `json:"parentAccountId,omitempty"`
+	Name            string `json:"name"`
+	Role            string `json:"role"`
 }
 
 const (

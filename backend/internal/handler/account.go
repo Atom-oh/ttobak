@@ -59,24 +59,59 @@ func (h *AccountHandler) CreateAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	acc, err := h.accountService.CreateAccount(ctx, userID, email, &req)
 	if err != nil {
-		if errors.Is(err, service.ErrInvalidInput) {
-			writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account name is required")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		writeAccountHierarchyError(w, err)
 		return
 	}
 	// Return the freshly-created account as a response (owner is the only member).
 	writeJSON(w, http.StatusCreated, model.AccountResponse{
-		AccountID:   acc.AccountID,
-		Name:        acc.Name,
-		Aliases:     acc.Aliases,
-		Domains:     acc.Domains,
-		Industry:    acc.Industry,
-		OwnerUserID: acc.OwnerUserID,
-		Members:     []model.AccountMemberDTO{{UserID: userID, Email: email, Role: model.RoleOwner}},
-		CreatedAt:   acc.CreatedAt,
+		AccountID:       acc.AccountID,
+		ParentAccountID: acc.ParentAccountID,
+		Name:            acc.Name,
+		Aliases:         acc.Aliases,
+		Domains:         acc.Domains,
+		Industry:        acc.Industry,
+		OwnerUserID:     acc.OwnerUserID,
+		Members:         []model.AccountMemberDTO{{UserID: userID, Email: email, Role: model.RoleOwner}},
+		CreatedAt:       acc.CreatedAt,
 	})
+}
+
+func (h *AccountHandler) UpdateAccountParent(w http.ResponseWriter, r *http.Request) {
+	accountID := chi.URLParam(r, "accountId")
+	if accountID == "" {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Account ID is required")
+		return
+	}
+	var req model.UpdateAccountParentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+	if req.ParentAccountID == nil {
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "parentAccountId is required (empty string detaches)")
+		return
+	}
+	resp, err := h.accountService.UpdateAccountParent(r.Context(), middleware.GetUserID(r.Context()), accountID, &req)
+	if err != nil {
+		writeAccountHierarchyError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func writeAccountHierarchyError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, service.ErrInvalidInput):
+		writeError(w, http.StatusBadRequest, model.ErrCodeBadRequest, "Invalid account name or parent hierarchy")
+	case errors.Is(err, service.ErrForbidden):
+		writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
+	case errors.Is(err, service.ErrNotFound):
+		writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Account or parent not found")
+	case errors.Is(err, service.ErrAccountHierarchyConflict):
+		writeError(w, http.StatusConflict, model.ErrCodeConflict, "Account hierarchy changed; retry the request")
+	default:
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+	}
 }
 
 func (h *AccountHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
