@@ -43,7 +43,7 @@ bedrock_runtime = boto3.client('bedrock-runtime')
 s3_client = boto3.client('s3')
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(TABLE_NAME)
-BUCKET_NAME = os.environ.get('BUCKET_NAME', 'ttobak-assets')
+BUCKET_NAME = os.environ.get('BUCKET_NAME', '')
 ORIGIN_VERIFY_SECRET = os.environ.get('ORIGIN_VERIFY_SECRET', '')
 RESEARCH_SFN_ARN = os.environ.get('RESEARCH_SFN_ARN', '')
 DAILY_RESEARCH_LIMIT = 5
@@ -227,18 +227,16 @@ def create_research_from_chat(user_id, topic, mode):
     return {"researchId": research_id}
 
 
-def resolve_s3_ref(value):
-    """Resolve s3:// reference to actual content. Returns original value if not an S3 ref."""
-    if not isinstance(value, str) or not value.startswith('s3://'):
-        return value
+def resolve_s3_ref(value, meeting_id, field):
+    """Validate spill ownership before reads; retain the existing error fallback."""
+    from transcript_storage import resolve_transcript
     try:
-        # Parse s3://bucket/key
-        path = value[5:]  # strip "s3://"
-        bucket, key = path.split('/', 1)
-        obj = s3_client.get_object(Bucket=bucket, Key=key)
-        return obj['Body'].read().decode('utf-8')
+        return resolve_transcript(
+            value, bucket_name=BUCKET_NAME, meeting_id=meeting_id,
+            field=field, s3_client=s3_client,
+        )
     except Exception as e:
-        logger.warning(f'Failed to resolve S3 reference {value[:60]}: {e}')
+        logger.warning('Failed to resolve transcript reference: %s', e)
         return ''
 
 
@@ -1042,9 +1040,10 @@ def load_meeting_context(user_id, meeting_id):
         if item.get('title'):
             parts.append(f"제목: {item['title']}")
         if item.get('content'):
-            parts.append(f"내용:\n{resolve_s3_ref(item['content'])}")
+            # Editable Markdown is inline data, never a storage read command.
+            parts.append(f"내용:\n{item['content']}")
         if item.get('transcriptA'):
-            parts.append(f"트랜스크립트:\n{resolve_s3_ref(item['transcriptA'])}")
+            parts.append(f"트랜스크립트:\n{resolve_s3_ref(item['transcriptA'], meeting_id, 'transcriptA')}")
         return '\n\n'.join(parts), None
     except Exception as e:
         logger.error(f'Failed to fetch meeting: {e}')

@@ -107,6 +107,15 @@ describe('GatewayStack', () => {
     });
   });
 
+  test('QA transcript validation uses the actual assets bucket', () => {
+    const functions = template.findResources('AWS::Lambda::Function');
+    const environments = Object.values(functions).map((resource) => resource.Properties);
+    const qa = environments.find((properties) => properties.FunctionName === 'ttobak-qa');
+    const api = environments.find((properties) => properties.FunctionName === 'ttobak-api');
+    expect(qa.Environment.Variables.BUCKET_NAME).toBeDefined();
+    expect(qa.Environment.Variables.BUCKET_NAME).toEqual(api.Environment.Variables.BUCKET_NAME);
+  });
+
   test('QA Lambda gets the Web Search Gateway env vars (search_web tool)', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-qa',
