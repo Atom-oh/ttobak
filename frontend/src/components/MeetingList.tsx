@@ -6,14 +6,15 @@ import { useSearchParams } from 'next/navigation';
 import { meetingsApi } from '@/lib/api';
 import type { AccountSummary, Meeting, MeetingListFilter } from '@/types/meeting';
 import { SkeletonCard } from '@/components/ui/Skeleton';
+import { AccountTreePicker } from '@/components/AccountTreePicker';
 
 interface MeetingListProps {
   meetings: Meeting[];
   isLoading?: boolean;
   activeTab: MeetingListFilter['tab'];
   onTabChange: (tab: MeetingListFilter['tab']) => void;
-  selectedAccountId: string;
-  onAccountChange: (accountId: string) => void;
+  selectedAccountIds: string[];
+  onAccountChange: (accountIds: string[]) => void;
   accounts: AccountSummary[];
   isLoadingAccounts: boolean;
   accountsError: string | null;
@@ -237,7 +238,7 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete?: (meet
 }
 
 export function MeetingList({
-  meetings, isLoading, activeTab, onTabChange, selectedAccountId, onAccountChange,
+  meetings, isLoading, activeTab, onTabChange, selectedAccountIds, onAccountChange,
   accounts, isLoadingAccounts, accountsError, onRetryAccounts, hasMore, error,
   onRetry, onDeleteMeeting,
 }: MeetingListProps) {
@@ -268,8 +269,10 @@ export function MeetingList({
     meetings.forEach(m => m.tags?.forEach(t => tagSet.add(t)));
     return Array.from(tagSet).sort();
   }, [meetings, selectedTags]);
-  const selectedAccount = accounts.find(account => account.accountId === selectedAccountId);
-  const hasActiveFilters = Boolean(selectedAccountId || selectedTags.length > 0 || searchQuery);
+  const selectedAccountLabel = selectedAccountIds.length === 1
+    ? accounts.find(account => account.accountId === selectedAccountIds[0])?.name || '선택한 어카운트'
+    : `${selectedAccountIds.length}개 어카운트`;
+  const hasActiveFilters = Boolean(selectedAccountIds.length || selectedTags.length > 0 || searchQuery);
 
   const filteredMeetings = meetings.filter((meeting) => {
     // Tab-based filtering: 'recent' shows only last 7 days
@@ -363,31 +366,11 @@ export function MeetingList({
             ))}
           </div>
           <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-2 pb-2">
-            <div className="flex min-w-0 max-w-full items-center gap-2">
-              <label htmlFor="meeting-account-filter" className="shrink-0 text-sm font-medium text-slate-600 dark:text-text-secondary">
-                어카운트
-              </label>
-              <select
-                id="meeting-account-filter"
-                value={selectedAccountId}
-                onChange={(e) => onAccountChange(e.target.value)}
-                disabled={isLoadingAccounts && accounts.length === 0}
-                aria-busy={isLoadingAccounts}
-                aria-describedby={isLoadingAccounts || accountsError || accounts.length === 0 ? 'meeting-account-status' : undefined}
-                className="min-w-0 w-40 sm:w-48 px-3 py-1.5 rounded-lg text-sm bg-slate-50 dark:bg-surface-lowest border border-slate-200 dark:border-white/10 text-slate-700 dark:text-text-secondary focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50"
-              >
-                <option value="">전체 어카운트</option>
-                {selectedAccountId && !selectedAccount && (
-                  <option value={selectedAccountId}>선택한 어카운트</option>
-                )}
-                {accounts.map(account => (
-                  <option key={account.accountId} value={account.accountId}>{account.name}</option>
-                ))}
-              </select>
-            </div>
-            {selectedAccountId && (
+            <AccountTreePicker accounts={accounts} selectedIds={selectedAccountIds} onChange={onAccountChange}
+              loading={isLoadingAccounts} disabled={isLoadingAccounts && accounts.length === 0} />
+            {selectedAccountIds.length > 0 && (
               <button
-                onClick={() => onAccountChange('')}
+                onClick={() => onAccountChange([])}
                 className="text-xs font-semibold text-primary hover:underline"
               >
                 어카운트 해제
@@ -536,13 +519,13 @@ export function MeetingList({
                   선택한 조건에 맞는 미팅이 없습니다
                 </h3>
                 <p className="text-sm text-slate-500 max-w-xs mb-4">
-                  {selectedAccountId
-                    ? `${selectedAccount?.name || '선택한 어카운트'}에서 다른 태그나 검색어를 사용하거나 어카운트 필터를 해제해 보세요.`
+                  {selectedAccountIds.length
+                    ? `${selectedAccountLabel}에서 다른 태그나 검색어를 사용하거나 어카운트 필터를 해제해 보세요.`
                     : '태그나 검색어를 변경해 보세요.'}
                 </p>
                 <div className="flex flex-wrap justify-center gap-3">
-                  {selectedAccountId && (
-                    <button onClick={() => onAccountChange('')} className="text-sm font-semibold text-primary hover:underline">
+                  {selectedAccountIds.length > 0 && (
+                    <button onClick={() => onAccountChange([])} className="text-sm font-semibold text-primary hover:underline">
                       어카운트 해제
                     </button>
                   )}

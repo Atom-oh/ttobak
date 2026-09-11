@@ -8,6 +8,7 @@ import { accountApi, projectApi } from '@/lib/api';
 import { uploadDocFile } from '@/lib/upload';
 import { MemberPicker } from '@/components/MemberPicker';
 import { FieldInsightsSection } from '@/components/FieldInsightsSection';
+import { AccountParentEditor } from '@/components/AccountParentEditor';
 import { ASSIGNABLE_ACCOUNT_ROLES } from '@/types/meeting';
 import type { Account, AccountInsight, AccountMeetingRef, AccountDocument, AccountResearchRef, ProjectSummary, User, AccountMember } from '@/types/meeting';
 
@@ -72,6 +73,7 @@ export default function AccountDetailClient() {
         accountApi.listDocuments(accountId),
         accountApi.research(accountId),
       ]);
+      if (activeAccountIdRef.current !== myAccountId) return;
       setAccount(acc);
       setMeetings(mtg?.meetings ?? []);
       setInsights(ins?.insights ?? []);
@@ -86,9 +88,9 @@ export default function AccountDetailClient() {
       setProjectsError(projectRes === null);
       if (projectRes !== null) setProjects(projectRes.projects ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load account');
+      if (activeAccountIdRef.current === myAccountId) setError(err instanceof Error ? err.message : 'Failed to load account');
     } finally {
-      setLoading(false);
+      if (activeAccountIdRef.current === myAccountId) setLoading(false);
     }
   }, [accountId]);
 
@@ -260,6 +262,11 @@ export default function AccountDetailClient() {
                 )}
               </div>
             </div>
+
+            {account.accountId === accountId && (
+              <AccountParentEditor key={accountId} account={account} canEdit={user?.userId === account.ownerUserId}
+                onUpdated={parentAccountId => setAccount(prev => prev?.accountId === accountId ? { ...prev, parentAccountId: parentAccountId || undefined } : prev)} />
+            )}
 
             {/* Members */}
             <section className="mb-8">

@@ -133,6 +133,7 @@ export interface TranscriptComparison {
 export interface MeetingListFilter {
   tab: 'all' | 'recent' | 'shared' | 'favorites';
   accountId?: string;
+  accountIds?: string[];
   search?: string;
   tags?: string[];
   dateRange?: {
@@ -310,6 +311,7 @@ export interface AccountSummary {
   accountId: string;
   name: string;
   role: string;
+  parentAccountId?: string;
 }
 
 export interface AccountMember {
@@ -328,6 +330,7 @@ export interface AccountMember {
 export interface Account {
   accountId: string;
   name: string;
+  parentAccountId?: string;
   aliases?: string[];
   domains?: string[];
   industry?: string;
