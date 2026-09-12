@@ -42,8 +42,8 @@ modules and the standalone bundle. Fixtures supply fixed server pages and exerci
 real HTTP/auth code, including oversized-response aborts; backend tests own
 Unicode pagination, source verification, and cursor validity.
 Run `npm run test:bundle` for the bundle checks alone.
-This does not publish or copy the frontend artifact; the release owner must still
-perform the copy/comparison above. CI's published-artifact comparison is mandatory.
+The test command does not copy the frontend artifact automatically. This change
+includes the regenerated public bundle; CI verifies it with the mandatory byte comparison.
 
 ### Prerequisites
 
@@ -571,7 +571,7 @@ MCP 배포 전에 이 API를 먼저 배포해야 합니다. 라우트가 없거�
 전환하세요. 서버 읽기 API가 Lambda 응답을 만들기 전에 크기를 제한하고,
 MCP는 그 페이지를 그대로 전달합니다. 원문 선택·검증·페이지 나누기는 서버 책임입니다.
 `npm test`는 일반 모듈과 번들 양쪽의 프로토콜 테스트 및 번들 재현성을 검증합니다.
-프런트엔드 공개 번들 복사/CI 비교는 배포 담당자가 별도로 수행해야 합니다.
+테스트 명령이 공개 번들을 자동 복사하지는 않습니다. 이번 변경에는 재생성한 공개 번들을 포함하며, CI가 필수 바이트 비교를 수행합니다.
 
 | 도구 | 설명 | 예시 프롬프트 |
 |------|------|---------------|

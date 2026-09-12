@@ -3,10 +3,9 @@
 Goal: let external agents read saved notes first and continue long transcripts
 without fetching an oversized full meeting through buffered Lambda responses.
 
-Scope: `mcp-server/**`, its README, and this plan only. The backend reading API
-is implemented separately under `docs/superpowers/plans/2026-09-12-meeting-reading-api.md`.
-Do not change backend/frontend/infra, copy the public bundle, commit, or publish
-as part of this adapter task.
+Scope: MCP source, tests, documentation and the reproducibly built public bundle.
+The backend reading API is implemented separately under
+`docs/superpowers/plans/2026-09-12-meeting-reading-api.md` and was deployed before this adapter release.
 
 ## Shared API and tool contract
 
@@ -61,9 +60,9 @@ actual source pagination and bounded API Gateway v1 responses.
 ## Delivery order
 
 Merge and deploy the bounded API after its prerequisites, then release this MCP
-adapter. The release owner must copy the reviewed reproducible bundle to
-`frontend/public/mcp/ttobak-mcp.mjs` and satisfy the existing CI byte comparison.
-This task leaves that frontend artifact unchanged. No IAM change is needed.
+adapter. This PR includes the reviewed reproducible bundle at
+`frontend/public/mcp/ttobak-mcp.mjs`; `test-mcp.yml` verifies it matches the source
+build with `cmp`. No IAM change is needed.
 
 ## Verification
 
@@ -74,5 +73,6 @@ TypeScript compilation passed; two consecutive esbuild outputs were byte-identic
 Bundle SHA-256: `e5d46fe38019b6dd881110ac30a8efdfdd24589ee1b42f4a3ee7c193052fd4bb` (766711 bytes).
 The full-suite rerun also verifies explicit fixture-trace synchronization; tests do not assume
 that child stderr arrives before the MCP stdout response.
-HTTP transports and credentials were synthetic. The public frontend bundle remains unchanged;
-live backend integration/deployment and the reviewed public-bundle copy belong to the release owner.
+Protocol-test HTTP transports and credentials were synthetic. The public bundle
+was copied and compared byte-for-byte, and the frontend static build passed.
+The prerequisite API deployment succeeded; adapter deployment remains a post-merge verification.
