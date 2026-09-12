@@ -116,6 +116,16 @@ describe('GatewayStack', () => {
     expect(qa.Environment.Variables.BUCKET_NAME).toEqual(api.Environment.Variables.BUCKET_NAME);
   });
 
+  test('QA binds legacy and indexed sources to the configured knowledge bucket', () => {
+    const functions = Object.values(template.findResources('AWS::Lambda::Function'))
+      .map((resource) => resource.Properties);
+    const qa = functions.find((properties) => properties.FunctionName === 'ttobak-qa');
+    const kb = functions.find((properties) => properties.FunctionName === 'ttobak-kb');
+    expect(qa.Environment.Variables.KB_BUCKET_NAME).toBeDefined();
+    expect(qa.Environment.Variables.KB_BUCKET_NAME).toEqual(kb.Environment.Variables.KB_BUCKET_NAME);
+    expect(qa.Environment.Variables.KB_BUCKET_NAME).not.toEqual(qa.Environment.Variables.BUCKET_NAME);
+  });
+
   test('QA Lambda gets the Web Search Gateway env vars (search_web tool)', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-qa',

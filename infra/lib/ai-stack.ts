@@ -489,13 +489,33 @@ export class AiStack extends cdk.Stack {
 
     props.table.grantReadWriteData(this.qaRole);
 
-    // Deploy the exact per-meeting transcript-reference guard first.
-    // See docs/runbooks/qa-transcript-read-rollout.md for rollout/rollback order.
+    // Existing transcript guards remain active. The new source readers are
+    // staged separately; configure their reads before the runtime cutover.
     this.qaRole.addToPolicy(new iam.PolicyStatement({
       sid: 'ReadMeetingTranscripts',
-      actions: ['s3:GetObject'],
+      actions: ['s3:GetObject', 's3:GetObjectVersion'],
       resources: [props.bucket.arnForObjects('transcripts/*')],
     }));
+    this.qaRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'ReadCurrentDocumentSources',
+      actions: ['s3:GetObject', 's3:GetObjectVersion'],
+      resources: ['docs/*', 'docs-pdf/*', 'files/*'].map((prefix) => props.bucket.arnForObjects(prefix)),
+    }));
+    this.qaRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'ReadCurrentLegacyKnowledgeSources',
+      actions: ['s3:GetObject', 's3:GetObjectVersion'],
+      resources: ['kb/*', 'shared/*'].map((prefix) => props.kbBucket.arnForObjects(prefix)),
+    }));
+    // Effective bucket-level ListBucket lets HEAD distinguish a missing
+    // original/preview (404) from a denied source (403).
+    this.qaRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'InspectCurrentSourceExistence',
+      actions: ['s3:ListBucket'],
+      resources: [props.bucket.bucketArn, props.kbBucket.bucketArn],
+      conditions: { StringEquals: { 'aws:ResourceAccount': cdk.Aws.ACCOUNT_ID } },
+    }));
+    props.bucket.encryptionKey?.grantDecrypt(this.qaRole);
+    props.kbBucket.encryptionKey?.grantDecrypt(this.qaRole);
 
     this.qaRole.addToPolicy(
       new iam.PolicyStatement({

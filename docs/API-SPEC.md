@@ -1886,10 +1886,11 @@ Manually curates a single crawled **news** document — e.g. a search result the
 - **Env vars**: TABLE_NAME, CONNECTIONS_TABLE_NAME, NOVA_SONIC_MODEL_ID, BEDROCK_MODEL_ID
 
 ### 6. KB Lambda (cmd/kb)
-- **Trigger**: S3 Event (kb/ prefix) via EventBridge + API Gateway (sync requests)
-- **Role**: Knowledge Base file indexing
-- **Steps**: (1) download file from S3 (pdf/md/pptx/docx) → (2) add/update the document in the Bedrock Knowledge Base → (3) update the OpenSearch Serverless index → (4) store indexing status in DynamoDB
-- **Env vars**: TABLE_NAME, BUCKET_NAME, KB_ID, AOSS_ENDPOINT
+- **State**: staged worker, currently no deployed trigger. Existing `/api/kb/*` REST routes remain in `ttobak-api`.
+- **Input**: canonical DynamoDB `Records`, EventBridge Scheduled Event, or IAM-only `{ "action": "tick" }` / `sync`. API Gateway proxy requests are rejected.
+- **Role**: source-bound immutable projections plus coalesced S3-data-source ingestion; no direct AOSS writes.
+- **Env vars**: `TABLE_NAME`, `BUCKET_NAME`, `KB_BUCKET_NAME`, `KB_ID`, `DATA_SOURCE_ID`; the last two are bare ten-character alphanumeric IDs.
+- **Activation**: deploy/verify canonical QA retrieval first, then worker IAM/configuration (12 minutes, 1024 MiB), then stream/tick delivery. Legacy meeting exports are deleted; rollback to old QA requires re-export (ADR-038).
 
 ### 7. Lambda@Edge (cmd/edge-auth, us-east-1)
 - **Trigger**: CloudFront Viewer Request
