@@ -424,7 +424,8 @@ func (h *MeetingHandler) UpdateSpeakers(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		log.Printf("UpdateSpeakers failed: %v", err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "화자 이름 저장 결과를 확인하지 못했습니다. 새로고침 후 확인해 주세요.")
 		return
 	}
 

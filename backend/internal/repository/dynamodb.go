@@ -175,16 +175,11 @@ var transcriptRefMeetingID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127
 var transcriptRefVersionSuffix = regexp.MustCompile(`^[0-9a-f]{32}\.txt$`)
 
 // validateTranscriptRef accepts the legacy {field}.txt key and the immutable
-// {field}.{32-lowercase-hex}.txt format. This only prepares readers; storeTranscript
-// still emits legacy keys until the separate writer rollout.
-// Binding to the meeting/field matters, not just bucket+prefix: a
-// user-settable transcript field (UpdateMeetingRequest.TranscriptA) is
-// passed through untouched when it already "looks stored", so a
-// prefix-only whitelist still lets an authenticated editor plant ANOTHER
-// meeting's transcript key on their own meeting and read a different
-// tenant's transcript through the api Lambda's bucket-wide grant. Exact
-// per-meeting/field key match closes that. Pure function so the security
-// branching is unit-testable without an S3 client.
+// {field}.{32-lowercase-hex}.txt format. Unconditional writes retain legacy keys;
+// storeConditionalTranscript emits immutable keys for snapshot-based writes.
+// API writes reject client-supplied s3:// values; this storage guard also binds
+// persisted refs to their lookup's meeting/field. A matching format is not an
+// authorization grant. Keep this pure so malformed/cross-scope refs are testable.
 func validateTranscriptRef(ownBucket, meetingID, field, ref string) (bucket, key string, err error) {
 	if ownBucket == "" || !strings.HasPrefix(ref, "s3://") || !transcriptRefMeetingID.MatchString(meetingID) {
 		return "", "", fmt.Errorf("%w: invalid scheme or storage context", ErrInvalidTranscriptRef)
