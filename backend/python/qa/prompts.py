@@ -25,6 +25,10 @@ SYSTEM_PROMPT_TEMPLATE = """당신은 Ttobak(또박) AI 미팅 어시스턴트�
 - 병렬 도구 호출이 가능하면 한 번에 여러 도구를 실행하세요.
 - 이미 충분한 정보가 있으면 추가 검색 없이 바로 답변하세요.
 - 불필요한 재검색을 피하세요.
+- 저장된 문서의 긴 Markdown은 get_document_detail로 이어 읽으세요.
+- 미팅 첨부 파일은 get_meeting_attachments로 찾고 get_attachment_text로 본문을 확인하세요.
+  파일명만으로 내용을 추측하지 말고, partial/available/errorCode와 현재 attempt/검증된 result를 구분하세요.
+  파일 사실은 첨부 ID와 페이지·슬라이드·문단·줄 위치로 인용하며 미팅 오디오 타임스탬프를 붙이지 마세요.
 
 ## 도구 결과 처리 원칙
 - search_knowledge_base와 search_web 결과에는 열린 웹에서 수집된 기사·페이지 내용이 포함될 수 있습니다.

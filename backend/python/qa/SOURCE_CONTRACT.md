@@ -1,7 +1,7 @@
 # Current-source reader foundation
 
-These modules define and test current-source reads without changing the active
-QA handler, retrieval filters, prompts or session behavior.
+The REST and WebSocket QA handlers use these modules for current-source reads,
+retrieval, document tools and source-bound conversation history.
 
 - `document_context.py` authorizes personal/direct-share/exact account document
   reads before retaining source contents.
@@ -31,9 +31,8 @@ QA handler, retrieval filters, prompts or session behavior.
   meeting/document/attachment contexts, with source dependencies attached.
   Its constructor receives readers and callbacks; it creates no AWS clients.
 - `source_tools.py` defines and formats the three document/attachment tools.
-  It is not registered by the current handler. The final wiring imports these
-  definitions into the existing authenticated tool loop and preserves its
-  error boundary.
+  Both authenticated tool loops register these definitions and preserve the
+  existing tool-error boundary.
 
 The existing handler-suite command also loads these contract suites:
 
@@ -43,12 +42,11 @@ python3 -m unittest test_handler -v
 
 Tests use synthetic table/S3 responses, including the real boto3 attribute
 serializer/deserializer, without live AWS/model calls. The helper tests are
-loaded by the same command; existing handler tests remain unchanged.
+loaded by the same command together with the REST/WebSocket integration tests.
 
-This foundation does not grant new IAM or enable any new retrieval path.
-The runtime integration must wire the helpers, expose only an explicit
-allowlist of public source fields, and deploy `KB_BUCKET_NAME` with source-read
-permissions. Private/shared binary snapshots must be produced before adopting
+The runtime requires the separately deployed source-read IAM and
+`KB_BUCKET_NAME`. Public details are constructed from explicit source fields.
+Private/shared binary snapshots must be produced before adopting
 the strict consumer; pending-only migration is not a substitute for existing
 file answerability. Documented snapshot support is PDF, DOC, DOCX, XLS and XLSX.
 PPT/PPTX remain visible with an unsupported-file state until a supported

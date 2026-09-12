@@ -1465,6 +1465,17 @@ Response: 200 OK
 
 #### Agentic Q&A (Python QA Lambda)
 
+Current-source retrieval supersedes the cache behavior described above:
+every query performs fresh discovery and authorization. REST and WebSocket
+completion payloads retain `sources: string[]` and add `sourceDetails` with
+resource identity, title, revision and provenance. Changed/deleted/revoked
+sources invalidate dependent conversation history. New tools are
+`get_document_detail`, `get_meeting_attachments` and `get_attachment_text`;
+they support bounded continuation and explicit partial/error states.
+File facts use document locations, never audio timestamps. See the
+[source contract](../backend/python/qa/SOURCE_CONTRACT.md) for schemas,
+legacy-file compatibility and rollout prerequisites.
+
 KB meeting hits are discovery candidates, not current note snapshots. For exact
 `meetings/{ownerId}/{meetingId}.md` sources, every response—including a cache
 hit—rechecks current access and reads current `notes` and `content` from
