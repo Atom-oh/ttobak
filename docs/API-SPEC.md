@@ -1887,10 +1887,12 @@ Manually curates a single crawled **news** document — e.g. a search result the
 - **Env vars**: COGNITO_USER_POOL_ID, COGNITO_REGION (deployed to us-east-1)
 
 ### 8. Convert-Doc Lambda (cmd/convert-doc, container image, ADR-022)
+
+The converter records `source-etag` and optional `source-version-id` from the actual source GET, rechecks the original, and publishes conditionally against the preview observed before conversion. The current preview URL path still checks sidecar existence; canonical indexing/retrieval must validate the binding before treating its content as current. Legacy unbound previews require regeneration. Preview conversion retains its existing disk/time budgets; the separate KB file-size limit does not restrict previews.
 - **Trigger**: S3 Event (docs/ prefix, .ppt/.pptx only) via EventBridge
 - **Role**: converts an uploaded PPTX/PPT to a PDF sidecar via headless LibreOffice (for in-browser preview, reusing the existing PDF `<iframe>` viewer)
 - **Steps**: (1) download the PPTX/PPT from S3 → (2) run `soffice --headless --convert-to pdf` (with `AWS_*` env vars stripped before exec, to prevent credential leakage while parsing untrusted input) → (3) upload the PDF to a deterministic sidecar key (no DynamoDB write)
-- **IAM**: scoped to `docs/*` read + `docs-pdf/*` write (narrower than other upload categories' bucket-wide `grantReadWrite`)
+- **IAM**: scoped to `docs/*` read + `docs-pdf/*` read/write (HEAD for conditional replacement; narrower than other upload categories' bucket-wide `grantReadWrite`)
 - **Env vars**: BUCKET_NAME (calls `log.Fatal` immediately at cold start if unset)
 
 ---

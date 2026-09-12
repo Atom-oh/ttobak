@@ -61,4 +61,4 @@ passing is not a general accuracy percentage or a substitute for real meeting
 evaluation. Preserve failed runs and explain any rubric correction separately
 from changes to the model or production prompt.
 
-An [exploratory real-model probe](2026-09-12-note-quality-probe.md) found an inferred follow-up task. The rubric and prompts now cover that failure. A complete live corpus run after the change remains required.
+An [exploratory real-model probe](2026-09-12-note-quality-probe.md) found an inferred follow-up task. The rubric and prompts now cover that failure. The subsequent [complete live evaluation](evaluations/2026-09-12-note-quality/README.md) passed all 25 checks across four cases; its raw responses, hashes, manual observations and stricter regrade are preserved with the report.
