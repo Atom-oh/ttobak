@@ -15,6 +15,9 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
+var summaryMeetingFields = []string{"meetingId", "userId", "status", "content", "notes",
+	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "accountId", "sharedToAccount"}
+
 var summaryAttachmentFields = []string{"attachmentId", "meetingId", "userId", "originalKey", "processedKey", "type", "status", "fileName", "processedContent", "description"}
 var summaryTextFields = []string{"runId", "status", "leaseUntil", "sourceKey", "ownerId", "uploaderId", "sourceETag", "resultKey", "unitCount", "complete", "updatedAt"}
 
@@ -347,4 +350,9 @@ func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *mo
 		safeCleanup = false
 	}
 	return resultErr
+}
+
+func summaryKey(meetingID string) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		"SK": &types.AttributeValueMemberS{Value: model.ResummarySK}}
 }

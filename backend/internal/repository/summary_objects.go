@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"unicode/utf8"
 
@@ -43,6 +44,10 @@ func (r *DynamoDBRepository) ReadResummaryTranscript(ctx context.Context, meetin
 	}
 	out, err := r.s3Client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), IfMatch: head.ETag})
 	if err != nil {
+		var response interface{ HTTPStatusCode() int }
+		if errors.As(err, &response) && response.HTTPStatusCode() == http.StatusPreconditionFailed {
+			return "", nil, ErrConditionFailed
+		}
 		return "", nil, ErrSummaryObject
 	}
 	if out.Body == nil {

@@ -50,4 +50,5 @@ spills, definite-failure cleanup, ambiguous-result retention, and IfMatch reads.
 Frontend production build and targeted lint passed (existing warnings only).
 A mocked-browser flow verified unsaved-edit blocking, busy state, bounded result
 reading with hash/run verification, and retention of the displayed summary after
-a failed publish. No live AWS, commit, push or deployment.
+a failed publish. The frontend checks belong to the separate UI release. Backend changes are
+prepared on a release branch; no live AWS call, PR merge or deployment was performed.

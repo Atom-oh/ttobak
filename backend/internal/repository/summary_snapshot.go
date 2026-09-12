@@ -20,11 +20,8 @@ var (
 	ErrSummaryLimit  = errors.New("summary snapshot or output exceeds limit")
 )
 
-var summaryMeetingFields = []string{"meetingId", "userId", "status", "content", "notes",
-	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "accountId", "sharedToAccount"}
-
 var batchSummaryFields = []string{"meetingId", "userId", "status", "content", "notes", "liveSummary",
-	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "attachmentSummarySources", "summarizeRetryClaimedAt"}
+	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "attachmentSummarySources", "summarizeRetryClaimedAt", "summaryRetryAttempts"}
 
 func summaryRowKey(pk, sk string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: pk}, "SK": &types.AttributeValueMemberS{Value: sk}}
@@ -143,10 +140,18 @@ func (r *DynamoDBRepository) MarkSummaryConflict(ctx context.Context, snapshot *
 	} else {
 		condition = condition.And(expression.AttributeNotExists(expression.Name("summarizeRetryClaimedAt")))
 	}
-	update := expression.Set(expression.Name("summaryRetryPending"), expression.Value(true)).
-		Set(expression.Name("summaryConflictCode"), expression.Value("SOURCE_CHANGED")).
+	exhausted := snapshot.Meeting.SummaryRetryAttempts >= MaxSummaryRetries
+	code := "SOURCE_CHANGED"
+	if exhausted {
+		code = "RETRY_EXHAUSTED"
+	}
+	update := expression.Set(expression.Name("summaryRetryPending"), expression.Value(!exhausted)).
+		Set(expression.Name("summaryConflictCode"), expression.Value(code)).
 		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC())).
 		Remove(expression.Name("summarizeRetryClaimedAt"))
+	if exhausted {
+		update = update.Set(expression.Name("status"), expression.Value(model.StatusError))
+	}
 	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
 	if err != nil {
 		return err
@@ -156,9 +161,4 @@ func (r *DynamoDBRepository) MarkSummaryConflict(ctx context.Context, snapshot *
 		ConditionExpression: expr.Condition(), UpdateExpression: expr.Update(),
 		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()})
 	return err
-}
-
-func summaryKey(meetingID string) map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
-		"SK": &types.AttributeValueMemberS{Value: model.ResummarySK}}
 }

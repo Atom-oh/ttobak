@@ -20,8 +20,8 @@ func TestSummaryConflictMarkerOwnsOnlyItsClaimAndNeverWritesOldOutput(t *testing
 			t.Fatal("retry claim not guarded")
 		}
 		wire, _ := json.Marshal(body)
-		if strings.Contains(string(wire), "old model output") {
-			t.Fatal("conflict reuses model output")
+		if strings.Contains(string(wire), "old model output") || !strings.Contains(string(wire), "RETRY_EXHAUSTED") || !strings.Contains(string(wire), `"S":"error"`) {
+			t.Fatal("terminal conflict is unsafe or invisible")
 		}
 		for _, name := range body["ExpressionAttributeNames"].(map[string]any) {
 			if name == "content" || name == "notes" || name == "transcriptA" {
@@ -29,7 +29,7 @@ func TestSummaryConflictMarkerOwnsOnlyItsClaimAndNeverWritesOldOutput(t *testing
 			}
 		}
 	}, 200, `{}`)
-	snapshot := &model.SummarySnapshot{Meeting: &model.Meeting{UserID: "owner", MeetingID: "m"},
+	snapshot := &model.SummarySnapshot{Meeting: &model.Meeting{UserID: "owner", MeetingID: "m", SummaryRetryAttempts: MaxSummaryRetries},
 		Stored: map[string]interface{}{"summarizeRetryClaimedAt": "claim-1", "content": "old model output"},
 		Checks: []model.SummaryCheck{{PK: "USER#owner", SK: "MEETING#m", Exists: true}}}
 	if err := repo.MarkSummaryConflict(context.Background(), snapshot); err != nil {
