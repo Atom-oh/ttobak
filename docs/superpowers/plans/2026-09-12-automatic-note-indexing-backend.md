@@ -10,8 +10,11 @@ It serializes immutable publication and full sync, retaining the token and
 Changing members are deferred; failed jobs back off 1–30 minutes. Unknown
 revisions preserve cooldown; proven edits reset it.
 Transient source/HEAD/GET errors preserve projections and source revisions;
-preparation retries without cleanup, and finalization retains the pending member.
+preparation preserves validated keys, and finalization retains the pending member.
 Confirmed missing/invalid sources and changing sources use separate cleanup paths.
+Each batch member gets three attempts per phase across invocations, then durable
+failure/backoff and detachment. Unverified attempt outputs are discarded; validated
+keys remain. Unknown writes retain the lease and cannot use this escape path.
 
 ## Projection and revision
 

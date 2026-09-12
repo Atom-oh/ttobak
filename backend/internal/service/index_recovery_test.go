@@ -84,7 +84,13 @@ func TestIndexTransientReadsPreservePublishedProjections(t *testing.T) {
 			if !reflect.DeepEqual(objects.kb, published) || len(provider.tokens) != starts {
 				t.Fatal("transient source read deleted projections or submitted destructive sync")
 			}
-			if phase != "prepare-get" && !reflect.DeepEqual(repo.jobs[key.Hash()], previous) {
+			current := repo.jobs[key.Hash()]
+			if phase == "source-scan" || phase == "known-job" {
+				if current.State != model.IndexPending || current.Revision != previous.Revision ||
+					current.DesiredRevision != previous.DesiredRevision || !reflect.DeepEqual(current.Keys, previous.Keys) {
+					t.Fatalf("retry discarded the published source proof: %+v", current)
+				}
+			} else if phase != "prepare-get" && !reflect.DeepEqual(current, previous) {
 				t.Fatalf("transient read regressed durable source state: %+v", repo.jobs[key.Hash()])
 			}
 			// Recovery uses the same source/objects; no new stream notification.

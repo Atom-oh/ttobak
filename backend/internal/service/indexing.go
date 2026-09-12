@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ type IndexRepository interface {
 
 const indexLease = 20 * time.Minute // Longer than a Lambda invocation, including its final network operations.
 const indexBatchSize = 4
+const indexMemberAttempts = 3
 
 type IndexingService struct {
 	repo         IndexRepository
@@ -141,7 +143,11 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 	if control.Phase == "EXPORTING" {
 		next := *control
 		next.Batch = append([]model.IndexMember(nil), control.Batch...)
+		var failures error
 		for i, member := range next.Batch {
+			if member.Detached {
+				continue
+			}
 			current, e := s.prepare(ctx, member.Resource)
 			if e != nil {
 				if errors.Is(e, ErrIndexWriteUncertain) {
@@ -151,20 +157,34 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 					if e := s.deferChangingSource(ctx, member.Resource); e != nil {
 						return result, e
 					}
-					next.Batch[i] = model.IndexMember{Resource: member.Resource}
+					next.Batch[i] = model.IndexMember{Resource: member.Resource, Detached: true}
 					result.Failed++
 					continue
 				}
-				if !errors.Is(e, ErrIndexWriteUncertain) && !errors.Is(e, ErrIndexLeaseBusy) {
-					e = errors.Join(e, s.retryPreparation(ctx, member.Resource))
+				if errors.Is(e, ErrIndexLeaseBusy) {
+					return result, e
 				}
-				return result, e
+				if retryErr := s.retryPreparation(ctx, member.Resource); retryErr != nil {
+					return result, errors.Join(e, retryErr)
+				}
+				if retryErr := s.memberFailure(ctx, &next.Batch[i], "PREPARATION_EXHAUSTED"); retryErr != nil {
+					return result, errors.Join(e, retryErr)
+				}
+				if next.Batch[i].Detached {
+					result.Failed++
+				} else {
+					failures = errors.Join(failures, e)
+				}
+				continue
 			}
 			next.Batch[i] = current
 			result.Resources++
 			if current.Revision == "" {
 				result.Failed++
 			}
+		}
+		if failures != nil {
+			return result, errors.Join(failures, save(next))
 		}
 		next.Phase, next.ClientToken, next.ErrorCode = "PREPARED", s.newID(), ""
 		if e := save(next); e != nil {
@@ -221,16 +241,27 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 		}
 	}
 	if control.Phase == "FINALIZING" {
+		next := *control
+		next.Batch = append([]model.IndexMember(nil), control.Batch...)
 		var failures error
-		for _, member := range control.Batch {
+		for i, member := range next.Batch {
+			if member.Detached {
+				continue
+			}
 			if e := s.finish(ctx, member, control.ProviderJobID, control.ProviderSucceeded); e != nil {
-				failures = errors.Join(failures, e)
+				if retryErr := s.memberFailure(ctx, &next.Batch[i], "FINALIZATION_EXHAUSTED"); retryErr != nil {
+					return result, errors.Join(e, retryErr)
+				}
+				if next.Batch[i].Detached {
+					result.Failed++
+				} else {
+					failures = errors.Join(failures, e)
+				}
 			}
 		}
 		if failures != nil {
-			return result, failures
+			return result, errors.Join(failures, save(next))
 		}
-		next := *control
 		next.Phase, next.Batch, next.ClientToken, next.ProviderJobID, next.ErrorCode = "IDLE", nil, "", "", ""
 		next.ProviderSucceeded = false
 		if e := save(next); e != nil {
@@ -238,6 +269,33 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 		}
 	}
 	return result, nil
+}
+
+func (s *IndexingService) memberFailure(ctx context.Context, member *model.IndexMember, code string) error {
+	member.Attempts++
+	if member.Attempts < indexMemberAttempts {
+		return nil
+	}
+	job, err := s.repo.GetIndexJob(ctx, member.Resource)
+	if err != nil {
+		return err
+	}
+	if job != nil {
+		if code == "FINALIZATION_EXHAUSTED" && (job.Version != member.Version || job.RunID != member.RunID) {
+			member.Detached = true
+			return nil
+		}
+		next := *job
+		// Source/status unavailability proves no deletion. Keep all published
+		// keys, removal obligations and the last known source revision.
+		s.failJob(&next, code)
+		if err := s.repo.SaveIndexJob(ctx, job, &next, nil, false, s.now().UnixMilli()); err != nil &&
+			!errors.Is(err, repository.ErrConditionFailed) {
+			return err
+		}
+	}
+	member.Detached = true
+	return nil
 }
 
 func permanentIndexSourceError(err error) bool {
@@ -275,7 +333,10 @@ func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexCon
 		if source, e := s.ReadSource(ctx, key, false); e == nil {
 			revision = source.Revision
 		} else if !permanentIndexSourceError(e) {
-			return nil, e
+			if err := s.queueUnreadable(ctx, key); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		if err := s.repo.RequestIndexResource(ctx, key, revision, s.now().UnixMilli()); err != nil {
 			return nil, err
@@ -296,7 +357,9 @@ func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexCon
 			// A transient read is not evidence that a legacy source is gone.
 			// Known invalid sources still enter the durable cleanup path.
 			if err := s.Enqueue(ctx, key); err != nil {
-				return nil, err
+				if err := s.queueUnreadable(ctx, key); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -311,17 +374,19 @@ func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexCon
 	for _, job := range jobs {
 		// Known jobs also detect deleted sources and same-key S3 byte replacements.
 		source, readErr := s.ReadSource(ctx, job.Resource, false)
-		if readErr != nil && !permanentIndexSourceError(readErr) {
-			return nil, readErr
-		}
 		changed := readErr != nil || source.Revision != job.Revision
+		unavailable := readErr != nil && !permanentIndexSourceError(readErr)
+		if unavailable {
+			changed = false
+		}
 		extra := false
 		if !changed && (job.State == model.IndexIndexed || job.State == model.IndexDeleted || job.State == model.IndexWaitingSource) {
 			complete, e := s.inventoryMatches(ctx, job.Resource, job.Keys)
 			if e != nil {
-				return nil, e
+				unavailable = true
+			} else {
+				changed, extra = !complete, !complete
 			}
-			changed, extra = !complete, !complete
 		}
 		if changed && job.State != model.IndexPreparing && job.State != model.IndexWaitingSync {
 			revision := ""
@@ -344,13 +409,22 @@ func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexCon
 		}
 		eligible := job.State == model.IndexPending || job.State == model.IndexWaitingSync ||
 			(job.State == model.IndexFailed && job.RetryAfter <= s.now().UnixMilli()) ||
-			(job.State == model.IndexPreparing && job.LeaseUntil <= s.now().UnixMilli())
+			(job.State == model.IndexPreparing && job.LeaseUntil <= s.now().UnixMilli()) ||
+			(unavailable && (job.State == model.IndexIndexed || job.State == model.IndexDeleted || job.State == model.IndexWaitingSource))
 		if eligible && len(batch) < indexBatchSize {
 			batch = append(batch, model.IndexMember{Resource: job.Resource})
 		}
 	}
 	control.JobCursor = cursor
 	return batch, nil
+}
+
+func (s *IndexingService) queueUnreadable(ctx context.Context, key model.IndexResource) error {
+	job, err := s.repo.GetIndexJob(ctx, key)
+	if err != nil || job != nil {
+		return err
+	}
+	return s.repo.RequestIndexResource(ctx, key, "", s.now().UnixMilli())
 }
 
 func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) (model.IndexMember, error) {
@@ -360,6 +434,9 @@ func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) 
 	}
 	if prior == nil {
 		return model.IndexMember{}, ErrIndexInvalid
+	}
+	if prior.State == model.IndexFailed && prior.RetryAfter > s.now().UnixMilli() {
+		return model.IndexMember{Resource: key, Detached: true}, nil
 	}
 	if prior.State == model.IndexWaitingSync {
 		current, e := s.ReadSource(ctx, key, false)
@@ -457,9 +534,36 @@ func (s *IndexingService) retryPreparation(ctx context.Context, key model.IndexR
 	if job.State != model.IndexPreparing {
 		return nil
 	}
+	// Only unverified outputs of this attempt are disposable. Keys are promoted
+	// durably after validation, before old objects are removed.
+	pendingKeys, err := s.objects.List(ctx, key.Prefix())
+	if err != nil {
+		return err
+	}
 	next := *job
-	next.State, next.LeaseUntil, next.ErrorCode = model.IndexPending, 0, "PREPARATION_RETRY"
-	return s.repo.SaveIndexJob(ctx, job, &next, nil, false, s.now().UnixMilli())
+	for _, key := range pendingKeys {
+		if !slices.Contains(job.Keys, key) && !strings.HasSuffix(key, ".metadata.json") && !slices.Contains(next.RemovedKeys, key) {
+			next.RemovedKeys = append(next.RemovedKeys, key)
+		}
+	}
+	if err := s.repo.SaveIndexJob(ctx, job, &next, nil, false, s.now().UnixMilli()); err != nil {
+		return err
+	}
+	for _, pending := range pendingKeys {
+		if !strings.HasPrefix(pending, key.Prefix()) {
+			return ErrIndexInvalid
+		}
+		if slices.Contains(job.Keys, pending) {
+			continue
+		}
+		if err := s.objects.Delete(ctx, pending); err != nil {
+			return err
+		}
+	}
+	queued := next
+	queued.PendingKeys = nil
+	queued.State, queued.LeaseUntil, queued.ErrorCode = model.IndexPending, 0, "PREPARATION_RETRY"
+	return s.repo.SaveIndexJob(ctx, &next, &queued, nil, false, s.now().UnixMilli())
 }
 
 func indexMember(job *model.IndexJob) model.IndexMember {
@@ -554,6 +658,7 @@ func (s *IndexingService) cleanupTracked(ctx context.Context, job *model.IndexJo
 		next.RemovedKeys = append(next.RemovedKeys, key)
 	}
 	sort.Strings(next.RemovedKeys)
+	next.Keys, next.PendingKeys = append([]string(nil), keep...), nil
 	// Record deletions before S3 mutation. A crash cannot erase the document
 	// identifiers needed to verify removal after a partially failed full sync.
 	if err := s.repo.SaveIndexJob(ctx, job, &next, nil, false, s.now().UnixMilli()); err != nil {
