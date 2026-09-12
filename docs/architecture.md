@@ -1,5 +1,7 @@
 # Architecture / 아키텍처
 
+Summary source guards and bounded conflict regeneration: [ADR-040](decisions/ADR-040-guarded-summary-publication.md) / 요약 소스 보호·bounded 재생성.
+
 <p align="center">
   <kbd><a href="#한국어">한국어</a></kbd>&nbsp;&nbsp;
   <kbd><a href="#english">English</a></kbd>
@@ -175,7 +177,6 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 - [ADR-036: 어카운트 계층과 미팅 필터](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (승인됨)
 - [ADR-037: 조건부 전사문 수정을 위한 불변 spill](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (승인됨)
 - [ADR-039: 회의 문서 텍스트 추출](decisions/ADR-039-meeting-document-extraction.md) (승인됨)
-- [ADR-040: 배치 소스 조건·충돌 재생성·문서 근거](decisions/ADR-040-guarded-summary-publication.md) (승인됨)
 
 ### 운영
 
@@ -300,7 +301,6 @@ The asynchronous document worker consumes validated attachment runs. Parser, net
 - [ADR-036: Account Hierarchy and Meeting Filters](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (Accepted)
 - [ADR-037: Immutable Spills for Conditional Transcript Writes](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (Accepted)
 - [ADR-039: Meeting Document Text Extraction](decisions/ADR-039-meeting-document-extraction.md) (Accepted)
-- [ADR-040: Batch source guards, conflict regeneration and document evidence](decisions/ADR-040-guarded-summary-publication.md) (Accepted)
 
 ### Operations
 

@@ -15,11 +15,14 @@ import (
 )
 
 func (r *DynamoDBRepository) publishMeetingSummary(ctx context.Context, snapshot *model.SummarySnapshot, content, coverage string) (resultErr error) {
-	if !validSummarySnapshot(snapshot) || len(snapshot.Checks) > 100 {
+	if !validSummarySnapshot(snapshot) {
 		return ErrConditionFailed
 	}
+	if len(snapshot.Checks) > 100 {
+		return ErrSummaryLimit
+	}
 	fields := map[string]interface{}{"content": content, "status": model.StatusDone, "attachmentSummarySources": coverage,
-		"summaryRetryPending": false, "summaryConflictCode": "", "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)}
+		"summaryRetryPending": false, "summaryConflictCode": "", "summaryRetryAttempts": 0, "updatedAt": time.Now().UTC().Format(time.RFC3339Nano)}
 	stored := map[string]interface{}{}
 	for key, value := range snapshot.Stored {
 		stored[key] = value
@@ -71,6 +74,7 @@ func (r *DynamoDBRepository) publishMeetingSummary(ctx context.Context, snapshot
 			update = update.Set(expression.Name(key), expression.Value(value))
 		}
 	}
+	update = update.Remove(expression.Name("summarizeRetryClaimedAt"))
 	op, err := analysisUpdate(r.tableName, summaryRowKey(parent.PK, parent.SK), update, summaryCondition(parent))
 	if err != nil {
 		return err

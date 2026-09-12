@@ -1,5 +1,7 @@
 package model
 
+const ResummarySK = "ANALYSIS#summary"
+
 // Present distinguishes an absent attribute from its explicit empty value.
 // Values retain DynamoDB's original strings, including timestamp formatting.
 type SummaryValue struct {
