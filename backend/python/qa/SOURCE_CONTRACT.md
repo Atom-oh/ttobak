@@ -60,7 +60,9 @@ Verified or current text precedes metadata-only pending results. For limits
 of two or more, literal saved body matches reserve at least one result slot
 while retaining up to `limit - 1` semantic text results; remaining slots can
 hold additional saved matches. A limit of one preserves an available semantic
-body result. Title-only matches never displace available body evidence.
+body result. The reserved candidate must match all query terms in
+notes/content/action items, excluding the title. A title-only match, including
+one with unrelated nonempty content, never displaces available body evidence.
 These fallback matches have score zero, not fabricated provider confidence.
 They require all of the first 20 whitespace-separated, case-folded query terms
 to occur in the saved title/notes/content/action items; this is not a Korean
