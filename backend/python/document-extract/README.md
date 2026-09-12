@@ -95,7 +95,7 @@ and child memory rather than equating this ceiling with Lambda memory size.
   `NO_EXTRACTABLE_TEXT`. Mixed text/image-only pages return `partial`.
 - OOXML supports the usual transitional namespaces. Strict/other namespaces,
   encrypted/legacy OLE containers, encrypted ZIP members, macro-enabled content
-  types/parts/relationships, ActiveX, OLE objects, and embedded packages are rejected.
+  types/parts/relationships, ActiveX, OLE objects, and embedded packages are rejected, except internal XLSX chart workbooks under `ppt/embeddings/` referenced by a PPTX chart. Those bytes remain opaque: they are not parsed or executed, and their omission makes the result partial.
   This is not an antivirus scan of arbitrary hidden bytes.
 - Ordinary external `.../relationships/hyperlink` relationships are accepted as
   inert data in DOCX/PPTX. Visible run text is preserved. Targets (including
@@ -106,7 +106,7 @@ and child memory rather than equating this ceiling with Lambda memory size.
   ambiguous package paths are rejected; internal `../` relationships resolve
   only inside the archive, never to the filesystem.
 - DOCX includes current body paragraphs and table cells; paragraph numbering
-  follows body traversal and includes empty paragraphs. Deleted runs are excluded.
+  follows body traversal and includes empty paragraphs. Deleted/moved-from runs are excluded; nonbreaking and soft hyphens are preserved.
   Table/cell indices are XML ordinals, not inferred visual columns or page numbers.
 - PPTX includes slide body paragraphs/tables in presentation relationship order.
   Paragraph order is XML shape order, not a guess at visual reading order.
@@ -151,7 +151,7 @@ than decrypted; no optional crypto/image/font/OCR dependency is installed.
 
 ## Verification
 
-The 25 parser/child tests pass under CPython 3.12.13 on Linux/AArch64.
+The 28 parser/child tests pass under CPython 3.12.13 on Linux/AArch64.
 Coverage includes generated Korean PDF text,
 presentation relationship ordering, DOCX nested/wrapped tables, Markdown UTF-8,
 encrypted/corrupt/empty/scanned files, unsafe ZIP/XML/macro content, configured
