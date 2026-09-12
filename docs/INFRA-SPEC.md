@@ -186,14 +186,16 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - Permissions: Bedrock InvokeModelWithBidirectionalStream (Nova Sonic), Bedrock InvokeModel (Claude translation), DynamoDB read/write, API Gateway ManageConnections
 
 #### KB Lambda
-- Trigger: one-minute scheduled tick, 1024 MiB / 720s. The canonical DynamoDB
-  mapping is disabled during `manual-only` bootstrap and enabled only in `all`
+- Trigger: one-minute scheduled tick (disabled until explicit activation),
+  1024 MiB / 720s. The canonical DynamoDB mapping and stream-read grants are
+  absent during `manual-only` bootstrap and created only in `all`
   mode. Existing `/api/kb/*` HTTP routes remain in the API Lambda.
 - Env: `TABLE_NAME`, `BUCKET_NAME`, `KB_BUCKET_NAME`, `KB_ID`, `DATA_SOURCE_ID`,
   `AWS_REGION_NAME`, `INDEXING_MODE` (`manual-only` or `all`).
 - Permissions: conditional job/control updates, KB-scoped full ingestion and
   per-document status reads, and immutable snapshot access. Bootstrap grants
   original `kb/*`/`shared/*` reads and snapshot-prefix writes/deletes only;
+  DynamoDB operations are limited to the two `KBINDEX#` job/control partitions.
   canonical source/projection permissions are added with explicit full mode.
   The worker has no OpenSearch or model-inference permission.
 - Rollout: the mode-aware migration worker must be deployed before enabling

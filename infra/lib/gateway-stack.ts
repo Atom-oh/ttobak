@@ -39,6 +39,7 @@ export interface GatewayStackProps extends cdk.StackProps {
   knowledgeBaseId?: string;
   dataSourceId?: string;
   indexingMode?: 'manual-only' | 'all';
+  indexScheduleEnabled?: boolean;
   agentCoreRuntimeArn?: string;
   researchWorkerRole?: iam.IRole;
   convertDocRole?: iam.IRole;
@@ -269,6 +270,7 @@ export class GatewayStack extends cdk.Stack {
     });
 
     const indexDlq = new sqs.Queue(this, 'CanonicalIndexDlq', {
+      queueName: 'ttobak-kb-index-dlq',
       encryption: sqs.QueueEncryption.SQS_MANAGED,
       enforceSSL: true,
       retentionPeriod: cdk.Duration.days(7),
@@ -280,47 +282,56 @@ export class GatewayStack extends cdk.Stack {
           actions: ['sqs:SendMessage', 'sqs:GetQueueUrl', 'sqs:GetQueueAttributes'],
           resources: [indexDlq.queueArn],
         }),
+      ],
+    });
+    this.kbFunction.node.addDependency(indexDeliveryPolicy);
+    if (props.indexingMode === 'all') {
+      if (!props.table.tableStreamArn) {
+        throw new Error('Canonical indexing requires the table stream');
+      }
+      indexDeliveryPolicy.addStatements(
         new iam.PolicyStatement({
           actions: ['dynamodb:DescribeStream', 'dynamodb:GetRecords', 'dynamodb:GetShardIterator'],
-          resources: [props.table.tableStreamArn!],
+          resources: [props.table.tableStreamArn],
         }),
         new iam.PolicyStatement({
           actions: ['dynamodb:ListStreams'],
           resources: ['*'],
           conditions: { StringEquals: { 'aws:RequestedRegion': this.region } },
         }),
-      ],
-    });
-    this.kbFunction.node.addDependency(indexDeliveryPolicy);
-    this.kbFunction.addEventSource(new lambdaSources.DynamoEventSource(props.table, {
-      startingPosition: lambda.StartingPosition.LATEST,
-      enabled: props.indexingMode === 'all',
-      batchSize: 20,
-      bisectBatchOnError: true,
-      reportBatchItemFailures: true,
-      retryAttempts: 3,
-      maxRecordAge: cdk.Duration.hours(23),
-      onFailure: new lambdaSources.SqsDlq(indexDlq),
-      filters: [
-        lambda.FilterCriteria.filter({
-          eventName: ['INSERT', 'MODIFY', 'REMOVE'],
-          dynamodb: { Keys: {
-            PK: { S: [{ prefix: 'USER#' }] },
-            SK: { S: [{ prefix: 'MEETING#' }, { prefix: 'DOC#' }] },
-          } },
-        }),
-        lambda.FilterCriteria.filter({
-          eventName: ['INSERT', 'MODIFY', 'REMOVE'],
-          dynamodb: { Keys: {
-            PK: { S: [{ prefix: 'ACCOUNT#' }] },
-            SK: { S: [{ prefix: 'DOC#' }] },
-          } },
-        }),
-      ],
-    }));
+      );
+      this.kbFunction.addEventSource(new lambdaSources.DynamoEventSource(props.table, {
+        startingPosition: lambda.StartingPosition.LATEST,
+        enabled: true,
+        batchSize: 20,
+        bisectBatchOnError: true,
+        reportBatchItemFailures: true,
+        retryAttempts: 3,
+        maxRecordAge: cdk.Duration.hours(23),
+        onFailure: new lambdaSources.SqsDlq(indexDlq),
+        filters: [
+          lambda.FilterCriteria.filter({
+            eventName: ['INSERT', 'MODIFY', 'REMOVE'],
+            dynamodb: { Keys: {
+              PK: { S: [{ prefix: 'USER#' }] },
+              SK: { S: [{ prefix: 'MEETING#' }, { prefix: 'DOC#' }] },
+            } },
+          }),
+          lambda.FilterCriteria.filter({
+            eventName: ['INSERT', 'MODIFY', 'REMOVE'],
+            dynamodb: { Keys: {
+              PK: { S: [{ prefix: 'ACCOUNT#' }] },
+              SK: { S: [{ prefix: 'DOC#' }] },
+            } },
+          }),
+        ],
+      }));
+    }
     const indexTick = new events.Rule(this, 'CanonicalIndexTick', {
+      ruleName: 'ttobak-kb-index-tick',
       description: 'Reconcile knowledge snapshots in the configured rollout mode',
       schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      enabled: props.indexScheduleEnabled ?? false,
     });
     indexTick.addTarget(new eventsTargets.LambdaFunction(this.kbFunction, {
       event: events.RuleTargetInput.fromObject({ action: 'tick' }),

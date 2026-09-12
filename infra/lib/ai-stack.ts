@@ -463,6 +463,12 @@ export class AiStack extends cdk.Stack {
           'dynamodb:UpdateItem', 'dynamodb:ConditionCheckItem',
         ],
         resources: [props.table.tableArn],
+        conditions: canonicalIndexing ? undefined : {
+          'ForAllValues:StringEquals': {
+            'dynamodb:LeadingKeys': ['KBINDEX#JOBS', 'KBINDEX#CONTROL'],
+          },
+          Null: { 'dynamodb:LeadingKeys': 'false' },
+        },
       })
     );
     props.table.encryptionKey?.grantEncryptDecrypt(this.kbRole);

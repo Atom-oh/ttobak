@@ -9,7 +9,7 @@ import { GatewayStack } from '../lib/gateway-stack';
 describe('GatewayStack', () => {
   let template: Template;
 
-  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only'): Template {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only', scheduleEnabled = false): Template {
     const app = new cdk.App({
       context: {
         'ttobak:cloudfrontDomain': 'd2olomx8td8txt.cloudfront.net',
@@ -47,6 +47,7 @@ describe('GatewayStack', () => {
       kbBucket,
       knowledgeBaseId: 'test-kb-id',
       indexingMode,
+      indexScheduleEnabled: scheduleEnabled,
       dataSourceId: 'test-ds-id',
       webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
     });
@@ -113,7 +114,7 @@ describe('GatewayStack', () => {
     });
   });
 
-  test('bootstrap ticks run manual-only with canonical notifications disabled', () => {
+  test('bootstrap is configured manual-only without a schedule or canonical stream reads', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-kb',
       Timeout: 720,
@@ -123,17 +124,12 @@ describe('GatewayStack', () => {
       }) },
     });
     const mappings = Object.values(template.findResources('AWS::Lambda::EventSourceMapping'));
-    expect(mappings).toHaveLength(1);
-    expect(mappings[0].Properties).toEqual(expect.objectContaining({
-      Enabled: false, StartingPosition: 'LATEST', BatchSize: 20,
-      BisectBatchOnFunctionError: true,
-      FunctionResponseTypes: ['ReportBatchItemFailures'],
-      MaximumRetryAttempts: 3, MaximumRecordAgeInSeconds: 82800,
-    }));
+    expect(mappings).toHaveLength(0);
     const rules = Object.entries(template.findResources('AWS::Events::Rule'))
       .filter(([id]) => id.startsWith('CanonicalIndexTick'));
     expect(rules).toHaveLength(1);
     expect(rules[0][1].Properties.ScheduleExpression).toBe('rate(1 minute)');
+    expect(rules[0][1].Properties.State).toBe('DISABLED');
     expect(rules[0][1].Properties.Targets).toEqual([expect.objectContaining({
       Input: '{"action":"tick"}',
       RetryPolicy: { MaximumEventAgeInSeconds: 300, MaximumRetryAttempts: 2 },
@@ -142,13 +138,21 @@ describe('GatewayStack', () => {
     const delivery = Object.entries(template.findResources('AWS::IAM::Policy'))
       .find(([id]) => id.startsWith('CanonicalIndexDeliveryPolicy'));
     expect(delivery).toBeDefined();
-    const statement = delivery![1].Properties.PolicyDocument.Statement.find(
-      (entry: { Action: string }) => entry.Action === 'dynamodb:ListStreams');
-    expect(statement.Condition.StringEquals['aws:RequestedRegion']).toBeDefined();
+    for (const entry of delivery![1].Properties.PolicyDocument.Statement) {
+      expect([entry.Action].flat().some((action: string) => action.startsWith('dynamodb:'))).toBe(false);
+    }
+  });
+
+  test('manual bootstrap scheduling requires an explicit deployment choice', () => {
+    const scheduled = buildTemplate('manual-only', true);
+    const rules = Object.entries(scheduled.findResources('AWS::Events::Rule'))
+      .filter(([id]) => id.startsWith('CanonicalIndexTick'));
+    expect(rules[0][1].Properties.State).toBe('ENABLED');
+    expect(Object.values(scheduled.findResources('AWS::Lambda::EventSourceMapping'))).toHaveLength(0);
   });
 
   test('full mode explicitly enables canonical notifications and uses the same worker', () => {
-    const all = buildTemplate('all');
+    const all = buildTemplate('all', true);
     all.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-kb',
       Environment: { Variables: Match.objectLike({ INDEXING_MODE: 'all' }) },
@@ -156,9 +160,19 @@ describe('GatewayStack', () => {
     const mappings = Object.values(all.findResources('AWS::Lambda::EventSourceMapping'));
     expect(mappings).toHaveLength(1);
     expect(mappings[0].Properties.Enabled).toBe(true);
+    expect(mappings[0].Properties).toEqual(expect.objectContaining({
+      StartingPosition: 'LATEST', BatchSize: 20, BisectBatchOnFunctionError: true,
+      FunctionResponseTypes: ['ReportBatchItemFailures'],
+      MaximumRetryAttempts: 3, MaximumRecordAgeInSeconds: 82800,
+    }));
     expect(JSON.stringify(mappings[0].Properties.FilterCriteria)).toContain('MEETING#');
     expect(JSON.stringify(mappings[0].Properties.FilterCriteria)).toContain('DOC#');
     expect(JSON.stringify(mappings[0].Properties.FilterCriteria)).toContain('ACCOUNT#');
+    const delivery = Object.entries(all.findResources('AWS::IAM::Policy'))
+      .find(([id]) => id.startsWith('CanonicalIndexDeliveryPolicy'));
+    const statement = delivery![1].Properties.PolicyDocument.Statement.find(
+      (entry: { Action: string }) => entry.Action === 'dynamodb:ListStreams');
+    expect(statement.Condition.StringEquals['aws:RequestedRegion']).toBeDefined();
   });
 
   test('QA transcript validation uses the actual assets bucket', () => {

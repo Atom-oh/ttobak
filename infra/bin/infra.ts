@@ -15,6 +15,7 @@ import { WebSearchGatewayStack } from '../lib/web-search-gateway-stack';
 const app = new cdk.App();
 // Prepare existing KB snapshots before the current-source QA cutover.
 const knowledgeIndexingMode: 'manual-only' | 'all' = 'manual-only';
+const knowledgeIndexScheduleEnabled = false;
 
 // Environment configuration (ap-northeast-2 recommended for Korean users)
 const env = {
@@ -120,6 +121,7 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   kbBucket: knowledgeStack.kbBucket,
   knowledgeBaseId: knowledgeStack.knowledgeBaseId,
   indexingMode: knowledgeIndexingMode,
+  indexScheduleEnabled: knowledgeIndexScheduleEnabled,
   dataSourceId: knowledgeStack.dataSourceId,
   websocketRole: aiStack.websocketRole,
   wsAuthorizerRole: aiStack.wsAuthorizerRole,

@@ -64,6 +64,10 @@ describe('AiStack', () => {
     expect(bySid('CanonicalIndexState').Action).toEqual([
       'dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:UpdateItem', 'dynamodb:ConditionCheckItem',
     ]);
+    expect(bySid('CanonicalIndexState').Condition).toEqual({
+      'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': ['KBINDEX#JOBS', 'KBINDEX#CONTROL'] },
+      Null: { 'dynamodb:LeadingKeys': 'false' },
+    });
     for (const sid of ['WriteCanonicalIndexProjections', 'RemoveObsoleteIndexProjections']) {
       const statement = bySid(sid);
       expect(statement).toBeDefined();
@@ -97,6 +101,7 @@ describe('AiStack', () => {
       .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
     const bySid = (sid: string) => statements.find((entry) => entry.Sid === sid);
     expect(bySid('CanonicalIndexState').Action).toContain('dynamodb:Scan');
+    expect(bySid('CanonicalIndexState').Condition).toBeUndefined();
     const reads = JSON.stringify(bySid('ReadCanonicalIndexSources').Resource);
     for (const prefix of ['transcripts', 'docs', 'docs-pdf']) {
       expect(reads).toContain(`/${prefix}/*`);
