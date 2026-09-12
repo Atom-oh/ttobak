@@ -241,9 +241,22 @@ func (s *AttachmentTextService) Request(ctx context.Context, userID, meetingID, 
 		defer cancel()
 		failErr := s.repo.FailAttachmentText(cleanup, meetingID, attachmentID, next, "PUBLISH_FAILED", s.now().UTC())
 		if errors.Is(failErr, repository.ErrConditionFailed) {
-			failErr = nil
+			observed, readErr := s.describe(cleanup, meeting, att)
+			if readErr == nil && observed.Status != model.AttachmentTextUnknown {
+				return attachmentStatus(meeting, att, observed), ErrAttachmentPublish
+			}
+			return nil, errors.Join(ErrAttachmentPublish, failErr, readErr)
 		}
-		return nil, errors.Join(ErrAttachmentPublish, failErr)
+		if failErr != nil {
+			return nil, errors.Join(ErrAttachmentPublish, failErr)
+		}
+		failed := *next
+		failed.Status, failed.ErrorCode, failed.LeaseUntil = model.AttachmentTextFailed, "PUBLISH_FAILED", 0
+		if prior != nil {
+			failed.ResultKey, failed.SourceETag = prior.ResultKey, prior.SourceETag
+			failed.UnitCount, failed.Complete = prior.UnitCount, prior.Complete
+		}
+		return attachmentStatus(meeting, att, &failed), ErrAttachmentPublish
 	}
 	state, err := s.describe(ctx, meeting, att)
 	if err != nil {

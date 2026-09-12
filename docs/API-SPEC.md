@@ -1899,7 +1899,13 @@ Manually curates a single crawled **news** document — e.g. a search result the
 ### 3. Summarize Lambda (cmd/summarize)
 - **Trigger**: EventBridge — S3 `Object Created` on the `transcripts/` prefix, and the custom `AllPartsTranscribed` event for multi-part audio (not a DynamoDB Stream — see INFRA-SPEC.md and ADR-031)
 - **Role**: summarizes the meeting via Bedrock Claude
-- **Steps**: (1) load the selected transcript → (2) build attachment context: image analysis results (a diagram attachment is labeled "Attached Diagram" and its mermaid code passed as a trusted source) + document attachment (PPTX/PDF etc., body not extracted) filenames → (3) call Bedrock Claude Opus 5 — the note conditionally includes an `## Architecture Diagram` section (only when a diagram attachment's mermaid exists or the discussion is concretely architectural; otherwise the section is omitted) → (4) generate the structured markdown note (+ trailing `## Attached Images`/`## Attached Documents` sections using `attachment://{id}` links, resolved to presigned URLs by the frontend) → (5) save content to DynamoDB → (6) set status to "done"
+- **Steps**:
+  1. Refine/merge the original STT result; a recorded source-conflict retry skips STT/refinement.
+  2. Capture exact stored source presence, hydrate the effective selected transcript/segments, and prepare verified DOCUMENT evidence.
+  3. Generate from those inputs with strict model completion; only verified documents enable DOC instructions.
+  4. Reject unsupported document claim units while preserving valid sibling claims, markdown and transcript citations. Document failures produce omission notices.
+  5. Atomically publish against captured human text, source and supplied-attachment conditions. Genuine source conflicts discard output and allow bounded fresh generation; ordinary read errors and deterministic limits fail.
+  6. Retain uploaded-file links and trusted image/diagram content, then run the existing action/tag/insight follow-ups. `## 아키텍처 다이어그램` remains conditional on diagram evidence; attached image/document link sections remain available. See ADR-040.
 - **Env vars**: TABLE_NAME, BEDROCK_MODEL_ID
 
 ### 4. Process Image Lambda (cmd/process-image)
@@ -1966,6 +1972,51 @@ EventBridge source `ttobak.upload`, detail-type `DocumentUploadCompleted`, detai
 source, not the event key. The worker accepts only an active queued run, produces
 immutable source-bound JSON and commits success/partial/failure conditionally.
 
-This is an internal event, not a public REST route. Status/retry/text-reading
-REST producers and consumers are staged separately. The current worker deployment
-does not imply that existing uploads already use the new pipeline.
+This internal event is published by upload completion and explicit text retry.
+API and summarize wiring are implemented here; frontend/QA activation and live
+end-to-end acceptance are separate rollout gates.
+
+## Meeting attachment text
+
+Owner-only upload completion creates canonical metadata and requests extraction
+for PDF/PPTX/DOCX/MD. A stored original remains HTTP 200 when unsupported format
+or publication failure has durable `textExtraction` failure metadata. Failed-state
+persistence errors remain errors. Retry still returns errors when work cannot queue.
+`POST /api/upload/complete` uses fixed error messages: 400 invalid input, 403 denied,
+404 missing meeting/source, 409 concurrent source change and 500 storage/event failure
+without a durable failure state. Its success response remains `{"status":"processing"}`.
+
+### GET /api/meetings/{meetingId}/attachments/{attachmentId}/text/status
+
+Current meeting readers receive HTTP 200. No query fields are accepted.
+Status also appears as `Attachment.textExtraction`:
+`{status,runId?,errorCode?,leaseUntil?,updatedAt?,unitCount,complete,hasResult,needsResummary,summaryExcerpted}`.
+States: unknown/queued/running/succeeded/partial/failed. Expiry is interrupted
+failure; retained results never imply current success.
+
+```json
+{"status":"failed","errorCode":"PUBLISH_FAILED","unitCount":0,"complete":false,"hasResult":false,"needsResummary":false,"summaryExcerpted":false}
+```
+
+`STATUS_UNAVAILABLE` means status lookup failed; unknown/absence never implies success.
+
+### POST /api/meetings/{meetingId}/attachments/{attachmentId}/text/retry
+
+Owners/editors may retry supported documents, including legacy unknown state.
+No query fields are accepted. HTTP 202 returns the same status shape, normally queued.
+An unsupported retry returns 422 `UNSUPPORTED_FORMAT`; publication/state errors remain errors.
+
+### GET /api/meetings/{meetingId}/attachments/{attachmentId}/text
+
+Optional query: `pageSize=3000&cursor=...`. Unknown/duplicate query fields fail.
+Text: `{analysis,current,source,format,scope,complete,warningCount,units,nextCursor?,pageComplete}`.
+Units carry exact Unicode offsets and parser locations. pageSize is 1–6000,
+response ≤14,000 bytes (`AttachmentTextPageLimit`) including newline, ≤50 units. Current auth/source/run/ETag
+is revalidated; stale cursors conflict. Errors: 400 query, 403/404 access/source,
+409 `CONFLICT` for stale source/cursor or `TEXT_UNAVAILABLE` for missing verified text,
+500 storage failures. A page with `current:false` is retained historical evidence.
+
+Source conflicts preserve text and mark fresh-generation retry; unrelated metadata
+changes do not invalidate generation. No source/model text appears in errors.
+Deployment prerequisites and runtime acceptance are recorded in
+[the rollout runbook](runbooks/meeting-document-release.md).

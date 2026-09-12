@@ -513,7 +513,10 @@ Cognito IDs load at **runtime**, not build time — the static bundle is infra-a
 and a 90-second timeout. CDK packages the exact dependency pins and six runtime
 modules from `backend/python/document-extract`. `DocumentUploadCompleted` on
 `ttobak.upload` invokes it only after the API has created attachment/run records;
-API producers are a later rollout step. Event delivery retries three times for
+The API upload/retry routes publish this event; the summarize Lambda consumes
+verified results as DOCUMENT evidence. Deploy these consumers/producers only after
+worker acceptance and the guarded-summary foundation (see the meeting-document
+runbook). Frontend/QA activation remains separately gated. Event delivery retries three times for
 at most five minutes, with a seven-day encrypted DLQ; Lambda async retries are
 disabled because run/lease recovery belongs to the status/retry protocol.
 
