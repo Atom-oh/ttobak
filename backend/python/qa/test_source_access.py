@@ -106,7 +106,8 @@ class TestDocumentAccess(_SourceFixture, unittest.TestCase):
         self.assertNotIn('PRIVATE_NOTE', text)
         self.assertEqual(self.table.reads, [])
         self.assertEqual({tool['toolSpec']['name'] for tool in SOURCE_TOOL_DEFINITIONS},
-                         {'get_document_detail', 'get_meeting_attachments', 'get_attachment_text'})
+                         {'get_document_detail', 'get_meeting_attachments', 'get_attachment_text',
+                          'get_legacy_text_detail'})
 
 
 class TestAttachmentAccess(_AttachmentFixture, unittest.TestCase):
