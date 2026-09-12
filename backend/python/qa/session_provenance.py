@@ -9,7 +9,7 @@ from tool_history import (
 )
 
 MAX_SESSION_DEPENDENCIES = 128
-MAX_HISTORY_BYTES = 256 * 1024
+MAX_HISTORY_BYTES = 384 * 1024
 
 
 def new_source_state():

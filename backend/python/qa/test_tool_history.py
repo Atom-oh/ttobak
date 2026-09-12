@@ -194,10 +194,11 @@ class TestToolHistory(unittest.TestCase):
         for i in range(MAX_TOOL_DEPENDENCIES):
             history.read(state, 'list_meetings', {'keyword': str(i)})
         before = len(self.calls)
-        with self.assertRaises(ValueError):
-            history.read(state, 'list_meetings', {'keyword': 'one-too-many'})
-        self.assertEqual(len(self.calls), before)
+        result = history.read(state, 'list_meetings', {'keyword': 'one-too-many'})
+        self.assertEqual(result[0]['meetingId'], 'm1')
+        self.assertEqual(len(self.calls), before + 1)
         self.assertFalse(state['replayable'])
+        self.assertEqual(state['toolHistoryCoverage'][0]['reason'], 'DEPENDENCY_LIMIT')
 
     def test_output_bounds_and_cycles_never_produce_a_trusted_hash(self):
         from tool_history import CompleteRead, MAX_RESULT_BYTES, fingerprint
@@ -208,10 +209,11 @@ class TestToolHistory(unittest.TestCase):
                 fingerprint(value)
         history = self.tracker(lambda user, **kwargs: CompleteRead([{'title': 'x' * (MAX_RESULT_BYTES + 1)}]))
         state = provenance.new_source_state()
-        with self.assertRaises(ValueError):
-            history.read(state, 'list_meetings', {})
+        current = history.read(state, 'list_meetings', {})
+        self.assertEqual(len(current[0]['title']), MAX_RESULT_BYTES + 1)
         self.assertFalse(state['replayable'])
         self.assertEqual(state['dependencies'], [])
+        self.assertEqual(state['toolHistoryCoverage'][0]['reason'], 'RESULT_LIMIT')
 
     def test_changes_within_a_turn_fail_and_final_validation_rechecks(self):
         history = self.tracker()
@@ -280,3 +282,51 @@ class TestToolHistory(unittest.TestCase):
         with self.assertRaises(ValueError):
             context['list_meetings']('owner', limit=2)
         self.assertEqual(len(self.calls), before)
+
+    def test_large_korean_limit100_list_keeps_answer_and_history(self):
+        from tool_history import CompleteRead, ToolHistory
+        import test_handler
+        import tools
+        rows = [{'meetingId': f'm{i}', 'title': '고객사 운영 검토 회의 ' * 20,
+                 'date': '2026-09-12', 'status': 'done', 'isShared': False,
+                 'tags': ['운영검토태그' + str(tag) for tag in range(40)]} for i in range(100)]
+        self.assertGreater(len(json.dumps(rows, ensure_ascii=False).encode()), 65536)
+        history = ToolHistory('reader', {'list_meetings': lambda user, **kw: CompleteRead(copy.deepcopy(rows))})
+        state = provenance.new_source_state()
+        view = history.read(state, 'list_meetings', {'limit': 100})
+        self.assertEqual(len(view), 100)
+        self.assertEqual(tools.format_meetings_results(view), tools.format_meetings_results(rows))
+        self.assertTrue(state['replayable'])
+        saved = session(state, conversation(tools.format_meetings_results(view), arguments={'limit': 100}))
+        self.assertTrue(provenance.restore_messages(
+            saved, provenance.new_source_state(), lambda _: False, tool_history=history))
+
+    def test_brief_hash_uses_actual_formatter_summary_extent(self):
+        from tool_history import CompleteRead, ToolHistory
+        import test_handler
+        import tools
+        value = {'account': '고객사', 'industry': '제조', 'insightsByType': {}, 'meetings': [],
+                 'research': [{'topic': '보고서', 'status': 'done', 'summary': '공개 요약' * 100000}]}
+        history = ToolHistory('reader', {'get_account_brief': lambda user, **kw: CompleteRead(copy.deepcopy(value))})
+        state = provenance.new_source_state()
+        view = history.read(state, 'get_account_brief', {'account': '고객사'})
+        self.assertEqual(len(view['research'][0]['summary']), 200)
+        self.assertEqual(tools.format_account_brief(view), tools.format_account_brief(value))
+        saved = session(state, conversation('brief', 'get_account_brief', {'account': '고객사'}))
+        value['research'][0]['summary'] = value['research'][0]['summary'][:200] + 'changed unshown suffix'
+        self.assertTrue(provenance.restore_messages(
+            saved, provenance.new_source_state(), lambda _: False, tool_history=history))
+        value['research'][0]['summary'] = 'Visible correction'
+        self.assertEqual(provenance.restore_messages(
+            saved, provenance.new_source_state(), lambda _: False, tool_history=history), [])
+
+    def test_history_capacity_cannot_misreport_successful_research_creation(self):
+        from tool_history import MAX_TOOL_DEPENDENCIES, ToolHistory
+        history = ToolHistory('reader', {})
+        state = provenance.new_source_state()
+        for i in range(MAX_TOOL_DEPENDENCIES):
+            history.research_receipt(state, {'topic': 'Synthetic'}, {'researchId': f'r{i}'})
+        receipt = history.research_receipt(state, {'topic': 'New task'}, {'researchId': 'new-id'})
+        self.assertEqual(receipt['researchId'], 'new-id')
+        self.assertFalse(state['replayable'])
+        self.assertEqual(state['toolHistoryCoverage'][0]['reason'], 'DEPENDENCY_LIMIT')

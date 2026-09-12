@@ -47,10 +47,16 @@ fields are rejected. Inputs cannot supply another user ID or callback name.
 
 ## State and replay
 
-`history.read(state, name, input)` returns the result for the existing formatter
+`history.read(state, name, input)` returns the effective public view for the existing formatter
 and registers `{readOnlyTool, toolInput, userId, sourceRevision}`. The revision is
 a SHA-256 fingerprint of the typed tool/user/input/result envelope. Dependencies
 store bounded inputs and the hash, not result text.
+
+Only formatter-consumed fields and stable identity fields enter this view. In
+particular, research summary is limited to the same first 200 characters that
+`format_account_brief` actually displays; hidden raw summaries are not hashed.
+Tests compare the original and projected formatter output. All 100 requested
+meeting rows remain available, including realistic large Korean titles/tags.
 
 Canonical framing preserves list order (including what “first” refers to), sorts
 map keys, distinguishes null/missing and bool/number, and treats exact int/Decimal
@@ -58,13 +64,17 @@ values equivalently across real boto3 serialization. No float coercion, repr/def
 stringification, Unicode normalization, or silent truncation is used.
 
 At most 16 tool/receipt dependencies and 128 total dependencies are retained.
-Results/envelopes are limited to 64 KiB of typed encoding, 4,096 nodes and depth 12.
-Overflow marks the turn nonreplayable and raises a visible error; it never hashes a
-truncated result. Callbacks must separately enforce bounded SDK calls, pagination
+Tracking is limited to 1 MiB of typed encoding, 16,384 nodes and depth 12.
+Bookkeeping overflow does not fail or erase a valid current result: the full
+effective public view is still returned, the turn becomes nonreplayable, and
+`state["toolHistoryCoverage"]` reports `RESULT_LIMIT` or `DEPENDENCY_LIMIT` with
+`complete: false`. Callers should surface that history-coverage limitation rather
+than claim no results. No truncated result is hashed as if complete. Callbacks
+and the model response path must separately enforce their SDK/output limits, pagination
 and timeouts. Each validation pass executes at most one read per saved dependency;
 there is no warm result cache that can hide changes.
 
-`restore_messages` bounds stored JSON to 256 KiB/100 messages and requires coverage
+`restore_messages` bounds stored JSON to 384 KiB/100 messages and requires coverage
 for every saved readonly call or creation receipt. It checks all source and tool
 dependencies before returning any messages. Changed order/content, revoked access,
 failed reads, absent callbacks or malformed state returns **the entire history as
@@ -78,7 +88,7 @@ outside Converse message blocks. Revalidate before every subsequent model round,
 including after a long tool read; concurrent changes must not enter final output.
 
 Replace the old `_track_tool_history` behavior for these four tracked readers.
-Other mutable/untracked tools remain nonreplayable. Failed/oversized helper reads
+Other mutable/untracked tools remain nonreplayable. Failed reads or tracking overflow
 set `source_state["replayable"] = False`; do not override that flag afterward.
 Use the same adapter/state in REST and streaming paths.
 

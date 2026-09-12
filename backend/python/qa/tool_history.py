@@ -7,10 +7,14 @@ from source_revision import HEX_REVISION, IDENTIFIER
 
 READONLY_TOOLS = frozenset(('list_meetings', 'list_accounts', 'get_account_insights', 'get_account_brief'))
 MAX_TOOL_DEPENDENCIES = 16
-MAX_RESULT_BYTES = 65536
-MAX_NODES = 4096
+MAX_RESULT_BYTES = 1024 * 1024
+MAX_NODES = 16384
 MAX_DEPTH = 12
 INSIGHT_TYPES = frozenset(('trend', 'need', 'competitive', 'risk', 'opportunity', 'tech', 'stakeholder', 'action'))
+
+
+class HistoryLimit(ValueError):
+    """Bookkeeping limits never turn a valid current read into missing data."""
 
 
 @dataclass(frozen=True)
@@ -26,12 +30,12 @@ def _snapshot(value):
 
     def emit(data):
         if len(output) + len(data) > MAX_RESULT_BYTES:
-            raise ValueError('Tool result exceeds history byte limit')
+            raise HistoryLimit('Tool result exceeds history byte limit')
         output.extend(data)
 
     def text(value):
         if len(value) > MAX_RESULT_BYTES:
-            raise ValueError('Tool text exceeds history byte limit')
+            raise HistoryLimit('Tool text exceeds history byte limit')
         data = value.encode('utf-8', errors='strict')
         emit(str(len(data)).encode() + b':' + data)
 
@@ -39,7 +43,7 @@ def _snapshot(value):
         nonlocal nodes
         nodes += 1
         if depth > MAX_DEPTH or nodes > MAX_NODES:
-            raise ValueError('Tool result exceeds history structure limit')
+            raise HistoryLimit('Tool result exceeds history structure limit')
         if item is None:
             emit(b'n')
         elif type(item) is bool:
@@ -65,8 +69,10 @@ def _snapshot(value):
             emit(b'd')
             text(normalized)
         elif type(item) in (dict, list):
-            if id(item) in ancestors or len(item) > MAX_NODES:
+            if id(item) in ancestors:
                 raise ValueError('Invalid tool result structure')
+            if len(item) > MAX_NODES:
+                raise HistoryLimit('Tool result exceeds history structure limit')
             ancestors.add(id(item))
             try:
                 if type(item) is dict:
@@ -182,6 +188,39 @@ def tool_dependency_key(dependency):
     return ('research-receipt', dependency['userId'], dependency['researchReceipt']['researchId'])
 
 
+def _public_view(name, value):
+    """Only fields consumed by existing formatters, plus stable identity fields."""
+    def pick(item, fields):
+        if type(item) is not dict:
+            raise ValueError('Invalid readonly result row')
+        return {field: list(item[field]) if type(item[field]) is list else item[field]
+                for field in fields if field in item}
+
+    def rows(items, fields):
+        if type(items) is not list:
+            raise ValueError('Invalid readonly result collection')
+        return [pick(item, fields) for item in items]
+
+    if name == 'list_meetings':
+        return rows(value, ('meetingId', 'title', 'date', 'tags', 'status', 'isShared', 'sharedBy'))
+    if name == 'list_accounts':
+        return rows(value, ('accountId', 'name', 'role'))
+    result = pick(value, ('account', 'accountId'))
+    if name == 'get_account_insights':
+        result['insights'] = rows(value['insights'], ('insightId', 'type', 'text', 'occurredAt', 'entities'))
+        return result
+    if 'industry' in value:
+        result['industry'] = value['industry']
+    result['insightsByType'] = {key: rows(items, ('insightId', 'text'))
+                               for key, items in value['insightsByType'].items()}
+    result['meetings'] = rows(value['meetings'], ('meetingId', 'title', 'date'))
+    result['research'] = rows(value['research'], ('researchId', 'topic', 'summary', 'status'))
+    for research in result['research']:
+        if type(research.get('summary')) is str:
+            research['summary'] = research['summary'][:200]  # format_account_brief's actual visible extent.
+    return result
+
+
 def covers_tool_calls(messages, dependencies):
     """A replayable flag cannot substitute for a tracked read/creation receipt."""
     try:
@@ -269,13 +308,23 @@ class ToolHistory:
                          and type(value.get('meetings')) is list and type(value.get('research')) is list)
         if not valid:
             raise ValueError('Readonly callback returned an invalid/error result')
-        return _snapshot(value)[0]
+        return _public_view(name, value)
 
     @staticmethod
     def _capacity(state, key):
+        from session_provenance import MAX_SESSION_DEPENDENCIES
         dependencies = [dep for dep in state['dependencies'] if is_tool_dependency(dep)]
-        if len(dependencies) >= MAX_TOOL_DEPENDENCIES and not any(tool_dependency_key(dep) == key for dep in dependencies):
-            raise ValueError('Readonly history dependency budget exceeded')
+        if ((len(dependencies) >= MAX_TOOL_DEPENDENCIES or len(state['dependencies']) >= MAX_SESSION_DEPENDENCIES)
+                and not any(tool_dependency_key(dep) == key for dep in dependencies)):
+            raise HistoryLimit('Readonly history dependency budget exceeded')
+
+    @staticmethod
+    def _untracked(state, name, reason):
+        state['replayable'] = False
+        coverage = state.setdefault('toolHistoryCoverage', [])
+        entry = {'tool': name, 'complete': False, 'reason': reason}
+        if entry not in coverage:
+            coverage.append(entry)
 
     def read(self, state, name, arguments):
         from session_provenance import remember_source
@@ -283,9 +332,17 @@ class ToolHistory:
             arguments = normalize_input(name, arguments)
             dependency = {'readOnlyTool': name, 'toolInput': arguments, 'userId': self.user_id,
                           'sourceRevision': '0' * 64}
-            self._capacity(state, tool_dependency_key(dependency))
             value = self._value(name, arguments)
-            dependency['sourceRevision'] = fingerprint(['readonly-tool-v1', self.user_id, name, arguments, value])
+            try:
+                self._capacity(state, tool_dependency_key(dependency))
+            except HistoryLimit:
+                self._untracked(state, name, 'DEPENDENCY_LIMIT')
+                return value
+            try:
+                dependency['sourceRevision'] = fingerprint(['readonly-tool-v1', self.user_id, name, arguments, value])
+            except HistoryLimit:
+                self._untracked(state, name, 'RESULT_LIMIT')
+                return value
             remember_source(state, dependency)
             return value
         except Exception:
@@ -305,7 +362,11 @@ class ToolHistory:
                           'sourceRevision': fingerprint(['research-receipt-v1', self.user_id, receipt])}
             if not valid_tool_dependency(dependency):
                 raise ValueError('Invalid research receipt')
-            self._capacity(state, tool_dependency_key(dependency))
+            try:
+                self._capacity(state, tool_dependency_key(dependency))
+            except HistoryLimit:
+                self._untracked(state, 'start_research', 'DEPENDENCY_LIMIT')
+                return dict(receipt)
             remember_source(state, dependency)
             return dict(receipt)
         except Exception:
