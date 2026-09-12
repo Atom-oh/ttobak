@@ -1,53 +1,40 @@
 # Action item extraction recovery
 
-## Problem
-
-Malformed/partial model output currently becomes `[]`, which is displayed as
-“no action items.” Pipeline failures are logged without a visible result state.
-The completion checkbox is local-only and cannot survive a reload.
+Malformed model output previously became `[]`; failed extraction was invisible,
+and completion checkboxes existed only in local UI state.
 
 ## Required behavior
 
-1. A complete, valid empty array means success with no items. Malformed JSON,
-   null/object responses, invalid required item fields and incomplete model
-   completion mean failure, with no replacement of previously saved items.
-2. A separate `MEETING#{id}/ANALYSIS#actionItems` record stores only run identity,
-   source hash, status, lease timestamps and fixed public error codes/messages.
-   It contains no source text, names, emails or model output. Missing legacy
-   state is “unknown,” never proof of successful empty extraction.
-3. Retry is authenticated and requires meeting owner/edit permission plus a
-   saved summary. `POST /api/meetings/{id}/action-items/retry` returns accepted
-   queued state. A scoped EventBridge rule invokes the existing summarize
-   Lambda with meeting/owner/run identifiers, without redoing STT or summary.
-4. Claiming a run is conditional. Duplicate events do not run a second model
-   call. Expired queued/running leases become visibly failed and can be retried.
-   Old run IDs cannot complete or overwrite a replacement run.
-5. The worker extracts from an immutable saved-summary snapshot. Result and
-   success state are written in one transaction conditioned on the active run,
-   unchanged source summary and unchanged existing action items. A source edit,
-   completion toggle or deletion wins over stale generated results.
-6. New generated items start incomplete and receive new IDs. Exact unchanged
-   tasks keep their existing ID/completion state. Model-supplied IDs or completion
-   flags are never authoritative. A late checkbox request cannot target a new
-   task merely because it occupies the same array index.
-7. `PUT /api/meetings/{id}/action-items/{itemId}` persists the explicit completed
-   boolean through owner/edit authorization and conditional updates.
-8. The UI displays queued/running/failed/succeeded states, retains prior items
-   on failure, polls pending work, exposes retry to authorized users, and reports
-   checkbox save errors. Successful empty extraction alone gets the empty-result
-   label.
+1. Only a complete valid array succeeds. Reject malformed/partial output,
+   null/objects, empty task text, invalid priorities and invalid ISO dates.
+   Failed runs never replace saved items.
+2. Store run ID, status, source hash, timestamps, numeric lease and fixed error
+   codes in `MEETING#{id}/ANALYSIS#actionItems`, outside whole-item meeting writes.
+   Store no source text or model output there. Missing legacy state is unknown;
+   other states are queued, running, succeeded and failed.
+3. Owner/edit users may retry a done meeting with a saved summary. Return 202;
+   `ttobak.analysis` / `ActionItemsRequested` carries owner/meeting/run IDs to
+   the existing summarize worker. Do not rerun STT or summary. The normal pipeline
+   uses the same lifecycle inline before its existing export stage.
+4. Conditional claims prevent duplicate model calls. Expired leases expose an
+   interrupted failure and allow retry; old run IDs cannot overwrite newer runs.
+5. Extract from a copied summary snapshot. Commit items and success together,
+   conditional on active run, unchanged summary and unchanged old items.
+   Deletion, source edits and completion changes win over stale generated output.
+6. Preserve IDs and completion for exact unchanged tasks. New tasks get new IDs
+   and start incomplete. Model IDs/completion are never authoritative.
+   Preserve legacy done flags and assign stable IDs to entries without one.
+7. Persist explicit completion booleans through owner/edit authorization and
+   bounded conditional retries. Removed IDs fail instead of targeting another task.
+8. Show pending/error/unknown states and prior items. Poll pending work separately
+   from meeting status, reconcile reordered responses and surface errors. Autosave
+   acknowledgments must not overwrite newer editor drafts. Only succeeded `[]`
+   displays the no-items label.
 
-## Integration and validation
+## Verification
 
-The normal summarize pipeline invokes the same lifecycle service inline after
-summary creation. Retry events enter that service through the summarize handler.
-Status lives outside whole-item Meeting writes. Repository operations use the
-expression builder and conditional transactions; handlers only perform HTTP/auth
-adaptation. Fixed error messages never echo source text or raw provider errors.
-
-Test malformed versus empty output, partial completion, immutable input,
-duplicate queue delivery, expiry, stale run IDs, source changes, concurrent
-checkboxes, deletion, failed publication/persistence, read-only access and
-stable task identities. Add a scoped EventBridge delivery/failure configuration
-with IAM assertions. Run complete Go tests/vet/ARM64 builds, frontend changed-file
-lint/static build and infra synth/tests before the PR review gate.
+Use stdlib Go tests for parsing, authorization, lifecycle races, failure handling,
+legacy data and SDK transaction guards. Check UI source-change and autosave races;
+run changed-file lint/build without a new framework. Verify the exact EventBridge
+rule, bounded retries and private encrypted DLQ with infra tests/synth. Complete
+current-head PR review, required CI, merge and deployment checks.

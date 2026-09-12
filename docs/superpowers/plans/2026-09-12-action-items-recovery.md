@@ -5,10 +5,6 @@
 **Spec:** `docs/superpowers/specs/2026-09-12-action-items-recovery.md`.
 The complete five-item goal remains in `docs/research/2026-09-12-ai-note-improvements.md`.
 
-**Architecture:** A separate conditional analysis row owns the run and lease. The
-existing summarize worker reads an immutable summary; a transaction publishes
-items and success only when the run, source and previous items still match.
-
 ## Delivery checklist
 
 - [x] Strict parsing and immutable input; reject malformed/partial/null results (PR194).
@@ -23,7 +19,6 @@ items and success only when the run, source and previous items still match.
 - [x] Verify Go tests/vet/ARM64, frontend changed-file lint/build and infra tests/synth.
 - [ ] Publish to main, resolve current-head AI findings, merge and verify deployment.
 
-Use stdlib Go tests and frontend lint/build only. Deploy changed stacks with
-`--exclusively`. Preserve user edits to the root AGENTS.md. The configured Go
-path is absent locally; verification uses `/home/atomoh/go-sdk/go/bin/go` with
-`GOTMPDIR=/home/atomoh/.cache/ttobak-improvements/tmp`.
+Validation uses Go stdlib tests, frontend lint/build and CDK tests/synth.
+Deploy stacks with `--exclusively`; preserve root AGENTS.md user edits.
+Local Go: `/home/atomoh/go-sdk/go/bin/go`.
