@@ -3,7 +3,6 @@ package convertdoc
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 
@@ -11,8 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
-
-const MaxPreviewSourceBytes int64 = 50 * 1024 * 1024
 
 var ErrPreviewSourceChanged = errors.New("preview source changed")
 
@@ -78,8 +75,8 @@ func (s *PreviewStorage) Download(ctx context.Context, key string, target io.Wri
 		return source, errors.New("slide source has no body")
 	}
 	defer out.Body.Close()
-	if aws.ToString(out.ETag) == "" || out.ContentLength == nil || *out.ContentLength < 0 || *out.ContentLength > MaxPreviewSourceBytes {
-		return source, errors.New("invalid or oversized slide source")
+	if aws.ToString(out.ETag) == "" || out.ContentLength == nil || *out.ContentLength < 0 || *out.ContentLength == 1<<63-1 {
+		return source, errors.New("invalid slide source metadata")
 	}
 	source.ETag, source.VersionID = *out.ETag, aws.ToString(out.VersionId)
 	n, err := io.Copy(target, io.LimitReader(out.Body, *out.ContentLength+1))
@@ -87,7 +84,7 @@ func (s *PreviewStorage) Download(ctx context.Context, key string, target io.Wri
 		return source, err
 	}
 	if n != *out.ContentLength {
-		return source, fmt.Errorf("slide source length mismatch")
+		return source, errors.New("slide source length mismatch")
 	}
 	return source, nil
 }

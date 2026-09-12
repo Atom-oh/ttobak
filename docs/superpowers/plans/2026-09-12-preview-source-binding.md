@@ -4,7 +4,10 @@ Automatic document indexing must distinguish the current slide upload from an
 older PDF preview at the same sidecar key. The converter now records the exact
 GET response ETag and optional S3 version ID as `source-etag` and
 `source-version-id` metadata, and rechecks the source immediately before
-publication. Downloads also have a 50 MiB byte limit.
+publication. Downloads verify their actual byte count against S3 metadata and
+stream to disk. Preview conversion keeps its existing 2 GiB temporary-storage
+and five-minute function budgets; the KB provider's separate 50 MiB ingestion
+limit is not imposed on preview generation.
 
 Before conversion, HEAD the destination. Publish with If-None-Match for a new
 preview or If-Match against its observed ETag for a replacement. Conditional
