@@ -92,6 +92,7 @@ func (s *BedrockService) ExtractActionItemsForMeeting(ctx context.Context, meeti
 - dueDate: 명시적으로 언급된 경우만 (ISO 형식 YYYY-MM-DD)
 
 "~하기로 했다", "~할 예정", "~를 준비", "팔로업", "확인 필요" 등의 표현에서 액션을 추출하세요.
+단, 명시적으로 맡거나 합의한 후속 작업만 추출하세요. 제안이나 문제·미승인·정보 부족만을 근거로 확인, 재검토, 준비 작업을 새로 만들지 마세요. 합의된 작업이 없으면 []를 반환하세요.
 유효한 JSON 배열만 반환하세요. 액션 아이템이 없으면 []를 반환하세요.
 예시:
 [{"text":"PoC 환경 구축 제안서 준비","assignee":"spk_1","priority":"high","completed":false}]`
