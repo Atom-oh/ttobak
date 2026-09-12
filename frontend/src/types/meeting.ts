@@ -84,6 +84,18 @@ export interface ActionItem {
   dueDate?: string;
 }
 
+export interface ActionItemsAnalysis {
+  status: 'unknown' | 'queued' | 'running' | 'failed' | 'succeeded';
+  runId?: string;
+  errorCode?: string;
+  leaseUntil?: number;
+}
+
+export interface ActionItemsResponse {
+  actionItems: ActionItem[];
+  analysis: ActionItemsAnalysis;
+}
+
 export interface TranscriptSegment {
   id: string;
   speaker: string;
@@ -151,6 +163,7 @@ export interface User {
 
 // Extended meeting detail from API
 export interface MeetingDetail extends Meeting {
+  actionItemsAnalysis?: ActionItemsAnalysis;
   content?: string;
   notes?: string;
   /** Real-time summary built during recording (markdown incl. mermaid) */

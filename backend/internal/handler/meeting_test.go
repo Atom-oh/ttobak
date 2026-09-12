@@ -7,9 +7,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/go-chi/chi/v5"
 	"github.com/ttobak/backend/internal/middleware"
 	"github.com/ttobak/backend/internal/model"
@@ -52,15 +54,16 @@ func newStubMeetingHandler() (*MeetingHandler, *mockHandlerMeetingRepo) {
 
 // mockHandlerMeetingRepo implements service.MeetingRepo for handler tests.
 type mockHandlerMeetingRepo struct {
-	meetings           map[string]*model.Meeting
-	meetingsByID       map[string]*model.Meeting
-	shares             map[string]*model.Share
-	attachments        map[string][]model.Attachment
-	users              map[string]*model.User
-	members            map[string]*model.AccountMember // "accountID|userID"
-	meetingRefs        map[string][]model.MeetingRef   // accountID -> refs
-	accountInsights    []model.AccountInsight
-	listMeetingsParams []repository.ListMeetingsParams
+	meetings            map[string]*model.Meeting
+	meetingsByID        map[string]*model.Meeting
+	shares              map[string]*model.Share
+	attachments         map[string][]model.Attachment
+	users               map[string]*model.User
+	members             map[string]*model.AccountMember // "accountID|userID"
+	meetingRefs         map[string][]model.MeetingRef   // accountID -> refs
+	accountInsights     []model.AccountInsight
+	listMeetingsParams  []repository.ListMeetingsParams
+	conditionalWriteErr error
 }
 
 func newMockHandlerMeetingRepo() *mockHandlerMeetingRepo {
@@ -131,6 +134,18 @@ func (m *mockHandlerMeetingRepo) UpdateMeetingFields(_ context.Context, userID, 
 			cp.Notes = v.(string)
 		case "transcriptA":
 			cp.TranscriptA = v.(string)
+		case "transcriptB":
+			cp.TranscriptB = v.(string)
+		case "transcriptSegments":
+			cp.TranscriptSegments = v.(string)
+		case "actionItems":
+			cp.ActionItems = v.(string)
+		case "speakerMap":
+			cp.SpeakerMap = v.(map[string]string)
+		case "accountId":
+			cp.AccountID = v.(string)
+		case "sharedToAccount":
+			cp.SharedToAccount = v.(bool)
 		case "selectedTranscript":
 			cp.SelectedTranscript = v.(string)
 		case "participants":
@@ -144,6 +159,42 @@ func (m *mockHandlerMeetingRepo) UpdateMeetingFields(_ context.Context, userID, 
 	m.meetingsByID[meetingID] = &cp
 	return nil
 }
+func (m *mockHandlerMeetingRepo) UpdateMeetingFieldsIfMatch(ctx context.Context, userID, meetingID string, expected, fields map[string]interface{}) error {
+	if m.conditionalWriteErr != nil {
+		return m.conditionalWriteErr
+	}
+	meeting := m.meetings[hKey(userID, meetingID)]
+	if meeting == nil {
+		return repository.ErrConditionFailed
+	}
+	stored, err := attributevalue.MarshalMap(meeting)
+	if err != nil {
+		return err
+	}
+	for field, want := range expected {
+		value, err := attributevalue.Marshal(want)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(stored[field], value) {
+			return repository.ErrConditionFailed
+		}
+	}
+	return m.UpdateMeetingFields(ctx, userID, meetingID, fields)
+}
+
+func TestUpdateSpeakersConflict(t *testing.T) {
+	h, repo := newStubMeetingHandler()
+	repo.addMeeting(&model.Meeting{UserID: "owner", MeetingID: "meeting", Status: model.StatusDone})
+	repo.conditionalWriteErr = errors.Join(errors.New("concurrent update"), repository.ErrConditionFailed)
+	r := withChiParam(withUserCtx(httptest.NewRequest(http.MethodPut, "/", bytes.NewBufferString(`{"speakerMap":{"spk_0":"Kim"}}`)), "owner"), "meetingId", "meeting")
+	w := httptest.NewRecorder()
+	h.UpdateSpeakers(w, r)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("speaker rename conflict: status=%d body=%s", w.Code, w.Body)
+	}
+}
+
 func (m *mockHandlerMeetingRepo) DeleteMeeting(_ context.Context, userID, meetingID string) error {
 	delete(m.meetings, hKey(userID, meetingID))
 	delete(m.meetingsByID, meetingID)
