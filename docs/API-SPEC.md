@@ -1916,3 +1916,16 @@ The converter records `source-etag` and optional `source-version-id` from the ac
 2. On failure, look up PK=USER#{userId}, SK=SHARED#{meetingId} → shared, check permission
 3. Both fail → 403 Forbidden
 ```
+
+
+## Internal Document Extraction Event (ADR-039)
+
+EventBridge source `ttobak.upload`, detail-type `DocumentUploadCompleted`, detail
+`{bucket,key,meetingId,ownerId,userId,attachmentId,runId}`. `userId` is the uploader;
+`ownerId` is the canonical meeting owner. The stored attachment/run authorize the
+source, not the event key. The worker accepts only an active queued run, produces
+immutable source-bound JSON and commits success/partial/failure conditionally.
+
+This is an internal event, not a public REST route. Status/retry/text-reading
+REST producers and consumers are staged separately. The current worker deployment
+does not imply that existing uploads already use the new pipeline.

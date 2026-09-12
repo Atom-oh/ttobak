@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: b1d46a4f66c9 · generated-at: 2026-09-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 0b09109efffc · generated-at: 2026-09-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -23,7 +23,7 @@ cd frontend && npm run build      # static export to out/
 cd frontend && npm run lint       # eslint (NO test framework — lint+build only)
 pip install 'boto3<2'             # prerequisite for the Python suites below
 cd backend/python/crawler && python3 -m unittest test_crawlers -v
-cd backend/python/document-extract && python3 -m pip install -r requirements.txt && python3 -m unittest test_extract test_worker -v
+cd backend/python/document-extract && python3 -m pip install -r requirements-lambda.txt && python3 -m unittest test_extract test_worker test_handler -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
 cd backend/python/qa && python3 -m unittest test_handler -v    # mocks boto3 at import — no boto3<2 pin needed
 cd backend/python/sim && python3 -m unittest test_handler -v   # cost/sizing simulator worker (ADR-033)
@@ -74,7 +74,7 @@ cd mac-app/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D wa
 - Keep functions/files focused; follow existing patterns in the touched package.
 
 ## Known False-Positives (do NOT report)
-- **`updateAttachmentByKey`** is implemented: `ListAttachments` matches `originalKey` and persists type/content/status, with `ExtractInfoFromImageKey` fallback. Do not re-raise missing image persistence. **Production document attachments still contribute filenames only**; the bounded PDF/PPTX/DOCX/MD parser is present, but queueing and summary/QA integration remain pending. Manual KB copy + async ingestion remains available; its default parser does not index PPT/PPTX. This tracked HIGH gap is not a new finding.
+- **`updateAttachmentByKey`** is implemented; do not re-raise missing image persistence. Document extraction has a bounded parser and private worker (ADR-039), but API/summary/QA wiring remains staged. The worker validates `ATTACH#`/`ATTEXT#` identity, run, lease and ETag; immutable results use `files/*/*/text/*/*.json`. Empty text is failure, partial extraction is explicit. Manual KB copy remains available; its default parser does not index PPT/PPTX.
 - **JWT signature verification**: `middleware.ParseVerifiedJWT` verifies signatures against Cognito JWKS (RS256, issuer + exp checked) — this is not a gap; don't re-raise "unverified JWT" findings.
 - **"`FileKey` isn't validated to be owner-prefixed on write, so the unauthenticated public-share route could presign an arbitrary bucket object"**: checked directly against `service/account.go` — `validateFileKeyOwnership(userID, req.FileKey)` runs in both `putDoc` (create) and `updateDoc` (update, whenever `req.FileKey` differs from the doc's existing value) before any assignment; every write path funnels through one of these two functions. `ownsFileKey`'s separate use in the S3-cleanup-on-supersede path is about a *different* concern (a shared copy's underlying object lives under the sharer's prefix, not the current editor's) and does not imply write-time validation is missing. Covered by `TestPutDocument_SlideRejectsForeignFileKey`/`TestUpdateAccountDocument_RejectsForeignFileKey`. Don't re-raise without pointing at a concrete write path that skips `validateFileKeyOwnership`.
 - **Hardcoded ACM ARN / domain / CORS origin / KB id / `agentCoreRuntimeArn` / `researchAgentExecutionRoleArn` in CDK, and mac-app's `EXPECTED_BUCKET_HOST`**: known tech-debt, tracked; not a new-PR blocker unless the diff worsens it.

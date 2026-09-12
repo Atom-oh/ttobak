@@ -486,3 +486,27 @@ Cognito IDs load at **runtime**, not build time — the static bundle is infra-a
 | Real-time transcription | API Gateway WebSocket + Nova Sonic | Bidirectional streaming support |
 | Added Knowledge Base | Bedrock KB + OpenSearch Serverless | Supports meeting Q&A RAG |
 | External integration API keys | Stored KMS-encrypted in DynamoDB | Safe storage for e.g. Notion API keys |
+
+
+## Meeting Document Extraction Worker (ADR-039)
+
+`ttobak-document-extract` is a Python 3.12 ARM64 Lambda with 1536 MiB memory
+and a 90-second timeout. CDK packages the exact dependency pins and six runtime
+modules from `backend/python/document-extract`. `DocumentUploadCompleted` on
+`ttobak.upload` invokes it only after the API has created attachment/run records;
+API producers are a later rollout step. Event delivery retries three times for
+at most five minutes, with a seven-day encrypted DLQ; Lambda async retries are
+disabled because run/lease recovery belongs to the status/retry protocol.
+
+The existing VPC's PRIVATE_ISOLATED subnets have S3/DynamoDB gateway endpoints.
+A dedicated security group permits TCP 443 only to their AWS-managed prefix
+lists, resolved by CDK lookup. No ingress or public Lambda URL is created.
+The role permits source `files/*` reads, result `files/*/*/text/*/*.json` PUTs,
+and table GetItem/UpdateItem/ConditionCheckItem. Regional ENI operations use
+a RequestedRegion condition. Logs have 30-day retention. Canonical validation
+remains required: these service permissions span users inside those prefixes.
+
+Deploy this worker before the upload/retry producer. Verify source/runtime
+identity checks and result persistence with synthetic records before enabling
+summary/Q&A consumers. See the worker contract for explicit limits and retained
+results after failures; no existing attachment is backfilled by this stack alone.

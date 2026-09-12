@@ -74,5 +74,5 @@ jobs:
       - name: Run bounded document parser tests
         working-directory: backend/python/document-extract
         run: |
-          python3 -m pip install -r requirements.txt
-          python3 -m unittest test_extract test_worker -v
+          python3 -m pip install -r requirements-lambda.txt
+          python3 -m unittest test_extract test_worker test_handler -v
