@@ -2,6 +2,25 @@
 
 > CDK stack design (v2 - API Gateway + Lambda@Edge architecture)
 
+## Saved-summary retry delivery
+
+`TtobakGatewayStack` routes default-bus events from `ttobak.analysis` with
+detail-type `SummaryRequested` to the existing summarize Lambda. Detail contains
+only `{meetingId,runId}`. Delivery expires after five minutes, with three retry
+attempts and a seven-day SQS-managed encrypted DLQ.
+
+The DLQ accepts `sqs:SendMessage` only from `events.amazonaws.com`, conditioned on
+this exact rule ARN; redrive from other queues is denied. Lambda invocation is
+likewise scoped to the rule ARN. There is no new public endpoint or wildcard
+principal. The existing API default-bus `PutEvents` permission is sufficient.
+
+The API function explicitly depends on the summarize consumer and the rule
+construct, including its invocation permission. CDK assertions pin those
+dependencies so the producer cannot update ahead of delivery setup. The document
+worker from #208 must still be physically deployed before document upload
+producers. See [release order](runbooks/meeting-document-release.md); this code
+does not claim that deployment has happened.
+
 ## 1. Stack Overview
 
 ```

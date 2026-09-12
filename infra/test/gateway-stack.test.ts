@@ -187,6 +187,55 @@ describe('GatewayStack', () => {
     });
   });
 
+  test('saved summaries retain their run detail and reach summarize through a bounded rule', () => {
+    const summarizeId = resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-summarize');
+    const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-saved-summary-dlq');
+    const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-saved-summary-requested');
+    const rule = template.findResources('AWS::Events::Rule')[ruleId].Properties;
+    expect(rule.EventPattern).toEqual({ source: ['ttobak.analysis'], 'detail-type': ['SummaryRequested'] });
+    expect(rule.Targets).toEqual([{
+      Arn: { 'Fn::GetAtt': [summarizeId, 'Arn'] }, Id: expect.any(String),
+      DeadLetterConfig: { Arn: { 'Fn::GetAtt': [queueId, 'Arn'] } },
+      RetryPolicy: { MaximumEventAgeInSeconds: 300, MaximumRetryAttempts: 3 },
+    }]);
+    expect(template.findResources('AWS::SQS::Queue')[queueId].Properties).toMatchObject({
+      SqsManagedSseEnabled: true, MessageRetentionPeriod: 604800,
+      RedriveAllowPolicy: { redrivePermission: 'denyAll' },
+    });
+    template.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunction', FunctionName: { 'Fn::GetAtt': [summarizeId, 'Arn'] },
+      Principal: 'events.amazonaws.com', SourceArn: { 'Fn::GetAtt': [ruleId, 'Arn'] },
+    });
+  });
+
+  test('saved-summary producer waits for its consumer, rule and invocation permission', () => {
+    const apiId = resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-api');
+    const summarizeId = resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-summarize');
+    const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-saved-summary-requested');
+    const permissions = template.findResources('AWS::Lambda::Permission');
+    const permissionId = Object.keys(permissions).find((id) =>
+      JSON.stringify(permissions[id].Properties.SourceArn) === JSON.stringify({ 'Fn::GetAtt': [ruleId, 'Arn'] }));
+    expect(permissionId).toBeDefined();
+    const dependencies = template.toJSON().Resources[apiId].DependsOn ?? [];
+    expect(dependencies).toEqual(expect.arrayContaining([summarizeId, ruleId, permissionId]));
+  });
+
+  test('saved-summary DLQ accepts sends only from its exact EventBridge rule', () => {
+    const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-saved-summary-dlq');
+    const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-saved-summary-requested');
+    const statements = Object.values(template.findResources('AWS::SQS::QueuePolicy'))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement)
+      .filter((statement) => JSON.stringify(statement.Resource) === JSON.stringify({ 'Fn::GetAtt': [queueId, 'Arn'] }));
+    expect(statements).toEqual([{
+      Sid: expect.any(String),
+      Action: 'sqs:SendMessage',
+      Effect: 'Allow',
+      Principal: { Service: 'events.amazonaws.com' },
+      Resource: { 'Fn::GetAtt': [queueId, 'Arn'] },
+      Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } },
+    }]);
+  });
+
   test('action-item DLQ is encrypted, retains seven days, and accepts only this rule', () => {
     const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-action-items-dlq');
     const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-action-items-requested');

@@ -357,6 +357,46 @@ objects. Conditional writes remain unchanged. Both queueing and processing
 require a nonblank saved summary, so transcript storage references cannot become
 fallback model input when the summary is unavailable.
 
+#### Re-summary from saved sources
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/meetings/{meetingId}/resummary` | Current meeting readers; small status response |
+| POST | `/api/meetings/{meetingId}/resummary` | Owner/edit; empty body or `{}`; `202` with status |
+
+Response: `{status, runId?, errorCode?, leaseUntil?, updatedAt?, resultHash?}`.
+Status is `unknown`, `queued`, `running`, `succeeded`, or `failed`; lease is epoch
+milliseconds and updatedAt is RFC3339. An active run is reused. Expired work is
+persisted as `failed/INTERRUPTED`. A successful resultHash is the SHA-256 of the
+saved summary text.
+
+This differs from POST `/summarize`, which is live, caller-text summarization.
+Re-summary reads saved notes/summary, the current selected transcript and
+verified document extraction. It does not rerun STT or refinement and does not
+import linked-meeting context. Unavailable documents are omitted with notices
+when trusted notes/transcript remain. If no other source exists, pending/failed/
+missing document text returns `409 SOURCE_NOT_READY`; active transcription returns `409 MEETING_BUSY`;
+absent source returns `409 NO_SUMMARY_SOURCE`. Source conflicts return 409,
+source/output limits 413, and publish failures 503. Raw source/model text is
+never included in error responses.
+
+State is separate at `MEETING#id / ANALYSIS#summary`. The worker revalidates the
+requester's edit grant, source fields, attachment inventory and object ETags.
+Summary/coverage and success are published atomically under source/run/lease
+conditions. Concurrent human changes reject the generated result. Failure keeps
+the previous summary. Inputs are limited to 20 attachments and 8 MiB per loaded
+transcript field; document evidence is fairly excerpted within 64 KiB total.
+Unprovided/partial evidence is explicitly marked.
+
+Delivery requires host infrastructure to route
+`source=ttobak.analysis, detail-type=SummaryRequested`, detail `{meetingId,runId}`,
+to the existing summarize Lambda. The API uses its existing default-bus PutEvents
+grant. Deploy that rule before enabling this action.
+
+The frontend polls metadata while pending and explicitly loads completed content
+through `/api/meetings/{id}/reading?kind=meeting&section=summary`, checking page
+continuity, current run and resultHash. It never replaces an unsaved editor draft.
+
 #### Delete Meeting
 
 ```
