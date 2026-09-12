@@ -142,10 +142,9 @@ func (r *DynamoDBRepository) SetS3Client(s3Client *s3.Client, bucketName string)
 // Accepted because (a) transcript-family fields are only ever written via
 // the UNconditional UpdateMeetingFields path or UpdateMeeting, whose only
 // conditions (sibling size guard, projectIds guard) retry until the same
-// content lands — the write converges rather than being abandoned — and
-// (b) no IfMatch caller carries transcript fields today. If one ever does,
-// switch to versioned spill keys referenced only after the item write
-// commits.
+// content lands — the write converges rather than being abandoned.
+// Conditional snapshot writers MUST use storeConditionalTranscript instead:
+// a rejected snapshot is abandoned, not converged onto this fixed key.
 func (r *DynamoDBRepository) storeTranscript(ctx context.Context, meetingID, field, text string) (string, error) {
 	if text == "" {
 		return "", nil
@@ -814,7 +813,7 @@ func (r *DynamoDBRepository) getMeetingProjectIDs(ctx context.Context, ownerUser
 // condition inherent in the PutItem-based UpdateMeeting method.
 // Fields map keys must be DynamoDB attribute names (e.g., "status", "audioKey", "content").
 func (r *DynamoDBRepository) UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error {
-	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, expression.AttributeExists(expression.Name("PK")), fields)
+	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, expression.AttributeExists(expression.Name("PK")), fields, false)
 }
 
 // UpdateMeetingFieldsIfMatch is UpdateMeetingFields with an added condition
@@ -839,10 +838,29 @@ func (r *DynamoDBRepository) UpdateMeetingFieldsIfMatch(ctx context.Context, use
 	for k, v := range expected {
 		condition = condition.And(expression.Name(k).Equal(expression.Value(v)))
 	}
-	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, fields)
+	return r.updateMeetingFieldsWithCondition(ctx, userID, meetingID, condition, fields, true)
 }
 
-func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}) error {
+func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Context, userID, meetingID string, condition expression.ConditionBuilder, fields map[string]interface{}, immutableSpills bool) (resultErr error) {
+	if immutableSpills {
+		// Failed spills may be deleted. Never leave their internal references
+		// in a caller's map that could be reused for a later retry.
+		copyFields := make(map[string]interface{}, len(fields))
+		for name, value := range fields {
+			copyFields[name] = value
+		}
+		fields = copyFields
+	}
+	var uploadedKeys []string
+	safeToDelete := true
+	defer func() {
+		if resultErr != nil && safeToDelete {
+			if err := r.deleteUncommittedTranscriptSpills(ctx, uploadedKeys); err != nil {
+				log.Printf("Transcript spill cleanup failed: %v", err)
+				resultErr = errors.Join(resultErr, err)
+			}
+		}
+	}()
 	// Handle S3 transcript overflow for large transcript fields.
 	// transcriptSegments is included since 2026-08-31: without it, a long
 	// recording's segments JSON + transcriptA in one UpdateItem exceeded
@@ -923,7 +941,13 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 				if pick == "" {
 					break
 				}
-				ref, err := r.storeTranscript(ctx, meetingID, pick, fields[pick].(string))
+				var ref string
+				var err error
+				if immutableSpills {
+					ref, err = r.storeConditionalTranscript(ctx, meetingID, pick, fields[pick].(string), &uploadedKeys)
+				} else {
+					ref, err = r.storeTranscript(ctx, meetingID, pick, fields[pick].(string))
+				}
 				if err != nil {
 					return fmt.Errorf("failed to store %s: %w", pick, err)
 				}
@@ -967,6 +991,16 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			return fmt.Errorf("failed to build update expression: %w", err)
 		}
 
+		var options []func(*dynamodb.Options)
+		if len(uploadedKeys) > 0 {
+			// An SDK retry could hide a committed write behind a later failed
+			// condition. One wire attempt makes a condition rejection definite;
+			// other errors remain ambiguous and retain the uploaded objects.
+			options = append(options, func(o *dynamodb.Options) {
+				o.Retryer = aws.NopRetryer{}
+				o.RetryMaxAttempts = 1
+			})
+		}
 		_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 			TableName: aws.String(r.tableName),
 			Key: map[string]types.AttributeValue{
@@ -977,7 +1011,7 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 			ConditionExpression:       expr.Condition(),
 			ExpressionAttributeNames:  expr.Names(),
 			ExpressionAttributeValues: expr.Values(),
-		})
+		}, options...)
 		if err != nil {
 			var ccfe *types.ConditionalCheckFailedException
 			if errors.As(err, &ccfe) {
@@ -993,9 +1027,11 @@ func (r *DynamoDBRepository) updateMeetingFieldsWithCondition(ctx context.Contex
 				}
 				return fmt.Errorf("%w: meeting %s condition not met", ErrConditionFailed, meetingID)
 			}
+			safeToDelete = false
 			return fmt.Errorf("failed to update meeting fields: %w", err)
 		}
 
+		safeToDelete = false
 		return nil
 	}
 }
