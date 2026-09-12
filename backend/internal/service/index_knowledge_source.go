@@ -152,6 +152,11 @@ func (s *IndexingService) reconcileKnowledge(ctx context.Context, control *model
 			revision := ""
 			if source, err := s.ReadSource(ctx, key, false); err == nil {
 				revision = source.Revision
+			} else if !permanentIndexSourceError(err) {
+				if err := s.queueUnreadable(ctx, key); err != nil {
+					return err
+				}
+				continue
 			}
 			// Unknown revisions retain PR205's failure cooldown; a catalog
 			// notification cannot erase backoff without evidence of new bytes.

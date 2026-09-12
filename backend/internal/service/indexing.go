@@ -36,10 +36,11 @@ type IndexingService struct {
 	assetsBucket string
 	now          func() time.Time
 	newID        func() string
+	mode         string
 }
 
 func NewIndexingService(repo IndexRepository, objects IndexObjects, ingestion IndexIngestion, assetsBucket string) *IndexingService {
-	return &IndexingService{repo: repo, objects: objects, ingestion: ingestion, assetsBucket: assetsBucket, now: time.Now, newID: uuid.NewString}
+	return &IndexingService{repo: repo, objects: objects, ingestion: ingestion, assetsBucket: assetsBucket, now: time.Now, newID: uuid.NewString, mode: IndexModeAll}
 }
 
 func (s *IndexingService) ReadSource(ctx context.Context, key model.IndexResource, bodies bool) (*IndexSnapshot, error) {
@@ -55,6 +56,9 @@ func (s *IndexingService) ReadSource(ctx context.Context, key model.IndexResourc
 func (s *IndexingService) Enqueue(ctx context.Context, key model.IndexResource) error {
 	if !key.Valid() {
 		return ErrIndexInvalid
+	}
+	if !s.indexesResource(key) {
+		return nil
 	}
 	// Stream records are notifications, not source snapshots. Read the current
 	// revision so duplicate delivery can coalesce with an active preparation,
@@ -87,10 +91,14 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 	if err != nil {
 		return result, err
 	}
+	if err := s.checkIndexingMode(control); err != nil {
+		return result, err
+	}
 	if control.LeaseUntil > s.now().UnixMilli() {
 		return IndexTickResult{Phase: "LEASE_WAIT"}, nil
 	}
 	owned := *control
+	owned.Mode = s.mode
 	owned.Owner, owned.LeaseUntil = s.newID(), s.now().Add(indexLease).UnixMilli()
 	if err := s.repo.SaveIndexControl(ctx, control, &owned, s.now().UnixMilli()); err != nil {
 		return result, err
@@ -329,46 +337,48 @@ func (s *IndexingService) deferChangingSource(ctx context.Context, key model.Ind
 }
 
 func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexControl) ([]model.IndexMember, error) {
-	keys, cursor, err := s.repo.ScanIndexSources(ctx, control.SourceCursor, 25)
-	if err != nil {
-		return nil, err
-	}
-	for _, key := range keys {
-		revision := ""
-		if source, e := s.ReadSource(ctx, key, false); e == nil {
-			revision = source.Revision
-		} else if !permanentIndexSourceError(e) {
-			if err := s.queueUnreadable(ctx, key); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		if err := s.repo.RequestIndexResource(ctx, key, revision, s.now().UnixMilli()); err != nil {
+	if s.mode == IndexModeAll {
+		keys, cursor, err := s.repo.ScanIndexSources(ctx, control.SourceCursor, 25)
+		if err != nil {
 			return nil, err
 		}
-	}
-	control.SourceCursor = cursor
-	legacy, legacyCursor, err := s.objects.LegacyPage(ctx, control.LegacyCursor)
-	if err != nil {
-		return nil, err
-	}
-	for _, object := range legacy {
-		parts := strings.Split(strings.TrimSuffix(object, ".metadata.json"), "/")
-		if len(parts) != 3 || parts[0] != "meetings" || !strings.HasSuffix(parts[2], ".md") {
-			continue
-		}
-		key, ok := model.CanonicalIndexResource("USER#"+parts[1], "MEETING#"+strings.TrimSuffix(parts[2], ".md"))
-		if ok {
-			// A transient read is not evidence that a legacy source is gone.
-			// Known invalid sources still enter the durable cleanup path.
-			if err := s.Enqueue(ctx, key); err != nil {
+		for _, key := range keys {
+			revision := ""
+			if source, e := s.ReadSource(ctx, key, false); e == nil {
+				revision = source.Revision
+			} else if !permanentIndexSourceError(e) {
 				if err := s.queueUnreadable(ctx, key); err != nil {
 					return nil, err
 				}
+				continue
+			}
+			if err := s.repo.RequestIndexResource(ctx, key, revision, s.now().UnixMilli()); err != nil {
+				return nil, err
 			}
 		}
+		control.SourceCursor = cursor
+		legacy, legacyCursor, err := s.objects.LegacyPage(ctx, control.LegacyCursor)
+		if err != nil {
+			return nil, err
+		}
+		for _, object := range legacy {
+			parts := strings.Split(strings.TrimSuffix(object, ".metadata.json"), "/")
+			if len(parts) != 3 || parts[0] != "meetings" || !strings.HasSuffix(parts[2], ".md") {
+				continue
+			}
+			key, ok := model.CanonicalIndexResource("USER#"+parts[1], "MEETING#"+strings.TrimSuffix(parts[2], ".md"))
+			if ok {
+				// A transient read is not evidence that a legacy source is gone.
+				// Known invalid sources still enter the durable cleanup path.
+				if err := s.Enqueue(ctx, key); err != nil {
+					if err := s.queueUnreadable(ctx, key); err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+		control.LegacyCursor = legacyCursor
 	}
-	control.LegacyCursor = legacyCursor
 	if err := s.reconcileKnowledge(ctx, control); err != nil {
 		return nil, err
 	}
@@ -380,6 +390,9 @@ func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexCon
 	}
 	batch := []model.IndexMember{}
 	for _, job := range jobs {
+		if !s.indexesResource(job.Resource) {
+			continue
+		}
 		// Known jobs also detect deleted sources and same-key S3 byte replacements.
 		source, readErr := s.ReadSource(ctx, job.Resource, false)
 		changed := readErr != nil || source.Revision != job.Revision
@@ -661,9 +674,20 @@ func (s *IndexingService) cleanupTracked(ctx context.Context, job *model.IndexJo
 	for _, key := range keep {
 		retained[key] = true
 	}
+	known := legacyIndexKeys(job.Resource)
+	if job.Resource.IsKnowledgeSource() {
+		if job.Outcome == model.IndexDeleted {
+			// Originals are never deleted by this worker. After owner deletion,
+			// their old unbound vectors still need explicit removal proof.
+			known = append(known, job.Resource.SourceKey)
+		} else {
+			// A recreated original belongs in the live data source again.
+			retained[job.Resource.SourceKey] = true
+		}
+	}
 	// Legacy vectors can outlive their S3 objects and predate this job record.
 	// Their exact canonical URI remains known even when inventory is empty.
-	for _, list := range [][]string{inventory, job.Keys, job.PendingKeys, job.RemovedKeys, legacyIndexKeys(job.Resource)} {
+	for _, list := range [][]string{inventory, job.Keys, job.PendingKeys, job.RemovedKeys, known} {
 		for _, key := range list {
 			if !retained[key] && !strings.HasSuffix(key, ".metadata.json") {
 				removed[key] = true

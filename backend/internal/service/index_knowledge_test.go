@@ -339,7 +339,7 @@ func TestKnowledgeReadRaceAndProviderFailureNeverClaimSuccess(t *testing.T) {
 	if _, err := service.Tick(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if job := repo.jobs[key.Hash()]; job.State != model.IndexFailed || job.ErrorCode != "SOURCE_CHANGED" {
+	if job := repo.jobs[key.Hash()]; job.State != model.IndexFailed || job.ErrorCode != "SOURCE_CHANGING" {
 		t.Fatalf("unpinned read accepted: %+v", job)
 	}
 	if len(store.kb) != 0 {

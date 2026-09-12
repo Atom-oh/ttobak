@@ -108,6 +108,7 @@ type IndexMember struct {
 // A frozen batch stays EXPORTING until every partial projection is cleaned or
 // fully staged. PREPARED persists ClientToken before any provider submission.
 type IndexControl struct {
+	Mode              string        `dynamodbav:"mode"`
 	Version           int64         `dynamodbav:"version"`
 	Owner             string        `dynamodbav:"owner"`
 	LeaseUntil        int64         `dynamodbav:"leaseUntil"`

@@ -282,7 +282,9 @@ func (p *IndexAWSProvider) Documents(ctx context.Context, keys []string) (map[st
 	identifiers := make([]bedrocktypes.DocumentIdentifier, 0, len(keys))
 	expected := map[string]string{}
 	for _, key := range keys {
-		if !indexProjectionKey(key) || strings.HasSuffix(key, ".metadata.json") {
+		_, original := model.KnowledgeIndexResource(key)
+		original = original && model.KnowledgeBinaryKey(key)
+		if (!indexProjectionKey(key) && !original) || strings.HasSuffix(key, ".metadata.json") {
 			return nil, ErrIndexInvalid
 		}
 		uri := "s3://" + p.bucket + "/" + key

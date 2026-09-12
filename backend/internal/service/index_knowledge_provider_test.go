@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -10,6 +11,63 @@ import (
 
 	"github.com/ttobak/backend/internal/model"
 )
+
+func TestKnowledgeOriginalDocumentStatusReadDoesNotAllowOriginalMutation(t *testing.T) {
+	keys := []string{"kb/owner/file.pdf", "shared/reference/file.docx"}
+	calls := 0
+	p := indexHTTPProvider(t, func(req *http.Request) (*http.Response, error) {
+		calls++
+		if req.Method != http.MethodPost || !strings.HasSuffix(req.URL.Path, "/documents/getDocuments") {
+			t.Fatalf("original status lookup performed a different operation: %s %s", req.Method, req.URL)
+		}
+		var input struct {
+			Documents []struct {
+				Type string `json:"dataSourceType"`
+				S3   struct {
+					URI string `json:"uri"`
+				} `json:"s3"`
+			} `json:"documentIdentifiers"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		if len(input.Documents) != len(keys) {
+			t.Fatal("original document identifiers missing")
+		}
+		details := []map[string]interface{}{}
+		for i, document := range input.Documents {
+			if document.Type != "S3" || document.S3.URI != "s3://knowledge/"+keys[i] {
+				t.Fatal("original status lookup changed bucket/key")
+			}
+			details = append(details, map[string]interface{}{
+				"knowledgeBaseId": "KB12345678", "dataSourceId": "DS12345678", "status": "NOT_FOUND",
+				"identifier": map[string]interface{}{"dataSourceType": "S3", "s3": map[string]string{"uri": document.S3.URI}},
+			})
+		}
+		out, _ := json.Marshal(map[string]interface{}{"documentDetails": details})
+		return indexHTTPResponse(200, string(out), map[string]string{"Content-Type": "application/json"}), nil
+	})
+	statuses, err := p.Documents(context.Background(), keys)
+	if err != nil || statuses[keys[0]] != "NOT_FOUND" || statuses[keys[1]] != "NOT_FOUND" {
+		t.Fatalf("original removal proof unavailable: %v %v", statuses, err)
+	}
+	for _, key := range keys {
+		if err := p.Put(context.Background(), key, "", nil); !errors.Is(err, ErrIndexInvalid) {
+			t.Fatal("read-only original support widened publication permissions")
+		}
+		if err := p.Delete(context.Background(), key); !errors.Is(err, ErrIndexInvalid) {
+			t.Fatal("read-only original support widened deletion permissions")
+		}
+	}
+	for _, key := range []string{"docs/owner/file.pdf", "kb/owner/../file.pdf", "shared/../file.pdf", "kb//file.pdf"} {
+		if _, err := p.Documents(context.Background(), []string{key}); !errors.Is(err, ErrIndexInvalid) {
+			t.Fatalf("unscoped original status lookup accepted %s", key)
+		}
+	}
+	if calls != 1 {
+		t.Fatal("rejected original mutations or invalid lookups reached AWS")
+	}
+}
 
 func TestKnowledgePinnedOldVersionIsRejectedAfterCurrentHeadChanges(t *testing.T) {
 	current := "v1"

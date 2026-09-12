@@ -38,7 +38,11 @@ or condition-failed cause, retaining the freeze.
 The same frozen batch/client token drives `StartIngestionJob`, including manual
 or crawler conflicts and lost responses. INDEXED/DELETED requires successful
 terminal ingestion, a fresh original-source revision, matching inventory, and
-the job CAS. S3-only sources deliberately do not use a fabricated missing
+the job CAS. Partial syncs use document-level status for immutable snapshots.
+Deleted sources also require `NOT_FOUND` for the original upload's former vector;
+the status read never deletes or rewrites that original. Transient catalog,
+HEAD and GET errors preserve published snapshots and known source revisions.
+S3-only sources deliberately do not use a fabricated missing
 DynamoDB row as source authority. As with existing S3-backed canonical files,
 S3 and DynamoDB are not one transaction; QA must recheck original bindings
 before using retrieved chunks, and status reads revalidate freshness.
@@ -79,8 +83,35 @@ Private/shared golden revision vectors are in
 
 ## Runtime/IAM handoff
 
-No new environment variables: use the existing TABLE_NAME, BUCKET_NAME,
-KB_BUCKET_NAME, KB_ID and DATA_SOURCE_ID. No resource IDs are hardcoded.
+Keep TABLE_NAME, BUCKET_NAME, KB_BUCKET_NAME, KB_ID and DATA_SOURCE_ID.
+Set required `INDEXING_MODE` to exactly `manual-only` or `all`; missing/invalid
+values fail before AWS client initialization. No resource IDs are hardcoded.
+
+Bootstrap and activation order:
+
+1. Deploy this required-mode worker before activation, keeping schedule and stream
+   delivery disabled. Configure `INDEXING_MODE=manual-only` and bootstrap permissions,
+   then explicitly enable the normal schedule; no stream mapping is needed yet.
+   The worker automatically paginates private/shared
+   originals and produces their immutable snapshots with the same full-sync
+   coordinator. Do not run an ad-hoc global tick or edit coordinator rows.
+2. Verify private/shared snapshots are INDEXED and answerable in deployed synthetic
+   acceptance. This mode skips canonical source scans, legacy meeting enumeration,
+   canonical notifications and canonical job processing. Existing meeting exports,
+   source records and job records remain unchanged.
+3. Deploy the strict unified QA runtime only after the snapshots are ready. Its
+   matching private/shared consumers and current-source/session guards must ship
+   together; do not expose a pending-only replacement for existing binary search.
+4. Change `INDEXING_MODE` to `all` after QA verification. Existing manual syncs
+   finish under their persisted token, then canonical backfill/legacy retirement
+   starts normally. No stream replay or hand-edited job state is required.
+
+The coordinator persists the applied mode. `all → manual-only` is rejected before
+mutation, as is manual-only operation over an existing canonical batch (including
+old records without mode metadata). Reverting QA after canonical activation needs
+the documented legacy re-export rollback; changing this flag is not that rollback.
+Full S3 sync may revisit existing S3 objects in either mode; manual-only mode never
+rewrites or deletes canonical/legacy meeting objects.
 
 On the configured KB bucket, extend the worker's permissions with:
 
@@ -92,8 +123,9 @@ On the configured KB bucket, extend the worker's permissions with:
   snapshot prefixes.
 - `s3:PutObject` and `s3:DeleteObject` only for the two new snapshot prefixes.
 
-No writes/deletes to original source prefixes are required. Existing table and
-Bedrock Start/Get/ListIngestionJob permissions suffice. The existing scheduled
+No writes/deletes to original source prefixes are required. Use the PR205 table,
+Bedrock Start/Get/ListIngestionJob and GetKnowledgeBaseDocuments permissions.
+The existing scheduled
 tick recovers old uploads, overwrites, deletions and missed events; no new
 producer notification is required.
 
