@@ -87,18 +87,18 @@ export function useActionItems({ meetingId, isDone, source, sourceRevision, item
   }, [isDone, source, sourceRevision, analysis?.runId, analysis?.status, refresh]);
 
   useEffect(() => {
-    if (!isDone || result.analysis.status !== 'unknown') return;
-    // Summary status can become "done" just before analysis claims its run.
-    // Observe that handoff, without polling legacy meetings indefinitely.
-    const timer = setInterval(() => { void refresh(); }, 5000);
-    const timeout = setTimeout(() => clearInterval(timer), 60000);
-    return () => { clearInterval(timer); clearTimeout(timeout); };
-  }, [isDone, result.analysis.status, refresh]);
-
-  useEffect(() => {
-    if (!isDone || !isPending || pendingAction) return;
-    // Independent of the meeting's STT/summary polling, which stops at "done".
-    const timer = setInterval(() => { void refresh(); }, 5000);
+    if (!isDone || pendingAction) return;
+    // A new summary can become done before its new analysis is claimed, while
+    // the previous analysis still looks terminal. Observe that handoff for all
+    // states, then continue only for pending work. One timer avoids double polls.
+    const handoffUntil = Date.now() + 60000;
+    const timer = setInterval(() => {
+      if (!isPending && Date.now() >= handoffUntil) {
+        clearInterval(timer);
+        return;
+      }
+      void refresh();
+    }, 5000);
     return () => clearInterval(timer);
   }, [isDone, isPending, pendingAction, refresh]);
 

@@ -100,10 +100,11 @@ func pickTranscriptToSpill(inline map[string]int, fixedInline int) string {
 
 // DynamoDBRepository provides DynamoDB operations for the meeting assistant
 type DynamoDBRepository struct {
-	client     *dynamodb.Client
-	tableName  string
-	s3Client   *s3.Client
-	bucketName string
+	client                  *dynamodb.Client
+	tableName               string
+	s3Client                *s3.Client
+	bucketName              string
+	skipTranscriptHydration bool
 }
 
 // NewDynamoDBRepository creates a new DynamoDB repository
@@ -398,7 +399,7 @@ func (r *DynamoDBRepository) loadTranscript(ctx context.Context, meetingID, fiel
 
 // resolveTranscripts loads transcripts from S3 if they are S3 references
 func (r *DynamoDBRepository) resolveTranscripts(ctx context.Context, meetingID string, meeting *model.Meeting) error {
-	if meeting == nil {
+	if meeting == nil || r.skipTranscriptHydration {
 		return nil
 	}
 
@@ -501,6 +502,9 @@ func (r *DynamoDBRepository) GetMeeting(ctx context.Context, userID, meetingID s
 	if err := attributevalue.UnmarshalMap(result.Item, &meeting); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
 	}
+	if r.skipTranscriptHydration && (meeting.MeetingID != meetingID || meeting.UserID != userID) {
+		return nil, fmt.Errorf("meeting metadata identity does not match its primary key")
+	}
 
 	// Resolve S3 transcript references
 	if err := r.resolveTranscripts(ctx, meetingID, &meeting); err != nil {
@@ -539,6 +543,11 @@ func (r *DynamoDBRepository) GetMeetingByID(ctx context.Context, meetingID strin
 	var meeting model.Meeting
 	if err := attributevalue.UnmarshalMap(result.Items[0], &meeting); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal meeting: %w", err)
+	}
+	if r.skipTranscriptHydration {
+		// GSI3 discovers the owner; a current base-table read decides whether
+		// the meeting still exists and is still published to its account.
+		return r.GetMeeting(ctx, meeting.UserID, meetingID)
 	}
 
 	// Resolve S3 transcript references
