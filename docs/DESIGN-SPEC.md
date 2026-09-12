@@ -403,6 +403,7 @@ Layout:
     - Title: text-4xl font-black tracking-tight
     - Date + Folder
     - Participants stack
+    - Speaker name edits keep the entered names and show an inline error when saving fails, including a 409 concurrent-change response.
     - AI Summary + Action Items row (drag-resizable, useResizablePanel):
       - AI Summary (bg-white border rounded-xl p-6) — drag-resizable width 400-900px,
         persisted to localStorage `ttobak:meetingSummaryWidth`
