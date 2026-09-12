@@ -215,6 +215,17 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - The generated Python never receives the meeting transcript — only the server-validated requirements/options JSON the invoke payload carries (see ADR-033's trust-boundary section)
 
 ### EventBridge Rules
+
+Action-item retries use `ttobak-action-items-requested` on the default bus,
+matching source `ttobak.analysis` and detail type `ActionItemsRequested`. The
+existing summarize Lambda receives only owner/meeting/run identifiers and
+performs analysis without rerunning transcription or summary. Delivery retries
+are bounded to three attempts and five minutes; exhausted delivery goes to the
+SQS-managed-encrypted `ttobak-action-items-dlq` with seven-day retention. Lambda
+invoke and queue SendMessage policies are scoped to this exact rule ARN.
+Execution failure is recorded in `MEETING#{id}/ANALYSIS#actionItems`; an expired
+five-minute lease exposes interrupted execution and permits an authorized retry.
+The EventBridge DLQ covers delivery failure, not downstream model failures.
 - **audio-uploaded**: S3 PutObject (prefix `audio/`) → Transcribe Lambda
 - **image-uploaded**: S3 PutObject (prefix `images/`) → Process Image Lambda
 - **kb-uploaded**: S3 PutObject (prefix `kb/`) → KB Lambda

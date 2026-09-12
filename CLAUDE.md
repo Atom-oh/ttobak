@@ -76,6 +76,10 @@ CloudFront (d2olomx8td8txt.cloudfront.net)
   └→ HTTP API Gateway → ttobak-api Lambda (chi router, all REST endpoints)
 ```
 
+### Action item recovery
+
+Action-item analysis uses a separate `MEETING#{id}/ANALYSIS#actionItems` row with run ID, status, source hash and numeric lease. Authenticated owners/editors may retry through `ttobak.analysis` / `ActionItemsRequested`; the existing summarize Lambda processes it, while the normal pipeline uses the same service inline. Publish result and success together only when run, saved summary and previous items still match. Failures retain prior items; only validated successful `[]` means no tasks. Preserve exact unchanged task IDs and human completion; persist checkbox changes conditionally. Legacy missing metadata is unknown. Expired leases become interrupted failures. See `docs/superpowers/specs/2026-09-12-action-items-recovery.md` and `docs/API-SPEC.md`.
+
 ### Event-Driven Pipeline
 ```
 audio/ upload → EventBridge → ttobak-transcribe → Whisper ECS (GPU Spot g5.xlarge) → transcripts/ S3

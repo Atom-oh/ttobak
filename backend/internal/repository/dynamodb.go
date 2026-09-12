@@ -1370,6 +1370,12 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 		},
 	})
 
+	// Keep singleton analysis cleanup with the source deletion. Delayed workers
+	// cannot recreate the source or this state because all writes are conditional.
+	transactItems = append(transactItems, types.TransactWriteItem{
+		Delete: &types.Delete{TableName: aws.String(r.tableName), Key: actionAnalysisKey(meetingID)},
+	})
+
 	// 2. Attachments
 	attachments, err := r.ListAttachments(ctx, meetingID)
 	if err != nil {
