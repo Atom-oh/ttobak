@@ -30,7 +30,7 @@ QA handler, retrieval filters, prompts or session behavior.
 - `source_access.py` composes these readers into current-source search and
   meeting/document/attachment contexts, with source dependencies attached.
   Its constructor receives readers and callbacks; it creates no AWS clients.
-- `source_tools.py` defines and formats the three document/attachment tools.
+- `source_tools.py` defines and formats document, attachment and legacy-text tools.
   It is not registered by the current handler. The final wiring imports these
   definitions into the existing authenticated tool loop and preserves its
   error boundary.
@@ -77,6 +77,25 @@ after consumption; results retain at most 6,000 characters and indicate
 partial coverage. Source reads are capped at 50 MiB. `shared/` is an existing
 authenticated-global namespace for shared ingestion, not a tenant-private
 partition; a producer must never move private uploads there.
+
+Legacy search excerpts are selected from current bytes. A provider chunk is
+used only if its exact text occurs in the current source; duplicate URI hits
+are considered in descending relevance order. Otherwise an excerpt around a
+literal query term in current text is used, with the mismatch explicit.
+`coverage` reports source-relative character offsets and total length, so a
+matching paragraph after the file's introduction is not replaced by its head.
+The model-facing search formatter caps the selected excerpt at 2,400
+characters and recomputes both its coverage and provenance partial flag from
+that rendered range. The larger reader window is not a claim that the model
+received the whole source.
+
+`get_legacy_text_detail(uri, offset=0, sourceRevision?)` reads up to 6,000 current
+characters from an authorized legacy text object. Continuations require the
+previous source revision and restart after an object change. `nextOffset`
+exists only when later text remains; a page beginning after offset zero is
+still partial even on the final page. The tool is added to the public model
+loop only by the later QA wiring release. It never reads binary files or
+foreign private `kb/{owner}/` objects.
 
 ## Binary snapshot producer contract
 

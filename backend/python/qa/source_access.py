@@ -6,6 +6,7 @@ from source_revision import legacy_text_key, legacy_text_revision, legacy_meetin
 from manual_kb import current_source as current_manual_source, current_shared_source
 from session_provenance import remember_source, collect_detail, new_source_state
 from indexed_retrieval import discover_sources, discovery_filters, hydrate_candidates
+from legacy_text import legacy_page
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,17 @@ class SourceAccess:
             return text, None
         except Exception:
             return None, {'code': 'INTERNAL_ERROR', 'message': 'Failed to fetch current document', 'status': 500}
+
+    def load_legacy_text(self, user_id, uri, offset=0, expected_revision=None, *,
+                         source_state=None, source_details=None):
+        page = legacy_page(self.reader, user_id, uri, offset, expected_revision)
+        if page is None:
+            return None
+        if source_state is not None:
+            remember_source(source_state, page['dependency'])
+        if source_details is not None:
+            collect_detail(source_details, page['provenance'])
+        return {key: value for key, value in page.items() if key not in ('dependency', 'provenance')}
 
     def _attachment_prompt(self, attachments):
         return (

@@ -36,11 +36,14 @@ var workerFactory = func(ctx context.Context) (indexWorker, error) {
 
 func configuredWorker(ctx context.Context) (indexWorker, error) {
 	values := map[string]string{}
-	for _, name := range []string{"TABLE_NAME", "BUCKET_NAME", "KB_BUCKET_NAME", "KB_ID", "DATA_SOURCE_ID"} {
+	for _, name := range []string{"TABLE_NAME", "BUCKET_NAME", "KB_BUCKET_NAME", "KB_ID", "DATA_SOURCE_ID", "INDEXING_MODE"} {
 		values[name] = os.Getenv(name)
 		if values[name] == "" {
 			return nil, fmt.Errorf("required indexing configuration missing: %s", name)
 		}
+	}
+	if !service.ValidIndexingMode(values["INDEXING_MODE"]) {
+		return nil, service.ErrIndexMode
 	}
 	id := regexp.MustCompile(`^[A-Za-z0-9]{10}$`)
 	if !id.MatchString(values["KB_ID"]) || !id.MatchString(values["DATA_SOURCE_ID"]) {
@@ -58,7 +61,11 @@ func configuredWorker(ctx context.Context) (indexWorker, error) {
 		return nil, err
 	}
 	repo := repository.NewDynamoDBRepository(dynamodb.NewFromConfig(cfg), values["TABLE_NAME"])
-	return service.NewIndexingService(repo, provider, provider, values["BUCKET_NAME"]), nil
+	worker := service.NewIndexingService(repo, provider, provider, values["BUCKET_NAME"])
+	if err := worker.SetIndexingMode(values["INDEXING_MODE"]); err != nil {
+		return nil, err
+	}
+	return worker, nil
 }
 
 // DynamoDB retries only failed sequence numbers. Old images never drive exports:

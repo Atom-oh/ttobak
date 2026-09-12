@@ -81,3 +81,18 @@ func TestIndexWorkerRequiresRuntimeConfiguration(t *testing.T) {
 		t.Fatal("missing configuration silently used production defaults")
 	}
 }
+
+func TestIndexWorkerRejectsMissingOrInvalidRolloutModeBeforeAWS(t *testing.T) {
+	for name, value := range map[string]string{
+		"TABLE_NAME": "synthetic", "BUCKET_NAME": "assets", "KB_BUCKET_NAME": "knowledge",
+		"KB_ID": "KB12345678", "DATA_SOURCE_ID": "DS12345678",
+	} {
+		t.Setenv(name, value)
+	}
+	for _, mode := range []string{"", "manual", "ALL", "all "} {
+		t.Setenv("INDEXING_MODE", mode)
+		if _, err := configuredWorker(context.Background()); err == nil {
+			t.Fatalf("invalid rollout mode reached client initialization: %q", mode)
+		}
+	}
+}

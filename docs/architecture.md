@@ -135,6 +135,8 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 
 문서 추출 워커는 검증된 첨부 실행을 비동기로 처리합니다. 파서·네트워크·원본 검증 경계와 단계별 활성화는 [ADR-039](decisions/ADR-039-meeting-document-extraction.md)에 기록했습니다.
 
+기존 KB 바이너리는 `manual-kb/v1/`(소유자 전용)·`shared-kb/v1/`(인증된 공유) snapshot으로 준비합니다. `INDEXING_MODE=manual-only`는 원본·회의 export를 보존하며 전체 S3 동기화만 사용합니다. Snapshot 검증과 strict QA runtime 배포 후 `all`로 전환해 canonical 색인을 켭니다([ADR-038 bootstrap 확장](decisions/ADR-038-canonical-note-indexing.md)).
+
 ### 아키텍처 결정 기록 (ADR)
 
 - [ADR-001: 원격 회의 시스템 오디오 캡처](decisions/ADR-001-system-audio-capture-for-remote-meetings.md) — `getDisplayMedia` + `AudioContext` 믹싱 (제안됨)
@@ -260,6 +262,8 @@ Store action extraction state in a separate analysis row. Route authorized edito
 Authenticated `/api/meetings/{id}/reading` bounds the requested section before response serialization. Notes, authorization and action-state reads use metadata views without transcript hydration; transcript reads load only the chosen text and candidate segments after authorization. Recheck current access and content revision on every page ([API contract](API-SPEC.md)).
 
 The asynchronous document worker consumes validated attachment runs. Parser, network, source checks and staged activation are documented in [ADR-039](decisions/ADR-039-meeting-document-extraction.md).
+
+Existing KB binaries bootstrap into owner-isolated `manual-kb/v1/` and authenticated-shared `shared-kb/v1/` snapshots. `INDEXING_MODE=manual-only` preserves originals and meeting exports while using full S3 sync. Enable all-mode/canonical indexing only after snapshot verification and strict QA runtime deployment ([ADR-038 extension](decisions/ADR-038-canonical-note-indexing.md)).
 
 ### Architecture Decision Records (ADR)
 
