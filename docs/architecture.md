@@ -176,6 +176,7 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 - [ADR-037: 조건부 전사문 수정을 위한 불변 spill](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (승인됨)
 - [ADR-038: 원본 기반 노트 색인](decisions/ADR-038-canonical-note-indexing.md) (승인됨, 자동 실행 전 통합 단계)
 - [ADR-039: 회의 문서 텍스트 추출](decisions/ADR-039-meeting-document-extraction.md) (승인됨)
+- [ADR-042: 현재 원본 Q&A와 대화 이력](decisions/ADR-042-current-source-qa-and-history.md) (승인됨, 런타임 연결 준비 중)
 
 ### 운영
 
@@ -301,6 +302,7 @@ The asynchronous document worker consumes validated attachment runs. Parser, net
 - [ADR-037: Immutable Spills for Conditional Transcript Writes](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (Accepted)
 - [ADR-038: Canonical Note Indexing](decisions/ADR-038-canonical-note-indexing.md) (Accepted, activation pending)
 - [ADR-039: Meeting Document Text Extraction](decisions/ADR-039-meeting-document-extraction.md) (Accepted)
+- [ADR-042: Current-source Q&A and History](decisions/ADR-042-current-source-qa-and-history.md) (Accepted, runtime integration staged)
 
 ### Operations
 
