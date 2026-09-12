@@ -132,6 +132,27 @@ class TestCurrentCandidates(_SourceFixture, unittest.TestCase):
         self.assertEqual([entry.get('text') for entry in result[:2]], ['FILE_FACT_0', 'FILE_FACT_1'])
         self.assertEqual(result[2]['document']['content'], 'NEW_TERM')
 
+    def test_single_result_keeps_verified_file_ahead_of_literal_fallback(self):
+        row = self.doc(content='', fileKey='docs/owner/file.pdf')
+        self.s3.head_object.return_value = {'ETag': '"one"', 'VersionId': 'v1', 'ContentLength': 10}
+        hit = candidate(self.indexed(filename='file.pdf', text='VERIFIED_FILE'))
+        self.table.put_item(Item=dict(row, SK='DOC#new', docId='new', content='NEW_TERM', fileKey=''))
+        identities, _ = self.discover('owner')
+        result = hydrate_candidates(self.source_reader, 'owner', 'NEW_TERM', [hit], identities, 1)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].get('text'), 'VERIFIED_FILE')
+
+    def test_title_only_fallback_cannot_displace_verified_body(self):
+        row = self.doc(content='', fileKey='docs/owner/file.pdf')
+        self.s3.head_object.return_value = {'ETag': '"one"', 'VersionId': 'v1', 'ContentLength': 10}
+        self.table.put_item(Item=dict(row, SK='DOC#second', docId='second'))
+        hits = [candidate(self.indexed(sk=sk, filename='file.pdf', text=body))
+                for sk, body in [('DOC#doc', 'FIRST_FILE'), ('DOC#second', 'SECOND_FILE')]]
+        self.table.put_item(Item=dict(row, SK='DOC#title', docId='title', title='NEW_TERM'))
+        identities, _ = self.discover('owner')
+        result = hydrate_candidates(self.source_reader, 'owner', 'NEW_TERM', hits, identities, 2)
+        self.assertEqual([entry.get('text') for entry in result], ['FIRST_FILE', 'SECOND_FILE'])
+
     def test_legacy_text_excerpt_is_bounded_and_marked_partial(self):
         body = b'a' * 9000
         self.s3.head_object.return_value = {'ETag': '"one"', 'ContentLength': len(body)}

@@ -198,11 +198,13 @@ def hydrate_candidates(reader, user_id, question, candidates, identities, limit,
         return bool(result.get('text') or any(fields.get(name) for name in ('notes', 'content', 'actionItems')))
     ready = [result for result in ranked if has_body(result)]
     pending = [result for result in ranked if not has_body(result)]
-    if not keyword_results:
-        return (ready + pending)[:limit]
-    # Reserve one slot for a newly saved literal match without letting many
-    # keyword matches displace verified semantic evidence. A keyword score is
+    keyword_ready = [result for result in keyword_results if has_body(result)]
+    keyword_pending = [result for result in keyword_results if not has_body(result)]
+    if not keyword_ready or (limit == 1 and ready):
+        return (ready + keyword_pending + pending)[:limit]
+    # For multiple results, reserve a slot for new saved text while keeping
+    # semantic body evidence in the other slots. A keyword score is
     # not a provider relevance score; metadata-only pending files come last.
     count = min(len(ready), max(0, limit - 1))
-    selected = ready[:count] + keyword_results[:limit - count]
-    return (selected + ready[count:] + pending)[:limit]
+    selected = ready[:count] + keyword_ready[:limit - count]
+    return (selected + ready[count:] + keyword_pending + pending)[:limit]
