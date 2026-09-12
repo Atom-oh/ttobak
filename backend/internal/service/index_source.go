@@ -157,7 +157,7 @@ func (s *IndexingService) ReadSource(ctx context.Context, key model.IndexResourc
 			}
 			objectKey, e := repository.IndexTranscriptKey(s.assetsBucket, key.ID, field, ref)
 			if e != nil {
-				return nil, e
+				return nil, fmt.Errorf("%w: %w", ErrIndexInvalid, e)
 			}
 			object, e := head(objectKey)
 			if e != nil {

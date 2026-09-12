@@ -139,6 +139,14 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 		for i, member := range next.Batch {
 			current, e := s.prepare(ctx, member.Resource)
 			if e != nil {
+				if errors.Is(e, ErrIndexChanged) || errors.Is(e, repository.ErrConditionFailed) {
+					if e := s.deferChangingSource(ctx, member.Resource); e != nil {
+						return result, e
+					}
+					next.Batch[i] = model.IndexMember{Resource: member.Resource}
+					result.Failed++
+					continue
+				}
 				if !errors.Is(e, ErrIndexWriteUncertain) && !errors.Is(e, ErrIndexLeaseBusy) {
 					e = errors.Join(e, s.retryPreparation(ctx, member.Resource))
 				}
@@ -218,6 +226,27 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 		}
 	}
 	return result, nil
+}
+
+func (s *IndexingService) deferChangingSource(ctx context.Context, key model.IndexResource) error {
+	// The coordinator owns publication. These errors are definitive, unlike
+	// an uncertain PUT, so obsolete staged objects can be removed safely.
+	if err := s.cleanup(ctx, key, nil); err != nil {
+		return err
+	}
+	job, err := s.repo.GetIndexJob(ctx, key)
+	if err != nil || job == nil {
+		return err
+	}
+	next := *job
+	s.failJob(&next, "SOURCE_CHANGING")
+	next.Keys, next.PendingKeys = nil, nil
+	err = s.repo.SaveIndexJob(ctx, job, &next, nil, false, s.now().UnixMilli())
+	// A newer notification can retain PENDING; it must not hold this batch.
+	if errors.Is(err, repository.ErrConditionFailed) {
+		return nil
+	}
+	return err
 }
 
 func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexControl) ([]model.IndexMember, error) {
