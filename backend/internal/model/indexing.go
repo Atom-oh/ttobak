@@ -89,6 +89,8 @@ type IndexMember struct {
 	Version  int64         `dynamodbav:"version"`
 	RunID    string        `dynamodbav:"runId"`
 	Revision string        `dynamodbav:"revision"`
+	Attempts int           `dynamodbav:"attempts"`
+	Detached bool          `dynamodbav:"detached"`
 }
 
 // A frozen batch stays EXPORTING until every partial projection is cleaned or
