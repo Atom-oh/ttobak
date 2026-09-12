@@ -129,6 +129,8 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 
 조건부 전사문 수정은 고유 S3 객체를 만들고 DB 조건부 갱신으로만 참조를 반영합니다. 충돌 시 기존 객체를 보존하며, 불확실한 DB 응답에서는 새 객체도 보존합니다. reader를 먼저 배포합니다([ADR-037](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md)).
 
+액션 아이템 추출 상태는 별도 분석 행에 저장합니다. 인증된 편집자의 재시도는 EventBridge를 통해 기존 summarize Lambda로 전달하며, run·요약·기존 아이템 조건이 모두 맞을 때만 결과와 성공 상태를 함께 반영합니다. 실패 시 이전 아이템을 보존합니다.
+
 ### 아키텍처 결정 기록 (ADR)
 
 - [ADR-001: 원격 회의 시스템 오디오 캡처](decisions/ADR-001-system-audio-capture-for-remote-meetings.md) — `getDisplayMedia` + `AudioContext` 믹싱 (제안됨)
@@ -245,6 +247,8 @@ Since Phase 2 (2026-09-03, ADR-035) the production pipeline's diarization runs t
    - *Why*: An auditable, actually-executed computation instead of an LLM estimate. The meeting transcript never reaches the codegen prompt, so an injection's blast radius is bounded to wasted sandbox CPU.
 
 Conditional transcript edits create unique S3 objects and publish their references only through the conditional database update. Preserve existing objects on conflict and retain new objects after ambiguous database responses. Deploy readers first ([ADR-037](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md)).
+
+Store action extraction state in a separate analysis row. Route authorized editor retries through EventBridge to the existing summarize Lambda. Commit results and success together only when the run, summary and prior items match; retain prior items on failure.
 
 ### Architecture Decision Records (ADR)
 
