@@ -61,4 +61,3 @@ Legacy cleanup makes rollback to old QA require re-export (ADR-038).
 Validation: `/usr/local/go/bin/go test ./... -count=1`,
 `/usr/local/go/bin/go vet ./...`, and
 `GOOS=linux GOARCH=arm64 /usr/local/go/bin/go build -tags lambda.norpc -o cmd/kb/bootstrap ./cmd/kb`.
-
