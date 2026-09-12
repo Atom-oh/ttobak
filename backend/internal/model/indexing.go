@@ -74,6 +74,7 @@ type IndexJob struct {
 	RunID           string        `dynamodbav:"runId" json:"runId,omitempty"`
 	LeaseUntil      int64         `dynamodbav:"leaseUntil" json:"leaseUntil,omitempty"`
 	RetryAfter      int64         `dynamodbav:"retryAfter" json:"retryAfter,omitempty"`
+	FailureCount    int           `dynamodbav:"failureCount" json:"-"`
 	Keys            []string      `dynamodbav:"keys" json:"-"`
 	PendingKeys     []string      `dynamodbav:"pendingKeys" json:"-"`
 	Outcome         string        `dynamodbav:"outcome" json:"-"`
