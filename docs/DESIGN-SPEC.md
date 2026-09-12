@@ -1136,3 +1136,15 @@ owner 전용 API를 호출한다). 이 배너는 `error` 배너(빨강)와 별�
 | Fit to screen | fit_screen | Diagram zoom/pan reset |
 | Fullscreen | fullscreen | Diagram lightbox (`DiagramLightbox`) |
 | Cost simulator | query_stats | Cost/sizing simulator card (`SimCard`, ADR-033) |
+
+## Document search status and QA provenance
+
+Document details show a compact 검색 반영 status with explicit refresh and bounded
+pending polling. Unsaved edits remain labeled as unsaved; failed or unavailable
+index status never implies successful indexing.
+
+QA messages retain optional structured source details across REST, WebSocket
+and chat. Display human-readable titles and only validated existing-app links,
+with legacy `sources` as fallback. Internal partition keys are not primary labels.
+These consumers require the index-status and unified QA APIs to be deployed.
+
