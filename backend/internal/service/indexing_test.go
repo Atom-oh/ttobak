@@ -55,14 +55,15 @@ func (m *indexMemory) RequestIndexResource(_ context.Context, key model.IndexRes
 	if job == nil {
 		job = &model.IndexJob{Resource: key}
 	}
+	if job.State == model.IndexFailed && job.RetryAfter > now &&
+		(revision == "" || job.DesiredRevision == revision) {
+		return nil
+	}
 	if revision != "" {
 		if job.State == model.IndexPending && job.DesiredRevision == revision {
 			return nil
 		}
 		if job.State == model.IndexPreparing && job.DesiredRevision == revision && job.LeaseUntil > now {
-			return nil
-		}
-		if job.State == model.IndexFailed && job.DesiredRevision == revision && job.RetryAfter > now {
 			return nil
 		}
 		switch job.State {
@@ -71,6 +72,9 @@ func (m *indexMemory) RequestIndexResource(_ context.Context, key model.IndexRes
 				return nil
 			}
 		}
+	}
+	if revision != "" && job.DesiredRevision != revision {
+		job.FailureCount = 0
 	}
 	job.Version++
 	job.State, job.DesiredRevision, job.UpdatedAt, job.RetryAfter = model.IndexPending, revision, now, 0
@@ -381,6 +385,82 @@ func TestIndexEnqueueDistinguishesDuplicateStreamDeliveryFromEditedSource(t *tes
 	}
 	if job := repo.jobs[key.Hash()]; job.Version != 8 || job.State != model.IndexPending || job.DesiredRevision == source.Revision {
 		t.Fatalf("source edit was lost: %+v", job)
+	}
+}
+
+func TestIndexPermanentFailuresDoNotStarveLaterHealthyJobs(t *testing.T) {
+	s, repo, _, provider, now := newIndexTest()
+	keys := make([]model.IndexResource, 25)
+	for i := range keys {
+		keys[i] = addIndexMeeting(repo, fmt.Sprintf("document-%02d", i), "current notes")
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].Hash() < keys[j].Hash() })
+	for _, key := range keys[:4] {
+		// ReadSource(false) fails too, exercising the reconciliation path
+		// that previously reset a failed job with an unknown revision.
+		repo.sources[key.Hash()].Fields["userId"] = "wrong-owner"
+	}
+	for cycle := 0; cycle < 50; cycle++ {
+		if _, err := s.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		provider.complete()
+		if _, err := s.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		indexed := 0
+		for _, key := range keys[4:] {
+			if job := repo.jobs[key.Hash()]; job != nil && job.State == model.IndexIndexed {
+				indexed++
+			}
+		}
+		if indexed == 21 {
+			return
+		}
+		*now = now.Add(2 * time.Minute)
+	}
+	t.Fatal("four permanently invalid sources starved the 21 healthy jobs")
+}
+
+func TestIndexInvalidSourceBackoffAndImmediateRecoveryAfterEdit(t *testing.T) {
+	s, repo, _, provider, now := newIndexTest()
+	key := addIndexMeeting(repo, "broken", "notes")
+	repo.sources[key.Hash()].Fields["userId"] = "wrong-owner"
+	firstStart := *now
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	finishIndex(t, s, provider)
+	failed := *repo.jobs[key.Hash()]
+	firstDelay := time.UnixMilli(failed.RetryAfter).Sub(firstStart)
+	starts := len(provider.tokens)
+	*now = now.Add(10 * time.Second)
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.tokens) != starts || repo.jobs[key.Hash()].Version != failed.Version {
+		t.Fatal("an unknown revision erased the failed source's cooldown")
+	}
+	*now = time.UnixMilli(failed.RetryAfter).Add(time.Second)
+	secondStart := *now
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	finishIndex(t, s, provider)
+	secondDelay := time.UnixMilli(repo.jobs[key.Hash()].RetryAfter).Sub(secondStart)
+	if secondDelay <= firstDelay {
+		t.Fatalf("retry delay did not grow: %s then %s", firstDelay, secondDelay)
+	}
+	repo.sources[key.Hash()].Fields["userId"] = "owner"
+	if err := s.Enqueue(context.Background(), key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	finishIndex(t, s, provider)
+	if repo.jobs[key.Hash()].State != model.IndexIndexed {
+		t.Fatal("a corrected source remained stuck in backoff")
 	}
 }
 

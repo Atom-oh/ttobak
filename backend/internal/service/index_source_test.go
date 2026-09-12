@@ -63,8 +63,11 @@ func TestIndexDocumentBytesRevisionAndPreviewBinding(t *testing.T) {
 			s, repo, objects, p, _ := newIndexTest()
 			key, _ := model.CanonicalIndexResource(pk, "DOC#d")
 			repo.sources[key.Hash()] = &model.IndexRecord{Resource: key, Fields: map[string]interface{}{
-				"docId": "d", "title": "문서", "content": "", "fileKey": "docs/owner/file.pdf", "updatedAt": "unchanged",
+				"docId": "d", "title": "문서", "content": "", "fileKey": "docs/owner/file.pdf", "updatedAt": "unchanged", "sourceUserId": "owner",
 			}}
+			if key.Kind == "accountDocument" {
+				repo.sources[key.Hash()].Fields["accountId"] = "team"
+			}
 			objects.asset("docs/owner/file.pdf", "PDF bytes\x00😀", "v1")
 			before, err := s.ReadSource(context.Background(), key, true)
 			if err != nil {

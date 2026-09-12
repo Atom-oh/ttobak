@@ -249,7 +249,9 @@ func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexCon
 		}
 	}
 	control.LegacyCursor = legacyCursor
-	jobs, cursor, err := s.repo.ListIndexJobs(ctx, control.JobCursor, 25)
+	// Never advance past eligible jobs that did not fit this generation.
+	// Reading at most a batch preserves rotation even when early jobs fail forever.
+	jobs, cursor, err := s.repo.ListIndexJobs(ctx, control.JobCursor, indexBatchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +333,7 @@ func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) 
 			return model.IndexMember{}, errors.Join(err, cleanupErr)
 		}
 		failed := job
-		failed.State, failed.ErrorCode, failed.LeaseUntil, failed.RetryAfter = model.IndexFailed, "SOURCE_UNAVAILABLE", 0, s.now().Add(time.Minute).UnixMilli()
+		s.failJob(&failed, "SOURCE_UNAVAILABLE")
 		failed.Keys, failed.PendingKeys = nil, nil
 		if e := s.repo.SaveIndexJob(ctx, &job, &failed, nil, false, s.now().UnixMilli()); e != nil {
 			return model.IndexMember{}, e
@@ -477,12 +479,12 @@ func (s *IndexingService) finish(ctx context.Context, member model.IndexMember, 
 	next := *job
 	next.SyncID, next.UpdatedAt = syncID, s.now().UnixMilli()
 	if !success {
-		next.State, next.ErrorCode, next.RetryAfter = model.IndexFailed, "INGESTION_FAILED", s.now().Add(time.Minute).UnixMilli()
+		s.failJob(&next, "INGESTION_FAILED")
 		return s.repo.SaveIndexJob(ctx, job, &next, nil, false, s.now().UnixMilli())
 	}
 	current, err := s.ReadSource(ctx, member.Resource, false)
 	if err != nil {
-		next.State, next.ErrorCode, next.RetryAfter = model.IndexFailed, "SOURCE_UNAVAILABLE", s.now().Add(time.Minute).UnixMilli()
+		s.failJob(&next, "SOURCE_UNAVAILABLE")
 		return s.repo.SaveIndexJob(ctx, job, &next, nil, false, s.now().UnixMilli())
 	}
 	complete, err := s.inventoryMatches(ctx, member.Resource, job.Keys)
@@ -493,11 +495,28 @@ func (s *IndexingService) finish(ctx context.Context, member model.IndexMember, 
 		return s.repo.RequestIndexResource(ctx, member.Resource, "", s.now().UnixMilli())
 	}
 	next.State, next.ErrorCode = current.Outcome, current.ErrorCode
+	next.FailureCount, next.RetryAfter = 0, 0
 	err = s.repo.SaveIndexJob(ctx, job, &next, current.Record, true, s.now().UnixMilli())
 	if errors.Is(err, repository.ErrConditionFailed) {
 		return s.repo.RequestIndexResource(ctx, member.Resource, "", s.now().UnixMilli())
 	}
 	return err
+}
+
+func (s *IndexingService) failJob(job *model.IndexJob, code string) {
+	if job.FailureCount < 0 {
+		job.FailureCount = 0
+	}
+	if job.FailureCount < 6 {
+		job.FailureCount++
+	}
+	delay := time.Minute << min(job.FailureCount-1, 5)
+	if delay > 30*time.Minute {
+		delay = 30 * time.Minute
+	}
+	now := s.now()
+	job.State, job.ErrorCode, job.LeaseUntil = model.IndexFailed, code, 0
+	job.RetryAfter, job.UpdatedAt = now.Add(delay).UnixMilli(), now.UnixMilli()
 }
 
 // Status revalidates source bytes as well as the canonical record. A stored

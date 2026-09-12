@@ -29,6 +29,9 @@ This worker slice uses the existing S3 data-source full ingestion path. It does 
   provider job, fresh object/source checks, and a conditional source+job write.
 - Reconciliation pages canonical records, known jobs (including deleted sources),
   and legacy exports, persisting cursors so missed streams/backfill make progress.
+- Job pages are at most one generation (four entries), so failed entries cannot
+  hide later eligible jobs. Repeated failures back off from one to thirty minutes;
+  an unreadable-source scan preserves cooldown, and a proven new revision resets it.
 - PPTX/PPT waits for PDF preview metadata `source-etag` and, when supplied by S3,
   `source-version-id` matching its current original object. Converter changes
   belong to the host; an unbound legacy preview is not proof of current content.
@@ -99,8 +102,9 @@ and [StartIngestionJob idempotency](https://docs.aws.amazon.com/bedrock/latest/A
   30-second/256 MB settings are insufficient for this workload.
 - Enable canonical-key DynamoDB stream delivery with `ReportBatchItemFailures`,
   including REMOVE events, and a scheduled tick. Give the role table
-  GetItem/Query/Scan/UpdateItem/TransactWriteItems and stream-consumer permissions;
-  assets GetObject/GetObjectVersion under transcripts, docs and docs-pdf; KB
+  GetItem/Query/Scan/UpdateItem/ConditionCheckItem and stream-consumer permissions;
+  assets GetObject/GetObjectVersion under transcripts, docs and docs-pdf plus
+  ListBucket to distinguish missing sources/previews from forbidden reads; KB
   ListBucket for canonical/v1 and meetings, PutObject under canonical/v1 and
   DeleteObject under canonical/v1 and meetings; and scoped Bedrock
   StartIngestionJob/GetIngestionJob/ListIngestionJobs.
@@ -116,13 +120,8 @@ and [StartIngestionJob idempotency](https://docs.aws.amazon.com/bedrock/latest/A
 - Deployed ingestion/recall and real source edit/delete/revoke evidence remain
   host-owned prerequisites; synthetic tests alone do not establish those results.
 
-Review split: model/repository/provider files and their tests form a standalone
-foundation (no source service or worker dependency). A second patch can add
-`index_source*`, `indexing*` service files, revision fixture, `cmd/kb`, and this
-plan. Keep all regression tests when splitting to satisfy review size limits.
-
 Validation uses home-backed GOTMPDIR/TMPDIR and the shared Go cache. Full
-`go test ./... -count=1`, `go vet ./...`, and a Linux ARM64 `lambda.norpc` KB build
+`/usr/local/go/bin/go test ./... -count=1`, `/usr/local/go/bin/go vet ./...`, and a Linux ARM64 `lambda.norpc` KB build
 are required. The indexing suite covers stream filtering, source/CAS races,
 coordinator/run leases, accepted replies lost across both provider and DynamoDB,
 partial uploads, cleanup/deletion/recreation, external sync conflicts, failed
