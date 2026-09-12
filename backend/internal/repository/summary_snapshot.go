@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -19,9 +20,11 @@ var (
 	ErrSummaryLimit  = errors.New("summary snapshot or output exceeds limit")
 )
 
-var summaryMeetingFields = []string{"meetingId", "userId", "title", "status", "content", "notes", "liveSummary", "actionItems",
-	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "speakerMap", "participants",
-	"accountId", "sharedToAccount", "updatedAt"}
+var summaryMeetingFields = []string{"meetingId", "userId", "status", "content", "notes",
+	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "accountId", "sharedToAccount"}
+
+var batchSummaryFields = []string{"meetingId", "userId", "status", "content", "notes", "liveSummary",
+	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "attachmentSummarySources", "summarizeRetryClaimedAt"}
 
 func summaryRowKey(pk, sk string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: pk}, "SK": &types.AttributeValueMemberS{Value: sk}}
@@ -70,7 +73,7 @@ func summaryCondition(check model.SummaryCheck) expression.ConditionBuilder {
 	}
 	return condition
 }
-func (r *DynamoDBRepository) captureMeetingSummaryMetadata(ctx context.Context, ownerID, meetingID string) (*model.SummarySnapshot, error) {
+func (r *DynamoDBRepository) captureMeetingSummaryMetadata(ctx context.Context, ownerID, meetingID string, fields []string) (*model.SummarySnapshot, error) {
 	row, err := r.summaryRow(ctx, model.PrefixUser+ownerID, model.PrefixMeeting+meetingID)
 	if err != nil || len(row) == 0 {
 		return nil, err
@@ -85,7 +88,7 @@ func (r *DynamoDBRepository) captureMeetingSummaryMetadata(ctx context.Context, 
 	if err := attributevalue.UnmarshalMap(row, &snapshot.Stored); err != nil {
 		return nil, err
 	}
-	parent, err := summaryCheck(model.PrefixUser+ownerID, model.PrefixMeeting+meetingID, row, summaryMeetingFields)
+	parent, err := summaryCheck(model.PrefixUser+ownerID, model.PrefixMeeting+meetingID, row, fields)
 	if err != nil {
 		return nil, err
 	}
@@ -100,14 +103,11 @@ func (r *DynamoDBRepository) captureMeetingSummaryMetadata(ctx context.Context, 
 	return snapshot, nil
 }
 
-// CaptureMeetingSummary records exact stored attribute presence before hydrating
-// the source used by the existing batch summarizer. A missing meeting is nil.
+// CaptureMeetingSummary records exact stored presence before source selection.
+// Hydration binds the effective selected field to bytes separately.
 func (r *DynamoDBRepository) CaptureMeetingSummary(ctx context.Context, ownerID, meetingID string) (*model.SummarySnapshot, error) {
-	snapshot, err := r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID)
+	snapshot, err := r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, batchSummaryFields)
 	if err != nil || snapshot == nil {
-		return nil, err
-	}
-	if err := r.resolveTranscripts(ctx, meetingID, snapshot.Meeting); err != nil {
 		return nil, err
 	}
 	return snapshot, nil
@@ -127,6 +127,38 @@ func (r *DynamoDBRepository) SaveMeetingSummary(ctx context.Context, snapshot *m
 	if !validSummarySnapshot(snapshot) {
 		return ErrConditionFailed
 	}
-	return r.updateMeetingFieldsWithCondition(ctx, snapshot.Meeting.UserID, snapshot.Meeting.MeetingID,
-		summaryCondition(snapshot.Checks[0]), map[string]interface{}{"content": content, "status": model.StatusDone, "attachmentSummarySources": coverage}, true)
+	return r.publishMeetingSummary(ctx, snapshot, content, coverage)
+}
+
+// MarkSummaryConflict discards this attempt without touching human text.
+// Only its observed retry claim can be released for a fresh generation.
+func (r *DynamoDBRepository) MarkSummaryConflict(ctx context.Context, snapshot *model.SummarySnapshot) error {
+	if !validSummarySnapshot(snapshot) {
+		return ErrConditionFailed
+	}
+	condition := expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name("status").Equal(expression.Value(model.StatusSummarizing)))
+	if claim, present := snapshot.Stored["summarizeRetryClaimedAt"]; present {
+		condition = condition.And(expression.Name("summarizeRetryClaimedAt").Equal(expression.Value(claim)))
+	} else {
+		condition = condition.And(expression.AttributeNotExists(expression.Name("summarizeRetryClaimedAt")))
+	}
+	update := expression.Set(expression.Name("summaryRetryPending"), expression.Value(true)).
+		Set(expression.Name("summaryConflictCode"), expression.Value("SOURCE_CHANGED")).
+		Set(expression.Name("updatedAt"), expression.Value(time.Now().UTC())).
+		Remove(expression.Name("summarizeRetryClaimedAt"))
+	expr, err := expression.NewBuilder().WithCondition(condition).WithUpdate(update).Build()
+	if err != nil {
+		return err
+	}
+	_, err = r.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{TableName: aws.String(r.tableName),
+		Key:                 summaryRowKey(snapshot.Checks[0].PK, snapshot.Checks[0].SK),
+		ConditionExpression: expr.Condition(), UpdateExpression: expr.Update(),
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()})
+	return err
+}
+
+func summaryKey(meetingID string) map[string]types.AttributeValue {
+	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+		"SK": &types.AttributeValueMemberS{Value: model.ResummarySK}}
 }

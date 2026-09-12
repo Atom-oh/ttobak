@@ -46,56 +46,6 @@ Response: 200 OK
 
 ### Meetings
 
-#### Meeting document text
-
-Release prerequisite: merge the summary foundation (#209), which supplies the
-canonical ADR-040 and shared release/rollback runbook, before this API producer.
-The host verified worker deployment `34717614426` SUCCESS: a 626-byte synthetic
-PDF produced 752-byte JSON with native page 1, exact source ETag/identity,
-succeeded/complete state and lease zero. A duplicate left state unchanged;
-three synthetic rows and two exact S3 versions were removed and absence checked.
-This IAM worker smoke does not prove public API/EventBridge/summary/QA behavior.
-
-Deploy the document extraction worker before merging/deploying this upload
-producer; there is no feature toggle. The host verified deployment 34717614426
-and the worker smoke described in the release runbook. Upload completion remains owner-only. Supported meeting files
-(PDF, PPTX, DOCX, MD) queue `ttobak.upload / DocumentUploadCompleted`; publish
-failure is stored in extraction state. Once that failure is durable, upload
-completion returns 200 because the original file is already stored. Failure to
-persist or confirm extraction state remains an error. Other formats
-remain downloadable: upload completion returns 200 after recording
-`UNSUPPORTED_FORMAT`; the text retry endpoint still returns 422.
-
-Authenticated meeting readers may call:
-
-- `GET /api/meetings/{meetingId}/attachments/{attachmentId}/text/status`
-- `GET /api/meetings/{meetingId}/attachments/{attachmentId}/text?pageSize=3000&cursor=...`
-
-Owners/editors may call
-`POST /api/meetings/{meetingId}/attachments/{attachmentId}/text/retry` (202),
-including legacy documents without extraction metadata.
-
-Status is also embedded as `attachments[].textExtraction` on meeting detail:
-`{status,runId?,errorCode?,leaseUntil?,updatedAt?,unitCount,complete,hasResult,needsResummary,summaryExcerpted}`.
-States are `unknown`, `queued`, `running`, `succeeded`, `partial`, `failed`.
-Missing metadata is unknown; expired work reports failure. Previous result
-metadata may survive a failed attempt and must not be labeled current success.
-
-Text pages contain `{analysis,current,source,format,scope,complete,warningCount,
-units,nextCursor?,pageComplete}`. Each unit carries `unitIndex,startOffset,
-endOffset,text,location`; offsets count Unicode code points and locations come
-from the parser. `pageSize` accepts 1–6000, only one value per query field.
-The encoded response is capped at 14,000 bytes; continuation requires fresh
-authorization and the same canonical source/result revision.
-
-Errors: 400 invalid query; 403/404 access or missing source; 409 stale cursor,
-changed source or unavailable verified text; 422 unsupported format on text retry.
-Upload completion preserves 200 for durable `PUBLISH_FAILED` / `UNSUPPORTED_FORMAT`
-states; storage failures remain 500 and are never silently acknowledged.
-No result S3 URL is exposed. Verified document excerpts are separate DOCUMENT
-evidence in summaries; late extraction sets `needsResummary` instead of claiming
-that old notes include the new document.
-
 #### List Meetings
 
 ```
@@ -1909,7 +1859,7 @@ Manually curates a single crawled **news** document — e.g. a search result the
 ### 3. Summarize Lambda (cmd/summarize)
 - **Trigger**: EventBridge — S3 `Object Created` on the `transcripts/` prefix, and the custom `AllPartsTranscribed` event for multi-part audio (not a DynamoDB Stream — see INFRA-SPEC.md and ADR-031)
 - **Role**: summarizes the meeting via Bedrock Claude
-- **Steps**: (1) load the selected transcript → (2) build attachment context: image analysis results (a diagram attachment is labeled "Attached Diagram" and its mermaid code passed as a trusted source) + verified bounded document text (or explicit unavailable-evidence notices for pending/failed extraction) → (3) call Bedrock Claude Opus 5 — the note conditionally includes an `## Architecture Diagram` section (only when a diagram attachment's mermaid exists or the discussion is concretely architectural; otherwise the section is omitted) → (4) generate the structured markdown note (+ trailing `## Attached Images`/`## Attached Documents` sections using `attachment://{id}` links, resolved to presigned URLs by the frontend) → (5) save content to DynamoDB → (6) set status to "done"
+- **Steps**: load a presence-aware source snapshot, prepare verified DOCUMENT evidence, generate with strict completion, filter unsupported citation claims, then atomically save against current source/attachment conditions. Failed documents become explicit omission notices; source conflicts regenerate from fresh inputs without STT. Completed uploads retain links. See ADR-040 in prerequisite #209.
 - **Env vars**: TABLE_NAME, BEDROCK_MODEL_ID
 
 ### 4. Process Image Lambda (cmd/process-image)
@@ -1979,3 +1929,32 @@ immutable source-bound JSON and commits success/partial/failure conditionally.
 This is an internal event, not a public REST route. Status/retry/text-reading
 REST producers and consumers are staged separately. The current worker deployment
 does not imply that existing uploads already use the new pipeline.
+
+## Meeting attachment text release
+
+Merge #209 first (canonical ADR-040, shared tests and rollout/rollback guidance).
+The host verified worker deployment `34717614426` SUCCESS: 626-byte native PDF →
+752-byte JSON, exact page/ETag/identity, succeeded/complete with lease zero,
+duplicate ignored, three rows/two S3 versions removed and absence rechecked. This
+IAM smoke does not prove public API/EventBridge/summary/QA behavior.
+
+Owner-only upload completion creates canonical metadata and requests extraction
+for PDF/PPTX/DOCX/MD. A stored original remains HTTP 200 when unsupported format
+or publication failure has durable `textExtraction` failure metadata. Failed-state
+persistence errors remain errors. Retry still returns errors when work cannot queue.
+
+Authenticated readers: GET `/api/meetings/{meetingId}/attachments/{attachmentId}/text/status`
+and GET `.../text?pageSize=3000&cursor=...`. Owners/editors: POST `.../text/retry`
+(202), including legacy unknown documents. Status also appears on attachments:
+`{status,runId?,errorCode?,leaseUntil?,updatedAt?,unitCount,complete,hasResult,needsResummary,summaryExcerpted}`.
+States: unknown/queued/running/succeeded/partial/failed. Expiry is interrupted
+failure; retained results never imply current success.
+
+Text: `{analysis,current,source,format,scope,complete,warningCount,units,nextCursor?,pageComplete}`.
+Units carry exact Unicode offsets and parser locations. pageSize is 1–6000,
+response ≤14,000 bytes including newline, ≤50 units. Current auth/source/run/ETag
+is revalidated; stale cursors conflict. Errors: 400 query, 403/404 access/source,
+409 stale/unavailable text, 422 unsupported retry, 500 storage failures.
+
+Source conflicts preserve text and mark fresh-generation retry; unrelated metadata
+changes do not invalidate generation. No source/model text appears in errors.

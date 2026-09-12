@@ -18,6 +18,7 @@ type SummarySnapshot struct {
 	TextStates  map[string]*AttachmentTextState
 	Checks      []SummaryCheck // first check is the canonical meeting
 	Stored      map[string]interface{}
+	Objects     []SummaryObject
 }
 type SummaryObject struct {
 	Bucket    string `json:"bucket"`
