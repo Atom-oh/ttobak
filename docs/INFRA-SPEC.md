@@ -186,9 +186,11 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - Permissions: Bedrock InvokeModelWithBidirectionalStream (Nova Sonic), Bedrock InvokeModel (Claude translation), DynamoDB read/write, API Gateway ManageConnections
 
 #### KB Lambda
-- Trigger: S3 Event (prefix `kb/`) via EventBridge + API Gateway (sync), 1024MB / 300s
-- Env: `TABLE_NAME`, `BUCKET_NAME`, `KB_ID`, `AOSS_ENDPOINT`
-- Permissions: Bedrock KB management, OpenSearch Serverless, S3 read, DynamoDB read/write
+- Current deployment: `ttobak-kb` has no trigger, 256 MiB / 30 seconds. No API Gateway or S3 upload rule points to it.
+- Worker contract: canonical DynamoDB stream records or scheduled/internal tick; coalesced full ingestion and immutable `canonical/v1/` projections, not direct OpenSearch writes.
+- Before activation: provide `TABLE_NAME`, `BUCKET_NAME`, `KB_BUCKET_NAME`, bare ten-character `KB_ID` and `DATA_SOURCE_ID`; increase to 1024 MiB / 12 minutes and grant source reads/existence checks, scoped projection operations and ingestion controls.
+- Deploy and verify canonical QA filters/current-source authorization before enabling stream/tick delivery. Legacy export deletion otherwise removes meeting recall; reverting QA requires re-export (ADR-038).
+- A crashed invocation may retain its 20-minute coordinator lease; normal ticks report `LEASE_WAIT` until recovery. Source changes are deferred per document so one recording cannot block other jobs.
 
 #### QA Lambda (`ttobak-qa`, Python)
 - Current-source configuration: `KB_BUCKET_NAME` identifies the KB bucket,
