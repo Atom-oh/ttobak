@@ -46,6 +46,14 @@ func NewActionItemsAnalysisService(repo actionAnalysisRepo, meetings *MeetingSer
 	return &ActionItemsAnalysisService{repo: repo, meetings: meetings, extractor: extractor, publish: publish, now: time.Now}
 }
 
+// NewMetadataActionItemsAnalysisService keeps lifecycle reads and access checks
+// on saved summary metadata. The view retains the repository's real conditional
+// writes; the API's other services and the summarizer keep their original readers.
+func NewMetadataActionItemsAnalysisService(repo *repository.DynamoDBRepository, extractor actionItemsExtractor, publish func(context.Context, model.ActionItemsRequested) error) *ActionItemsAnalysisService {
+	view := repo.MetadataView()
+	return NewActionItemsAnalysisService(view, NewMeetingService(view), extractor, publish)
+}
+
 func actionSourceHash(source string) string {
 	sum := sha256.Sum256([]byte(source))
 	return hex.EncodeToString(sum[:])
@@ -237,7 +245,7 @@ func (s *ActionItemsAnalysisService) Process(ctx context.Context, event model.Ac
 	if err != nil {
 		return err
 	}
-	if meeting == nil || meeting.Status != model.StatusDone || state.SourceHash != actionSourceHash(meeting.Content) {
+	if meeting == nil || meeting.Status != model.StatusDone || strings.TrimSpace(meeting.Content) == "" || state.SourceHash != actionSourceHash(meeting.Content) {
 		return s.fail(ctx, event.MeetingID, state, model.AnalysisSourceChanged)
 	}
 	now := s.now()
