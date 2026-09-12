@@ -196,11 +196,16 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
   per-document status reads, and immutable snapshot access. Bootstrap grants
   original `kb/*`/`shared/*` reads and snapshot-prefix writes/deletes only;
   DynamoDB operations are limited to the two `KBINDEX#` job/control partitions.
-  canonical source/projection permissions are added with explicit full mode.
+  Canonical source reads and projection permissions are added with explicit full mode;
+  DynamoDB writes remain restricted to the job/control partitions in both modes.
   The worker has no OpenSearch or model-inference permission.
 - Rollout: the mode-aware migration worker must be deployed before enabling
   the scheduled producer. Follow the
   [bootstrap and activation runbook](runbooks/knowledge-index-bootstrap.md).
+- Worker contract: raw DynamoDB stream records or scheduled `tick` envelopes;
+  coalesced full ingestion and immutable projections, not direct OpenSearch writes.
+- Recovery: a crashed invocation may retain its 20-minute coordinator lease.
+  Normal ticks report `LEASE_WAIT` until recovery; member failures back off independently.
 
 #### QA Lambda (`ttobak-qa`, Python)
 - Current-source configuration: `KB_BUCKET_NAME` identifies the KB bucket,
