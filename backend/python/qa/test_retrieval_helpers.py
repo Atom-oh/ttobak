@@ -2,6 +2,7 @@
 import copy
 from decimal import Decimal
 import hashlib
+import io
 import json
 import unittest
 from unittest import mock
@@ -96,6 +97,73 @@ class TestCurrentCandidates(_SourceFixture, unittest.TestCase):
         changed = hydrate_candidates(self.source_reader, 'owner', 'file', [hit], {}, 5)
         self.assertNotIn('OLD_BYTES', json.dumps(changed))
         self.assertTrue(changed[0]['document']['filePending'])
+
+    def test_duplicate_candidates_keep_the_best_score_independent_of_group_order(self):
+        self.doc(content='CURRENT')
+        hit = candidate(self.indexed())
+        lower, higher = dict(hit, score=.5), dict(hit, score=.9)
+        for candidates in ([lower, higher], [higher, lower]):
+            result = hydrate_candidates(self.source_reader, 'owner', 'query', candidates, {}, 5)
+            self.assertEqual(result[0]['score'], .9)
+
+    def test_old_file_hit_does_not_mark_current_markdown_as_file_pending(self):
+        row = self.doc(content='', fileKey='docs/owner/file.pdf')
+        self.s3.head_object.return_value = {'ETag': '"one"', 'VersionId': 'v1', 'ContentLength': 10}
+        hit = candidate(self.indexed(filename='file.pdf', text='OLD_FILE'))
+        row.pop('fileKey')
+        row['content'] = 'CURRENT_MARKDOWN'
+        result = hydrate_candidates(self.source_reader, 'owner', 'query', [hit], {}, 5)
+        self.assertEqual(result[0]['document']['content'], 'CURRENT_MARKDOWN')
+        self.assertNotIn('filePending', result[0]['document'])
+        self.assertNotIn('filePending', result[0]['provenance'])
+
+    def test_keyword_fallback_retains_new_saved_text_without_crowding_out_file_evidence(self):
+        self.s3.head_object.return_value = {'ETag': '"one"', 'VersionId': 'v1', 'ContentLength': 10}
+        hits = []
+        for i in range(2):
+            row = dict(self.doc(content='', fileKey='docs/owner/file.pdf'),
+                       SK=f'DOC#file{i}', docId=f'file{i}')
+            self.table.put_item(Item=row)
+            hits.append(candidate(self.indexed(sk=f'DOC#file{i}', filename='file.pdf', text=f'FILE_FACT_{i}')))
+        for i in range(7):
+            self.table.put_item(Item=dict(self.doc(content='NEW_TERM'), SK=f'DOC#note{i}', docId=f'note{i}'))
+        identities, _ = self.discover('owner')
+        result = hydrate_candidates(self.source_reader, 'owner', 'NEW_TERM', hits, identities, 3)
+        self.assertEqual([entry.get('text') for entry in result[:2]], ['FILE_FACT_0', 'FILE_FACT_1'])
+        self.assertEqual(result[2]['document']['content'], 'NEW_TERM')
+
+    def test_single_result_keeps_verified_file_ahead_of_literal_fallback(self):
+        row = self.doc(content='', fileKey='docs/owner/file.pdf')
+        self.s3.head_object.return_value = {'ETag': '"one"', 'VersionId': 'v1', 'ContentLength': 10}
+        hit = candidate(self.indexed(filename='file.pdf', text='VERIFIED_FILE'))
+        self.table.put_item(Item=dict(row, SK='DOC#new', docId='new', content='NEW_TERM', fileKey=''))
+        identities, _ = self.discover('owner')
+        result = hydrate_candidates(self.source_reader, 'owner', 'NEW_TERM', [hit], identities, 1)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].get('text'), 'VERIFIED_FILE')
+
+    def test_title_only_fallback_cannot_displace_verified_body(self):
+        row = self.doc(content='', fileKey='docs/owner/file.pdf')
+        self.s3.head_object.return_value = {'ETag': '"one"', 'VersionId': 'v1', 'ContentLength': 10}
+        self.table.put_item(Item=dict(row, SK='DOC#second', docId='second'))
+        hits = [candidate(self.indexed(sk=sk, filename='file.pdf', text=body))
+                for sk, body in [('DOC#doc', 'FIRST_FILE'), ('DOC#second', 'SECOND_FILE')]]
+        for body in ('', 'UNRELATED_BODY'):
+            with self.subTest(body=body):
+                self.table.put_item(Item=dict(row, SK='DOC#title', docId='title',
+                                              title='NEW_TERM', content=body, fileKey=''))
+                identities, _ = self.discover('owner')
+                result = hydrate_candidates(self.source_reader, 'owner', 'NEW_TERM', hits, identities, 2)
+                self.assertEqual([entry.get('text') for entry in result], ['FIRST_FILE', 'SECOND_FILE'])
+
+    def test_legacy_text_excerpt_is_bounded_and_marked_partial(self):
+        body = b'a' * 9000
+        self.s3.head_object.return_value = {'ETag': '"one"', 'ContentLength': len(body)}
+        self.s3.get_object.return_value = {'ETag': '"one"', 'Body': io.BytesIO(body)}
+        result = hydrate_candidates(self.source_reader, 'owner', 'query', [
+            {'uri': 's3://knowledge/kb/owner/large.md', 'score': .8}], {}, 5)
+        self.assertEqual(len(result[0]['text']), 6000)
+        self.assertTrue(result[0]['provenance']['partial'])
 
     def test_filter_groups_preserve_every_foreign_grant(self):
         identities = {('USER#owner', f'DOC#d{i}'): {} for i in range(23)}
