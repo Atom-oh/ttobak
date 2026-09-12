@@ -733,6 +733,84 @@ class TestTranscriptReadGuard(unittest.TestCase):
                     bucket_name='synthetic', meeting_id=meeting_id, field=field,
                 )
 
+    def test_legacy_and_versioned_refs_are_exact_reads_for_all_spill_fields(self):
+        from transcript_storage import resolve_transcript, validate_transcript_ref
+        version = '0123456789abcdef0123456789abcdef'
+        for field in ('transcriptA', 'transcriptB', 'transcriptSegments'):
+            for suffix in ('.txt', f'.{version}.txt'):
+                key = f'transcripts/m1/{field}{suffix}'
+                value = f's3://synthetic/{key}'
+                with self.subTest(key=key):
+                    self.assertEqual(validate_transcript_ref(
+                        value, bucket_name='synthetic', meeting_id='m1', field=field,
+                    ), key)
+                    body = io.BytesIO('원문 payload'.encode())
+                    s3 = mock.Mock()
+                    s3.get_object.return_value = {'Body': body}
+                    self.assertEqual(resolve_transcript(
+                        value, bucket_name='synthetic', meeting_id='m1', field=field, s3_client=s3,
+                    ), '원문 payload')
+                    s3.get_object.assert_called_once_with(Bucket='synthetic', Key=key)
+                    self.assertTrue(body.closed)
+
+    def test_versioned_refs_reach_authorized_qa_context(self):
+        for field in ('transcriptA', 'transcriptB'):
+            key = f'transcripts/m1/{field}.0123456789abcdef0123456789abcdef.txt'
+            body = io.BytesIO(b'VERSIONED_TRANSCRIPT')
+            with self.subTest(field=field), mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
+                s3.get_object.return_value = {'Body': body}
+                text, err = self.read_meeting(**{field: f's3://synthetic/{key}', 'selectedTranscript': field[-1]})
+                self.assertIsNone(err)
+                self.assertIn('VERSIONED_TRANSCRIPT', text)
+                s3.get_object.assert_called_once_with(Bucket='synthetic', Key=key)
+                self.assertTrue(body.closed)
+
+    def test_malformed_versioned_refs_fail_before_s3(self):
+        from transcript_storage import resolve_transcript, validate_transcript_ref
+        version = '0123456789abcdef0123456789abcdef'
+        base = 's3://synthetic/transcripts/m1/transcriptA'
+        refs = [
+            f's3://other/transcripts/m1/transcriptA.{version}.txt',
+            f's3://synthetic/transcripts/m10/transcriptA.{version}.txt',
+            f's3://synthetic/transcripts/m1/transcriptB.{version}.txt',
+            f's3://synthetic/transcripts/m1/../m2/transcriptA.{version}.txt',
+            f's3://synthetic/transcripts/%6d1/transcriptA.{version}.txt',
+            f's3://synthetic/transcripts/m1/%74ranscriptA.{version}.txt',
+            *(f'{base}.{bad}.txt' for bad in ('a' * 31, 'a' * 33, 'A' * 32, 'g' * 32,
+                                             '01234567-89ab-cdef-0123-456789abcdef', '%30' + version[1:])),
+            f'{base}.{version}/other.txt', f'{base}.{version}.txt.bak',
+            f'{base}.{version}.txt?versionId=old', f'{base}.{version}.txt#fragment',
+            f'{base}.{version}.txt\n',
+        ]
+        for value in refs:
+            with self.subTest(value=value):
+                s3 = mock.Mock()
+                with self.assertRaises(ValueError):
+                    resolve_transcript(value, bucket_name='synthetic', meeting_id='m1', field='transcriptA', s3_client=s3)
+                s3.get_object.assert_not_called()
+        for scheme in ('', 'S3://', 's3:/', 'https://'):
+            with self.subTest(scheme=scheme), self.assertRaises(ValueError):
+                validate_transcript_ref(
+                    f'{scheme}synthetic/transcripts/m1/transcriptA.{version}.txt',
+                    bucket_name='synthetic', meeting_id='m1', field='transcriptA',
+                )
+
+    def test_versioned_ref_cannot_redirect_via_meeting_metadata(self):
+        with mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
+            text, err = self.read_meeting(meetingId='other', transcriptA='s3://synthetic/transcripts/other/transcriptA.0123456789abcdef0123456789abcdef.txt')
+        self.assertIsNone(text)
+        self.assertEqual(err['status'], 500)
+        s3.get_object.assert_not_called()
+
+    def test_versioned_read_failure_does_not_fall_back_to_legacy(self):
+        key = 'transcripts/m1/transcriptA.0123456789abcdef0123456789abcdef.txt'
+        with mock.patch.object(handler, 'BUCKET_NAME', 'synthetic'), mock.patch.object(handler, 's3_client') as s3:
+            s3.get_object.side_effect = RuntimeError('synthetic S3 failure')
+            text, err = self.read_meeting(transcriptA=f's3://synthetic/{key}')
+        self.assertIsNone(text)
+        self.assertEqual(err['status'], 500)
+        s3.get_object.assert_called_once_with(Bucket='synthetic', Key=key)
+
 
 class TestLoadSessionTrimsTrailingUser(unittest.TestCase):
     """A stored history ending in user-role messages must be trimmed on load,
