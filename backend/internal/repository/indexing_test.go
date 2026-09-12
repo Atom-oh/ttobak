@@ -112,6 +112,59 @@ func TestIndexUnknownRevisionKeepsFailureCooldown(t *testing.T) {
 	}
 }
 
+func TestUnknownIndexRevisionPreservesEvidenceAcrossRetryFailure(t *testing.T) {
+	desired, failures, deadline, writes := "old", "4", 500, 0
+	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+		if strings.HasSuffix(target, ".GetItem") {
+			return fmt.Sprintf(`{"Item":{"resource":{"M":{"pk":{"S":"USER#owner"},"sk":{"S":"DOC#d"},"kind":{"S":"personalDocument"},"id":{"S":"d"}}},"version":{"N":"3"},"state":{"S":"FAILED"},"desiredRevision":{"S":%q},"failureCount":{"N":%q},"retryAfter":{"N":"%d"}}}`, desired, failures, deadline)
+		}
+		if !strings.HasSuffix(target, ".UpdateItem") {
+			t.Fatalf("unexpected call: %s", target)
+		}
+		writes++
+		names := body["ExpressionAttributeNames"].(map[string]interface{})
+		values := body["ExpressionAttributeValues"].(map[string]interface{})
+		for _, assignment := range strings.Split(strings.TrimPrefix(body["UpdateExpression"].(string), "SET "), ",") {
+			parts := strings.Fields(assignment)
+			if len(parts) != 3 || parts[1] != "=" {
+				continue
+			}
+			value := values[parts[2]].(map[string]interface{})
+			switch names[parts[0]] {
+			case "desiredRevision":
+				desired = value["S"].(string)
+			case "failureCount":
+				failures = value["N"].(string)
+			}
+		}
+		return "{}"
+	})
+	key, ok := model.CanonicalIndexResource("USER#owner", "DOC#d")
+	if !ok {
+		t.Fatal("invalid fixture")
+	}
+	if err := repo.RequestIndexResource(context.Background(), key, "", 1000); err != nil {
+		t.Fatal(err)
+	}
+	if desired != "old" || failures != "4" {
+		t.Fatalf("unknown revision erased evidence: %q failures=%s", desired, failures)
+	}
+	// The worker failed again; unchanged readable bytes must not bypass its new cooldown.
+	deadline = 2000
+	if err := repo.RequestIndexResource(context.Background(), key, "old", 1100); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 1 {
+		t.Fatal("unchanged revision bypassed renewed cooldown")
+	}
+	if err := repo.RequestIndexResource(context.Background(), key, "new", 1200); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 2 || desired != "new" || failures != "0" {
+		t.Fatalf("new revision did not reset failure count: writes=%d revision=%q count=%s", writes, desired, failures)
+	}
+}
+
 func TestIndexJobQueryPaginationAndCursorValidation(t *testing.T) {
 	calls := 0
 	repo := indexingWire(t, func(target string, body map[string]interface{}) string {
