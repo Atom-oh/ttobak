@@ -203,6 +203,19 @@ Error: 404 Not Found
 > comparison permits redundant headers for that speaker at segment boundaries.
 > Different/unknown labels and bracketed body text are not removed.
 
+#### Update Speaker Names
+
+`PUT /api/meetings/{meetingId}/speakers` accepts
+`{ "speakerMap": { "spk_0": "김담당" } }`. Existing meeting owner/edit permission
+is required. Success returns `200 { meetingId, updatedAt }`; denied/missing
+meetings return 403/404. A concurrent meeting edit returns 409 with a message
+asking the user to refresh and retry. The editor keeps the names entered and
+shows the failure instead of treating it as a successful save.
+
+The update matches the previously read version before replacing derived text.
+Large transcript fields are uploaded to unique versioned S3 keys, and their
+references change only when that conditional database write succeeds.
+
 #### Update Meeting
 
 ```

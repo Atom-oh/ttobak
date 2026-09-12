@@ -491,7 +491,7 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 
 	if isStuck(meeting.Status, meeting.UpdatedAt) {
 		err = s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,
-			map[string]interface{}{"status": meeting.Status, "updatedAt": meeting.UpdatedAt},
+			map[string]interface{}{"status": meeting.Status, "updatedAt": meeting.UpdatedAt.Format(time.RFC3339Nano)},
 			map[string]interface{}{"status": model.StatusError})
 		if err != nil && !errors.Is(err, repository.ErrConditionFailed) {
 			return nil, fmt.Errorf("expire stuck meeting: %w", err)
@@ -711,7 +711,7 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	// Guard the original version: hydrated transcripts can differ from stored S3 refs.
 	updatedAt := time.Now().UTC()
 	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,
-		map[string]interface{}{"updatedAt": meeting.UpdatedAt},
+		map[string]interface{}{"updatedAt": meeting.UpdatedAt.Format(time.RFC3339Nano)},
 		map[string]interface{}{
 			"content": meeting.Content, "transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
 			"transcriptSegments": meeting.TranscriptSegments, "actionItems": meeting.ActionItems, "speakerMap": meeting.SpeakerMap,
