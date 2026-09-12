@@ -60,7 +60,7 @@ interface MeetingHeaderProps {
   meeting: MeetingDetail;
   onShare: (user: SharedUser) => void;
   onUnshare: (userId: string) => void;
-  onTitleChange?: (newTitle: string) => void;
+  onTitleChange?: (newTitle: string) => void | Promise<void>;
   onTitleDirtyChange?: (dirty: boolean) => void;
   /** ADR-014 Phase 6: called with the updated linked id list after the picker saves. */
   onLinkedMeetingsChange?: (linkedMeetingIds: string[]) => void;
@@ -69,6 +69,9 @@ interface MeetingHeaderProps {
 export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onTitleDirtyChange, onLinkedMeetingsChange }: MeetingHeaderProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState(meeting.title);
+  const [isSavingTitle, setIsSavingTitle] = useState(false);
+  const [titleError, setTitleError] = useState('');
+  const titleSaveInFlight = useRef(false);
   const [showLinkPicker, setShowLinkPicker] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
@@ -79,15 +82,28 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onTi
     }
   }, [isEditingTitle]);
 
-  const saveTitle = () => {
+  const saveTitle = async () => {
+    if (titleSaveInFlight.current) return;
     const trimmed = editTitle.trim();
-    if (trimmed && trimmed !== meeting.title) {
-      onTitleChange?.(trimmed);
-    } else {
+    if (!onTitleChange || !trimmed || trimmed === meeting.title.trim()) {
       setEditTitle(meeting.title);
       onTitleDirtyChange?.(false);
+      setIsEditingTitle(false);
+      return;
     }
-    setIsEditingTitle(false);
+    titleSaveInFlight.current = true;
+    setIsSavingTitle(true);
+    setTitleError('');
+    try {
+      await onTitleChange(trimmed);
+      onTitleDirtyChange?.(false);
+      setIsEditingTitle(false);
+    } catch {
+      setTitleError('제목을 저장하지 못했습니다. Enter로 다시 시도하거나 Esc로 취소하세요.');
+    } finally {
+      titleSaveInFlight.current = false;
+      setIsSavingTitle(false);
+    }
   };
 
   return (
@@ -114,12 +130,14 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onTi
         {isEditingTitle ? (
           <input
             ref={titleInputRef}
+            aria-label="미팅 제목"
+            disabled={isSavingTitle}
             value={editTitle}
-            onChange={(e) => { setEditTitle(e.target.value); onTitleDirtyChange?.(e.target.value.trim() !== meeting.title); }}
+            onChange={(e) => { setEditTitle(e.target.value); onTitleDirtyChange?.(e.target.value.trim() !== meeting.title.trim()); }}
             onBlur={saveTitle}
             onKeyDown={(e) => {
               if (e.key === 'Enter') saveTitle();
-              if (e.key === 'Escape') { setEditTitle(meeting.title); setIsEditingTitle(false); onTitleDirtyChange?.(false); }
+              if (e.key === 'Escape') { setEditTitle(meeting.title); setIsEditingTitle(false); setTitleError(''); onTitleDirtyChange?.(false); }
             }}
             className="w-full text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-primary mb-4 bg-transparent border-b-2 border-primary outline-none text-slate-900"
           />
@@ -133,6 +151,7 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onTi
             <span className="material-symbols-outlined text-lg ml-2 opacity-0 group-hover:opacity-50 transition-opacity align-middle">edit</span>
           </h1>
         )}
+        {titleError && <p role="alert" className="mb-4 text-sm text-red-600 dark:text-red-400">{titleError}</p>}
 
         {/* Linked predecessor meetings (ADR-014 Phase 6) — chips for existing
             links + a "+ 연결" button to open the picker. The summarize Lambda

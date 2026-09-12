@@ -488,15 +488,9 @@ function MeetingDetailContent() {
             onUnshare={handleUnshare}
             onTitleDirtyChange={onTitleDirtyChange}
             onTitleChange={canEdit ? async (newTitle) => {
-              setMeeting({ ...meeting, title: newTitle });
-              try {
-                await meetingsApi.update(meeting.meetingId, { title: newTitle });
-                onTitleDirtyChange(false);
-                setIndexRevision((value) => value + 1);
-              } catch (err) {
-                console.error('Failed to update title:', err);
-                setMeeting(meeting);
-              }
+              await meetingsApi.update(meeting.meetingId, { title: newTitle });
+              setMeeting((current) => current?.meetingId === meeting.meetingId ? { ...current, title: newTitle } : current);
+              setIndexRevision((value) => value + 1);
             } : undefined}
             onLinkedMeetingsChange={(ids) => setMeeting({ ...meeting, linkedMeetingIds: ids })}
           />
