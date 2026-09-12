@@ -26,6 +26,7 @@ func indexClone[T any](value T) T {
 		copy := *job
 		copy.Keys = append([]string(nil), job.Keys...)
 		copy.PendingKeys = append([]string(nil), job.PendingKeys...)
+		copy.RemovedKeys = append([]string(nil), job.RemovedKeys...)
 		return any(&copy).(T)
 	}
 	raw, _ := json.Marshal(value)
@@ -81,7 +82,10 @@ func (m *indexMemory) RequestIndexResource(_ context.Context, key model.IndexRes
 		job.FailureCount = 0
 	}
 	job.Version++
-	job.State, job.DesiredRevision, job.UpdatedAt, job.RetryAfter = model.IndexPending, revision, now, 0
+	job.State, job.UpdatedAt, job.RetryAfter = model.IndexPending, now, 0
+	if revision != "" {
+		job.DesiredRevision = revision
+	}
 	m.jobs[key.Hash()] = job
 	return nil
 }
@@ -276,6 +280,13 @@ func (p *indexSync) Start(_ context.Context, token string) (string, error) {
 }
 func (p *indexSync) Get(_ context.Context, id string) (IndexProviderJob, error) {
 	return p.jobs[id], nil
+}
+func (p *indexSync) Documents(_ context.Context, keys []string) (map[string]string, error) {
+	result := map[string]string{}
+	for _, key := range keys {
+		result[key] = "FAILED"
+	}
+	return result, nil
 }
 func (p *indexSync) complete() {
 	for id, job := range p.jobs {

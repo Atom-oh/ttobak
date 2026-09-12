@@ -125,6 +125,7 @@ const gatewayStack = new GatewayStack(app, 'TtobakGatewayStack', {
   agentCoreRuntimeArn,
   researchWorkerRole: aiStack.researchWorkerRole,
   convertDocRole: aiStack.convertDocRole,
+  enableDocumentExtraction: true,
   simRole: aiStack.simRole,
   simCodeInterpreterId: aiStack.simCodeInterpreter.codeInterpreterId,
   // Same pre-existing VPC WhisperStack uses (ec2.Vpc.fromLookup) --

@@ -59,6 +59,7 @@ type IndexIngestion interface {
 	Busy(context.Context) (bool, error)
 	Start(context.Context, string) (string, error)
 	Get(context.Context, string) (IndexProviderJob, error)
+	Documents(context.Context, []string) (map[string]string, error)
 }
 
 // IndexAWSProvider is pinned to the configured assets bucket, KB bucket and S3
@@ -249,6 +250,61 @@ func (p *IndexAWSProvider) Get(ctx context.Context, id string) (IndexProviderJob
 	result := IndexProviderJob{ID: id, Status: string(job.Status), FailureReasons: job.FailureReasons}
 	if job.Statistics != nil {
 		result.Failed = job.Statistics.NumberOfDocumentsFailed
+	}
+	return result, nil
+}
+
+// Documents reads status only; it never invokes direct ingestion. S3 data
+// sources support this API after their initial full sync. Each immutable key is
+// bound to the configured bucket, KB and data source, including in the reply.
+func (p *IndexAWSProvider) Documents(ctx context.Context, keys []string) (map[string]string, error) {
+	identifiers := make([]bedrocktypes.DocumentIdentifier, 0, len(keys))
+	expected := map[string]string{}
+	for _, key := range keys {
+		if !indexProjectionKey(key) || strings.HasSuffix(key, ".metadata.json") {
+			return nil, ErrIndexInvalid
+		}
+		uri := "s3://" + p.bucket + "/" + key
+		if _, duplicate := expected[uri]; duplicate {
+			return nil, ErrIndexInvalid
+		}
+		expected[uri] = key
+		identifiers = append(identifiers, bedrocktypes.DocumentIdentifier{
+			DataSourceType: bedrocktypes.ContentDataSourceTypeS3,
+			S3:             &bedrocktypes.S3Location{Uri: aws.String(uri)},
+		})
+	}
+	result := map[string]string{}
+	for start := 0; start < len(identifiers); start += 10 {
+		batch := identifiers[start:min(start+10, len(identifiers))]
+		out, err := p.bedrock.GetKnowledgeBaseDocuments(ctx, &bedrockagent.GetKnowledgeBaseDocumentsInput{
+			KnowledgeBaseId: aws.String(p.kbID), DataSourceId: aws.String(p.dataSourceID), DocumentIdentifiers: batch,
+		})
+		if err != nil {
+			return nil, err
+		}
+		allowed := map[string]bool{}
+		for _, id := range batch {
+			allowed[aws.ToString(id.S3.Uri)] = true
+		}
+		for _, document := range out.DocumentDetails {
+			id := document.Identifier
+			if aws.ToString(document.KnowledgeBaseId) != p.kbID || aws.ToString(document.DataSourceId) != p.dataSourceID ||
+				id == nil || id.DataSourceType != bedrocktypes.ContentDataSourceTypeS3 || id.S3 == nil || id.Custom != nil {
+				return nil, ErrIndexInvalid
+			}
+			uri := aws.ToString(id.S3.Uri)
+			key, requested := expected[uri]
+			if !requested || !allowed[uri] || result[key] != "" || document.Status == "" {
+				return nil, ErrIndexInvalid
+			}
+			result[key] = string(document.Status)
+		}
+		for _, id := range batch {
+			if result[expected[aws.ToString(id.S3.Uri)]] == "" {
+				return nil, ErrIndexInvalid
+			}
+		}
 	}
 	return result, nil
 }

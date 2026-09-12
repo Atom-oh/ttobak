@@ -1419,5 +1419,12 @@ class TestWebSearchRateLimit(unittest.TestCase):
         self.assertEqual(sources, [])
 
 
+def load_tests(loader, tests, pattern):
+    # Keep the canonical CI/local command covering the independent readers.
+    for module in ('test_document_context', 'test_source_contract', 'test_attachment_context'):
+        tests.addTests(loader.loadTestsFromName(module))
+    return tests
+
+
 if __name__ == '__main__':
     unittest.main()

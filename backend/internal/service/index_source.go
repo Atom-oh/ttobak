@@ -26,6 +26,26 @@ type IndexSnapshot struct {
 	Parts     []IndexPart
 }
 
+type IndexSourceRepository interface {
+	GetIndexSource(context.Context, model.IndexResource) (*model.IndexRecord, error)
+}
+
+type IndexSourceObjects interface {
+	Head(context.Context, string) (IndexObject, error)
+	Read(context.Context, IndexObject) ([]byte, error)
+}
+
+// IndexSourceReader has no publication, job-state or ingestion capability.
+type IndexSourceReader struct {
+	repo         IndexSourceRepository
+	objects      IndexSourceObjects
+	assetsBucket string
+}
+
+func NewIndexSourceReader(repo IndexSourceRepository, objects IndexSourceObjects, assetsBucket string) *IndexSourceReader {
+	return &IndexSourceReader{repo: repo, objects: objects, assetsBucket: assetsBucket}
+}
+
 // IndexSourceRevision hashes UTF-8 length-prefixed strings (N:value), avoiding
 // cross-language JSON escaping differences. See the backend plan for the order.
 func IndexSourceRevision(key model.IndexResource, fields map[string]interface{}, objects []IndexObject, outcome string) (string, error) {
@@ -82,7 +102,7 @@ func indexString(record *model.IndexRecord, name string) (string, error) {
 
 // ReadSource produces a revision even for missing files/previews. Reconciliation
 // can therefore detect bytes appearing/changing without a DynamoDB stream event.
-func (s *IndexingService) ReadSource(ctx context.Context, key model.IndexResource, bodies bool) (*IndexSnapshot, error) {
+func (s *IndexSourceReader) ReadSource(ctx context.Context, key model.IndexResource, bodies bool) (*IndexSnapshot, error) {
 	canonical, ok := model.CanonicalIndexResource(key.PK, key.SK)
 	if !ok || canonical != key {
 		return nil, ErrIndexInvalid

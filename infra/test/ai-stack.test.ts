@@ -50,6 +50,27 @@ describe('AiStack', () => {
     });
   });
 
+  test('converter can inspect preview generations with object access limited to document prefixes', () => {
+    const statements = Object.values(template.findResources('AWS::IAM::Policy'))
+      .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakConvertDocRole'))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
+    const reads = statements.filter((statement) =>
+      [statement.Action].flat().some((action: string) => action.startsWith('s3:GetObject')));
+    expect(JSON.stringify(reads.map((statement) => statement.Resource))).toContain('/docs-pdf/*');
+    expect(JSON.stringify(reads.map((statement) => statement.Resource))).toContain('/docs/*');
+    for (const statement of statements.filter((entry) =>
+      [entry.Action].flat().some((action: string) => action.startsWith('s3:')))) {
+      for (const resource of [statement.Resource].flat()) {
+        expect(resource).not.toBe('*');
+        const serialized = JSON.stringify(resource);
+        if (serialized.includes('/*')) {
+          expect(serialized).toMatch(/\/docs(?:-pdf)?\/\*/);
+          expect(serialized).not.toMatch(/\/(audio|images|files|transcripts)\/\*/);
+        }
+      }
+    }
+  });
+
   test('qa can read only transcript objects, without bucket listing or writes', () => {
     const policies = Object.values(template.findResources('AWS::IAM::Policy'));
     const statements = policies

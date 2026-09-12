@@ -92,7 +92,10 @@ func (r *DynamoDBRepository) RequestIndexResource(ctx context.Context, key model
 		if revision != "" && (prior == nil || prior.DesiredRevision != revision) {
 			next.FailureCount = 0
 		}
-		next.State, next.DesiredRevision, next.UpdatedAt, next.RetryAfter = model.IndexPending, revision, now, 0
+		if revision != "" {
+			next.DesiredRevision = revision
+		}
+		next.State, next.UpdatedAt, next.RetryAfter = model.IndexPending, now, 0
 		next.Version = version + 1
 		err = r.indexWrite(ctx, indexKey(model.IndexJobsPK, key.Hash()), next, indexVersion(version), nil)
 		if errors.Is(err, ErrConditionFailed) {

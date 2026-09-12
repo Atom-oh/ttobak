@@ -133,6 +133,8 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 
 인증된 `/api/meetings/{id}/reading` 조회는 응답 직렬화 전에 요청한 구간으로 제한합니다. 메모·권한·액션 상태 조회에는 전사문을 읽지 않는 metadata view를 사용하며, 전사문 조회는 인가 후 선택한 원문과 후보 구간만 읽습니다. 각 페이지에서 현재 권한과 내용 revision을 확인합니다([API 계약](API-SPEC.md)).
 
+문서 추출 워커는 검증된 첨부 실행을 비동기로 처리합니다. 파서·네트워크·원본 검증 경계와 단계별 활성화는 [ADR-039](decisions/ADR-039-meeting-document-extraction.md)에 기록했습니다.
+
 ### 아키텍처 결정 기록 (ADR)
 
 - [ADR-001: 원격 회의 시스템 오디오 캡처](decisions/ADR-001-system-audio-capture-for-remote-meetings.md) — `getDisplayMedia` + `AudioContext` 믹싱 (제안됨)
@@ -173,6 +175,7 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 - [ADR-036: 어카운트 계층과 미팅 필터](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (승인됨)
 - [ADR-037: 조건부 전사문 수정을 위한 불변 spill](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (승인됨)
 - [ADR-038: 원본 기반 노트 색인](decisions/ADR-038-canonical-note-indexing.md) (승인됨, 자동 실행 전 통합 단계)
+- [ADR-039: 회의 문서 텍스트 추출](decisions/ADR-039-meeting-document-extraction.md) (승인됨)
 
 ### 운영
 
@@ -255,6 +258,8 @@ Store action extraction state in a separate analysis row. Route authorized edito
 
 Authenticated `/api/meetings/{id}/reading` bounds the requested section before response serialization. Notes, authorization and action-state reads use metadata views without transcript hydration; transcript reads load only the chosen text and candidate segments after authorization. Recheck current access and content revision on every page ([API contract](API-SPEC.md)).
 
+The asynchronous document worker consumes validated attachment runs. Parser, network, source checks and staged activation are documented in [ADR-039](decisions/ADR-039-meeting-document-extraction.md).
+
 ### Architecture Decision Records (ADR)
 
 - [ADR-001: System Audio Capture for Remote Meetings](decisions/ADR-001-system-audio-capture-for-remote-meetings.md) — `getDisplayMedia` + `AudioContext` mixing (Proposed)
@@ -295,6 +300,7 @@ Authenticated `/api/meetings/{id}/reading` bounds the requested section before r
 - [ADR-036: Account Hierarchy and Meeting Filters](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (Accepted)
 - [ADR-037: Immutable Spills for Conditional Transcript Writes](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (Accepted)
 - [ADR-038: Canonical Note Indexing](decisions/ADR-038-canonical-note-indexing.md) (Accepted, activation pending)
+- [ADR-039: Meeting Document Text Extraction](decisions/ADR-039-meeting-document-extraction.md) (Accepted)
 
 ### Operations
 

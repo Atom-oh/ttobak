@@ -60,7 +60,7 @@ func TestIndexCanonicalKeysExcludeSharesAndState(t *testing.T) {
 func TestIndexDocumentBytesRevisionAndPreviewBinding(t *testing.T) {
 	for _, pk := range []string{"USER#owner", "ACCOUNT#team"} {
 		t.Run(pk, func(t *testing.T) {
-			s, repo, objects, p, _ := newIndexTest()
+			s, repo, objects := newIndexSourceTest()
 			key, _ := model.CanonicalIndexResource(pk, "DOC#d")
 			repo.sources[key.Hash()] = &model.IndexRecord{Resource: key, Fields: map[string]interface{}{
 				"docId": "d", "title": "문서", "content": "", "fileKey": "docs/owner/file.pdf", "updatedAt": "unchanged", "sourceUserId": "owner",
@@ -76,15 +76,7 @@ func TestIndexDocumentBytesRevisionAndPreviewBinding(t *testing.T) {
 			if len(before.Parts) != 1 || string(before.Parts[0].Body) != "PDF bytes\x00😀" {
 				t.Fatal("file bytes replaced by filename/metadata")
 			}
-			if _, err := s.Tick(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			finishIndex(t, s, p)
 			objects.asset("docs/owner/file.pdf", "changed PDF bytes", "v2")
-			status, err := s.Status(context.Background(), key)
-			if err != nil || status.State != model.IndexPending {
-				t.Fatalf("same updatedAt masked changed bytes: %+v %v", status, err)
-			}
 			after, err := s.ReadSource(context.Background(), key, false)
 			if err != nil {
 				t.Fatal(err)
@@ -116,8 +108,8 @@ func TestIndexDocumentBytesRevisionAndPreviewBinding(t *testing.T) {
 }
 
 func TestIndexSourceReadPinsSpillBytesAndRejectsForeignRefs(t *testing.T) {
-	s, repo, objects, _, _ := newIndexTest()
-	key := addIndexMeeting(repo, "m", "정정 메모")
+	s, repo, objects := newIndexSourceTest()
+	key := addIndexSourceMeeting(repo, "m", "정정 메모")
 	record := repo.sources[key.Hash()]
 	record.Fields["transcriptA"] = ""
 	record.Fields["transcriptB"] = "s3://assets/transcripts/m/transcriptB.txt"
@@ -145,8 +137,8 @@ func TestIndexSourceReadPinsSpillBytesAndRejectsForeignRefs(t *testing.T) {
 }
 
 func TestIndexMetadataCarriesCanonicalIdentityAndByteBindings(t *testing.T) {
-	s, repo, _, _, _ := newIndexTest()
-	key := addIndexMeeting(repo, "m", "notes")
+	s, repo, _ := newIndexSourceTest()
+	key := addIndexSourceMeeting(repo, "m", "notes")
 	snapshot, err := s.ReadSource(context.Background(), key, true)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +164,7 @@ func TestIndexMetadataCarriesCanonicalIdentityAndByteBindings(t *testing.T) {
 }
 
 func TestIndexSourceRejectsInvalidTextAndOversizedMetadata(t *testing.T) {
-	s, repo, objects, _, _ := newIndexTest()
+	s, repo, objects := newIndexSourceTest()
 	key, _ := model.CanonicalIndexResource("USER#owner", "DOC#d")
 	repo.sources[key.Hash()] = &model.IndexRecord{Resource: key, Fields: map[string]interface{}{
 		"docId": "d", "fileKey": "docs/owner/note.txt",

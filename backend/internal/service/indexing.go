@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,6 +38,10 @@ type IndexingService struct {
 
 func NewIndexingService(repo IndexRepository, objects IndexObjects, ingestion IndexIngestion, assetsBucket string) *IndexingService {
 	return &IndexingService{repo: repo, objects: objects, ingestion: ingestion, assetsBucket: assetsBucket, now: time.Now, newID: uuid.NewString}
+}
+
+func (s *IndexingService) ReadSource(ctx context.Context, key model.IndexResource, bodies bool) (*IndexSnapshot, error) {
+	return NewIndexSourceReader(s.repo, s.objects, s.assetsBucket).ReadSource(ctx, key, bodies)
 }
 
 func (s *IndexingService) Enqueue(ctx context.Context, key model.IndexResource) error {
@@ -139,6 +144,9 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 		for i, member := range next.Batch {
 			current, e := s.prepare(ctx, member.Resource)
 			if e != nil {
+				if errors.Is(e, ErrIndexWriteUncertain) {
+					return result, e
+				}
 				if errors.Is(e, ErrIndexChanged) || errors.Is(e, repository.ErrConditionFailed) {
 					if e := s.deferChangingSource(ctx, member.Resource); e != nil {
 						return result, e
@@ -213,10 +221,14 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 		}
 	}
 	if control.Phase == "FINALIZING" {
+		var failures error
 		for _, member := range control.Batch {
 			if e := s.finish(ctx, member, control.ProviderJobID, control.ProviderSucceeded); e != nil {
-				return result, e
+				failures = errors.Join(failures, e)
 			}
+		}
+		if failures != nil {
+			return result, failures
 		}
 		next := *control
 		next.Phase, next.Batch, next.ClientToken, next.ProviderJobID, next.ErrorCode = "IDLE", nil, "", "", ""
@@ -228,14 +240,18 @@ func (s *IndexingService) Tick(ctx context.Context) (result IndexTickResult, err
 	return result, nil
 }
 
+func permanentIndexSourceError(err error) bool {
+	return errors.Is(err, ErrIndexInvalid) || errors.Is(err, ErrIndexMissing)
+}
+
 func (s *IndexingService) deferChangingSource(ctx context.Context, key model.IndexResource) error {
 	// The coordinator owns publication. These errors are definitive, unlike
 	// an uncertain PUT, so obsolete staged objects can be removed safely.
-	if err := s.cleanup(ctx, key, nil); err != nil {
-		return err
-	}
 	job, err := s.repo.GetIndexJob(ctx, key)
 	if err != nil || job == nil {
+		return err
+	}
+	if err := s.cleanupTracked(ctx, job, nil); err != nil {
 		return err
 	}
 	next := *job
@@ -258,6 +274,8 @@ func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexCon
 		revision := ""
 		if source, e := s.ReadSource(ctx, key, false); e == nil {
 			revision = source.Revision
+		} else if !permanentIndexSourceError(e) {
+			return nil, e
 		}
 		if err := s.repo.RequestIndexResource(ctx, key, revision, s.now().UnixMilli()); err != nil {
 			return nil, err
@@ -275,9 +293,9 @@ func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexCon
 		}
 		key, ok := model.CanonicalIndexResource("USER#"+parts[1], "MEETING#"+strings.TrimSuffix(parts[2], ".md"))
 		if ok {
-			// Legacy cleanup must also queue malformed/unreadable sources so
-			// preparation can remove obsolete exports and persist a failure.
-			if err := s.repo.RequestIndexResource(ctx, key, "", s.now().UnixMilli()); err != nil {
+			// A transient read is not evidence that a legacy source is gone.
+			// Known invalid sources still enter the durable cleanup path.
+			if err := s.Enqueue(ctx, key); err != nil {
 				return nil, err
 			}
 		}
@@ -293,6 +311,9 @@ func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexCon
 	for _, job := range jobs {
 		// Known jobs also detect deleted sources and same-key S3 byte replacements.
 		source, readErr := s.ReadSource(ctx, job.Resource, false)
+		if readErr != nil && !permanentIndexSourceError(readErr) {
+			return nil, readErr
+		}
 		changed := readErr != nil || source.Revision != job.Revision
 		extra := false
 		if !changed && (job.State == model.IndexIndexed || job.State == model.IndexDeleted || job.State == model.IndexWaitingSource) {
@@ -342,6 +363,9 @@ func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) 
 	}
 	if prior.State == model.IndexWaitingSync {
 		current, e := s.ReadSource(ctx, key, false)
+		if e != nil && !permanentIndexSourceError(e) {
+			return model.IndexMember{}, e
+		}
 		if e == nil && current.Revision == prior.Revision {
 			complete, e := s.inventoryMatches(ctx, key, prior.Keys)
 			if e != nil {
@@ -362,8 +386,13 @@ func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) 
 	}
 	source, err := s.ReadSource(ctx, key, true)
 	if err != nil {
-		// Failed/unsupported sources must not keep obsolete published projections.
-		if cleanupErr := s.cleanup(ctx, key, nil); cleanupErr != nil {
+		if !permanentIndexSourceError(err) {
+			// Unavailability supplies no proof that published bytes are obsolete.
+			// The caller resets preparation for retry while keeping tracked keys.
+			return model.IndexMember{}, err
+		}
+		// A confirmed missing or invalid source cannot retain stale projections.
+		if cleanupErr := s.cleanupTracked(ctx, &job, nil); cleanupErr != nil {
 			return model.IndexMember{}, errors.Join(err, cleanupErr)
 		}
 		failed := job
@@ -408,7 +437,7 @@ func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) 
 	if current.Revision != source.Revision {
 		return model.IndexMember{}, ErrIndexChanged
 	}
-	if err := s.cleanup(ctx, key, keys); err != nil {
+	if err := s.cleanupTracked(ctx, &job, keys); err != nil {
 		return model.IndexMember{}, err
 	}
 	ready := job
@@ -501,6 +530,39 @@ func (s *IndexingService) cleanup(ctx context.Context, key model.IndexResource, 
 	return nil
 }
 
+func (s *IndexingService) cleanupTracked(ctx context.Context, job *model.IndexJob, keep []string) error {
+	inventory, err := s.inventory(ctx, job.Resource)
+	if err != nil {
+		return err
+	}
+	retained, removed := map[string]bool{}, map[string]bool{}
+	for _, key := range keep {
+		retained[key] = true
+	}
+	// Legacy vectors can outlive their S3 objects and predate this job record.
+	// Their exact canonical URI remains known even when inventory is empty.
+	for _, list := range [][]string{inventory, job.Keys, job.PendingKeys, job.RemovedKeys, legacyIndexKeys(job.Resource)} {
+		for _, key := range list {
+			if !retained[key] && !strings.HasSuffix(key, ".metadata.json") {
+				removed[key] = true
+			}
+		}
+	}
+	next := *job
+	next.RemovedKeys = nil
+	for key := range removed {
+		next.RemovedKeys = append(next.RemovedKeys, key)
+	}
+	sort.Strings(next.RemovedKeys)
+	// Record deletions before S3 mutation. A crash cannot erase the document
+	// identifiers needed to verify removal after a partially failed full sync.
+	if err := s.repo.SaveIndexJob(ctx, job, &next, nil, false, s.now().UnixMilli()); err != nil {
+		return err
+	}
+	*job = next
+	return s.cleanup(ctx, job.Resource, keep)
+}
+
 func (s *IndexingService) finish(ctx context.Context, member model.IndexMember, syncID string, success bool) error {
 	job, err := s.repo.GetIndexJob(ctx, member.Resource)
 	if err != nil {
@@ -513,13 +575,23 @@ func (s *IndexingService) finish(ctx context.Context, member model.IndexMember, 
 	next := *job
 	next.SyncID, next.UpdatedAt = syncID, s.now().UnixMilli()
 	if !success {
-		s.failJob(&next, "INGESTION_FAILED")
-		return s.repo.SaveIndexJob(ctx, job, &next, nil, false, s.now().UnixMilli())
+		var removed bool
+		success, removed, err = s.documentsSucceeded(ctx, job.Keys, job.RemovedKeys)
+		if err != nil {
+			return err
+		}
+		if removed {
+			next.RemovedKeys = nil
+		}
 	}
+	// Read after the provider status request: that request can take time, and
+	// document success is never proof that its source is still current.
 	current, err := s.ReadSource(ctx, member.Resource, false)
 	if err != nil {
-		s.failJob(&next, "SOURCE_UNAVAILABLE")
-		return s.repo.SaveIndexJob(ctx, job, &next, nil, false, s.now().UnixMilli())
+		if permanentIndexSourceError(err) || errors.Is(err, ErrIndexChanged) {
+			return s.repo.RequestIndexResource(ctx, member.Resource, "", s.now().UnixMilli())
+		}
+		return err
 	}
 	complete, err := s.inventoryMatches(ctx, member.Resource, job.Keys)
 	if err != nil {
@@ -528,13 +600,61 @@ func (s *IndexingService) finish(ctx context.Context, member model.IndexMember, 
 	if current.Revision != member.Revision || !complete {
 		return s.repo.RequestIndexResource(ctx, member.Resource, "", s.now().UnixMilli())
 	}
+	if !success {
+		s.failJob(&next, "INGESTION_FAILED")
+		return s.repo.SaveIndexJob(ctx, job, &next, current.Record, true, s.now().UnixMilli())
+	}
 	next.State, next.ErrorCode = current.Outcome, current.ErrorCode
+	next.RemovedKeys = nil
 	next.FailureCount, next.RetryAfter = 0, 0
 	err = s.repo.SaveIndexJob(ctx, job, &next, current.Record, true, s.now().UnixMilli())
 	if errors.Is(err, repository.ErrConditionFailed) {
 		return s.repo.RequestIndexResource(ctx, member.Resource, "", s.now().UnixMilli())
 	}
 	return err
+}
+
+func (s *IndexingService) documentsSucceeded(ctx context.Context, keys, removed []string) (bool, bool, error) {
+	documents := []string{}
+	expected := map[string]string{}
+	for _, key := range keys {
+		if !strings.HasSuffix(key, ".metadata.json") {
+			documents = append(documents, key)
+			expected[key] = "INDEXED"
+		}
+	}
+	for _, key := range removed {
+		if _, duplicate := expected[key]; duplicate {
+			return false, false, ErrIndexInvalid
+		}
+		documents = append(documents, key)
+		expected[key] = "NOT_FOUND"
+	}
+	if len(documents) == 0 {
+		return true, true, nil
+	}
+	statuses, err := s.ingestion.Documents(ctx, documents)
+	if err != nil {
+		return false, false, err
+	}
+	indexed, deleted := true, true
+	for _, key := range documents {
+		if statuses[key] == expected[key] {
+			continue
+		}
+		switch statuses[key] {
+		case "INDEXED", "FAILED", "PARTIALLY_INDEXED", "METADATA_PARTIALLY_INDEXED", "METADATA_UPDATE_FAILED", "IGNORED", "NOT_FOUND":
+			indexed = false
+			if expected[key] == "NOT_FOUND" {
+				deleted = false
+			}
+		case "STARTING", "PENDING", "IN_PROGRESS", "DELETING", "DELETE_IN_PROGRESS":
+			return false, false, ErrIndexSyncBusy
+		default:
+			return false, false, ErrIndexInvalid
+		}
+	}
+	return indexed, deleted, nil
 }
 
 func (s *IndexingService) failJob(job *model.IndexJob, code string) {

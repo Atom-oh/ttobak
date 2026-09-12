@@ -11,7 +11,7 @@ import (
 func TestIndexAccountFileBindsAccountAcrossEditorReplacement(t *testing.T) {
 	for _, change := range []string{"valid", "later editor", "accountId"} {
 		t.Run(change, func(t *testing.T) {
-			s, repo, objects, _, _ := newIndexTest()
+			s, repo, objects := newIndexSourceTest()
 			key, _ := model.CanonicalIndexResource("ACCOUNT#team", "DOC#doc")
 			fields := map[string]interface{}{
 				"docId": "doc", "accountId": "team", "sourceUserId": "author",
