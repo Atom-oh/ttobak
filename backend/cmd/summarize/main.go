@@ -31,6 +31,7 @@ import (
 var (
 	bedrockService     *service.BedrockService
 	actionItemsService *service.ActionItemsAnalysisService
+	resummaryService   *service.ResummaryService
 	kbExportService    *service.KBExportService
 	repo               *repository.DynamoDBRepository
 	s3Client           *s3.Client
@@ -71,6 +72,10 @@ func init() {
 
 	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
 	bedrockService = service.NewBedrockService(bedrockClient, s3Client, repo)
+	metadata := repo.MetadataView()
+	attachmentTextService := service.NewAttachmentTextService(metadata, service.NewMeetingService(metadata), s3Client, bucketName, nil)
+	bedrockService.SetAttachmentTextService(attachmentTextService)
+	resummaryService = service.NewResummaryService(metadata, service.NewMeetingService(metadata), bedrockService, attachmentTextService, nil)
 	actionItemsService = service.NewMetadataActionItemsAnalysisService(repo, bedrockService, nil)
 
 	// KB export service — gracefully skips if not configured
@@ -169,6 +174,15 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	var envelope model.EventEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("failed to unmarshal event envelope: %w", err)
+	}
+	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "SummaryRequested" {
+		var event struct {
+			Detail model.SummaryRequested `json:"detail"`
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("decode summary request")
+		}
+		return resummaryService.Process(ctx, event.Detail)
 	}
 
 	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "ActionItemsRequested" {
