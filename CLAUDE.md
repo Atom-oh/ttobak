@@ -34,6 +34,7 @@ cd frontend && npm run lint      # eslint
 # Python unit tests (stdlib unittest; `pip install 'boto3<2'` locally --
 # the <2 cap matters for crawler/research-agent, which exercise botocore.auth.SigV4Auth)
 cd backend/python/crawler && python3 -m unittest test_crawlers -v
+cd backend/python/document-extract && python3 -m pip install -r requirements.txt && python3 -m unittest test_extract test_worker -v
 cd backend/python/research-agent && python3 -m unittest test_tools -v
 cd backend/python/qa && python3 -m unittest test_handler -v    # mocks boto3 at import -- no boto3<2 pin needed
 cd backend/python/sim && python3 -m unittest test_handler -v
@@ -166,7 +167,7 @@ The news crawler (`ttobak-crawler-news`) and QA (`ttobak-qa`, for `search_web`) 
 ## Known Issues & Decisions
 
 ### HIGH
-- **Meeting document attachments (PPTX/PDF/DOCX/MD) are never content-extracted**: upload category `file` marks the attachment done with no processing, so contents reach neither the live summary nor the final note prompt (filenames only). Reaches the KB only via manual per-attachment copy + async ingestion; Bedrock KB's default parser doesn't index PPT/PPTX, so slide decks need conversion first.
+- **Meeting document attachments (PPTX/PDF/DOCX/MD) are never content-extracted**: upload category `file` marks the attachment done with no processing, so contents reach neither the live summary nor the final note prompt (filenames only). Reaches the KB only via manual per-attachment copy + async ingestion; Bedrock KB's default parser doesn't index PPT/PPTX, so slide decks need conversion first. A bounded PDF/PPTX/DOCX/MD parser now exists in `backend/python/document-extract`; production queueing and summary/QA integration remain pending.
 
 ### Medium
 - **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID, `agentCoreRuntimeArn`, `researchAgentExecutionRoleArn` are hardcoded in CDK stacks. Should move to CDK context for multi-account/stage support. The KB ID/DataSource ID in `infra/lib/knowledge-stack.ts` (`BJJLVLFTOR`/`3AVMMT3RF3`) are the real out-of-band values — they briefly regressed to a `'PENDING'` placeholder once (ADR-021); don't reintroduce that. Same class: `mac-app/src-tauri/src/upload.rs`'s `EXPECTED_BUCKET_HOST` pins the exact `ttobak-assets-180294183052.s3.ap-northeast-2.amazonaws.com` host (deliberately an exact match, not a `.amazonaws.com` suffix check — see that file's doc comment on why a suffix check would accept any AWS customer's bucket) — a different account/stage's native upload fails with a message that reads like an attack, not a misconfiguration, until this is parameterized too.
