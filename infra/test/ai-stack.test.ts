@@ -81,6 +81,7 @@ describe('AiStack', () => {
       expect(resources).not.toContain('"/shared/*"');
     }
     expect(bySid('ReadCanonicalIndexSources')).toBeUndefined();
+    expect(bySid('ReadCanonicalIndexRecords')).toBeUndefined();
     expect(bySid('InspectCanonicalSourceExistence')).toBeUndefined();
     expect(bySid('ReadLegacyKnowledgeSources').Action).toEqual(['s3:GetObject', 's3:GetObjectVersion']);
     expect(bySid('SynchronizeCanonicalIndex').Action).toEqual([
@@ -100,8 +101,18 @@ describe('AiStack', () => {
       .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakKbRole'))
       .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
     const bySid = (sid: string) => statements.find((entry) => entry.Sid === sid);
-    expect(bySid('CanonicalIndexState').Action).toContain('dynamodb:Scan');
-    expect(bySid('CanonicalIndexState').Condition).toBeUndefined();
+    expect(bySid('ReadCanonicalIndexRecords').Action).toEqual([
+      'dynamodb:GetItem', 'dynamodb:Scan', 'dynamodb:ConditionCheckItem',
+    ]);
+    expect(bySid('ReadCanonicalIndexRecords').Condition).toBeUndefined();
+    expect(bySid('CanonicalIndexState').Action).toContain('dynamodb:UpdateItem');
+    for (const entry of statements.filter((statement) =>
+      [statement.Action].flat().includes('dynamodb:UpdateItem'))) {
+      expect(entry.Condition).toEqual({
+        'ForAllValues:StringEquals': { 'dynamodb:LeadingKeys': ['KBINDEX#JOBS', 'KBINDEX#CONTROL'] },
+        Null: { 'dynamodb:LeadingKeys': 'false' },
+      });
+    }
     const reads = JSON.stringify(bySid('ReadCanonicalIndexSources').Resource);
     for (const prefix of ['transcripts', 'docs', 'docs-pdf']) {
       expect(reads).toContain(`/${prefix}/*`);

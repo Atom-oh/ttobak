@@ -459,11 +459,10 @@ export class AiStack extends cdk.Stack {
         sid: 'CanonicalIndexState',
         actions: [
           'dynamodb:GetItem', 'dynamodb:Query',
-          ...(canonicalIndexing ? ['dynamodb:Scan'] : []),
           'dynamodb:UpdateItem', 'dynamodb:ConditionCheckItem',
         ],
         resources: [props.table.tableArn],
-        conditions: canonicalIndexing ? undefined : {
+        conditions: {
           'ForAllValues:StringEquals': {
             'dynamodb:LeadingKeys': ['KBINDEX#JOBS', 'KBINDEX#CONTROL'],
           },
@@ -473,6 +472,11 @@ export class AiStack extends cdk.Stack {
     );
     props.table.encryptionKey?.grantEncryptDecrypt(this.kbRole);
     if (canonicalIndexing) {
+      this.kbRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'ReadCanonicalIndexRecords',
+        actions: ['dynamodb:GetItem', 'dynamodb:Scan', 'dynamodb:ConditionCheckItem'],
+        resources: [props.table.tableArn],
+      }));
       this.kbRole.addToPolicy(new iam.PolicyStatement({
         sid: 'ReadCanonicalIndexSources',
         actions: ['s3:GetObject', 's3:GetObjectVersion'],

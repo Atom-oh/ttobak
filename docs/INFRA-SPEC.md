@@ -252,7 +252,9 @@ five-minute lease exposes interrupted execution and permits an authorized retry.
 The EventBridge DLQ covers delivery failure, not downstream model failures.
 - **audio-uploaded**: S3 PutObject (prefix `audio/`) → Transcribe Lambda
 - **image-uploaded**: S3 PutObject (prefix `images/`) → Process Image Lambda
-- **kb-uploaded**: S3 PutObject (prefix `kb/`) → KB Lambda
+- **ttobak-kb-index-tick**: disabled-by-default one-minute tick → KB Lambda.
+  Delivery failures use `ttobak-kb-index-dlq` (SSE-SQS, seven-day retention).
+  Full mode additionally creates the canonical DynamoDB stream mapping.
 - **doc-slide-uploaded**: S3 PutObject (prefix `docs/`, suffix `.ppt`/`.pptx`) → Convert-Doc Lambda
 
 ### Outputs
@@ -429,7 +431,7 @@ EdgeAuthStack.functionVersionArn → FrontendStack (Lambda@Edge association)
 GatewayStack.httpApiEndpoint → FrontendStack (CloudFront API origin)
 GatewayStack.webSocketApiEndpoint → FrontendStack (CloudFront WebSocket origin)
 KnowledgeStack.kbId → GatewayStack (API Lambda, KB Lambda)
-KnowledgeStack.collectionEndpoint → GatewayStack (KB Lambda)
+KnowledgeStack.knowledgeBaseId/dataSourceId → GatewayStack (KB Lambda)
 ```
 
 ## 11. Deployment Order

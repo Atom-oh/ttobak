@@ -38,10 +38,8 @@ start over a canonical batch. Do not edit coordinator records to bypass that
 guard and do not invoke ad-hoc global ticks.
 
 Before bootstrap, use a strong read of `KBINDEX#CONTROL / STATE`, including
-PK/SK, to check for an existing mode/batch. The 2026-09-12 preflight found no
-record. The existing Lambda was Active/Successful at 30 seconds/256 MiB with
-no KB/source/mode configuration; that was the inactive baseline, not evidence
-that backfill had run.
+PK/SK, to check for an existing mode/batch. Record the current Lambda code hash,
+mode, configuration and coordinator observation in deployment evidence.
 
 ## Verify and enable canonical indexing
 
@@ -58,9 +56,13 @@ that backfill had run.
    source-read permissions, private/shared snapshot verification and session
    revalidation. Verify overwrite, deletion and access revocation behavior.
 5. Change `knowledgeIndexingMode` to `all` in a reviewed activation PR. This
-   adds canonical source/projection and stream permissions and creates the
+   adds canonical read/condition-check and stream permissions and creates the
    DynamoDB mapping together with `INDEXING_MODE=all`. Existing manual batches
    retain their ingestion token and finish normally before canonical backfill.
+   DynamoDB writes remain limited to the job/control partitions. Full mode
+   also permits deletion of legacy `meetings/*` exports and writes/deletes of
+   `canonical/v1/*` projections. The stream activates independently of the tick
+   switch, so keep the schedule enabled for normal full-mode processing.
 6. Verify canonical create/edit/delete/revoke behavior and DLQ/failure states.
    A provider failure must not be reported as an empty successful search.
 
@@ -70,6 +72,9 @@ canonical USER meeting/document and ACCOUNT document keys. It uses batch size
 The canonical catalogue scan covers pre-activation changes without stream
 replay. Stream permissions and the DLQ policy belong to GatewayStack so no
 reverse dependency on AiStack is introduced.
+The function imports an immutable role reference; manage its grants through
+AiStack's KB role and GatewayStack's explicit delivery policy, not direct
+`grant*` calls on the function.
 
 ## Rollback
 
