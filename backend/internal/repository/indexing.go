@@ -62,10 +62,13 @@ func (r *DynamoDBRepository) RequestIndexResource(ctx context.Context, key model
 		if err != nil {
 			return err
 		}
+		if prior != nil && prior.State == model.IndexFailed && prior.RetryAfter > now &&
+			(revision == "" || prior.DesiredRevision == revision) {
+			// An unreadable source has no new revision evidence. It must not
+			// erase its own cooldown on every reconciliation scan.
+			return nil
+		}
 		if prior != nil && revision != "" {
-			if prior.State == model.IndexFailed && prior.DesiredRevision == revision && prior.RetryAfter > now {
-				return nil
-			}
 			if prior.State == model.IndexPending && prior.DesiredRevision == revision {
 				return nil
 			}
@@ -85,6 +88,9 @@ func (r *DynamoDBRepository) RequestIndexResource(ctx context.Context, key model
 		version := int64(0)
 		if prior != nil {
 			next, version = *prior, prior.Version
+		}
+		if revision != "" && (prior == nil || prior.DesiredRevision != revision) {
+			next.FailureCount = 0
 		}
 		next.State, next.DesiredRevision, next.UpdatedAt, next.RetryAfter = model.IndexPending, revision, now, 0
 		next.Version = version + 1
