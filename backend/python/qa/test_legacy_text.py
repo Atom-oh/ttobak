@@ -40,6 +40,15 @@ class LegacyTextTests(_SourceFixture, unittest.TestCase):
         self.assertTrue(result[0]['provenance']['matchedIndexedText'])
         self.assertIn('get_legacy_text_detail', rendered)
 
+    def test_rendered_excerpt_has_one_consistent_partial_signal(self):
+        self.source('x' * 3000)
+        result = hydrate_candidates(self.source_reader, 'owner', 'query', [self.hit('x' * 3000)], {}, 5)
+        rendered = format_source_results(result)
+        snapshot = json.loads(rendered.split('\n', 2)[2])
+        self.assertEqual(len(snapshot['text']), 2400)
+        self.assertTrue(snapshot['coverage']['partial'])
+        self.assertTrue(snapshot['provenance']['partial'])
+        self.assertEqual(snapshot['coverage']['nextOffset'], 2400)
     def test_duplicate_uri_uses_the_best_current_matching_chunk(self):
         fact = 'CURRENT_TARGET_FACT'
         self.source('intro\n' + 'padding ' * 1500 + fact)
