@@ -219,3 +219,21 @@ class TestDocumentRetrieval(_SourceFixture, unittest.TestCase):
         self.table.index_rows = copy.deepcopy(list(self.table.items.values()))
         del self.table.items[('ACCOUNT#child', 'MEMBER#reader')]
         self.assertEqual(self.retrieve('ACCOUNT_TERM', user_id='reader'), [])
+
+
+class TestSnapshotProducerVectors(unittest.TestCase):
+    def test_private_and_shared_hashes_match_producer_vectors(self):
+        from manual_kb import binary_revision
+        vectors = json.loads((Path(__file__).parent / 'testdata/knowledge-revisions.json').read_text())
+        for vector in vectors:
+            self.assertEqual(binary_revision(vector['indexSchema'], vector['sourceBucket'], vector['sourceKey'],
+                                              vector['sourceETag'], vector['sourceVersionId'], vector['sourceSize']),
+                             vector['sourceRevision'])
+
+    def test_manual_revision_vectors(self):
+        from manual_kb import manual_revision
+        vectors = json.loads((Path(__file__).parent / 'testdata/manual-kb-revisions.json').read_text())
+        for vector in vectors:
+            self.assertEqual(manual_revision(vector['sourceBucket'], vector['sourceKey'], vector['sourceETag'],
+                                             vector['sourceVersionId'], vector['sourceSize']),
+                             vector['sourceRevision'])

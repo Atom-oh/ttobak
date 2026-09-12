@@ -99,3 +99,25 @@ class _KBFixture:
                              'indexRunId': run, 'sourceBucket': 'knowledge', 'sourceKey': self.key,
                              'sourceETag': head['ETag'], 'sourceVersionId': self.version,
                              'sourceSize': len(copied_bytes)}}
+
+class _SharedKBFixture(_KBFixture):
+    def setUp(self):
+        super().setUp()
+        self.key = 'shared/reference/file.pdf'
+
+    def shared_snapshot(self, marker='CURRENT_V1', run='00000000-0000-4000-8000-000000000001'):
+        from manual_kb import binary_revision
+        obj = self.head(Bucket='knowledge', Key=self.key)
+        resource_id = hashlib.sha256(self.key.encode()).hexdigest()
+        revision = binary_revision('shared-kb-v1', 'knowledge', self.key, obj['ETag'],
+                                   self.version, len(self.body))
+        uri = (f's3://knowledge/shared-kb/v1/{resource_id}/{revision}/{run}/'
+               f'document{Path(self.key).suffix.lower()}')
+        return {
+            'score': 0.95, 'location': {'s3Location': {'uri': uri}}, 'content': {'text': marker},
+            'metadata': {'indexSchema': 'shared-kb-v1', 'resourceKind': 'sharedKbDocument',
+                         'visibility': 'authenticated-shared', 'resourceId': resource_id,
+                         'sourceRevision': revision, 'indexRunId': run, 'sourceBucket': 'knowledge',
+                         'sourceKey': self.key, 'sourceETag': obj['ETag'],
+                         'sourceVersionId': self.version, 'sourceSize': len(self.body)},
+        }
