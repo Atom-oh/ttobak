@@ -27,6 +27,13 @@ QA handler, retrieval filters, prompts or session behavior.
   an explicit replayable marker. Both integer version 1 before persistence and
   Decimal version 1 after a boto3 resource read are accepted; booleans, floats,
   strings, unknown versions and untracked histories are rejected.
+- `source_access.py` composes these readers into current-source search and
+  meeting/document/attachment contexts, with source dependencies attached.
+  Its constructor receives readers and callbacks; it creates no AWS clients.
+- `source_tools.py` defines and formats the three document/attachment tools.
+  It is not registered by the current handler. The final wiring imports these
+  definitions into the existing authenticated tool loop and preserves its
+  error boundary.
 
 The existing handler-suite command also loads these contract suites:
 
