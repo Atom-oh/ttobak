@@ -23,6 +23,10 @@ const MeetingEditor = dynamic(() => import('./MeetingEditor').then(m => ({ defau
 const marked = new Marked();
 const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', hr: '---' });
 
+function documentChanged(saved: { title: string; markdown: string }, title: string, markdown: string) {
+  return title.trim() !== saved.title.trim() || markdown !== saved.markdown;
+}
+
 interface DocDetailClientProps {
   /** Set for the /accounts/{id}/docs/{docId} route; omit for a personal (account-less) /docs/{docId} route. */
   accountScoped?: boolean;
@@ -102,7 +106,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
       setPublicToken(detail.publicShareToken || null);
       latestMarkdownRef.current = detail.content ?? '';
       latestTitleRef.current = detail.title;
-      savedContentRef.current = { title: detail.title, markdown: detail.content ?? '' };
+      savedContentRef.current = { title: detail.title.trim(), markdown: detail.content ?? '' };
       setDirty(false);
       setTitles((list?.documents ?? []).filter((d) => d.docId !== docId).map((d) => d.title));
     } catch (err) {
@@ -186,7 +190,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
       // Full-replace PUT: send every field the backend would otherwise
       // overwrite with an empty value (path in particular -- update is not
       // a partial patch, see ADR-020).
-      const req = { title: nextTitle ?? title, docType: doc.docType, path: doc.path, markdown };
+      const req = { title: (nextTitle ?? latestTitleRef.current).trim(), docType: doc.docType, path: doc.path, markdown };
       const updated = accountId
         ? await accountApi.updateDocument(accountId, docId, req)
         : await docApi.update(docId, req);
@@ -198,9 +202,14 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
       // in would revert those newer, not-yet-saved keystrokes. Once
       // mounted, the editor is the sole owner of live content between
       // saves; only non-content metadata needs syncing here.
-      setDoc((prev) => (prev ? { ...prev, title: req.title, updatedAt: updated.updatedAt } : prev));
-      savedContentRef.current = { title: req.title, markdown };
-      setDirty(latestTitleRef.current.trim() !== req.title || latestMarkdownRef.current !== markdown);
+      const savedTitle = (updated.title ?? req.title).trim();
+      setDoc((prev) => (prev ? { ...prev, title: savedTitle, updatedAt: updated.updatedAt } : prev));
+      savedContentRef.current = { title: savedTitle, markdown };
+      if (latestTitleRef.current.trim() === req.title) {
+        latestTitleRef.current = savedTitle;
+        setTitle(savedTitle);
+      }
+      setDirty(documentChanged(savedContentRef.current, latestTitleRef.current, latestMarkdownRef.current));
       setIndexRevision((value) => value + 1);
       setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
@@ -214,11 +223,11 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
         saveContent(pending.markdown, pending.nextTitle);
       }
     }
-  }, [accountId, docId, doc, title]);
+  }, [accountId, docId, doc]);
 
   const handleChange = useCallback((html: string) => {
     latestMarkdownRef.current = turndown.turndown(html);
-    setDirty(latestMarkdownRef.current !== savedContentRef.current.markdown || latestTitleRef.current.trim() !== savedContentRef.current.title);
+    setDirty(documentChanged(savedContentRef.current, latestTitleRef.current, latestMarkdownRef.current));
   }, []);
 
   const handleAutoSave = useCallback((html: string) => {
@@ -226,7 +235,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
   }, [saveContent]);
 
   const handleTitleBlur = useCallback(() => {
-    if (doc && title.trim() && title !== doc.title) {
+    if (doc && title.trim() && title.trim() !== savedContentRef.current.title.trim()) {
       saveContent(latestMarkdownRef.current, title.trim());
     }
   }, [doc, title, saveContent]);
@@ -335,7 +344,7 @@ function DocDetailContent({ accountScoped }: DocDetailClientProps) {
             value={title}
             onChange={(e) => {
               setTitle(e.target.value); latestTitleRef.current = e.target.value;
-              setDirty(e.target.value.trim() !== savedContentRef.current.title || latestMarkdownRef.current !== savedContentRef.current.markdown);
+              setDirty(documentChanged(savedContentRef.current, e.target.value, latestMarkdownRef.current));
             }}
             onBlur={handleTitleBlur}
             disabled={isSlide || isReceivedShare}
