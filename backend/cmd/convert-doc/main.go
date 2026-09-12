@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -23,7 +22,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
@@ -89,7 +87,13 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	defer os.RemoveAll(workDir)
 
 	inPath := filepath.Join(workDir, "in"+ext)
-	if err := downloadObject(ctx, key, inPath); err != nil {
+	storage := convertdoc.NewPreviewStorage(s3Client, bucket)
+	destination, err := storage.Snapshot(ctx, sidecarKey)
+	if err != nil {
+		return fmt.Errorf("read preview generation: %w", err)
+	}
+	source, err := downloadObject(ctx, storage, key, inPath)
+	if err != nil {
 		return fmt.Errorf("download %s: %w", key, err)
 	}
 
@@ -128,7 +132,7 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	}
 
 	outPath := filepath.Join(outDir, strings.TrimSuffix(filepath.Base(inPath), filepath.Ext(inPath))+".pdf")
-	if err := uploadObject(ctx, outPath, sidecarKey); err != nil {
+	if err := uploadObject(ctx, storage, outPath, source, destination); err != nil {
 		return fmt.Errorf("upload %s: %w", sidecarKey, err)
 	}
 
@@ -136,40 +140,27 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	return nil
 }
 
-func downloadObject(ctx context.Context, key, destPath string) error {
-	out, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		return err
-	}
-	defer out.Body.Close()
-
+func downloadObject(ctx context.Context, storage *convertdoc.PreviewStorage, key, destPath string) (convertdoc.PreviewSource, error) {
 	f, err := os.Create(destPath)
 	if err != nil {
-		return err
+		return convertdoc.PreviewSource{}, err
 	}
 	defer f.Close()
-
-	_, err = io.Copy(f, out.Body)
-	return err
+	source, err := storage.Download(ctx, key, f)
+	if err != nil {
+		return source, err
+	}
+	return source, f.Close()
 }
 
-func uploadObject(ctx context.Context, srcPath, key string) error {
+func uploadObject(ctx context.Context, storage *convertdoc.PreviewStorage, srcPath string, source convertdoc.PreviewSource, destination convertdoc.PreviewDestination) error {
 	f, err := os.Open(srcPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	_, err = s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:      aws.String(bucket),
-		Key:         aws.String(key),
-		Body:        f,
-		ContentType: aws.String("application/pdf"),
-	})
-	return err
+	return storage.Publish(ctx, source, destination, f)
 }
 
 func main() {

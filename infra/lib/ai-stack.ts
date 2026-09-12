@@ -384,6 +384,8 @@ export class AiStack extends cdk.Stack {
       'Role for ttobak-convert-doc Lambda function'
     );
     props.bucket.grantRead(this.convertDocRole, 'docs/*');
+    // HEAD the current preview before conversion for a conditional replacement.
+    props.bucket.grantRead(this.convertDocRole, 'docs-pdf/*');
     props.bucket.grantPut(this.convertDocRole, 'docs-pdf/*');
     // Required for gateway-stack.ts's VPC placement (ADR-022 network
     // isolation) -- ENI create/describe/delete for the Lambda's VPC
