@@ -1,0 +1,66 @@
+name: Evaluate Note Quality
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: note-quality-evaluation
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ttobak-claude-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Read deployed model configuration
+        env:
+          AWS_REGION: ap-northeast-2
+        run: |
+          set -euo pipefail
+          echo "EVAL_DIRECTORY=$RUNNER_TEMP/note-quality-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+          aws lambda get-function-configuration \
+            --function-name ttobak-summarize --region ap-northeast-2 \
+            --query '{modelId:Environment.Variables.BEDROCK_MODEL_ID,region:Environment.Variables.BEDROCK_REGION,codeSha256:CodeSha256,state:State,lastUpdateStatus:LastUpdateStatus}' \
+            --output json > "$RUNNER_TEMP/note-model.json"
+          python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          config = json.loads((Path(os.environ["RUNNER_TEMP"]) / "note-model.json").read_text())
+          if config["state"] != "Active" or config["lastUpdateStatus"] != "Successful":
+              raise SystemExit("Summarize deployment is not stable")
+          model = config.get("modelId") or ""
+          region = config.get("region") or "us-west-2"
+          if (model and not re.fullmatch(r"[A-Za-z0-9:/._-]+", model)) or not re.fullmatch(r"[a-z0-9-]+", region):
+              raise SystemExit("Invalid deployed model configuration")
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"BEDROCK_MODEL_ID={model}\nBEDROCK_REGION={region}\n")
+          PY
+
+      - name: Evaluate four synthetic meetings with the real model
+        run: |
+          TTOBAK_GO_BINARY="$(command -v go)" \
+            scripts/eval-note-quality.sh live "$EVAL_DIRECTORY"
+
+      - name: Preserve deployed configuration evidence
+        if: always() && env.EVAL_DIRECTORY != ''
+        run: |
+          if [ -d "$EVAL_DIRECTORY" ] && [ -f "$RUNNER_TEMP/note-model.json" ]; then
+            cp "$RUNNER_TEMP/note-model.json" "$EVAL_DIRECTORY/deployed-model.json"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always() && env.EVAL_DIRECTORY != ''
+        with:
+          name: note-quality-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.EVAL_DIRECTORY }}
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,405 @@
+[
+  {
+    "id": "selected-source-numbers-negation",
+    "description": "선택한 B의 금액과 단위를 보존하고 배포 미승인을 승인으로 바꾸지 않는다.",
+    "transcriptA": "월 예산은 999만원이며 배포를 승인했습니다.",
+    "selectedTranscript": "B",
+    "segments": [
+      {
+        "id": "budget",
+        "speaker": "spk_0",
+        "text": "현재 월 예산은 120만원입니다.",
+        "startTime": 0,
+        "endTime": 5
+      },
+      {
+        "id": "units",
+        "speaker": "spk_1",
+        "text": "지연시간은 30밀리초이고 CPU 사용률은 30퍼센트입니다.",
+        "startTime": 10,
+        "endTime": 15
+      },
+      {
+        "id": "denied",
+        "speaker": "spk_0",
+        "text": "이번 주 배포는 승인하지 않았습니다. 배포 승인 상태는 미승인입니다.",
+        "startTime": 20,
+        "endTime": 25
+      }
+    ],
+    "criteria": [
+      {
+        "id": "current-budget",
+        "scope": "all",
+        "required": [
+          "120만|1200000원"
+        ],
+        "forbidden": [
+          "999"
+        ]
+      },
+      {
+        "id": "latency-unit",
+        "scope": "all",
+        "required": [
+          "30밀리초|30ms|0\\.03초"
+        ]
+      },
+      {
+        "id": "cpu-unit",
+        "scope": "all",
+        "required": [
+          "cpu.{0,40}30(%|퍼센트)|(30%|30퍼센트).{0,40}cpu"
+        ]
+      },
+      {
+        "id": "negation",
+        "scope": "all",
+        "required": [
+          "배포.{0,50}(미승인|승인하지|승인되지|보류)|(미승인|승인하지|승인되지|보류).{0,50}배포"
+        ],
+        "noApproval": true
+      },
+      {
+        "id": "no-inferred-followup",
+        "scope": "actions",
+        "forbidden": [
+          "\\[(x)?\\]"
+        ],
+        "noTasks": true
+      }
+    ],
+    "reference": "# 회의록\n## 주요 논의 사항\n월 예산은 120만원입니다. [00:00](transcript://budget)\n지연시간은 30ms이고 CPU 사용률은 30%입니다. [00:10](transcript://units)\n## 결정 사항\n- 이번 주 배포는 미승인입니다. [00:20](transcript://denied)\n## 액션 아이템\n확정된 액션 아이템은 없습니다.",
+    "mutations": [
+      {
+        "name": "stale A amount",
+        "from": "120만원",
+        "to": "999만원",
+        "fails": [
+          "current-budget"
+        ]
+      },
+      {
+        "name": "latency unit error",
+        "from": "30ms",
+        "to": "30초",
+        "fails": [
+          "latency-unit"
+        ]
+      },
+      {
+        "name": "negation removed",
+        "from": "배포는 미승인",
+        "to": "배포는 승인",
+        "fails": [
+          "negation"
+        ]
+      },
+      {
+        "name": "CPU percentage changed",
+        "from": "CPU 사용률은 30%",
+        "to": "CPU 사용률은 3%",
+        "fails": [
+          "cpu-unit"
+        ]
+      },
+      {
+        "name": "unagreed follow-up from non-approval",
+        "from": "확정된 액션 아이템은 없습니다.",
+        "to": "- [ ] 담당자 미정: 배포 미승인 사유 및 재상정 시점 확인. [00:20](transcript://denied)",
+        "fails": [
+          "no-inferred-followup"
+        ]
+      },
+      {
+        "name": "inferred task without checkbox",
+        "from": "확정된 액션 아이템은 없습니다.",
+        "to": "- 담당자 미정: 배포 미승인 사유 확인.",
+        "fails": [
+          "no-inferred-followup"
+        ]
+      },
+      {
+        "name": "contradictory approval after negation",
+        "from": "- 이번 주 배포는 미승인입니다.",
+        "to": "- 이번 주 배포는 미승인입니다. 배포를 승인했습니다.",
+        "fails": [
+          "negation"
+        ]
+      },
+      {
+        "name": "approval status transition contradicts source",
+        "from": "- 이번 주 배포는 미승인입니다.",
+        "to": "- 배포는 미승인에서 승인으로 변경되어 확정되었습니다.",
+        "fails": [
+          "negation"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "proposal-is-not-decision",
+    "description": "확정된 롤링 배포와 미확정 블루그린 제안을 구분한다.",
+    "segments": [
+      {
+        "id": "rolling",
+        "speaker": "spk_0",
+        "text": "오늘 확정한 방식은 롤링 배포입니다.",
+        "startTime": 0,
+        "endTime": 5
+      },
+      {
+        "id": "proposal",
+        "speaker": "spk_1",
+        "text": "블루그린 배포는 아이디어로만 제안했으며 도입을 결정하지 않았습니다.",
+        "startTime": 10,
+        "endTime": 15
+      },
+      {
+        "id": "no-task",
+        "speaker": "spk_0",
+        "text": "블루그린 제안의 검토 담당자나 기한도 정하지 않았고 액션 아이템으로 확정하지 않았습니다.",
+        "startTime": 20,
+        "endTime": 25
+      }
+    ],
+    "criteria": [
+      {
+        "id": "rolling-decided",
+        "scope": "decisions",
+        "required": [
+          "롤링"
+        ]
+      },
+      {
+        "id": "proposal-labelled",
+        "scope": "all",
+        "required": [
+          "블루그린.{0,90}(제안|미확정|미결정|결정하지|도입하지)|(제안|미확정|미결정).{0,90}블루그린"
+        ]
+      },
+      {
+        "id": "proposal-not-final",
+        "scope": "decisions",
+        "target": "블루그린",
+        "lineRequires": "제안(단계|수준)|검토(중|만)|미확정|미결정|결정하지|확정하지|보류|않|아니|도입미정",
+        "lineForbids": "(도입|적용).{0,30}(확정했|확정합|승인했|승인합|결정했|결정합)"
+      },
+      {
+        "id": "no-invented-task",
+        "scope": "actions",
+        "target": "블루그린",
+        "lineRequires": "확정하지|미확정|없|아니|않"
+      }
+    ],
+    "reference": "# 회의록\n## 주요 논의 사항\n블루그린 배포는 제안으로 남아 있고 도입 결정은 없습니다. [00:10](transcript://proposal)\n## 결정 사항\n- 롤링 배포를 적용합니다. [00:00](transcript://rolling)\n## 액션 아이템\n확정된 액션 아이템은 없습니다.",
+    "mutations": [
+      {
+        "name": "proposal promoted",
+        "from": "- 롤링 배포를 적용합니다.",
+        "to": "- 롤링 배포와 블루그린 도입을 확정합니다.",
+        "fails": [
+          "proposal-not-final"
+        ]
+      },
+      {
+        "name": "unagreed action invented",
+        "from": "확정된 액션 아이템은 없습니다.",
+        "to": "- [ ] 담당 미정: 블루그린 검토를 진행합니다.",
+        "fails": [
+          "no-invented-task"
+        ]
+      },
+      {
+        "name": "proposal word must not excuse approval",
+        "from": "- 롤링 배포를 적용합니다.",
+        "to": "- 롤링 배포와 함께 블루그린 제안을 검토해 도입을 확정했습니다.",
+        "fails": [
+          "proposal-not-final"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "owners-and-deadlines",
+    "description": "명시된 담당자·기한을 보존하고 미정인 담당자를 만들어내지 않는다.",
+    "segments": [
+      {
+        "id": "assigned",
+        "speaker": "spk_0",
+        "text": "저는 민수입니다. 제가 보안 체크리스트를 2026년 9월 18일까지 확인하겠습니다.",
+        "startTime": 0,
+        "endTime": 7
+      },
+      {
+        "id": "unassigned",
+        "speaker": "spk_1",
+        "text": "백업 검증도 필요합니다. 다만 백업 검증의 담당자와 기한은 아직 미정입니다.",
+        "startTime": 10,
+        "endTime": 17
+      }
+    ],
+    "criteria": [
+      {
+        "id": "assigned-owner",
+        "scope": "actions",
+        "required": [
+          "민수.{0,100}체크리스트|체크리스트.{0,100}민수"
+        ]
+      },
+      {
+        "id": "explicit-deadline",
+        "scope": "actions",
+        "required": [
+          "2026[-./년]0?9[-./월]18|9월18일"
+        ]
+      },
+      {
+        "id": "unassigned-preserved",
+        "scope": "all",
+        "required": [
+          "백업.{0,100}(미정|미지정|미확정|정하지|확인필요)|(미정|미지정|미확정).{0,100}백업"
+        ]
+      },
+      {
+        "id": "no-owner-inference",
+        "scope": "actions",
+        "target": "백업",
+        "lineForbids": "민수|서연",
+        "unknownOwner": true,
+        "noDates": true
+      }
+    ],
+    "reference": "# 회의록\n## 참석자\n- 민수 (spk_0)\n- spk_1\n## 주요 논의 사항\n백업 검증의 담당자와 기한은 미정입니다. [00:10](transcript://unassigned)\n## 액션 아이템\n- [ ] 민수: 보안 체크리스트 확인, 기한 2026-09-18. [00:00](transcript://assigned)\n- [ ] 담당자 미정: 백업 검증, 기한 미정. [00:10](transcript://unassigned)",
+    "mutations": [
+      {
+        "name": "wrong owner",
+        "from": "민수: 보안",
+        "to": "서연: 보안",
+        "fails": [
+          "assigned-owner"
+        ]
+      },
+      {
+        "name": "wrong deadline",
+        "from": "2026-09-18",
+        "to": "2026-09-19",
+        "fails": [
+          "explicit-deadline"
+        ]
+      },
+      {
+        "name": "invented backup owner",
+        "from": "담당자 미정: 백업",
+        "to": "민수: 백업",
+        "fails": [
+          "no-owner-inference"
+        ]
+      },
+      {
+        "name": "previously unseen backup owner",
+        "from": "담당자 미정: 백업",
+        "to": "지훈: 백업",
+        "fails": [
+          "no-owner-inference"
+        ]
+      },
+      {
+        "name": "unassigned backup gets deadline",
+        "from": "백업 검증, 기한 미정",
+        "to": "백업 검증, 기한 2026-09-20",
+        "fails": [
+          "no-owner-inference"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "notes-are-not-spoken-evidence",
+    "description": "사용자 메모만의 정보를 발언·참석자·오디오 근거로 위장하지 않는다.",
+    "notes": "사용자 메모에만 있는 가정: 예산 후보는 53만원입니다. 서연에게 일정을 확인할 필요가 있다고 개인적으로 적어 둡니다. 녹취에서 확인된 정보가 아닙니다.",
+    "segments": [
+      {
+        "id": "spoken",
+        "speaker": "spk_0",
+        "text": "계약 금액은 아직 정해지지 않았습니다. 오늘 금액 합의는 없습니다.",
+        "startTime": 0,
+        "endTime": 8
+      }
+    ],
+    "criteria": [
+      {
+        "id": "memo-value-preserved",
+        "scope": "all",
+        "required": [
+          "53만|530000원"
+        ]
+      },
+      {
+        "id": "memo-labelled",
+        "scope": "all",
+        "required": [
+          "사용자메모기준|사용자메모에|사용자메모상"
+        ]
+      },
+      {
+        "id": "no-invented-attendee",
+        "scope": "participants",
+        "forbidden": [
+          "서연"
+        ]
+      },
+      {
+        "id": "no-audio-evidence-for-memo",
+        "scope": "all",
+        "forbidden": [
+          "53만원[^.。\\n]{0,120}transcript://"
+        ],
+        "noCitationFor": "53만원|530000원"
+      }
+    ],
+    "reference": "# 회의록\n\n## 참석자\n- spk_0\n\n## 주요 논의 사항\n계약 금액은 미정이고 합의가 없습니다. [00:00](transcript://spoken)\n\n사용자 메모 기준 예산 후보는 53만원입니다. 녹취에서 확인된 금액은 아닙니다.\n\n사용자 메모에 서연에게 일정 확인이 필요하다고 적혀 있으나 참석 여부나 합의된 액션은 확인되지 않았습니다.\n\n## 결정 사항\n확정된 금액은 없습니다.",
+    "mutations": [
+      {
+        "name": "attendee invented",
+        "from": "- spk_0",
+        "to": "- spk_0\n- 서연",
+        "fails": [
+          "no-invented-attendee"
+        ]
+      },
+      {
+        "name": "memo given audio citation",
+        "from": "53만원입니다.",
+        "to": "53만원입니다 [00:00](transcript://spoken).",
+        "fails": [
+          "no-audio-evidence-for-memo"
+        ]
+      },
+      {
+        "name": "memo presented as meeting fact",
+        "from": "사용자 메모 기준 예산 후보는 53만원입니다. 녹취에서 확인된 금액은 아닙니다.\n\n사용자 메모에 서연에게 일정 확인이 필요하다고 적혀 있으나 참석 여부나 합의된 액션은 확인되지 않았습니다.",
+        "to": "회의에서 예산 53만원과 서연의 일정 확인을 확정했습니다.",
+        "fails": [
+          "memo-labelled"
+        ]
+      },
+      {
+        "name": "memo citation after punctuation",
+        "from": "53만원입니다.",
+        "to": "53만원입니다. [00:00](transcript://spoken)",
+        "fails": [
+          "no-audio-evidence-for-memo"
+        ]
+      },
+      {
+        "name": "alternate amount with audio citation",
+        "from": "53만원입니다.",
+        "to": "530,000원입니다. [00:00](transcript://spoken)",
+        "fails": [
+          "no-audio-evidence-for-memo"
+        ]
+      }
+    ]
+  }
+]
