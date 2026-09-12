@@ -310,6 +310,38 @@ if [ -s "$WORK/degraded-models.txt" ]; then
   } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
 fi
 
+# Kiro 사전 검증 실패(run-panel.sh 의 kiro-preflight.flag) — 고정 프롬프트 사전 검증이 실패하면
+# PR diff 를 Kiro 에 보내지 않은 상태로 중단됐다. 왜 Kiro 셀이 전부 비었는지 코멘트에서 바로 읽게.
+if [ -s "$WORK/kiro-preflight.flag" ]; then
+  PREFLIGHT_DETAIL="$(tr '\n' ' ' < "$WORK/kiro-preflight.flag" | sed 's/ *$//')"
+  { echo "🛑 **Kiro 사전 검증 실패**: $PREFLIGHT_DETAIL 도구 차단을 확인하지 못해 Kiro 리뷰를 시작하지 않았습니다. 절차: docs/runbooks/pr-review-panel.md"
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
+# Kiro 월간 요청 한도 소진(run-panel.sh 의 kiro-quota.flag) — 위 degraded 배너의 원인 후보
+# 나열 대신 실제 원인을 못박는다. 코드/플래그 문제가 아니라 KIRO_API_KEY 계정 한도이므로
+# 사람이 취할 행동(overage 활성화 또는 키 교체)과 리셋 시점을 코멘트에서 바로 읽을 수 있게.
+if [ -s "$WORK/kiro-quota.flag" ]; then
+  QUOTA_DETAIL="$(tr '\n' ' ' < "$WORK/kiro-quota.flag" | sed 's/ *$//')"
+  { echo "🚫 **Kiro 월간 요청 한도 소진**: KIRO_API_KEY 계정이 MONTHLY_REQUEST_COUNT 한도에 도달해 Kiro 셀이 응답 없음 (\`$QUOTA_DETAIL\`) — kiro-cli headless 플래그 문제가 아님. overage 활성화 또는 \`/demo-platform/actions/AI-key\` 의 KIRO_API_KEY 교체 전까지 매 실행 반복됨. 절차: docs/runbooks/pr-review-panel.md"
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
+# Kiro 에이전트 폴백(run-panel.sh 의 kiro-agent-fallback.flag) — 러너의 kiro-cli 가
+# `--agent pr-review-notools` 를 무시하고 툴 있는 기본 에이전트로 실행한 셀이 있었다. 응답은
+# 이미 폐기됐고 coverage-severe 로 강제 FAIL 되지만, "왜 FAIL 인지"를 코멘트에서 바로 읽게 한다.
+if [ -s "$WORK/kiro-agent-fallback.flag" ]; then
+  AGENTFAIL_DETAIL="$(tr '\n' ' ' < "$WORK/kiro-agent-fallback.flag" | sed 's/ *$//')"
+  { echo "🔓 **Kiro 무툴 계약 위반**: kiro-cli 가 \`--agent pr-review-notools\` 를 무시하고 툴 있는 기본 에이전트로 실행함 (\`$AGENTFAIL_DETAIL\`) — 해당 셀 응답은 폐기, 강제 FAIL. 러너 이미지의 kiro-cli 버전/에이전트 스키마 변경 여부 확인 필요(docs/runbooks/pr-review-panel.md)."
+    echo ""
+    cat "$OUT"
+  } > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+fi
+
 # Kiro diff truncation 가시화 — 대형 diff 는 run-panel.sh 의 KIRO_DIFF_CAP 을 넘으면 Kiro
 # 셀에 prefix 만 전달된다(argv 커널 한도 회피, 의도된 트레이드오프). truncation 은 VERDICT
 # 를 강제하진 않되(codex 는 여전히 전체 diff 를 봄) 신호 없이 넘기면 "Kiro 셀이 diff 뒷부분은
