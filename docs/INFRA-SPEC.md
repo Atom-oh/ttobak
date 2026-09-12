@@ -186,11 +186,26 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - Permissions: Bedrock InvokeModelWithBidirectionalStream (Nova Sonic), Bedrock InvokeModel (Claude translation), DynamoDB read/write, API Gateway ManageConnections
 
 #### KB Lambda
-- Current deployment: `ttobak-kb` has no trigger, 256 MiB / 30 seconds. No API Gateway or S3 upload rule points to it.
-- Worker contract: canonical DynamoDB stream records or scheduled/internal tick; coalesced full ingestion and immutable `canonical/v1/` projections, not direct OpenSearch writes.
-- Before activation: provide `TABLE_NAME`, `BUCKET_NAME`, `KB_BUCKET_NAME`, bare ten-character `KB_ID` and `DATA_SOURCE_ID`; increase to 1024 MiB / 12 minutes and grant source reads/existence checks, scoped projection operations and ingestion controls.
-- Deploy and verify canonical QA filters/current-source authorization before enabling stream/tick delivery. Legacy export deletion otherwise removes meeting recall; reverting QA requires re-export (ADR-038).
-- A crashed invocation may retain its 20-minute coordinator lease; normal ticks report `LEASE_WAIT` until recovery. Source changes are deferred per document so one recording cannot block other jobs.
+- Trigger: one-minute scheduled tick (disabled until explicit activation),
+  1024 MiB / 720s. The canonical DynamoDB mapping and stream-read grants are
+  absent during `manual-only` bootstrap and created only in `all`
+  mode. Existing `/api/kb/*` HTTP routes remain in the API Lambda.
+- Env: `TABLE_NAME`, `BUCKET_NAME`, `KB_BUCKET_NAME`, `KB_ID`, `DATA_SOURCE_ID`,
+  `AWS_REGION_NAME`, `INDEXING_MODE` (`manual-only` or `all`).
+- Permissions: conditional job/control updates, KB-scoped full ingestion and
+  per-document status reads, and immutable snapshot access. Bootstrap grants
+  original `kb/*`/`shared/*` reads and snapshot-prefix writes/deletes only;
+  DynamoDB operations are limited to the two `KBINDEX#` job/control partitions.
+  Canonical source reads and projection permissions are added with explicit full mode;
+  DynamoDB writes remain restricted to the job/control partitions in both modes.
+  The worker has no OpenSearch or model-inference permission.
+- Rollout: the mode-aware migration worker must be deployed before enabling
+  the scheduled producer. Follow the
+  [bootstrap and activation runbook](runbooks/knowledge-index-bootstrap.md).
+- Worker contract: raw DynamoDB stream records or scheduled `tick` envelopes;
+  coalesced full ingestion and immutable projections, not direct OpenSearch writes.
+- Recovery: a crashed invocation may retain its 20-minute coordinator lease.
+  Normal ticks report `LEASE_WAIT` until recovery; member failures back off independently.
 
 #### QA Lambda (`ttobak-qa`, Python)
 - Current-source configuration: `KB_BUCKET_NAME` identifies the KB bucket,
@@ -243,7 +258,9 @@ five-minute lease exposes interrupted execution and permits an authorized retry.
 The EventBridge DLQ covers delivery failure, not downstream model failures.
 - **audio-uploaded**: S3 PutObject (prefix `audio/`) → Transcribe Lambda
 - **image-uploaded**: S3 PutObject (prefix `images/`) → Process Image Lambda
-- **kb-uploaded**: S3 PutObject (prefix `kb/`) → KB Lambda
+- **ttobak-kb-index-tick**: disabled-by-default one-minute tick → KB Lambda.
+  Delivery failures use `ttobak-kb-index-dlq` (SSE-SQS, seven-day retention).
+  Full mode additionally creates the canonical DynamoDB stream mapping.
 - **doc-slide-uploaded**: S3 PutObject (prefix `docs/`, suffix `.ppt`/`.pptx`) → Convert-Doc Lambda
 
 ### Outputs
@@ -420,7 +437,7 @@ EdgeAuthStack.functionVersionArn → FrontendStack (Lambda@Edge association)
 GatewayStack.httpApiEndpoint → FrontendStack (CloudFront API origin)
 GatewayStack.webSocketApiEndpoint → FrontendStack (CloudFront WebSocket origin)
 KnowledgeStack.kbId → GatewayStack (API Lambda, KB Lambda)
-KnowledgeStack.collectionEndpoint → GatewayStack (KB Lambda)
+KnowledgeStack.knowledgeBaseId/dataSourceId → GatewayStack (KB Lambda)
 ```
 
 ## 11. Deployment Order
