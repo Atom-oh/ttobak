@@ -412,6 +412,10 @@ func (h *MeetingHandler) UpdateSpeakers(w http.ResponseWriter, r *http.Request) 
 
 	result, err := h.meetingService.UpdateSpeakers(ctx, userID, meetingID, &req)
 	if err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			writeError(w, http.StatusConflict, model.ErrCodeConflict, "회의록이 변경되었습니다. 새로고침 후 다시 시도해 주세요.")
+			return
+		}
 		if errors.Is(err, service.ErrForbidden) {
 			writeError(w, http.StatusForbidden, model.ErrCodeForbidden, "Access denied")
 			return
@@ -420,7 +424,8 @@ func (h *MeetingHandler) UpdateSpeakers(w http.ResponseWriter, r *http.Request) 
 			writeError(w, http.StatusNotFound, model.ErrCodeNotFound, "Meeting not found")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
+		log.Printf("UpdateSpeakers failed: %v", err)
+		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, "화자 이름 저장 결과를 확인하지 못했습니다. 새로고침 후 확인해 주세요.")
 		return
 	}
 

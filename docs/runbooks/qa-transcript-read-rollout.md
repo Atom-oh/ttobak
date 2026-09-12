@@ -79,3 +79,5 @@ Rollout order:
    alone does not fix fixed-key S3 overwrites before a rejected DynamoDB write.
 3. Retain both reader formats after enabling versioned writers. Never roll a
    reader back to legacy-only code while versioned refs remain in DynamoDB.
+
+The conditional writer behavior and retained-object tradeoffs are recorded in [ADR-037](../decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md).
