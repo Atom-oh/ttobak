@@ -133,7 +133,11 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 
 인증된 `/api/meetings/{id}/reading` 조회는 응답 직렬화 전에 요청한 구간으로 제한합니다. 메모·권한·액션 상태 조회에는 전사문을 읽지 않는 metadata view를 사용하며, 전사문 조회는 인가 후 선택한 원문과 후보 구간만 읽습니다. 각 페이지에서 현재 권한과 내용 revision을 확인합니다([API 계약](API-SPEC.md)).
 
-문서 파서와 후속 워커의 격리·실패·배포 조건은 [ADR-039](decisions/ADR-039-meeting-document-extraction.md)에 기록했습니다. 현재 파서만 구현되며 자동 처리 연결은 후속 단계입니다.
+문서 파서와 후속 워커의 격리·실패·배포 조건은 [ADR-039](decisions/ADR-039-meeting-document-extraction.md)에 기록했습니다. 파서와 검증된 결과 읽기 기반이 구현되며 자동 처리 연결은 후속 단계입니다.
+
+검증된 문서 근거를 별도 DOCUMENT 자료로 전달하는 요약 생성기와 저장된
+소스·편집 권한을 조건으로 확인하는 요약 저장소가 준비되었습니다. API 생산자와
+비동기 연결은 [배포 순서](runbooks/meeting-document-release.md)에 따라 별도로 활성화합니다.
 
 ### 아키텍처 결정 기록 (ADR)
 
@@ -257,7 +261,11 @@ Store action extraction state in a separate analysis row. Route authorized edito
 
 Authenticated `/api/meetings/{id}/reading` bounds the requested section before response serialization. Notes, authorization and action-state reads use metadata views without transcript hydration; transcript reads load only the chosen text and candidate segments after authorization. Recheck current access and content revision on every page ([API contract](API-SPEC.md)).
 
-Parser isolation, failure policy and planned worker rollout are recorded in [ADR-039](decisions/ADR-039-meeting-document-extraction.md). Only the parser is implemented in this slice.
+Parser isolation, failure policy and planned worker rollout are recorded in [ADR-039](decisions/ADR-039-meeting-document-extraction.md). Parser and verified-result reading foundations precede automatic processing.
+
+The summary/storage foundation prepares verified DOCUMENT evidence and guards
+publication against source and editor-grant changes. API producers and async
+wiring activate separately under the [release order](runbooks/meeting-document-release.md).
 
 ### Architecture Decision Records (ADR)
 
