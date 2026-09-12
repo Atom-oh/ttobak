@@ -32,7 +32,7 @@
         "id": "current-budget",
         "scope": "all",
         "required": [
-          "120만|1200000원"
+          "(^|[^0-9.])(120만원|1200000원)($|[^0-9])"
         ],
         "forbidden": [
           "999"
@@ -42,14 +42,14 @@
         "id": "latency-unit",
         "scope": "all",
         "required": [
-          "30밀리초|30ms|0\\.03초"
+          "(^|[^0-9.])(30밀리초|30ms|0\\.03초)($|[^0-9])"
         ]
       },
       {
         "id": "cpu-unit",
         "scope": "all",
         "required": [
-          "cpu.{0,40}30(%|퍼센트)|(30%|30퍼센트).{0,40}cpu"
+          "cpu[^0-9\\n]{0,40}30(%|퍼센트)|(^|[^0-9.])30(%|퍼센트)[^0-9\\n]{0,40}cpu"
         ]
       },
       {
@@ -133,6 +133,30 @@
         "to": "- 배포는 미승인에서 승인으로 변경되어 확정되었습니다.",
         "fails": [
           "negation"
+        ]
+      },
+      {
+        "name": "budget substring is not same number",
+        "from": "120만원",
+        "to": "1120만원",
+        "fails": [
+          "current-budget"
+        ]
+      },
+      {
+        "name": "latency substring is not same number",
+        "from": "30ms",
+        "to": "130ms",
+        "fails": [
+          "latency-unit"
+        ]
+      },
+      {
+        "name": "CPU substring is not same number",
+        "from": "CPU 사용률은 30%",
+        "to": "CPU 사용률은 130%",
+        "fails": [
+          "cpu-unit"
         ]
       }
     ]

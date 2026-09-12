@@ -5,11 +5,11 @@ reviewed synthetic meetings. Keep DynamoDB and S3 synthetic; invoke only Bedrock
 in live mode. Record model/region, request and fixture hashes, raw responses,
 rendered notes and criterion-level results. Request export is not an evaluation.
 
-- [ ] Add reference cases for selected sources, numbers/units, negation,
+- [x] Add reference cases for selected sources, numbers/units, negation,
   decisions versus proposals, owners/deadlines and notes-only evidence.
-- [ ] Verify the rubric accepts reviewed examples and rejects deliberate errors.
-- [ ] Add an executable live/export/grade command without customer-data access.
-- [ ] Add a main-only manual CI workflow using the deployed model configuration.
+- [x] Verify the rubric accepts reviewed examples and rejects deliberate errors.
+- [x] Add an executable live/export/grade command without customer-data access.
+- [x] Add a main-only manual CI workflow using the deployed model configuration.
 - [ ] Run real model evaluation, inspect all outputs and record results honestly.
 - [ ] Fix observed prompt failures without weakening the reference criteria.
 - [ ] Complete latest-head PR review, merge and deployment verification.

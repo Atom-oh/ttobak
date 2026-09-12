@@ -28,6 +28,55 @@ type qualityEvidence struct {
 	ObservedAt     time.Time `json:"observedAt"`
 }
 
+func parseQualityEvidence(proof []byte, modelID, region string, request, response []byte) (qualityEvidence, error) {
+	var evidence qualityEvidence
+	if err := json.Unmarshal(proof, &evidence); err != nil {
+		return evidence, fmt.Errorf("invalid invocation evidence: %w", err)
+	}
+	if evidence.ModelID == "" || evidence.Region == "" || evidence.RequestSHA256 == "" ||
+		evidence.ResponseSHA256 == "" || evidence.Transport == "" || evidence.ObservedAt.IsZero() {
+		return evidence, fmt.Errorf("invocation evidence requires every attested field")
+	}
+	if (evidence.Transport != "aws-sdk" && evidence.Transport != "aws-mcp") ||
+		evidence.ModelID != modelID || evidence.Region != region ||
+		evidence.RequestSHA256 != qualityHash(request) || evidence.ResponseSHA256 != qualityHash(response) {
+		return evidence, fmt.Errorf("invocation evidence does not match the current model/request/response")
+	}
+	return evidence, nil
+}
+
+func TestNoteQualityEvidenceRequiresEveryAttestedField(t *testing.T) {
+	request, response := []byte("request"), []byte("response")
+	valid := map[string]interface{}{
+		"transport": "aws-mcp", "modelId": "model", "region": "us-west-2",
+		"requestSha256": qualityHash(request), "responseSha256": qualityHash(response),
+		"observedAt": "2026-09-12T12:00:00Z",
+	}
+	data, _ := json.Marshal(valid)
+	if _, err := parseQualityEvidence(data, "model", "us-west-2", request, response); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"transport", "modelId", "region", "requestSha256", "responseSha256", "observedAt"} {
+		t.Run(field, func(t *testing.T) {
+			incomplete := map[string]interface{}{}
+			for key, value := range valid {
+				if key != field {
+					incomplete[key] = value
+				}
+			}
+			data, _ := json.Marshal(incomplete)
+			if _, err := parseQualityEvidence(data, "model", "us-west-2", request, response); err == nil {
+				t.Fatalf("missing %s inherited an expected value", field)
+			}
+		})
+	}
+	for _, malformed := range []string{"null", "{}", `{"modelId":3}`} {
+		if _, err := parseQualityEvidence([]byte(malformed), "model", "us-west-2", request, response); err == nil {
+			t.Fatalf("malformed evidence accepted: %s", malformed)
+		}
+	}
+}
+
 type qualityCaseResult struct {
 	ID           string           `json:"id"`
 	Invoked      bool             `json:"invoked"`
@@ -204,15 +253,16 @@ func TestNoteQualityEvaluation(t *testing.T) {
 			var readErr error
 			response, readErr = os.ReadFile(filepath.Join(dir, fixture.ID+".response.json"))
 			proof, proofErr := os.ReadFile(filepath.Join(dir, fixture.ID+".evidence.json"))
-			if readErr != nil || proofErr != nil || json.Unmarshal(proof, &evidence) != nil {
+			if readErr != nil || proofErr != nil {
 				entry.Error = "real response and invocation evidence are required"
-			} else if (evidence.Transport != "aws-sdk" && evidence.Transport != "aws-mcp") ||
-				evidence.ModelID != ClaudeOpusModelID || evidence.Region != region ||
-				evidence.RequestSHA256 != qualityHash(request) ||
-				evidence.ResponseSHA256 != qualityHash(response) || evidence.ObservedAt.IsZero() {
-				entry.Error = "invocation evidence does not match the current model/request/response"
 			} else {
-				entry.Invoked = true
+				attested, err := parseQualityEvidence(proof, ClaudeOpusModelID, region, request, response)
+				if err != nil {
+					entry.Error = err.Error()
+				} else {
+					evidence = attested
+					entry.Invoked = true
+				}
 			}
 		}
 		if entry.Error == "" {

@@ -13,7 +13,7 @@ the same production completion validation and transcript-anchor resolution.
 
 Run the **Evaluate Note Quality** workflow on main. It reads only the deployed
 summarize function's model/region, code hash and deployment status, then evaluates
-the four cases and uploads the results. It does not load customer meetings.
+the four cases and uploads the results. It does not load customer meetings. The runner needs Lambda GetFunctionConfiguration for the summarizer and Bedrock InvokeModel in its configured region; only selected nonsecret configuration fields are archived.
 
 For local SDK credentials, use a new empty output directory:
 
@@ -43,7 +43,7 @@ attestation, not cryptographic proof of AWS execution.
 scripts/eval-note-quality.sh grade /absolute/existing-request-directory
 ```
 
-Grade mode rejects missing evidence, modified requests and mismatched hashes.
+Grade mode decodes an empty evidence record and requires every attested field; it never fills missing fields with expected values. It rejects missing evidence, modified requests and mismatched hashes.
 Never grade a mock response as real model output.
 
 ## Interpret

@@ -39,7 +39,7 @@ jobs:
               raise SystemExit("Summarize deployment is not stable")
           model = config.get("modelId") or ""
           region = config.get("region") or "us-west-2"
-          if (model and not re.fullmatch(r"[A-Za-z0-9:/._-]+", model)) or not re.fullmatch(r"[a-z0-9-]+", region):
+          if not model or not re.fullmatch(r"[A-Za-z0-9:/._-]+", model) or not re.fullmatch(r"[a-z0-9-]+", region):
               raise SystemExit("Invalid deployed model configuration")
           with open(os.environ["GITHUB_ENV"], "a") as env:
               env.write(f"BEDROCK_MODEL_ID={model}\nBEDROCK_REGION={region}\n")

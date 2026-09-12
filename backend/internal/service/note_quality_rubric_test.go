@@ -142,6 +142,7 @@ func onlyNoTaskResult(scope string) bool {
 
 func explicitUnknownOwner(line string) bool {
 	value := qualityNormalized(qualityLink.ReplaceAllString(line, ""))
+	value = strings.NewReplacer("**", "", "__", "", "`", "", "(", "", ")", "").Replace(value)
 	value = strings.TrimLeft(value, "-*[]x0123456789.")
 	if before, _, found := strings.Cut(value, ":"); found {
 		return before == "미정" || before == "담당미정" || before == "담당자미정" ||
