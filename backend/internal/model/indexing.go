@@ -74,8 +74,10 @@ type IndexJob struct {
 	RunID           string        `dynamodbav:"runId" json:"runId,omitempty"`
 	LeaseUntil      int64         `dynamodbav:"leaseUntil" json:"leaseUntil,omitempty"`
 	RetryAfter      int64         `dynamodbav:"retryAfter" json:"retryAfter,omitempty"`
+	FailureCount    int           `dynamodbav:"failureCount" json:"-"`
 	Keys            []string      `dynamodbav:"keys" json:"-"`
 	PendingKeys     []string      `dynamodbav:"pendingKeys" json:"-"`
+	RemovedKeys     []string      `dynamodbav:"removedKeys" json:"-"`
 	Outcome         string        `dynamodbav:"outcome" json:"-"`
 	ErrorCode       string        `dynamodbav:"errorCode" json:"errorCode,omitempty"`
 	SyncID          string        `dynamodbav:"syncId" json:"syncId,omitempty"`
@@ -87,6 +89,8 @@ type IndexMember struct {
 	Version  int64         `dynamodbav:"version"`
 	RunID    string        `dynamodbav:"runId"`
 	Revision string        `dynamodbav:"revision"`
+	Attempts int           `dynamodbav:"attempts"`
+	Detached bool          `dynamodbav:"detached"`
 }
 
 // A frozen batch stays EXPORTING until every partial projection is cleaned or

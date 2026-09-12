@@ -186,16 +186,46 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - Permissions: Bedrock InvokeModelWithBidirectionalStream (Nova Sonic), Bedrock InvokeModel (Claude translation), DynamoDB read/write, API Gateway ManageConnections
 
 #### KB Lambda
-- Trigger: S3 Event (prefix `kb/`) via EventBridge + API Gateway (sync), 1024MB / 300s
-- Env: `TABLE_NAME`, `BUCKET_NAME`, `KB_ID`, `AOSS_ENDPOINT`
-- Permissions: Bedrock KB management, OpenSearch Serverless, S3 read, DynamoDB read/write
+- Trigger: one-minute scheduled tick (disabled until explicit activation),
+  1024 MiB / 720s. The canonical DynamoDB mapping and stream-read grants are
+  absent during `manual-only` bootstrap and created only in `all`
+  mode. Existing `/api/kb/*` HTTP routes remain in the API Lambda.
+- Env: `TABLE_NAME`, `BUCKET_NAME`, `KB_BUCKET_NAME`, `KB_ID`, `DATA_SOURCE_ID`,
+  `AWS_REGION_NAME`, `INDEXING_MODE` (`manual-only` or `all`).
+- Permissions: conditional job/control updates, KB-scoped full ingestion and
+  per-document status reads, and immutable snapshot access. Bootstrap grants
+  original `kb/*`/`shared/*` reads and snapshot-prefix writes/deletes only;
+  DynamoDB operations are limited to the two `KBINDEX#` job/control partitions.
+  Canonical source reads and projection permissions are added with explicit full mode;
+  DynamoDB writes remain restricted to the job/control partitions in both modes.
+  The worker has no OpenSearch or model-inference permission.
+- Rollout: the mode-aware migration worker must be deployed before enabling
+  the scheduled producer. Follow the
+  [bootstrap and activation runbook](runbooks/knowledge-index-bootstrap.md).
+- Worker contract: raw DynamoDB stream records or scheduled `tick` envelopes;
+  coalesced full ingestion and immutable projections, not direct OpenSearch writes.
+- Recovery: a crashed invocation may retain its 20-minute coordinator lease.
+  Normal ticks report `LEASE_WAIT` until recovery; member failures back off independently.
 
 #### QA Lambda (`ttobak-qa`, Python)
+- Current-source configuration: `KB_BUCKET_NAME` identifies the KB bucket,
+  separately from the assets `BUCKET_NAME`. QA can read versions under assets
+  `transcripts/*`, `docs/*`, `docs-pdf/*`, `files/*` and KB `kb/*`, `shared/*`;
+  account-conditioned listing of those two buckets distinguishes missing
+  sources from denied reads. No object-write/delete grant is added. Handler
+  activation and binary compatibility follow the
+  [current-source rollout](runbooks/qa-current-source-rollout.md).
 - Trigger: API Gateway HTTP (`/api/qa/*`, sync) + async re-invocation from the WebSocket Lambda (`InvocationType=Event`, live Q&A streaming)
 - Async retry: `retryAttempts: 0` (`configureAsyncInvoke`) — without this, Lambda's default 2 retries could deliver a stale duplicate answer delta to an already-closed WebSocket session
-- Env: `TABLE_NAME`, `BUCKET_NAME`, `KB_ID`, `BEDROCK_MODEL_ID`, `DETECT_MODEL_ID`, `MAX_TOOL_ROUNDS`, `KB_CACHE_TTL_SECONDS`, `RESEARCH_SFN_ARN`, `WEB_SEARCH_GATEWAY_URL`/`WEB_SEARCH_GATEWAY_REGION` (`search_web` tool — cross-region SigV4 call to the us-east-1 AgentCore Web Search Gateway; if unset, the tool stays exposed but returns a "web search not configured" failure to the model), `WEB_SEARCH_HOURLY_LIMIT` (server-side per-user hourly cap on `search_web`, default 30, `0` disables — checked before the gateway call so a capped call consumes no external quota; the value is a `gateway-stack.ts` literal, so changing it requires a `TtobakGatewayStack --exclusively` redeploy, not a console knob)
-- Permissions: S3 `GetObject` only for the assets bucket's `transcripts/*` objects (no list/write; AiStack), DynamoDB R/W, Bedrock InvokeModel(+stream)/Retrieve, Step Functions StartExecution, WebSocket ManageConnections, `bedrock-agentcore:InvokeGateway` (scoped to the Web Search Gateway ARN, `ai-stack.ts`)
+- Env: `TABLE_NAME`, `BUCKET_NAME`, `KB_BUCKET_NAME`, `KB_ID`, `BEDROCK_MODEL_ID`, `DETECT_MODEL_ID`, `MAX_TOOL_ROUNDS`, `KB_CACHE_TTL_SECONDS`, `RESEARCH_SFN_ARN`, `WEB_SEARCH_GATEWAY_URL`/`WEB_SEARCH_GATEWAY_REGION` (`search_web` tool — cross-region SigV4 call to the us-east-1 AgentCore Web Search Gateway; if unset, the tool stays exposed but returns a "web search not configured" failure to the model), `WEB_SEARCH_HOURLY_LIMIT` (server-side per-user hourly cap on `search_web`, default 30, `0` disables — checked before the gateway call so a capped call consumes no external quota; the value is a `gateway-stack.ts` literal, so changing it requires a `TtobakGatewayStack --exclusively` redeploy, not a console knob)
+- Permissions: S3 object/version reads for the current-source prefixes and account-conditioned listing of the two buckets (AiStack; no object writes/deletes), DynamoDB R/W, Bedrock InvokeModel(+stream)/Retrieve, Step Functions StartExecution, WebSocket ManageConnections, `bedrock-agentcore:InvokeGateway` (scoped to the Web Search Gateway ARN, `ai-stack.ts`)
 - Transcript storage: `BUCKET_NAME` is the actual assets bucket supplied by GatewayStack. S3 references are accepted only for the exact `transcripts/{authorizedMeetingId}/{transcriptA|transcriptB}.txt` key in that bucket; editable summary/notes text is never a storage instruction. Deploy this guard before adding transcript S3 read permissions; see [rollout procedure](runbooks/qa-transcript-read-rollout.md).
+
+- Legacy cache compatibility: `KB_CACHE_TTL_SECONDS` and
+  `SHARED_MEETINGS_CACHE_TTL_SECONDS` are still injected for the legacy handler.
+  The staged current-source runtime ignores them for fresh discovery and writes
+  no new result/identity cache. They do not extend authorization or source lifetime
+  (ADR-042). Remove the compatibility settings with the final runtime cleanup.
 
 #### Convert-Doc Lambda (ADR-022)
 - Trigger: S3 Event (prefix `docs/`, suffix `.ppt`/`.pptx`) via EventBridge
@@ -228,7 +258,9 @@ five-minute lease exposes interrupted execution and permits an authorized retry.
 The EventBridge DLQ covers delivery failure, not downstream model failures.
 - **audio-uploaded**: S3 PutObject (prefix `audio/`) → Transcribe Lambda
 - **image-uploaded**: S3 PutObject (prefix `images/`) → Process Image Lambda
-- **kb-uploaded**: S3 PutObject (prefix `kb/`) → KB Lambda
+- **ttobak-kb-index-tick**: disabled-by-default one-minute tick → KB Lambda.
+  Delivery failures use `ttobak-kb-index-dlq` (SSE-SQS, seven-day retention).
+  Full mode additionally creates the canonical DynamoDB stream mapping.
 - **doc-slide-uploaded**: S3 PutObject (prefix `docs/`, suffix `.ppt`/`.pptx`) → Convert-Doc Lambda
 
 ### Outputs
@@ -405,7 +437,7 @@ EdgeAuthStack.functionVersionArn → FrontendStack (Lambda@Edge association)
 GatewayStack.httpApiEndpoint → FrontendStack (CloudFront API origin)
 GatewayStack.webSocketApiEndpoint → FrontendStack (CloudFront WebSocket origin)
 KnowledgeStack.kbId → GatewayStack (API Lambda, KB Lambda)
-KnowledgeStack.collectionEndpoint → GatewayStack (KB Lambda)
+KnowledgeStack.knowledgeBaseId/dataSourceId → GatewayStack (KB Lambda)
 ```
 
 ## 11. Deployment Order
