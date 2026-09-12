@@ -11,11 +11,5 @@ set. Completing one PR does not complete the overall goal.
 | Summary quality evaluation | A reviewed reference set measures factual preservation, numbers/negation, decisions versus proposals, assignees/deadlines and evidence; actual model results are recorded honestly | Executable evaluation command, scored reference cases, sensitivity tests for intentionally bad answers, real evaluation report | Pending |
 | Long-meeting MCP reading | Clients can read notes first, then bounded transcript time ranges/pages with provenance, completeness and continuation information | Real MCP protocol tests for long/Korean data, page boundaries, no omissions/duplication, bundle reproduction and deployment | Pending |
 
-Every implementation PR targets `main`. Latest-head AI coverage and required
-checks must complete; actual Critical/Major issues are fixed and re-reviewed.
-Existing user changes to `AGENTS.md` are preserved.
-
-Frontend validation uses lint/build without introducing a test framework.
-Go uses stdlib testing. AWS changes retain CloudFront-only public ingress and
-scoped identities; each changed CDK stack is deployed with `--exclusively`.
-Customer recordings and credentials are not test fixtures.
+Each PR targets main, completes latest-head review/CI and deployment verification.
+Preserve root AGENTS.md user edits. Do not use customer data as test fixtures.

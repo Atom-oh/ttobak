@@ -127,6 +127,10 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 5. **비용·사이징 시뮬레이터 (ADR-033)**: 사용자 버튼 → Go api Lambda가 Haiku로 정량 요구사항 추출 → 사용자 확인·보정 → `ttobak-sim`(Python) 비동기 실행 → AgentCore Code Interpreter(SANDBOX 네트워크, 빈 실행역할)에서 Sonnet이 생성한 파이썬이 실제로 계산 → 차트·리포트·코드가 S3에 저장, 프론트엔드가 5초 폴링으로 결과 확인.
    - *이유*: LLM 추정치가 아닌 실행된 코드로 감사 가능한 비용 비교. 미팅 트랜스크립트는 코드 생성 프롬프트에 절대 도달하지 않아 인젝션 폭발 반경이 샌드박스 CPU로 제한됨.
 
+조건부 전사문 수정은 고유 S3 객체를 만들고 DB 조건부 갱신으로만 참조를 반영합니다. 충돌 시 기존 객체를 보존하며, 불확실한 DB 응답에서는 새 객체도 보존합니다. reader를 먼저 배포합니다([ADR-037](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md)).
+
+액션 아이템 추출 상태는 별도 분석 행에 저장합니다. 인증된 편집자의 재시도는 EventBridge를 통해 기존 summarize Lambda로 전달하며, run·요약·기존 아이템 조건이 모두 맞을 때만 결과와 성공 상태를 함께 반영합니다. 실패 시 이전 아이템을 보존합니다.
+
 ### 아키텍처 결정 기록 (ADR)
 
 - [ADR-001: 원격 회의 시스템 오디오 캡처](decisions/ADR-001-system-audio-capture-for-remote-meetings.md) — `getDisplayMedia` + `AudioContext` 믹싱 (제안됨)
@@ -163,6 +167,9 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 - [ADR-032: 관리자 사용자 관리 패널](decisions/ADR-032-admin-user-management-panel.md) (승인됨)
 - [ADR-033: 미팅 기반 비용·사이징 시뮬레이터 — AgentCore Code Interpreter](decisions/ADR-033-meeting-cost-sizing-simulator-code-interpreter.md) (승인됨)
 - [ADR-034: Account 멤버 추가/역할변경 권한을 owner 전용에서 멤버 전체로 개방](decisions/ADR-034-account-member-permission-democratization.md) (승인됨)
+- [ADR-035: pyannote 4 화자분리와 ASR 의존성 고정](decisions/ADR-035-diarization-pyannote4-community1-asr-pins.md) (승인됨)
+- [ADR-036: 어카운트 계층과 미팅 필터](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (승인됨)
+- [ADR-037: 조건부 전사문 수정을 위한 불변 spill](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (승인됨)
 
 ### 운영
 
@@ -239,6 +246,10 @@ Since Phase 2 (2026-09-03, ADR-035) the production pipeline's diarization runs t
 5. **Cost/Sizing Simulator (ADR-033)**: User button → Go api Lambda extracts quantitative requirements via Haiku → user confirms/corrects → async `ttobak-sim` (Python) → Sonnet-generated Python actually runs inside AgentCore Code Interpreter (SANDBOX network, empty execution role) → charts/report/code land in S3, frontend polls every 5s for the result.
    - *Why*: An auditable, actually-executed computation instead of an LLM estimate. The meeting transcript never reaches the codegen prompt, so an injection's blast radius is bounded to wasted sandbox CPU.
 
+Conditional transcript edits create unique S3 objects and publish their references only through the conditional database update. Preserve existing objects on conflict and retain new objects after ambiguous database responses. Deploy readers first ([ADR-037](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md)).
+
+Store action extraction state in a separate analysis row. Route authorized editor retries through EventBridge to the existing summarize Lambda. Commit results and success together only when the run, summary and prior items match; retain prior items on failure.
+
 ### Architecture Decision Records (ADR)
 
 - [ADR-001: System Audio Capture for Remote Meetings](decisions/ADR-001-system-audio-capture-for-remote-meetings.md) — `getDisplayMedia` + `AudioContext` mixing (Proposed)
@@ -275,6 +286,9 @@ Since Phase 2 (2026-09-03, ADR-035) the production pipeline's diarization runs t
 - [ADR-032: Admin User-Management Panel](decisions/ADR-032-admin-user-management-panel.md) (Accepted)
 - [ADR-033: Meeting-Driven Cost/Sizing Simulator — AgentCore Code Interpreter](decisions/ADR-033-meeting-cost-sizing-simulator-code-interpreter.md) (Accepted)
 - [ADR-034: Open Account Member Add/Role-Change from Owner-Only to Any Member](decisions/ADR-034-account-member-permission-democratization.md) (Accepted)
+- [ADR-035: Diarization with pyannote 4 and pinned ASR dependencies](decisions/ADR-035-diarization-pyannote4-community1-asr-pins.md) (Accepted)
+- [ADR-036: Account Hierarchy and Meeting Filters](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (Accepted)
+- [ADR-037: Immutable Spills for Conditional Transcript Writes](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (Accepted)
 
 ### Operations
 
