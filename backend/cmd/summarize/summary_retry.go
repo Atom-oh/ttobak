@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/ttobak/backend/internal/model"
 )
 
 type summaryRetryStore interface {
-	ClaimSummarizeRetry(context.Context, string, string) (bool, error)
+	ClaimSummaryRetry(context.Context, string, string) (string, error)
+	ReleaseSummaryRetryClaim(context.Context, string, string, string) error
 	GetMeeting(context.Context, string, string) (*model.Meeting, error)
 }
 
@@ -19,16 +22,20 @@ func resumeSummaryRetry(ctx context.Context, meeting *model.Meeting, store summa
 	if meeting == nil || !meeting.SummaryRetryPending || meeting.Status != model.StatusSummarizing {
 		return false, nil
 	}
-	claimed, err := store.ClaimSummarizeRetry(ctx, meeting.UserID, meeting.MeetingID)
-	if err != nil || !claimed {
+	claim, err := store.ClaimSummaryRetry(ctx, meeting.UserID, meeting.MeetingID)
+	if err != nil || claim == "" {
 		return true, err
 	}
 	current, err := store.GetMeeting(ctx, meeting.UserID, meeting.MeetingID)
 	if err != nil || current == nil {
-		return true, err
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return true, errors.Join(err, store.ReleaseSummaryRetryClaim(cleanup, meeting.UserID, meeting.MeetingID, claim))
 	}
 	if current.UserID != meeting.UserID || current.MeetingID != meeting.MeetingID {
-		return true, fmt.Errorf("summary retry source identity changed")
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return true, errors.Join(fmt.Errorf("summary retry source identity changed"), store.ReleaseSummaryRetryClaim(cleanup, meeting.UserID, meeting.MeetingID, claim))
 	}
 	if current.Status != model.StatusSummarizing {
 		return true, nil

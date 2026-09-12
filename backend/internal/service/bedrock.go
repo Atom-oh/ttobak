@@ -61,15 +61,19 @@ func getEnvOrDefaultChain(fallback string, keys ...string) string {
 	return fallback
 }
 
+type summaryAttachmentProvider interface {
+	summaryAttachments(context.Context, string, string) ([]model.Attachment, error)
+}
+
 // BedrockService handles AI operations using Amazon Bedrock
 type BedrockService struct {
 	bedrockClient  *bedrockruntime.Client
 	s3Client       *s3.Client
 	repo           *repository.DynamoDBRepository
-	attachmentText *AttachmentTextService
+	attachmentText summaryAttachmentProvider
 }
 
-func (s *BedrockService) SetAttachmentTextService(text *AttachmentTextService) {
+func (s *BedrockService) SetAttachmentTextService(text summaryAttachmentProvider) {
 	s.attachmentText = text
 }
 
@@ -666,6 +670,9 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 	}
 	meeting := snapshot.Meeting
 	conflict := func(cause error) (string, error) {
+		if !errors.Is(cause, repository.ErrConditionFailed) {
+			return "", cause
+		}
 		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		return "", errors.Join(ErrSummaryConflict, cause, s.repo.MarkSummaryConflict(markCtx, snapshot))
@@ -699,13 +706,17 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 		meeting.TranscriptA = transcript
 	}
 	segments, segmentBinding, segmentErr := s.repo.ReadResummaryTranscript(ctx, meetingID, "transcriptSegments", meeting.TranscriptSegments)
-	if segmentErr == nil && len(transcriptSegmentsForText(transcript, segments)) > 0 {
-		meeting.TranscriptSegments = segments
-		if segmentBinding != nil {
-			snapshot.Objects = append(snapshot.Objects, *segmentBinding)
+	if segmentErr != nil {
+		if errors.Is(segmentErr, repository.ErrConditionFailed) {
+			return conflict(segmentErr)
 		}
-	} else {
-		meeting.TranscriptSegments = ""
+		return "", segmentErr
+	}
+	meeting.TranscriptSegments = segments
+	if segmentBinding != nil {
+		snapshot.Objects = append(snapshot.Objects, *segmentBinding)
+	}
+	if !snapshot.Checks[0].Fields["transcriptSegments"].Present {
 		delete(snapshot.Checks[0].Fields, "transcriptSegments")
 	}
 	var attachments []model.Attachment
@@ -726,6 +737,9 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 			att.SummaryOmitted, att.ExtractedText, att.ExtractedRevision = true, nil, ""
 		}
 	}
+	if len(snapshot.Checks) > 100 {
+		return "", repository.ErrSummaryLimit
+	}
 	if err := s.repo.CheckResummaryObjects(ctx, meetingID, snapshot.Objects); err != nil {
 		return conflict(err)
 	}
@@ -741,25 +755,6 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 		return "", fmt.Errorf("failed to update meeting: %w", err)
 	}
 	return content, nil
-}
-
-// GenerateResummary consumes the caller's immutable prepared snapshot. It never
-// reloads a meeting, runs STT/refinement, or writes a result to storage.
-func (s *BedrockService) GenerateResummary(ctx context.Context, meeting *model.Meeting, attachments []model.Attachment) (string, error) {
-	if meeting == nil {
-		return "", ErrResummaryNoSource
-	}
-	transcript, _ := selectMeetingTranscript(meeting)
-	hasSource := strings.TrimSpace(transcript) != "" || strings.TrimSpace(meeting.Notes) != "" || strings.TrimSpace(meeting.Content) != ""
-	for _, att := range attachments {
-		if att.ExtractedText != nil && len(att.ExtractedText.Units) > 0 {
-			hasSource = true
-		}
-	}
-	if !hasSource {
-		return "", ErrResummaryNoSource
-	}
-	return s.generateSummarySnapshot(ctx, meeting, attachments, "", true)
 }
 
 func (s *BedrockService) generateSummarySnapshot(ctx context.Context, meeting *model.Meeting, attachments []model.Attachment, priorContext string, includeSaved bool) (string, error) {

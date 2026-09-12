@@ -489,6 +489,25 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 		return nil, ErrNotFound
 	}
 
+	if meeting.SummaryRetryPending && meeting.SummaryRetryAttempts >= repository.MaxSummaryRetries {
+		claim, parseErr := time.Parse(time.RFC3339Nano, meeting.SummarizeRetryClaimedAt)
+		if meeting.SummarizeRetryClaimedAt == "" || parseErr == nil && time.Since(claim) > repository.SummarizeRetryClaimTTL {
+			if finisher, ok := s.repo.(interface {
+				ExpireSummaryRetry(context.Context, string, string) error
+			}); ok {
+				if err := finisher.ExpireSummaryRetry(ctx, meeting.UserID, meetingID); err != nil {
+					return nil, err
+				}
+				meeting, err = s.repo.GetMeeting(ctx, meeting.UserID, meetingID)
+				if err != nil {
+					return nil, err
+				}
+				if meeting == nil {
+					return nil, ErrNotFound
+				}
+			}
+		}
+	}
 	if isStuck(meeting.Status, meeting.UpdatedAt) {
 		err = s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,
 			map[string]interface{}{"status": meeting.Status, "updatedAt": meeting.UpdatedAt.Format(time.RFC3339Nano)},

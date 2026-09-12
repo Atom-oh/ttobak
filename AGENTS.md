@@ -1,9 +1,9 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: f12bb457056d · generated-at: 2026-09-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: d84cbca7fdf0 · generated-at: 2026-09-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
 
-Summary: ADR-040. This wiring activates document evidence and upload/status routes after the worker and summary foundation.
+Summary: ADR-040 pins source evidence, bounds conflict retries and preserves valid claims. Upload/retry and DOCUMENT consumption are wired; KB export remains separate.
 
 Korean AI meeting assistant for AWS Solutions Architects: record → real-time STT (AWS Transcribe Streaming in browser) → batch STT (Whisper ECS GPU Spot) → Bedrock Claude summary → Notion-style editor. Plus an Account-centric Insight Substrate (shared customer accounts + typed insights + bidirectional MCP back-data) and a personal Document Hub (notes/blog/slides, wikilinks, account sharing, PDF preview, public share links).
 

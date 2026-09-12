@@ -514,9 +514,11 @@ func handleAllPartsTranscribed(ctx context.Context, detail *model.AllPartsTransc
 	// pipeline (refine + save + summarize) on top of the already-merged
 	// content. Errors here must abort so we don't write the archive
 	// under an inconsistent status.
-	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-		"status": model.StatusSummarizing,
-	}); statusErr != nil {
+	statusFields := map[string]interface{}{"status": model.StatusSummarizing}
+	if !meeting.SummaryRetryPending || meeting.Status != model.StatusSummarizing {
+		statusFields["summaryRetryAttempts"], statusFields["summaryRetryPending"], statusFields["summaryConflictCode"] = 0, false, ""
+	}
+	if statusErr := repo.UpdateMeetingFields(ctx, userID, meetingID, statusFields); statusErr != nil {
 		log.Printf("Failed to set status=summarizing before archive for meeting %s: %v", meetingID, statusErr)
 		return fmt.Errorf("set summarizing status failed (retrying): %w", statusErr)
 	}
