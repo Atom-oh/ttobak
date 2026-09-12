@@ -157,7 +157,7 @@ func (s *IndexingService) ReadSource(ctx context.Context, key model.IndexResourc
 			}
 			objectKey, e := repository.IndexTranscriptKey(s.assetsBucket, key.ID, field, ref)
 			if e != nil {
-				return nil, e
+				return nil, fmt.Errorf("%w: %w", ErrIndexInvalid, e)
 			}
 			object, e := head(objectKey)
 			if e != nil {
@@ -226,6 +226,11 @@ func (s *IndexingService) ReadSource(ctx context.Context, key model.IndexResourc
 				}
 			}
 			if key.Kind == "personalDocument" && key.PK != "USER#"+components[1] {
+				return nil, ErrIndexInvalid
+			}
+			// SourceUserID is the creator, not the current file owner: a later
+			// account member can replace the file with their own validated key.
+			if key.Kind == "accountDocument" && get("accountId") != strings.TrimPrefix(key.PK, "ACCOUNT#") {
 				return nil, ErrIndexInvalid
 			}
 			original, e := head(fileKey)

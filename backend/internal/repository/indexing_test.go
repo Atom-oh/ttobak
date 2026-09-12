@@ -86,6 +86,32 @@ func TestIndexRequestsCoalesceActivePreparationWithoutHidingNewWork(t *testing.T
 	}
 }
 
+func TestIndexUnknownRevisionKeepsFailureCooldown(t *testing.T) {
+	for _, revision := range []string{"", "changed"} {
+		t.Run(revision, func(t *testing.T) {
+			writes := 0
+			repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+				if strings.HasSuffix(target, ".GetItem") {
+					return `{"Item":{"resource":{"M":{"pk":{"S":"USER#owner"},"sk":{"S":"DOC#d"},"kind":{"S":"personalDocument"},"id":{"S":"d"}}},"version":{"N":"3"},"state":{"S":"FAILED"},"desiredRevision":{"S":"old"},"retryAfter":{"N":"2000"}}}`
+				}
+				writes++
+				return "{}"
+			})
+			key, _ := model.CanonicalIndexResource("USER#owner", "DOC#d")
+			if err := repo.RequestIndexResource(context.Background(), key, revision, 1000); err != nil {
+				t.Fatal(err)
+			}
+			expected := 0
+			if revision != "" {
+				expected = 1
+			}
+			if writes != expected {
+				t.Fatalf("writes=%d want=%d", writes, expected)
+			}
+		})
+	}
+}
+
 func TestIndexJobQueryPaginationAndCursorValidation(t *testing.T) {
 	calls := 0
 	repo := indexingWire(t, func(target string, body map[string]interface{}) string {

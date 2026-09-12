@@ -42,9 +42,13 @@ type indexMemory struct {
 	control      *model.IndexControl
 	beforeSave   func(*model.IndexJob)
 	afterControl func(*model.IndexControl) error
+	readError    error
 }
 
 func (m *indexMemory) GetIndexSource(_ context.Context, key model.IndexResource) (*model.IndexRecord, error) {
+	if m.readError != nil {
+		return nil, m.readError
+	}
 	return indexClone(m.sources[key.Hash()]), nil
 }
 func (m *indexMemory) GetIndexJob(_ context.Context, key model.IndexResource) (*model.IndexJob, error) {
@@ -55,14 +59,15 @@ func (m *indexMemory) RequestIndexResource(_ context.Context, key model.IndexRes
 	if job == nil {
 		job = &model.IndexJob{Resource: key}
 	}
+	if job.State == model.IndexFailed && job.RetryAfter > now &&
+		(revision == "" || job.DesiredRevision == revision) {
+		return nil
+	}
 	if revision != "" {
 		if job.State == model.IndexPending && job.DesiredRevision == revision {
 			return nil
 		}
 		if job.State == model.IndexPreparing && job.DesiredRevision == revision && job.LeaseUntil > now {
-			return nil
-		}
-		if job.State == model.IndexFailed && job.DesiredRevision == revision && job.RetryAfter > now {
 			return nil
 		}
 		switch job.State {
@@ -71,6 +76,9 @@ func (m *indexMemory) RequestIndexResource(_ context.Context, key model.IndexRes
 				return nil
 			}
 		}
+	}
+	if revision != "" && job.DesiredRevision != revision {
+		job.FailureCount = 0
 	}
 	job.Version++
 	job.State, job.DesiredRevision, job.UpdatedAt, job.RetryAfter = model.IndexPending, revision, now, 0
@@ -384,6 +392,147 @@ func TestIndexEnqueueDistinguishesDuplicateStreamDeliveryFromEditedSource(t *tes
 	}
 }
 
+func TestIndexPermanentFailuresDoNotStarveLaterHealthyJobs(t *testing.T) {
+	s, repo, _, provider, now := newIndexTest()
+	keys := make([]model.IndexResource, 25)
+	for i := range keys {
+		keys[i] = addIndexMeeting(repo, fmt.Sprintf("document-%02d", i), "current notes")
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].Hash() < keys[j].Hash() })
+	for _, key := range keys[:4] {
+		// ReadSource(false) fails too, exercising the reconciliation path
+		// that previously reset a failed job with an unknown revision.
+		repo.sources[key.Hash()].Fields["userId"] = "wrong-owner"
+	}
+	for cycle := 0; cycle < 50; cycle++ {
+		if _, err := s.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		provider.complete()
+		if _, err := s.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		indexed := 0
+		for _, key := range keys[4:] {
+			if job := repo.jobs[key.Hash()]; job != nil && job.State == model.IndexIndexed {
+				indexed++
+			}
+		}
+		if indexed == 21 {
+			return
+		}
+		*now = now.Add(2 * time.Minute)
+	}
+	t.Fatal("four permanently invalid sources starved the 21 healthy jobs")
+}
+
+func TestIndexInvalidSourceBackoffAndImmediateRecoveryAfterEdit(t *testing.T) {
+	s, repo, _, provider, now := newIndexTest()
+	key := addIndexMeeting(repo, "broken", "notes")
+	repo.sources[key.Hash()].Fields["userId"] = "wrong-owner"
+	firstStart := *now
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	finishIndex(t, s, provider)
+	failed := *repo.jobs[key.Hash()]
+	firstDelay := time.UnixMilli(failed.RetryAfter).Sub(firstStart)
+	starts := len(provider.tokens)
+	*now = now.Add(10 * time.Second)
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.tokens) != starts || repo.jobs[key.Hash()].Version != failed.Version {
+		t.Fatal("an unknown revision erased the failed source's cooldown")
+	}
+	*now = time.UnixMilli(failed.RetryAfter).Add(time.Second)
+	secondStart := *now
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	finishIndex(t, s, provider)
+	secondDelay := time.UnixMilli(repo.jobs[key.Hash()].RetryAfter).Sub(secondStart)
+	if secondDelay <= firstDelay {
+		t.Fatalf("retry delay did not grow: %s then %s", firstDelay, secondDelay)
+	}
+	repo.sources[key.Hash()].Fields["userId"] = "owner"
+	if err := s.Enqueue(context.Background(), key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	finishIndex(t, s, provider)
+	if repo.jobs[key.Hash()].State != model.IndexIndexed {
+		t.Fatal("a corrected source remained stuck in backoff")
+	}
+}
+
+func TestIndexEnqueuePersistsPermanentSourceFailureButRetriesStorageErrors(t *testing.T) {
+	s, repo, _, _, _ := newIndexTest()
+	key := addIndexMeeting(repo, "invalid", "notes")
+	repo.sources[key.Hash()].Fields["userId"] = "wrong-owner"
+	if err := s.Enqueue(context.Background(), key); err != nil {
+		t.Fatalf("permanent source error would block stream delivery: %v", err)
+	}
+	if job := repo.jobs[key.Hash()]; job == nil || job.State != model.IndexPending {
+		t.Fatal("permanent source failure was dropped instead of queued")
+	}
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if repo.jobs[key.Hash()].State != model.IndexFailed {
+		t.Fatal("invalid source did not persist a failure")
+	}
+	badRef := addIndexMeeting(repo, "bad-ref", "notes")
+	repo.sources[badRef.Hash()].Fields["transcriptA"] = "s3://foreign/transcripts/bad-ref/transcriptA.txt"
+	if err := s.Enqueue(context.Background(), badRef); err != nil || repo.jobs[badRef.Hash()] == nil {
+		t.Fatalf("invalid spill reference blocked delivery: %v", err)
+	}
+	repo.readError = errors.New("temporary storage failure")
+	if err := s.Enqueue(context.Background(), key); !errors.Is(err, repo.readError) {
+		t.Fatalf("transient storage failure was acknowledged: %v", err)
+	}
+}
+
+func TestIndexContinuouslyChangingSourceDoesNotBlockItsBatch(t *testing.T) {
+	s, repo, _, provider, now := newIndexTest()
+	keys := make([]model.IndexResource, 7)
+	for i := range keys {
+		keys[i] = addIndexMeeting(repo, fmt.Sprintf("hot-%d", i), "notes")
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].Hash() < keys[j].Hash() })
+	hot, changes := keys[0], 0
+	repo.beforeSave = func(job *model.IndexJob) {
+		if job.Resource == hot && job.State == model.IndexPreparing {
+			changes++
+			repo.sources[hot.Hash()].Fields["notes"] = fmt.Sprintf("recording update %d", changes)
+		}
+	}
+	for cycle := 0; cycle < 20; cycle++ {
+		_, err := s.Tick(context.Background())
+		if err != nil && !errors.Is(err, repository.ErrConditionFailed) && !errors.Is(err, ErrIndexChanged) {
+			t.Fatal(err)
+		}
+		provider.complete()
+		_, err = s.Tick(context.Background())
+		if err != nil && !errors.Is(err, repository.ErrConditionFailed) && !errors.Is(err, ErrIndexChanged) {
+			t.Fatal(err)
+		}
+		indexed := 0
+		for _, key := range keys[1:] {
+			if job := repo.jobs[key.Hash()]; job != nil && job.State == model.IndexIndexed {
+				indexed++
+			}
+		}
+		if indexed == 6 {
+			return
+		}
+		*now = now.Add(2 * time.Minute)
+	}
+	t.Fatal("one continuously changing source blocked six stable documents")
+}
+
 func TestIndexSubmissionConflictAndUncertainReplyRetainToken(t *testing.T) {
 	for _, conflict := range []bool{false, true} {
 		t.Run(fmt.Sprint(conflict), func(t *testing.T) {
@@ -556,10 +705,12 @@ func TestIndexBackfillPaginatesAndDoesNotSucceedPartialIngestion(t *testing.T) {
 }
 
 func TestIndexDuplicateDuringPublishCannotReplaceNewSource(t *testing.T) {
-	s, repo, objects, p, _ := newIndexTest()
+	s, repo, objects, p, now := newIndexTest()
 	key := addIndexMeeting(repo, "m", "old notes")
+	var stale []string
 	repo.beforeSave = func(next *model.IndexJob) {
 		if next.State == model.IndexWaitingSync {
+			stale = append([]string(nil), next.Keys...)
 			repo.beforeSave = nil
 			repo.sources[key.Hash()].Fields["notes"] = "new notes"
 			if err := s.Enqueue(context.Background(), key); err != nil {
@@ -567,23 +718,24 @@ func TestIndexDuplicateDuringPublishCannotReplaceNewSource(t *testing.T) {
 			}
 		}
 	}
-	if _, err := s.Tick(context.Background()); !errors.Is(err, repository.ErrConditionFailed) {
-		t.Fatalf("stale stage ignored source/event CAS: %v", err)
-	}
-	if len(p.tokens) != 0 {
-		t.Fatal("synced a rejected stage")
-	}
-	stale := repo.jobs[key.Hash()].PendingKeys
-	if len(stale) == 0 {
-		t.Fatal("stream enqueue discarded pending projection ledger")
-	}
 	if _, err := s.Tick(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if len(stale) == 0 {
+		t.Fatal("fixture did not stage a projection")
 	}
 	for _, old := range stale {
 		if _, exists := objects.kb[old]; exists {
 			t.Fatal("rejected generation was not removed before sync")
 		}
+	}
+	finishIndex(t, s, p)
+	if repo.jobs[key.Hash()].State == model.IndexIndexed {
+		t.Fatal("rejected generation was marked indexed")
+	}
+	*now = now.Add(2 * time.Minute)
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	finishIndex(t, s, p)
 	if repo.jobs[key.Hash()].State != model.IndexIndexed {
