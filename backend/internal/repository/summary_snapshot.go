@@ -162,8 +162,3 @@ func (r *DynamoDBRepository) MarkSummaryConflict(ctx context.Context, snapshot *
 		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values()})
 	return err
 }
-
-func summaryKey(meetingID string) map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
-		"SK": &types.AttributeValueMemberS{Value: model.ResummarySK}}
-}

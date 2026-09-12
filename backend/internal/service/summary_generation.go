@@ -17,33 +17,43 @@ const summaryCitationNotice = "> 문서 인용을 확인할 수 없는 내용을
 var summaryListStart = regexp.MustCompile(`^([ \t]*)(?:[-+*]|\d+[.)])\s+`)
 var summaryInlineLink = regexp.MustCompile(`\[TS:[^\]]*\]|\[[^\]]*\]\([^)]*\)`)
 
-// Keep a list item and its continuation together without dropping sibling items.
+// Slice original bytes: preserve separators, list continuations and fenced blocks.
 func summaryClaimUnits(content string) []string {
 	var units []string
-	for _, block := range strings.Split(content, "\n\n") {
-		var current []string
-		indent := -1
-		flush := func() {
-			if len(current) > 0 {
-				units = append(units, strings.Join(current, "\n"))
-				current = nil
-			}
+	start, offset, indent, fence := 0, 0, -1, ""
+	flush := func(end int) {
+		if end > start {
+			units = append(units, content[start:end])
+			start = end
 		}
-		for _, line := range strings.Split(block, "\n") {
-			if match := summaryListStart.FindStringSubmatch(line); match != nil {
-				depth := len(strings.ReplaceAll(match[1], "\t", "    "))
-				if indent < 0 || depth <= indent {
-					flush()
-					indent = depth
-				}
-			} else if strings.HasPrefix(strings.TrimSpace(line), "#") {
-				flush()
-				indent = -1
-			}
-			current = append(current, line)
-		}
-		flush()
 	}
+	for _, line := range strings.SplitAfter(content, "\n") {
+		text := strings.TrimSpace(line)
+		if fence != "" {
+			if strings.HasPrefix(text, fence) && strings.Trim(text, fence[:1]) == "" {
+				fence = ""
+				flush(offset + len(line))
+			}
+		} else if strings.HasPrefix(text, "```") || strings.HasPrefix(text, "~~~") {
+			flush(offset)
+			fence = text[:len(text)-len(strings.TrimLeft(text, text[:1]))]
+			indent = -1
+		} else if text == "" {
+			flush(offset + len(line))
+			indent = -1
+		} else if match := summaryListStart.FindStringSubmatch(line); match != nil {
+			depth := len(strings.ReplaceAll(match[1], "\t", "    "))
+			if indent < 0 || depth <= indent {
+				flush(offset)
+				indent = depth
+			}
+		} else if strings.HasPrefix(text, "#") {
+			flush(offset)
+			indent = -1
+		}
+		offset += len(line)
+	}
+	flush(offset)
 	return units
 }
 

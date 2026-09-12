@@ -1385,27 +1385,6 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 		Delete: &types.Delete{TableName: aws.String(r.tableName), Key: actionAnalysisKey(meetingID)},
 	})
 
-	// 4. Sim run (ADR-033) -- unconditional delete; a Delete against a
-	// nonexistent key is a no-op, not an error, so this is safe whether or
-	// not a simulation was ever run for this meeting. Exactly +1 item
-	// regardless of how many times the meeting was re-simulated, because
-	// SimRun is a singleton (SK=SIMRUN), not a history.
-	transactItems = append(transactItems, types.TransactWriteItem{
-		Delete: &types.Delete{
-			TableName: aws.String(r.tableName),
-			Key: map[string]types.AttributeValue{
-				"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
-				"SK": &types.AttributeValueMemberS{Value: model.PrefixSimRun},
-			},
-		},
-	})
-
-	// Keep source and summary in one transaction. Four leading singleton
-	// deletes preserve every attachment/share pair at 100-item boundaries.
-	transactItems = append(transactItems, types.TransactWriteItem{
-		Delete: &types.Delete{TableName: aws.String(r.tableName), Key: summaryKey(meetingID)},
-	})
-
 	// 2. Attachments
 	attachments, err := r.ListAttachments(ctx, meetingID)
 	if err != nil {
@@ -1453,6 +1432,21 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 			},
 		})
 	}
+
+	// 4. Sim run (ADR-033) -- unconditional delete; a Delete against a
+	// nonexistent key is a no-op, not an error, so this is safe whether or
+	// not a simulation was ever run for this meeting. Exactly +1 item
+	// regardless of how many times the meeting was re-simulated, because
+	// SimRun is a singleton (SK=SIMRUN), not a history.
+	transactItems = append(transactItems, types.TransactWriteItem{
+		Delete: &types.Delete{
+			TableName: aws.String(r.tableName),
+			Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixSimRun},
+			},
+		},
+	})
 
 	// Execute in batches of 100 (TransactWriteItems limit)
 	for i := 0; i < len(transactItems); i += 100 {

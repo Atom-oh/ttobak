@@ -91,7 +91,7 @@ func (r *DynamoDBRepository) publishMeetingSummary(ctx context.Context, snapshot
 	}
 	// No source bytes or row conditions are refreshed to authorize old output.
 	if err := r.CheckResummaryObjects(ctx, snapshot.Meeting.MeetingID, snapshot.Objects); err != nil {
-		return errors.Join(ErrConditionFailed, err)
+		return err
 	}
 	_, err = r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: items},
 		func(o *dynamodb.Options) { o.Retryer = aws.NopRetryer{}; o.RetryMaxAttempts = 1 })

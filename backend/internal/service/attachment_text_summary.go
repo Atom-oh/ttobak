@@ -78,6 +78,12 @@ func summaryAttachmentNotice(attachments []model.Attachment) string {
 // Resolve only model-selected unit indexes that exist in supplied document
 // evidence. Positions and attachment links come from the parser, never the model.
 func resolveDocumentCitations(content string, attachments []model.Attachment) (string, error) {
+	if !strings.Contains(content, "[DOC:") {
+		if !summaryHasBody(content) {
+			return "", ErrInvalidAnalysisResponse
+		}
+		return content, nil
+	}
 	marker := regexp.MustCompile(`\[DOC:([A-Za-z0-9_-]{1,128}):([0-9]{1,6})\]`)
 	audioMarker := regexp.MustCompile(`\[TS:\d+\]`)
 	audioLink := regexp.MustCompile(`\[[^\]]*\]\(transcript://[^)]*\)`)
@@ -133,7 +139,7 @@ func resolveDocumentCitations(content string, attachments []model.Attachment) (s
 		}
 		kept = append(kept, paragraph)
 	}
-	result := strings.Join(kept, "\n\n")
+	result := strings.Join(kept, "")
 	if !summaryHasBody(result) {
 		return "", ErrInvalidAnalysisResponse
 	}

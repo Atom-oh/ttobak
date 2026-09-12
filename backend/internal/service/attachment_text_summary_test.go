@@ -45,6 +45,16 @@ func TestDocumentClaimsKeepValidBulletsLinksAndInputCoverage(t *testing.T) {
 	}
 }
 
+func TestDocumentCitationPreservesMarkdown(t *testing.T) {
+	prefix := "# 요약\n- 결정\n- 담당\n\n```sh\n# 주석\n\n- 코드\n```\n\n"
+	for _, suffix := range []string{"본문\n", "- 허위 주장 [DOC:missing:0]\n"} {
+		got, err := resolveDocumentCitations(prefix+suffix, nil)
+		if err != nil || !strings.HasPrefix(got, prefix) || suffix == "본문\n" && got != prefix+suffix {
+			t.Fatalf("markdown changed: %q %v", got, err)
+		}
+	}
+}
+
 func TestSummaryRejectsHeadingOnlyAndKeepsDocumentIdentityOutOfPrompt(t *testing.T) {
 	if _, err := resolveDocumentCitations("# 회의록\n\n## 개요\n\n- 허위 주장 [DOC:missing:0]", nil); !errors.Is(err, ErrInvalidAnalysisResponse) {
 		t.Fatal("heading-only output succeeded")

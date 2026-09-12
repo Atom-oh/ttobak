@@ -670,7 +670,7 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 	}
 	meeting := snapshot.Meeting
 	conflict := func(cause error) (string, error) {
-		if errors.Is(cause, repository.ErrSummaryLimit) {
+		if !errors.Is(cause, repository.ErrConditionFailed) {
 			return "", cause
 		}
 		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)

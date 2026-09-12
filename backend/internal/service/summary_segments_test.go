@@ -16,8 +16,9 @@ import (
 )
 
 func TestSummarySegmentReadFailuresNeverBecomeSuccessfulAbsence(t *testing.T) {
-	for _, code := range []int{500, 412} {
-		models, saves, conflicts := 0, 0, 0
+	for _, test := range [][2]int{{500, 0}, {412, 0}, {500, 2}, {500, 3}} {
+		code, failHead := test[0], test[1]
+		models, saves, conflicts, heads := 0, 0, 0, 0
 		client := noteSourceHTTPClient(func(req *http.Request) (*http.Response, error) {
 			status, body := 200, `{}`
 			switch req.Header.Get("X-Amz-Target") {
@@ -31,9 +32,16 @@ func TestSummarySegmentReadFailuresNeverBecomeSuccessfulAbsence(t *testing.T) {
 				body = `{"Items":[]}`
 			default:
 				if req.Method == "HEAD" {
+					heads++
+					if heads == failHead {
+						return &http.Response{StatusCode: code, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(""))}, nil
+					}
 					return &http.Response{StatusCode: 200, Header: http.Header{"Etag": {`"v1"`}, "Content-Length": {"6"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
 				}
 				if req.Method == "GET" {
+					if failHead > 0 {
+						return &http.Response{StatusCode: 200, Header: http.Header{"Etag": {`"v1"`}}, Body: io.NopCloser(strings.NewReader("한글"))}, nil
+					}
 					status = code
 					body = `<Error><Code>InternalError</Code></Error>`
 					if code == 412 {
@@ -53,8 +61,13 @@ func TestSummarySegmentReadFailuresNeverBecomeSuccessfulAbsence(t *testing.T) {
 		storage := s3.NewFromConfig(cfg)
 		svc := NewBedrockService(bedrockruntime.NewFromConfig(cfg), storage, repository.NewDynamoDBRepositoryWithS3(dynamodb.NewFromConfig(cfg), "table", storage, "bucket"))
 		_, err := svc.SummarizeTranscript(context.Background(), "m", "owner", "")
-		if err == nil || models != 0 || saves != 0 || (code == 412 && (!errors.Is(err, ErrSummaryConflict) || conflicts != 1)) {
-			t.Fatalf("code=%d model=%d save=%d conflict=%d err=%v", code, models, saves, conflicts, err)
+		wantModels := 0
+		if failHead == 3 {
+			wantModels = 1
+		}
+		if err == nil || models != wantModels || saves != 0 || (code == 412 && (!errors.Is(err, ErrSummaryConflict) || conflicts != 1)) ||
+			code == 500 && (errors.Is(err, ErrSummaryConflict) || conflicts != 0) {
+			t.Errorf("code=%d head=%d model=%d save=%d conflict=%d err=%v", code, failHead, models, saves, conflicts, err)
 		}
 	}
 }
