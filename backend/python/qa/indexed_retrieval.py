@@ -125,11 +125,11 @@ def _legacy_text(reader, user_id, uri, score):
     revision = legacy_text_revision(uri, obj)
     if current.get('missing') or legacy_text_revision(uri, current) != revision:
         raise ValueError('Legacy source changed while reading')
-    return {'uri': uri, 'score': score, 'text': text,
+    return {'uri': uri, 'score': score, 'text': text[:6000],
             'dependency': {'legacyURI': uri, 'sourceRevision': revision},
             'provenance': {'uri': uri, 'resourceKind': 'legacyText',
                            'title': key.rsplit('/', 1)[-1], 'contentSource': 'current_legacy_text',
-                           'sourceRevision': revision}}
+                           'sourceRevision': revision, 'partial': len(text) > 6000}}
 
 
 def hydrate_candidates(reader, user_id, question, candidates, identities, limit, manual_lookup=None):
@@ -155,6 +155,7 @@ def hydrate_candidates(reader, user_id, question, candidates, identities, limit,
         if result is None:
             result = _current_result(snapshot, uri, score, 'current_saved')
             results[key] = result
+        result['score'] = max(result['score'], score)
         if source['resourceKind'] == 'meeting':
             continue  # never reuse indexed/cached meeting text
         if identity and identity['filename'].startswith('file.'):
@@ -171,14 +172,13 @@ def hydrate_candidates(reader, user_id, question, candidates, identities, limit,
                     result['provenance']['partial'] = True
                     result['document'].pop('filePending', None)
                     result['provenance'].pop('filePending', None)
-            elif not result.get('text'):
+            elif not result.get('text') and snapshot['fields'].get('fileKey'):
                 result['document']['filePending'] = True
                 result['provenance']['filePending'] = True
-        elif identity and identity['filename'] != 'document.md':
-            results.pop(key, None)
     # Fresh saved text complements semantic discovery while ingestion is pending.
     # No S3 reads/heads are needed for resources whose saved text does not match.
     terms = [word for word in re.split(r'\s+', question.casefold().strip()) if word][:20]
+    keyword_results = []
     for key, identity in sorted(identities.items()):
         if key in results:
             continue
@@ -188,7 +188,21 @@ def hydrate_candidates(reader, user_id, question, candidates, identities, limit,
         searchable = '\n'.join(fields.get(name) or '' for name in ('title', 'notes', 'content', 'actionItems')).casefold()
         if terms and all(term in searchable for term in terms):
             snapshot = reader.snapshot(identity, fields)
-            results[key] = _current_result(snapshot, 'ttobak://source/' + identity['resourceHash'], 1.0,
-                                           'current_saved_keyword_match')
+            keyword_results.append(_current_result(
+                snapshot, 'ttobak://source/' + identity['resourceHash'], 0.0,
+                'current_saved_keyword_match'))
     manual = hydrate_manual_candidates(reader, user_id, candidates, manual_lookup)
-    return sorted([*results.values(), *manual], key=lambda result: result.get('score', 0), reverse=True)[:limit]
+    ranked = sorted([*results.values(), *manual], key=lambda result: result.get('score', 0), reverse=True)
+    def has_body(result):
+        fields = result.get('meeting') or result.get('document') or {}
+        return bool(result.get('text') or any(fields.get(name) for name in ('notes', 'content', 'actionItems')))
+    ready = [result for result in ranked if has_body(result)]
+    pending = [result for result in ranked if not has_body(result)]
+    if not keyword_results:
+        return (ready + pending)[:limit]
+    # Reserve one slot for a newly saved literal match without letting many
+    # keyword matches displace verified semantic evidence. A keyword score is
+    # not a provider relevance score; metadata-only pending files come last.
+    count = min(len(ready), max(0, limit - 1))
+    selected = ready[:count] + keyword_results[:limit - count]
+    return (selected + ready[count:] + pending)[:limit]

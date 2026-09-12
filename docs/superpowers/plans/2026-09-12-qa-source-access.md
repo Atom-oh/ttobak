@@ -14,9 +14,10 @@
 ## Validation and integration
 
 - [x] Preserve every existing test through `test_handler.load_tests`.
-- [x] Run the standalone prerequisite: 127 tests passed.
-- [x] Apply the module extraction to the complete prepared handler/tools integration: 157 tests passed, including every original private/shared and REST/WebSocket regression.
+- [x] Run the standalone prerequisite: 131 tests passed.
+- [x] Apply the module extraction to the complete prepared handler/tools integration: 161 tests passed, including every original private/shared and REST/WebSocket regression.
 - [x] Preserve the PR #215 Decimal-session and reserved-permission-alias fixes.
+- [x] Reproduce and fix duplicate-score ordering, keyword crowding of verified files, false file-pending state after conversion to Markdown, and unbounded legacy excerpts.
 - [ ] Obtain the latest-HEAD AI review and CI results.
 - [ ] Merge after prerequisite PR #215.
 
