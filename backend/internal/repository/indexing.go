@@ -69,6 +69,11 @@ func (r *DynamoDBRepository) RequestIndexResource(ctx context.Context, key model
 			if prior.State == model.IndexPending && prior.DesiredRevision == revision {
 				return nil
 			}
+			if prior.State == model.IndexPreparing && prior.DesiredRevision == revision && prior.LeaseUntil > now {
+				// Duplicate delivery must not invalidate an active preparation.
+				// Expired leases and genuinely changed revisions still queue work.
+				return nil
+			}
 			switch prior.State {
 			case model.IndexIndexed, model.IndexDeleted, model.IndexWaitingSync, model.IndexWaitingSource:
 				if prior.Revision == revision {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -46,6 +47,42 @@ func TestIndexSourceReadKeepsRawSpillAndExcludesUnrelatedFields(t *testing.T) {
 	}
 	if value, present := record.Fields["notes"]; !present || value != nil {
 		t.Fatal("NULL and absent fields were conflated")
+	}
+}
+
+func TestIndexRequestsCoalesceActivePreparationWithoutHidingNewWork(t *testing.T) {
+	for _, tc := range []struct {
+		name, revision string
+		lease          int64
+		wantWrites     int
+	}{
+		{"active same revision", "current", 2000, 0},
+		{"expired same revision", "current", 999, 1},
+		{"active changed revision", "new", 2000, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writes := 0
+			repo := indexingWire(t, func(target string, body map[string]interface{}) string {
+				if strings.HasSuffix(target, ".GetItem") {
+					return fmt.Sprintf(`{"Item":{"resource":{"M":{"pk":{"S":"USER#owner"},"sk":{"S":"DOC#d"},"kind":{"S":"personalDocument"},"id":{"S":"d"}}},"version":{"N":"3"},"state":{"S":"PREPARING"},"desiredRevision":{"S":"current"},"runId":{"S":"active-run"},"leaseUntil":{"N":"%d"}}}`, tc.lease)
+				}
+				if !strings.HasSuffix(target, ".UpdateItem") {
+					t.Fatalf("unexpected operation %s", target)
+				}
+				writes++
+				return "{}"
+			})
+			key, ok := model.CanonicalIndexResource("USER#owner", "DOC#d")
+			if !ok {
+				t.Fatal("invalid fixture")
+			}
+			if err := repo.RequestIndexResource(context.Background(), key, tc.revision, 1000); err != nil {
+				t.Fatal(err)
+			}
+			if writes != tc.wantWrites {
+				t.Fatalf("writes=%d want=%d", writes, tc.wantWrites)
+			}
+		})
 	}
 }
 
