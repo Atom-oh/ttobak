@@ -13,6 +13,20 @@ QA handler, retrieval filters, prompts or session behavior.
 - `attachment_context.py` reads authorized `ATTACH#`/`ATTEXT#` records and verifies
   immutable result identity, original ETag, byte limits and continuation.
   Partial/retained results remain explicit and never get audio timestamps.
+- `indexed_retrieval.py` discovers all authorized identity pages, consumes
+  current saved text, and accepts indexed file excerpts only with the current
+  canonical revision and S3 bindings. Legacy meeting exports supply identities,
+  never meeting text. Saved keyword matches cover ingestion delay.
+- `manual_kb.py` verifies private `manual-kb-v1` and authenticated-shared
+  `shared-kb-v1` snapshots. Original `kb/{owner}/...` and `shared/**` binary
+  chunks need a new immutable copy; adding current metadata to an old URI is
+  insufficient. Missing snapshots return explicit pending status. Source
+  read failures propagate instead of returning empty success.
+- `session_provenance.py` keeps source dependencies beside model messages.
+  Restore requires current authorization/revisions for every dependency and
+  an explicit replayable marker. Both integer version 1 before persistence and
+  Decimal version 1 after a boto3 resource read are accepted; booleans, floats,
+  strings, unknown versions and untracked histories are rejected.
 
 The existing handler-suite command also loads these contract suites:
 
@@ -20,7 +34,16 @@ The existing handler-suite command also loads these contract suites:
 python3 -m unittest test_handler -v
 ```
 
-Tests use synthetic table/S3 responses and reject live networking. This foundation
-does not grant new IAM or enable any new retrieval path. Unified discovery,
-source-derived session invalidation, legacy binary migration and deployment
-remain separate integration work.
+Tests use synthetic table/S3 responses, including the real boto3 attribute
+serializer/deserializer, without live AWS/model calls. The helper tests are
+loaded by the same command; existing handler tests remain unchanged.
+
+This foundation does not grant new IAM or enable any new retrieval path.
+The runtime integration must wire the helpers, expose only an explicit
+allowlist of public source fields, and deploy `KB_BUCKET_NAME` with source-read
+permissions. Private/shared binary snapshots must be produced before adopting
+the strict consumer; pending-only migration is not a substitute for existing
+file answerability. Documented snapshot support is PDF, DOC, DOCX, XLS and XLSX.
+PPT/PPTX remain visible with an unsupported-file state until a supported
+conversion path exists. Producer deployment, actual recall and session
+revalidation through the public endpoints remain separate acceptance work.
