@@ -605,7 +605,7 @@ Error: 500 Internal Server Error (failed to list meetings to check for cleanup �
 >
 > **Meeting-list lookup failure**: the `ListMeetingRefsForAccount` call used to determine cleanup targets runs *before* the membership delete — if it fails, membership stays intact and the caller gets 500, so the same request is safely retryable.
 >
-> **A cleanup failure never leaves access behind**: per-meeting cleanup failures surface in the response's `cleanupFailedForMeetings`, but cleanup isn't the only access control. Every read path re-verifies current account membership live rather than trusting an `origin=="account"` Share row: meeting detail (`checkAccess`), meeting list (`ListMeetings`), KB Q&A (`KnowledgeService.Ask`, currently unused/unwired but kept consistent for future reuse), and the Python QA Lambda (`_list_shared_meetings`). The Python path caches only the immutable identifiers of which meetings are shared (`SHARED_MEETINGS_CACHE_TTL_SECONDS`, default 300s) — live membership/origin/`sharedToAccount` are re-checked on every call, so removal takes effect on the next QA request regardless of that TTL. The KB search cache (`KB_CACHE_TTL_SECONDS`, default 600s) stores an access signature alongside cached results and treats an access change as a cache miss. So a stale Share row alone can't restore access even if cleanup itself failed; `cleanupFailedForMeetings` is a useful signal for tidying stale rows, not a security requirement.
+> **A cleanup failure never leaves access behind**: `cleanupFailedForMeetings` reports incomplete cleanup. Read paths independently recheck the current share origin, canonical meeting publication and exact account membership. Stale share rows or discovery/cache hints are not authorization. Removed members cannot regain access merely because cleanup failed.
 >
 > **Where this guarantee doesn't apply**: legacy shares predating the `Origin` field (`origin==""`) are indistinguishable from direct grants and are trusted unconditionally until backfilled via the CLI below.
 >
@@ -1466,20 +1466,55 @@ Response: 200 OK
 #### Agentic Q&A (Python QA Lambda)
 
 KB meeting hits are discovery candidates, not current note snapshots. For exact
-`meetings/{ownerId}/{meetingId}.md` sources, every response—including a cache
-hit—rechecks current access and reads current `notes` and `content` from
+`meetings/{ownerId}/{meetingId}.md` sources, every response rechecks current access and reads current `notes` and `content` from
 DynamoDB. Deleted/revoked meetings and their citations are removed; retrieval
 failures are reported as tool errors. Meeting results include `updatedAt` and
 separate bounded excerpts with coverage markers; their index score is neither
 confidence nor freshness. Non-meeting KB documents keep their existing behavior.
-This does not reindex edited meetings: a newly added term can still fail to
-produce a candidate until the export/index is refreshed.
+The legacy handler depends on export/index refresh for new-term discovery.
+The staged current-source runtime adds fresh saved-text discovery; its rollout
+status and history policy are recorded in ADR-042.
 
 `POST /api/qa/ask`, `POST /api/qa/meeting/{meetingId}`, WebSocket `ask_live` — a Bedrock Converse agentic loop. Available tools: `search_knowledge_base`, `search_aws_docs`, `search_transcript`, `get_aws_recommendation`, `search_web`, `list_meetings`, `get_meeting_detail`, `start_research`, and account tools. Streaming and HTTP requests with a `meetingId` load current authorized meeting data and saved notes. Both pass separate untrusted JSON excerpts: 2,000 characters from the live/selected transcript context and up to 4,000 from saved notes, with source-relative coverage metadata and the meeting ID. Empty sources are omitted. The HTTP live fallback preserves `meetingId` too. Conversation continuity: history per `sessionId` is stored in DynamoDB (7-day TTL), so follow-up questions in the same session carry prior Q&A context.
 
 **`search_web` data-transmission notice**: this tool makes a cross-region SigV4 call to the us-east-1 AgentCore Web Search Gateway, and the model-composed search query (up to 200 chars, which may include keywords derived from meeting conversation) **is sent to an external web search provider**. This happens **on the manual question path too**, not just proactive auto-fire — the opt-in toggle below only gates auto-fired questions. The manual path's mitigation is query-construction constraints in the system prompt/tool description (no customer/attendee names, internal codenames, or meeting figures — generalized keywords only), plus an injection guard that never treats transcript text as an instruction. Query text is never logged in plaintext — both `web_search.py`'s own logs and the agentic loop's tool-call log (`redact_tool_input_for_log`) keep only a hash + length. If `WEB_SEARCH_GATEWAY_URL` is unset, the tool stays exposed but calling it returns a "web search not configured" failure to the model (consumes one tool round, isn't fully disabled). A server-side per-user hourly rate limit applies (`WEB_SEARCH_HOURLY_LIMIT`, default 30/h; checked before the gateway call, so a capped call consumes no external quota and returns a distinct limit-reached message to the model). It is an abuse brake, not a security boundary: it fails open on DynamoDB errors, is a tumbling-hour window (a burst straddling the hour boundary can reach ~2× the limit), and applies to the qa Lambda's authenticated agentic paths only (crawler/research-agent are system-triggered and unmetered by design).
 
 Stored meeting detail uses the selected transcript, falling back only when that variant is absent. `get_meeting_detail(meetingId, offset)` returns up to 6,000 characters and tells the model how to continue. Its offset addresses the combined detail text, so start at zero and follow the tool-provided next offset; per-source excerpt positions are not detail offsets. Required transcript read/validation failures return an explicit error (HTTP 500), not a success with missing text. Unauthenticated requests return 401; inaccessible meetings return 404.
+
+#### Current-source response contract (staged runtime)
+
+The reader foundations and bucket permissions are implemented. The complete
+REST/WebSocket connection is staged until private/shared binary snapshots are
+backfilled and verified. This section describes that target contract, not a
+claim that the public runtime has switched.
+
+Existing `answer`, `sources: string[]`, `usedKB`, `usedDocs` and `toolsUsed`
+remain compatible. `sourceDetails` adds explicit public provenance:
+
+| Field | Meaning |
+| --- | --- |
+| `uri`, `title`, `sourceRevision`, `contentSource` | Source identity, display title, revision and evidence origin |
+| `resourceKind` | `meeting`, `personalDocument`, `accountDocument`, `meetingAttachment`, `legacyText`, `manualKbDocument`, `sharedKbDocument` |
+| `resourceId`, `sourcePK`, `sourceSK` | Canonical resource identity when applicable |
+| `partial`, `filePending`, `migrationStatus` | Excerpt coverage and current file availability |
+| `sourceBucket`, `sourceKey`, `ownerId` | Verified manual-file binding; `ownerId` applies only to private manual files |
+| `visibility` | `authenticated-shared` for shared KB files; never relabels a private key |
+| `meetingId`, `attempt`, `result`, `usingPreviousResult`, `locations` | Attachment identity, attempt/result separation and document positions |
+
+File positions use PDF pages, slides, paragraphs/cells or lines, never meeting
+audio timestamps. Field presence depends on the source kind. Public details
+are constructed explicitly; arbitrary provider metadata is not forwarded.
+
+The current-source runtime performs fresh provider discovery and source
+validation. Old cached meeting identities may supplement discovery, but
+cached text or cached misses cannot replace it and no new result cache is
+written. Stable read-only list/account tool results retain continuity through
+revalidated fingerprints. Edited, deleted, revoked or untracked dependencies
+invalidate their entire history, including assistant paraphrases. Research
+creation is never repeated just to validate a historical receipt. Existing
+unverifiable sessions reset once at cutover. See
+[ADR-042](decisions/ADR-042-current-source-qa-and-history.md) and the
+[source contract](../backend/python/qa/SOURCE_CONTRACT.md).
 
 #### Detect Questions (live question detection + proactive-search flag)
 
