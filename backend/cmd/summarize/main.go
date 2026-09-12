@@ -29,12 +29,13 @@ import (
 )
 
 var (
-	bedrockService  *service.BedrockService
-	kbExportService *service.KBExportService
-	repo            *repository.DynamoDBRepository
-	s3Client        *s3.Client
-	ebClient        *eventbridge.Client
-	bucketName      string
+	bedrockService     *service.BedrockService
+	actionItemsService *service.ActionItemsAnalysisService
+	kbExportService    *service.KBExportService
+	repo               *repository.DynamoDBRepository
+	s3Client           *s3.Client
+	ebClient           *eventbridge.Client
+	bucketName         string
 )
 
 func init() {
@@ -70,6 +71,7 @@ func init() {
 
 	repo = repository.NewDynamoDBRepositoryWithS3(dynamoClient, tableName, s3Client, bucketName)
 	bedrockService = service.NewBedrockService(bedrockClient, s3Client, repo)
+	actionItemsService = service.NewActionItemsAnalysisService(repo, service.NewMeetingService(repo), bedrockService, nil)
 
 	// KB export service — gracefully skips if not configured
 	kbBucketName := os.Getenv("KB_BUCKET_NAME")
@@ -167,6 +169,16 @@ func Handler(ctx context.Context, raw json.RawMessage) error {
 	var envelope model.EventEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return fmt.Errorf("failed to unmarshal event envelope: %w", err)
+	}
+
+	if envelope.Source == "ttobak.analysis" && envelope.DetailType == "ActionItemsRequested" {
+		var event struct {
+			Detail model.ActionItemsRequested `json:"detail"`
+		}
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return fmt.Errorf("decode action items event: %w", err)
+		}
+		return actionItemsService.Process(ctx, event.Detail)
 	}
 
 	// Custom event: all parts of a multi-file meeting have been transcribed
@@ -554,17 +566,8 @@ func generateSummary(ctx context.Context, meeting *model.Meeting, priorContext s
 
 	log.Printf("Generated content for meeting %s: %d characters", meetingID, len(content))
 
-	actionItems, err := bedrockService.ExtractActionItems(ctx, meetingID, userID)
-	if err != nil {
-		log.Printf("Failed to extract action items (non-fatal): %v", err)
-	} else {
-		if err := repo.UpdateMeetingFields(ctx, userID, meetingID, map[string]interface{}{
-			"actionItems": actionItems,
-		}); err != nil {
-			log.Printf("Failed to save action items: %v", err)
-		} else {
-			log.Printf("Extracted action items for meeting %s: %s", meetingID, actionItems)
-		}
+	if err := actionItemsService.RunInline(ctx, userID, meetingID); err != nil {
+		log.Printf("Action item analysis could not finish: %v", err)
 	}
 
 	tags, err := bedrockService.ExtractTags(ctx, meetingID, userID)

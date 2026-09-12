@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: a3732f986d60 · generated-at: 2026-09-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 9352a95019c0 · generated-at: 2026-09-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -62,6 +62,8 @@ cd mac-app/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D wa
 - **whisperx task definition: never set `entryPoint`/`command` in CDK** — the image ENTRYPOINT is pinned to the `run_engine.py` allowlist dispatcher; engine selection is the `ENGINE` env var only (`whisperx`/`fw_p4`). A CDK `entryPoint` silently bypasses the pin (host networkMode + all-users audio read) and is the only bypass channel (RunTask overrides have no entryPoint field; a command override is loudly rejected). CI-guarded both halves: `whisper-stack.test.ts` + `test_dockerfile_entrypoint.py`.
 
 ## Review Expectations
+
+- **Action items**: `ANALYSIS#actionItems` tracks run/lease/status; owner/edit retries; run/source/items CAS. Failure keeps items; only successful `[]` means none. Preserve task IDs and human completion.
 - **Tool call parameters**: non-ASCII text (Korean, etc.) inside tool-call parameters (JSON) must be written as literal UTF-8, never as `\uXXXX` escapes — escaped output renders broken/mojibake text.
 - **Tests**: Go changes need stdlib-`testing` coverage (table-driven, mock repos). Extract security-critical logic into pure functions so it's unit-testable without AWS mocks. Frontend has no test framework — verify via lint + build only. Rust (`mac-app/`) uses stdlib `#[test]`/`#[tokio::test]` with local mock TCP servers for network code — same "extract pure functions" principle applies (e.g. the planar/interleaved audio-buffer conversion, or the upload URL host validation); a pure function shouldn't sit inside a `#[cfg(target_os = "macos")]` gate unless it's actually platform-specific — otherwise its tests can't run except on a Mac.
 - **Error handling**: no silent failures; use sentinel errors + `errors.Is`. Best-effort side effects (e.g. KB promotion) must be visibly surfaced, not swallowed.

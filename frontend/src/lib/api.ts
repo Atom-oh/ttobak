@@ -155,6 +155,17 @@ export const meetingsApi = {
   rediarize: (meetingId: string, speakerCount: number) =>
     api.post<{ meetingId: string; status: string }>(`/api/meetings/${meetingId}/rediarize`, { speakerCount }),
 
+  getActionItems: (meetingId: string, options?: { signal?: AbortSignal }) =>
+    api.get<import('@/types/meeting').ActionItemsResponse>(`/api/meetings/${meetingId}/action-items`, options),
+
+  retryActionItems: (meetingId: string, options?: { signal?: AbortSignal }) =>
+    api.post<import('@/types/meeting').ActionItemsResponse>(`/api/meetings/${meetingId}/action-items/retry`, {}, options),
+
+  setActionItemCompleted: (meetingId: string, itemId: string, completed: boolean, options?: { signal?: AbortSignal }) =>
+    api.put<import('@/types/meeting').ActionItemsResponse>(
+      `/api/meetings/${meetingId}/action-items/${encodeURIComponent(itemId)}`, { completed }, options,
+    ),
+
   // ADR-033 cost/sizing simulator
   extractSimRequirements: (meetingId: string) =>
     api.post<import('@/types/meeting').SimRun>(`/api/meetings/${meetingId}/sim/extract`, {}),

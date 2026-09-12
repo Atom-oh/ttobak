@@ -158,6 +158,8 @@ type MeetingDetailResponse struct {
 	SimRun             *SimRunResponse      `json:"simRun,omitempty"` // ADR-033 cost/sizing simulator, singleton per meeting
 	CreatedAt          string               `json:"createdAt"`
 	UpdatedAt          string               `json:"updatedAt"`
+
+	ActionItemsAnalysis *ActionItemsAnalysis `json:"actionItemsAnalysis,omitempty"`
 }
 
 // SimChartResponse is one generated chart with its presigned CloudFront URL,
