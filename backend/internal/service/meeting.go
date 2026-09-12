@@ -507,7 +507,10 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 	}
 
 	// Get attachments
-	attachments, _ := s.repo.ListAttachments(ctx, meetingID)
+	attachments, err := s.repo.ListAttachments(ctx, meetingID)
+	if err != nil {
+		return nil, err
+	}
 	var attachmentResponses []model.AttachmentResponse
 	for _, att := range attachments {
 		attachmentResponses = append(attachmentResponses, model.AttachmentResponse{

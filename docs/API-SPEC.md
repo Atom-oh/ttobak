@@ -46,6 +46,42 @@ Response: 200 OK
 
 ### Meetings
 
+#### Meeting document text
+
+Deploy the document extraction worker (#208) before enabling the upload producer
+in this release. Upload completion remains owner-only. Supported meeting files
+(PDF, PPTX, DOCX, MD) queue `ttobak.upload / DocumentUploadCompleted`; publish
+failure is stored in extraction state and returned as an error. Other formats
+remain downloadable and explicitly report `UNSUPPORTED_FORMAT`.
+
+Authenticated meeting readers may call:
+
+- `GET /api/meetings/{meetingId}/attachments/{attachmentId}/text/status`
+- `GET /api/meetings/{meetingId}/attachments/{attachmentId}/text?pageSize=3000&cursor=...`
+
+Owners/editors may call
+`POST /api/meetings/{meetingId}/attachments/{attachmentId}/text/retry` (202),
+including legacy documents without extraction metadata.
+
+Status is also embedded as `attachments[].textExtraction` on meeting detail:
+`{status,runId?,errorCode?,leaseUntil?,updatedAt?,unitCount,complete,hasResult,needsResummary,summaryExcerpted}`.
+States are `unknown`, `queued`, `running`, `succeeded`, `partial`, `failed`.
+Missing metadata is unknown; expired work reports failure. Previous result
+metadata may survive a failed attempt and must not be labeled current success.
+
+Text pages contain `{analysis,current,source,format,scope,complete,warningCount,
+units,nextCursor?,pageComplete}`. Each unit carries `unitIndex,startOffset,
+endOffset,text,location`; offsets count Unicode code points and locations come
+from the parser. `pageSize` accepts 1–6000, only one value per query field.
+The encoded response is capped at 14,000 bytes; continuation requires fresh
+authorization and the same canonical source/result revision.
+
+Errors: 400 invalid query; 403/404 access or missing source; 409 stale cursor,
+changed source or unavailable verified text; 422 unsupported format.
+No result S3 URL is exposed. Verified document excerpts are separate DOCUMENT
+evidence in summaries; late extraction sets `needsResummary` instead of claiming
+that old notes include the new document.
+
 #### List Meetings
 
 ```
@@ -1859,7 +1895,7 @@ Manually curates a single crawled **news** document — e.g. a search result the
 ### 3. Summarize Lambda (cmd/summarize)
 - **Trigger**: EventBridge — S3 `Object Created` on the `transcripts/` prefix, and the custom `AllPartsTranscribed` event for multi-part audio (not a DynamoDB Stream — see INFRA-SPEC.md and ADR-031)
 - **Role**: summarizes the meeting via Bedrock Claude
-- **Steps**: (1) load the selected transcript → (2) build attachment context: image analysis results (a diagram attachment is labeled "Attached Diagram" and its mermaid code passed as a trusted source) + document attachment (PPTX/PDF etc., body not extracted) filenames → (3) call Bedrock Claude Opus 5 — the note conditionally includes an `## Architecture Diagram` section (only when a diagram attachment's mermaid exists or the discussion is concretely architectural; otherwise the section is omitted) → (4) generate the structured markdown note (+ trailing `## Attached Images`/`## Attached Documents` sections using `attachment://{id}` links, resolved to presigned URLs by the frontend) → (5) save content to DynamoDB → (6) set status to "done"
+- **Steps**: (1) load the selected transcript → (2) build attachment context: image analysis results (a diagram attachment is labeled "Attached Diagram" and its mermaid code passed as a trusted source) + verified bounded document text (or explicit unavailable-evidence notices for pending/failed extraction) → (3) call Bedrock Claude Opus 5 — the note conditionally includes an `## Architecture Diagram` section (only when a diagram attachment's mermaid exists or the discussion is concretely architectural; otherwise the section is omitted) → (4) generate the structured markdown note (+ trailing `## Attached Images`/`## Attached Documents` sections using `attachment://{id}` links, resolved to presigned URLs by the frontend) → (5) save content to DynamoDB → (6) set status to "done"
 - **Env vars**: TABLE_NAME, BEDROCK_MODEL_ID
 
 ### 4. Process Image Lambda (cmd/process-image)

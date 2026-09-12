@@ -23,11 +23,12 @@ import (
 
 // UploadService handles file upload operations
 type UploadService struct {
-	s3Client      *s3.Client
-	presignClient *s3.PresignClient
-	ebClient      *eventbridge.Client
-	repo          *repository.DynamoDBRepository
-	bucketName    string
+	s3Client       *s3.Client
+	presignClient  *s3.PresignClient
+	ebClient       *eventbridge.Client
+	repo           *repository.DynamoDBRepository
+	bucketName     string
+	attachmentText *AttachmentTextService
 
 	cfSignerMu      sync.Mutex
 	cfSigner        *CloudFrontSigner
@@ -116,6 +117,10 @@ func NewUploadService(
 	if len(ebClient) > 0 {
 		svc.ebClient = ebClient[0]
 	}
+	if repo != nil {
+		metadata := repo.MetadataView()
+		svc.attachmentText = NewAttachmentTextService(metadata, NewMeetingService(metadata), s3Client, bucketName, AttachmentTextPublisher(svc.ebClient))
+	}
 	return svc
 }
 
@@ -198,15 +203,15 @@ func (s *UploadService) GeneratePresignedUploadURL(
 // CompleteUpload handles upload completion notification
 func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *model.UploadCompleteRequest) error {
 	// Verify meeting ownership before completing upload
-	meeting, err := s.repo.GetMeetingByID(ctx, req.MeetingID)
+	meeting, err := s.repo.MetadataView().GetMeeting(ctx, userID, req.MeetingID)
 	if err != nil {
 		return err
 	}
 	if meeting == nil {
-		return fmt.Errorf("meeting not found")
+		return ErrNotFound
 	}
 	if meeting.UserID != userID {
-		return fmt.Errorf("forbidden: you do not own this meeting")
+		return ErrForbidden
 	}
 
 	switch req.Category {
@@ -252,17 +257,15 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 		return s.emitImageUploadEvent(ctx, req.MeetingID, userID, req.Key)
 
 	case "file":
-		// Create attachment record — no Bedrock processing, mark as done immediately
-		attachType := inferAttachTypeFromMime(req.MimeType)
-		att, err := s.repo.CreateAttachment(ctx, req.MeetingID, userID, req.Key, attachType)
+		if !validAttachmentSource(&model.Attachment{AttachmentID: "pending", MeetingID: req.MeetingID, UserID: userID, OriginalKey: req.Key}) {
+			return ErrInvalidInput
+		}
+		att, err := s.repo.CreateFileAttachment(ctx, userID, req, inferAttachTypeFromMime(req.MimeType))
 		if err != nil {
 			return err
 		}
-		att.FileName = req.FileName
-		att.FileSize = req.FileSize
-		att.MimeType = req.MimeType
-		att.Status = model.AttachStatusDone
-		return s.repo.UpdateAttachment(ctx, att)
+		_, err = s.attachmentText.Request(ctx, userID, req.MeetingID, att.AttachmentID)
+		return err
 
 	default:
 		return fmt.Errorf("unsupported category: %s", req.Category)
