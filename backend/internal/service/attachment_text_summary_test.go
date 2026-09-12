@@ -152,11 +152,14 @@ func TestSummaryUsesDocumentProvenanceThroughActualModelRequest(t *testing.T) {
 	meeting := r.meetings[meetingKey("owner", "m")]
 	meeting.TranscriptA = noteSourceGroupedA
 	meeting.TranscriptSegments = noteSourceSegments
+	attachments, err := text.summaryAttachments(context.Background(), "owner", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
 	request, content, writes, err := invokeNoteSourceFixture(t, meeting,
 		`{"content":[{"type":"text","text":"문서 근거 [DOC:a:0] [TS:12]\n\n회의 발언 [TS:12]"}],"stop_reason":"end_turn"}`,
 		func(s *BedrockService) (string, error) {
-			s.SetAttachmentTextService(text)
-			return s.SummarizeTranscript(context.Background(), "m", "owner", "")
+			return s.GenerateResummary(context.Background(), meeting, attachments)
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +172,7 @@ func TestSummaryUsesDocumentProvenanceThroughActualModelRequest(t *testing.T) {
 	if strings.Contains(paragraphs[0], "transcript://") || !strings.Contains(paragraphs[0], "attachment://a") || !strings.Contains(paragraphs[1], "transcript://") {
 		t.Fatalf("cross-source citation: %s", content)
 	}
-	if writes != 1 {
-		t.Fatalf("summary/snapshot not saved together: %d", writes)
+	if writes != 0 {
+		t.Fatalf("snapshot-only generation wrote storage: %d", writes)
 	}
 }

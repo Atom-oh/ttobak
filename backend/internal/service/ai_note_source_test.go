@@ -80,7 +80,7 @@ func invokeNoteSourceFixture(t *testing.T, meeting *model.Meeting, modelResponse
 				return response(string(body)), nil
 			case "DynamoDB_20120810.Query":
 				return response(`{"Items":[]}`), nil
-			case "DynamoDB_20120810.UpdateItem":
+			case "DynamoDB_20120810.UpdateItem", "DynamoDB_20120810.TransactWriteItems":
 				writes++
 				return response(`{}`), nil
 			default:

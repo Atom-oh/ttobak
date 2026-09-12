@@ -103,14 +103,11 @@ func (r *DynamoDBRepository) captureMeetingSummaryMetadata(ctx context.Context, 
 	return snapshot, nil
 }
 
-// CaptureMeetingSummary records exact stored attribute presence before hydrating
-// the source used by the existing batch summarizer. A missing meeting is nil.
+// CaptureMeetingSummary records exact stored presence before source selection.
+// Hydration binds the effective selected field to bytes separately.
 func (r *DynamoDBRepository) CaptureMeetingSummary(ctx context.Context, ownerID, meetingID string) (*model.SummarySnapshot, error) {
 	snapshot, err := r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, batchSummaryFields)
 	if err != nil || snapshot == nil {
-		return nil, err
-	}
-	if err := r.resolveTranscripts(ctx, meetingID, snapshot.Meeting); err != nil {
 		return nil, err
 	}
 	return snapshot, nil
@@ -130,9 +127,7 @@ func (r *DynamoDBRepository) SaveMeetingSummary(ctx context.Context, snapshot *m
 	if !validSummarySnapshot(snapshot) {
 		return ErrConditionFailed
 	}
-	return r.updateMeetingFieldsWithCondition(ctx, snapshot.Meeting.UserID, snapshot.Meeting.MeetingID,
-		summaryCondition(snapshot.Checks[0]), map[string]interface{}{"content": content, "status": model.StatusDone, "attachmentSummarySources": coverage,
-			"summaryRetryPending": false, "summaryConflictCode": ""}, true)
+	return r.publishMeetingSummary(ctx, snapshot, content, coverage)
 }
 
 // MarkSummaryConflict discards this attempt without touching human text.

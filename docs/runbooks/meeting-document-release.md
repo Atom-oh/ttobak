@@ -1,79 +1,31 @@
-# Meeting document and saved-summary release
+# Meeting document / summary rollout
 
-Opening a PR does not deploy it. Merging backend changes triggers the production
-deployment workflow; there is no feature toggle. The host controls merge order.
+PR opening does not deploy; merging backend changes starts production deployment.
+There is no feature toggle. The host owns merges and deployment.
 
-## Order
+1. Deploy the bounded document worker before upload producers. The host verified
+   deployment `34717614426` SUCCESS, native PDF text/page/ETag identity, duplicate
+   suppression and exact cleanup. This IAM smoke does not prove EventBridge,
+   public API authorization, summaries or QA; detailed evidence remains in the
+   host's `document-worker-live-acceptance.md` / `live-document-worker-smoke.json`.
+2. Deploy the batch source guard/retry/filter changes. DOCUMENT fetching remains
+   inactive until caller injection in the attachment API/summary wiring release.
+   Verify first summaries with absent content/notes, metadata-only changes,
+   source conflicts, legacy S3 replacement and per-document omission.
+3. Deploy upload/status/text wiring after the worker. Stored uploads remain 200
+   after durable extraction failure; failed-state writes must surface as errors.
+4. Deploy saved-summary storage/orchestration and consumer/rule before its API.
+   API deployment depends on consumer/rule/permission. Release UI after its APIs.
 
-1. Keep the merged parser (#202), attachment state/read foundation (#206),
-   metadata reading (#198), and current-source QA readers (#207).
-2. Deploy the document worker from #208 through `TtobakGatewayStack`. Verify
-   the deployed artifact, `DocumentUploadCompleted` rule, scoped permissions,
-   and bounded parser startup before merging the upload API producer.
-   A merged worker PR or passing local test is not deployment evidence.
-3. Land the summary/storage foundation. It adds guarded batch publication/recovery,
-   prepared evidence and snapshot-only generation; it adds no upload
-   event producer or saved-summary HTTP route. It changes the active batch save condition, conflict recovery and output
-   filtering. DOCUMENT fetching starts only with caller injection in step 4.
-   Local tests cover omitted text and concurrent edits. After deployment, verify
-   synthetic first-summary and retry flows before advancing. Watch Lambda Errors
-   and `Summary source conflict` logs; rollback is a source revert/redeployment,
-   not a runtime switch. Retain compatible readers.
-4. Land the attachment API and summary wiring after step 2. Supported uploads
-   now queue extraction. Legacy documents require an authorized retry.
-5. Land saved-summary orchestration and its `SummaryRequested` consumer/rule
-   before allowing its API producer to send events. Deploy the summarize
-   consumer and rule before the API code, or enforce that dependency in CDK.
-6. Release UI consumers after their APIs are deployed. Document/search status
-   also depends on the index-status API; QA source links depend on the unified
-   QA producer. Frontend deployment preserves runtime `config.json`.
+For a targeted release, build changed Go entry points from `backend` with
+`GOOS=linux GOARCH=arm64 go build -tags lambda.norpc -o cmd/<name>/bootstrap ./cmd/<name>`.
+Then `cd ../infra` and deploy only `TtobakGatewayStack --exclusively`; never `--all`.
+Use CI/review gates. Rollback is source revert/redeployment, not a runtime switch.
 
-The current push-to-main workflow deploys infrastructure for backend changes.
-The host must hold producer merges until the prerequisite deployment finishes.
-For a targeted manual release, deploy only the changed stack with
-build Go bootstraps first (`cd backend`, then Linux/ARM64 `go build -tags
-lambda.norpc -o cmd/<name>/bootstrap ./cmd/<name>` for changed entry points), then
-`cd ../infra` and `npx cdk deploy TtobakGatewayStack --exclusively`; never `--all`. Do not
-disable CI or review gates to shorten this sequence.
-
-## Invariants and acceptance
-
-The host verified worker deployment `34717614426` as SUCCESS and recorded an
-IAM-invoked smoke at `2026-09-12T20:56:44.603Z`: a 626-byte synthetic PDF produced
-752-byte JSON with the exact marker, native page 1 and matching source ETag and
-identity. Owner/uploader differed; state was succeeded/complete with lease zero.
-A duplicate was ignored without changing state. Three owned rows and two exact
-S3 versions were deleted and absence rechecked. This proves worker runtime/IAM,
-not EventBridge delivery, public upload/retry authorization, summaries or QA.
-The host's detailed evidence is `document-worker-live-acceptance.md` and
-`live-document-worker-smoke.json` in the improvement evidence cache.
-
-- Metadata authorization precedes S3 reads. Cursors require an explicit version
-  and revision; a changed source must clear the previous result indication.
-- Document JSON is separate `DOCUMENT` evidence. Only verified locations may
-  become document citations; document-only evidence does not establish speech.
-- Saved-summary queue/start/completion check current source and editor grants.
-  Failure retains human content. Success and coverage are one transaction.
-- Meeting, action analysis, sim, and summary state deletes occupy four initial
-  transaction entries. Source and summary state disappear atomically even if a
-  later batch fails; subsequent attachment/share pairs stay within 100-item
-  transaction boundaries.
-- Definite write rejection cleans only new immutable spills. Ambiguous database
-  outcomes retain them so a committed reference cannot become dangling.
-
-Before activating producers, verify synthetic supported documents, visible
-queue/failure/retry, retained-result caveats, late-document re-summary, editor
-revocation, changed ETags, stale cursors, and multi-batch deletion failure.
-Use repository fixtures for local checks; production acceptance belongs to the
-host and uses explicitly authorized synthetic resources.
-
-Rollback producer/UI code first and retain compatible workers/readers for
-in-flight events. Do not delete state/results to make failures appear successful.
-See [ADR-040](../decisions/ADR-040-guarded-summary-publication.md) for the exact
-source-presence, document-omission and publication decisions.
-
-Batch conflicts persist `summaryRetryPending`/`SOURCE_CHANGED` and release only
-the observed claim. Lambda redelivery generates fresh output without STT; it
-never rebases old output onto edited sources. Delivery retries are finite. If
-exhausted, retain the marker and use a deliberate redelivery or the separately
-released saved-summary retry API; do not erase human text or weaken conditions.
+Watch Lambda Errors and `Summary source conflict` logs; no new alarm is claimed.
+A conflict retains `summaryRetryPending`/`SOURCE_CHANGED`; redelivery generates
+fresh output without retranscription or old-output rebinding. Retry limits are
+finite: if exhausted, deliberately redeliver or use the separately released
+saved-summary API. Preserve human text and compatible readers/workers on rollback.
+Do not weaken conditions, erase failures, or delete ambiguously committed spills.
+See [ADR-040](../decisions/ADR-040-guarded-summary-publication.md).

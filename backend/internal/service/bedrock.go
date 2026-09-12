@@ -665,10 +665,48 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 		return "", fmt.Errorf("meeting not found: %s", meetingID)
 	}
 	meeting := snapshot.Meeting
+	conflict := func(cause error) (string, error) {
+		markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		return "", errors.Join(ErrSummaryConflict, cause, s.repo.MarkSummaryConflict(markCtx, snapshot))
+	}
 
-	transcript, _ := selectMeetingTranscript(meeting)
+	transcript, variant := selectMeetingTranscript(meeting)
 	if strings.TrimSpace(transcript) == "" {
 		return "", ErrResummaryNoSource
+	}
+	transcript, binding, err := s.repo.ReadResummaryTranscript(ctx, meetingID, "transcript"+variant, transcript)
+	if err != nil {
+		if errors.Is(err, repository.ErrConditionFailed) {
+			return conflict(err)
+		}
+		return "", err
+	}
+	if binding != nil {
+		snapshot.Objects = append(snapshot.Objects, *binding)
+	}
+	if (meeting.SelectedTranscript == "B" && variant == "B") || (meeting.SelectedTranscript != "B" && variant == "A") {
+		unselected := "transcriptB"
+		if variant == "B" {
+			unselected = "transcriptA"
+		}
+		delete(snapshot.Checks[0].Fields, unselected)
+	}
+	meeting.TranscriptA, meeting.TranscriptB = "", ""
+	if variant == "B" {
+		meeting.TranscriptB = transcript
+	} else {
+		meeting.TranscriptA = transcript
+	}
+	segments, segmentBinding, segmentErr := s.repo.ReadResummaryTranscript(ctx, meetingID, "transcriptSegments", meeting.TranscriptSegments)
+	if segmentErr == nil && len(transcriptSegmentsForText(transcript, segments)) > 0 {
+		meeting.TranscriptSegments = segments
+		if segmentBinding != nil {
+			snapshot.Objects = append(snapshot.Objects, *segmentBinding)
+		}
+	} else {
+		meeting.TranscriptSegments = ""
+		delete(snapshot.Checks[0].Fields, "transcriptSegments")
 	}
 	var attachments []model.Attachment
 	if s.attachmentText != nil {
@@ -679,6 +717,18 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 	if err != nil {
 		return "", err
 	}
+	for i := range attachments {
+		att := &attachments[i]
+		if att.SummaryOmitted || (att.ExtractedText == nil && att.ProcessedContent == "") {
+			continue
+		}
+		if err := s.repo.BindSummaryAttachment(ctx, snapshot, att); err != nil {
+			att.SummaryOmitted, att.ExtractedText, att.ExtractedRevision = true, nil, ""
+		}
+	}
+	if err := s.repo.CheckResummaryObjects(ctx, meetingID, snapshot.Objects); err != nil {
+		return conflict(err)
+	}
 	priorContext = FoldLiveSummary(priorContext, meeting.LiveSummary)
 	content, err := s.generateSummarySnapshot(ctx, meeting, attachments, priorContext, meeting.SummaryRetryPending)
 	if err != nil {
@@ -686,9 +736,7 @@ func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, use
 	}
 	if err := s.repo.SaveMeetingSummary(ctx, snapshot, content, summaryAttachmentSnapshot(content, attachments)); err != nil {
 		if errors.Is(err, repository.ErrConditionFailed) {
-			markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			return "", errors.Join(ErrSummaryConflict, err, s.repo.MarkSummaryConflict(markCtx, snapshot))
+			return conflict(err)
 		}
 		return "", fmt.Errorf("failed to update meeting: %w", err)
 	}

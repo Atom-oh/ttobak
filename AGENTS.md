@@ -1,7 +1,9 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 2058b52f29e1 · generated-at: 2026-09-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: e0d500f699a8 · generated-at: 2026-09-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
+
+Summary: ADR-040. Batch guards/retries are active; DOCUMENT input needs caller injection. Never reuse old output after source edits.
 
 Korean AI meeting assistant for AWS Solutions Architects: record → real-time STT (AWS Transcribe Streaming in browser) → batch STT (Whisper ECS GPU Spot) → Bedrock Claude summary → Notion-style editor. Plus an Account-centric Insight Substrate (shared customer accounts + typed insights + bidirectional MCP back-data) and a personal Document Hub (notes/blog/slides, wikilinks, account sharing, PDF preview, public share links).
 
@@ -73,11 +75,8 @@ cd mac-app/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D wa
 - **Rust lock scope (mac-app/)**: never hold a `Mutex` across blocking FFI/I/O with no timeout of its own — reserve/release/reacquire around the call instead. Any state two code paths both gate on (e.g. "is this recording still being written") must be updated inside the SAME critical section as the state transition it depends on, not as a separate step after the lock is released — flag a gap between them as a MAJOR TOCTOU, not a style nit. Likewise, a global aggregate collapsing multiple independent items (recordings, uploads, jobs) into one boolean is a MAJOR finding if a caller treats it as a precise per-item signal.
 - Keep functions/files focused; follow existing patterns in the touched package.
 
-
-Summaries (ADR-040) pin exact attribute presence. Invalid document claims are omitted, not unmarked. Incomplete output fails; source/ACL CAS preserves edits.
-
 ## Known False-Positives (do NOT report)
-- **`updateAttachmentByKey`** is implemented. The private document worker is verified. Batch source CAS/retry/filtering is active code; DOCUMENT fetching needs caller injection in the wiring release. Upload/status and QA/frontend consumers follow release gates (ADR-039/040).
+- **`updateAttachmentByKey`** is implemented; do not re-raise missing image persistence. Document extraction has a bounded parser and private worker (ADR-039), but API/summary/QA wiring remains staged. The worker validates `ATTACH#`/`ATTEXT#` identity, run, lease and ETag; immutable results use `files/*/*/text/*/*.json`. Empty text is failure, partial extraction is explicit. Manual KB copy remains available; its default parser does not index PPT/PPTX.
 - **JWT signature verification**: `middleware.ParseVerifiedJWT` verifies signatures against Cognito JWKS (RS256, issuer + exp checked) — this is not a gap; don't re-raise "unverified JWT" findings.
 - **"`FileKey` isn't validated to be owner-prefixed on write, so the unauthenticated public-share route could presign an arbitrary bucket object"**: checked directly against `service/account.go` — `validateFileKeyOwnership(userID, req.FileKey)` runs in both `putDoc` (create) and `updateDoc` (update, whenever `req.FileKey` differs from the doc's existing value) before any assignment; every write path funnels through one of these two functions. `ownsFileKey`'s separate use in the S3-cleanup-on-supersede path is about a *different* concern (a shared copy's underlying object lives under the sharer's prefix, not the current editor's) and does not imply write-time validation is missing. Covered by `TestPutDocument_SlideRejectsForeignFileKey`/`TestUpdateAccountDocument_RejectsForeignFileKey`. Don't re-raise without pointing at a concrete write path that skips `validateFileKeyOwnership`.
 - **Hardcoded ACM ARN / domain / CORS origin / KB id / `agentCoreRuntimeArn` / `researchAgentExecutionRoleArn` in CDK, and mac-app's `EXPECTED_BUCKET_HOST`**: known tech-debt, tracked; not a new-PR blocker unless the diff worsens it.

@@ -40,13 +40,28 @@ func TestFirstSummaryMatchesOmittedTextAndRejectsConcurrentEdits(t *testing.T) {
 					return respond(200, string(body))
 				case "DynamoDB_20120810.Query":
 					return respond(200, `{"Items":[]}`)
-				case "DynamoDB_20120810.UpdateItem":
+				case "DynamoDB_20120810.UpdateItem", "DynamoDB_20120810.TransactWriteItems":
+					var raw json.RawMessage
+					if err := json.NewDecoder(req.Body).Decode(&raw); err != nil {
+						t.Fatal(err)
+					}
+					if strings.HasSuffix(req.Header.Get("X-Amz-Target"), ".TransactWriteItems") {
+						var tx struct {
+							Items []struct {
+								Update json.RawMessage `json:"Update"`
+							} `json:"TransactItems"`
+						}
+						if err := json.Unmarshal(raw, &tx); err != nil {
+							t.Fatal(err)
+						}
+						raw = tx.Items[0].Update
+					}
 					var body struct {
 						Condition string                    `json:"ConditionExpression"`
 						Names     map[string]string         `json:"ExpressionAttributeNames"`
 						Values    map[string]map[string]any `json:"ExpressionAttributeValues"`
 					}
-					if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					if err := json.Unmarshal(raw, &body); err != nil {
 						t.Fatal(err)
 					}
 					hasContent := false
@@ -94,7 +109,7 @@ func TestFirstSummaryMatchesOmittedTextAndRejectsConcurrentEdits(t *testing.T) {
 							allowed = exists && value["S"] == body.Values[match[1]]["S"]
 						}
 						if !allowed {
-							return respond(400, `{"__type":"ConditionalCheckFailedException"}`)
+							return respond(400, `{"__type":"TransactionCanceledException","CancellationReasons":[{"Code":"ConditionalCheckFailed"}]}`)
 						}
 					}
 					return respond(200, `{}`)

@@ -117,6 +117,7 @@ func (s *AttachmentTextService) summaryAttachments(ctx context.Context, ownerID,
 		}
 		remaining -= len(documentEvidence(*att))
 		att.ExtractedRevision = attachmentRevision(state)
+		att.SummaryTextState = state
 		loaded++
 	}
 	return attachments, nil

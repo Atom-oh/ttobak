@@ -77,6 +77,7 @@ type Attachment struct {
 	SummaryExcerpted  bool                  `dynamodbav:"-" json:"-"`
 	SummaryOmitted    bool                  `dynamodbav:"-" json:"-"`
 	CitationRejected  bool                  `dynamodbav:"-" json:"-"`
+	SummaryTextState  *AttachmentTextState  `dynamodbav:"-" json:"-"`
 	PK                string                `dynamodbav:"PK"`
 	SK                string                `dynamodbav:"SK"`
 	AttachmentID      string                `dynamodbav:"attachmentId"`
