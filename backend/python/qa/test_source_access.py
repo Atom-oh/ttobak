@@ -1,4 +1,5 @@
 """Current source access and tool contracts before public handler activation."""
+import copy
 import json
 from pathlib import Path
 import unittest
@@ -157,3 +158,64 @@ class TestManualSourceAccess(_KBFixture, unittest.TestCase):
         self.assertFalse(current._source_is_current('owner', dependency))
         self.body = None
         self.assertFalse(current._source_is_current('owner', dependency))
+
+
+class TestDocumentRetrieval(_SourceFixture, unittest.TestCase):
+    def retrieve(self, question, **kwargs):
+        current = SourceAccess(self.source_reader, AttachmentReader(self.source_reader, helpers.handler._query_all),
+                               helpers.handler._list_shared_meetings, query_all=helpers.handler._query_all,
+                               provider=self.runtime, kb_id='test-kb')
+        return current.retrieve_from_kb(question, **kwargs)
+
+    def test_account_file_replacement_by_another_member_keeps_creation_author(self):
+        self.doc(pk='ACCOUNT#team', content='', sourceUserId='original-creator',
+                 fileKey='docs/later-editor/replacement.pdf')
+        self.table.put_item(Item={'PK': 'ACCOUNT#team', 'SK': 'MEMBER#reader',
+                                 'accountId': 'team', 'userId': 'reader',
+                                 'GSI1PK': 'USER#reader', 'GSI1SK': 'ACCOUNT#team'})
+        self.s3.head_object.return_value = {'ETag': '"replacement"', 'VersionId': 'v2', 'ContentLength': 12}
+        hit = self.indexed(pk='ACCOUNT#team', filename='file.pdf', text='REPLACEMENT_FILE_FACT')
+        self.runtime.retrieve.return_value = {'retrievalResults': [hit]}
+        result = self.retrieve('replacement', user_id='reader')
+        self.assertEqual(result[0]['text'], 'REPLACEMENT_FILE_FACT')
+        self.assertTrue(all(call.kwargs['Key'] == 'docs/later-editor/replacement.pdf'
+                            for call in self.s3.head_object.call_args_list))
+        del self.table.items[('ACCOUNT#team', 'MEMBER#reader')]
+        self.s3.head_object.reset_mock()
+        self.assertEqual(self.retrieve('replacement', user_id='reader'), [])
+        self.s3.head_object.assert_not_called()
+
+    def test_file_chunks_require_exact_current_revision_and_bindings(self):
+        self.doc(content='', fileKey='docs/owner/file.pdf')
+        self.s3.head_object.return_value = {'ETag': '"e1"', 'VersionId': 'v1', 'ContentLength': 10}
+        hit = self.indexed(filename='file.pdf', text='VERIFIED_FILE_CHUNK')
+        self.runtime.retrieve.return_value = {'retrievalResults': [hit]}
+        first = self.retrieve('file detail', user_id='owner')
+        self.assertIn('VERIFIED_FILE_CHUNK', json.dumps(first))
+        self.s3.get_object.assert_not_called()
+        self.s3.head_object.return_value = {'ETag': '"e2"', 'VersionId': 'v2', 'ContentLength': 10}
+        changed = self.retrieve('file detail', user_id='owner')
+        self.assertNotIn('VERIFIED_FILE_CHUNK', json.dumps(changed))
+        self.assertIn('filePending', changed[0]['document'])
+        self.assertTrue(changed[0]['provenance']['filePending'])
+        # Forged metadata cannot cause reads of its object keys.
+        hit['metadata']['sourceObjects'] = json.dumps([{'key': 'docs/other/private.pdf', 'etag': '"e2"', 'size': 10}])
+        self.s3.reset_mock()
+        self.retrieve('file detail', user_id='owner')
+        self.assertTrue(all(call.kwargs['Key'] == 'docs/owner/file.pdf'
+                            for call in self.s3.head_object.call_args_list))
+
+    def test_account_document_requires_exact_membership_on_every_retrieval(self):
+        self.doc(pk='ACCOUNT#child', content='ACCOUNT_TERM')
+        self.table.put_item(Item={'PK': 'ACCOUNT#parent', 'SK': 'MEMBER#reader',
+                                 'accountId': 'parent', 'userId': 'reader',
+                                 'GSI1PK': 'USER#reader', 'GSI1SK': 'ACCOUNT#parent'})
+        self.assertEqual(self.retrieve('ACCOUNT_TERM', user_id='reader'), [])
+        self.table.put_item(Item={'PK': 'ACCOUNT#child', 'SK': 'MEMBER#reader',
+                                 'accountId': 'child', 'userId': 'reader',
+                                 'GSI1PK': 'USER#reader', 'GSI1SK': 'ACCOUNT#child'})
+        self.assertEqual(self.retrieve('ACCOUNT_TERM', user_id='reader')[0]['document']['content'],
+                         'ACCOUNT_TERM')
+        self.table.index_rows = copy.deepcopy(list(self.table.items.values()))
+        del self.table.items[('ACCOUNT#child', 'MEMBER#reader')]
+        self.assertEqual(self.retrieve('ACCOUNT_TERM', user_id='reader'), [])
