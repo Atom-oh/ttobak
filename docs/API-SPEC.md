@@ -1875,11 +1875,12 @@ Manually curates a single crawled **news** document — e.g. a search result the
 - **Env vars**: TABLE_NAME, CONNECTIONS_TABLE_NAME, NOVA_SONIC_MODEL_ID, BEDROCK_MODEL_ID
 
 ### 6. KB Lambda (cmd/kb)
-- **State**: staged worker, currently no deployed trigger. Existing `/api/kb/*` REST routes remain in `ttobak-api`.
+- **Trigger**: none while staged. After preparation, an explicitly enabled schedule bootstraps manual snapshots; canonical stream delivery follows all-mode. Existing `/api/kb/*` REST routes remain in `ttobak-api`.
 - **Input**: canonical DynamoDB `Records`, EventBridge Scheduled Event, or IAM-only `{ "action": "tick" }` / `sync`. API Gateway proxy requests are rejected.
-- **Role**: source-bound immutable projections plus coalesced S3-data-source ingestion; no direct AOSS writes.
-- **Env vars**: `TABLE_NAME`, `BUCKET_NAME`, `KB_BUCKET_NAME`, `KB_ID`, `DATA_SOURCE_ID`; the last two are bare ten-character alphanumeric IDs.
-- **Activation**: deploy/verify canonical QA retrieval first, then worker IAM/configuration (12 minutes, 1024 MiB), then stream/tick delivery. Legacy meeting exports are deleted; rollback to old QA requires re-export (ADR-038).
+- **Role**: source-bound immutable private/shared snapshots and canonical projections with coalesced full S3 ingestion. Original uploads/list/delete behavior and visibility stay unchanged. Manual-only acknowledges canonical notifications without reading or changing their sources/jobs.
+- **Env vars**: required `TABLE_NAME`, `BUCKET_NAME`, `KB_BUCKET_NAME`, `KB_ID`, `DATA_SOURCE_ID`, `INDEXING_MODE`. KB/source IDs are ten alphanumeric characters; mode must be exactly `manual-only` or `all`. Missing/invalid values fail before AWS client initialization.
+- **Steps / activation**: (1) deploy worker with schedule/stream off, configure manual-only plus bootstrap IAM/12-minute/1024-MiB settings, then explicitly enable its schedule; (2) verify private/shared snapshots and synthetic recall; (3) deploy/verify strict QA runtime wiring of existing readers; (4) enable all-mode, canonical IAM and stream delivery. Do not bootstrap by editing coordinator rows or invoking an ad-hoc global tick.
+- **Rollback**: coordinator mode is durable; all-to-manual-only and manual-only resumption of a canonical batch are rejected before mutation. Restore mode to all after a mistaken downgrade. Old QA rollback after canonical cleanup requires legacy re-export ([ADR-038](decisions/ADR-038-canonical-note-indexing.md)).
 
 ### 7. Lambda@Edge (cmd/edge-auth, us-east-1)
 - **Trigger**: CloudFront Viewer Request

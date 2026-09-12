@@ -1,134 +1,54 @@
 # Existing KB binary migration
 
-Extends the PR205 coordinator; no second ingestion mechanism or canonical
-document rows are created. Original `kb/{owner}/{filename}` and `shared/**`
-objects, upload/list/delete routes, and visibility semantics stay unchanged.
+Extends [ADR-038](../../../docs/decisions/ADR-038-canonical-note-indexing.md) using
+the existing full S3 sync coordinator; no direct ingestion or fabricated DOC#
+source rows. Original upload/list/delete behavior and visibility are preserved.
 
-## Discovery and lifecycle
+## Source and snapshot contract
 
-Each scheduled tick visits one bounded S3 page from `kb/` and `shared/`, saving
-`manualCursor` and `sharedCursor` beside existing coordinator cursors. Empty or
-filtered pages retain their continuation tokens. Metadata sidecars and plain
-text are excluded from binary migration; QA already hydrates legacy text.
+Private `kb/{owner}/{filename}` and authenticated `shared/**` originals are read
+with exact ETag/version binding. The worker never rewrites/deletes them. New
+snapshots use `manual-kb/v1/` and `shared-kb/v1/`, immutable conditional PUTs, and
+provenance sidecars. Exact paths, fields and revision framing are in the
+[Go contract](../../internal/service/INDEX_SOURCE_CONTRACT.md) and
+[existing QA reader contract](../../python/qa/SOURCE_CONTRACT.md).
+`manual_kb.py` already supports both schemas; strict runtime wiring (PR221) remains
+held until snapshots are verified. Adding metadata to old chunks is not proof.
+Vectors: `backend/internal/service/testdata/knowledge-revisions.json`.
 
-PDF, DOC, DOCX, XLS and XLSX bytes are copied to new immutable objects.
-PPT/PPTX are recorded as `FAILED / UNSUPPORTED_FILE`, because the existing
-default KB parser does not index these formats. Empty and oversized sources
-also have explicit durable failures. Originals are never removed or rewritten.
+Each scheduled tick advances one bounded page per original prefix. Jobs retain
+source keys to recover deletion after listing stops finding an object. Source
+reads, current HEAD checks, run/lease CAS and uncertain-write freezes bind each
+publication. Transient errors preserve validated snapshots; retries/backoff and
+per-document status follow PR205. Partial full-sync success requires INDEXED for
+current snapshots and NOT_FOUND for removed snapshots/original vectors.
 
-Jobs share `KBINDEX#JOBS`, its four-entry rotation, revision coalescing, version/
-run/lease conditions, and exponential failure cooldown (one to thirty minutes).
-Private object identities use `USER#{owner} / KBFILE#{resourceId}`; shared
-identities use `KB#SHARED / KBFILE#{resourceId}`. These are job identities only,
-not canonical DynamoDB source records. `resource.sourceKey` retains the exact
-original S3 key, so known jobs detect deletion even after catalog enumeration
-can no longer find the source.
+PDF, DOC, DOCX, XLS and XLSX are copied as bytes. PPT/PPTX, empty and oversized
+sources have explicit failure states; the 50 MiB limit is not a filename fallback.
+Content-Type is copied from the original when present and checked for read races.
 
-Read the original with `IfMatch` plus `VersionId` when supplied by S3; verify
-actual bytes/ETag/version/content type, then recheck the current original.
-Persist planned output keys before any PUT. Metadata and data use
-`IfNoneMatch="*"` and no SDK retries. Uncertain uploads retain the coordinator
-lease so late writes cannot race successor cleanup. All old/partial objects
-under the resource's snapshot prefix are removed before its full sync.
-The merged PR205 changing-source isolation applies to both S3 source classes:
-definitive source changes clean up and back off without blocking stable batch
-members. An uncertain-write marker takes precedence over any wrapped changed
-or condition-failed cause, retaining the freeze.
+## Rollout and operations
 
-The same frozen batch/client token drives `StartIngestionJob`, including manual
-or crawler conflicts and lost responses. INDEXED/DELETED requires successful
-terminal ingestion, a fresh original-source revision, matching inventory, and
-the job CAS. Partial syncs use document-level status for immutable snapshots.
-Deleted sources also require `NOT_FOUND` for the original upload's former vector;
-the status read never deletes or rewrites that original. Transient catalog,
-HEAD and GET errors preserve published snapshots and known source revisions.
-S3-only sources deliberately do not use a fabricated missing
-DynamoDB row as source authority. As with existing S3-backed canonical files,
-S3 and DynamoDB are not one transaction; QA must recheck original bindings
-before using retrieved chunks, and status reads revalidate freshness.
+Required env: TABLE_NAME, BUCKET_NAME, KB_BUCKET_NAME, KB_ID, DATA_SOURCE_ID,
+`INDEXING_MODE=manual-only|all`. Mode is validated before AWS client initialization.
+Follow the same four stages in [INFRA-SPEC](../../../docs/INFRA-SPEC.md) and
+[API-SPEC](../../../docs/API-SPEC.md):
 
-## Private snapshot contract
+1. Deploy worker with schedule/stream off; configure manual-only, bootstrap IAM,
+   1024 MiB/12 minutes, then explicitly enable the schedule (no stream mapping).
+2. Verify private/shared snapshots and deployed synthetic recall. Canonical
+   sources/jobs and canonical/legacy meeting exports remain untouched.
+3. Deploy/verify strict QA runtime using the existing reader foundations.
+4. Enable all-mode and canonical permissions/delivery. No job edits or ad-hoc
+   global tick invocation substitute for this order.
 
-`manual-kb/v1/{ownerId}/{resourceId}/{sourceRevision}/{indexRunId}/document.{ext}`
+Mode is durable: downgrade and manual-only resumption of a canonical batch fail
+before mutation. Restore all after mistaken downgrade; old-QA rollback after
+canonical cleanup requires legacy re-export. Narrow the current broad KB grant
+as specified in INFRA-SPEC; original prefixes need read only. GetKnowledgeBaseDocuments
+uses the configured KB permission and does not grant original object deletion.
 
-Adjacent `.metadata.json` contains `metadataAttributes`:
-
-- `indexSchema: manual-kb-v1`
-- `resourceKind: manualKbDocument`
-- `ownerId`, `resourceId`, `sourceRevision`, `indexRunId`
-- `sourceBucket`, `sourceKey`, `sourceETag`, `sourceVersionId`, `sourceSize`
-
-This matches the QA `MANUAL_KB_COMPATIBILITY.md` contract exactly. `resourceId`
-is lowercase SHA-256 of the exact UTF-8 original key. Revision is lowercase
-SHA-256 over UTF-8 strings framed as decimal byte length, `:`, then bytes:
-schema, configured KB bucket, source key, exact ETag, version ID (or empty),
-decimal source size. No filename, URI or key normalization is performed.
-
-## Shared snapshot contract
-
-`shared-kb/v1/{resourceId}/{sourceRevision}/{indexRunId}/document.{ext}`
-
-Shared snapshots use the same revision framing and common source attributes,
-with `indexSchema: shared-kb-v1`, `resourceKind: sharedKbDocument` and
-`visibility: authenticated-shared`. They never carry a fabricated `ownerId`.
-The source must be under `shared/`; a `kb/{owner}/...` key cannot be relabeled
-shared. This preserves the baseline QA filter's authenticated access to the
-existing `shared/` dataset. It does not create public S3 access, anonymous
-routes, or account-membership inheritance.
-
-QA needs a corresponding shared-schema consumer with the same current-byte
-checks. Keep the unified QA consumer held until both schemas are supported.
-Private/shared golden revision vectors are in
-`internal/service/testdata/knowledge-revisions.json`.
-
-## Runtime/IAM handoff
-
-Keep TABLE_NAME, BUCKET_NAME, KB_BUCKET_NAME, KB_ID and DATA_SOURCE_ID.
-Set required `INDEXING_MODE` to exactly `manual-only` or `all`; missing/invalid
-values fail before AWS client initialization. No resource IDs are hardcoded.
-
-Bootstrap and activation order:
-
-1. Deploy this required-mode worker before activation, keeping schedule and stream
-   delivery disabled. Configure `INDEXING_MODE=manual-only` and bootstrap permissions,
-   then explicitly enable the normal schedule; no stream mapping is needed yet.
-   The worker automatically paginates private/shared
-   originals and produces their immutable snapshots with the same full-sync
-   coordinator. Do not run an ad-hoc global tick or edit coordinator rows.
-2. Verify private/shared snapshots are INDEXED and answerable in deployed synthetic
-   acceptance. This mode skips canonical source scans, legacy meeting enumeration,
-   canonical notifications and canonical job processing. Existing meeting exports,
-   source records and job records remain unchanged.
-3. Deploy the strict unified QA runtime only after the snapshots are ready. Its
-   matching private/shared consumers and current-source/session guards must ship
-   together; do not expose a pending-only replacement for existing binary search.
-4. Change `INDEXING_MODE` to `all` after QA verification. Existing manual syncs
-   finish under their persisted token, then canonical backfill/legacy retirement
-   starts normally. No stream replay or hand-edited job state is required.
-
-The coordinator persists the applied mode. `all → manual-only` is rejected before
-mutation, as is manual-only operation over an existing canonical batch (including
-old records without mode metadata). Reverting QA after canonical activation needs
-the documented legacy re-export rollback; changing this flag is not that rollback.
-Full S3 sync may revisit existing S3 objects in either mode; manual-only mode never
-rewrites or deletes canonical/legacy meeting objects.
-
-On the configured KB bucket, extend the worker's permissions with:
-
-- `s3:GetObject` and `s3:GetObjectVersion` for `kb/*` and `shared/*`.
-- `s3:ListBucket` on the exact configured KB bucket with a ResourceAccount
-  condition. Effective ListBucket permission is needed for HEAD to distinguish
-  absence from AccessDenied; a prefix-only condition may not apply to HEAD.
-  Runtime listing methods still allow only the defined source/catalog and
-  snapshot prefixes.
-- `s3:PutObject` and `s3:DeleteObject` only for the two new snapshot prefixes.
-
-No writes/deletes to original source prefixes are required. Use the PR205 table,
-Bedrock Start/Get/ListIngestionJob and GetKnowledgeBaseDocuments permissions.
-The existing scheduled
-tick recovers old uploads, overwrites, deletions and missed events; no new
-producer notification is required.
-
-Tests are synthetic and do not establish deployed retrieval quality. Verify
-the full Go suite, vet, ARM64 worker build, and deployment ordering before
-releasing the held QA consumer.
+Verify the out-of-band data source includes both snapshot prefixes, bucket
+versioning/encryption and runtime sizing. Originals and snapshots can coexist in
+that source; QA merges candidates and requires current bindings for binary facts.
+Tests are synthetic; deployed acceptance remains required before strict QA.
