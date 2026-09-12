@@ -228,8 +228,9 @@ func (s *IndexingService) ReadSource(ctx context.Context, key model.IndexResourc
 			if key.Kind == "personalDocument" && key.PK != "USER#"+components[1] {
 				return nil, ErrIndexInvalid
 			}
-			if key.Kind == "accountDocument" &&
-				(get("sourceUserId") != components[1] || get("accountId") != strings.TrimPrefix(key.PK, "ACCOUNT#")) {
+			// SourceUserID is the creator, not the current file owner: a later
+			// account member can replace the file with their own validated key.
+			if key.Kind == "accountDocument" && get("accountId") != strings.TrimPrefix(key.PK, "ACCOUNT#") {
 				return nil, ErrIndexInvalid
 			}
 			original, e := head(fileKey)

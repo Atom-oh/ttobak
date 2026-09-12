@@ -42,9 +42,13 @@ type indexMemory struct {
 	control      *model.IndexControl
 	beforeSave   func(*model.IndexJob)
 	afterControl func(*model.IndexControl) error
+	readError    error
 }
 
 func (m *indexMemory) GetIndexSource(_ context.Context, key model.IndexResource) (*model.IndexRecord, error) {
+	if m.readError != nil {
+		return nil, m.readError
+	}
 	return indexClone(m.sources[key.Hash()]), nil
 }
 func (m *indexMemory) GetIndexJob(_ context.Context, key model.IndexResource) (*model.IndexJob, error) {
@@ -461,6 +465,28 @@ func TestIndexInvalidSourceBackoffAndImmediateRecoveryAfterEdit(t *testing.T) {
 	finishIndex(t, s, provider)
 	if repo.jobs[key.Hash()].State != model.IndexIndexed {
 		t.Fatal("a corrected source remained stuck in backoff")
+	}
+}
+
+func TestIndexEnqueuePersistsPermanentSourceFailureButRetriesStorageErrors(t *testing.T) {
+	s, repo, _, _, _ := newIndexTest()
+	key := addIndexMeeting(repo, "invalid", "notes")
+	repo.sources[key.Hash()].Fields["userId"] = "wrong-owner"
+	if err := s.Enqueue(context.Background(), key); err != nil {
+		t.Fatalf("permanent source error would block stream delivery: %v", err)
+	}
+	if job := repo.jobs[key.Hash()]; job == nil || job.State != model.IndexPending {
+		t.Fatal("permanent source failure was dropped instead of queued")
+	}
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if repo.jobs[key.Hash()].State != model.IndexFailed {
+		t.Fatal("invalid source did not persist a failure")
+	}
+	repo.readError = errors.New("temporary storage failure")
+	if err := s.Enqueue(context.Background(), key); !errors.Is(err, repo.readError) {
+		t.Fatalf("transient storage failure was acknowledged: %v", err)
 	}
 }
 

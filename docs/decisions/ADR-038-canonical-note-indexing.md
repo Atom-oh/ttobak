@@ -41,6 +41,13 @@ explicit pending/failure states. Full syncs, source checks and reconciliation
 cost requests and time; immutable projections require cleanup. Cross-service
 S3/DynamoDB checks are not atomic, so retrieval revalidation remains necessary.
 
+Activation is also a recall migration: old QA filters recognize only legacy
+`meetings/{owner}/` URIs. Deploy and verify canonical metadata/current-authorization
+retrieval first, configure the worker second, then enable stream/tick delivery.
+Cleanup deletes legacy exports; enabling the worker before the new reader loses
+meeting recall. A rollback to the old reader requires re-export, not just stopping
+the worker.
+
 Implementation and cross-language revision vectors:
 [worker contract](../superpowers/plans/2026-09-12-automatic-note-indexing-backend.md).
 
@@ -71,3 +78,8 @@ Implementation and cross-language revision vectors:
 저장과 검색은 지연을 두고 일치하며 대기·실패 상태를 드러냅니다. 전체 동기화와
 복구에는 시간·요청 비용이 들고 불변 객체 정리가 필요합니다. S3와 DynamoDB
 검사는 원자적이지 않으므로 검색 시 재검증을 생략할 수 없습니다.
+
+기존 QA는 `meetings/{owner}/` 경로만 검색합니다. 새 메타데이터·현재 권한
+검증 검색을 먼저 배포해 확인하고, 워커 설정 후 자동 실행을 켜야 합니다.
+레거시 파일 정리 후 기존 QA로 되돌리려면 재내보내기가 필요하며 워커 중지만으로
+검색이 복원되지 않습니다.

@@ -1,45 +1,23 @@
 # Automatic indexing backend contract
 
-This worker slice uses the existing S3 data-source full ingestion path. It does not enable stream/scheduled delivery; current-source retrieval guards and the required runtime configuration/IAM must ship before activation.
+`cmd/kb` accepts canonical DynamoDB notifications and internal `tick`/`sync`
+requests. This slice enables no automatic trigger. Runtime configuration is
+`TABLE_NAME`, `BUCKET_NAME` (assets), `KB_BUCKET_NAME`, `KB_ID`, `DATA_SOURCE_ID`.
 
-- `cmd/kb` accepts DynamoDB stream records (canonical keys only, partial-batch
-  failures) and scheduled/internal `tick` or `sync` requests.
-- Required environment: `TABLE_NAME`, `BUCKET_NAME` (assets), `KB_BUCKET_NAME`,
-  `KB_ID`, `DATA_SOURCE_ID`. IDs come only from runtime configuration.
-- Resource jobs live at `KBINDEX#JOBS / sha256(sourcePK + NUL + sourceSK)`.
-  Source classes: `meeting`, `personalDocument`, `accountDocument`.
-- States: PENDING, PREPARING, WAITING_SYNC, INDEXED, DELETED, WAITING_SOURCE,
-  FAILED. Stream delivery reads the current source revision before queueing; duplicate same-revision events preserve active preparation. It never trusts old event images.
-- A version-CAS coordinator at `KBINDEX#CONTROL / STATE` freezes a batch through
-  EXPORTING → PREPARED → RUNNING → FINALIZING. Persist its idempotency token before
-  StartIngestionJob. Conflicts and unknown submissions retain the same token.
-- One coordinator lease serializes publication and cleanup. A 20-minute lease
-  outlives Lambda's maximum execution duration; processing uses a shorter context
-  budget. Uncertain S3 writes retain this lease rather than immediately allowing
-  another publisher. Every worker transition also checks version/run/lease.
-- Immutable projections use `canonical/v1/{kind}/{resourceHash}/{runId}/`.
-  Persist planned object keys first; enumerate the resource prefix to recover
-  partial/obsolete projections and remove legacy `meetings/{owner}/{id}.md`
-  exports before syncing. No unrelated crawler/upload prefixes are deleted.
-- Metadata: `resourceKind`, `resourceId`, `sourcePK`, `sourceSK`, `sourceRevision`,
-  `indexRunId`, `indexSchema: canonical-v1`, `sourceObjects` (JSON string).
-  Metadata is discovery/provenance, never authorization.
-- Source revisions bind canonical projection fields and S3 ETag/version/size.
-  Reads use pinned versions plus If-Match. INDEXED/DELETED requires a successful
-  provider job, fresh object/source checks, and a conditional source+job write.
-- Reconciliation pages canonical records, known jobs (including deleted sources),
-  and legacy exports, persisting cursors so missed streams/backfill make progress.
-- Job pages are at most one generation (four entries), so failed entries cannot
-  hide later eligible jobs. Repeated failures back off from one to thirty minutes;
-  an unreadable-source scan preserves cooldown, and a proven new revision resets it.
-- PPTX/PPT waits for PDF preview metadata `source-etag` and, when supplied by S3,
-  `source-version-id` matching its current original object. Converter changes
-  belong to the host; an unbound legacy preview is not proof of current content.
+Jobs use `KBINDEX#JOBS / sha256(sourcePK + NUL + sourceSK)`; the version/lease
+coordinator is `KBINDEX#CONTROL/STATE`. Its 20-minute lease covers the maximum
+invocation and is retained after uncertain writes. Persist the ingestion token
+before submission and keep it across unknown/conflicting replies.
 
-Implement model/repository/provider/source/worker modules and synthetic tests for
-reordering, crash recovery, lost responses, source deletion, byte revisions,
-cleanup, competing full syncs, HTTP serialization and command dispatch. QA,
-status API/UI and CDK event/IAM wiring remain host-owned.
+Sources are meetings and personal/account documents. Immutable projections use
+`canonical/v1/{kind}/{resourceHash}/{runId}/`; clean obsolete/partial generations
+and exact legacy meeting exports before sync. Completion requires a successful
+provider job, fresh source/object checks and a conditional write (ADR-038).
+
+Paginated reconciliation rotates four-job pages. Failures back off 1–30 minutes;
+unknown revisions preserve cooldown, while a proven new revision resets it.
+Permanent source defects become durable failed jobs, not blocked stream records.
+QA, status UI and activation are separate integration steps described below.
 
 ## Cross-language source revision
 
@@ -91,6 +69,15 @@ and [StartIngestionJob idempotency](https://docs.aws.amazon.com/bedrock/latest/A
 
 ## Integration handoff
 
+Activation order is required for recall as well as authorization: deploy and
+verify QA filters that accept `canonical/v1/` metadata and reauthorize current
+sources first; configure the worker's environment/IAM/12-minute/1-GB budget
+second; enable stream/scheduled delivery last. The old QA URI filter accepts
+only `meetings/{owner}/` exports and cannot discover canonical projections.
+The worker deletes those legacy exports, so enabling it first loses meeting
+recall. Rolling QA back afterward requires re-exporting legacy objects; stopping
+the worker alone does not restore them. Preserve compatible readers on rollback.
+
 - `NewIndexingService(repo, objects, ingestion, assetsBucket)` exposes `Enqueue`,
   `Tick`, `ReadSource` and `Status`. `Status` needs canonical authorization in its
   caller, and revalidates source/object bindings and projection inventory before
@@ -115,17 +102,12 @@ and [StartIngestionJob idempotency](https://docs.aws.amazon.com/bedrock/latest/A
   S3 heads and DynamoDB transactions are not one cross-service atomic read;
   retrieval must reject stale file chunks even if an object changes just after
   the worker's final freshness check. This is why stored INDEXED is not a grant.
-- PPTX/PPT preview binding requires a separate converter change. Unbound previews
-  remain WAITING_SOURCE. No converter, QA, frontend or infra changes are included.
+- Confirm deployment of the source-binding converter from PR204 before backfill.
+  Unbound previews remain WAITING_SOURCE until regenerated. No converter, QA,
+  frontend or infra changes are included in this worker slice.
 - Deployed ingestion/recall and real source edit/delete/revoke evidence remain
   host-owned prerequisites; synthetic tests alone do not establish those results.
 
-Validation uses home-backed GOTMPDIR/TMPDIR and the shared Go cache. Full
-`/usr/local/go/bin/go test ./... -count=1`, `/usr/local/go/bin/go vet ./...`, and a Linux ARM64 `lambda.norpc` KB build
-are required. The indexing suite covers stream filtering, source/CAS races,
-coordinator/run leases, accepted replies lost across both provider and DynamoDB,
-partial uploads, cleanup/deletion/recreation, external sync conflicts, failed
-ingestion, retry cooldowns, paginated backfill, raw byte projection and revision
-binding, metadata bounds, and actual SDK HTTP serialization. No live AWS calls.
-
-Validation on main plus this worker patch uses the commands above. The new stream-delivery regression proves a duplicate leaves the active preparation/version intact, while editing saved notes queues a new revision. The deliberately bad version failed before the fix. The opt-in real-model evaluation is not run by these unit tests.
+Validation: run `/usr/local/go/bin/go test ./... -count=1`,
+`/usr/local/go/bin/go vet ./...`, and a Linux ARM64 `lambda.norpc` KB build.
+Tests use synthetic SDK responses; deployed recall is a separate activation gate.

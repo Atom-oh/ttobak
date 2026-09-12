@@ -48,6 +48,11 @@ func (s *IndexingService) Enqueue(ctx context.Context, key model.IndexResource) 
 	// revision so duplicate delivery can coalesce with an active preparation,
 	// while a real edit still invalidates that worker's conditional completion.
 	source, err := s.ReadSource(ctx, key, false)
+	if errors.Is(err, ErrIndexInvalid) {
+		// A permanent source defect belongs in the durable job's failure
+		// state, not in repeated delivery of the same stream sequence.
+		return s.repo.RequestIndexResource(ctx, key, "", s.now().UnixMilli())
+	}
 	if err != nil {
 		return err
 	}
