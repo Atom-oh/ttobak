@@ -203,17 +203,18 @@ type CreateSimulationRequest struct {
 
 // AttachmentResponse represents an attachment in API responses
 type AttachmentResponse struct {
-	AttachmentID     string `json:"attachmentId"`
-	OriginalKey      string `json:"originalKey"`
-	ProcessedKey     string `json:"processedKey,omitempty"`
-	URL              string `json:"url,omitempty"`
-	Type             string `json:"type"` // photo, screenshot, diagram, whiteboard, document, video, audio_file
-	Status           string `json:"status"`
-	Description      string `json:"description,omitempty"`
-	ProcessedContent string `json:"processedContent,omitempty"`
-	FileName         string `json:"fileName,omitempty"`
-	FileSize         int64  `json:"fileSize,omitempty"`
-	MimeType         string `json:"mimeType,omitempty"`
+	TextExtraction   *AttachmentTextStatus `json:"textExtraction,omitempty"`
+	AttachmentID     string                `json:"attachmentId"`
+	OriginalKey      string                `json:"originalKey"`
+	ProcessedKey     string                `json:"processedKey,omitempty"`
+	URL              string                `json:"url,omitempty"`
+	Type             string                `json:"type"` // photo, screenshot, diagram, whiteboard, document, video, audio_file
+	Status           string                `json:"status"`
+	Description      string                `json:"description,omitempty"`
+	ProcessedContent string                `json:"processedContent,omitempty"`
+	FileName         string                `json:"fileName,omitempty"`
+	FileSize         int64                 `json:"fileSize,omitempty"`
+	MimeType         string                `json:"mimeType,omitempty"`
 }
 
 // UserSearchResponse represents a user in search results
