@@ -82,6 +82,17 @@ CloudFront (d2olomx8td8txt.cloudfront.net)
 Action-item analysis uses a separate `MEETING#{id}/ANALYSIS#actionItems` row with run ID, status, source hash and numeric lease. Authenticated owners/editors may retry through `ttobak.analysis` / `ActionItemsRequested`; the existing summarize Lambda processes it, while the normal pipeline uses the same service inline. Publish result and success together only when run, saved summary and previous items still match. Failures retain prior items; only validated successful `[]` means no tasks. Preserve exact unchanged task IDs and human completion; persist checkbox changes conditionally. Legacy missing metadata is unknown. Expired leases become interrupted failures. See `docs/superpowers/specs/2026-09-12-action-items-recovery.md` and `docs/API-SPEC.md`.
 
 ### Event-Driven Pipeline
+
+Summary publication follows [ADR-040](docs/decisions/ADR-040-guarded-summary-publication.md).
+The existing `SummarizeTranscript` path captures exact stored attribute presence
+before hydration and conditionally publishes against that snapshot; absent text
+is not globally equated with empty text. This changes active batch-summary
+behavior when deployed. Verified documents are separate evidence; unavailable
+documents and invalid citation paragraphs are omitted with notices, while
+incomplete model responses and notice-only results fail. Saved-summary
+orchestration additionally uses `ANALYSIS#summary` run/lease/source and edit-grant
+guards. The release slices activate producers separately; see the
+[release order and rollback](docs/runbooks/meeting-document-release.md).
 ```
 audio/ upload → EventBridge → ttobak-transcribe → Whisper ECS (GPU Spot g5.xlarge) → transcripts/ S3
 transcripts/ upload → EventBridge → ttobak-summarize → Bedrock Claude → DynamoDB
@@ -167,7 +178,7 @@ The news crawler (`ttobak-crawler-news`) and QA (`ttobak-qa`, for `search_web`) 
 ## Known Issues & Decisions
 
 ### HIGH
-- **Meeting document attachments (PPTX/PDF/DOCX/MD) are not yet content-extracted in production**: upload category `file` marks the attachment done with no processing, so contents reach neither the live summary nor the final note prompt (filenames only). Reaches the KB only via manual per-attachment copy + async ingestion; Bedrock KB's default parser doesn't index PPT/PPTX, so slide decks need conversion first. The bounded parser and private asynchronous `ttobak-document-extract` worker now exist (ADR-039). The worker checks canonical `ATTACH#`/`ATTEXT#` rows and writes immutable result JSON; production API producers and summary/QA integration remain staged.
+- **Meeting document extraction activation**: the private worker (ADR-039), owner-authorized upload producer, status/retry/text routes and verified DOCUMENT summary integration are implemented. A stored file remains uploaded when unsupported extraction or publication failure is durably recorded; failed-state persistence errors still surface. The host verified worker deployment/runtime before producer release. API, saved-summary, frontend and QA activation remain separately coordinated; legacy unknown documents require retry. Source-presence and omission rules follow ADR-040.
 
 ### Medium
 - **Infra hardcoding**: ACM ARN, domain, CORS origin, KB ID, `agentCoreRuntimeArn`, `researchAgentExecutionRoleArn` are hardcoded in CDK stacks. Should move to CDK context for multi-account/stage support. The KB ID/DataSource ID in `infra/lib/knowledge-stack.ts` (`BJJLVLFTOR`/`3AVMMT3RF3`) are the real out-of-band values — they briefly regressed to a `'PENDING'` placeholder once (ADR-021); don't reintroduce that. Same class: `mac-app/src-tauri/src/upload.rs`'s `EXPECTED_BUCKET_HOST` pins the exact `ttobak-assets-180294183052.s3.ap-northeast-2.amazonaws.com` host (deliberately an exact match, not a `.amazonaws.com` suffix check — see that file's doc comment on why a suffix check would accept any AWS customer's bucket) — a different account/stage's native upload fails with a message that reads like an attack, not a misconfiguration, until this is parameterized too.

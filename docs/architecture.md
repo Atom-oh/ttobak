@@ -135,6 +135,12 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 
 문서 추출 워커는 검증된 첨부 실행을 비동기로 처리합니다. 파서·네트워크·원본 검증 경계와 단계별 활성화는 [ADR-039](decisions/ADR-039-meeting-document-extraction.md)에 기록했습니다.
 
+검증된 문서 근거를 별도 DOCUMENT 자료로 전달하는 요약 생성기와 저장된
+소스·편집 권한을 조건으로 확인하는 요약 저장소가 준비되었습니다. API 생산자와
+비동기 연결은 [배포 순서](runbooks/meeting-document-release.md)에 따라 별도로 활성화합니다.
+기존 배치 요약의 저장과 문서 제외 동작도 배포 시 변경됩니다. 정확한 속성 존재
+여부와 저장 조건은 [ADR-040](decisions/ADR-040-guarded-summary-publication.md)을 따릅니다.
+
 ### 아키텍처 결정 기록 (ADR)
 
 - [ADR-001: 원격 회의 시스템 오디오 캡처](decisions/ADR-001-system-audio-capture-for-remote-meetings.md) — `getDisplayMedia` + `AudioContext` 믹싱 (제안됨)
@@ -175,6 +181,7 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 - [ADR-036: 어카운트 계층과 미팅 필터](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (승인됨)
 - [ADR-037: 조건부 전사문 수정을 위한 불변 spill](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (승인됨)
 - [ADR-039: 회의 문서 텍스트 추출](decisions/ADR-039-meeting-document-extraction.md) (승인됨)
+- [ADR-040: 조건부 요약 저장](decisions/ADR-040-guarded-summary-publication.md) (승인됨)
 
 ### 운영
 
@@ -259,6 +266,12 @@ Authenticated `/api/meetings/{id}/reading` bounds the requested section before r
 
 The asynchronous document worker consumes validated attachment runs. Parser, network, source checks and staged activation are documented in [ADR-039](decisions/ADR-039-meeting-document-extraction.md).
 
+The summary/storage foundation prepares verified DOCUMENT evidence and guards
+publication against source and editor-grant changes. API producers and async
+wiring activate separately under the [release order](runbooks/meeting-document-release.md).
+Deployment also changes existing batch-summary saves and document omission.
+Preserve exact attribute presence under [ADR-040](decisions/ADR-040-guarded-summary-publication.md).
+
 ### Architecture Decision Records (ADR)
 
 - [ADR-001: System Audio Capture for Remote Meetings](decisions/ADR-001-system-audio-capture-for-remote-meetings.md) — `getDisplayMedia` + `AudioContext` mixing (Proposed)
@@ -299,6 +312,7 @@ The asynchronous document worker consumes validated attachment runs. Parser, net
 - [ADR-036: Account Hierarchy and Meeting Filters](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (Accepted)
 - [ADR-037: Immutable Spills for Conditional Transcript Writes](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (Accepted)
 - [ADR-039: Meeting Document Text Extraction](decisions/ADR-039-meeting-document-extraction.md) (Accepted)
+- [ADR-040: Guarded Summary Publication](decisions/ADR-040-guarded-summary-publication.md) (Accepted)
 
 ### Operations
 

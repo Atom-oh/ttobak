@@ -69,8 +69,10 @@ func attachmentApplySet(t *testing.T, op map[string]interface{}, item map[string
 	}
 }
 func TestCompleteDocumentUploadRealSDKQueuesAndPersistsEventFailure(t *testing.T) {
-	for _, publishFails := range []bool{false, true} {
-		t.Run(map[bool]string{false: "success", true: "delivery failure"}[publishFails], func(t *testing.T) {
+	for _, scenario := range []string{"success", "delivery failure", "failure state unavailable"} {
+		t.Run(scenario, func(t *testing.T) {
+			publishFails := scenario != "success"
+			failStateWrite := scenario == "failure state unavailable"
 			var attachment *model.Attachment
 			state := map[string]dbtypes.AttributeValue{}
 			events, claims, s3Calls := 0, 0, 0
@@ -127,6 +129,10 @@ func TestCompleteDocumentUploadRealSDKQueuesAndPersistsEventFailure(t *testing.T
 					}
 					return attachmentWireResponse(map[string]interface{}{}), nil
 				case strings.HasSuffix(target, ".UpdateItem"):
+					if failStateWrite {
+						return &http.Response{StatusCode: 400, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
+							Body: io.NopCloser(strings.NewReader(`{"__type":"AccessDeniedException","message":"synthetic state-write failure"}`))}, nil
+					}
 					attachmentApplySet(t, body, state)
 					return attachmentWireResponse(map[string]interface{}{}), nil
 				case strings.HasSuffix(target, ".PutEvents"):
@@ -155,7 +161,13 @@ func TestCompleteDocumentUploadRealSDKQueuesAndPersistsEventFailure(t *testing.T
 			repo := repository.NewDynamoDBRepositoryWithS3(db, "table", storage, "bucket")
 			upload := NewUploadService(storage, repo, "bucket", eventsClient)
 			err := upload.CompleteUpload(context.Background(), "owner", &model.UploadCompleteRequest{MeetingID: "m", Key: "files/owner/m/노트.md", Category: "file", FileName: "노트.md", MimeType: "text/markdown"})
-			if publishFails != errors.Is(err, ErrAttachmentPublish) || !publishFails && err != nil {
+			if failStateWrite {
+				if err == nil || attachment == nil {
+					t.Fatal("failed state persistence must remain an upload error")
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("error=%v", err)
 			}
 			var actual model.AttachmentTextState

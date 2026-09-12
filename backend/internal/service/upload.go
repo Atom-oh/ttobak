@@ -264,7 +264,15 @@ func (s *UploadService) CompleteUpload(ctx context.Context, userID string, req *
 		if err != nil {
 			return err
 		}
-		_, err = s.attachmentText.Request(ctx, userID, req.MeetingID, att.AttachmentID)
+		if att.Type != model.AttachTypeDocument {
+			return nil
+		}
+		status, err := s.attachmentText.Request(ctx, userID, req.MeetingID, att.AttachmentID)
+		// The original file is committed. A non-nil status accompanies these
+		// errors only after failure was saved or a newer durable run was read.
+		if status != nil && (errors.Is(err, ErrUnsupportedAttachment) || errors.Is(err, ErrAttachmentPublish)) {
+			return nil
+		}
 		return err
 
 	default:

@@ -73,6 +73,7 @@ type Attachment struct {
 	ExtractedText     *AttachmentTextResult `dynamodbav:"-" json:"-"` // Verified in-memory summary evidence only.
 	ExtractedRevision string                `dynamodbav:"-" json:"-"`
 	SummaryExcerpted  bool                  `dynamodbav:"-" json:"-"`
+	SummaryOmitted    bool                  `dynamodbav:"-" json:"-"`
 	PK                string                `dynamodbav:"PK"`
 	SK                string                `dynamodbav:"SK"`
 	AttachmentID      string                `dynamodbav:"attachmentId"`

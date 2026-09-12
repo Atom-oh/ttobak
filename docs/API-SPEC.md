@@ -48,11 +48,23 @@ Response: 200 OK
 
 #### Meeting document text
 
-Deploy the document extraction worker (#208) before enabling the upload producer
-in this release. Upload completion remains owner-only. Supported meeting files
+Release prerequisite: merge the summary foundation (#209), which supplies the
+canonical ADR-040 and shared release/rollback runbook, before this API producer.
+The host verified worker deployment `34717614426` SUCCESS: a 626-byte synthetic
+PDF produced 752-byte JSON with native page 1, exact source ETag/identity,
+succeeded/complete state and lease zero. A duplicate left state unchanged;
+three synthetic rows and two exact S3 versions were removed and absence checked.
+This IAM worker smoke does not prove public API/EventBridge/summary/QA behavior.
+
+Deploy the document extraction worker before merging/deploying this upload
+producer; there is no feature toggle. The host verified deployment 34717614426
+and the worker smoke described in the release runbook. Upload completion remains owner-only. Supported meeting files
 (PDF, PPTX, DOCX, MD) queue `ttobak.upload / DocumentUploadCompleted`; publish
-failure is stored in extraction state and returned as an error. Other formats
-remain downloadable and explicitly report `UNSUPPORTED_FORMAT`.
+failure is stored in extraction state. Once that failure is durable, upload
+completion returns 200 because the original file is already stored. Failure to
+persist or confirm extraction state remains an error. Other formats
+remain downloadable: upload completion returns 200 after recording
+`UNSUPPORTED_FORMAT`; the text retry endpoint still returns 422.
 
 Authenticated meeting readers may call:
 
@@ -77,7 +89,9 @@ The encoded response is capped at 14,000 bytes; continuation requires fresh
 authorization and the same canonical source/result revision.
 
 Errors: 400 invalid query; 403/404 access or missing source; 409 stale cursor,
-changed source or unavailable verified text; 422 unsupported format.
+changed source or unavailable verified text; 422 unsupported format on text retry.
+Upload completion preserves 200 for durable `PUBLISH_FAILED` / `UNSUPPORTED_FORMAT`
+states; storage failures remain 500 and are never silently acknowledged.
 No result S3 URL is exposed. Verified document excerpts are separate DOCUMENT
 evidence in summaries; late extraction sets `needsResummary` instead of claiming
 that old notes include the new document.
