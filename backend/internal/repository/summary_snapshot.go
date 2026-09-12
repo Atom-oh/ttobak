@@ -103,11 +103,7 @@ func (r *DynamoDBRepository) captureMeetingSummaryMetadata(ctx context.Context, 
 // CaptureMeetingSummary records exact stored presence before source selection.
 // Hydration binds the effective selected field to bytes separately.
 func (r *DynamoDBRepository) CaptureMeetingSummary(ctx context.Context, ownerID, meetingID string) (*model.SummarySnapshot, error) {
-	snapshot, err := r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, batchSummaryFields)
-	if err != nil || snapshot == nil {
-		return nil, err
-	}
-	return snapshot, nil
+	return r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID, batchSummaryFields)
 }
 
 func validSummarySnapshot(snapshot *model.SummarySnapshot) bool {

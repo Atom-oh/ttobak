@@ -138,7 +138,6 @@ func (s *AttachmentTextService) describe(ctx context.Context, meeting *model.Mee
 		if !stateMatchesAttachment(state, meeting, att) {
 			copy.Status = model.AttachmentTextFailed
 			copy.ErrorCode = "SOURCE_CHANGED"
-			copy.ResultKey = ""
 		}
 		return &copy, nil
 	}

@@ -229,7 +229,6 @@ func renderAttachmentPage(status *model.AttachmentTextStatus, state *model.Attac
 		}
 		decoder := json.NewDecoder(bytes.NewReader(body))
 		decoder.DisallowUnknownFields()
-		position = attachmentCursor{}
 		if decoder.Decode(&position) != nil || decoder.Decode(new(interface{})) != io.EOF || position.Version != 1 || position.Revision != revision || position.Unit < 0 || position.Unit >= len(result.Units) || position.Offset < 0 || position.Offset >= utf8.RuneCountInString(result.Units[position.Unit].Text) {
 			return nil, ErrAttachmentCursor
 		}
