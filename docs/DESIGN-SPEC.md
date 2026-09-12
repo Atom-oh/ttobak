@@ -426,6 +426,18 @@ Layout:
     `ttobak:meetingAsideWidth`) — same w-2 divider pattern
 ```
 
+#### Action item recovery
+
+The meeting detail card distinguishes unverified legacy results, queued/running
+analysis, failed analysis, and successful results. Only successful empty results
+show “액션 아이템이 없습니다.” Pending/failed analysis retains the previous items.
+Editors can request analysis again after a summary is saved and processing is
+done; readers have no write controls. Completion checkboxes persist through the
+API and show save failures. Polling continues while analysis is pending even
+after the meeting itself is done; a bounded one-minute initial check covers the
+summary-to-analysis handoff. Failed status reads expose a manual refresh action.
+Changing meetings resets the card and cancels obsolete requests.
+
 ### 2.9 LiveTranscript Component
 
 Displays streaming real-time transcription and translation results.

@@ -4,6 +4,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
@@ -510,6 +511,28 @@ export class GatewayStack extends cdk.Stack {
       },
     });
     allPartsTranscribedRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction));
+
+    // Action-item retries use the existing worker with their original event detail.
+    const actionItemsDlq = new sqs.Queue(this, 'ActionItemsDlq', {
+      queueName: 'ttobak-action-items-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      retentionPeriod: cdk.Duration.days(7),
+      redriveAllowPolicy: { redrivePermission: sqs.RedrivePermission.DENY_ALL },
+    });
+    const actionItemsRequestedRule = new events.Rule(this, 'ActionItemsRequestedRule', {
+      ruleName: 'ttobak-action-items-requested',
+      description: 'Retry action-item extraction for the requested meeting analysis run',
+      eventPattern: {
+        source: ['ttobak.analysis'],
+        detailType: ['ActionItemsRequested'],
+      },
+    });
+    // CDK scopes both Lambda invocation and DLQ SendMessage to this rule ARN.
+    actionItemsRequestedRule.addTarget(new eventsTargets.LambdaFunction(this.summarizeFunction, {
+      maxEventAge: cdk.Duration.minutes(5),
+      retryAttempts: 3,
+      deadLetterQueue: actionItemsDlq,
+    }));
 
     // Convert Doc Lambda (container image w/ LibreOffice) + EventBridge rule
     // for PPTX/PPT slide uploads -> PDF sidecar conversion. Optional (like

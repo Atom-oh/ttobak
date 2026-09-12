@@ -155,6 +155,60 @@ describe('GatewayStack', () => {
     });
   });
 
+  function resourceId(type: string, property: string, value: string): string {
+    const matches = Object.entries(template.findResources(type))
+      .filter(([, resource]) => resource.Properties[property] === value);
+    expect(matches).toHaveLength(1);
+    return matches[0][0];
+  }
+
+  test('action-item requests reach only summarize with bounded delivery retries and their DLQ', () => {
+    const summarizeId = resourceId('AWS::Lambda::Function', 'FunctionName', 'ttobak-summarize');
+    const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-action-items-dlq');
+    const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-action-items-requested');
+    const rule = template.findResources('AWS::Events::Rule')[ruleId].Properties;
+    expect(rule.EventBusName ?? 'default').toBe('default');
+    expect(rule.EventPattern).toEqual({
+      source: ['ttobak.analysis'],
+      'detail-type': ['ActionItemsRequested'],
+    });
+    // No input transform: the worker needs the original event detail/run ID.
+    expect(rule.Targets).toEqual([{
+      Arn: { 'Fn::GetAtt': [summarizeId, 'Arn'] },
+      Id: expect.any(String),
+      DeadLetterConfig: { Arn: { 'Fn::GetAtt': [queueId, 'Arn'] } },
+      RetryPolicy: { MaximumEventAgeInSeconds: 300, MaximumRetryAttempts: 3 },
+    }]);
+    template.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunction',
+      FunctionName: { 'Fn::GetAtt': [summarizeId, 'Arn'] },
+      Principal: 'events.amazonaws.com',
+      SourceArn: { 'Fn::GetAtt': [ruleId, 'Arn'] },
+    });
+  });
+
+  test('action-item DLQ is encrypted, retains seven days, and accepts only this rule', () => {
+    const queueId = resourceId('AWS::SQS::Queue', 'QueueName', 'ttobak-action-items-dlq');
+    const ruleId = resourceId('AWS::Events::Rule', 'Name', 'ttobak-action-items-requested');
+    const queue = template.findResources('AWS::SQS::Queue')[queueId].Properties;
+    expect(queue.SqsManagedSseEnabled).toBe(true);
+    expect(queue.MessageRetentionPeriod).toBe(604800);
+    expect(queue.FifoQueue ?? false).toBe(false);
+    // This DLQ is for EventBridge delivery, not redrive from arbitrary SQS queues.
+    expect(queue.RedriveAllowPolicy).toEqual({ redrivePermission: 'denyAll' });
+    const policies = Object.values(template.findResources('AWS::SQS::QueuePolicy'))
+      .filter((policy) => policy.Properties.Queues.some((queue: { Ref?: string }) => queue.Ref === queueId));
+    expect(policies).toHaveLength(1);
+    expect(policies[0].Properties.PolicyDocument.Statement).toEqual([{
+      Sid: expect.any(String),
+      Effect: 'Allow',
+      Principal: { Service: 'events.amazonaws.com' },
+      Action: 'sqs:SendMessage',
+      Resource: { 'Fn::GetAtt': [queueId, 'Arn'] },
+      Condition: { ArnEquals: { 'aws:SourceArn': { 'Fn::GetAtt': [ruleId, 'Arn'] } } },
+    }]);
+  });
+
   test('Summarize Lambda has 15 minute timeout', () => {
     template.hasResourceProperties('AWS::Lambda::Function', {
       FunctionName: 'ttobak-summarize',

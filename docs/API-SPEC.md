@@ -239,6 +239,31 @@ Error: 403 Forbidden (shared users with "read" permission cannot edit)
 > anchors, including Nova Sonic B-only meetings. Whitespace-only nonempty A
 > updates are rejected with `400 BAD_REQUEST`; an empty string remains a no-op.
 
+#### Action item analysis and completion
+
+All three routes require the existing meeting authorization. GET permits readers;
+retry and completion changes require owner/edit permission.
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/meetings/{meetingId}/action-items` | `200 { actionItems: [], analysis: { status, runId?, errorCode?, leaseUntil? } }` |
+| POST | `/api/meetings/{meetingId}/action-items/retry` | `202` with the same shape; requires a `done` meeting and saved summary |
+| PUT | `/api/meetings/{meetingId}/action-items/{itemId}` | Explicit `{ "completed": false }` or `true`; returns the current items and analysis |
+
+Analysis status is `unknown`, `queued`, `running`, `succeeded`, or `failed`.
+Only `succeeded` with an empty array establishes that extraction found no tasks.
+Missing legacy metadata is `unknown`; expired pending runs become `failed` with
+`INTERRUPTED`. Fixed error codes also include `INVALID_OUTPUT`, `PROVIDER_FAILED`,
+`PUBLISH_FAILED`, `SOURCE_CHANGED`, and `PERSISTENCE_FAILED`; raw model responses
+are never returned as error messages. A conflict returns 409, denied writes 403,
+and missing meetings/items 404. The detail response also includes
+`actionItemsAnalysis`; a secondary status lookup failure is visibly represented
+as `unknown` / `STATUS_UNAVAILABLE` while preserving the meeting view.
+
+Retry preserves existing items until a complete valid result is committed.
+Unchanged tasks keep their IDs and completion state; new tasks start incomplete
+with new IDs. Concurrent summary or item changes reject stale generated output.
+
 #### Delete Meeting
 
 ```

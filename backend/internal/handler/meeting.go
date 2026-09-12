@@ -25,7 +25,12 @@ type MeetingHandler struct {
 	// simService is optional (see SetSimService) so GetMeeting can attach
 	// the meeting's SimRun (ADR-033) without every existing NewMeetingHandler
 	// call site needing to change.
-	simService *service.SimService
+	simService         *service.SimService
+	actionItemsService *service.ActionItemsAnalysisService
+}
+
+func (h *MeetingHandler) SetActionItemsService(s *service.ActionItemsAnalysisService) {
+	h.actionItemsService = s
 }
 
 // SetSimService injects the cost/sizing simulator service (ADR-033) so
@@ -247,6 +252,17 @@ func (h *MeetingHandler) GetMeeting(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusInternalServerError, model.ErrCodeInternalError, err.Error())
 		return
+	}
+
+	if h.actionItemsService != nil {
+		analysis, analysisErr := h.actionItemsService.Get(ctx, userID, meetingID)
+		if analysisErr != nil {
+			log.Printf("Action item status lookup failed: %v", analysisErr)
+			result.ActionItemsAnalysis = &model.ActionItemsAnalysis{Status: model.AnalysisUnknown, ErrorCode: "STATUS_UNAVAILABLE"}
+		} else {
+			result.ActionItemsAnalysis = analysis.Analysis
+			result.ActionItems, _ = json.Marshal(analysis.ActionItems) // fixed string/bool struct
+		}
 	}
 
 	// Generate presigned download URLs for image attachments
