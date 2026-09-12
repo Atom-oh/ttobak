@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -37,6 +38,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   kmsKeyId?: string;
   knowledgeBaseId?: string;
   dataSourceId?: string;
+  indexingMode?: 'manual-only' | 'all';
+  indexScheduleEnabled?: boolean;
   agentCoreRuntimeArn?: string;
   researchWorkerRole?: iam.IRole;
   convertDocRole?: iam.IRole;
@@ -250,16 +253,92 @@ export class GatewayStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       handler: 'bootstrap',
       code: lambda.Code.fromAsset('../backend/cmd/kb'),
-      role: props.kbRole as iam.Role,
+      // Explicit stream/DLQ policy below avoids both an upstream stack cycle
+      // and CDK's unconditioned ListStreams wildcard grant.
+      role: iam.Role.fromRoleArn(this, 'KbRuntimeRole', props.kbRole.roleArn, { mutable: false }),
       environment: {
         TABLE_NAME: props.table.tableName,
         BUCKET_NAME: props.bucket.bucketName,
         KB_BUCKET_NAME: props.kbBucket?.bucketName || '',
+        KB_ID: props.knowledgeBaseId || '',
+        DATA_SOURCE_ID: props.dataSourceId || '',
+        INDEXING_MODE: props.indexingMode || 'manual-only',
         AWS_REGION_NAME: cdk.Aws.REGION,
       },
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
+      timeout: cdk.Duration.minutes(12),
+      memorySize: 1024,
     });
+
+    const indexDlq = new sqs.Queue(this, 'CanonicalIndexDlq', {
+      queueName: 'ttobak-kb-index-dlq',
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: cdk.Duration.days(7),
+    });
+    const indexDeliveryPolicy = new iam.Policy(this, 'CanonicalIndexDeliveryPolicy', {
+      roles: [props.kbRole],
+      statements: [
+        new iam.PolicyStatement({
+          actions: ['sqs:SendMessage', 'sqs:GetQueueUrl', 'sqs:GetQueueAttributes'],
+          resources: [indexDlq.queueArn],
+        }),
+      ],
+    });
+    this.kbFunction.node.addDependency(indexDeliveryPolicy);
+    if (props.indexingMode === 'all') {
+      if (!props.table.tableStreamArn) {
+        throw new Error('Canonical indexing requires the table stream');
+      }
+      indexDeliveryPolicy.addStatements(
+        new iam.PolicyStatement({
+          actions: ['dynamodb:DescribeStream', 'dynamodb:GetRecords', 'dynamodb:GetShardIterator'],
+          resources: [props.table.tableStreamArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ['dynamodb:ListStreams'],
+          resources: ['*'],
+          conditions: { StringEquals: { 'aws:RequestedRegion': this.region } },
+        }),
+      );
+      this.kbFunction.addEventSource(new lambdaSources.DynamoEventSource(props.table, {
+        startingPosition: lambda.StartingPosition.LATEST,
+        enabled: true,
+        batchSize: 20,
+        bisectBatchOnError: true,
+        reportBatchItemFailures: true,
+        retryAttempts: 3,
+        maxRecordAge: cdk.Duration.hours(23),
+        onFailure: new lambdaSources.SqsDlq(indexDlq),
+        filters: [
+          lambda.FilterCriteria.filter({
+            eventName: ['INSERT', 'MODIFY', 'REMOVE'],
+            dynamodb: { Keys: {
+              PK: { S: [{ prefix: 'USER#' }] },
+              SK: { S: [{ prefix: 'MEETING#' }, { prefix: 'DOC#' }] },
+            } },
+          }),
+          lambda.FilterCriteria.filter({
+            eventName: ['INSERT', 'MODIFY', 'REMOVE'],
+            dynamodb: { Keys: {
+              PK: { S: [{ prefix: 'ACCOUNT#' }] },
+              SK: { S: [{ prefix: 'DOC#' }] },
+            } },
+          }),
+        ],
+      }));
+    }
+    const indexTick = new events.Rule(this, 'CanonicalIndexTick', {
+      ruleName: 'ttobak-kb-index-tick',
+      description: 'Reconcile knowledge snapshots in the configured rollout mode',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      enabled: props.indexScheduleEnabled ?? false,
+    });
+    indexTick.addTarget(new eventsTargets.LambdaFunction(this.kbFunction, {
+      event: events.RuleTargetInput.fromObject({ action: 'tick' }),
+      retryAttempts: 2,
+      maxEventAge: cdk.Duration.minutes(5),
+      deadLetterQueue: indexDlq,
+    }));
 
     // Q&A Lambda function (Python runtime for flexible prompt engineering)
     this.qaFunction = new lambda.Function(this, 'QAFunction', {
