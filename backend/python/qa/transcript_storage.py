@@ -1,19 +1,24 @@
-"""Read only the exact repository-owned spill object for an authorized meeting."""
+"""Read a pinned legacy or immutable-version spill object for an authorized meeting."""
 import re
 
 
 def validate_transcript_ref(value, *, bucket_name, meeting_id, field):
-    # Matches Go's repository.validateTranscriptRef key binding, plus an
-    # explicit meeting ID charset check. Never normalize a supplied key.
+    # Mirrors Go's repository.validateTranscriptRef. Never normalize or decode a key.
     if (
-        not bucket_name
+        not isinstance(value, str)
+        or not isinstance(bucket_name, str)
+        or not bucket_name
         or not isinstance(meeting_id, str)
         or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', meeting_id)
-        or field not in ('transcriptA', 'transcriptB')
+        or field not in ('transcriptA', 'transcriptB', 'transcriptSegments')
     ):
         raise ValueError('Invalid transcript storage reference')
-    key = f'transcripts/{meeting_id}/{field}.txt'
-    if value != f's3://{bucket_name}/{key}':
+    prefix = f's3://{bucket_name}/'
+    if not value.startswith(prefix):
+        raise ValueError('Invalid transcript storage reference')
+    key = value[len(prefix):]
+    base = re.escape(f'transcripts/{meeting_id}/{field}')
+    if not re.fullmatch(base + r'(?:\.[0-9a-f]{32})?\.txt', key):
         raise ValueError('Invalid transcript storage reference')
     return key
 
