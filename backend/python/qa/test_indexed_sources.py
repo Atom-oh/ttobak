@@ -150,21 +150,23 @@ class TestIndexedSourceIntegration(_SourceFixture, unittest.TestCase):
             'score': 0.9, 'location': {'s3Location': {'uri': 's3://knowledge/kb/owner/note.md'}},
             'content': {'text': 'OLD_UNBOUND_CHUNK'},
         }]}
-        self.s3.head_object.return_value = {'ETag': '"v1"', 'VersionId': 'v1', 'ContentLength': 7}
+        body = b'current' * 450
+        self.s3.head_object.return_value = {'ETag': '"v1"', 'VersionId': 'v1', 'ContentLength': len(body)}
         self.s3.get_object.side_effect = lambda **kw: {'ETag': '"v1"', 'VersionId': 'v1',
-                                                       'Body': io.BytesIO(b'current')}
+                                                       'Body': io.BytesIO(body)}
         state, details = handler.new_source_state(), []
         context = handler._agent_context('owner', None, None, state, details)
         result = context['retrieve_from_kb']('legacy')[0]
         self.assertIn('dependency', result)
-        self.assertEqual(result['text'], 'current')
+        self.assertEqual(result['text'], body.decode())
+        self.assertTrue(details[0]['partial'], 'public source detail claimed the full model context')
         page = context['load_legacy_text']('owner', result['uri'], 0, result['provenance']['sourceRevision'])
-        self.assertEqual(page['text'], 'current')
+        self.assertEqual(page['text'], body.decode())
         messages = [{'role': 'user', 'content': [{'text': 'question'}]},
                     {'role': 'assistant', 'content': [{'text': 'LEGACY_DERIVED_FACT'}]}]
         handler.save_session('legacy-new', messages, user_id='owner', source_state=state)
         self.assertEqual(handler.load_session('legacy-new', user_id='owner'), messages)
-        self.s3.head_object.return_value = {'ETag': '"v2"', 'VersionId': 'v2', 'ContentLength': 7}
+        self.s3.head_object.return_value = {'ETag': '"v2"', 'VersionId': 'v2', 'ContentLength': len(body)}
         self.assertEqual(handler.load_session('legacy-new', user_id='owner'), [])
         self.assertEqual(self.s3.get_object.call_count, 2)
 

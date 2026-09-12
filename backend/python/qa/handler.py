@@ -935,7 +935,10 @@ def _agent_context(user_id, transcript, meeting_notes, source_state, source_deta
                 remember_source(source_state, dependency)
             if result.get('volatile'):
                 source_state['replayable'] = False
-            collect_detail(source_details, result.get('provenance'))
+            detail = dict(result.get('provenance') or {})
+            if detail.get('resourceKind') == 'legacyText':
+                detail['partial'] = detail.get('partial', False) or len(result.get('text', '')) > 2400
+            collect_detail(source_details, detail)
             for detail in result.get('additionalSourceDetails', []):
                 collect_detail(source_details, detail)
         return results
