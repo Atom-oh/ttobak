@@ -17,6 +17,7 @@ func TestExtractMeetingIDFromTranscriptKey(t *testing.T) {
 		// and errors the invocation on every long meeting's pipeline run).
 		{"spill transcriptA key rejected", "transcripts/abc-123/transcriptA.txt", ""},
 		{"spill segments key rejected", "transcripts/abc-123/transcriptSegments.txt", ""},
+		{"versioned spill key rejected", "transcripts/abc-123/transcriptA.0123456789abcdef0123456789abcdef.txt", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
