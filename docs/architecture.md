@@ -174,6 +174,7 @@ Phase 2(2026-09-03, ADR-035)부터 프로덕션 화자분리는 pyannote 4.x com
 - [ADR-035: pyannote 4 화자분리와 ASR 의존성 고정](decisions/ADR-035-diarization-pyannote4-community1-asr-pins.md) (승인됨)
 - [ADR-036: 어카운트 계층과 미팅 필터](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (승인됨)
 - [ADR-037: 조건부 전사문 수정을 위한 불변 spill](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (승인됨)
+- [ADR-039: 회의 문서 텍스트 추출](decisions/ADR-039-meeting-document-extraction.md) (승인됨)
 
 ### 운영
 
@@ -297,6 +298,7 @@ The asynchronous document worker consumes validated attachment runs. Parser, net
 - [ADR-035: Diarization with pyannote 4 and pinned ASR dependencies](decisions/ADR-035-diarization-pyannote4-community1-asr-pins.md) (Accepted)
 - [ADR-036: Account Hierarchy and Meeting Filters](decisions/ADR-036-account-hierarchy-and-meeting-filters.md) (Accepted)
 - [ADR-037: Immutable Spills for Conditional Transcript Writes](decisions/ADR-037-immutable-spills-for-conditional-transcript-writes.md) (Accepted)
+- [ADR-039: Meeting Document Text Extraction](decisions/ADR-039-meeting-document-extraction.md) (Accepted)
 
 ### Operations
 

@@ -19,6 +19,11 @@ synchronously from the API would spend its request budget on untrusted files.
 Use an asynchronous Lambda with the bounded native PDF/PPTX/DOCX/Markdown parser.
 OCR and legacy Office conversion are outside this parser's declared scope. Internal XLSX chart workbooks remain opaque and are not parsed/executed; their omission produces partial extraction while preserving slide text. OLE, macros and other embedded packages remain rejected.
 
+The parser ceilings remain 20 MiB input, 512 MiB child address space, 8/9 seconds
+CPU and 12 seconds wall time. Completeness covers native text, not rendered
+appearance or OCR. Ordinary hyperlinks remain inert; chart workbooks are the
+explicit opaque-package exception above.
+
 ### Decision
 
 The API creates a canonical `ATTACH#` row and a separate `ATTEXT#` queued run
@@ -68,6 +73,10 @@ API·요약·Q&A·화면 연결은 별도 배포 단계입니다.
 요청 시간 제한을 소모하므로, 제한된 PDF/PPTX/DOCX/Markdown 파서를
 비동기 Lambda에서 실행합니다. OCR과 구형 Office 변환은 이 파서의 범위가 아닙니다. 차트의 내부 XLSX 워크북은 읽거나 실행하지 않고 누락을 부분 추출로 표시하며 슬라이드 텍스트를 보존합니다. OLE·매크로·다른 내장 패키지는 거부합니다.
 
+파서 한도는 입력 20MiB, 주소 공간 512MiB, CPU 8/9초, 경과 시간 12초입니다.
+완료는 원래 텍스트 범위이며 OCR·전체 시각 표현을 보장하지 않습니다.
+일반 하이퍼링크는 실행하지 않고 차트 워크북만 불투명 패키지 예외로 둡니다.
+
 ### 결정
 
 API가 `ATTACH#` 원본과 `ATTEXT#` 실행 상태를 먼저 저장한 뒤 이벤트를 보냅니다.
@@ -94,3 +103,24 @@ API가 `ATTACH#` 원본과 `ATTEXT#` 실행 상태를 먼저 저장한 뒤 이�
 
 - [워커 계약과 검증](../../backend/python/document-extract/LAMBDA.md)
 - [파서 범위와 제한](../../backend/python/document-extract/README.md)
+
+### Result retention / 결과 보존
+
+Result JSON uses the existing private, versioned assets bucket with S3-managed
+server-side encryption and Block Public Access. No body text or parser stderr
+is logged. Code/dependencies are packaged together read-only; fixtures/tests are
+excluded. Environment stripping does not prevent a same-UID exploit from reading
+parent credentials, so it is not an isolation boundary.
+
+There is currently no expiration rule for `files/` results, matching retained
+original files. Attachment/meeting deletion removes canonical access and ATTEXT
+rows; it does not physically erase result object versions. Unreferenced-object
+cleanup remains a recorded retention gap. Active results must not be expired
+blindly, and ambiguous commits retain their objects to avoid breaking readers.
+
+결과는 비공개·버전 관리·S3 서버 측 암호화·공개 접근 차단이 적용된 기존
+assets 버킷에 저장합니다. 본문과 파서 stderr를 로그에 남기지 않습니다.
+현재 `files/` 결과의 자동 만료는 없으며, 원본 파일처럼 보존됩니다.
+회의·첨부 삭제는 접근 권한과 ATTEXT 행을 제거하지만 객체 버전의 물리 삭제는
+보장하지 않습니다. 참조 없는 객체 정리는 남은 보존 과제로 기록합니다.
+환경변수 제거는 같은 UID의 침해에서 부모 자격증명 접근을 막는 경계가 아닙니다.
