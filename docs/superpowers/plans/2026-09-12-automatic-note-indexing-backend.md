@@ -59,6 +59,11 @@ Fresh source/byte reads and the source CAS still follow the provider check.
 
 ## Activation and rollback
 
+Runtime also requires `INDEXING_MODE=manual-only|all`. Follow the four-stage
+[ADR-038 bootstrap extension](../../decisions/ADR-038-canonical-note-indexing.md).
+The steps below apply only to canonical/all-mode activation after manual snapshots
+and strict QA runtime have been verified.
+
 1. Deploy and verify QA canonical metadata filters and current-source authorization.
    Old QA recognizes only legacy `meetings/{owner}/` URIs and cannot find canonical
    objects. Verify current edits, new terms, deletion and revocation.
@@ -68,8 +73,9 @@ Fresh source/byte reads and the source CAS still follow the provider check.
    legacy meeting cleanup; scoped Bedrock Start/Get/ListIngestionJobs and
    GetKnowledgeBaseDocuments on the configured knowledge base.
 3. Enable canonical-key stream delivery with partial-batch responses, bounded
-   retries/DLQ and scheduled reconciliation. Current CDK has no trigger and still
-   uses 30 seconds/256 MiB, so configuration must precede activation.
+   retries/DLQ and scheduled reconciliation only after manual snapshot bootstrap
+   and strict QA verification. The prepared CDK now configures 12 minutes/1024
+   MiB with its schedule disabled; verify that preparation is deployed first.
 
 Legacy cleanup makes rollback to old QA require re-export (ADR-038).
 

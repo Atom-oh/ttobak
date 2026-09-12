@@ -33,6 +33,7 @@ interface QAEntry {
   question: string;
   answer: string;
   sources?: string[];
+  sourceDetails?: import('@/types/meeting').QASourceDetail[];
   usedKB?: boolean;
   usedDocs?: boolean;
   toolsUsed?: string[];
@@ -257,6 +258,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
                   ...e,
                   answer: msg.answer || e.answer,
                   sources: msg.sources,
+                  sourceDetails: msg.sourceDetails,
                   usedKB: msg.usedKB,
                   usedDocs: msg.usedDocs,
                   toolsUsed: msg.toolsUsed,
@@ -433,6 +435,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
                 ...entry,
                 answer: response.answer,
                 sources: response.sources,
+                sourceDetails: response.sourceDetails,
                 usedKB: response.usedKB,
                 usedDocs: response.usedDocs,
                 toolsUsed: response.toolsUsed,
@@ -576,6 +579,7 @@ export function LiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
               question={entry.question}
               answer={entry.answer}
               sources={entry.sources}
+              sourceDetails={entry.sourceDetails}
               usedKB={entry.usedKB}
               usedDocs={entry.usedDocs}
               toolsUsed={entry.toolsUsed}

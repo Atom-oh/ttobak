@@ -4,9 +4,9 @@ import re
 from boto3.dynamodb.conditions import Key
 from source_revision import (
     IDENTIFIER, resource_identity, projection_identity, legacy_meeting_identity, normalize_bindings,
-    legacy_text_key, legacy_text_revision,
 )
 from manual_kb import discovery_filter as manual_discovery_filter, hydrate_manual_candidates
+from legacy_text import read_legacy_text, source_excerpt
 
 
 def discover_sources(reader, user_id, query_all, shared_meetings):
@@ -111,36 +111,23 @@ def _current_result(snapshot, uri, score, content_source):
     return result
 
 
-def _legacy_text(reader, user_id, uri, score):
-    key = legacy_text_key(uri, reader.kb_bucket, user_id)
-    if key is None:
-        return None
-    obj = reader.head(key, reader.kb_bucket)
-    if obj.get('missing'):
-        return None
-    # Legacy uploads/crawler text has no canonical revision in the old index.
-    # Read current text instead of trusting an unbound indexed chunk.
-    text = reader.bytes(obj, reader.kb_bucket).decode('utf-8', errors='strict')
-    current = reader.head(key, reader.kb_bucket)
-    revision = legacy_text_revision(uri, obj)
-    if current.get('missing') or legacy_text_revision(uri, current) != revision:
-        raise ValueError('Legacy source changed while reading')
-    return {'uri': uri, 'score': score, 'text': text[:6000],
-            'dependency': {'legacyURI': uri, 'sourceRevision': revision},
-            'provenance': {'uri': uri, 'resourceKind': 'legacyText',
-                           'title': key.rsplit('/', 1)[-1], 'contentSource': 'current_legacy_text',
-                           'sourceRevision': revision, 'partial': len(text) > 6000}}
+def _legacy_text(reader, user_id, uri, question, candidates):
+    source = read_legacy_text(reader, user_id, uri)
+    return source_excerpt(source, question, candidates) if source else None
 
 
 def hydrate_candidates(reader, user_id, question, candidates, identities, limit, manual_lookup=None):
     results, snapshots = {}, {}
+    grouped = {}
+    for candidate in candidates:
+        grouped.setdefault(candidate.get('uri', ''), []).append(candidate)
     for candidate in candidates:
         uri, score = candidate.get('uri', ''), candidate.get('score', 0)
         identity = projection_identity(uri, candidate.get('metadata'), reader.kb_bucket)
         legacy = legacy_meeting_identity(uri, reader.kb_bucket)
         if identity is None and legacy is None:
             if uri not in results:
-                current = _legacy_text(reader, user_id, uri, score)
+                current = _legacy_text(reader, user_id, uri, question, grouped[uri])
                 if current:
                     results[uri] = current
             continue

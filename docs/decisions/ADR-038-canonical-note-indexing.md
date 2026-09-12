@@ -62,3 +62,24 @@ requires re-export; stopping the worker does not restore deleted exports.
 ### 참고
 
 [스키마·검증 벡터·배포 순서](../superpowers/plans/2026-09-12-automatic-note-indexing-backend.md)
+
+## Bootstrap extension / 추가 결정 — 2026-09-12
+
+Accepted. Extend the preceding canonical-only activation order to preserve existing
+binary recall: deploy the worker with delivery off; require
+`INDEXING_MODE=manual-only|all`; explicitly enable manual-only snapshot production;
+verify snapshots/recall; deploy and verify strict QA runtime; then enable all-mode
+and canonical delivery. Private `manual-kb/v1/` snapshots preserve owner isolation;
+`shared-kb/v1/` preserves authenticated sharing. Originals and meeting exports stay
+untouched during bootstrap. Use the same full S3 sync, never direct ingestion.
+Mode is durable and downgrade is rejected. Restore all after a mistaken downgrade;
+old-QA rollback after canonical retirement still needs re-export.
+
+승인. 기존 바이너리 검색을 유지하도록 배포 순서를 확장합니다. 비활성 워커 배포
+→ manual-only snapshot 생성 명시적 활성화·검증 → 이미 존재하는 reader의 strict QA
+runtime 연결·검증 → all-mode/canonical 활성화 순서입니다. 원본과 기존 회의 export를
+bootstrap 동안 보존하며 개인 소유자 격리와 인증된 공유 범위를 유지합니다.
+모드는 영속화하고 역전환을 거부합니다. 잘못 내린 env는 all로 복원해야 하며
+구 QA 롤백은 레거시 재내보내기가 필요합니다.
+
+[Migration contract / 상세 계약](../../backend/cmd/kb/KNOWLEDGE_MIGRATION.md)
