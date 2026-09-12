@@ -30,6 +30,10 @@ Persist planned output keys before any PUT. Metadata and data use
 `IfNoneMatch="*"` and no SDK retries. Uncertain uploads retain the coordinator
 lease so late writes cannot race successor cleanup. All old/partial objects
 under the resource's snapshot prefix are removed before its full sync.
+The merged PR205 changing-source isolation applies to both S3 source classes:
+definitive source changes clean up and back off without blocking stable batch
+members. An uncertain-write marker takes precedence over any wrapped changed
+or condition-failed cause, retaining the freeze.
 
 The same frozen batch/client token drives `StartIngestionJob`, including manual
 or crawler conflicts and lost responses. INDEXED/DELETED requires successful
@@ -81,8 +85,11 @@ KB_BUCKET_NAME, KB_ID and DATA_SOURCE_ID. No resource IDs are hardcoded.
 On the configured KB bucket, extend the worker's permissions with:
 
 - `s3:GetObject` and `s3:GetObjectVersion` for `kb/*` and `shared/*`.
-- `s3:ListBucket` with prefix conditions for `kb/*`, `shared/*`,
-  `manual-kb/v1/*` and `shared-kb/v1/*`.
+- `s3:ListBucket` on the exact configured KB bucket with a ResourceAccount
+  condition. Effective ListBucket permission is needed for HEAD to distinguish
+  absence from AccessDenied; a prefix-only condition may not apply to HEAD.
+  Runtime listing methods still allow only the defined source/catalog and
+  snapshot prefixes.
 - `s3:PutObject` and `s3:DeleteObject` only for the two new snapshot prefixes.
 
 No writes/deletes to original source prefixes are required. Existing table and

@@ -384,7 +384,9 @@ func TestKnowledgeChangingSourceCleanupDoesNotBlockStableBatchMembers(t *testing
 		}
 	}
 	for cycle := 0; cycle < 20; cycle++ {
-		if _, err := service.Tick(context.Background()); err != nil { t.Fatal(err) }
+		if _, err := service.Tick(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 		finishIndex(t, service, sync)
 		indexed := 0
 		for _, key := range keys[1:] {
