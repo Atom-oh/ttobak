@@ -14,6 +14,7 @@ type retryStoreFixture struct {
 	claims, reads       int
 	readErr, releaseErr error
 	released            string
+	releaseContextErr   error
 }
 
 func (s *retryStoreFixture) ClaimSummaryRetry(context.Context, string, string) (string, error) {
@@ -23,13 +24,40 @@ func (s *retryStoreFixture) ClaimSummaryRetry(context.Context, string, string) (
 	}
 	return "", nil
 }
-func (s *retryStoreFixture) ReleaseSummaryRetryClaim(_ context.Context, _, _ string, claim string) error {
+func (s *retryStoreFixture) ReleaseSummaryRetryClaim(ctx context.Context, _, _ string, claim string) error {
 	s.released = claim
+	s.releaseContextErr = ctx.Err()
 	return s.releaseErr
 }
 func (s *retryStoreFixture) GetMeeting(context.Context, string, string) (*model.Meeting, error) {
 	s.reads++
 	return s.current, s.readErr
+}
+
+func TestSummaryRetryRunCancellationAndChangedStatusRelease(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		old := &model.Meeting{UserID: "owner", MeetingID: "m", Status: model.StatusSummarizing, SummaryRetryPending: true}
+		current := *old
+		if changed {
+			current.Status = model.StatusDone
+			current.SummarizeRetryClaimedAt = "newer-claim"
+		}
+		cleanupErr := errors.New("cleanup failed")
+		store := &retryStoreFixture{current: &current, claimed: true, releaseErr: cleanupErr}
+		ctx, cancel := context.WithCancel(context.Background())
+		_, err := resumeSummaryRetry(ctx, old, store, func(context.Context, *model.Meeting, string) error {
+			if changed {
+				t.Fatal("changed status reached generation")
+			}
+			cancel()
+			return context.Canceled
+		})
+		cancel()
+		if !errors.Is(err, cleanupErr) || !changed && !errors.Is(err, context.Canceled) ||
+			store.released != "owned-claim" || store.releaseContextErr != nil {
+			t.Fatalf("cleanup/error lost: %+v %v", store, err)
+		}
+	}
 }
 
 func TestSummaryRetryReadFailureReleasesOnlyOwnedClaim(t *testing.T) {

@@ -67,10 +67,10 @@ func (r *DynamoDBRepository) ExpireSummaryRetry(ctx context.Context, owner, id s
 
 // ReleaseSummaryRetryClaim also terminates the final failed attempt visibly.
 func (r *DynamoDBRepository) ReleaseSummaryRetryClaim(ctx context.Context, owner, id, claim string) error {
+	owned := expression.AttributeExists(expression.Name("PK")).
+		And(expression.Name("summarizeRetryClaimedAt").Equal(expression.Value(claim)))
 	for _, terminal := range []bool{true, false} {
-		condition := expression.AttributeExists(expression.Name("PK")).
-			And(expression.Name("status").Equal(expression.Value(model.StatusSummarizing))).
-			And(expression.Name("summarizeRetryClaimedAt").Equal(expression.Value(claim)))
+		condition := owned.And(expression.Name("status").Equal(expression.Value(model.StatusSummarizing)))
 		code := "SOURCE_CHANGED"
 		update := expression.Remove(expression.Name("summarizeRetryClaimedAt")).
 			Set(expression.Name("summaryRetryPending"), expression.Value(!terminal)).
@@ -88,5 +88,11 @@ func (r *DynamoDBRepository) ReleaseSummaryRetryClaim(ctx context.Context, owner
 			return err
 		}
 	}
-	return nil // another attempt or deletion owns the row
+	// A different lifecycle state may retain our claim; leave that state intact.
+	condition := owned.And(expression.AttributeNotExists(expression.Name("status")).Or(expression.Name("status").NotEqual(expression.Value(model.StatusSummarizing))))
+	err := r.summaryRetryUpdate(ctx, owner, id, expression.Remove(expression.Name("summarizeRetryClaimedAt")), condition)
+	if errors.Is(err, ErrConditionFailed) {
+		return nil // a different claim or deletion owns the row
+	}
+	return err
 }
