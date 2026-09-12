@@ -193,6 +193,13 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - A crashed invocation may retain its 20-minute coordinator lease; normal ticks report `LEASE_WAIT` until recovery. Source changes are deferred per document so one recording cannot block other jobs.
 
 #### QA Lambda (`ttobak-qa`, Python)
+- Current-source configuration: `KB_BUCKET_NAME` identifies the KB bucket,
+  separately from the assets `BUCKET_NAME`. QA can read versions under assets
+  `transcripts/*`, `docs/*`, `docs-pdf/*`, `files/*` and KB `kb/*`, `shared/*`;
+  account-conditioned listing of those two buckets distinguishes missing
+  sources from denied reads. No object-write/delete grant is added. Handler
+  activation and binary compatibility follow the
+  [current-source rollout](runbooks/qa-current-source-rollout.md).
 - Trigger: API Gateway HTTP (`/api/qa/*`, sync) + async re-invocation from the WebSocket Lambda (`InvocationType=Event`, live Q&A streaming)
 - Async retry: `retryAttempts: 0` (`configureAsyncInvoke`) — without this, Lambda's default 2 retries could deliver a stale duplicate answer delta to an already-closed WebSocket session
 - Env: `TABLE_NAME`, `BUCKET_NAME`, `KB_ID`, `BEDROCK_MODEL_ID`, `DETECT_MODEL_ID`, `MAX_TOOL_ROUNDS`, `KB_CACHE_TTL_SECONDS`, `RESEARCH_SFN_ARN`, `WEB_SEARCH_GATEWAY_URL`/`WEB_SEARCH_GATEWAY_REGION` (`search_web` tool — cross-region SigV4 call to the us-east-1 AgentCore Web Search Gateway; if unset, the tool stays exposed but returns a "web search not configured" failure to the model), `WEB_SEARCH_HOURLY_LIMIT` (server-side per-user hourly cap on `search_web`, default 30, `0` disables — checked before the gateway call so a capped call consumes no external quota; the value is a `gateway-stack.ts` literal, so changing it requires a `TtobakGatewayStack --exclusively` redeploy, not a console knob)
