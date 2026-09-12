@@ -36,6 +36,15 @@ cd mcp-server && npm run build && npm run bundle
 diff dist/ttobak-mcp.mjs ../frontend/public/mcp/ttobak-mcp.mjs   # must be empty
 ```
 
+`npm test` also builds the bundle twice, checks byte-for-byte reproducibility,
+and runs the bounded-API adapter protocol regressions against both the compiled
+modules and the standalone bundle. Fixtures supply fixed server pages and exercise
+real HTTP/auth code, including oversized-response aborts; backend tests own
+Unicode pagination, source verification, and cursor validity.
+Run `npm run test:bundle` for the bundle checks alone.
+This does not publish or copy the frontend artifact; the release owner must still
+perform the copy/comparison above. CI's published-artifact comparison is mandatory.
+
 ### Prerequisites
 
 - Node.js 18+
@@ -111,7 +120,7 @@ You should see:
 ttobak
   Status: connected
   Tools:  ttobak_login, ttobak_status, ttobak_list_meetings,
-          ttobak_get_meeting, ttobak_list_accounts, ttobak_get_account,
+          ttobak_get_meeting, ttobak_read_transcript, ttobak_list_accounts, ttobak_get_account,
           ttobak_get_account_meetings, ttobak_get_account_insights,
           ttobak_get_account_brief, ttobak_export_vault,
           ttobak_put_document, ttobak_list_documents, ttobak_get_document, ttobak_update_document,
@@ -175,12 +184,102 @@ Account filters are explicit: obtain `parentAccountId` relationships from
 `ttobak_list_accounts`, then include the group and its accessible descendant IDs
 in `accountIds`. Keep that same filter while following pagination cursors.
 
+#### Reading notes, summaries, and long transcripts
+
+Start with `ttobak_get_meeting` and `{"meetingId":"meeting-id"}`. It returns the
+current saved **notes** first. Read the generated summary separately with
+`{"meetingId":"meeting-id","section":"summary"}`; it is not a replacement for
+user-authored corrections. The requested field (`notes` or `content`) preserves
+its exact characters. Small identifying metadata, bounded participants/tags,
+`availableCodePoints`, `revision`, and `page` accompany it.
+
+Both reading tools call **only**
+`GET /api/meetings/{meetingId}/reading`, using `kind=meeting|transcript`,
+`pageSize`, optional `cursor`, and the applicable section/source/time-range
+options. The API must be deployed before releasing this adapter. A missing route
+or API failure is an explicit tool error; there is no fallback to the full
+meeting endpoint.
+
+`actionItems` remains available as a bounded preview alongside
+`actionItemsAnalysis` (`unknown`, `queued`, `running`, `succeeded`, or `failed`,
+plus optional `errorCode`, `runId`, and `leaseUntil`). A legacy server without
+analysis status is reported as **unknown**, never inferred successful from `[]`.
+`actionItemsPreview.available` distinguishes an absent collection from an empty
+one; its `complete`, `totalItems`, and `metadataTruncated` describe the preview.
+User-set completion flags are preserved.
+
+To read all items and every field when the preview is shortened, call
+`ttobak_get_meeting` with `section:"actionItems"` and follow its cursor. Join
+`actionItemsJson` across pages, then parse that complete JSON array. Individual
+JSON pages may end inside a string and are not standalone JSON documents.
+
+Read transcripts with `ttobak_read_transcript`:
+
+```json
+{"meetingId":"meeting-id","source":"selected","pageSize":4000}
+```
+
+- Source `selected` follows current A/B selection and availability. Explicit `A`
+  or `B` reads that source only. An unselected source never borrows the selected
+  source's speaker labels or timestamps.
+- Join `chunks[].text` in response order, then follow `page.nextCursor` with the
+  **same meeting, section/source, and time range**. `page.complete=true` and
+  `nextCursor=null` mean no continuation remains for that requested content;
+  do not claim completeness until all preceding pages have been read.
+- Offsets are zero-based **Unicode code points**, with exclusive end offsets,
+  not JavaScript UTF-16 indices or UTF-8 byte offsets. Korean, emoji, punctuation,
+  newlines, and speaker headers survive page reconstruction unchanged.
+- `pageSize` accepts integers 1–8000 (default 4000). The backend may return less
+  text to fit its **14,000-byte API JSON limit** (including the trailing newline)
+  and **50-chunk limit**. It owns segment splitting and metadata shortening.
+  The adapter counts HTTP bytes before buffering/JSON parsing and aborts responses
+  over **32,000 bytes**, then separately enforces a **32,000-byte serialized MCP
+  tool-result limit** after wrapping. It never reslices or silently truncates a
+  server page.
+- Treat server-issued `revision` and `page.nextCursor` as opaque. Forward the
+  cursor unchanged; the client does not decode, hash, or mint continuations.
+  The backend rejects a changed source, selection, timing, or provider with
+  `STALE_CURSOR`; restart without the cursor. Malformed/out-of-range cursors are
+  server errors. Every page rechecks access through the authenticated reading API.
+
+For a time range, pass **both** `startTime` and `endTime` in seconds, for example:
+
+```json
+{"meetingId":"meeting-id","source":"selected","startTime":60,"endTime":120}
+```
+
+This selects whole segments overlapping `[60,120)`, only when every supplied
+segment is verified against the current selected text and has valid times.
+`chunk.segment` reports original utterance times (`timingScope=whole_segment`);
+`partial=true` means only part of that segment's text fits this page. Those times
+are not word-level boundaries for the excerpt. Offsets expose any gaps between
+matching segments; `matchingCodePoints` counts the selected raw spans and
+`totalCodePoints` counts the whole source. Completeness then applies only to the
+requested range (`completenessScope=requested_time_range`).
+
+Without verified segments, ordinary reads use exact raw-text pages (`mode=text`)
+with no timing/speaker claims. Time-range requests return `TIME_RANGE_UNAVAILABLE`
+instead of fabricated timestamps. `sttProvider` is explicitly meeting-level
+metadata, not proof of which engine produced an individual variant.
+
+**Compatibility:** the existing tool name and `meetingId` input remain valid,
+but `ttobak_get_meeting` now projects a bounded notes/summary view. It no longer
+returns `transcriptA`, `transcriptB`, `transcription`, `speakerMap`, attachments,
+or shares. Action items use the bounded preview/explicit JSON pages above.
+Migrate transcript consumers to
+`ttobak_read_transcript` and summary consumers to `section=summary`. The required
+reading API bounds the response before Lambda serialization, including notes-only
+requests on meetings with large S3-backed transcripts. The adapter receives only
+that server page. Source selection, Unicode/time windows, and completeness remain
+backend responsibilities.
+
 | Tool | Description | Example Prompt |
 |------|-------------|----------------|
 | `ttobak_login` | Authenticate via browser | "Log in to TTOBAK" |
 | `ttobak_status` | Check auth status and config | "Check TTOBAK connection status" |
 | `ttobak_list_meetings` | List meetings with explicit `accountIds` filters and pagination | "Show meetings for Toss and its subsidiaries" |
-| `ttobak_get_meeting` | Full meeting detail | "Get the details of meeting X" |
+| `ttobak_get_meeting` | Bounded saved notes first; `section=summary` reads the summary | "Read the saved corrections for meeting X" |
+| `ttobak_read_transcript` | Source-bound transcript pages, verified segment/time ranges, continuation | "Read meeting X's transcript from 60 to 120 seconds" |
 | `ttobak_list_accounts` | List accounts you belong to | "Show my accounts" |
 | `ttobak_get_account` | Account detail and members | "Show the Hana Bank account info" |
 | `ttobak_get_account_meetings` | Meetings shared into an account | "List meetings shared into Hana Bank" |
@@ -350,7 +449,7 @@ Claude Code를 재시작한 후 MCP 서버 상태를 확인합니다:
 ttobak
   Status: connected
   Tools:  ttobak_login, ttobak_status, ttobak_list_meetings,
-          ttobak_get_meeting, ttobak_list_accounts, ttobak_get_account,
+          ttobak_get_meeting, ttobak_read_transcript, ttobak_list_accounts, ttobak_get_account,
           ttobak_get_account_meetings, ttobak_get_account_insights,
           ttobak_get_account_brief, ttobak_export_vault,
           ttobak_put_document, ttobak_list_documents, ttobak_get_document, ttobak_update_document,
@@ -413,12 +512,74 @@ Account 공유 공간을 사용합니다. 직접 공유받은 개인 문서는 �
 접근 가능한 하위 계열사 ID를 모두 `accountIds`에 넣습니다.
 다음 페이지를 조회할 때도 동일한 필터를 유지해야 합니다.
 
+#### 메모부터 읽고 긴 녹취록 이어 읽기
+
+`ttobak_get_meeting({"meetingId":"meeting-id"})`는 현재 저장된 사용자 메모를
+먼저 반환합니다. 생성된 요약은 `section:"summary"`로 별도로 읽으세요.
+메모의 정정 내용을 요약으로 대체하지 마세요. 응답의 `notes` 또는 `content`와
+`page.nextCursor`를 따라 같은 section으로 이어 읽습니다.
+
+두 읽기 도구는 인증된 `GET /api/meetings/{meetingId}/reading`만 호출합니다.
+`kind`, `pageSize`, `cursor`와 해당 section/source/시간 범위를 전달합니다.
+MCP 배포 전에 이 API를 먼저 배포해야 합니다. 라우트가 없거나 API가 실패하면
+명시적 도구 오류이며, 전체 미팅 조회로 되돌아가지 않습니다.
+
+`actionItems`의 제한된 미리보기와 `actionItemsAnalysis` 상태
+(`unknown/queued/running/succeeded/failed`, 선택적 errorCode/runId/leaseUntil)를
+함께 제공합니다. 구버전 서버에 상태가 없으면 `unknown`이며, `[]`만 보고
+추출 성공으로 판단하지 않습니다. `actionItemsPreview.available`은 원본 필드의
+존재 여부, `complete/totalItems/metadataTruncated`는 미리보기 범위를 나타냅니다.
+사용자가 체크한 완료 상태는 보존합니다. 전체 항목은 `section:"actionItems"`로
+`actionItemsJson` 페이지를 끝까지 합친 다음 JSON 배열로 해석하세요.
+개별 페이지는 문자열 중간에서 끝날 수 있어 독립된 JSON이 아닙니다.
+
+녹취록은 `ttobak_read_transcript`에 `meetingId`, `source:"selected"`를
+전달해 읽습니다. 서버가 현재 선택/가용성에 따라 A/B를 결정하며, `source:"A"` 또는
+`"B"`로 특정 원문을 지정할 수도 있습니다. 선택되지 않은 원문에는 다른 원문의
+화자·시간 정보를 붙이지 않습니다.
+
+- `chunks[].text`를 응답 순서대로 이어 붙입니다. 같은 미팅·source·시간 범위를
+  유지한 채 `page.nextCursor`를 다음 호출의 `cursor`에 전달하세요.
+  이전 페이지를 모두 읽고 `page.complete=true`, `nextCursor=null`일 때만
+  요청 범위를 끝까지 읽은 것입니다.
+- `startOffset`/`endOffset`은 0부터 시작하는 유니코드 코드 포인트 위치이며,
+  끝 위치는 제외합니다. UTF-16 인덱스나 바이트 위치가 아닙니다.
+  한글·이모지·공백·줄바꿈·화자 헤더를 빠뜨리거나 겹치지 않게 보존합니다.
+- `pageSize`는 1–8000 정수, 기본 4000입니다. 서버는 끝 줄바꿈을 포함한 API
+  JSON 14,000바이트와 청크 50개 제한에 맞춰 페이지를 만듭니다. 어댑터는 HTTP
+  본문을 버퍼에 추가하거나 JSON으로 해석하기 전에 바이트 수를 세어 32,000바이트
+  초과 응답을 중단하고, MCP로 감싼 최종 결과도 32,000바이트 이하인지 확인합니다.
+  클라이언트에서 원문을 다시 나누거나 조용히 자르지 않습니다.
+- 서버가 발급한 `revision`과 `page.nextCursor`는 내부 형식을 해석하지 않고
+  그대로 사용합니다. 원문·선택·시간·출처가 바뀌면 서버가 `STALE_CURSOR`를
+  반환하므로 cursor 없이 다시 읽으세요. 매 페이지에서 인증된 읽기 API로 접근을
+  재확인하며 접근 해제/삭제/401 오류를 캐시나 전체 미팅 조회로 우회하지 않습니다.
+- 시간 범위는 초 단위 `startTime`, `endTime`을 함께 전달하며
+  `0 <= startTime < endTime`이어야 합니다. 현재 선택 원문 전체와 일치하고
+  시간이 유효한 세그먼트가 있을 때만 `[startTime,endTime)`과 겹치는 발화를
+  반환합니다. 발화 일부만 담긴 청크의 `partial=true`여도 시간은 원래 발화 전체의
+  시간이며 단어 단위 구간을 추정하지 않습니다.
+- 검증된 세그먼트가 없으면 `mode=text`로 원문 위치만 제공합니다.
+  이 경우 시간 범위 요청은 `TIME_RANGE_UNAVAILABLE` 오류입니다.
+  시간 범위 읽기의 완료는 해당 구간에 한정되며, source offset으로 제외된 구간의
+  간격을 확인할 수 있습니다. `sttProvider`는 미팅 수준 정보입니다.
+
+기존 `ttobak_get_meeting` 이름/meetingId 입력은 유지하지만 전체 응답 전달은
+의도적으로 변경됐습니다. 녹취록 A/B·전체 화자 매핑·첨부·공유는 기본 응답에서
+제외합니다. 액션 항목은 제한된 미리보기와 명시적인 JSON 페이지로 제공합니다.
+요약은 `section=summary`, 녹취록은 새 도구로
+전환하세요. 서버 읽기 API가 Lambda 응답을 만들기 전에 크기를 제한하고,
+MCP는 그 페이지를 그대로 전달합니다. 원문 선택·검증·페이지 나누기는 서버 책임입니다.
+`npm test`는 일반 모듈과 번들 양쪽의 프로토콜 테스트 및 번들 재현성을 검증합니다.
+프런트엔드 공개 번들 복사/CI 비교는 배포 담당자가 별도로 수행해야 합니다.
+
 | 도구 | 설명 | 예시 프롬프트 |
 |------|------|---------------|
 | `ttobak_login` | 브라우저를 통한 인증 | "TTOBAK에 로그인해줘" |
 | `ttobak_status` | 인증 상태 및 설정 확인 | "TTOBAK 연결 상태 확인해줘" |
 | `ttobak_list_meetings` | `accountIds` 필터와 페이지네이션으로 미팅 조회 | "토스와 계열사 미팅 보여줘" |
-| `ttobak_get_meeting` | 미팅 상세 정보 | "미팅 X의 상세 내용을 가져와줘" |
+| `ttobak_get_meeting` | 사용자 메모 우선 페이지 읽기, `section=summary`로 요약 읽기 | "미팅 X의 정정 메모부터 읽어줘" |
+| `ttobak_read_transcript` | 원문 A/B·검증된 시간 범위·이어 읽기 | "미팅 X의 60–120초 녹취록을 읽어줘" |
 | `ttobak_list_accounts` | 내 Account 목록 | "내 어카운트 목록 보여줘" |
 | `ttobak_get_account` | Account 상세/멤버 | "하나은행 어카운트 정보" |
 | `ttobak_get_account_meetings` | 공유 미팅 목록 | "하나은행 공유 미팅 목록" |

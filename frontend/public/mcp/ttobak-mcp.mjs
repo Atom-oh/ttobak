@@ -21030,6 +21030,75 @@ import { request as httpsRequest2 } from "node:https";
 import { basename, extname, isAbsolute, sep } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { URL as URL3 } from "node:url";
+
+// src/reading.ts
+var MAX_READING_BYTES = 32e3;
+function readingOptions(args, kind) {
+  const allowed = ["meetingId", "pageSize", "cursor", ...kind === "meeting" ? ["section"] : ["source", "startTime", "endTime"]];
+  if (Object.keys(args).some((key) => !allowed.includes(key))) throw new Error("INVALID_ARGUMENT: unknown reading option");
+  if (typeof args.meetingId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(args.meetingId)) {
+    throw new Error("INVALID_ARGUMENT: meetingId must be an ID of at most 128 characters");
+  }
+  const pageSize = args.pageSize === void 0 ? 4e3 : args.pageSize;
+  if (typeof pageSize !== "number" || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 8e3) {
+    throw new Error("INVALID_ARGUMENT: pageSize must be an integer from 1 to 8000");
+  }
+  if (args.cursor !== void 0 && (typeof args.cursor !== "string" || !args.cursor.length || args.cursor.length > 2048)) {
+    throw new Error("INVALID_CURSOR: expected a nonempty cursor of at most 2048 characters");
+  }
+  const common = { meetingId: args.meetingId, pageSize, cursor: args.cursor };
+  if (kind === "meeting") {
+    const section = args.section === void 0 ? "notes" : args.section;
+    if (section !== "notes" && section !== "summary" && section !== "actionItems") {
+      throw new Error("INVALID_ARGUMENT: section must be notes, summary or actionItems");
+    }
+    return { ...common, kind, section };
+  }
+  const source = args.source === void 0 ? "selected" : args.source;
+  if (source !== "selected" && source !== "A" && source !== "B") throw new Error("INVALID_ARGUMENT: source must be selected, A or B");
+  if (args.startTime !== void 0 || args.endTime !== void 0) {
+    if (typeof args.startTime !== "number" || typeof args.endTime !== "number" || !Number.isFinite(args.startTime) || !Number.isFinite(args.endTime) || args.startTime < 0 || args.endTime <= args.startTime) {
+      throw new Error("INVALID_RANGE: supply finite seconds with 0 <= startTime < endTime");
+    }
+  }
+  return { ...common, kind, source, startTime: args.startTime, endTime: args.endTime };
+}
+function record2(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+function readingResult(value, options) {
+  if (!record2(value) || value.meetingId !== options.meetingId) {
+    throw new Error("INVALID_READING_RESPONSE: meeting identity does not match");
+  }
+  const page = value.page;
+  if (!record2(page) || page.unit !== "unicode_code_points" || typeof page.complete !== "boolean" || (page.complete ? page.nextCursor !== null : typeof page.nextCursor !== "string" || !page.nextCursor.length || page.nextCursor.length > 2048)) {
+    throw new Error("INVALID_READING_RESPONSE: missing or invalid page continuation");
+  }
+  let result = value;
+  if (options.kind === "meeting") {
+    const field = options.section === "notes" ? "notes" : options.section === "summary" ? "content" : "actionItemsJson";
+    if (typeof value[field] !== "string") throw new Error("INVALID_READING_RESPONSE: missing section text");
+    if (value.actionItemsAnalysis === void 0 || value.actionItemsAnalysis === null) {
+      result = { ...value, actionItemsAnalysis: { status: "unknown" } };
+    } else if (!record2(value.actionItemsAnalysis) || !["unknown", "queued", "running", "failed", "succeeded"].includes(value.actionItemsAnalysis.status)) {
+      throw new Error("INVALID_READING_RESPONSE: invalid action analysis state");
+    }
+  } else if (!Array.isArray(value.chunks)) {
+    throw new Error("INVALID_READING_RESPONSE: missing transcript chunks");
+  }
+  const output = { content: [{ type: "text", text: JSON.stringify(result) }] };
+  if (Buffer.byteLength(JSON.stringify(output), "utf8") > MAX_READING_BYTES) {
+    throw new Error("READING_LIMIT: wrapped reading response exceeds 32000 bytes");
+  }
+  return output;
+}
+function readingError(message) {
+  const points = Array.from(message);
+  const detail = points.slice(0, 1e3).join("") + (points.length > 1e3 ? " [error message truncated]" : "");
+  return { isError: true, content: [{ type: "text", text: `Error: ${detail}` }] };
+}
+
+// src/api.ts
 var MIME_BY_EXT = {
   ".pdf": "application/pdf",
   ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -21153,8 +21222,16 @@ var TtobakApi = class {
     const qs = q.toString();
     return this.get(`/api/meetings${qs ? "?" + qs : ""}`);
   }
-  async getMeeting(meetingId) {
-    return this.get(`/api/meetings/${meetingId}`);
+  async readMeeting(options) {
+    const query = new URLSearchParams({ kind: options.kind, pageSize: String(options.pageSize) });
+    if (options.kind === "meeting") query.set("section", options.section);
+    else query.set("source", options.source);
+    if (options.cursor !== void 0) query.set("cursor", options.cursor);
+    if (options.kind === "transcript" && options.startTime !== void 0) {
+      query.set("startTime", String(options.startTime));
+      query.set("endTime", String(options.endTime));
+    }
+    return this.request("GET", `/api/meetings/${identifier(options.meetingId, "meetingId")}/reading?${query}`, void 0, MAX_READING_BYTES);
   }
   async askQuestion(question, meetingId, sessionId) {
     const body = { question };
@@ -21344,7 +21421,7 @@ var TtobakApi = class {
       req.end();
     });
   }
-  async request(method, path, body) {
+  async request(method, path, body, maxResponseBytes) {
     const idToken = await this.auth.getIdToken();
     const url2 = new URL3(path, this.baseUrl);
     const data = body ? JSON.stringify(body) : void 0;
@@ -21363,16 +21440,44 @@ var TtobakApi = class {
           }
         },
         (res) => {
-          res.setEncoding("utf8");
-          let chunks = "";
-          res.on("data", (c) => chunks += c);
+          const chunks = [];
+          let received = 0, finished = false;
+          const fail = (error3) => {
+            if (finished) return;
+            finished = true;
+            chunks.length = 0;
+            reject(error3);
+            res.destroy();
+            req.destroy();
+          };
+          const tooLarge = () => fail(new Error("READING_LIMIT: HTTP reading response exceeds 32000 bytes"));
+          res.on("error", fail);
+          res.on("aborted", () => fail(new Error("TTOBAK response was aborted")));
+          res.on("close", () => {
+            if (!finished) fail(new Error("TTOBAK response ended before completion"));
+          });
+          res.on("data", (chunk) => {
+            if (finished) return;
+            if (maxResponseBytes !== void 0 && received + chunk.length > maxResponseBytes) {
+              tooLarge();
+              return;
+            }
+            received += chunk.length;
+            chunks.push(chunk);
+          });
           res.on("end", () => {
+            if (finished) return;
+            finished = true;
             try {
-              resolve(parseApiResponse(res.statusCode || 0, chunks));
+              resolve(parseApiResponse(res.statusCode || 0, Buffer.concat(chunks, received).toString("utf8")));
             } catch (error3) {
               reject(error3);
             }
           });
+          const declaredLength = res.headers?.["content-length"];
+          if (maxResponseBytes !== void 0 && declaredLength !== void 0 && Number(declaredLength) > maxResponseBytes) {
+            tooLarge();
+          }
         }
       );
       req.on("timeout", () => req.destroy(new Error("TTOBAK request timed out after 120s")));
@@ -21426,13 +21531,36 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "ttobak_get_meeting",
-      description: "Get full meeting detail: summary, transcript, action items, tags, participants, speaker map.",
+      description: "Read current saved notes first (default), or the generated summary with section=summary. Includes a bounded actionItems preview and actionItemsAnalysis; missing legacy analysis is unknown, never success. section=actionItems pages complete JSON in actionItemsJson. Follow page.nextCursor with the same section until complete. Notes are user corrections, not interchangeable with generated summaries. Use ttobak_read_transcript for transcripts.",
+      annotations: { readOnlyHint: true },
       inputSchema: {
         type: "object",
         properties: {
-          meetingId: { type: "string", description: "Meeting ID" }
+          meetingId: { type: "string", description: "Meeting ID" },
+          section: { type: "string", enum: ["notes", "summary", "actionItems"], default: "notes" },
+          cursor: { type: "string", maxLength: 2048, description: "Continuation for this meeting/section; restart if stale" },
+          pageSize: { type: "integer", minimum: 1, maximum: 8e3, default: 4e3, description: "Maximum Unicode code points; byte budget may shorten the page" }
         },
-        required: ["meetingId"]
+        required: ["meetingId"],
+        additionalProperties: false
+      }
+    },
+    {
+      name: "ttobak_read_transcript",
+      description: "Read bounded transcript pages after saved notes. Default source=selected uses current A/B selection and fallback. Every page rechecks access via the API. Follow page.nextCursor with the same source/time range until complete. Chunks preserve raw text and Unicode code-point offsets. Times/speakers appear only for segments fully matched to the selected text; segment times describe whole utterances even on partial chunks. Unselected sources are text-only. Time ranges select whole overlapping segments, not exact word-level cuts.",
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        type: "object",
+        properties: {
+          meetingId: { type: "string", description: "Meeting ID" },
+          source: { type: "string", enum: ["selected", "A", "B"], default: "selected" },
+          cursor: { type: "string", maxLength: 2048, description: "Continuation bound to meeting/source/revision/range; stale cursors require restarting" },
+          pageSize: { type: "integer", minimum: 1, maximum: 8e3, default: 4e3 },
+          startTime: { type: "number", minimum: 0, description: "Optional inclusive start in seconds; requires endTime and verified segments" },
+          endTime: { type: "number", minimum: 0, description: "Optional exclusive end in seconds, greater than startTime" }
+        },
+        required: ["meetingId"],
+        additionalProperties: false
       }
     },
     {
@@ -21766,10 +21894,12 @@ Client: ${CLIENT_ID.slice(0, 8)}...`
         return text(JSON.stringify(result, null, 2));
       }
       case "ttobak_get_meeting": {
-        const { meetingId } = args;
-        if (!meetingId) return error2("meetingId is required");
-        const result = await api.getMeeting(meetingId);
-        return text(JSON.stringify(result, null, 2));
+        const options = readingOptions(args, "meeting");
+        return readingResult(await api.readMeeting(options), options);
+      }
+      case "ttobak_read_transcript": {
+        const options = readingOptions(args, "transcript");
+        return readingResult(await api.readMeeting(options), options);
       }
       case "ttobak_list_accounts": {
         const result = await api.listAccounts();
@@ -21944,6 +22074,7 @@ Retrieval is scoped to you -- only your own ttobak_ask queries can find this fil
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (name === "ttobak_get_meeting" || name === "ttobak_read_transcript") return readingError(msg);
     return error2(msg);
   }
 });

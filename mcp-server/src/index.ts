@@ -6,6 +6,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { CognitoAuth } from './auth.js';
 import { TtobakApi } from './api.js';
+import { readingOptions, readingResult, readingError } from './reading.js';
 
 const COGNITO_DOMAIN = process.env.TTOBAK_COGNITO_DOMAIN || '';
 const CLIENT_ID = process.env.TTOBAK_CLIENT_ID || '';
@@ -57,13 +58,37 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'ttobak_get_meeting',
       description:
-        'Get full meeting detail: summary, transcript, action items, tags, participants, speaker map.',
+        'Read current saved notes first (default), or the generated summary with section=summary. Includes a bounded actionItems preview and actionItemsAnalysis; missing legacy analysis is unknown, never success. section=actionItems pages complete JSON in actionItemsJson. Follow page.nextCursor with the same section until complete. Notes are user corrections, not interchangeable with generated summaries. Use ttobak_read_transcript for transcripts.',
+      annotations: { readOnlyHint: true },
       inputSchema: {
         type: 'object' as const,
         properties: {
           meetingId: { type: 'string', description: 'Meeting ID' },
+          section: { type: 'string', enum: ['notes', 'summary', 'actionItems'], default: 'notes' },
+          cursor: { type: 'string', maxLength: 2048, description: 'Continuation for this meeting/section; restart if stale' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000, description: 'Maximum Unicode code points; byte budget may shorten the page' },
         },
         required: ['meetingId'],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: 'ttobak_read_transcript',
+      description:
+        'Read bounded transcript pages after saved notes. Default source=selected uses current A/B selection and fallback. Every page rechecks access via the API. Follow page.nextCursor with the same source/time range until complete. Chunks preserve raw text and Unicode code-point offsets. Times/speakers appear only for segments fully matched to the selected text; segment times describe whole utterances even on partial chunks. Unselected sources are text-only. Time ranges select whole overlapping segments, not exact word-level cuts.',
+      annotations: { readOnlyHint: true },
+      inputSchema: {
+        type: 'object' as const,
+        properties: {
+          meetingId: { type: 'string', description: 'Meeting ID' },
+          source: { type: 'string', enum: ['selected', 'A', 'B'], default: 'selected' },
+          cursor: { type: 'string', maxLength: 2048, description: 'Continuation bound to meeting/source/revision/range; stale cursors require restarting' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 8000, default: 4000 },
+          startTime: { type: 'number', minimum: 0, description: 'Optional inclusive start in seconds; requires endTime and verified segments' },
+          endTime: { type: 'number', minimum: 0, description: 'Optional exclusive end in seconds, greater than startTime' },
+        },
+        required: ['meetingId'],
+        additionalProperties: false,
       },
     },
     {
@@ -416,10 +441,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'ttobak_get_meeting': {
-        const { meetingId } = args as { meetingId: string };
-        if (!meetingId) return error('meetingId is required');
-        const result = await api.getMeeting(meetingId);
-        return text(JSON.stringify(result, null, 2));
+        const options = readingOptions(args, 'meeting');
+        return readingResult(await api.readMeeting(options), options);
+      }
+
+      case 'ttobak_read_transcript': {
+        const options = readingOptions(args, 'transcript');
+        return readingResult(await api.readMeeting(options), options);
       }
 
       case 'ttobak_list_accounts': {
@@ -666,6 +694,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (name === 'ttobak_get_meeting' || name === 'ttobak_read_transcript') return readingError(msg);
     return error(msg);
   }
 });
