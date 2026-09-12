@@ -38,6 +38,43 @@ func (r *DynamoDBRepository) GetAttachmentText(ctx context.Context, meetingID, a
 	return &state, nil
 }
 
+// deleteAttachmentTextStates runs after deleting the parent meeting. Strong
+// pagination catches states missed by the earlier attachment enumeration.
+func (r *DynamoDBRepository) deleteAttachmentTextStates(ctx context.Context, meetingID string) error {
+	expr, err := expression.NewBuilder().
+		WithKeyCondition(expression.Key("PK").Equal(expression.Value(model.PrefixMeeting + meetingID)).
+			And(expression.Key("SK").BeginsWith(model.PrefixAttachmentText))).
+		WithProjection(expression.NamesList(expression.Name("PK"), expression.Name("SK"))).Build()
+	if err != nil {
+		return err
+	}
+	pages := dynamodb.NewQueryPaginator(r.client, &dynamodb.QueryInput{
+		TableName: aws.String(r.tableName), ConsistentRead: aws.Bool(true),
+		KeyConditionExpression: expr.KeyCondition(), ProjectionExpression: expr.Projection(),
+		ExpressionAttributeNames: expr.Names(), ExpressionAttributeValues: expr.Values(),
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("list remaining attachment states: %w", err)
+		}
+		for start := 0; start < len(page.Items); start += 100 {
+			items := page.Items[start:min(start+100, len(page.Items))]
+			deletes := make([]types.TransactWriteItem, 0, len(items))
+			for _, item := range items {
+				deletes = append(deletes, types.TransactWriteItem{Delete: &types.Delete{
+					TableName: aws.String(r.tableName),
+					Key:       map[string]types.AttributeValue{"PK": item["PK"], "SK": item["SK"]},
+				}})
+			}
+			if _, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: deletes}); err != nil {
+				return fmt.Errorf("delete remaining attachment states: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 func (r *DynamoDBRepository) textSourceCheck(key map[string]types.AttributeValue, condition expression.ConditionBuilder) (*types.ConditionCheck, error) {
 	expr, err := expression.NewBuilder().WithCondition(condition).Build()
 	if err != nil {

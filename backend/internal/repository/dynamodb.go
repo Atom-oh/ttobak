@@ -1400,6 +1400,9 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 				},
 			},
 		})
+		transactItems = append(transactItems, types.TransactWriteItem{
+			Delete: &types.Delete{TableName: aws.String(r.tableName), Key: attachmentTextKey(meetingID, att.AttachmentID)},
+		})
 	}
 
 	// 3. Shares (both recipient and meeting records)
@@ -1459,7 +1462,9 @@ func (r *DynamoDBRepository) DeleteMeeting(ctx context.Context, userID, meetingI
 		}
 	}
 
-	return nil
+	// The source is now gone, so conditional workers cannot create new states.
+	// Sweep rows whose attachments disappeared or were created after enumeration.
+	return r.deleteAttachmentTextStates(ctx, meetingID)
 }
 
 // ListMeetingsParams contains parameters for listing meetings
@@ -1807,11 +1812,13 @@ func (r *DynamoDBRepository) UpdateAttachment(ctx context.Context, attachment *m
 
 // DeleteAttachment deletes an attachment
 func (r *DynamoDBRepository) DeleteAttachment(ctx context.Context, meetingID, attachmentID string) error {
-	_, err := r.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
-		TableName: aws.String(r.tableName),
-		Key: map[string]types.AttributeValue{
-			"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
-			"SK": &types.AttributeValueMemberS{Value: model.PrefixAttachment + attachmentID},
+	_, err := r.client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{
+		TransactItems: []types.TransactWriteItem{
+			{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: map[string]types.AttributeValue{
+				"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
+				"SK": &types.AttributeValueMemberS{Value: model.PrefixAttachment + attachmentID},
+			}}},
+			{Delete: &types.Delete{TableName: aws.String(r.tableName), Key: attachmentTextKey(meetingID, attachmentID)}},
 		},
 	})
 	if err != nil {
