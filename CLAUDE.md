@@ -82,6 +82,17 @@ CloudFront (d2olomx8td8txt.cloudfront.net)
 Action-item analysis uses a separate `MEETING#{id}/ANALYSIS#actionItems` row with run ID, status, source hash and numeric lease. Authenticated owners/editors may retry through `ttobak.analysis` / `ActionItemsRequested`; the existing summarize Lambda processes it, while the normal pipeline uses the same service inline. Publish result and success together only when run, saved summary and previous items still match. Failures retain prior items; only validated successful `[]` means no tasks. Preserve exact unchanged task IDs and human completion; persist checkbox changes conditionally. Legacy missing metadata is unknown. Expired leases become interrupted failures. See `docs/superpowers/specs/2026-09-12-action-items-recovery.md` and `docs/API-SPEC.md`.
 
 ### Event-Driven Pipeline
+
+Summary publication follows [ADR-040](docs/decisions/ADR-040-guarded-summary-publication.md).
+The existing `SummarizeTranscript` path captures exact stored attribute presence
+before hydration and conditionally publishes against that snapshot; absent text
+is not globally equated with empty text. This changes active batch-summary
+behavior when deployed. Verified documents are separate evidence; unavailable
+documents and invalid citation paragraphs are omitted with notices, while
+incomplete model responses and notice-only results fail. Saved-summary
+orchestration additionally uses `ANALYSIS#summary` run/lease/source and edit-grant
+guards. The release slices activate producers separately; see the
+[release order and rollback](docs/runbooks/meeting-document-release.md).
 ```
 audio/ upload → EventBridge → ttobak-transcribe → Whisper ECS (GPU Spot g5.xlarge) → transcripts/ S3
 transcripts/ upload → EventBridge → ttobak-summarize → Bedrock Claude → DynamoDB

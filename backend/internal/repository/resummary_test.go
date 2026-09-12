@@ -2,12 +2,36 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ttobak/backend/internal/model"
 )
+
+func TestResummaryWritesRejectMissingSnapshotsBeforeSDK(t *testing.T) {
+	repo := actionAnalysisWire(t, func(string, map[string]any) {
+		t.Fatal("invalid snapshot reached DynamoDB")
+	}, 200, `{}`)
+	state := &model.ResummaryState{RunID: "run", OwnerID: "owner", Status: model.AnalysisQueued}
+	now := time.Now()
+	for _, snapshot := range []*model.SummarySnapshot{nil, {}, {Meeting: &model.Meeting{}}} {
+		for name, write := range map[string]func() error{
+			"queue": func() error { return repo.QueueResummary(context.Background(), snapshot, nil, state) },
+			"start": func() error { return repo.StartResummary(context.Background(), snapshot, state, now, 123) },
+			"complete": func() error {
+				return repo.CompleteResummary(context.Background(), snapshot, state, "new", "", "hash", now)
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				if err := write(); !errors.Is(err, ErrConditionFailed) {
+					t.Fatalf("missing snapshot must reject: %v", err)
+				}
+			})
+		}
+	}
+}
 
 func TestResummaryCompletionGuardsSourcesAndPublishesAtomically(t *testing.T) {
 	repo := actionAnalysisWire(t, func(target string, body map[string]any) {

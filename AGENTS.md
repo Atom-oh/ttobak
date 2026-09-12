@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 22d72d7917ed · generated-at: 2026-09-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 9dd2377b123b · generated-at: 2026-09-12 · DO NOT EDIT — edit CLAUDE.md then run /co-agent sync-context -->
 > You are an external reviewer for this repo — project context below, distilled from CLAUDE.md. This file is shared verbatim by Kiro, Codex, and Agy (not a per-AI copy).
 
 # TTOBAK (또박) — Reviewer Context
@@ -72,6 +72,9 @@ cd mac-app/src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D wa
 - **Conditional writes on shared/racy fields**: a field another code path can mutate concurrently (e.g. a share token, a link/unlink set) needs a conditional `UpdateItem`, not a whole-item `PutItem` carrying a stale read-time snapshot — flag a whole-item overwrite of such a field as a MAJOR race, not a style nit.
 - **Rust lock scope (mac-app/)**: never hold a `Mutex` across blocking FFI/I/O with no timeout of its own — reserve/release/reacquire around the call instead. Any state two code paths both gate on (e.g. "is this recording still being written") must be updated inside the SAME critical section as the state transition it depends on, not as a separate step after the lock is released — flag a gap between them as a MAJOR TOCTOU, not a style nit. Likewise, a global aggregate collapsing multiple independent items (recordings, uploads, jobs) into one boolean is a MAJOR finding if a caller treats it as a precise per-item signal.
 - Keep functions/files focused; follow existing patterns in the touched package.
+
+
+Summaries (ADR-040) pin exact attribute presence. Invalid document claims are omitted, not unmarked. Incomplete output fails; source/ACL CAS preserves edits.
 
 ## Known False-Positives (do NOT report)
 - **`updateAttachmentByKey`** is implemented; do not re-raise missing image persistence. Document extraction has a bounded parser and private worker (ADR-039), but API/summary/QA wiring remains staged. The worker validates `ATTACH#`/`ATTEXT#` identity, run, lease and ETag; immutable results use `files/*/*/text/*/*.json`. Empty text is failure, partial extraction is explicit. Manual KB copy remains available; its default parser does not index PPT/PPTX.

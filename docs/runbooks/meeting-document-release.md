@@ -13,7 +13,11 @@ these PRs does not activate or verify production processing.
    A merged worker PR or passing local test is not deployment evidence.
 3. Land the summary/storage foundation. It adds guarded repository operations,
    prepared document evidence, and snapshot-only generation; it adds no upload
-   event producer or saved-summary HTTP route.
+   event producer or saved-summary HTTP route. It does change the existing
+   production `SummarizeTranscript` prompt, omission handling and save condition.
+   Validate first summaries with absent `content`/`notes`, existing summaries and
+   concurrent edits before advancing. A rise in summary failures is a rollback
+   signal; roll back the summarizer code while retaining compatible readers.
 4. Land the attachment API and summary wiring after step 2. Supported uploads
    now queue extraction. Legacy documents require an authorized retry.
 5. Land saved-summary orchestration and its `SummaryRequested` consumer/rule
@@ -30,6 +34,16 @@ For a targeted manual release, deploy only the changed stack with
 disable CI or review gates to shorten this sequence.
 
 ## Invariants and acceptance
+
+The host verified worker deployment `34717614426` as SUCCESS and recorded an
+IAM-invoked smoke at `2026-09-12T20:56:44.603Z`: a 626-byte synthetic PDF produced
+752-byte JSON with the exact marker, native page 1 and matching source ETag and
+identity. Owner/uploader differed; state was succeeded/complete with lease zero.
+A duplicate was ignored without changing state. Three owned rows and two exact
+S3 versions were deleted and absence rechecked. This proves worker runtime/IAM,
+not EventBridge delivery, public upload/retry authorization, summaries or QA.
+The host's detailed evidence is `document-worker-live-acceptance.md` and
+`live-document-worker-smoke.json` in the improvement evidence cache.
 
 - Metadata authorization precedes S3 reads. Cursors require an explicit version
   and revision; a changed source must clear the previous result indication.
@@ -52,3 +66,5 @@ host and uses explicitly authorized synthetic resources.
 
 Rollback producer/UI code first and retain compatible workers/readers for
 in-flight events. Do not delete state/results to make failures appear successful.
+See [ADR-040](../decisions/ADR-040-guarded-summary-publication.md) for the exact
+source-presence, document-omission and publication decisions.

@@ -530,7 +530,7 @@ func buildAttachmentLinkSections(attachments []model.Attachment) string {
 	var imgSection, docSection strings.Builder
 	seenDocLinks := make(map[string]bool)
 	for _, att := range attachments {
-		if att.Status != model.AttachStatusDone {
+		if att.Status != model.AttachStatusDone || att.SummaryOmitted {
 			continue
 		}
 		safeName := sanitizeMarkdownText(att.FileName)
@@ -586,6 +586,9 @@ func buildAttachmentContext(attachments []model.Attachment) string {
 	var docNames []string
 	seenDocs := make(map[string]bool)
 	for _, att := range attachments {
+		if att.SummaryOmitted {
+			continue
+		}
 		// Same done-gate for image analyses as for documents and the
 		// appended link section: process-image only writes ProcessedContent
 		// together with status=done, but an inconsistent row must not get
@@ -642,41 +645,43 @@ func buildAttachmentContext(attachments []model.Attachment) string {
 // userID enables strongly-consistent base table read instead of GSI.
 // priorContext is optional linked-meeting context prepended to the prompt.
 func (s *BedrockService) SummarizeTranscript(ctx context.Context, meetingID, userID, priorContext string) (string, error) {
-	var meeting *model.Meeting
-	var err error
-	if userID != "" {
-		meeting, err = s.repo.GetMeeting(ctx, userID, meetingID)
-	} else {
-		meeting, err = s.repo.GetMeetingByID(ctx, meetingID)
+	if userID == "" {
+		owner, err := s.repo.MetadataView().GetMeetingByID(ctx, meetingID)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve meeting owner: %w", err)
+		}
+		if owner == nil {
+			return "", fmt.Errorf("meeting not found: %s", meetingID)
+		}
+		userID = owner.UserID
 	}
+	snapshot, err := s.repo.CaptureMeetingSummary(ctx, userID, meetingID)
 	if err != nil {
 		return "", fmt.Errorf("failed to get meeting: %w", err)
 	}
-	if meeting == nil {
+	if snapshot == nil {
 		return "", fmt.Errorf("meeting not found: %s", meetingID)
 	}
+	meeting := snapshot.Meeting
 
 	transcript, _ := selectMeetingTranscript(meeting)
 	if strings.TrimSpace(transcript) == "" {
 		return "", ErrResummaryNoSource
 	}
-	attachments, err := s.repo.ListAttachments(ctx, meetingID)
-	if err != nil {
-		return "", err
-	}
+	var attachments []model.Attachment
 	if s.attachmentText != nil {
 		attachments, err = s.attachmentText.summaryAttachments(ctx, meeting.UserID, meetingID)
-		if err != nil {
-			return "", err
-		}
+	} else {
+		attachments, err = s.repo.ListAttachments(ctx, meetingID)
+	}
+	if err != nil {
+		return "", err
 	}
 	content, err := s.generateSummarySnapshot(ctx, meeting, attachments, priorContext, false)
 	if err != nil {
 		return "", err
 	}
-	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,
-		map[string]interface{}{"content": meeting.Content, "notes": meeting.Notes},
-		map[string]interface{}{"content": content, "status": model.StatusDone, "attachmentSummarySources": summaryAttachmentSnapshot(content, attachments)}); err != nil {
+	if err := s.repo.SaveMeetingSummary(ctx, snapshot, content, summaryAttachmentSnapshot(content, attachments)); err != nil {
 		return "", fmt.Errorf("failed to update meeting: %w", err)
 	}
 	return content, nil

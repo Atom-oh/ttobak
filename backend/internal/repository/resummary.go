@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"sort"
 	"strings"
 	"time"
 
@@ -16,67 +15,12 @@ import (
 	"github.com/ttobak/backend/internal/model"
 )
 
-var (
-	ErrSummaryAccess = errors.New("summary access revoked")
-	ErrSummaryLimit  = errors.New("summary snapshot or output exceeds limit")
-)
-
-var summaryMeetingFields = []string{"meetingId", "userId", "title", "status", "content", "notes", "liveSummary", "actionItems",
-	"transcriptA", "transcriptB", "selectedTranscript", "transcriptSegments", "speakerMap", "participants",
-	"accountId", "sharedToAccount", "updatedAt"}
 var summaryAttachmentFields = []string{"attachmentId", "meetingId", "userId", "originalKey", "processedKey", "type", "status", "fileName", "processedContent", "description"}
 var summaryTextFields = []string{"runId", "status", "leaseUntil", "sourceKey", "ownerId", "uploaderId", "sourceETag", "resultKey", "unitCount", "complete", "updatedAt"}
 
 func summaryKey(meetingID string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 		"SK": &types.AttributeValueMemberS{Value: model.ResummarySK}}
-}
-func summaryRowKey(pk, sk string) map[string]types.AttributeValue {
-	return map[string]types.AttributeValue{"PK": &types.AttributeValueMemberS{Value: pk}, "SK": &types.AttributeValueMemberS{Value: sk}}
-}
-func (r *DynamoDBRepository) summaryRow(ctx context.Context, pk, sk string) (map[string]types.AttributeValue, error) {
-	out, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{TableName: aws.String(r.tableName), Key: summaryRowKey(pk, sk), ConsistentRead: aws.Bool(true)})
-	if err != nil {
-		return nil, err
-	}
-	return out.Item, nil
-}
-func summaryCheck(pk, sk string, item map[string]types.AttributeValue, fields []string) (model.SummaryCheck, error) {
-	check := model.SummaryCheck{PK: pk, SK: sk, Exists: len(item) > 0, Fields: map[string]model.SummaryValue{}}
-	if !check.Exists {
-		return check, nil
-	}
-	for _, name := range fields {
-		value, exists := item[name]
-		field := model.SummaryValue{Present: exists}
-		if exists {
-			if err := attributevalue.Unmarshal(value, &field.Value); err != nil {
-				return check, err
-			}
-		}
-		check.Fields[name] = field
-	}
-	return check, nil
-}
-func summaryCondition(check model.SummaryCheck) expression.ConditionBuilder {
-	if !check.Exists {
-		return expression.AttributeNotExists(expression.Name("PK"))
-	}
-	condition := expression.AttributeExists(expression.Name("PK"))
-	names := make([]string, 0, len(check.Fields))
-	for name := range check.Fields {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		field := check.Fields[name]
-		if !field.Present {
-			condition = condition.And(expression.AttributeNotExists(expression.Name(name)))
-		} else {
-			condition = condition.And(expression.Name(name).Equal(expression.Value(field.Value)))
-		}
-	}
-	return condition
 }
 func (r *DynamoDBRepository) summaryRows(ctx context.Context, meetingID, prefix string, limit int) ([]map[string]types.AttributeValue, error) {
 	expr, err := expression.NewBuilder().WithKeyCondition(expression.Key("PK").Equal(expression.Value(model.PrefixMeeting + meetingID)).
@@ -103,25 +47,10 @@ func (r *DynamoDBRepository) summaryRows(ctx context.Context, meetingID, prefix 
 // CaptureResummary performs metadata-only reads and records exact conditions
 // for the source plus current edit grant. No transcript S3 hydration occurs.
 func (r *DynamoDBRepository) CaptureResummary(ctx context.Context, ownerID, meetingID, requester string) (*model.SummarySnapshot, error) {
-	row, err := r.summaryRow(ctx, model.PrefixUser+ownerID, model.PrefixMeeting+meetingID)
-	if err != nil || len(row) == 0 {
+	snapshot, err := r.captureMeetingSummaryMetadata(ctx, ownerID, meetingID)
+	if err != nil || snapshot == nil {
 		return nil, err
 	}
-	snapshot := &model.SummarySnapshot{Meeting: &model.Meeting{}, TextStates: map[string]*model.AttachmentTextState{}, Stored: map[string]interface{}{}}
-	if err := attributevalue.UnmarshalMap(row, snapshot.Meeting); err != nil {
-		return nil, err
-	}
-	if snapshot.Meeting.UserID != ownerID || snapshot.Meeting.MeetingID != meetingID {
-		return nil, ErrSummaryAccess
-	}
-	if err := attributevalue.UnmarshalMap(row, &snapshot.Stored); err != nil {
-		return nil, err
-	}
-	parent, err := summaryCheck(model.PrefixUser+ownerID, model.PrefixMeeting+meetingID, row, summaryMeetingFields)
-	if err != nil {
-		return nil, err
-	}
-	snapshot.Checks = append(snapshot.Checks, parent)
 	if requester != ownerID {
 		shareRow, err := r.summaryRow(ctx, model.PrefixUser+requester, model.PrefixShare+meetingID)
 		if err != nil {
@@ -272,7 +201,15 @@ func noSummaryRetries(options *dynamodb.Options) {
 	options.Retryer = aws.NopRetryer{}
 	options.RetryMaxAttempts = 1
 }
+
+func validResummaryWrite(snapshot *model.SummarySnapshot, state *model.ResummaryState) bool {
+	return validSummarySnapshot(snapshot) && state != nil && snapshot.Meeting.UserID == state.OwnerID
+}
+
 func (r *DynamoDBRepository) QueueResummary(ctx context.Context, snapshot *model.SummarySnapshot, prior, next *model.ResummaryState) error {
+	if !validResummaryWrite(snapshot, next) {
+		return ErrConditionFailed
+	}
 	condition := expression.AttributeNotExists(expression.Name("PK"))
 	if prior != nil {
 		condition = summaryRunCondition(prior)
@@ -302,6 +239,9 @@ func (r *DynamoDBRepository) QueueResummary(ctx context.Context, snapshot *model
 	return summaryWriteError(err)
 }
 func (r *DynamoDBRepository) StartResummary(ctx context.Context, snapshot *model.SummarySnapshot, state *model.ResummaryState, now time.Time, lease int64) error {
+	if !validResummaryWrite(snapshot, state) {
+		return ErrConditionFailed
+	}
 	condition := summaryRunCondition(state).And(expression.Name("leaseUntil").GreaterThan(expression.Value(now.UnixMilli())))
 	update := expression.Set(expression.Name("status"), expression.Value(model.AnalysisRunning)).
 		Set(expression.Name("leaseUntil"), expression.Value(lease)).Set(expression.Name("updatedAt"), expression.Value(now))
@@ -317,6 +257,9 @@ func (r *DynamoDBRepository) StartResummary(ctx context.Context, snapshot *model
 	return summaryWriteError(err)
 }
 func (r *DynamoDBRepository) FailResummary(ctx context.Context, meetingID string, state *model.ResummaryState, code string, now time.Time) error {
+	if state == nil {
+		return ErrConditionFailed
+	}
 	update := expression.Set(expression.Name("status"), expression.Value(model.AnalysisFailed)).
 		Set(expression.Name("errorCode"), expression.Value(code)).
 		Set(expression.Name("leaseUntil"), expression.Value(int64(0))).Set(expression.Name("updatedAt"), expression.Value(now))
@@ -330,8 +273,8 @@ func (r *DynamoDBRepository) FailResummary(ctx context.Context, meetingID string
 }
 
 func (r *DynamoDBRepository) CompleteResummary(ctx context.Context, snapshot *model.SummarySnapshot, state *model.ResummaryState, content, coverage, resultHash string, now time.Time) (resultErr error) {
-	if snapshot == nil || len(snapshot.Checks) == 0 {
-		return ErrSummaryLimit
+	if !validResummaryWrite(snapshot, state) {
+		return ErrConditionFailed
 	}
 	fields := map[string]interface{}{"content": content, "attachmentSummarySources": coverage, "status": model.StatusDone, "updatedAt": now.Format(time.RFC3339Nano)}
 	stored := map[string]interface{}{}

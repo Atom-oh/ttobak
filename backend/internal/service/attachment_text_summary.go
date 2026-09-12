@@ -33,33 +33,41 @@ func (s *AttachmentTextService) summaryAttachments(ctx context.Context, ownerID,
 		}
 		current, canonical, err := s.authorized(ctx, ownerID, meetingID, att.AttachmentID, false)
 		if err != nil {
-			return nil, err
+			att.SummaryOmitted = true
+			continue
 		}
 		state, err := s.describe(ctx, current, canonical)
 		if err != nil {
-			return nil, err
+			att.SummaryOmitted = true
+			continue
 		}
 		*att = *canonical
 		if state.Status != model.AttachmentTextSucceeded && state.Status != model.AttachmentTextPartial {
+			att.SummaryOmitted = true
 			continue
 		}
 		result, _, err := s.readResult(ctx, current, canonical, state)
 		if err != nil {
-			return nil, err
+			att.SummaryOmitted = true
+			continue
 		}
 		fresh, nowAtt, err := s.authorized(ctx, ownerID, meetingID, att.AttachmentID, false)
 		if err != nil {
-			return nil, err
+			att.SummaryOmitted = true
+			continue
 		}
 		latest, err := s.describe(ctx, fresh, nowAtt)
 		if err != nil {
-			return nil, err
+			att.SummaryOmitted = true
+			continue
 		}
 		if attachmentRevision(state) != attachmentRevision(latest) || nowAtt.OriginalKey != att.OriginalKey {
-			return nil, ErrAttachmentSourceChanged
+			att.SummaryOmitted = true
+			continue
 		}
 		if result.Source.RunID != state.RunID {
-			return nil, ErrAttachmentSourceChanged
+			att.SummaryOmitted = true
+			continue
 		}
 		copy := *result
 		copy.Units = nil
@@ -98,7 +106,8 @@ func (s *AttachmentTextService) summaryAttachments(ctx context.Context, ownerID,
 		}
 		if len(copy.Units) == 0 {
 			att.ExtractedText = nil
-			break
+			att.SummaryOmitted = true
+			continue
 		}
 		remaining -= len(documentEvidence(*att))
 		att.ExtractedRevision = attachmentRevision(state)
@@ -133,7 +142,7 @@ func documentEvidence(att model.Attachment) string {
 func summaryAttachmentSnapshot(content string, attachments []model.Attachment) string {
 	snapshot := attachmentSummarySources{ContentHash: actionSourceHash(content), Documents: map[string]string{}, Excerpted: map[string]bool{}}
 	for _, att := range attachments {
-		if att.ExtractedText != nil && att.ExtractedRevision != "" {
+		if att.ExtractedText != nil && att.ExtractedRevision != "" && !att.SummaryOmitted {
 			snapshot.Documents[att.AttachmentID] = att.ExtractedRevision
 			if att.SummaryExcerpted {
 				snapshot.Excerpted[att.AttachmentID] = true
@@ -154,6 +163,8 @@ func summaryAttachmentNotice(attachments []model.Attachment) string {
 		}
 		name := sanitizeMarkdownText(att.FileName)
 		switch {
+		case att.SummaryOmitted:
+			notes = append(notes, fmt.Sprintf("- %s: 검증할 수 없는 문서 근거를 제외했습니다. 추출 상태 또는 인용을 확인한 뒤 다시 요약하세요.", name))
 		case att.ExtractedText == nil:
 			notes = append(notes, fmt.Sprintf("- %s: 문서 본문은 이 요약에 반영되지 않았습니다. 추출 상태 확인 후 다시 요약하세요.", name))
 		case att.SummaryExcerpted:
@@ -174,15 +185,18 @@ func resolveDocumentCitations(content string, attachments []model.Attachment) (s
 	marker := regexp.MustCompile(`\[DOC:([A-Za-z0-9_-]{1,128}):([0-9]{1,6})\]`)
 	audioMarker := regexp.MustCompile(`\[TS:\d+\]`)
 	audioLink := regexp.MustCompile(`\[[^\]]*\]\(transcript://[^)]*\)`)
-	evidence := map[string]model.Attachment{}
-	for _, att := range attachments {
+	evidence := map[string]int{}
+	for i, att := range attachments {
 		if att.ExtractedText != nil {
-			evidence[att.AttachmentID] = att
+			evidence[att.AttachmentID] = i
 		}
 	}
 	paragraphs := strings.Split(content, "\n\n")
-	for i, paragraph := range paragraphs {
+	kept := make([]string, 0, len(paragraphs))
+	omitted := false
+	for _, paragraph := range paragraphs {
 		if !strings.Contains(paragraph, "[DOC:") {
+			kept = append(kept, paragraph)
 			continue
 		}
 		invalid := false
@@ -190,13 +204,24 @@ func resolveDocumentCitations(content string, attachments []model.Attachment) (s
 		paragraph = audioLink.ReplaceAllString(paragraph, "")
 		paragraph = marker.ReplaceAllStringFunc(paragraph, func(match string) string {
 			parts := marker.FindStringSubmatch(match)
-			att, ok := evidence[parts[1]]
+			attachmentIndex, ok := evidence[parts[1]]
 			index, err := strconv.Atoi(parts[2])
-			if !ok || err != nil || index >= len(att.ExtractedText.Units) {
+			if !ok {
 				invalid = true
 				return ""
 			}
+			att := &attachments[attachmentIndex]
+			if err != nil || index >= len(att.ExtractedText.Units) {
+				invalid = true
+				att.SummaryOmitted = true
+				return ""
+			}
 			location := att.ExtractedText.Units[index].Location
+			if !validDocumentLocation(att.ExtractedText.Format, location) {
+				invalid = true
+				att.SummaryOmitted = true
+				return ""
+			}
 			field, label := "paragraph", "문단"
 			switch att.ExtractedText.Format {
 			case "pdf":
@@ -207,9 +232,17 @@ func resolveDocumentCitations(content string, attachments []model.Attachment) (s
 			return fmt.Sprintf("[%s · %s %v](attachment://%s)", sanitizeMarkdownText(att.FileName), label, location[field], att.AttachmentID)
 		})
 		if invalid || strings.Contains(paragraph, "[DOC:") {
-			return "", ErrInvalidAnalysisResponse
+			omitted = true
+			continue
 		}
-		paragraphs[i] = paragraph
+		kept = append(kept, paragraph)
 	}
-	return strings.Join(paragraphs, "\n\n"), nil
+	result := strings.Join(kept, "\n\n")
+	if strings.TrimSpace(result) == "" {
+		return "", ErrInvalidAnalysisResponse
+	}
+	if omitted {
+		result += "\n\n> 문서 인용을 확인할 수 없는 문단을 제외했습니다."
+	}
+	return result, nil
 }
