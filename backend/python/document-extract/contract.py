@@ -84,15 +84,24 @@ def failure(fmt, code):
 class Collector:
     def __init__(self, fmt, limits, scope):
         self.limits = limits
+        self._payload_bytes = 0
         self.result = {
             "schemaVersion": 1, "format": fmt, "status": "succeeded", "complete": True,
             "scope": scope, "units": [], "warnings": [], "error": None,
             "metrics": {"units": 0, "textBytes": 0},
         }
 
-    def check_size(self):
-        if len(encoded(self.result)) > self.limits.max_result_bytes:
+    def check_size(self, final=False):
+        # Count each unit/warning once. The envelope/metrics are checked exactly
+        # at finish, after format-specific metrics have been populated.
+        size = len(encoded(self.result)) if final else self._payload_bytes
+        if size > self.limits.max_result_bytes:
             raise ParseFailure("LIMIT_EXCEEDED")
+
+    def append(self, field, value):
+        self._payload_bytes += len(encoded(value)) - 1 + bool(self.result[field])
+        self.check_size()
+        self.result[field].append(value)
 
     def add(self, text, location):
         text = text.strip()
@@ -102,22 +111,20 @@ class Collector:
         metrics = self.result["metrics"]
         if metrics["units"] >= self.limits.max_units or metrics["textBytes"] + size > self.limits.max_text_bytes:
             raise ParseFailure("LIMIT_EXCEEDED")
-        self.result["units"].append({"text": text, "location": location})
+        self.append("units", {"text": text, "location": location})
         metrics["units"] += 1
         metrics["textBytes"] += size
-        self.check_size()
         return True
 
     def warn(self, code, location):
         if len(self.result["warnings"]) >= 400:
             raise ParseFailure("LIMIT_EXCEEDED")
-        self.result["warnings"].append({"code": code, "location": location})
+        self.append("warnings", {"code": code, "location": location})
         self.result["complete"] = False
         self.result["status"] = "partial"
-        self.check_size()
 
     def finish(self, empty_code="NO_EXTRACTABLE_TEXT"):
         if not self.result["units"]:
             raise ParseFailure(empty_code)
-        self.check_size()
+        self.check_size(final=True)
         return self.result

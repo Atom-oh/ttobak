@@ -49,10 +49,10 @@ and production deployment remain separate from the pure parser.
 Use Python 3.12, install the exact pins, then invoke the parent runner:
 
 ```bash
-python -m pip install -r requirements.txt
-python worker.py /trusted/staging/attachment.pdf
-python worker.py /trusted/staging/file --format docx
-python -m unittest test_extract test_worker -v
+python3 -m pip install -r requirements.txt
+python3 worker.py /trusted/staging/attachment.pdf
+python3 worker.py /trusted/staging/file --format docx
+python3 -m unittest test_extract test_worker -v
 ```
 
 CLI exit code is 0 for complete extraction, 2 for partial/failed extraction.
@@ -77,7 +77,7 @@ No package member is written to disk. A storage parent can import
 | Child virtual address space | 512 MiB |
 | Child CPU soft/hard / parent wall time | 8 s / 9 s / 12 s |
 
-`Limits` can lower these ceilings, not raise/disable them. Limits count actual
+`Limits` can lower these ceilings, not raise/disable them. Incremental unit/warning byte accounting keeps collection linear; final serialization validates the complete envelope. Limits count actual
 encoded output (including JSON escaping), not just character counts. ZIP metadata
 is checked before decompression; every member is read under bounds to validate its
 actual length and CRC. PDF decompression uses the pinned release's public
@@ -151,7 +151,7 @@ than decrypted; no optional crypto/image/font/OCR dependency is installed.
 
 ## Verification
 
-The 24 parser/child tests pass under CPython 3.12.13 on Linux/AArch64.
+The 25 parser/child tests pass under CPython 3.12.13 on Linux/AArch64.
 Coverage includes generated Korean PDF text,
 presentation relationship ordering, DOCX nested/wrapped tables, Markdown UTF-8,
 encrypted/corrupt/empty/scanned files, unsafe ZIP/XML/macro content, configured

@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 from pathlib import Path
 import sys
@@ -9,7 +10,7 @@ from dataclasses import replace
 from unittest.mock import patch
 
 from contract import Limits, ParseFailure
-from fixtures import archive, docx_parts, pptx_parts, pdf
+from fixtures import W, archive, docx_parts, pptx_parts, pdf
 from worker import _bounded_child, _child_environment, extract_file, run_parser
 
 CACHE = Path.home() / ".cache" / "ttobak-document-parser-tests"
@@ -17,6 +18,18 @@ MODULE = str(Path(__file__).resolve().parent)
 
 
 class WorkerTests(unittest.TestCase):
+    def test_maximum_paragraph_count_avoids_quadratic_cpu_cost(self):
+        # Varied text avoids turning a legitimate stress fixture into a ZIP
+        # expansion-ratio fixture. All 4000 paragraphs fit text/output limits.
+        texts = [f"{i}: 한글 {hashlib.sha256(str(i).encode()).hexdigest()[:24]}" for i in range(4000)]
+        body = "".join(f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" for text in texts)
+        parts = docx_parts()
+        parts["word/document.xml"] = f'<w:document xmlns:w="{W}"><w:body>{body}</w:body></w:document>'
+        result = run_parser(archive(parts), "docx", replace(Limits(), cpu_seconds=2))
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertEqual([unit["text"] for unit in result["units"]], texts)
+        self.assertEqual(result["units"][-1]["location"]["paragraph"], 4000)
+
     def test_child_loader_path_is_derived_from_the_interpreter_not_inherited(self):
         with patch.dict(os.environ, {
             "LD_LIBRARY_PATH": "/untrusted/path",
