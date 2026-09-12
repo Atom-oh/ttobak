@@ -4,6 +4,7 @@ import { basename, extname, isAbsolute, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { URL } from 'node:url';
 import type { CognitoAuth } from './auth.js';
+import { MAX_READING_BYTES, type ReadingOptions } from './reading.js';
 
 // Extension -> MIME type, shared by both upload tools for inference only --
 // each tool advertises its own narrower format list (kb_upload: pdf/md/pptx/
@@ -188,8 +189,16 @@ export class TtobakApi {
     return this.get(`/api/meetings${qs ? '?' + qs : ''}`);
   }
 
-  async getMeeting(meetingId: string) {
-    return this.get(`/api/meetings/${meetingId}`);
+  async readMeeting(options: ReadingOptions) {
+    const query = new URLSearchParams({ kind: options.kind, pageSize: String(options.pageSize) });
+    if (options.kind === 'meeting') query.set('section', options.section);
+    else query.set('source', options.source);
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    if (options.kind === 'transcript' && options.startTime !== undefined) {
+      query.set('startTime', String(options.startTime));
+      query.set('endTime', String(options.endTime));
+    }
+    return this.request('GET', `/api/meetings/${identifier(options.meetingId, 'meetingId')}/reading?${query}`, undefined, MAX_READING_BYTES);
   }
 
   async askQuestion(question: string, meetingId?: string, sessionId?: string) {
@@ -457,7 +466,7 @@ export class TtobakApi {
     });
   }
 
-  private async request(method: string, path: string, body?: unknown): Promise<unknown> {
+  private async request(method: string, path: string, body?: unknown, maxResponseBytes?: number): Promise<unknown> {
     const idToken = await this.auth.getIdToken();
     const url = new URL(path, this.baseUrl);
     const data = body ? JSON.stringify(body) : undefined;
@@ -477,16 +486,44 @@ export class TtobakApi {
           },
         },
         (res) => {
-          res.setEncoding('utf8');
-          let chunks = '';
-          res.on('data', (c) => (chunks += c));
+          // Count original wire bytes before buffering/decoding JSON. A string
+          // character count would undercount Korean/emoji and byte-split chunks.
+          const chunks: Buffer[] = [];
+          let received = 0, finished = false;
+          const fail = (error: Error) => {
+            if (finished) return;
+            finished = true;
+            chunks.length = 0;
+            reject(error);
+            res.destroy();
+            req.destroy();
+          };
+          const tooLarge = () => fail(new Error('READING_LIMIT: HTTP reading response exceeds 32000 bytes'));
+          res.on('error', fail);
+          res.on('aborted', () => fail(new Error('TTOBAK response was aborted')));
+          res.on('close', () => { if (!finished) fail(new Error('TTOBAK response ended before completion')); });
+          res.on('data', (chunk: Buffer) => {
+            if (finished) return;
+            if (maxResponseBytes !== undefined && received + chunk.length > maxResponseBytes) {
+              tooLarge();
+              return;
+            }
+            received += chunk.length;
+            chunks.push(chunk);
+          });
           res.on('end', () => {
+            if (finished) return;
+            finished = true;
             try {
-              resolve(parseApiResponse(res.statusCode || 0, chunks));
+              resolve(parseApiResponse(res.statusCode || 0, Buffer.concat(chunks, received).toString('utf8')));
             } catch (error) {
               reject(error);
             }
           });
+          const declaredLength = res.headers?.['content-length'];
+          if (maxResponseBytes !== undefined && declaredLength !== undefined && Number(declaredLength) > maxResponseBytes) {
+            tooLarge();
+          }
         },
       );
       req.on('timeout', () => req.destroy(new Error('TTOBAK request timed out after 120s')));
