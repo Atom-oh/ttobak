@@ -1,8 +1,9 @@
 # Readonly tool history foundation
 
 This helper is inactive until the host wires the authenticated handler. It changes
-no handler, tool definitions, retrieval, IAM or AWS resources. The host's ADR-042
-documents the broader current-source QA policy; link it here once that ADR merges.
+no handler, tool definitions, retrieval, IAM or AWS resources.
+[ADR-042](../../../docs/decisions/ADR-042-current-source-qa-and-history.md)
+documents the broader current-source QA policy.
 
 ## Small integration API
 
