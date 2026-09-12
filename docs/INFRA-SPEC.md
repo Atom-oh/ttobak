@@ -202,8 +202,19 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - Rollout: the mode-aware migration worker must be deployed before enabling
   the scheduled producer. Follow the
   [bootstrap and activation runbook](runbooks/knowledge-index-bootstrap.md).
-- Worker contract: raw DynamoDB stream records or scheduled `tick` envelopes;
-  coalesced full ingestion and immutable projections, not direct OpenSearch writes.
+- Worker contract: required `INDEXING_MODE=manual-only|all`; raw DynamoDB stream
+  records or scheduled `tick` envelopes coalesce full S3 ingestion. Manual-only
+  creates `manual-kb/v1/` and `shared-kb/v1/` snapshots while preserving canonical
+  and legacy meeting exports. All mode also processes canonical sources.
+- Activation order: deploy this mode-aware worker with delivery off; verify the
+  manual-only configuration and restricted role, explicitly enable its schedule,
+  verify private/shared snapshots, deploy the complete strict QA runtime, then
+  enable all-mode canonical backfill (ADR-038). No ad-hoc global tick or
+  coordinator edits replace these gates.
+- Verify the out-of-band data source includes both snapshot prefixes. Originals
+  and snapshots may coexist; strict QA accepts only current-bound binary facts.
+  If an accidental downgrade blocks an all-mode coordinator, restore all mode;
+  reverting to the legacy QA path additionally requires a reviewed re-export.
 - Recovery: a crashed invocation may retain its 20-minute coordinator lease.
   Normal ticks report `LEASE_WAIT` until recovery; member failures back off independently.
 
