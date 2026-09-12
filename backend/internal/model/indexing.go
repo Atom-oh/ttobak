@@ -77,6 +77,7 @@ type IndexJob struct {
 	FailureCount    int           `dynamodbav:"failureCount" json:"-"`
 	Keys            []string      `dynamodbav:"keys" json:"-"`
 	PendingKeys     []string      `dynamodbav:"pendingKeys" json:"-"`
+	RemovedKeys     []string      `dynamodbav:"removedKeys" json:"-"`
 	Outcome         string        `dynamodbav:"outcome" json:"-"`
 	ErrorCode       string        `dynamodbav:"errorCode" json:"errorCode,omitempty"`
 	SyncID          string        `dynamodbav:"syncId" json:"syncId,omitempty"`
