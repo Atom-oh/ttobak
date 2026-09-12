@@ -186,9 +186,19 @@ Both triggers are plain `lambda.Function` (`NODEJS_22_X`, `ARM_64`, `Code.fromAs
 - Permissions: Bedrock InvokeModelWithBidirectionalStream (Nova Sonic), Bedrock InvokeModel (Claude translation), DynamoDB read/write, API Gateway ManageConnections
 
 #### KB Lambda
-- Trigger: S3 Event (prefix `kb/`) via EventBridge + API Gateway (sync), 1024MB / 300s
-- Env: `TABLE_NAME`, `BUCKET_NAME`, `KB_ID`, `AOSS_ENDPOINT`
-- Permissions: Bedrock KB management, OpenSearch Serverless, S3 read, DynamoDB read/write
+- Trigger: one-minute scheduled tick, 1024 MiB / 720s. The canonical DynamoDB
+  mapping is disabled during `manual-only` bootstrap and enabled only in `all`
+  mode. Existing `/api/kb/*` HTTP routes remain in the API Lambda.
+- Env: `TABLE_NAME`, `BUCKET_NAME`, `KB_BUCKET_NAME`, `KB_ID`, `DATA_SOURCE_ID`,
+  `AWS_REGION_NAME`, `INDEXING_MODE` (`manual-only` or `all`).
+- Permissions: conditional job/control updates, KB-scoped full ingestion and
+  per-document status reads, and immutable snapshot access. Bootstrap grants
+  original `kb/*`/`shared/*` reads and snapshot-prefix writes/deletes only;
+  canonical source/projection permissions are added with explicit full mode.
+  The worker has no OpenSearch or model-inference permission.
+- Rollout: the mode-aware migration worker must be deployed before enabling
+  the scheduled producer. Follow the
+  [bootstrap and activation runbook](runbooks/knowledge-index-bootstrap.md).
 
 #### QA Lambda (`ttobak-qa`, Python)
 - Current-source configuration: `KB_BUCKET_NAME` identifies the KB bucket,

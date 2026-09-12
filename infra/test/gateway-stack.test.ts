@@ -9,7 +9,7 @@ import { GatewayStack } from '../lib/gateway-stack';
 describe('GatewayStack', () => {
   let template: Template;
 
-  beforeAll(() => {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only'): Template {
     const app = new cdk.App({
       context: {
         'ttobak:cloudfrontDomain': 'd2olomx8td8txt.cloudfront.net',
@@ -20,6 +20,7 @@ describe('GatewayStack', () => {
     const mockStack = new cdk.Stack(app, 'MockStack');
     const table = new dynamodb.Table(mockStack, 'Table', {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
     });
     const bucket = new s3.Bucket(mockStack, 'Bucket');
     const kbBucket = new s3.Bucket(mockStack, 'KbBucket');
@@ -45,11 +46,16 @@ describe('GatewayStack', () => {
       userPoolClient,
       kbBucket,
       knowledgeBaseId: 'test-kb-id',
+      indexingMode,
       dataSourceId: 'test-ds-id',
       webSearchGatewayUrl: 'https://test-gateway.gateway.bedrock-agentcore.us-east-1.api.aws/mcp',
     });
 
-    template = Template.fromStack(stack);
+    return Template.fromStack(stack);
+  }
+
+  beforeAll(() => {
+    template = buildTemplate();
   });
 
   test('creates at least 6 Lambda functions', () => {
@@ -105,6 +111,54 @@ describe('GatewayStack', () => {
       Runtime: 'python3.12',
       Architectures: ['arm64'],
     });
+  });
+
+  test('bootstrap ticks run manual-only with canonical notifications disabled', () => {
+    template.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-kb',
+      Timeout: 720,
+      MemorySize: 1024,
+      Environment: { Variables: Match.objectLike({
+        INDEXING_MODE: 'manual-only', KB_ID: 'test-kb-id', DATA_SOURCE_ID: 'test-ds-id',
+      }) },
+    });
+    const mappings = Object.values(template.findResources('AWS::Lambda::EventSourceMapping'));
+    expect(mappings).toHaveLength(1);
+    expect(mappings[0].Properties).toEqual(expect.objectContaining({
+      Enabled: false, StartingPosition: 'LATEST', BatchSize: 20,
+      BisectBatchOnFunctionError: true,
+      FunctionResponseTypes: ['ReportBatchItemFailures'],
+      MaximumRetryAttempts: 3, MaximumRecordAgeInSeconds: 82800,
+    }));
+    const rules = Object.entries(template.findResources('AWS::Events::Rule'))
+      .filter(([id]) => id.startsWith('CanonicalIndexTick'));
+    expect(rules).toHaveLength(1);
+    expect(rules[0][1].Properties.ScheduleExpression).toBe('rate(1 minute)');
+    expect(rules[0][1].Properties.Targets).toEqual([expect.objectContaining({
+      Input: '{"action":"tick"}',
+      RetryPolicy: { MaximumEventAgeInSeconds: 300, MaximumRetryAttempts: 2 },
+      DeadLetterConfig: expect.any(Object),
+    })]);
+    const delivery = Object.entries(template.findResources('AWS::IAM::Policy'))
+      .find(([id]) => id.startsWith('CanonicalIndexDeliveryPolicy'));
+    expect(delivery).toBeDefined();
+    const statement = delivery![1].Properties.PolicyDocument.Statement.find(
+      (entry: { Action: string }) => entry.Action === 'dynamodb:ListStreams');
+    expect(statement.Condition.StringEquals['aws:RequestedRegion']).toBeDefined();
+  });
+
+  test('full mode explicitly enables canonical notifications and uses the same worker', () => {
+    const all = buildTemplate('all');
+    all.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'ttobak-kb',
+      Environment: { Variables: Match.objectLike({ INDEXING_MODE: 'all' }) },
+    });
+    const mappings = Object.values(all.findResources('AWS::Lambda::EventSourceMapping'));
+    expect(mappings).toHaveLength(1);
+    expect(mappings[0].Properties.Enabled).toBe(true);
+    expect(JSON.stringify(mappings[0].Properties.FilterCriteria)).toContain('MEETING#');
+    expect(JSON.stringify(mappings[0].Properties.FilterCriteria)).toContain('DOC#');
+    expect(JSON.stringify(mappings[0].Properties.FilterCriteria)).toContain('ACCOUNT#');
   });
 
   test('QA transcript validation uses the actual assets bucket', () => {

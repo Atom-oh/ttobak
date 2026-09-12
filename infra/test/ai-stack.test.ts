@@ -7,7 +7,7 @@ import { AiStack } from '../lib/ai-stack';
 describe('AiStack', () => {
   let template: Template;
 
-  beforeAll(() => {
+  function buildTemplate(indexingMode: 'manual-only' | 'all' = 'manual-only'): Template {
     const app = new cdk.App();
 
     const mockStack = new cdk.Stack(app, 'MockStack');
@@ -27,9 +27,14 @@ describe('AiStack', () => {
       researchAgentExecutionRoleArn:
         'arn:aws:iam::111111111111:role/test-research-role',
       knowledgeBaseId: 'test-kb-id',
+      indexingMode,
     });
 
-    template = Template.fromStack(stack);
+    return Template.fromStack(stack);
+  }
+
+  beforeAll(() => {
+    template = buildTemplate();
   });
 
   test('qa role InvokeGateway grant is scoped to the Web Search Gateway ARN', () => {
@@ -48,6 +53,62 @@ describe('AiStack', () => {
       },
       Roles: Match.arrayWith([Match.objectLike({ Ref: Match.stringLikeRegexp('^TtobakQaRole') })]),
     });
+  });
+
+  test('manual bootstrap can publish snapshots without changing originals or meeting projections', () => {
+    const statements = Object.values(template.findResources('AWS::IAM::Policy'))
+      .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakKbRole'))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
+    const bySid = (sid: string) => statements.find((entry) => entry.Sid === sid);
+    expect(bySid('CanonicalIndexState')).toBeDefined();
+    expect(bySid('CanonicalIndexState').Action).toEqual([
+      'dynamodb:GetItem', 'dynamodb:Query', 'dynamodb:UpdateItem', 'dynamodb:ConditionCheckItem',
+    ]);
+    for (const sid of ['WriteCanonicalIndexProjections', 'RemoveObsoleteIndexProjections']) {
+      const statement = bySid(sid);
+      expect(statement).toBeDefined();
+      expect(statement.Resource).toHaveLength(2);
+      const resources = JSON.stringify(statement.Resource);
+      expect(resources).toContain('/manual-kb/v1/*');
+      expect(resources).toContain('/shared-kb/v1/*');
+      expect(resources).not.toContain('/meetings/*');
+      expect(resources).not.toContain('/canonical/v1/*');
+      expect(resources).not.toContain('"/kb/*"');
+      expect(resources).not.toContain('"/shared/*"');
+    }
+    expect(bySid('ReadCanonicalIndexSources')).toBeUndefined();
+    expect(bySid('InspectCanonicalSourceExistence')).toBeUndefined();
+    expect(bySid('ReadLegacyKnowledgeSources').Action).toEqual(['s3:GetObject', 's3:GetObjectVersion']);
+    expect(bySid('SynchronizeCanonicalIndex').Action).toEqual([
+      'bedrock:StartIngestionJob', 'bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs',
+      'bedrock:GetKnowledgeBaseDocuments',
+    ]);
+    expect(JSON.stringify(bySid('SynchronizeCanonicalIndex').Resource)).toContain('knowledge-base/test-kb-id');
+    for (const statement of statements) {
+      expect([statement.Resource].flat()).not.toContain('*');
+      expect([statement.Action].flat()).not.toContain('aoss:APIAccessAll');
+    }
+  });
+
+  test('explicit full mode adds only canonical source and projection permissions', () => {
+    const all = buildTemplate('all');
+    const statements = Object.values(all.findResources('AWS::IAM::Policy'))
+      .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakKbRole'))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
+    const bySid = (sid: string) => statements.find((entry) => entry.Sid === sid);
+    expect(bySid('CanonicalIndexState').Action).toContain('dynamodb:Scan');
+    const reads = JSON.stringify(bySid('ReadCanonicalIndexSources').Resource);
+    for (const prefix of ['transcripts', 'docs', 'docs-pdf']) {
+      expect(reads).toContain(`/${prefix}/*`);
+    }
+    expect(reads).not.toContain('/audio/*');
+    const writes = JSON.stringify(bySid('WriteCanonicalIndexProjections').Resource);
+    expect(writes).toContain('/canonical/v1/*');
+    const deletes = JSON.stringify(bySid('RemoveObsoleteIndexProjections').Resource);
+    expect(deletes).toContain('/canonical/v1/*');
+    expect(deletes).toContain('/meetings/*');
+    expect(deletes).not.toContain('"/kb/*"');
+    expect(deletes).not.toContain('"/shared/*"');
   });
 
   test('converter can inspect preview generations with object access limited to document prefixes', () => {
