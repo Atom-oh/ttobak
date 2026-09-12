@@ -49,7 +49,8 @@ current key and validated write path; SourceUserID remains the original creator.
 A partially failed full sync is resolved per immutable document with
 `GetKnowledgeBaseDocuments`: current objects require `INDEXED`; removed objects
 require `NOT_FOUND`. `removedKeys` is persisted before deletion and retained across
-interrupted cleanup. Partial indexing is not success. Provider read errors/pending
+interrupted cleanup, including known legacy URIs whose S3 objects are already gone.
+Partial indexing is not success. Provider read errors/pending
 states retain the member for retry while other verified members can finalize.
 Fresh source/byte reads and the source CAS still follow the provider check.
 

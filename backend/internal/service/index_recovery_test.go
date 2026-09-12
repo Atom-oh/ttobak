@@ -193,7 +193,7 @@ func TestIndexPartialSyncVerifiesDeletionAndRetainsRemovalProofAcrossCrash(t *te
 	if _, err := s.Tick(context.Background()); err == nil {
 		t.Fatal("fixture did not interrupt cleanup")
 	}
-	if len(repo.jobs[key.Hash()].RemovedKeys) != 1 {
+	if len(repo.jobs[key.Hash()].RemovedKeys) != 2 {
 		t.Fatal("deletion identifiers were not persisted before the first S3 delete")
 	}
 	if _, err := s.Tick(context.Background()); err != nil {
@@ -212,6 +212,34 @@ func TestIndexPartialSyncVerifiesDeletionAndRetainsRemovalProofAcrossCrash(t *te
 		if _, ok := objects.kb[object]; ok {
 			t.Fatal("source deletion retained a projection")
 		}
+	}
+}
+
+func TestIndexPartialSyncCannotAssumeAbsentLegacyObjectMeansAbsentVector(t *testing.T) {
+	s, repo, _, provider, _ := newIndexTest()
+	key := addIndexMeeting(repo, "legacy", "notes")
+	if err := s.Enqueue(context.Background(), key); err != nil {
+		t.Fatal(err)
+	}
+	delete(repo.sources, key.Hash())
+	legacy := legacyIndexKeys(key)[0]
+	// The legacy S3 export is already gone, but its deletion failed in the
+	// provider. It never appeared in this new worker's key inventory.
+	p := &indexDocumentSync{indexSync: provider, statuses: map[string]string{legacy: "INDEXED"}}
+	s.ingestion = p
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	id := repo.control.ProviderJobID
+	provider.jobs[id] = IndexProviderJob{ID: id, Status: "COMPLETE", Failed: 1}
+	if _, err := s.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if repo.jobs[key.Hash()].State == model.IndexDeleted {
+		t.Fatal("S3 absence became proof of vector deletion after a partially failed sync")
+	}
+	if len(repo.jobs[key.Hash()].RemovedKeys) != 1 || repo.jobs[key.Hash()].RemovedKeys[0] != legacy {
+		t.Fatal("unconfirmed legacy deletion was not retained for a later sync")
 	}
 }
 

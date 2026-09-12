@@ -539,7 +539,9 @@ func (s *IndexingService) cleanupTracked(ctx context.Context, job *model.IndexJo
 	for _, key := range keep {
 		retained[key] = true
 	}
-	for _, list := range [][]string{inventory, job.Keys, job.PendingKeys, job.RemovedKeys} {
+	// Legacy vectors can outlive their S3 objects and predate this job record.
+	// Their exact canonical URI remains known even when inventory is empty.
+	for _, list := range [][]string{inventory, job.Keys, job.PendingKeys, job.RemovedKeys, legacyIndexKeys(job.Resource)} {
 		for _, key := range list {
 			if !retained[key] && !strings.HasSuffix(key, ".metadata.json") {
 				removed[key] = true
