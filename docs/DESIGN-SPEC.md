@@ -1147,4 +1147,3 @@ QA messages retain optional structured source details across REST, WebSocket
 and chat. Display human-readable titles and only validated existing-app links,
 with legacy `sources` as fallback. Internal partition keys are not primary labels.
 These consumers require the index-status and unified QA APIs to be deployed.
-
