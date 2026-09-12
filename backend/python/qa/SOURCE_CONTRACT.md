@@ -84,6 +84,10 @@ are considered in descending relevance order. Otherwise an excerpt around a
 literal query term in current text is used, with the mismatch explicit.
 `coverage` reports source-relative character offsets and total length, so a
 matching paragraph after the file's introduction is not replaced by its head.
+The model-facing search formatter caps the selected excerpt at 2,400
+characters and recomputes both its coverage and provenance partial flag from
+that rendered range. The larger reader window is not a claim that the model
+received the whole source.
 
 `get_legacy_text_detail(uri, offset=0, sourceRevision?)` reads up to 6,000 current
 characters from an authorized legacy text object. Continuations require the
