@@ -213,7 +213,8 @@
         "id": "no-invented-task",
         "scope": "actions",
         "target": "블루그린",
-        "lineRequires": "확정하지|미확정|없|아니|않"
+        "lineRequires": "확정하지|미확정|없|아니|않",
+        "noTasks": true
       }
     ],
     "reference": "# 회의록\n## 주요 논의 사항\n블루그린 배포는 제안으로 남아 있고 도입 결정은 없습니다. [00:10](transcript://proposal)\n## 결정 사항\n- 롤링 배포를 적용합니다. [00:00](transcript://rolling)\n## 액션 아이템\n확정된 액션 아이템은 없습니다.",
@@ -240,6 +241,22 @@
         "to": "- 롤링 배포와 함께 블루그린 제안을 검토해 도입을 확정했습니다.",
         "fails": [
           "proposal-not-final"
+        ]
+      },
+      {
+        "name": "unrelated task bypasses named proposal guard",
+        "from": "확정된 액션 아이템은 없습니다.",
+        "to": "- [ ] 담당자 미정: 배포 결과 보고서를 작성합니다.",
+        "fails": [
+          "no-invented-task"
+        ]
+      },
+      {
+        "name": "unrelated task without checkbox",
+        "from": "확정된 액션 아이템은 없습니다.",
+        "to": "- 담당자 미정: 배포 결과 보고서를 작성합니다.",
+        "fails": [
+          "no-invented-task"
         ]
       }
     ]
