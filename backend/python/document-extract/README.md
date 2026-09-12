@@ -151,10 +151,10 @@ than decrypted; no optional crypto/image/font/OCR dependency is installed.
 
 ## Verification
 
-The 23 parser/child tests pass under CPython 3.12.13 on Linux/AArch64.
+The 24 parser/child tests pass under CPython 3.12.13 on Linux/AArch64.
 Coverage includes generated Korean PDF text,
 presentation relationship ordering, DOCX nested/wrapped tables, Markdown UTF-8,
 encrypted/corrupt/empty/scanned files, unsafe ZIP/XML/macro content, configured
 limits, real child CPU/address-space/wall limits, bounded stdout/stderr, sanitized
-environment, ordinary DOCX/PPTX hyperlinks, and CLI JSON. Tests use generated
+environment with an interpreter-derived loader path, ordinary DOCX/PPTX hyperlinks, and CLI JSON. Tests use generated
 data and home-cache temporary directories, not customer files or live AWS.

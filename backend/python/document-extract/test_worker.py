@@ -10,13 +10,24 @@ from unittest.mock import patch
 
 from contract import Limits, ParseFailure
 from fixtures import archive, docx_parts, pptx_parts, pdf
-from worker import _bounded_child, extract_file, run_parser
+from worker import _bounded_child, _child_environment, extract_file, run_parser
 
-CACHE = Path("/home/atomoh/.cache/ttobak-improvements")
+CACHE = Path.home() / ".cache" / "ttobak-document-parser-tests"
 MODULE = str(Path(__file__).resolve().parent)
 
 
 class WorkerTests(unittest.TestCase):
+    def test_child_loader_path_is_derived_from_the_interpreter_not_inherited(self):
+        with patch.dict(os.environ, {
+            "LD_LIBRARY_PATH": "/untrusted/path",
+            "LD_PRELOAD": "/untrusted/library.so",
+            "AWS_SECRET_ACCESS_KEY": "synthetic-only",
+        }):
+            env = _child_environment()
+        self.assertEqual(env["LD_LIBRARY_PATH"], str(Path(sys.base_prefix) / "lib"))
+        self.assertNotIn("LD_PRELOAD", env)
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", env)
+
     def test_real_children_parse_all_formats(self):
         for data, fmt in [(b"# text", "md"), (pdf(), "pdf"), (archive(docx_parts()), "docx"), (archive(pptx_parts()), "pptx")]:
             with self.subTest(fmt=fmt):

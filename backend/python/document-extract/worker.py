@@ -25,12 +25,22 @@ def _kill(process):
     process.wait()
 
 
+def _child_environment():
+    # setup-python and Lambda interpreters may need their own libpython at
+    # startup. Derive this trusted path from the running interpreter; never
+    # inherit loader overrides, PYTHONPATH or cloud credentials from the parent.
+    return {
+        "PATH": os.defpath, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+        "LD_LIBRARY_PATH": str(Path(sys.base_prefix) / "lib"),
+    }
+
+
 def _bounded_child(command, data, limits):
     """Nonblocking IO bounds both output streams, including a broken child."""
     process = subprocess.Popen(
         command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         close_fds=True, start_new_session=True,
-        env={"PATH": os.defpath, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
+        env=_child_environment(),
     )
     selector = selectors.DefaultSelector()
     stdout, stderr = bytearray(), bytearray()
