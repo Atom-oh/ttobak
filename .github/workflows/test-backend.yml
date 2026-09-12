@@ -70,3 +70,9 @@ jobs:
         # but these suites were only documented in CLAUDE.md, never run here.
         run: |
           cd backend/whisper && python3 -m unittest test_transcribe test_whisper_common test_transcribe_whisperx test_transcribe_fw_p4 test_run_engine test_dockerfile_entrypoint -v
+
+      - name: Run bounded document parser tests
+        working-directory: backend/python/document-extract
+        run: |
+          python3 -m pip install -r requirements.txt
+          python3 -m unittest test_extract test_worker -v
