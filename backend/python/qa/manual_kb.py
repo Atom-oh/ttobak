@@ -186,6 +186,7 @@ def hydrate_manual_candidates(reader, user_id, candidates, lookup=None):
             result = _result(reader, user_id, current, 's3://' + reader.kb_bucket + '/' + key,
                              candidate.get('score', 0))
             results[key] = result
+        result['score'] = max(result['score'], candidate.get('score', 0))
         if identity is not None and identity['revision'] == current['revision']:
             text = candidate.get('_provider', {}).get('content', {}).get('text')
             if not isinstance(text, str) or not text.strip():
