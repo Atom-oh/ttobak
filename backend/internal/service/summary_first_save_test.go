@@ -17,17 +17,18 @@ import (
 )
 
 func TestFirstSummaryMatchesOmittedTextAndRejectsConcurrentEdits(t *testing.T) {
-	for _, scenario := range []string{"omitted", "empty", "human edit", "empty inserted", "empty removed"} {
+	for _, scenario := range []string{"omitted", "empty", "metadata edit", "human edit", "empty inserted", "empty removed"} {
 		t.Run(scenario, func(t *testing.T) {
 			row := map[string]map[string]string{
 				"PK": {"S": "USER#owner"}, "SK": {"S": "MEETING#meeting"},
 				"userId": {"S": "owner"}, "meetingId": {"S": "meeting"},
 				"transcriptA": {"S": "회의에서 예산을 검토했습니다."},
+				"status":      {"S": "summarizing"},
 			}
 			if scenario == "empty" || scenario == "empty removed" {
 				row["content"], row["notes"] = map[string]string{"S": ""}, map[string]string{"S": ""}
 			}
-			writes := 0
+			writes, conflicts := 0, 0
 			respond := func(code int, body string) (*http.Response, error) {
 				return &http.Response{StatusCode: code, Header: http.Header{"Content-Type": {"application/x-amz-json-1.0"}},
 					Body: io.NopCloser(strings.NewReader(body))}, nil
@@ -40,14 +41,36 @@ func TestFirstSummaryMatchesOmittedTextAndRejectsConcurrentEdits(t *testing.T) {
 				case "DynamoDB_20120810.Query":
 					return respond(200, `{"Items":[]}`)
 				case "DynamoDB_20120810.UpdateItem":
-					writes++
 					var body struct {
-						Condition string                       `json:"ConditionExpression"`
-						Names     map[string]string            `json:"ExpressionAttributeNames"`
-						Values    map[string]map[string]string `json:"ExpressionAttributeValues"`
+						Condition string                    `json:"ConditionExpression"`
+						Names     map[string]string         `json:"ExpressionAttributeNames"`
+						Values    map[string]map[string]any `json:"ExpressionAttributeValues"`
 					}
 					if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 						t.Fatal(err)
+					}
+					hasContent := false
+					for _, name := range body.Names {
+						if name == "content" {
+							hasContent = true
+						}
+					}
+					if !hasContent {
+						conflicts++
+						for _, name := range body.Names {
+							if name == "notes" || name == "transcriptA" {
+								t.Fatal("conflict marker must not rewrite evidence")
+							}
+						}
+						return respond(200, `{}`)
+					}
+					writes++
+					for alias, name := range body.Names {
+						if name == "title" || name == "updatedAt" || name == "actionItems" {
+							if regexp.MustCompile(regexp.QuoteMeta(alias) + `\b`).MatchString(body.Condition) {
+								t.Fatalf("metadata pinned as summary evidence: %s", name)
+							}
+						}
 					}
 					// Evaluate the two optional-text predicates from the actual
 					// SDK request against omitted, empty and newly edited rows.
@@ -76,6 +99,9 @@ func TestFirstSummaryMatchesOmittedTextAndRejectsConcurrentEdits(t *testing.T) {
 					}
 					return respond(200, `{}`)
 				case "":
+					if scenario == "metadata edit" {
+						row["title"], row["updatedAt"], row["actionItems"] = map[string]string{"S": "새 제목"}, map[string]string{"S": "2026-09-12T21:00:00Z"}, map[string]string{"S": "[]"}
+					}
 					if scenario == "human edit" {
 						row["content"] = map[string]string{"S": "사람이 수정한 메모"}
 					}
@@ -98,7 +124,7 @@ func TestFirstSummaryMatchesOmittedTextAndRejectsConcurrentEdits(t *testing.T) {
 			svc := NewBedrockService(bedrockruntime.NewFromConfig(cfg), nil, repository.NewDynamoDBRepository(dynamodb.NewFromConfig(cfg), "table"))
 			content, err := svc.SummarizeTranscript(context.Background(), "meeting", "owner", "")
 			if scenario == "human edit" || scenario == "empty inserted" || scenario == "empty removed" {
-				if !errors.Is(err, repository.ErrConditionFailed) {
+				if !errors.Is(err, repository.ErrConditionFailed) || !errors.Is(err, ErrSummaryConflict) || conflicts != 1 {
 					t.Fatalf("concurrent edit not protected: %q %v", content, err)
 				}
 			} else if err != nil || content != "새 요약" {

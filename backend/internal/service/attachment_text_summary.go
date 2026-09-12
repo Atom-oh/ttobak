@@ -28,7 +28,11 @@ func (s *AttachmentTextService) summaryAttachments(ctx context.Context, ownerID,
 	remaining, loaded := 64*1024, 0
 	for i := range attachments {
 		att := &attachments[i]
-		if att.Type != model.AttachTypeDocument || att.Status != model.AttachStatusDone || attachmentFormat(att.OriginalKey) == "" || remaining == 0 || loaded == 20 {
+		if att.Type != model.AttachTypeDocument || att.Status != model.AttachStatusDone || attachmentFormat(att.OriginalKey) == "" {
+			continue
+		}
+		if remaining == 0 || loaded == 20 {
+			att.SummaryExcerpted = true
 			continue
 		}
 		current, canonical, err := s.authorized(ctx, ownerID, meetingID, att.AttachmentID, false)
@@ -74,6 +78,9 @@ func (s *AttachmentTextService) summaryAttachments(ctx context.Context, ownerID,
 		att.ExtractedText = &copy
 		allowance := min(remaining, 16*1024)
 		for _, unit := range result.Units {
+			if strings.TrimSpace(unit.Text) == "" {
+				continue
+			}
 			if len(copy.Units) == 50 {
 				att.SummaryExcerpted = true
 				break
@@ -106,7 +113,6 @@ func (s *AttachmentTextService) summaryAttachments(ctx context.Context, ownerID,
 		}
 		if len(copy.Units) == 0 {
 			att.ExtractedText = nil
-			att.SummaryOmitted = true
 			continue
 		}
 		remaining -= len(documentEvidence(*att))
@@ -127,12 +133,12 @@ func documentEvidence(att model.Attachment) string {
 		Kind         string                     `json:"kind"`
 		AttachmentID string                     `json:"attachmentId"`
 		Name         string                     `json:"name"`
-		Source       model.AttachmentTextSource `json:"source"`
+		Format       string                     `json:"format"`
 		Scope        string                     `json:"scope"`
 		Complete     bool                       `json:"complete"`
 		Excerpted    bool                       `json:"excerpted"`
 		Units        []model.AttachmentTextUnit `json:"units"`
-	}{"DOCUMENT", att.AttachmentID, att.FileName, result.Source, result.Scope, result.Complete, att.SummaryExcerpted, result.Units}
+	}{"DOCUMENT", att.AttachmentID, att.FileName, result.Format, result.Scope, result.Complete, att.SummaryExcerpted, result.Units}
 	body, err := json.Marshal(evidence)
 	if err != nil {
 		return ""
@@ -165,6 +171,8 @@ func summaryAttachmentNotice(attachments []model.Attachment) string {
 		switch {
 		case att.SummaryOmitted:
 			notes = append(notes, fmt.Sprintf("- %s: 검증할 수 없는 문서 근거를 제외했습니다. 추출 상태 또는 인용을 확인한 뒤 다시 요약하세요.", name))
+		case att.ExtractedText == nil && att.SummaryExcerpted:
+			notes = append(notes, fmt.Sprintf("- %s: 크기 제한으로 문서 본문을 제공하지 못했습니다.", name))
 		case att.ExtractedText == nil:
 			notes = append(notes, fmt.Sprintf("- %s: 문서 본문은 이 요약에 반영되지 않았습니다. 추출 상태 확인 후 다시 요약하세요.", name))
 		case att.SummaryExcerpted:
@@ -191,7 +199,7 @@ func resolveDocumentCitations(content string, attachments []model.Attachment) (s
 			evidence[att.AttachmentID] = i
 		}
 	}
-	paragraphs := strings.Split(content, "\n\n")
+	paragraphs := summaryClaimUnits(content)
 	kept := make([]string, 0, len(paragraphs))
 	omitted := false
 	for _, paragraph := range paragraphs {
@@ -213,13 +221,13 @@ func resolveDocumentCitations(content string, attachments []model.Attachment) (s
 			att := &attachments[attachmentIndex]
 			if err != nil || index >= len(att.ExtractedText.Units) {
 				invalid = true
-				att.SummaryOmitted = true
+				att.CitationRejected = true
 				return ""
 			}
 			location := att.ExtractedText.Units[index].Location
 			if !validDocumentLocation(att.ExtractedText.Format, location) {
 				invalid = true
-				att.SummaryOmitted = true
+				att.CitationRejected = true
 				return ""
 			}
 			field, label := "paragraph", "문단"
@@ -238,11 +246,11 @@ func resolveDocumentCitations(content string, attachments []model.Attachment) (s
 		kept = append(kept, paragraph)
 	}
 	result := strings.Join(kept, "\n\n")
-	if strings.TrimSpace(result) == "" {
+	if !summaryHasBody(result) {
 		return "", ErrInvalidAnalysisResponse
 	}
 	if omitted {
-		result += "\n\n> 문서 인용을 확인할 수 없는 문단을 제외했습니다."
+		result += "\n\n" + summaryCitationNotice
 	}
 	return result, nil
 }

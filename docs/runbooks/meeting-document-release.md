@@ -1,7 +1,7 @@
 # Meeting document and saved-summary release
 
-Merge and deployment are separate gates. The host coordinates both; opening
-these PRs does not activate or verify production processing.
+Opening a PR does not deploy it. Merging backend changes triggers the production
+deployment workflow; there is no feature toggle. The host controls merge order.
 
 ## Order
 
@@ -11,13 +11,14 @@ these PRs does not activate or verify production processing.
    the deployed artifact, `DocumentUploadCompleted` rule, scoped permissions,
    and bounded parser startup before merging the upload API producer.
    A merged worker PR or passing local test is not deployment evidence.
-3. Land the summary/storage foundation. It adds guarded repository operations,
-   prepared document evidence, and snapshot-only generation; it adds no upload
-   event producer or saved-summary HTTP route. It does change the existing
-   production `SummarizeTranscript` prompt, omission handling and save condition.
-   Validate first summaries with absent `content`/`notes`, existing summaries and
-   concurrent edits before advancing. A rise in summary failures is a rollback
-   signal; roll back the summarizer code while retaining compatible readers.
+3. Land the summary/storage foundation. It adds guarded batch publication/recovery,
+   prepared evidence and snapshot-only generation; it adds no upload
+   event producer or saved-summary HTTP route. It changes the active batch save condition, conflict recovery and output
+   filtering. DOCUMENT fetching starts only with caller injection in step 4.
+   Local tests cover omitted text and concurrent edits. After deployment, verify
+   synthetic first-summary and retry flows before advancing. Watch Lambda Errors
+   and `Summary source conflict` logs; rollback is a source revert/redeployment,
+   not a runtime switch. Retain compatible readers.
 4. Land the attachment API and summary wiring after step 2. Supported uploads
    now queue extraction. Legacy documents require an authorized retry.
 5. Land saved-summary orchestration and its `SummaryRequested` consumer/rule
@@ -30,7 +31,9 @@ these PRs does not activate or verify production processing.
 The current push-to-main workflow deploys infrastructure for backend changes.
 The host must hold producer merges until the prerequisite deployment finishes.
 For a targeted manual release, deploy only the changed stack with
-`npx cdk deploy TtobakGatewayStack --exclusively`; never `--all`. Do not
+build Go bootstraps first (`cd backend`, then Linux/ARM64 `go build -tags
+lambda.norpc -o cmd/<name>/bootstrap ./cmd/<name>` for changed entry points), then
+`cd ../infra` and `npx cdk deploy TtobakGatewayStack --exclusively`; never `--all`. Do not
 disable CI or review gates to shorten this sequence.
 
 ## Invariants and acceptance
@@ -68,3 +71,9 @@ Rollback producer/UI code first and retain compatible workers/readers for
 in-flight events. Do not delete state/results to make failures appear successful.
 See [ADR-040](../decisions/ADR-040-guarded-summary-publication.md) for the exact
 source-presence, document-omission and publication decisions.
+
+Batch conflicts persist `summaryRetryPending`/`SOURCE_CHANGED` and release only
+the observed claim. Lambda redelivery generates fresh output without STT; it
+never rebases old output onto edited sources. Delivery retries are finite. If
+exhausted, retain the marker and use a deliberate redelivery or the separately
+released saved-summary retry API; do not erase human text or weaken conditions.

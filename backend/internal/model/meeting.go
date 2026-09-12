@@ -34,6 +34,8 @@ type Meeting struct {
 	// the claim, letting a second concurrent redelivery re-claim and
 	// double-run Bedrock summarize + KB export.
 	SummarizeRetryClaimedAt  string            `dynamodbav:"summarizeRetryClaimedAt,omitempty"`
+	SummaryRetryPending      bool              `dynamodbav:"summaryRetryPending,omitempty"`
+	SummaryConflictCode      string            `dynamodbav:"summaryConflictCode,omitempty"`
 	SttProvider              string            `dynamodbav:"sttProvider,omitempty"`              // "transcribe" or "nova-sonic"
 	TranscriptSegments       string            `dynamodbav:"transcriptSegments,omitempty"`       // JSON string of speaker-labeled segments
 	ActionItems              string            `dynamodbav:"actionItems,omitempty"`              // JSON string of extracted action items
@@ -74,6 +76,7 @@ type Attachment struct {
 	ExtractedRevision string                `dynamodbav:"-" json:"-"`
 	SummaryExcerpted  bool                  `dynamodbav:"-" json:"-"`
 	SummaryOmitted    bool                  `dynamodbav:"-" json:"-"`
+	CitationRejected  bool                  `dynamodbav:"-" json:"-"`
 	PK                string                `dynamodbav:"PK"`
 	SK                string                `dynamodbav:"SK"`
 	AttachmentID      string                `dynamodbav:"attachmentId"`
