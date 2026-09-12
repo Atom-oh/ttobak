@@ -19,15 +19,29 @@ Build changed bootstraps from backend using `/home/atomoh/go-sdk/go/bin/go` with
 `GOOS=linux GOARCH=arm64`, then `cd ../infra` and
 `npx cdk deploy TtobakGatewayStack --exclusively`. Never `--all`.
 
-Conflict recovery discards output. Lambda's two automatic retries claim durable
-`summaryRetryAttempts` (max 2), regenerate fresh inputs, and release failed-read
-claims. Final failure is `error/RETRY_EXHAUSTED`; expired final claims also finalize
-on detail read/redelivery instead of waiting 60 minutes. State-write errors surface.
-Recover terminal cases through the subsequent saved-summary API or deliberate
-replay of the original transcript/AllPartsTranscribed event after resolving cause.
-Never rebind old output. Inspect Lambda Errors/conflict codes (no new alarm).
-Rollback by revert/redeploy, preserving readers/workers and ambiguous spills.
+Batch recovery regenerates fresh inputs without STT. Durable retry maximum is 2;
+Lambda currently also defaults to two async retries. Failed reads/runs release
+owned claims; the final failure becomes `error/RETRY_EXHAUSTED`. Expired final
+claims finalize on detail read/redelivery. Cleanup failures remain errors.
 
-Bounds: 8 MiB/source, 300 KiB row budget, 20 docs/50 units, 16/64 KiB per-doc/total,
-22 byte bindings, 100 transaction checks. Deterministic overflow fails without
-conflict regeneration. [ADR-040](../decisions/ADR-040-guarded-summary-publication.md).
+**Terminal replay alone is a no-op** (`error` fails the status whitelist).
+Until the saved-summary API deploys, an operator must start a NEW recovery:
+
+1. Strongly read `USER#owner / MEETING#id`, resolve the failure, verify saved
+   sources and confirm no active invocation/claim.
+2. Conditional UpdateItem on that existing row: require `status=error`,
+   `summaryConflictCode=RETRY_EXHAUSTED`, the observed attempt count and absent
+   `summarizeRetryClaimedAt`. Set `status=summarizing`, `summaryRetryPending=true`,
+   `summaryRetryAttempts=0`, `summaryConflictCode=SOURCE_CHANGED` and current
+   RFC3339 `updatedAt`. Preserve every content/notes/source field.
+3. Replay the original transcript-created event or `ttobak.transcribe /
+   AllPartsTranscribed` with its original owner/meeting detail. Confirm delivery;
+   retry failed delivery. The pending branch precedes the whitelist and generates
+   afresh. Never reset the budget per attempt or rebind old output.
+
+Inspect Lambda Errors and DynamoDB conflict codes; the UI sees `status=error`.
+Rollback: revert/redeploy, preserving readers/workers and ambiguous spills.
+Bounds: 8 MiB/source, 1 MiB snapshot, 300 KiB row, 22 objects, 100 checks.
+[ADR-040](../decisions/ADR-040-guarded-summary-publication.md).
+
+DOCUMENT input also caps 20 documents, 50 units and 16/64 KiB per-document/total.
