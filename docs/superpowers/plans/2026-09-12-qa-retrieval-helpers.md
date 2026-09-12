@@ -25,7 +25,9 @@
 - [x] Add direct contract tests in `test_retrieval_helpers.py`: paginated discovery, post-discovery revocation, current saved text, stale binary snapshots, and DynamoDB-deserialized session versions.
 - [x] Bring the three existing integration helper modules into this isolated prerequisite.
 - [x] Verify `restore_sources` after an actual boto3 `TypeSerializer`/`TypeDeserializer` round trip. Keep changed or untracked histories non-replayable.
-- [ ] Register the tests through `test_handler.load_tests`, run the complete suite, and open a main-targeted PR below the review size limit.
+- [x] Register the tests through `test_handler.load_tests` and verify the complete suite.
+- [x] Open main-targeted PR #215 below the review size limit.
+- [x] Reproduce the review's bare `permission` projection failure, then add its DynamoDB attribute-name alias.
 
 ## Release boundary
 

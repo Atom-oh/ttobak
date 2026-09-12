@@ -27,6 +27,18 @@ class TestCurrentCandidates(_SourceFixture, unittest.TestCase):
     def discover(self, user):
         return discover_sources(self.source_reader, user, helpers.handler._query_all, [])
 
+    def test_share_discovery_aliases_reserved_attributes(self):
+        self.doc(content='SHARED_NOTE')
+        self.grant()
+        def query_all(**kwargs):
+            # DynamoDB rejects these bare names before evaluating any rows.
+            for name in kwargs.get('ProjectionExpression', '').split(','):
+                if name.strip().upper() in {'PERMISSION', 'PERMISSIONS'}:
+                    raise ValueError('reserved DynamoDB projection attribute')
+            return helpers.handler._query_all(**kwargs)
+        identities, _ = discover_sources(self.source_reader, 'reader', query_all, [])
+        self.assertIn(('USER#owner', 'DOC#doc'), identities)
+
     def test_discovery_consumes_all_pages_and_live_membership(self):
         for i in range(4):
             self.table.put_item(Item={'PK': 'USER#reader', 'SK': f'DOC#doc{i}'})

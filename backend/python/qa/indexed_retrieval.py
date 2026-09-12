@@ -31,7 +31,8 @@ def discover_sources(reader, user_id, query_all, shared_meetings):
         add('USER#' + shared['ownerId'], 'MEETING#' + shared['meetingId'])
     for share in query_all(
         KeyConditionExpression=Key('PK').eq(own_pk) & Key('SK').begins_with('SHAREDDOC#'),
-        ProjectionExpression='SK, meetingId, ownerId, sharedToId, permission, entityType',
+        ProjectionExpression='SK, meetingId, ownerId, sharedToId, #perm, entityType',
+        ExpressionAttributeNames={'#perm': 'permission'},
         ConsistentRead=True,
     ):
         doc_id, owner = share.get('meetingId'), share.get('ownerId')
