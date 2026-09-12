@@ -1930,6 +1930,27 @@ The converter records `source-etag` and optional `source-version-id` from the ac
 ```
 
 
+## Search Index Status
+
+All routes require the authenticated reader's current access and return `Cache-Control: no-store`:
+
+| Resource | Method and path | Access |
+| --- | --- | --- |
+| Meeting | `GET /api/meetings/{meetingId}/index-status` | Owner, current direct share or account grant |
+| Personal document | `GET /api/documents/{docId}/index-status` | Owner or current read-only document share |
+| Account document | `GET /api/accounts/{accountId}/documents/{docId}/index-status` | Current member of that exact account; parent membership is insufficient |
+
+Response: `{ "state": "PENDING", "updatedAt": "2026-09-12T18:30:00Z" }`.
+`errorCode` is optional and appears only for `FAILED` or `WAITING_SOURCE`.
+States are `UNTRACKED` (no job yet), `PENDING`, `PREPARING`, `WAITING_SYNC`,
+`WAITING_SOURCE`, `INDEXED`, `FAILED`, and `DELETED`. A stored success is checked
+against the current source revision and projection inventory; changed content
+returns pending. Job keys, raw source contents and provider IDs are not returned.
+
+Invalid identifiers return 400, unauthorized/missing resources 403/404, and an
+unavailable status reader returns 503 `INDEX_UNAVAILABLE` with a fixed message.
+The status route does not queue work or grant access to another document.
+
 ## Internal Document Extraction Event (ADR-039)
 
 EventBridge source `ttobak.upload`, detail-type `DocumentUploadCompleted`, detail

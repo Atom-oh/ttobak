@@ -158,13 +158,15 @@ class TestIndexedSourceIntegration(_SourceFixture, unittest.TestCase):
         result = context['retrieve_from_kb']('legacy')[0]
         self.assertIn('dependency', result)
         self.assertEqual(result['text'], 'current')
+        page = context['load_legacy_text']('owner', result['uri'], 0, result['provenance']['sourceRevision'])
+        self.assertEqual(page['text'], 'current')
         messages = [{'role': 'user', 'content': [{'text': 'question'}]},
                     {'role': 'assistant', 'content': [{'text': 'LEGACY_DERIVED_FACT'}]}]
         handler.save_session('legacy-new', messages, user_id='owner', source_state=state)
         self.assertEqual(handler.load_session('legacy-new', user_id='owner'), messages)
         self.s3.head_object.return_value = {'ETag': '"v2"', 'VersionId': 'v2', 'ContentLength': 7}
         self.assertEqual(handler.load_session('legacy-new', user_id='owner'), [])
-        self.assertEqual(self.s3.get_object.call_count, 1)
+        self.assertEqual(self.s3.get_object.call_count, 2)
 
 
 class AttachmentIntegrationTests(_AttachmentFixture, unittest.TestCase):

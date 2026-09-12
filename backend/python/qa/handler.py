@@ -948,6 +948,8 @@ def _agent_context(user_id, transcript, meeting_notes, source_state, source_deta
             uid, mid, source_state=source_state, source_details=source_details),
         "load_document_context": lambda uid, pk, did: load_document_context(
             uid, pk, did, source_state=source_state, source_details=source_details),
+        "load_legacy_text": lambda uid, uri, offset=0, revision=None: _source_access().load_legacy_text(
+            uid, uri, offset, revision, source_state=source_state, source_details=source_details),
         "load_meeting_attachments": lambda uid, mid, offset=0: load_meeting_attachments(
             uid, mid, offset, source_state=source_state, source_details=source_details),
         "load_attachment_text": lambda uid, mid, aid, unit=0, text=0, revision=None: load_attachment_text(
@@ -969,6 +971,7 @@ def _track_tool_history(source_state, tool_name):
         'search_knowledge_base', 'get_meeting_detail', 'get_document_detail',
         'get_meeting_attachments', 'get_attachment_text', 'search_transcript',
         'search_web', 'search_aws_docs', 'get_aws_recommendation',
+        'get_legacy_text_detail',
     }
     if tool_name not in tracked_or_public:
         source_state['replayable'] = False

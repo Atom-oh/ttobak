@@ -1428,22 +1428,10 @@ class TestWebSearchRateLimit(unittest.TestCase):
 
 
 def load_tests(loader, tests, pattern):
-    import test_document_context
-    import test_indexed_sources
-    import test_attachment_context
-    import test_source_contract
-    import test_manual_kb
-    import test_shared_kb
-    import test_retrieval_helpers
-    import test_source_access
-    tests.addTests(loader.loadTestsFromModule(test_document_context))
-    tests.addTests(loader.loadTestsFromModule(test_indexed_sources))
-    tests.addTests(loader.loadTestsFromModule(test_attachment_context))
-    tests.addTests(loader.loadTestsFromModule(test_source_contract))
-    tests.addTests(loader.loadTestsFromModule(test_manual_kb))
-    tests.addTests(loader.loadTestsFromModule(test_shared_kb))
-    tests.addTests(loader.loadTestsFromModule(test_retrieval_helpers))
-    tests.addTests(loader.loadTestsFromModule(test_source_access))
+    for module in ('test_document_context', 'test_source_contract', 'test_attachment_context',
+                   'test_retrieval_helpers', 'test_source_access', 'test_legacy_text',
+                   'test_indexed_sources', 'test_manual_kb', 'test_shared_kb'):
+        tests.addTests(loader.loadTestsFromName(module))
     return tests
 
 
