@@ -73,8 +73,9 @@ and strict QA runtime have been verified.
    legacy meeting cleanup; scoped Bedrock Start/Get/ListIngestionJobs and
    GetKnowledgeBaseDocuments on the configured knowledge base.
 3. Enable canonical-key stream delivery with partial-batch responses, bounded
-   retries/DLQ and scheduled reconciliation. Current CDK has no trigger and still
-   uses 30 seconds/256 MiB, so configuration must precede activation.
+   retries/DLQ and scheduled reconciliation only after manual snapshot bootstrap
+   and strict QA verification. The prepared CDK now configures 12 minutes/1024
+   MiB with its schedule disabled; verify that preparation is deployed first.
 
 Legacy cleanup makes rollback to old QA require re-export (ADR-038).
 

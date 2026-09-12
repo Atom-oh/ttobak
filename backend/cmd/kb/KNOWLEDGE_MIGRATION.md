@@ -44,8 +44,8 @@ Follow the same four stages in [INFRA-SPEC](../../../docs/INFRA-SPEC.md) and
 
 Mode is durable: downgrade and manual-only resumption of a canonical batch fail
 before mutation. Restore all after mistaken downgrade; old-QA rollback after
-canonical cleanup requires legacy re-export. Narrow the current broad KB grant
-as specified in INFRA-SPEC; original prefixes need read only. GetKnowledgeBaseDocuments
+canonical cleanup requires legacy re-export. Verify the prepared CDK narrowing
+described in INFRA-SPEC is deployed; original prefixes need read only. GetKnowledgeBaseDocuments
 uses the configured KB permission and does not grant original object deletion.
 
 Verify the out-of-band data source includes both snapshot prefixes, bucket
