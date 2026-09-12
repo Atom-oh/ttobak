@@ -71,20 +71,35 @@ describe('AiStack', () => {
     }
   });
 
-  test('qa can read only transcript objects, without bucket listing or writes', () => {
+  test('qa reads current source prefixes and versions without object writes or deletes', () => {
     const policies = Object.values(template.findResources('AWS::IAM::Policy'));
     const statements = policies
       .filter((policy) => JSON.stringify(policy.Properties.Roles).includes('TtobakQaRole'))
       .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
     const s3Statements = statements.filter((statement) =>
       [statement.Action].flat().some((action: string) => action.startsWith('s3:')));
-    expect(s3Statements).toHaveLength(1);
-    expect(s3Statements[0]).toEqual({
-      Sid: 'ReadMeetingTranscripts',
-      Effect: 'Allow',
-      Action: 's3:GetObject',
-      Resource: { 'Fn::Join': ['', [expect.any(Object), '/transcripts/*']] },
-    });
+    expect(s3Statements).toHaveLength(4);
+    const reads = s3Statements.filter((entry) => [entry.Action].flat().includes('s3:GetObject'));
+    expect(reads).toHaveLength(3);
+    for (const entry of reads) {
+      expect([entry.Action].flat()).toEqual(['s3:GetObject', 's3:GetObjectVersion']);
+      expect([entry.Resource].flat()).not.toContain('*');
+    }
+    const resources = JSON.stringify(reads.map((entry) => entry.Resource));
+    for (const prefix of ['transcripts', 'docs', 'docs-pdf', 'files', 'kb', 'shared']) {
+      expect(resources).toContain(`/${prefix}/*`);
+    }
+    expect(resources).not.toContain('/audio/*');
+    expect(resources).not.toContain('/images/*');
+    const list = s3Statements.find((entry) => [entry.Action].flat().includes('s3:ListBucket'));
+    expect(list.Action).toBe('s3:ListBucket');
+    expect(list.Resource).toHaveLength(2);
+    expect(list.Condition.StringEquals['aws:ResourceAccount']).toEqual({ Ref: 'AWS::AccountId' });
+    for (const entry of s3Statements) {
+      for (const action of [entry.Action].flat()) {
+        expect(['s3:GetObject', 's3:GetObjectVersion', 's3:ListBucket']).toContain(action);
+      }
+    }
   });
 
   test('api role CognitoAdminUserManagement grant includes the admin user-management actions, scoped to the pool ARN', () => {
