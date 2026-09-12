@@ -15,6 +15,7 @@ import * as apigatewayv2Integrations from 'aws-cdk-lib/aws-apigatewayv2-integrat
 import * as apigatewayv2Authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { Construct } from 'constructs';
 import { WHISPER_CLUSTER_NAME, WHISPER_TASK_FAMILY, WHISPER_CONTAINER_NAME } from './whisper-stack';
+import { DocumentExtraction } from './document-extraction';
 
 export const RESEARCH_SFN_NAME = 'ttobak-research-workflow';
 
@@ -44,6 +45,8 @@ export interface GatewayStackProps extends cdk.StackProps {
   // (ec2.Vpc.fromLookup, not a stack this one depends on). Optional so
   // unit tests that omit convertDocRole don't need a VPC context lookup.
   vpcId?: string;
+  /** Enable only after the bounded parser and its state protocol are packaged. */
+  enableDocumentExtraction?: boolean;
   /** @deprecated Keep cross-stack reference alive for RealtimeStack */
   legacyRole?: iam.IRole;
   originVerifySecret?: string;
@@ -481,6 +484,23 @@ export class GatewayStack extends cdk.Stack {
       },
     });
     imageUploadRule.addTarget(new eventsTargets.LambdaFunction(this.processImageFunction));
+
+    if (props.enableDocumentExtraction) {
+      if (!props.vpcId) {
+        throw new Error('Document extraction requires a VPC with isolated subnets');
+      }
+      const extractionVpc = ec2.Vpc.fromLookup(this, 'DocumentExtractionVpc', { vpcId: props.vpcId });
+      const s3Prefix = ec2.PrefixList.fromLookup(this, 'DocumentS3Prefix', {
+        prefixListName: `com.amazonaws.${this.region}.s3`,
+      });
+      const dynamoPrefix = ec2.PrefixList.fromLookup(this, 'DocumentDynamoPrefix', {
+        prefixListName: `com.amazonaws.${this.region}.dynamodb`,
+      });
+      new DocumentExtraction(this, 'DocumentExtraction', {
+        bucket: props.bucket, table: props.table, vpc: extractionVpc,
+        s3PrefixListId: s3Prefix.prefixListId, dynamoPrefixListId: dynamoPrefix.prefixListId,
+      });
+    }
 
     // EventBridge rule for transcript uploads -> Summarize Lambda
     const transcriptUploadRule = new events.Rule(this, 'TranscriptUploadRule', {

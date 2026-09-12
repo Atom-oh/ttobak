@@ -17,6 +17,7 @@ P = "http://schemas.openxmlformats.org/presentationml/2006/main"
 A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 CT = "http://schemas.openxmlformats.org/package/2006/content-types"
 MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+C = "http://schemas.openxmlformats.org/drawingml/2006/chart"
 
 
 def q(namespace, name):
@@ -28,6 +29,7 @@ class Package:
         if data.startswith(bytes.fromhex("d0cf11e0a1b11ae1")):
             raise ParseFailure("ENCRYPTED_OR_LEGACY_OFFICE")
         self.limits, self.xml, self.rels = limits, {}, {}
+        self.ignored_workbooks = set()
         self.zip = zipfile.ZipFile(io.BytesIO(data))
         infos = self.zip.infolist()
         if len(infos) > limits.max_entries:
@@ -144,9 +146,19 @@ class Package:
                 continue
             if mode != "Internal":
                 raise ParseFailure("UNSAFE_DOCUMENT")
-            if any(marker in kind.lower() for marker in ("vba", "activex", "oleobject")) or kind.endswith("/package"):
+            if any(marker in kind.lower() for marker in ("vba", "activex", "oleobject")):
                 raise ParseFailure("UNSAFE_DOCUMENT")
-            result[identity] = (kind, self.target(source, rel.get("Target", "")))
+            target = self.target(source, rel.get("Target", ""))
+            if kind.endswith("/package"):
+                # Ordinary chart workbooks are opaque, ignored data. Never
+                # parse or execute their nested package; retain slide text.
+                chart = self.xml.get(source)
+                if (kind != R + "/package" or chart is None or chart.tag != q(C, "chartSpace") or
+                        not source.startswith("ppt/charts/") or
+                        not target.startswith("ppt/embeddings/") or not target.lower().endswith(".xlsx")):
+                    raise ParseFailure("UNSAFE_DOCUMENT")
+                self.ignored_workbooks.add(target)
+            result[identity] = (kind, target)
         return result
 
     def main(self, fmt):
@@ -170,12 +182,16 @@ def paragraph_text(node, namespace):
     def visit(element):
         if element is not node and element.tag == q(namespace, "p"):
             return
-        if element.tag in (q(W, "del"), q(MC, "AlternateContent")):
+        if element.tag in (q(W, "del"), q(W, "moveFrom"), q(MC, "AlternateContent")):
             return
         if element.tag == q(namespace, "t"):
             result.append(element.text or "")
         elif element.tag == q(namespace, "tab"):
             result.append("\t")
+        elif element.tag == q(W, "noBreakHyphen"):
+            result.append("‑")
+        elif element.tag == q(W, "softHyphen"):
+            result.append("­")
         elif element.tag in (q(namespace, "br"), q(namespace, "cr")):
             result.append("\n")
         else:
@@ -200,7 +216,7 @@ def body_units(root, namespace, output, location):
                 output.warn("UNSUPPORTED_CONTENT", context)
     def visit(node, context):
         nonlocal paragraph, table
-        if node.tag == q(W, "del"):
+        if node.tag in (q(W, "del"), q(W, "moveFrom")):
             return
         if node.tag in (q(MC, "AlternateContent"), q(W, "altChunk"),
                         "{http://schemas.openxmlformats.org/drawingml/2006/chart}chart",
@@ -229,6 +245,8 @@ def office_text(data, fmt, limits):
     try:
         part, root = package.main(fmt)
         output = Collector(fmt, limits, "document_body" if fmt == "docx" else "slide_body")
+        for workbook in sorted(package.ignored_workbooks):
+            output.warn("EMBEDDED_WORKBOOK_NOT_EXTRACTED", {"part": workbook})
         if fmt == "docx":
             body = root.find(q(W, "body"))
             if root.tag != q(W, "document") or body is None:
@@ -259,7 +277,7 @@ def office_text(data, fmt, limits):
                     raise ParseFailure("CORRUPT_DOCUMENT")
                 before = len(output.result["units"])
                 body_units(tree, A, output, {"kind": "slide", "slide": number, "part": target,
-                                             "hidden": slide_root.get("show") == "0"})
+                                             "hidden": slide_root.get("show") in ("0", "false")})
                 if len(output.result["units"]) == before:
                     output.warn("NO_TEXT_ON_SLIDE", {"slide": number})
             output.result["metrics"]["slides"] = len(slides)

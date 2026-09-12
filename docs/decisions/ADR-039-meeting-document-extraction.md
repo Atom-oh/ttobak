@@ -9,21 +9,20 @@
 
 ### Status
 
-Accepted — 2026-09-12. This PR implements only the bounded parser. The asynchronous worker and API/summary/Q&A/UI wiring below are planned rollout steps; deploy and verify the worker before enabling producers.
+Accepted — 2026-09-12. Deploy the worker before enabling upload/retry producers.
+API, summary, Q&A and UI integration remain separate rollout steps.
 
 ### Context and options
 
 Meeting attachments previously contributed filenames only. Calling a parser
 synchronously from the API would spend its request budget on untrusted files.
 Use an asynchronous Lambda with the bounded native PDF/PPTX/DOCX/Markdown parser.
-OCR and legacy Office conversion are outside this parser's declared scope.
+OCR and legacy Office conversion are outside this parser's declared scope. Internal XLSX chart workbooks remain opaque and are not parsed/executed; their omission produces partial extraction while preserving slide text. OLE, macros and other embedded packages remain rejected.
 
-The parser uses a 20 MiB input limit, 512 MiB child address-space limit, 8/9
-second soft/hard CPU limits and a 12-second wall deadline. Limits can be lowered,
-not raised by document input. Complete means native text in the declared scope,
-not OCR or rendered appearance. Encrypted/OLE/macro content, strict OOXML and
-embedded packages are rejected; ordinary hyperlinks remain inert. This also
-excludes chart decks with embedded workbooks until separately supported.
+The parser ceilings remain 20 MiB input, 512 MiB child address space, 8/9 seconds
+CPU and 12 seconds wall time. Completeness covers native text, not rendered
+appearance or OCR. Ordinary hyperlinks remain inert; chart workbooks are the
+explicit opaque-package exception above.
 
 ### Decision
 
@@ -56,6 +55,7 @@ canonical validation is mandatory and network isolation is defense in depth.
 
 ### References
 
+- [Worker contract and verification](../../backend/python/document-extract/LAMBDA.md)
 - [Parser scope and limits](../../backend/python/document-extract/README.md)
 
 <a id="korean"></a>
@@ -64,19 +64,18 @@ canonical validation is mandatory and network isolation is defense in depth.
 
 ### 상태
 
-승인 — 2026-09-12. 현재 PR에는 제한된 파서만 구현합니다. 아래 비동기 워커와 API·요약·Q&A·화면 연결은 후속 단계이며, 요청을 활성화하기 전에 워커를 배포해 검증해야 합니다.
+승인 — 2026-09-12. 업로드·재시도 요청을 활성화하기 전에 워커를 배포합니다.
+API·요약·Q&A·화면 연결은 별도 배포 단계입니다.
 
 ### 배경과 대안
 
 기존 회의 첨부 문서는 파일명만 활용했습니다. API 안에서 파일을 동기 파싱하면
 요청 시간 제한을 소모하므로, 제한된 PDF/PPTX/DOCX/Markdown 파서를
-비동기 Lambda에서 실행합니다. OCR과 구형 Office 변환은 이 파서의 범위가 아닙니다.
+비동기 Lambda에서 실행합니다. OCR과 구형 Office 변환은 이 파서의 범위가 아닙니다. 차트의 내부 XLSX 워크북은 읽거나 실행하지 않고 누락을 부분 추출로 표시하며 슬라이드 텍스트를 보존합니다. OLE·매크로·다른 내장 패키지는 거부합니다.
 
-입력은 20MiB, 자식 주소 공간은 512MiB, CPU는 soft/hard 8/9초, 실제 경과
-시간은 12초로 제한합니다. 문서 입력으로 한도를 늘릴 수 없습니다. 완료는 선언된
-범위의 원래 텍스트를 뜻하며 OCR·전체 시각 표현을 보장하지 않습니다.
-암호화·OLE·매크로·strict OOXML·내장 패키지는 거부하고 일반 하이퍼링크는
-실행하지 않습니다. 내장 워크북을 포함한 차트 덱은 별도 지원 전까지 제외됩니다.
+파서 한도는 입력 20MiB, 주소 공간 512MiB, CPU 8/9초, 경과 시간 12초입니다.
+완료는 원래 텍스트 범위이며 OCR·전체 시각 표현을 보장하지 않습니다.
+일반 하이퍼링크는 실행하지 않고 차트 워크북만 불투명 패키지 예외로 둡니다.
 
 ### 결정
 
@@ -102,4 +101,26 @@ API가 `ATTACH#` 원본과 `ATTEXT#` 실행 상태를 먼저 저장한 뒤 이�
 
 ### 참고
 
+- [워커 계약과 검증](../../backend/python/document-extract/LAMBDA.md)
 - [파서 범위와 제한](../../backend/python/document-extract/README.md)
+
+### Result retention / 결과 보존
+
+Result JSON uses the existing private, versioned assets bucket with S3-managed
+server-side encryption and Block Public Access. No body text or parser stderr
+is logged. Code/dependencies are packaged together read-only; fixtures/tests are
+excluded. Environment stripping does not prevent a same-UID exploit from reading
+parent credentials, so it is not an isolation boundary.
+
+There is currently no expiration rule for `files/` results, matching retained
+original files. Attachment/meeting deletion removes canonical access and ATTEXT
+rows; it does not physically erase result object versions. Unreferenced-object
+cleanup remains a recorded retention gap. Active results must not be expired
+blindly, and ambiguous commits retain their objects to avoid breaking readers.
+
+결과는 비공개·버전 관리·S3 서버 측 암호화·공개 접근 차단이 적용된 기존
+assets 버킷에 저장합니다. 본문과 파서 stderr를 로그에 남기지 않습니다.
+현재 `files/` 결과의 자동 만료는 없으며, 원본 파일처럼 보존됩니다.
+회의·첨부 삭제는 접근 권한과 ATTEXT 행을 제거하지만 객체 버전의 물리 삭제는
+보장하지 않습니다. 참조 없는 객체 정리는 남은 보존 과제로 기록합니다.
+환경변수 제거는 같은 UID의 침해에서 부모 자격증명 접근을 막는 경계가 아닙니다.
