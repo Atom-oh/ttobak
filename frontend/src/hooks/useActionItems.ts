@@ -11,10 +11,11 @@ interface UseActionItemsOptions {
   sourceRevision: number;
   items?: ActionItem[];
   analysis?: ActionItemsAnalysis;
+  onSaved?: () => void;
 }
 
 /** Mount with a meeting key: detail refreshes must not replace newer API results. */
-export function useActionItems({ meetingId, isDone, source, sourceRevision, items, analysis }: UseActionItemsOptions) {
+export function useActionItems({ meetingId, isDone, source, sourceRevision, items, analysis, onSaved }: UseActionItemsOptions) {
   const [snapshot, setSnapshot] = useState(() => ({
     source, sourceRevision,
     result: { actionItems: items ?? [], analysis: analysis ?? { status: 'unknown' } } as ActionItemsResponse,
@@ -33,6 +34,9 @@ export function useActionItems({ meetingId, isDone, source, sourceRevision, item
   const queuedRef = useRef(false);
   const aliveRef = useRef(true);
   const latestRefreshRef = useRef<() => Promise<void>>(async () => {});
+  const lastItemsRef = useRef(JSON.stringify(items ?? []));
+  const onSavedRef = useRef(onSaved);
+  useEffect(() => { onSavedRef.current = onSaved; }, [onSaved]);
   const isPending = result.analysis.status === 'queued' || result.analysis.status === 'running';
 
   const applyResponse = useCallback((next: ActionItemsResponse) => {
@@ -40,6 +44,11 @@ export function useActionItems({ meetingId, isDone, source, sourceRevision, item
     // authoritative even if a newer summary makes a previous result stale.
     setSnapshot({ source, sourceRevision, result: next });
     setPollError(null);
+    const serialized = JSON.stringify(next.actionItems);
+    if (serialized !== lastItemsRef.current) {
+      lastItemsRef.current = serialized;
+      onSavedRef.current?.();
+    }
   }, [source, sourceRevision]);
 
   useEffect(() => {

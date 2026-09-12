@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import { Marked } from 'marked';
 import TurndownService from 'turndown';
@@ -45,24 +45,37 @@ interface AISummaryCardProps {
   summary?: string;
   transcriptA?: string;
   onSave?: (content: string) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
+  interactionLocked?: boolean;
 }
 
-export function AISummaryCard({ content, summary, transcriptA, onSave }: AISummaryCardProps) {
+export function AISummaryCard({ content, summary, transcriptA, onSave, onDirtyChange, interactionLocked = false }: AISummaryCardProps) {
   const rawText = content || summary || '';
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const latestHTML = useRef('');
+  const savedHTML = useRef('');
+  const [dirty, setDirty] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const markDirty = useCallback((value: boolean) => { setDirty(value); onDirtyChange?.(value); }, [onDirtyChange]);
 
   const handleAutoSave = useCallback(async (html: string) => {
     if (!onSave) return;
     setSaving(true);
+    setSaveError(null);
     try {
       await onSave(normalizeMarkdown(turndown.turndown(html)));
+      savedHTML.current = html;
+      markDirty(latestHTML.current !== html);
       setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
+    } catch (error) {
+      markDirty(true);
+      setSaveError(error instanceof Error ? error.message : '요약을 저장하지 못했습니다.');
     } finally {
       setSaving(false);
     }
-  }, [onSave]);
+  }, [onSave, markDirty]);
 
   return (
     <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-6 shadow-sm dark:border-l-4 dark:border-l-accent">
@@ -75,7 +88,11 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
             {saving && <span className="text-xs text-slate-400 animate-pulse">Saving...</span>}
             {savedAt && !saving && <span className="text-xs text-slate-400">Saved {savedAt}</span>}
             <button
-              onClick={() => setEditing(!editing)}
+              onClick={() => {
+                if (!editing) { savedHTML.current = marked.parse(rawText, { async: false }) as string; latestHTML.current = savedHTML.current; }
+                setEditing(!editing);
+              }}
+              disabled={interactionLocked || (editing && (dirty || saving))}
               className={`p-1.5 rounded-lg transition-colors ${
                 editing
                   ? 'bg-primary/10 text-primary'
@@ -88,10 +105,14 @@ export function AISummaryCard({ content, summary, transcriptA, onSave }: AISumma
           </div>
         )}
       </div>
+      {saveError && <p role="alert" className="mb-3 text-sm text-red-600 dark:text-red-300">{saveError} <button type="button" disabled={saving} onClick={() => { void handleAutoSave(latestHTML.current); }} className="underline">저장 다시 시도</button></p>}
+      {dirty && !saving && !saveError && <p className="mb-3 text-xs text-slate-500">변경 사항 저장 대기 중…</p>}
 
       {editing ? (
         <MeetingEditor
           content={marked.parse(rawText, { async: false }) as string}
+          readOnly={interactionLocked}
+          onChange={(html) => { latestHTML.current = html; markDirty(html !== savedHTML.current); }}
           onAutoSave={handleAutoSave}
           autoSaveDelay={3000}
         />

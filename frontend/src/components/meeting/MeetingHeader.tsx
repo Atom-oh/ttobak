@@ -61,11 +61,12 @@ interface MeetingHeaderProps {
   onShare: (user: SharedUser) => void;
   onUnshare: (userId: string) => void;
   onTitleChange?: (newTitle: string) => void;
+  onTitleDirtyChange?: (dirty: boolean) => void;
   /** ADR-014 Phase 6: called with the updated linked id list after the picker saves. */
   onLinkedMeetingsChange?: (linkedMeetingIds: string[]) => void;
 }
 
-export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLinkedMeetingsChange }: MeetingHeaderProps) {
+export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onTitleDirtyChange, onLinkedMeetingsChange }: MeetingHeaderProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState(meeting.title);
   const [showLinkPicker, setShowLinkPicker] = useState(false);
@@ -84,6 +85,7 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
       onTitleChange?.(trimmed);
     } else {
       setEditTitle(meeting.title);
+      onTitleDirtyChange?.(false);
     }
     setIsEditingTitle(false);
   };
@@ -113,17 +115,17 @@ export function MeetingHeader({ meeting, onShare, onUnshare, onTitleChange, onLi
           <input
             ref={titleInputRef}
             value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
+            onChange={(e) => { setEditTitle(e.target.value); onTitleDirtyChange?.(e.target.value.trim() !== meeting.title); }}
             onBlur={saveTitle}
             onKeyDown={(e) => {
               if (e.key === 'Enter') saveTitle();
-              if (e.key === 'Escape') { setEditTitle(meeting.title); setIsEditingTitle(false); }
+              if (e.key === 'Escape') { setEditTitle(meeting.title); setIsEditingTitle(false); onTitleDirtyChange?.(false); }
             }}
             className="w-full text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline dark:text-primary mb-4 bg-transparent border-b-2 border-primary outline-none text-slate-900"
           />
         ) : (
           <h1
-            onClick={() => { setEditTitle(meeting.title); setIsEditingTitle(true); }}
+            onClick={() => { if (onTitleChange) { setEditTitle(meeting.title); setIsEditingTitle(true); } }}
             className="text-3xl font-bold tracking-tight lg:text-4xl lg:font-black dark:font-headline mb-4 cursor-pointer group"
             title="클릭하여 제목 수정"
           >

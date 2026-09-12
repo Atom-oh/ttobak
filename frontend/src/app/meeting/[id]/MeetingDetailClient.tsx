@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth/AuthProvider';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -8,6 +8,9 @@ import { AudioPlayer } from '@/components/AudioPlayer';
 import { AudioUploader } from '@/components/AudioUploader';
 import { AttachmentGallery } from '@/components/AttachmentGallery';
 import { FileUploader } from '@/components/FileUploader';
+import { IndexStatus } from '@/components/IndexStatus';
+import { ResummaryControls } from '@/components/meeting/ResummaryControls';
+import { useResummary } from '@/hooks/useResummary';
 import { QAPanel } from '@/components/QAPanel';
 import ReferenceTabs from '@/components/ReferenceTabs';
 import ReferencePanel from '@/components/ReferencePanel';
@@ -25,19 +28,21 @@ import { meetingsApi } from '@/lib/api';
 import type { Meeting, MeetingDetail, ActionItem, SharedUser } from '@/types/meeting';
 
 /** Map backend attachment response to frontend Attachment type */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function normalizeAttachments(raw: any[]): import('@/types/meeting').Attachment[] | undefined {
+function normalizeAttachments(raw: unknown): import('@/types/meeting').Attachment[] | undefined {
   if (!Array.isArray(raw) || raw.length === 0) return undefined;
   return raw.map((att) => ({
     id: att.attachmentId || att.id || '',
     name: att.fileName || att.name || 'Untitled',
-    type: att.type === 'photo' || att.type === 'screenshot' ? 'image' as const : att.type,
+    type: ['photo', 'screenshot', 'diagram', 'whiteboard'].includes(att.type) ? 'image' as const
+      : att.type === 'audio_file' ? 'audio' as const : att.type,
     url: att.url || '',
     processedContent: att.processedContent,
     size: att.fileSize || att.size,
     mimeType: att.mimeType,
     status: att.status,
     createdAt: att.createdAt || '',
+    originalKey: att.originalKey,
+    textExtraction: att.textExtraction,
   }));
 }
 
@@ -287,6 +292,16 @@ function MeetingDetailContent() {
   const { isAuthenticated, isLoading: authLoading } = useAuth();
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
   const [summarySave, setSummarySave] = useState<{ revision: number; hasContent: boolean } | null>(null);
+  const [indexRevision, setIndexRevision] = useState(0);
+  const [summaryDirty, setSummaryDirty] = useState(false);
+  const [titleDirty, setTitleDirty] = useState(false);
+  const [transcriptDirty, setTranscriptDirty] = useState(false);
+  const dirtyRef = useRef({ summary: false, title: false, transcript: false });
+  const onSummaryDirtyChange = useCallback((dirty: boolean) => { dirtyRef.current.summary = dirty; setSummaryDirty(dirty); }, []);
+  const onTitleDirtyChange = useCallback((dirty: boolean) => { dirtyRef.current.title = dirty; setTitleDirty(dirty); }, []);
+  const onTranscriptDirtyChange = useCallback((dirty: boolean) => { dirtyRef.current.transcript = dirty; setTranscriptDirty(dirty); }, []);
+  const isResummaryDirty = useCallback(() => Object.values(dirtyRef.current).some(Boolean), []);
+  const onIndexedContentSaved = useCallback(() => setIndexRevision((value) => value + 1), []);
   const [isLoading, setIsLoading] = useState(true);
   const [showUploader, setShowUploader] = useState(false);
   const [showAudioUploader, setShowAudioUploader] = useState(false);
@@ -307,6 +322,19 @@ function MeetingDetailContent() {
     () => pathname.split('/meeting/')[1]?.split('/')[0] || '',
     [pathname]
   );
+  const applyResummary = useCallback((content: string) => {
+    if (isResummaryDirty()) return;
+    setMeeting((current) => current?.meetingId === meetingId ? { ...current, content, summary: undefined } : current);
+    setSummarySave((current) => ({ revision: (current?.revision ?? 0) + 1, hasContent: !!content.trim() }));
+    setIndexRevision((value) => value + 1);
+  }, [meetingId, isResummaryDirty]);
+  const resummary = useResummary({
+    meetingId,
+    enabled: isAuthenticated && meeting?.meetingId === meetingId,
+    canEdit: !!meeting && (meeting.permission === 'edit' || (!meeting.isShared && meeting.permission !== 'read')),
+    isDirty: isResummaryDirty,
+    onLoaded: applyResummary,
+  });
 
   const hasAudio = meeting?.audioKey || (meeting?.audioKeys && meeting.audioKeys.length > 0);
   useEffect(() => {
@@ -320,10 +348,12 @@ function MeetingDetailContent() {
 
   useEffect(() => {
     if (!isAuthenticated || !meetingId) return;
+    const controller = new AbortController();
 
     const fetchMeeting = async () => {
       try {
-        const data = await meetingsApi.get(meetingId);
+        const data = await meetingsApi.get(meetingId, { signal: controller.signal });
+        if (controller.signal.aborted) return;
         const detail = data as MeetingDetail;
         detail.actionItems = normalizeActionItems(detail.actionItems);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -334,12 +364,13 @@ function MeetingDetailContent() {
         detail.sharedWith = detail.shares;
         setMeeting(detail);
       } catch (err) {
-        console.error('Failed to fetch meeting:', err);
+        if (!controller.signal.aborted) console.error('Failed to fetch meeting:', err);
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) setIsLoading(false);
       }
     };
     fetchMeeting();
+    return () => controller.abort();
   }, [isAuthenticated, meetingId]);
 
   const refetchMeeting = async () => {
@@ -432,6 +463,7 @@ function MeetingDetailContent() {
   const usingTranscriptB = Boolean(meeting.transcriptB?.trim() && (meeting.selectedTranscript === 'B' || !meeting.transcriptA?.trim()));
   const displayedTranscript = usingTranscriptB ? meeting.transcriptB : (meeting.transcriptA?.trim() ? meeting.transcriptA : undefined);
   const canEdit = meeting.permission === 'edit' || (!meeting.isShared && meeting.permission !== 'read');
+  const canUpload = !meeting.isShared && meeting.permission !== 'read';
 
   return (
     <AppLayout activePath="/">
@@ -454,16 +486,30 @@ function MeetingDetailContent() {
             meeting={meeting}
             onShare={handleShare}
             onUnshare={handleUnshare}
-            onTitleChange={async (newTitle) => {
+            onTitleDirtyChange={onTitleDirtyChange}
+            onTitleChange={canEdit ? async (newTitle) => {
               setMeeting({ ...meeting, title: newTitle });
               try {
                 await meetingsApi.update(meeting.meetingId, { title: newTitle });
+                onTitleDirtyChange(false);
+                setIndexRevision((value) => value + 1);
               } catch (err) {
                 console.error('Failed to update title:', err);
                 setMeeting(meeting);
               }
-            }}
+            } : undefined}
             onLinkedMeetingsChange={(ids) => setMeeting({ ...meeting, linkedMeetingIds: ids })}
+          />
+          <IndexStatus target={{ kind: 'meeting', meetingId: meeting.meetingId }} savedRevision={indexRevision} dirty={summaryDirty || titleDirty || transcriptDirty} />
+          <ResummaryControls
+            status={resummary.status}
+            canRequest={canEdit && (meeting.status === 'done' || meeting.status === 'error')}
+            dirty={summaryDirty || titleDirty || transcriptDirty}
+            busy={!!resummary.action}
+            error={resummary.error}
+            onRequest={() => { void resummary.request(); }}
+            onRefresh={() => { void resummary.refresh(); }}
+            onLoad={() => { void resummary.load(); }}
           />
 
           {/* Recovery banner for crashed recordings */}
@@ -479,15 +525,24 @@ function MeetingDetailContent() {
               speakerMap={meeting.speakerMap}
               onSave={async (speakerMap) => {
                 await meetingsApi.updateSpeakers(meeting.meetingId, speakerMap);
+                setIndexRevision((value) => value + 1);
                 const refreshed = await meetingsApi.get(meeting.meetingId);
-                setMeeting(refreshed as Meeting);
+                setMeeting((current) => current?.meetingId === meeting.meetingId ? {
+                  ...current, ...(refreshed as MeetingDetail),
+                  content: summaryDirty ? current.content : (refreshed as MeetingDetail).content,
+                  attachments: normalizeAttachments(refreshed.attachments),
+                } : current);
               }}
               sttProvider={meeting.sttProvider}
               audioPartCount={meeting.audioPartCount}
               onRediarize={async (speakerCount) => {
                 await meetingsApi.rediarize(meeting.meetingId, speakerCount);
                 const refreshed = await meetingsApi.get(meeting.meetingId);
-                setMeeting(refreshed as Meeting);
+                setMeeting((current) => current?.meetingId === meeting.meetingId ? {
+                  ...current, ...(refreshed as MeetingDetail),
+                  content: summaryDirty ? current.content : (refreshed as MeetingDetail).content,
+                  attachments: normalizeAttachments(refreshed.attachments),
+                } : current);
               }}
             />
           )}
@@ -503,7 +558,7 @@ function MeetingDetailContent() {
               resizable reference aside are already claiming, so any fixed
               cutoff overflows for some combination of those. */}
           {(meeting.status === 'done' || meeting.content || meeting.summary) ? (
-            <div ref={summaryRowRef} className={`flex ${summaryFits ? 'flex-row' : 'flex-col'} gap-8 mb-12`}>
+            <div id="meeting-summary" ref={summaryRowRef} className={`scroll-mt-20 flex ${summaryFits ? 'flex-row' : 'flex-col'} gap-8 mb-12`}>
               <div
                 className={summaryFits ? 'shrink-0' : 'w-full'}
                 style={summaryFits ? { width: summaryWidth } : undefined}
@@ -512,11 +567,14 @@ function MeetingDetailContent() {
                   content={resolveTranscriptLinks(resolveAttachmentUrls(meeting.content || '', meeting.attachments))}
                   summary={resolveTranscriptLinks(meeting.summary || '')}
                   transcriptA={meeting.transcriptA}
+                  onDirtyChange={onSummaryDirtyChange}
+                  interactionLocked={resummary.action === 'load'}
                   onSave={canEdit ? async (content) => {
                     await meetingsApi.update(meeting.meetingId, { content });
                     // An acknowledged autosave must not replace newer text still
                     // being typed in the editor. Notify analysis separately.
                     setSummarySave((current) => ({ revision: (current?.revision ?? 0) + 1, hasContent: !!content.trim() }));
+                    setIndexRevision((value) => value + 1);
                   } : undefined}
                 />
               </div>
@@ -526,6 +584,7 @@ function MeetingDetailContent() {
               />
               <div className="flex-1 min-w-0">
                 <ActionItemsCard
+                  onSaved={onIndexedContentSaved}
                   key={meeting.meetingId}
                   meetingId={meeting.meetingId}
                   meetingStatus={meeting.status}
@@ -607,34 +666,42 @@ function MeetingDetailContent() {
           )}
 
           {/* Attachments Gallery */}
-          {meeting.attachments && meeting.attachments.length > 0 && (
+          {((meeting.attachments?.length ?? 0) > 0 || canUpload) && (
             <section className="mb-12">
               <AttachmentGallery
-                attachments={meeting.attachments}
-                onUploadClick={() => setShowUploader(true)}
+                key={meeting.meetingId}
+                meetingId={meeting.meetingId}
+                canEdit={canEdit}
+                summaryRevision={summarySave?.revision ?? 0}
+                attachments={meeting.attachments ?? []}
+                onUploadClick={canUpload ? () => setShowUploader(true) : undefined}
+                onResummarize={canEdit ? () => { void resummary.request(); document.getElementById('resummary-status')?.scrollIntoView({ block: 'center' }); } : undefined}
+                resummaryDisabled={resummary.pending || !!resummary.action || summaryDirty || titleDirty || transcriptDirty || (meeting.status !== 'done' && meeting.status !== 'error')}
               />
             </section>
           )}
 
           {/* Upload Modal */}
-          {showUploader && (
+          {showUploader && canUpload && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-              <div className="bg-white dark:bg-surface-lowest glass-panel rounded-xl p-6 max-w-lg w-full dark:border dark:border-white/10">
+              <div className="max-h-[90dvh] overflow-y-auto bg-white dark:bg-surface-lowest glass-panel rounded-xl p-6 max-w-lg w-full dark:border dark:border-white/10">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-slate-900 dark:text-text-main dark:font-headline">Upload Files</h3>
-                  <button onClick={() => setShowUploader(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-text-muted">
+                  <h3 className="font-bold text-slate-900 dark:text-text-main dark:font-headline">파일 첨부</h3>
+                  <button type="button" aria-label="파일 첨부 닫기" onClick={() => setShowUploader(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-text-muted">
                     <span className="material-symbols-outlined">close</span>
                   </button>
                 </div>
                 <FileUploader
                   meetingId={meeting.meetingId}
-                  onUploadComplete={async (files) => {
-                    setShowUploader(false);
+                  onAttachmentsChanged={async () => {
                     try {
                       const data = await meetingsApi.get(meeting.meetingId);
-                      setMeeting(data as Meeting);
+                      const attachments = normalizeAttachments(data.attachments);
+                      setMeeting((current) => current?.meetingId === meeting.meetingId
+                        ? { ...current, attachments } : current);
                     } catch (err) {
                       console.error('Failed to refresh meeting:', err);
+                      throw new Error('첨부 목록을 새로 불러오지 못했습니다. 파일 창을 닫고 페이지를 다시 확인해 주세요.');
                     }
                   }}
                 />
@@ -645,10 +712,12 @@ function MeetingDetailContent() {
           {/* Full Transcription */}
           {((meeting.transcription?.length ?? 0) > 0 || displayedTranscript) && (
             <TranscriptSection
+              onDirtyChange={onTranscriptDirtyChange}
               transcription={meeting.transcription || []}
               rawTranscript={displayedTranscript}
               onSaveRawTranscript={usingTranscriptB || meeting.permission === 'read' ? undefined : async (text) => {
                 await meetingsApi.update(meeting.meetingId, { transcriptA: text });
+                setIndexRevision((value) => value + 1);
                 setMeeting((current) => current?.meetingId === meeting.meetingId ? {
                   ...current,
                   transcriptA: text,

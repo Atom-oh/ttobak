@@ -2,10 +2,12 @@
 
 import { useState, useRef, useCallback } from 'react';
 import { uploadFile, notifyUploadComplete, formatFileSize, UploadProgress } from '@/lib/upload';
+import { ApiError } from '@/lib/api';
 
 interface FileUploaderProps {
   meetingId?: string;
   onUploadComplete?: (files: { name: string; url: string; mimeType?: string }[]) => void;
+  onAttachmentsChanged?: () => void | Promise<void>;
   onError?: (error: string) => void;
   accept?: string;
   multiple?: boolean;
@@ -16,7 +18,7 @@ interface FileUploaderProps {
 interface UploadingFile {
   file: File;
   progress: number;
-  status: 'pending' | 'uploading' | 'complete' | 'error';
+  status: 'pending' | 'uploading' | 'complete' | 'warning' | 'error';
   error?: string;
   url?: string;
 }
@@ -34,6 +36,7 @@ function getFileIcon(mimeType: string, fileName: string): string {
 export function FileUploader({
   meetingId,
   onUploadComplete,
+  onAttachmentsChanged,
   onError,
   accept = 'image/*,video/*,audio/*,.md,.ppt,.pptx,.docx,.doc,.pdf,.txt,.json,.csv,.xls,.xlsx',
   multiple = true,
@@ -42,10 +45,14 @@ export function FileUploader({
 }: FileUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [files, setFiles] = useState<UploadingFile[]>([]);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const uploadingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFiles = useCallback(
     async (fileList: FileList) => {
+      if (uploadingRef.current) return;
       const newFiles = Array.from(fileList).slice(0, maxFiles - files.length);
 
       // Validate files
@@ -58,6 +65,9 @@ export function FileUploader({
       });
 
       if (validFiles.length === 0) return;
+      uploadingRef.current = true;
+      setUploading(true);
+      setRefreshError(null);
 
       const uploadingFiles: UploadingFile[] = validFiles.map((file) => ({
         file,
@@ -69,6 +79,7 @@ export function FileUploader({
 
       // Upload files sequentially
       const results: { name: string; url: string; mimeType?: string }[] = [];
+      let notified = false;
 
       for (let i = 0; i < validFiles.length; i++) {
         const file = validFiles[i];
@@ -92,13 +103,19 @@ export function FileUploader({
           // Notify backend that upload is complete
           if (meetingId) {
             const category = file.type.startsWith('image/') ? 'image' as const : 'file' as const;
-            await notifyUploadComplete(meetingId, result.key, category, {
-              fileName: file.name,
-              fileSize: file.size,
-              mimeType: file.type,
-            }).catch((err) =>
-              console.warn('notifyComplete failed (meeting may not exist yet):', err),
-            );
+            notified = true;
+            try {
+              await notifyUploadComplete(meetingId, result.key, category, {
+                fileName: file.name, fileSize: file.size, mimeType: file.type,
+              });
+            } catch (error) {
+              const message = error instanceof ApiError && error.code === 'UNSUPPORTED_FORMAT'
+                ? '파일은 업로드되었지만 이 형식은 텍스트 추출을 지원하지 않습니다.'
+                : `파일 전송 후 처리를 확인하지 못했습니다. 첨부 목록에서 상태를 확인해 주세요. ${error instanceof Error ? error.message : ''}`;
+              setFiles((previous) => previous.map((entry, index) => index === fileIndex
+                ? { ...entry, status: 'warning', progress: 100, url: result.url, error: message } : entry));
+              continue;
+            }
           }
 
           setFiles((prev) =>
@@ -125,11 +142,17 @@ export function FileUploader({
         }
       }
 
+      if (notified && onAttachmentsChanged) {
+        try { await onAttachmentsChanged(); }
+        catch (error) { setRefreshError(error instanceof Error ? error.message : '첨부 목록을 갱신하지 못했습니다.'); }
+      }
+      uploadingRef.current = false;
+      setUploading(false);
       if (results.length > 0) {
         onUploadComplete?.(results);
       }
     },
-    [files.length, maxFiles, maxSize, meetingId, onUploadComplete, onError]
+    [files.length, maxFiles, maxSize, meetingId, onUploadComplete, onAttachmentsChanged, onError]
   );
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -157,6 +180,7 @@ export function FileUploader({
   };
 
   const removeFile = (index: number) => {
+    if (uploadingRef.current) return;
     setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
@@ -167,7 +191,8 @@ export function FileUploader({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
+        onClick={() => { if (!uploading) fileInputRef.current?.click(); }}
+        aria-disabled={uploading}
         className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all ${
           isDragging
             ? 'border-primary bg-primary/5'
@@ -179,6 +204,7 @@ export function FileUploader({
           type="file"
           accept={accept}
           multiple={multiple}
+          disabled={uploading}
           onChange={handleInputChange}
           className="hidden"
         />
@@ -190,12 +216,13 @@ export function FileUploader({
           cloud_upload
         </span>
         <p className="text-slate-600 dark:text-slate-400 font-medium">
-          {isDragging ? '여기에 파일을 놓으세요' : '파일을 드래그하거나 클릭하여 첨부'}
+          {uploading ? '파일을 처리하는 중…' : isDragging ? '여기에 파일을 놓으세요' : '파일을 드래그하거나 클릭하여 첨부'}
         </p>
         <p className="text-slate-400 text-sm mt-1">
           이미지, 문서, 동영상, 음성 파일 (최대 {formatFileSize(maxSize)})
         </p>
       </div>
+      {refreshError && <p role="alert" className="text-sm text-red-600 dark:text-red-300">{refreshError}</p>}
 
       {/* File List */}
       {files.length > 0 && (
@@ -238,8 +265,8 @@ export function FileUploader({
                 )}
 
                 {/* Error Message */}
-                {file.status === 'error' && (
-                  <p className="text-xs text-red-500 mt-1">{file.error}</p>
+                {(file.status === 'error' || file.status === 'warning') && (
+                  <p role="alert" className={`mt-1 text-xs ${file.status === 'warning' ? 'text-amber-700 dark:text-amber-200' : 'text-red-500'}`}>{file.error}</p>
                 )}
               </div>
 
@@ -248,12 +275,14 @@ export function FileUploader({
                 {file.status === 'complete' && (
                   <span className="material-symbols-outlined text-green-500">check_circle</span>
                 )}
+                {file.status === 'warning' && <span className="material-symbols-outlined text-amber-600" aria-label="처리 확인 필요">warning</span>}
                 {file.status === 'uploading' && (
                   <span className="text-xs text-slate-500">{file.progress}%</span>
                 )}
                 {file.status === 'error' && (
                   <button
-                    onClick={() => removeFile(index)}
+                          onClick={() => removeFile(index)}
+                    disabled={uploading}
                     className="text-slate-400 hover:text-red-500"
                   >
                     <span className="material-symbols-outlined">close</span>

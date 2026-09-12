@@ -12,6 +12,7 @@ interface ActionItemsCardProps {
   savedSummary: string;
   sourceRevision: number;
   hasSavedSummary: boolean;
+  onSaved?: () => void;
 }
 
 const statusMessages = {
@@ -32,11 +33,11 @@ const failureMessages: Record<string, string> = {
 };
 
 export function ActionItemsCard({
-  meetingId, meetingStatus, items: initialItems, analysis: initialAnalysis, canEdit, savedSummary, sourceRevision, hasSavedSummary,
+  meetingId, meetingStatus, items: initialItems, analysis: initialAnalysis, canEdit, savedSummary, sourceRevision, hasSavedSummary, onSaved,
 }: ActionItemsCardProps) {
   const {
     actionItems: items, analysis, isPending, pendingAction, pollError, mutationError, refresh, retry, setCompleted,
-  } = useActionItems({ meetingId, isDone: meetingStatus === 'done', source: savedSummary, sourceRevision, items: initialItems, analysis: initialAnalysis });
+  } = useActionItems({ meetingId, isDone: meetingStatus === 'done', source: savedSummary, sourceRevision, items: initialItems, analysis: initialAnalysis, onSaved });
   const canRetry = canEdit && meetingStatus === 'done' && hasSavedSummary && !isPending && !pendingAction;
   const statusUnavailable = analysis.errorCode === 'STATUS_UNAVAILABLE';
 

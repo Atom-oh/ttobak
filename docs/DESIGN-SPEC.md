@@ -2,6 +2,21 @@
 
 > Design system extracted from design_sample/ HTML files.
 
+## Meeting attachment text and saved re-summary
+
+Document cards expose extraction status, saved errors, authorized retry and a
+bounded text viewer with parser-provided page/slide/paragraph locations.
+Retained results, partial extraction, excerpts and documents missing from the
+saved summary remain explicit.
+
+The saved re-summary control requests asynchronous analysis without re-running
+STT. Loading a completed summary verifies paginated text against its run/hash
+and preserves unsaved edits. Polling is bounded and stale route responses are
+ignored. Meeting search status refreshes after successful saves and never marks
+unsaved text as indexed.
+
+Deploy attachment, saved-summary and index-status APIs before this UI.
+
 ## 1. Design Tokens
 
 ### 1.1 Colors

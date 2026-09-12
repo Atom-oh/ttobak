@@ -2,10 +2,16 @@
 
 import { useState } from 'react';
 import type { Attachment } from '@/types/meeting';
+import { DocumentAttachmentCard } from './meeting/DocumentAttachmentCard';
 
 interface AttachmentGalleryProps {
+  meetingId: string;
+  canEdit: boolean;
+  summaryRevision?: number;
   attachments: Attachment[];
   onUploadClick?: () => void;
+  onResummarize?: () => void;
+  resummaryDisabled?: boolean;
 }
 
 function ImageModal({
@@ -144,8 +150,13 @@ function AttachmentCard({
 }
 
 export function AttachmentGallery({
+  meetingId,
+  canEdit,
+  summaryRevision = 0,
   attachments,
   onUploadClick,
+  onResummarize,
+  resummaryDisabled,
 }: AttachmentGalleryProps) {
   const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
   const [showOriginal, setShowOriginal] = useState(false);
@@ -166,21 +177,32 @@ export function AttachmentGallery({
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-bold flex items-center gap-2 text-slate-900 dark:text-white">
           <span className="material-symbols-outlined">attachment</span>
-          Attachments
+          첨부 파일 ({attachments.length})
         </h2>
-        <button
+        {onUploadClick && <button
+          type="button"
           onClick={onUploadClick}
           className="text-sm font-semibold text-primary hover:underline"
         >
-          View All ({attachments.length})
-        </button>
+          파일 추가
+        </button>}
       </div>
 
       {/* Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
         {attachments.map((attachment) => (
-          <AttachmentCard
-            key={attachment.id}
+          attachment.type === 'document' ? (
+            <DocumentAttachmentCard
+              key={`${meetingId}:${attachment.id}:${attachment.originalKey ?? ''}`}
+              meetingId={meetingId}
+              attachment={attachment}
+              canEdit={canEdit}
+              summaryRevision={summaryRevision}
+              onResummarize={onResummarize}
+              resummaryDisabled={resummaryDisabled}
+            />
+          ) : <AttachmentCard
+            key={`${meetingId}:${attachment.id}`}
             attachment={attachment}
             onClick={() => handleCardClick(attachment)}
           />
@@ -188,7 +210,8 @@ export function AttachmentGallery({
 
         {/* Upload Placeholder */}
         {onUploadClick && (
-          <div
+          <button
+            type="button"
             onClick={onUploadClick}
             className="flex flex-col items-center justify-center aspect-video rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900/50 hover:border-primary hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all cursor-pointer group"
           >
@@ -196,9 +219,9 @@ export function AttachmentGallery({
               add_circle
             </span>
             <span className="text-[10px] font-bold text-slate-500 group-hover:text-primary uppercase tracking-wider">
-              Upload New
+              파일 첨부
             </span>
-          </div>
+          </button>
         )}
       </div>
 
