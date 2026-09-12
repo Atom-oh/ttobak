@@ -101,8 +101,8 @@ type meetingRepo interface {
 	CreateMeeting(ctx context.Context, userID, title string, date time.Time, participants []string, sttProvider string) (*model.Meeting, error)
 	GetMeeting(ctx context.Context, userID, meetingID string) (*model.Meeting, error)
 	GetMeetingByID(ctx context.Context, meetingID string) (*model.Meeting, error)
-	UpdateMeeting(ctx context.Context, meeting *model.Meeting) error
 	UpdateMeetingFields(ctx context.Context, userID, meetingID string, fields map[string]interface{}) error
+	UpdateMeetingFieldsIfMatch(ctx context.Context, userID, meetingID string, expected, fields map[string]interface{}) error
 	DeleteMeeting(ctx context.Context, userID, meetingID string) error
 	GetShare(ctx context.Context, sharedToID, meetingID string) (*model.Share, error)
 	ListAttachments(ctx context.Context, meetingID string) ([]model.Attachment, error)
@@ -490,8 +490,20 @@ func (s *MeetingService) GetMeetingDetail(ctx context.Context, userID, meetingID
 	}
 
 	if isStuck(meeting.Status, meeting.UpdatedAt) {
-		meeting.Status = model.StatusError
-		s.repo.UpdateMeeting(ctx, meeting)
+		err = s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,
+			map[string]interface{}{"status": meeting.Status, "updatedAt": meeting.UpdatedAt},
+			map[string]interface{}{"status": model.StatusError})
+		if err != nil && !errors.Is(err, repository.ErrConditionFailed) {
+			return nil, fmt.Errorf("expire stuck meeting: %w", err)
+		}
+		// A worker may have made progress or deleted the meeting after our read.
+		meeting, err = s.repo.GetMeeting(ctx, meeting.UserID, meetingID)
+		if err != nil {
+			return nil, err
+		}
+		if meeting == nil {
+			return nil, ErrNotFound
+		}
 	}
 
 	// Get attachments
@@ -696,13 +708,20 @@ func (s *MeetingService) UpdateSpeakers(ctx context.Context, userID, meetingID s
 	// Store the mapping for reference
 	meeting.SpeakerMap = req.SpeakerMap
 
-	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
+	// Guard the original version: hydrated transcripts can differ from stored S3 refs.
+	updatedAt := time.Now().UTC()
+	if err := s.repo.UpdateMeetingFieldsIfMatch(ctx, meeting.UserID, meetingID,
+		map[string]interface{}{"updatedAt": meeting.UpdatedAt},
+		map[string]interface{}{
+			"content": meeting.Content, "transcriptA": meeting.TranscriptA, "transcriptB": meeting.TranscriptB,
+			"transcriptSegments": meeting.TranscriptSegments, "actionItems": meeting.ActionItems, "speakerMap": meeting.SpeakerMap,
+		}); err != nil {
 		return nil, err
 	}
 
 	return &model.MeetingUpdateResponse{
 		MeetingID: meeting.MeetingID,
-		UpdatedAt: meeting.UpdatedAt.Format(time.RFC3339),
+		UpdatedAt: updatedAt.Format(time.RFC3339),
 	}, nil
 }
 
@@ -778,8 +797,7 @@ func (s *MeetingService) SelectTranscript(ctx context.Context, userID, meetingID
 		return ErrForbidden
 	}
 
-	meeting.SelectedTranscript = selected
-	return s.repo.UpdateMeeting(ctx, meeting)
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{"selectedTranscript": selected})
 }
 
 // ShareMeetingByEmail shares a meeting with a user identified by email. The
@@ -1264,11 +1282,10 @@ func (s *MeetingService) UpdateMeetingStatus(ctx context.Context, meetingID, sta
 		return err
 	}
 	if meeting == nil {
-		return fmt.Errorf("meeting not found")
+		return ErrNotFound
 	}
 
-	meeting.Status = status
-	return s.repo.UpdateMeeting(ctx, meeting)
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{"status": status})
 }
 
 // UpdateMeetingTranscript updates transcript fields (internal use)
@@ -1278,17 +1295,20 @@ func (s *MeetingService) UpdateMeetingTranscript(ctx context.Context, meetingID 
 		return err
 	}
 	if meeting == nil {
-		return fmt.Errorf("meeting not found")
+		return ErrNotFound
 	}
 
+	fields := map[string]interface{}{}
 	if transcriptA != "" {
-		meeting.TranscriptA = transcriptA
+		fields["transcriptA"] = transcriptA
 	}
 	if transcriptB != "" {
-		meeting.TranscriptB = transcriptB
+		fields["transcriptB"] = transcriptB
 	}
-
-	return s.repo.UpdateMeeting(ctx, meeting)
+	if len(fields) == 0 {
+		return nil
+	}
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, fields)
 }
 
 // UpdateMeetingContent updates the content/summary field (internal use)
@@ -1298,12 +1318,10 @@ func (s *MeetingService) UpdateMeetingContent(ctx context.Context, meetingID, co
 		return err
 	}
 	if meeting == nil {
-		return fmt.Errorf("meeting not found")
+		return ErrNotFound
 	}
 
-	meeting.Content = content
-	meeting.Status = model.StatusDone
-	return s.repo.UpdateMeeting(ctx, meeting)
+	return s.repo.UpdateMeetingFields(ctx, meeting.UserID, meetingID, map[string]interface{}{"content": content, "status": model.StatusDone})
 }
 
 // LinkMeetingToAccount classifies a meeting under an account (no sharing).
@@ -1326,8 +1344,7 @@ func (s *MeetingService) LinkMeetingToAccount(ctx context.Context, ownerID, meet
 	if member == nil {
 		return ErrForbidden
 	}
-	meeting.AccountID = accountID
-	return s.repo.UpdateMeeting(ctx, meeting)
+	return s.repo.UpdateMeetingFields(ctx, ownerID, meetingID, map[string]interface{}{"accountId": accountID})
 }
 
 // ShareMeetingToAccount publishes a meeting to an account team: sets
@@ -1353,7 +1370,7 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 	}
 
 	// This sequence is non-transactional, but every write is idempotent
-	// (UpdateMeeting and the MeetingRef PutItem target fixed keys; CreateShare
+	// (the meeting update and MeetingRef PutItem target fixed keys; CreateShare
 	// keys on the recipient), so a client retry converges. Single-item DynamoDB
 	// writes rarely fail; full atomicity via TransactWriteItems was considered
 	// but rejected because its 100-item limit would cap account team size.
@@ -1363,7 +1380,7 @@ func (s *MeetingService) ShareMeetingToAccount(ctx context.Context, ownerID, own
 	// leaving ListAccountMeetings permanently unable to surface it.
 	meeting.AccountID = accountID
 	meeting.SharedToAccount = true
-	if err := s.repo.UpdateMeeting(ctx, meeting); err != nil {
+	if err := s.repo.UpdateMeetingFields(ctx, ownerID, meetingID, map[string]interface{}{"accountId": accountID, "sharedToAccount": true}); err != nil {
 		return nil, err
 	}
 

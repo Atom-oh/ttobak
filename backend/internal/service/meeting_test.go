@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	cognitoidp "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	cognitoidptypes "github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider/types"
 	"github.com/ttobak/backend/internal/model"
@@ -143,6 +145,16 @@ func (m *mockMeetingRepo) UpdateMeetingFields(_ context.Context, userID, meeting
 			cp.LiveSummary = v.(string)
 		case "transcriptA":
 			cp.TranscriptA = v.(string)
+		case "transcriptB":
+			cp.TranscriptB = v.(string)
+		case "actionItems":
+			cp.ActionItems = v.(string)
+		case "speakerMap":
+			cp.SpeakerMap = v.(map[string]string)
+		case "accountId":
+			cp.AccountID = v.(string)
+		case "sharedToAccount":
+			cp.SharedToAccount = v.(bool)
 		case "transcriptSegments":
 			cp.TranscriptSegments = v.(string)
 		case "selectedTranscript":
@@ -157,6 +169,27 @@ func (m *mockMeetingRepo) UpdateMeetingFields(_ context.Context, userID, meeting
 	m.meetings[key] = &cp
 	m.meetingsByID[meetingID] = &cp
 	return nil
+}
+
+func (m *mockMeetingRepo) UpdateMeetingFieldsIfMatch(ctx context.Context, userID, meetingID string, expected, fields map[string]interface{}) error {
+	meeting := m.meetings[meetingKey(userID, meetingID)]
+	if meeting == nil {
+		return repository.ErrConditionFailed
+	}
+	stored, err := attributevalue.MarshalMap(meeting)
+	if err != nil {
+		return err
+	}
+	for field, want := range expected {
+		value, err := attributevalue.Marshal(want)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(stored[field], value) {
+			return repository.ErrConditionFailed
+		}
+	}
+	return m.UpdateMeetingFields(ctx, userID, meetingID, fields)
 }
 
 func (m *mockMeetingRepo) DeleteMeeting(_ context.Context, userID, meetingID string) error {
