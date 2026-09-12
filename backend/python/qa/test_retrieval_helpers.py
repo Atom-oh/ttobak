@@ -148,10 +148,13 @@ class TestCurrentCandidates(_SourceFixture, unittest.TestCase):
         self.table.put_item(Item=dict(row, SK='DOC#second', docId='second'))
         hits = [candidate(self.indexed(sk=sk, filename='file.pdf', text=body))
                 for sk, body in [('DOC#doc', 'FIRST_FILE'), ('DOC#second', 'SECOND_FILE')]]
-        self.table.put_item(Item=dict(row, SK='DOC#title', docId='title', title='NEW_TERM'))
-        identities, _ = self.discover('owner')
-        result = hydrate_candidates(self.source_reader, 'owner', 'NEW_TERM', hits, identities, 2)
-        self.assertEqual([entry.get('text') for entry in result], ['FIRST_FILE', 'SECOND_FILE'])
+        for body in ('', 'UNRELATED_BODY'):
+            with self.subTest(body=body):
+                self.table.put_item(Item=dict(row, SK='DOC#title', docId='title',
+                                              title='NEW_TERM', content=body, fileKey=''))
+                identities, _ = self.discover('owner')
+                result = hydrate_candidates(self.source_reader, 'owner', 'NEW_TERM', hits, identities, 2)
+                self.assertEqual([entry.get('text') for entry in result], ['FIRST_FILE', 'SECOND_FILE'])
 
     def test_legacy_text_excerpt_is_bounded_and_marked_partial(self):
         body = b'a' * 9000

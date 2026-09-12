@@ -178,7 +178,7 @@ def hydrate_candidates(reader, user_id, question, candidates, identities, limit,
     # Fresh saved text complements semantic discovery while ingestion is pending.
     # No S3 reads/heads are needed for resources whose saved text does not match.
     terms = [word for word in re.split(r'\s+', question.casefold().strip()) if word][:20]
-    keyword_results = []
+    keyword_ready, keyword_pending = [], []
     for key, identity in sorted(identities.items()):
         if key in results:
             continue
@@ -188,9 +188,11 @@ def hydrate_candidates(reader, user_id, question, candidates, identities, limit,
         searchable = '\n'.join(fields.get(name) or '' for name in ('title', 'notes', 'content', 'actionItems')).casefold()
         if terms and all(term in searchable for term in terms):
             snapshot = reader.snapshot(identity, fields)
-            keyword_results.append(_current_result(
+            result = _current_result(
                 snapshot, 'ttobak://source/' + identity['resourceHash'], 0.0,
-                'current_saved_keyword_match'))
+                'current_saved_keyword_match')
+            body = '\n'.join(fields.get(name) or '' for name in ('notes', 'content', 'actionItems')).casefold()
+            (keyword_ready if all(term in body for term in terms) else keyword_pending).append(result)
     manual = hydrate_manual_candidates(reader, user_id, candidates, manual_lookup)
     ranked = sorted([*results.values(), *manual], key=lambda result: result.get('score', 0), reverse=True)
     def has_body(result):
@@ -198,8 +200,6 @@ def hydrate_candidates(reader, user_id, question, candidates, identities, limit,
         return bool(result.get('text') or any(fields.get(name) for name in ('notes', 'content', 'actionItems')))
     ready = [result for result in ranked if has_body(result)]
     pending = [result for result in ranked if not has_body(result)]
-    keyword_ready = [result for result in keyword_results if has_body(result)]
-    keyword_pending = [result for result in keyword_results if not has_body(result)]
     if not keyword_ready or (limit == 1 and ready):
         return (ready + keyword_pending + pending)[:limit]
     # For multiple results, reserve a slot for new saved text while keeping
