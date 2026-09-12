@@ -27,6 +27,9 @@ type IndexResource struct {
 	SK   string `json:"sk" dynamodbav:"sk"`
 	Kind string `json:"kind" dynamodbav:"kind"`
 	ID   string `json:"id" dynamodbav:"id"`
+	// SourceKey is set only for private/shared legacy KB object jobs. These
+	// identities do not represent canonical DynamoDB document records.
+	SourceKey string `json:"sourceKey,omitempty" dynamodbav:"sourceKey,omitempty"`
 }
 
 func CanonicalIndexResource(pk, sk string) (IndexResource, bool) {
@@ -49,7 +52,16 @@ func (r IndexResource) Hash() string {
 	hash := sha256.Sum256([]byte(r.PK + "\x00" + r.SK))
 	return hex.EncodeToString(hash[:])
 }
-func (r IndexResource) Prefix() string { return IndexPrefix + r.Kind + "/" + r.Hash() + "/" }
+func (r IndexResource) Prefix() string {
+	switch r.Kind {
+	case IndexManualKind:
+		return IndexManualPrefix + strings.TrimPrefix(r.PK, "USER#") + "/" + r.ID + "/"
+	case IndexSharedKind:
+		return IndexSharedPrefix + r.ID + "/"
+	default:
+		return IndexPrefix + r.Kind + "/" + r.Hash() + "/"
+	}
+}
 
 // IndexRecord contains only projection-relevant source attributes. An absent
 // record is represented by nil; nil map values are real DynamoDB NULL values.
@@ -108,4 +120,6 @@ type IndexControl struct {
 	SourceCursor      string        `dynamodbav:"sourceCursor"`
 	JobCursor         string        `dynamodbav:"jobCursor"`
 	LegacyCursor      string        `dynamodbav:"legacyCursor"`
+	ManualCursor      string        `dynamodbav:"manualCursor"`
+	SharedCursor      string        `dynamodbav:"sharedCursor"`
 }

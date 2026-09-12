@@ -43,12 +43,17 @@ func NewIndexingService(repo IndexRepository, objects IndexObjects, ingestion In
 }
 
 func (s *IndexingService) ReadSource(ctx context.Context, key model.IndexResource, bodies bool) (*IndexSnapshot, error) {
+	if !key.Valid() {
+		return nil, ErrIndexInvalid
+	}
+	if key.IsKnowledgeSource() {
+		return s.readKnowledgeSource(ctx, key, bodies)
+	}
 	return NewIndexSourceReader(s.repo, s.objects, s.assetsBucket).ReadSource(ctx, key, bodies)
 }
 
 func (s *IndexingService) Enqueue(ctx context.Context, key model.IndexResource) error {
-	canonical, ok := model.CanonicalIndexResource(key.PK, key.SK)
-	if !ok || canonical != key {
+	if !key.Valid() {
 		return ErrIndexInvalid
 	}
 	// Stream records are notifications, not source snapshots. Read the current
@@ -364,6 +369,9 @@ func (s *IndexingService) reconcile(ctx context.Context, control *model.IndexCon
 		}
 	}
 	control.LegacyCursor = legacyCursor
+	if err := s.reconcileKnowledge(ctx, control); err != nil {
+		return nil, err
+	}
 	// Never advance past eligible jobs that did not fit this generation.
 	// Reading at most a batch preserves rotation even when early jobs fail forever.
 	jobs, cursor, err := s.repo.ListIndexJobs(ctx, control.JobCursor, indexBatchSize)
@@ -462,18 +470,25 @@ func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) 
 		return model.IndexMember{}, err
 	}
 	source, err := s.ReadSource(ctx, key, true)
-	if err != nil {
-		if !permanentIndexSourceError(err) {
-			// Unavailability supplies no proof that published bytes are obsolete.
-			// The caller resets preparation for retry while keeping tracked keys.
-			return model.IndexMember{}, err
-		}
+	if err != nil && !permanentIndexSourceError(err) {
+		// Unavailability supplies no proof that published bytes are obsolete.
+		// The caller resets preparation for retry while keeping tracked keys.
+		return model.IndexMember{}, err
+	}
+	if err != nil || source.Outcome == model.IndexFailed {
 		// A confirmed missing or invalid source cannot retain stale projections.
 		if cleanupErr := s.cleanupTracked(ctx, &job, nil); cleanupErr != nil {
 			return model.IndexMember{}, errors.Join(err, cleanupErr)
 		}
 		failed := job
-		s.failJob(&failed, "SOURCE_UNAVAILABLE")
+		code := "SOURCE_UNAVAILABLE"
+		if source != nil {
+			failed.Revision, failed.DesiredRevision = source.Revision, source.Revision
+			if source.ErrorCode != "" {
+				code = source.ErrorCode
+			}
+		}
+		s.failJob(&failed, code)
 		failed.Keys, failed.PendingKeys = nil, nil
 		if e := s.repo.SaveIndexJob(ctx, &job, &failed, nil, false, s.now().UnixMilli()); e != nil {
 			return model.IndexMember{}, e
@@ -481,14 +496,14 @@ func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) 
 		return model.IndexMember{Resource: key, Version: failed.Version, RunID: failed.RunID}, nil
 	}
 	keys := []string{}
-	prefix := key.Prefix() + job.RunID + "/"
+	prefix := indexRunPrefix(key, source.Revision, job.RunID)
 	for _, part := range source.Parts {
 		keys = append(keys, prefix+part.Name, prefix+part.Name+".metadata.json")
 	}
 	planned := job
 	planned.PendingKeys, planned.Revision, planned.Outcome = keys, source.Revision, source.Outcome
 	planned.DesiredRevision, planned.ErrorCode = source.Revision, source.ErrorCode
-	if err := s.repo.SaveIndexJob(ctx, &job, &planned, source.Record, true, s.now().UnixMilli()); err != nil {
+	if err := s.repo.SaveIndexJob(ctx, &job, &planned, source.Record, !key.IsKnowledgeSource(), s.now().UnixMilli()); err != nil {
 		return model.IndexMember{}, err
 	}
 	job = planned
@@ -520,7 +535,7 @@ func (s *IndexingService) prepare(ctx context.Context, key model.IndexResource) 
 	ready := job
 	ready.Keys, ready.PendingKeys, ready.State, ready.LeaseUntil = keys, nil, model.IndexWaitingSync, 0
 	ready.UpdatedAt = s.now().UnixMilli()
-	if err := s.repo.SaveIndexJob(ctx, &job, &ready, current.Record, true, s.now().UnixMilli()); err != nil {
+	if err := s.repo.SaveIndexJob(ctx, &job, &ready, current.Record, !key.IsKnowledgeSource(), s.now().UnixMilli()); err != nil {
 		return model.IndexMember{}, err
 	}
 	return indexMember(&ready), nil
@@ -571,6 +586,9 @@ func indexMember(job *model.IndexJob) model.IndexMember {
 }
 
 func (s *IndexingService) inventory(ctx context.Context, key model.IndexResource) ([]string, error) {
+	if !key.Valid() {
+		return nil, ErrIndexInvalid
+	}
 	keys, err := s.objects.List(ctx, key.Prefix())
 	if err != nil {
 		return nil, err
@@ -707,12 +725,12 @@ func (s *IndexingService) finish(ctx context.Context, member model.IndexMember, 
 	}
 	if !success {
 		s.failJob(&next, "INGESTION_FAILED")
-		return s.repo.SaveIndexJob(ctx, job, &next, current.Record, true, s.now().UnixMilli())
+		return s.repo.SaveIndexJob(ctx, job, &next, current.Record, !member.Resource.IsKnowledgeSource(), s.now().UnixMilli())
 	}
 	next.State, next.ErrorCode = current.Outcome, current.ErrorCode
 	next.RemovedKeys = nil
 	next.FailureCount, next.RetryAfter = 0, 0
-	err = s.repo.SaveIndexJob(ctx, job, &next, current.Record, true, s.now().UnixMilli())
+	err = s.repo.SaveIndexJob(ctx, job, &next, current.Record, !member.Resource.IsKnowledgeSource(), s.now().UnixMilli())
 	if errors.Is(err, repository.ErrConditionFailed) {
 		return s.repo.RequestIndexResource(ctx, member.Resource, "", s.now().UnixMilli())
 	}
