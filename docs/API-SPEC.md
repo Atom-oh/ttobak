@@ -203,6 +203,81 @@ Error: 404 Not Found
 > comparison permits redundant headers for that speaker at segment boundaries.
 > Different/unknown labels and bracketed body text are not removed.
 
+#### Bounded Meeting Reading
+
+`GET /api/meetings/{meetingId}/reading` uses the existing authenticated API and
+the same owner/direct-share/current-account-membership checks. Use this endpoint
+for long-meeting MCP reads instead of the unbounded detail response above.
+Every continuation rechecks access; responses use `Cache-Control: no-store`.
+
+| Query | Contract |
+|-------|----------|
+| `kind` | `meeting` (default) or `transcript` |
+| `pageSize` | Integer 1–8000 Unicode code points; default 4000 |
+| `cursor` | Optional opaque continuation, at most 2048 characters |
+| `section` | Meeting kind only: `notes` (default), `summary`, or `actionItems` |
+| `source` | Transcript kind only: `selected` (default), `A`, or `B` |
+| `startTime`, `endTime` | Transcript kind only, supplied together; finite seconds with `0 <= startTime < endTime` |
+
+Unknown/repeated query keys, malformed scalar/cursor syntax, and incompatible
+options return 400 before storage reads. Cursor revision and offset validity
+are checked against the current authorized source. Reuse the same meeting/kind/section or source/time
+range when following a cursor. Page size may change between requests.
+
+The response is the inner JSON object used by the MCP reading tools, **not** an
+MCP `content` wrapper. Serialized JSON is at most **14,000 bytes, including its
+trailing newline**, leaving room for API Gateway v1 and MCP string envelopes.
+Pages may be shorter than requested to satisfy the byte budget or 50-chunk cap.
+
+Meeting kind returns the requested `notes`, `content` (summary), or
+`actionItemsJson` field with bounded identifying metadata, participants/tags,
+`availableCodePoints`, `revision`, `readingHints`, and `page`. Join all
+`actionItemsJson` pages before JSON parsing; individual pages can end inside a
+JSON string. Items use the same saved-item normalization as the action-items
+endpoint for legacy IDs/completion flags, while preserving all other stored
+properties, including nested extension objects and arrays. The preview flags
+omitted extension fields as `actionItems[N].otherFields`; the full JSON section
+retains them. Extension-only changes also invalidate its cursor.
+
+It also returns `actionItems` as a bounded preview, `actionItemsPreview`
+(`available`, `totalItems`, `complete`, `metadataTruncated`, `readWithSection`),
+and `actionItemsAnalysis` (`status`, optional `errorCode`, `runId`, `leaseUntil`).
+Absent legacy analysis is **unknown**, never inferred successful from `[]`.
+Status lookup failure is visible as unknown/`STATUS_UNAVAILABLE`; succeeded
+analysis against a changed summary is shown as failed/`SOURCE_CHANGED`.
+`actionItemsAnalysisTruncated` and `metadataTruncated` disclose shortened metadata.
+The preview may include fewer entries under the stricter API byte budget; full
+items remain available through their paged section.
+
+Transcript kind returns `source`, `selectedSource`, `requestedSource`,
+`revision`, `provenance`, `mode`, `timeRange`, `completenessScope`, `chunks`, and
+`page`. Each chunk preserves exact text and zero-based code-point
+`startOffset`/exclusive `endOffset`. Verified segments add original identity,
+speaker, times, `timingScope: "whole_segment"`, and `partial`; never infer
+word-level times for partial chunks. Unselected sources and unmatched/invalid
+segments return text pages without borrowed speaker/timing metadata.
+
+Time ranges select whole verified segments overlapping `[startTime,endTime)`.
+Offsets expose gaps between matches; completeness applies only to the requested
+range. All pages expose `page.unit: "unicode_code_points"`, start/end offsets,
+whole-source `totalCodePoints`, requested-span `matchingCodePoints`, `complete`,
+and `nextCursor` (null at the end). Only claim full reading after consuming all
+preceding pages. Cursors bind current source content and relevant provenance,
+not merely timestamps; changes require restarting.
+
+Notes/summary/action-item reads perform **no S3 transcript hydration**. Transcript
+reads hydrate the chosen field and, only for the effective selected source,
+candidate segments after authorization. A selected empty variant can fall back
+to the other available variant. Stored S3 references are never returned.
+The endpoint bounds transport output; it still loads the selected source into
+memory to verify and page it.
+
+Errors: 401 `UNAUTHORIZED`; 403 `FORBIDDEN` or 404 `NOT_FOUND` for denied/missing
+meetings; 400 `INVALID_ARGUMENT`, `INVALID_CURSOR`, `NO_TRANSCRIPT`, or
+`TIME_RANGE_UNAVAILABLE`; 409 `STALE_CURSOR`; 500 `READING_UNAVAILABLE` for
+storage/data failures. Authentication and storage failures never fall back to
+cached transcript text.
+
 #### Update Speaker Names
 
 `PUT /api/meetings/{meetingId}/speakers` accepts
@@ -276,6 +351,11 @@ as `unknown` / `STATUS_UNAVAILABLE` while preserving the meeting view.
 Retry preserves existing items until a complete valid result is committed.
 Unchanged tasks keep their IDs and completion state; new tasks start incomplete
 with new IDs. Concurrent summary or item changes reject stale generated output.
+Lifecycle polling, retry authorization, and the summarize worker's action
+analysis use metadata repository views: they do not hydrate transcript S3
+objects. Conditional writes remain unchanged. Both queueing and processing
+require a nonblank saved summary, so transcript storage references cannot become
+fallback model input when the summary is unavailable.
 
 #### Delete Meeting
 

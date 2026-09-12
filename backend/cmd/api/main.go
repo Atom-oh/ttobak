@@ -157,7 +157,8 @@ func init() {
 	simService := service.NewSimService(repo, bedrockService, lambdaClient, simFunctionName)
 	simHandler := handler.NewSimHandler(simService)
 	meetingHandler.SetSimService(simService)
-	actionItemsService := service.NewActionItemsAnalysisService(repo, meetingService, bedrockService, service.ActionItemsPublisher(ebClient))
+	actionItemsService := service.NewMetadataActionItemsAnalysisService(repo, bedrockService, service.ActionItemsPublisher(ebClient))
+	readingHandler := handler.NewMeetingReadingHandler(service.NewMeetingReadingService(repo, actionItemsService))
 	actionItemsHandler := handler.NewActionItemsHandler(actionItemsService)
 	meetingHandler.SetActionItemsService(actionItemsService)
 	// Setup router
@@ -229,6 +230,7 @@ func init() {
 		r.Get("/api/meetings", meetingHandler.ListMeetings)
 		r.Post("/api/meetings", meetingHandler.CreateMeeting)
 		r.Get("/api/meetings/{meetingId}", meetingHandler.GetMeeting)
+		r.Get("/api/meetings/{meetingId}/reading", readingHandler.Get)
 		r.Get("/api/meetings/{meetingId}/action-items", actionItemsHandler.Get)
 		r.Post("/api/meetings/{meetingId}/action-items/retry", actionItemsHandler.Retry)
 		r.Put("/api/meetings/{meetingId}/action-items/{itemId}", actionItemsHandler.SetCompleted)

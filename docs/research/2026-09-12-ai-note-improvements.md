@@ -13,3 +13,5 @@ set. Completing one PR does not complete the overall goal.
 
 Each PR targets main, completes latest-head review/CI and deployment verification.
 Preserve root AGENTS.md user edits. Do not use customer data as test fixtures.
+
+Delivery evidence: PR194/195/196/197 are merged. PR197 frontend and infrastructure deployments succeeded (runs 34705112285/34705112280). The bounded-reading API adds metadata-only action reads and the terminal-state handoff polling follow-up; these still require their own merge/deployment.
