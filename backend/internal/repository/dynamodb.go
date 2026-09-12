@@ -1764,19 +1764,24 @@ func (r *DynamoDBRepository) ListAttachments(ctx context.Context, meetingID stri
 		return nil, fmt.Errorf("failed to build expression: %w", err)
 	}
 
-	result, err := r.client.Query(ctx, &dynamodb.QueryInput{
+	pages := dynamodb.NewQueryPaginator(r.client, &dynamodb.QueryInput{
 		TableName:                 aws.String(r.tableName),
 		KeyConditionExpression:    expr.KeyCondition(),
 		ExpressionAttributeNames:  expr.Names(),
 		ExpressionAttributeValues: expr.Values(),
+		ConsistentRead:            aws.Bool(true),
 	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to query attachments: %w", err)
-	}
-
 	var attachments []model.Attachment
-	if err := attributevalue.UnmarshalListOfMaps(result.Items, &attachments); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal attachments: %w", err)
+	for pages.HasMorePages() {
+		result, err := pages.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query attachments: %w", err)
+		}
+		var page []model.Attachment
+		if err := attributevalue.UnmarshalListOfMaps(result.Items, &page); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal attachments: %w", err)
+		}
+		attachments = append(attachments, page...)
 	}
 
 	return attachments, nil
@@ -1818,7 +1823,8 @@ func (r *DynamoDBRepository) DeleteAttachment(ctx context.Context, meetingID, at
 // GetAttachment retrieves an attachment by meetingID and attachmentID
 func (r *DynamoDBRepository) GetAttachment(ctx context.Context, meetingID, attachmentID string) (*model.Attachment, error) {
 	result, err := r.client.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(r.tableName),
+		TableName:      aws.String(r.tableName),
+		ConsistentRead: aws.Bool(true),
 		Key: map[string]types.AttributeValue{
 			"PK": &types.AttributeValueMemberS{Value: model.PrefixMeeting + meetingID},
 			"SK": &types.AttributeValueMemberS{Value: model.PrefixAttachment + attachmentID},
@@ -1828,7 +1834,7 @@ func (r *DynamoDBRepository) GetAttachment(ctx context.Context, meetingID, attac
 		return nil, fmt.Errorf("failed to get attachment: %w", err)
 	}
 
-	if result.Item == nil {
+	if len(result.Item) == 0 {
 		return nil, nil
 	}
 
@@ -1837,6 +1843,9 @@ func (r *DynamoDBRepository) GetAttachment(ctx context.Context, meetingID, attac
 		return nil, fmt.Errorf("failed to unmarshal attachment: %w", err)
 	}
 
+	if attachment.MeetingID != meetingID || attachment.AttachmentID != attachmentID {
+		return nil, fmt.Errorf("attachment identity does not match its primary key")
+	}
 	return &attachment, nil
 }
 
