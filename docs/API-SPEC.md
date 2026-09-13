@@ -460,6 +460,14 @@ and revision; changes or revocation invalidate the complete derived history.
   attempt/result/location. Do not forward arbitrary provider metadata or invent
   audio timestamps for document positions. Public titles have a presentation bound
   and expose `titleTruncated:true` when shortened; source arrays remain complete.
+- No-tool follow-ups restore source attribution only after live dependency
+  validation. `provenanceScope: validated_history` identifies historical evidence,
+  not a new retrieval. Valid older sessions retain dialogue with explicit
+  `legacy_identity` references when detailed metadata is unavailable. Changed or
+  revoked dependencies clear both history and attribution. Research creation
+  receipts use `history_receipt`; inventory validation receipts are not citations.
+  Equivalent fresh attribution replaces restored attribution. See the source
+  contract for metadata/identity bounds and incomplete-attribution markers.
 - Replay requires current access/revisions for every source plus matching
   fingerprints for supported read-only tools. Strict callbacks consume all pages,
   recheck exact membership/canonical references and attest complete reads.
@@ -470,6 +478,12 @@ and revision; changes or revocation invalidate the complete derived history.
   source failures use `SOURCE_CHANGED` (409) or `SOURCE_UNAVAILABLE` (503);
   WebSocket failures use `answer_error`. Oversized/rejected completions report
   `RESPONSE_TOO_LARGE` or `DELIVERY_FAILED`, not a shortened successful result.
+  Large source arrays arrive in bounded `answer_sources` frames, followed by
+  `answer_complete` with matching `sourceBatchId` and `sourceBatchCount`. Clients
+  validate and assemble the entire source batch before presenting completion.
+  Small responses retain the existing one-frame shape.
+  Clients request this protocol with `sourceFramesVersion:1` on `ask_live`.
+  Without that opt-in, oversized responses retain the existing size error.
   See the source contract's completion limits and non-atomic streaming caveat.
 - `start_research` records a creation receipt only after one successful mutation.
   Never replay creation to validate history. Tracking overflow preserves the

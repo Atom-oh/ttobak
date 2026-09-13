@@ -157,7 +157,8 @@ class TestCompletionDelivery(unittest.TestCase):
         self.assertEqual(frames[-1]['code'], 'RESPONSE_TOO_LARGE')
         self.assertNotIn('sensitive', json.dumps(frames[-1]))
 
-    def test_oversized_completion_fails_before_sdk_without_truncating_source_array(self):
+    def test_large_source_array_is_delivered_in_bounded_frames_without_truncation(self):
+        self.event['sourceFramesVersion'] = 1
         full, frames = [], []
         def final(*args, source_details, **kwargs):
             for number in range(100):
@@ -165,17 +166,17 @@ class TestCompletionDelivery(unittest.TestCase):
                                                'uri': 's3://synthetic/' + str(number)})
             full.extend(copy.deepcopy(source_details))
             return 'answer', [], []
-        self.client.meta.events.register('before-parameter-build.apigatewaymanagementapi.PostToConnection',
-                                        lambda params, **kwargs: frames.append(json.loads(params['Data'])))
-        with Stubber(self.client) as stub:
-            stub.add_response('post_to_connection', {}, {'ConnectionId': 'c', 'Data': ANY})
-            stub.add_response('post_to_connection', {}, {'ConnectionId': 'c', 'Data': ANY})
+        with mock.patch.object(self.client, 'post_to_connection',
+                               side_effect=lambda **params: frames.append(json.loads(params['Data']))):
             result = self.invoke(final)
-            stub.assert_no_pending_responses()
         self.assertEqual(len(full), 100)
-        self.assertEqual(result['status'], 'delivery_failed')
-        self.assertEqual([row['type'] for row in frames], ['answer_start', 'answer_error'])
-        self.assertLess(len(json.dumps(frames[-1]).encode()), 1024)
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(frames[0]['type'], 'answer_start')
+        self.assertEqual(frames[-1]['type'], 'answer_complete')
+        self.assertEqual([detail for row in frames[1:-1] for detail in row['sourceDetails']], full)
+        self.assertTrue(all(len(json.dumps(row, ensure_ascii=False).encode()) <= handler.WS_FRAME_BUDGET_BYTES
+                            for row in frames))
+        self.assertEqual(frames[-1]['sourceBatchCount'], len(frames) - 2)
 
     def test_failed_error_notification_does_not_recurse_or_report_success(self):
         with Stubber(self.client) as stub:
