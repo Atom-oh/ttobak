@@ -17,6 +17,7 @@ export interface AiStackProps extends cdk.StackProps {
   researchAgentExecutionRoleArn: string;
   /** Bedrock Knowledge Base ID — scopes the api role's StartIngestionJob grant to this KB's ARN. */
   knowledgeBaseId?: string;
+  indexingMode?: 'manual-only' | 'all';
 }
 
 export class AiStack extends cdk.Stack {
@@ -445,39 +446,86 @@ export class AiStack extends cdk.Stack {
     );
 
     // ==================== KB Role ====================
-    // Needs: DynamoDB R/W, S3 R/W (kb bucket), Bedrock KB, OpenSearch Serverless
+    // Bootstrap private/shared snapshots first; canonical permissions follow QA cutover.
+    const canonicalIndexing = props.indexingMode === 'all';
     this.kbRole = createLambdaRole(
       'TtobakKbRole',
       'ttobak-kb-role',
       'Role for ttobak-kb Lambda function'
     );
 
-    props.table.grantReadWriteData(this.kbRole);
-    props.kbBucket.grantReadWrite(this.kbRole);
-
     this.kbRole.addToPolicy(
       new iam.PolicyStatement({
-        sid: 'BedrockKBAccess',
-        effect: iam.Effect.ALLOW,
+        sid: 'CanonicalIndexState',
         actions: [
-          'bedrock:RetrieveAndGenerate',
-          'bedrock:Retrieve',
-          'bedrock:StartIngestionJob',
-          'bedrock:GetIngestionJob',
-          'bedrock:ListIngestionJobs',
+          'dynamodb:GetItem', 'dynamodb:Query',
+          'dynamodb:UpdateItem', 'dynamodb:ConditionCheckItem',
         ],
-        resources: ['*'],
+        resources: [props.table.tableArn],
+        conditions: {
+          'ForAllValues:StringEquals': {
+            'dynamodb:LeadingKeys': ['KBINDEX#JOBS', 'KBINDEX#CONTROL'],
+          },
+          Null: { 'dynamodb:LeadingKeys': 'false' },
+        },
       })
     );
-
-    this.kbRole.addToPolicy(
-      new iam.PolicyStatement({
-        sid: 'OpenSearchServerlessAccess',
-        effect: iam.Effect.ALLOW,
-        actions: ['aoss:APIAccessAll'],
-        resources: ['*'],
-      })
-    );
+    props.table.encryptionKey?.grantEncryptDecrypt(this.kbRole);
+    if (canonicalIndexing) {
+      this.kbRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'ReadCanonicalIndexRecords',
+        actions: ['dynamodb:GetItem', 'dynamodb:Scan', 'dynamodb:ConditionCheckItem'],
+        resources: [props.table.tableArn],
+      }));
+      this.kbRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'ReadCanonicalIndexSources',
+        actions: ['s3:GetObject', 's3:GetObjectVersion'],
+        resources: ['transcripts/*', 'docs/*', 'docs-pdf/*'].map((prefix) => props.bucket.arnForObjects(prefix)),
+      }));
+      // S3 uses ListBucket permission to distinguish a missing object (404)
+      // from access denial (403), including previews that are still being built.
+      this.kbRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'InspectCanonicalSourceExistence',
+        actions: ['s3:ListBucket'],
+        resources: [props.bucket.bucketArn],
+        conditions: { StringEquals: { 'aws:ResourceAccount': cdk.Aws.ACCOUNT_ID } },
+      }));
+      props.bucket.encryptionKey?.grantDecrypt(this.kbRole);
+    }
+    this.kbRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'ListCanonicalIndexProjections',
+      actions: ['s3:ListBucket'],
+      resources: [props.kbBucket.bucketArn],
+      // HEAD of a deleted legacy original also needs effective ListBucket
+      // permission to distinguish absence from denied access.
+      conditions: { StringEquals: { 'aws:ResourceAccount': cdk.Aws.ACCOUNT_ID } },
+    }));
+    this.kbRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'ReadLegacyKnowledgeSources',
+      actions: ['s3:GetObject', 's3:GetObjectVersion'],
+      resources: ['kb/*', 'shared/*'].map((prefix) => props.kbBucket.arnForObjects(prefix)),
+    }));
+    this.kbRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'WriteCanonicalIndexProjections',
+      actions: ['s3:PutObject'],
+      resources: ['manual-kb/v1/*', 'shared-kb/v1/*', ...(canonicalIndexing ? ['canonical/v1/*'] : [])].map((prefix) => props.kbBucket.arnForObjects(prefix)),
+    }));
+    this.kbRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'RemoveObsoleteIndexProjections',
+      actions: ['s3:DeleteObject'],
+      resources: ['manual-kb/v1/*', 'shared-kb/v1/*', ...(canonicalIndexing ? ['canonical/v1/*', 'meetings/*'] : [])].map((prefix) => props.kbBucket.arnForObjects(prefix)),
+    }));
+    props.kbBucket.encryptionKey?.grantEncryptDecrypt(this.kbRole);
+    if (props.knowledgeBaseId) {
+      this.kbRole.addToPolicy(new iam.PolicyStatement({
+        sid: 'SynchronizeCanonicalIndex',
+        actions: ['bedrock:StartIngestionJob', 'bedrock:GetIngestionJob', 'bedrock:ListIngestionJobs', 'bedrock:GetKnowledgeBaseDocuments'],
+        resources: [cdk.Stack.of(this).formatArn({
+          service: 'bedrock', resource: 'knowledge-base', resourceName: props.knowledgeBaseId,
+          arnFormat: cdk.ArnFormat.SLASH_RESOURCE_NAME,
+        })],
+      }));
+    }
 
     // ==================== QA Role ====================
     // Needs: DynamoDB R/W, Bedrock InvokeModel, Bedrock KB (Retrieve)
@@ -489,13 +537,33 @@ export class AiStack extends cdk.Stack {
 
     props.table.grantReadWriteData(this.qaRole);
 
-    // Deploy the exact per-meeting transcript-reference guard first.
-    // See docs/runbooks/qa-transcript-read-rollout.md for rollout/rollback order.
+    // Existing transcript guards remain active. The new source readers are
+    // staged separately; configure their reads before the runtime cutover.
     this.qaRole.addToPolicy(new iam.PolicyStatement({
       sid: 'ReadMeetingTranscripts',
-      actions: ['s3:GetObject'],
+      actions: ['s3:GetObject', 's3:GetObjectVersion'],
       resources: [props.bucket.arnForObjects('transcripts/*')],
     }));
+    this.qaRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'ReadCurrentDocumentSources',
+      actions: ['s3:GetObject', 's3:GetObjectVersion'],
+      resources: ['docs/*', 'docs-pdf/*', 'files/*'].map((prefix) => props.bucket.arnForObjects(prefix)),
+    }));
+    this.qaRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'ReadCurrentLegacyKnowledgeSources',
+      actions: ['s3:GetObject', 's3:GetObjectVersion'],
+      resources: ['kb/*', 'shared/*'].map((prefix) => props.kbBucket.arnForObjects(prefix)),
+    }));
+    // Effective bucket-level ListBucket lets HEAD distinguish a missing
+    // original/preview (404) from a denied source (403).
+    this.qaRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'InspectCurrentSourceExistence',
+      actions: ['s3:ListBucket'],
+      resources: [props.bucket.bucketArn, props.kbBucket.bucketArn],
+      conditions: { StringEquals: { 'aws:ResourceAccount': cdk.Aws.ACCOUNT_ID } },
+    }));
+    props.bucket.encryptionKey?.grantDecrypt(this.qaRole);
+    props.kbBucket.encryptionKey?.grantDecrypt(this.qaRole);
 
     this.qaRole.addToPolicy(
       new iam.PolicyStatement({

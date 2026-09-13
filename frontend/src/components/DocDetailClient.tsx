@@ -10,6 +10,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { accountApi, docApi } from '@/lib/api';
 import { uploadDocFile } from '@/lib/upload';
 import { DocumentShareButton } from '@/components/ShareButton';
+import { IndexStatus } from '@/components/IndexStatus';
 import type { AccountDocument, AccountSummary } from '@/types/meeting';
 
 const MeetingEditor = dynamic(() => import('./MeetingEditor').then(m => ({ default: m.MeetingEditor })), {
@@ -22,12 +23,21 @@ const MeetingEditor = dynamic(() => import('./MeetingEditor').then(m => ({ defau
 const marked = new Marked();
 const turndown = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', hr: '---' });
 
+function documentChanged(saved: { title: string; markdown: string }, title: string, markdown: string) {
+  return title.trim() !== saved.title.trim() || markdown !== saved.markdown;
+}
+
 interface DocDetailClientProps {
   /** Set for the /accounts/{id}/docs/{docId} route; omit for a personal (account-less) /docs/{docId} route. */
   accountScoped?: boolean;
 }
 
 export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
+  const pathname = usePathname();
+  return <DocDetailContent key={`${accountScoped ? 'account' : 'personal'}:${pathname}`} accountScoped={accountScoped} />;
+}
+
+function DocDetailContent({ accountScoped }: DocDetailClientProps) {
   const pathname = usePathname();
   // Parse both ids from the live pathname rather than trusting the route's
   // params prop -- this is a static export, so the placeholder page's
@@ -46,6 +56,10 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [indexRevision, setIndexRevision] = useState(0);
+  const [dirty, setDirty] = useState(false);
+  const savedContentRef = useRef({ title: '', markdown: '' });
+  const latestTitleRef = useRef('');
   // Tracks the freshest in-editor markdown (updated on every keystroke via
   // MeetingEditor's onChange, not just the debounced autosave) so a title
   // blur mid-edit sends the content the user is actually looking at instead
@@ -91,6 +105,9 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
       setTitle(detail.title);
       setPublicToken(detail.publicShareToken || null);
       latestMarkdownRef.current = detail.content ?? '';
+      latestTitleRef.current = detail.title;
+      savedContentRef.current = { title: detail.title.trim(), markdown: detail.content ?? '' };
+      setDirty(false);
       setTitles((list?.documents ?? []).filter((d) => d.docId !== docId).map((d) => d.title));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load document');
@@ -173,7 +190,7 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
       // Full-replace PUT: send every field the backend would otherwise
       // overwrite with an empty value (path in particular -- update is not
       // a partial patch, see ADR-020).
-      const req = { title: nextTitle ?? title, docType: doc.docType, path: doc.path, markdown };
+      const req = { title: (nextTitle ?? latestTitleRef.current).trim(), docType: doc.docType, path: doc.path, markdown };
       const updated = accountId
         ? await accountApi.updateDocument(accountId, docId, req)
         : await docApi.update(docId, req);
@@ -185,7 +202,15 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
       // in would revert those newer, not-yet-saved keystrokes. Once
       // mounted, the editor is the sole owner of live content between
       // saves; only non-content metadata needs syncing here.
-      setDoc((prev) => (prev ? { ...prev, ...updated } : prev));
+      const savedTitle = (updated.title ?? req.title).trim();
+      setDoc((prev) => (prev ? { ...prev, title: savedTitle, updatedAt: updated.updatedAt } : prev));
+      savedContentRef.current = { title: savedTitle, markdown };
+      if (latestTitleRef.current.trim() === req.title) {
+        latestTitleRef.current = savedTitle;
+        setTitle(savedTitle);
+      }
+      setDirty(documentChanged(savedContentRef.current, latestTitleRef.current, latestMarkdownRef.current));
+      setIndexRevision((value) => value + 1);
       setSavedAt(new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save document');
@@ -198,10 +223,11 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
         saveContent(pending.markdown, pending.nextTitle);
       }
     }
-  }, [accountId, docId, doc, title]);
+  }, [accountId, docId, doc]);
 
   const handleChange = useCallback((html: string) => {
     latestMarkdownRef.current = turndown.turndown(html);
+    setDirty(documentChanged(savedContentRef.current, latestTitleRef.current, latestMarkdownRef.current));
   }, []);
 
   const handleAutoSave = useCallback((html: string) => {
@@ -209,7 +235,7 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
   }, [saveContent]);
 
   const handleTitleBlur = useCallback(() => {
-    if (doc && title.trim() && title !== doc.title) {
+    if (doc && title.trim() && title.trim() !== savedContentRef.current.title.trim()) {
       saveContent(latestMarkdownRef.current, title.trim());
     }
   }, [doc, title, saveContent]);
@@ -239,6 +265,7 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
       } else {
         await docApi.update(docId, req);
       }
+      setIndexRevision((value) => value + 1);
       // updateDoc's response doesn't re-presign downloadUrl/previewUrl for
       // the new fileKey (only GetDocument does) -- refetch instead of
       // merging the response into state, or the viewer/Download link would
@@ -313,8 +340,12 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
               call sending markdown: "") can never fire on one -- see the
               comment on saveContent before removing this. */}
           <input
+            aria-label="문서 제목"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => {
+              setTitle(e.target.value); latestTitleRef.current = e.target.value;
+              setDirty(documentChanged(savedContentRef.current, e.target.value, latestMarkdownRef.current));
+            }}
             onBlur={handleTitleBlur}
             disabled={isSlide || isReceivedShare}
             className="flex-1 text-2xl font-bold bg-transparent border-none outline-none focus:ring-0 text-slate-900 dark:text-text-main disabled:text-slate-500"
@@ -327,6 +358,11 @@ export function DocDetailClient({ accountScoped }: DocDetailClientProps) {
           {saving && <span className="text-xs text-slate-400 animate-pulse">Saving...</span>}
           {savedAt && !saving && <span className="text-xs text-slate-400">Saved {savedAt}</span>}
         </div>
+        <IndexStatus
+          target={accountId ? { kind: 'accountDocument', accountId, docId } : { kind: 'document', docId }}
+          savedRevision={indexRevision}
+          dirty={dirty || saving || replacing}
+        />
 
         {!accountScoped && !isReceivedShare && (
           <div className="mb-6">
