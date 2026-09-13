@@ -201,6 +201,47 @@ class TestHistoryDetailContinuity(_SourceFixture, _QAConversationFixture, unitte
         self.assertEqual(dependencies[1], inventory)
         self.assertEqual(history_details.restore([inventory], '[]', 'knowledge', 'assets'), [])
 
+    def test_identity_fallback_remains_explicit_across_multiple_saved_followups(self):
+        dep = {'sourcePK': 'USER#owner', 'sourceSK': 'DOC#doc', 'sourceRevision': 'a' * 64}
+        details = history_details.restore([dep], None, 'knowledge', 'assets')
+        for _ in range(3):
+            payload = history_details.pack(details, [dep], 'knowledge', 'assets')
+            details = history_details.restore([dep], payload, 'knowledge', 'assets')
+            self.assertEqual(details[0]['provenanceScope'], 'legacy_identity')
+            self.assertEqual(details[0]['contentSource'], 'validated_history_identity')
+
+    def test_more_than_128_detail_records_under_byte_budget_restore_without_loss(self):
+        dep = {'sourcePK': 'USER#owner', 'sourceSK': 'DOC#doc', 'sourceRevision': 'a' * 64}
+        identity = history_details.identity_detail(dep, 'knowledge')
+        details = [dict(identity, title='synthetic-title-' + str(i), contentSource='current_saved')
+                   for i in range(150)]
+        payload = history_details.pack(details, [dep], 'knowledge', 'assets')
+        self.assertIsNotNone(payload)
+        restored = history_details.restore([dep], payload, 'knowledge', 'assets')
+        self.assertEqual(len(restored), 150)
+        self.assertEqual([detail['title'] for detail in restored], [detail['title'] for detail in details])
+
+    def test_equivalent_fresh_detail_replaces_history_attribution_in_both_orders(self):
+        from session_provenance import collect_detail
+        fresh = {'uri': 'ttobak://source/synthetic', 'resourceId': 'doc', 'title': 'current'}
+        historical = dict(fresh, provenanceScope='validated_history')
+        for existing, added in ((fresh, historical), (historical, fresh)):
+            details = [existing]
+            collect_detail(details, added)
+            self.assertEqual(details, [fresh])
+
+    def test_legacy_meeting_uri_retains_attribution_only_for_its_current_identity(self):
+        dep = {'sourcePK': 'USER#owner', 'sourceSK': 'MEETING#m', 'sourceRevision': 'a' * 64}
+        detail = dict(dep, resourceKind='meeting', resourceId='m',
+                      uri='s3://knowledge/meetings/owner/m.md', title='Synthetic saved meeting',
+                      contentSource='current_saved')
+        payload = history_details.pack([detail], [dep], 'knowledge', 'assets')
+        restored = history_details.restore([dep], payload, 'knowledge', 'assets')
+        self.assertEqual(restored[0]['uri'], detail['uri'])
+        self.assertEqual(restored[0]['title'], detail['title'])
+        self.assertIsNone(history_details.safe_detail(
+            dict(detail, uri='s3://knowledge/meetings/other/m.md'), dep, 'knowledge', 'assets'))
+
     def test_private_and_shared_binary_details_bind_original_key_revision_and_scope(self):
         for shared in (False, True):
             key = 'shared/test/file.docx' if shared else 'kb/reader/file.pdf'

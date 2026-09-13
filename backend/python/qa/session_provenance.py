@@ -178,5 +178,10 @@ def collect_detail(details, detail):
     if isinstance(title, str) and len(title) > MAX_PUBLIC_TITLE_CHARS:
         public['title'] = title[:MAX_PUBLIC_TITLE_CHARS]
         public['titleTruncated'] = True
-    if public not in details:
-        details.append(public)
+    evidence = {key: value for key, value in public.items() if key != 'provenanceScope'}
+    for index, previous in enumerate(details):
+        if {key: value for key, value in previous.items() if key != 'provenanceScope'} == evidence:
+            if 'provenanceScope' not in public:
+                details[index] = public
+            return
+    details.append(public)

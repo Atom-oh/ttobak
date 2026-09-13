@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 
-from source_revision import resource_identity, RUN_ID, IDENTIFIER, FILE_EXTENSIONS
+from source_revision import resource_identity, legacy_meeting_identity, RUN_ID, IDENTIFIER, FILE_EXTENSIONS
 from attachment_context import _location
 
 MAX_SAVED_BYTES = 64 * 1024
@@ -112,6 +112,9 @@ def _matches(detail, dep, kb_bucket, assets_bucket):
         return False
     if uri == 'ttobak://source/' + identity['resourceHash']:
         return True
+    legacy = legacy_meeting_identity(uri, kb_bucket)
+    if legacy is not None:
+        return legacy == identity
     prefix = f"s3://{kb_bucket}/canonical/v1/{identity['resourceKind']}/{identity['resourceHash']}/"
     tail = uri[len(prefix):] if uri.startswith(prefix) else ''
     run, _, name = tail.partition('/')
@@ -164,7 +167,9 @@ def _safe_detail(detail, dep, kb_bucket, assets_bucket):
     raw = encoded(clean)
     if len(raw.encode()) > 8192:
         return None
-    clean['provenanceScope'] = 'validated_history'
+    clean['provenanceScope'] = (
+        'legacy_identity' if clean.get('contentSource') == 'validated_history_identity'
+        else 'validated_history')
     return clean
 
 
@@ -193,7 +198,7 @@ def restore(dependencies, payload, kb_bucket, assets_bucket):
     if type(payload) is str and len(payload.encode()) <= MAX_SAVED_BYTES:
         try:
             value = json.loads(payload)
-            if type(value) is list and len(value) <= 128:
+            if type(value) is list:
                 saved = value
         except (ValueError, TypeError, RecursionError):
             pass

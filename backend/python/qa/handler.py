@@ -24,10 +24,11 @@ from source_revision import legacy_meeting_identity
 from attachment_context import AttachmentReader
 from indexed_retrieval import hydrate_candidates
 from session_provenance import (
-    new_source_state, restore_messages, validate_sources, SourceValidationError,
+    new_source_state, restore_messages, validate_sources, SourceValidationError, collect_detail,
 )
 from web_search import redact_tool_input_for_log
 import history_details
+from ws_source_frames import completion_frames
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -677,8 +678,7 @@ def load_session(session_id, user_id=None, source_state=None, source_details=Non
                 validate_sources(state, lambda dep: _source_is_current(user_id, dep, state),
                                  tool_history=_tool_history(user_id))
                 for detail in restored:
-                    if detail not in source_details:
-                        source_details.append(detail)
+                    collect_detail(source_details, detail)
             return messages
         return []
     except Exception as e:
@@ -1323,10 +1323,23 @@ def _post_ws(apigw, connection_id, payload):
     except apigw.exceptions.PayloadTooLargeException:
         raise WebSocketDeliveryError('RESPONSE_TOO_LARGE') from None
     except Exception as e:
-        if payload.get('type') in ('answer_start', 'answer_complete', 'answer_error'):
+        if payload.get('type') in ('answer_start', 'answer_sources', 'answer_complete', 'answer_error'):
             raise WebSocketDeliveryError('DELIVERY_FAILED') from None
         logger.warning("Nonterminal WebSocket delivery failed (%s)", type(e).__name__)
         return True
+
+
+def _post_ws_completion(apigw, connection_id, payload, source_frames_version=0):
+    if type(source_frames_version) is not int or source_frames_version != 1:
+        return _post_ws(apigw, connection_id, payload)
+    try:
+        frames = completion_frames(payload, WS_FRAME_BUDGET_BYTES)
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise WebSocketDeliveryError('RESPONSE_TOO_LARGE') from None
+    for frame in frames:
+        if not _post_ws(apigw, connection_id, frame):
+            return False
+    return True
 
 
 def _stream_error(apigw, connection_id, session_id, code, message, status='error'):
@@ -1400,7 +1413,7 @@ def handle_ask_stream(event):
         )
 
         _validate_answer_sources(user_id, source_state)
-        if not _post_ws(apigw, connection_id, {
+        if not _post_ws_completion(apigw, connection_id, {
             'type': 'answer_complete',
             'sessionId': session_id,
             'answer': answer,
@@ -1410,7 +1423,7 @@ def handle_ask_stream(event):
             'toolsUsed': list(set(tools_used)),
             'usedKB': 'search_knowledge_base' in tools_used,
             'usedDocs': 'search_aws_docs' in tools_used,
-        }):
+        }, event.get('sourceFramesVersion', 0)):
             return {'status': 'gone'}
     except SourceValidationError as error:
         return _stream_error(apigw, connection_id, session_id, error.code, error.message)

@@ -34,11 +34,16 @@ func init() {
 }
 
 type wsMessage struct {
-	Action    string `json:"action"`
-	Question  string `json:"question,omitempty"`
-	Context   string `json:"context,omitempty"`
-	MeetingID string `json:"meetingId,omitempty"`
-	SessionID string `json:"sessionId,omitempty"`
+	Action              string `json:"action"`
+	Question            string `json:"question,omitempty"`
+	Context             string `json:"context,omitempty"`
+	MeetingID           string `json:"meetingId,omitempty"`
+	SessionID           string `json:"sessionId,omitempty"`
+	SourceFramesVersion int    `json:"sourceFramesVersion,omitempty"`
+}
+
+func (message wsMessage) supportsSourceFrames() bool {
+	return message.SourceFramesVersion == 1
 }
 
 type wsResponse struct {
@@ -96,14 +101,18 @@ func handleMessage(ctx context.Context, event events.APIGatewayWebsocketProxyReq
 	}
 
 	payload := map[string]any{
-		"streamMode":   "ask_live",
-		"connectionId": connID,
-		"endpoint":     endpoint,
-		"question":     msg.Question,
-		"context":      msg.Context,
-		"meetingId":    msg.MeetingID,
-		"sessionId":    msg.SessionID,
-		"userId":       userID,
+		"streamMode":          "ask_live",
+		"connectionId":        connID,
+		"endpoint":            endpoint,
+		"question":            msg.Question,
+		"context":             msg.Context,
+		"meetingId":           msg.MeetingID,
+		"sessionId":           msg.SessionID,
+		"userId":              userID,
+		"sourceFramesVersion": 0,
+	}
+	if msg.supportsSourceFrames() {
+		payload["sourceFramesVersion"] = 1
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {

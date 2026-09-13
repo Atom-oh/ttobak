@@ -140,11 +140,17 @@ No mutation or model call is replayed for attribution.
 Older valid sessions and missing, expired, mismatched, unavailable or oversized
 metadata retain their validated conversation. Details fall back to safe dependency
 identities with `provenanceScope: legacy_identity`, without inventing excerpts,
-page locations or current titles. This does not make untracked legacy history
+page locations or current titles. Research creation receipts instead use
+`history_receipt`; read-only tool dependencies provide identity-only attribution.
+Identity-only scope remains explicit across later saves. Inventory-only attachment
+receipts validate file additions/removals and are not content citations. Equivalent
+fresh attribution replaces historical attribution without duplicate cards.
+This does not make untracked legacy history
 replayable. Attachment attempt/result/locations are typed and allowlisted; title
 limits also apply to restored metadata. A restored-detail budget of 320 KiB
 returns an explicit `legacy_identity_unavailable` / `DETAIL_LIMIT` marker if even
-identity attribution exceeds it. Existing final transport limits still apply.
+identity attribution exceeds it. That marker replaces the attribution list while
+preserving valid dialogue. Existing final transport limits still apply.
 
 ## Completion and delivery
 
@@ -165,12 +171,26 @@ budget. AWS documents a [32-KB frame quota and 128-KB message quota](https://doc
 messages above the frame quota require fragmentation, including `@connections`.
 The [SDK operation](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/apigatewaymanagementapi/client/post_to_connection.html)
 takes bytes and a connection ID and exposes `PayloadTooLargeException`; it does
-not expose a frame-fragmentation option. This consumer expects one complete JSON
-message, so the application does not split its completion into a new protocol.
+not expose a frame-fragmentation option. `ws_source_frames.py` therefore keeps
+small completions unchanged and moves large attribution into separate complete
+JSON `answer_sources` messages. Each carries `sourceBatchId`, zero-based
+`sourceBatchIndex`, `sessionId`, `sources` and `sourceDetails`; the final
+`answer_complete` carries the same batch ID and `sourceBatchCount` instead of
+duplicating those arrays. Up to 64 attribution frames and 512 KiB of attribution
+are allowed. All frames are built and size-checked before the first write.
+The frontend `QASourceFrames` assembler validates sequence, session, batch/count
+and aggregate size, and exposes the answer only with the complete original arrays.
+Missing, duplicate, mixed-session or oversized attribution produces an explicit
+error. This is application framing, not silent source truncation; direct
+WebSocket clients opt in with `sourceFramesVersion:1` on `ask_live`; the Go
+relay forwards only that supported version. Older or unknown-version clients
+retain the existing explicit size error instead of receiving incomplete arrays.
 
-Oversized completions retain their source arrays and produce a small
+Oversized answer text, individual sources or aggregate attribution retain their
+source arrays and produce a small
 `answer_error` with `RESPONSE_TOO_LARGE`, never a truncated successful result.
-SDK payload rejection takes the same path. Other terminal delivery failures use
+SDK payload rejection takes the same path. Source-frame delivery failures are
+terminal and cannot be followed by a successful completion. Other terminal delivery failures use
 `DELIVERY_FAILED`; the async handler returns `delivery_failed` and logs a safe code.
 An error-notification failure is not retried recursively or reported as `ok`.
 Confirmed Gone returns `gone`; if the error cannot reach a disconnected or
