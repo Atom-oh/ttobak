@@ -9,7 +9,16 @@ SOURCE_HISTORY_TOOLS = SOURCE_TOOL_NAMES | {'search_knowledge_base', 'get_meetin
 PUBLIC_HISTORY_TOOLS = frozenset(('search_web', 'search_aws_docs', 'get_aws_recommendation'))
 CLIENT_LIVE_NOTE = ('client_live: The meeting_context block is user-provided input for this request. '
                     'Use the latest request input when it corrects earlier live context. '
-                    'It is not a verification of saved-source bytes.')
+                    'It is not a verification of saved-source bytes. '
+                    'When the user asks for only current/latest values or to omit old drafts, '
+                    'apply that restriction to the entire answer. '
+                    'Do not repeat superseded raw values anywhere in the answer, '
+                    'including correction narratives, quotes, comparisons, or explanations of your previous answer. '
+                    'Acknowledge a correction generically if needed, without quoting the discarded values. '
+                    'Preserve requested conversation labels and other unaffected references from earlier turns; '
+                    'they are not superseded draft values. Keep current saved-source provenance distinct. '
+                    'Historical values may be discussed when the user explicitly requests a history or comparison '
+                    'rather than a latest-only answer.')
 
 
 def build_tool_context(user_id, text, source_state, source_details, *, source_access, history,
