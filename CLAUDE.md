@@ -9,7 +9,7 @@ documentation stays English.
 
 ## Authority and review scope
 
-- This file is the canonical project guide. `AGENTS.md` is its generated review
+- `CLAUDE.md` is the canonical project guide. `AGENTS.md` is its generated review
   extract; `.kiro/steering/project-context.md` points to that extract.
 - Verify implementation claims against the reviewed revision's code, tests,
   manifests, and CDK. Documentation records intent; it does not prove deployment.
@@ -93,7 +93,9 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
 - Use sentinel errors (`service.ErrForbidden`, `service.ErrNotFound`,
   `repository.ErrConditionFailed`) and `errors.Is`, never message-string control
   flow. API errors have shape `{ "error": { "code": "...", "message": "..." } }`.
-  Surface failed best-effort side effects.
+  Surface failed best-effort side effects. For changed HTTP/rendering paths,
+  verify bounded request/result sizes and appropriate HTML sanitization; do not
+  assume every text-only path needs the same sanitizer.
 - The Go chi integration requires API Gateway payload **1.0**. Python QA uses
   **2.0** in the same GatewayStack; do not apply the Go constraint globally.
 - Frontend requests use `src/lib/api.ts` (Bearer token, 401 refresh); Cognito auth
@@ -298,6 +300,11 @@ reviews or failed required coverage are not a pass. Minor/Info alone does not st
 completion. Before merging, check the reviewed SHA equals current HEAD, required
 CI/protection passes, and base/predecessor PRs match the intended integration path.
 The user has authorized merge once these conditions hold; do not request it again.
+Generic autofix does not authorize workflow/review-gate edits. Such changes must
+already be in the user's original scope or a concrete approved PR, receive an
+independent review of the control diff, and preserve all required gates. Autofix
+batches are bounded to five corrective rounds; exhaustion returns to root-cause
+diagnosis with the task unfinished, not to bypass or automatic approval.
 See `docs/runbooks/pr-review.md` for exact markers and limitations.
 
 Never run `cdk deploy --all` or deploy a stack with implicit dependencies.

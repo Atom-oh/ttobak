@@ -1,4 +1,4 @@
-<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 137b1240c366 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
+<!-- generated-by: co-agent · source: CLAUDE.md · claude-md-sha: 851eb4990189 · DO NOT EDIT: run python3 scripts/docs/sync_review_context.py -->
 # TTOBAK review context
 
 Shared by Codex, Kiro, and the CI review panel. Extracted from the
@@ -6,7 +6,7 @@ canonical CLAUDE.md; delivery procedures and historical records are omitted.
 
 ## Authority and review scope
 
-- This file is the canonical project guide. `AGENTS.md` is its generated review
+- `CLAUDE.md` is the canonical project guide. `AGENTS.md` is its generated review
   extract; `.kiro/steering/project-context.md` points to that extract.
 - Verify implementation claims against the reviewed revision's code, tests,
   manifests, and CDK. Documentation records intent; it does not prove deployment.
@@ -90,7 +90,9 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
 - Use sentinel errors (`service.ErrForbidden`, `service.ErrNotFound`,
   `repository.ErrConditionFailed`) and `errors.Is`, never message-string control
   flow. API errors have shape `{ "error": { "code": "...", "message": "..." } }`.
-  Surface failed best-effort side effects.
+  Surface failed best-effort side effects. For changed HTTP/rendering paths,
+  verify bounded request/result sizes and appropriate HTML sanitization; do not
+  assume every text-only path needs the same sanitizer.
 - The Go chi integration requires API Gateway payload **1.0**. Python QA uses
   **2.0** in the same GatewayStack; do not apply the Go constraint globally.
 - Frontend requests use `src/lib/api.ts` (Bearer token, 401 refresh); Cognito auth

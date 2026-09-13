@@ -68,7 +68,12 @@ Verify Critical/Major findings against code, fix actual defects, run relevant te
 commit/push, and wait for the new HEAD's review. Review failure, no response or
 inadequate coverage is unfinished work. Minor/Info alone is not a blocker. Rerun
 recoverable failed jobs; report a concrete permission/external-state blocker if
-one prevents completion. Do not use an arbitrary retry count as a clean verdict.
+one prevents completion. Autofix batches have at most five corrective push/review rounds. At the bound,
+return to the coordinating agent for new diagnosis and a concrete revised plan;
+remaining failures still block merge. Generic autofix does not authorize workflow
+or review-gate edits. Tooling changes already in the user's authorized task/PR
+require independent review of that control diff and the same latest-HEAD checks,
+not another approval loop or weaker gates.
 
 Immediately before merge, re-read HEAD, verify it matches the reviewed SHA, check
 required CI and branch protection, and confirm the base and predecessor PR state.

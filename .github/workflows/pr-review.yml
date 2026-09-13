@@ -81,6 +81,9 @@ jobs:
           rm -rf /tmp/pr-review/lenses
           mkdir -p /tmp/pr-review/lenses
           python3 scripts/pr-review/build-prompts.py "$GITHUB_WORKSPACE" /tmp/pr-review/lenses
+          for lens in L2 L3 L4 L5; do
+            test -s "/tmp/pr-review/lenses/${lens}.txt" || { echo "::error::missing lens ${lens}"; exit 1; }
+          done
 
           if [ "${total_lines:-0}" -gt "$MAX_LINES" ]; then
             for f in /tmp/pr-review/lenses/*.txt; do
