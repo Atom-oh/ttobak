@@ -1,12 +1,14 @@
 'use client';
 
 import { getIdToken } from './auth';
+import { QASourceFrames } from './qaSourceFrames';
 
 export interface WebSocketMessage {
   type:
     | 'answer_start'
     | 'answer_delta'
     | 'answer_complete'
+    | 'answer_sources'
     | 'answer_error'
     | 'tool_progress'
     | 'error';
@@ -19,6 +21,9 @@ export interface WebSocketMessage {
   usedDocs?: boolean;
   toolsUsed?: string[];
   error?: string;
+  sourceBatchId?: string;
+  sourceBatchIndex?: number;
+  sourceBatchCount?: number;
 }
 
 type MessageHandler = (msg: WebSocketMessage) => void;
@@ -36,6 +41,7 @@ export class RealtimeWebSocket {
   private reconnectAttempts = 0;
   private intentionalClose = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private sourceFrames = new QASourceFrames();
 
   constructor(
     url: string,
@@ -50,6 +56,7 @@ export class RealtimeWebSocket {
   }
 
   async connect(): Promise<void> {
+    this.sourceFrames.reset();
     const token = getIdToken();
     if (!token) throw new Error('No auth token');
     const wsUrl = `${this.url}?token=${encodeURIComponent(token)}`;
@@ -66,7 +73,8 @@ export class RealtimeWebSocket {
       this.ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data) as WebSocketMessage;
-          this.onMessage(msg);
+          const complete = this.sourceFrames.accept(msg);
+          if (complete) this.onMessage(complete);
         } catch {
           // Ignore unparseable messages
         }
@@ -132,6 +140,7 @@ export class RealtimeWebSocket {
       context: ctx,
       meetingId,
       sessionId,
+      sourceFramesVersion: 1,
     });
   }
 
@@ -142,6 +151,7 @@ export class RealtimeWebSocket {
   }
 
   disconnect() {
+    this.sourceFrames.reset();
     this.intentionalClose = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
