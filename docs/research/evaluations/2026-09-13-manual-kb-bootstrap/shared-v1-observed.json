@@ -1,0 +1,86 @@
+{
+  "source": {
+    "bucket": "ttobak-kb-180294183052",
+    "key": "shared/acceptance/acc-5136a0a6ff5f4977b657/shared.docx",
+    "etag": "\"a9b3c1023e1572deb5d94a7b52a34046\"",
+    "versionId": "Tm4MxqubI7LM2UgW7pJoqn1BmRzsiufc",
+    "size": 1132,
+    "metadata": {
+      "acceptance-run-id": "acc-5136a0a6ff5f4977b657"
+    }
+  },
+  "expectedSource": {
+    "etag": "\"a9b3c1023e1572deb5d94a7b52a34046\"",
+    "versionId": "Tm4MxqubI7LM2UgW7pJoqn1BmRzsiufc",
+    "fixtureSHA256": "28431e0cab6d8315c57658251070cbf47419fb624a81b767650c5d92c67d4068",
+    "directUploadReceipt": "shared-v1-direct-upload.json",
+    "priorVersionsForCleanup": [
+      "p5fBX7bM.bTPlr8vsnQfiYlEBZN9NO9F",
+      "IpCFEBbFhZJQBErpgj2.awoqeP0qLLNO",
+      "5WEI9niyCTtCPWiti20pJ.vnyC7sD4U."
+    ]
+  },
+  "job": {
+    "resource": {
+      "pk": "KB#SHARED",
+      "sk": "KBFILE#723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8",
+      "kind": "sharedKbDocument",
+      "sourceKey": "shared/acceptance/acc-5136a0a6ff5f4977b657/shared.docx",
+      "id": "723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8"
+    },
+    "state": "INDEXED",
+    "revision": "dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c",
+    "desiredRevision": "dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c",
+    "runId": "c24f3818-e9f0-4b3b-bf50-dcf90e90d6ed",
+    "keys": [
+      "shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c/c24f3818-e9f0-4b3b-bf50-dcf90e90d6ed/document.docx",
+      "shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c/c24f3818-e9f0-4b3b-bf50-dcf90e90d6ed/document.docx.metadata.json"
+    ],
+    "pendingKeys": null,
+    "removedKeys": null,
+    "syncId": "Y01HI94LWB",
+    "version": 6,
+    "failureCount": 0,
+    "errorCode": ""
+  },
+  "inventory": [
+    "shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c/c24f3818-e9f0-4b3b-bf50-dcf90e90d6ed/document.docx",
+    "shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c/c24f3818-e9f0-4b3b-bf50-dcf90e90d6ed/document.docx.metadata.json"
+  ],
+  "documentStatuses": {
+    "s3://ttobak-kb-180294183052/shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c/c24f3818-e9f0-4b3b-bf50-dcf90e90d6ed/document.docx": "INDEXED"
+  },
+  "ingestion": {
+    "id": "Y01HI94LWB",
+    "status": "COMPLETE",
+    "statistics": {
+      "numberOfDocumentsScanned": 2040,
+      "numberOfMetadataDocumentsScanned": 670,
+      "numberOfNewDocumentsIndexed": 1,
+      "numberOfDocumentsFailed": 2
+    },
+    "startedAt": "2026-09-13T00:43:59.198308+00:00",
+    "updatedAt": "2026-09-13T00:44:08.710767+00:00"
+  },
+  "retrieval": [
+    {
+      "uri": "s3://ttobak-kb-180294183052/shared-kb/v1/723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8/dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c/c24f3818-e9f0-4b3b-bf50-dcf90e90d6ed/document.docx",
+      "metadata": {
+        "sourceKey": "shared/acceptance/acc-5136a0a6ff5f4977b657/shared.docx",
+        "resourceId": "723c71cae4e9701925287ca8631f46ae5995c3b76e0dac92c4cd3e0f7eb8a4b8",
+        "indexRunId": "c24f3818-e9f0-4b3b-bf50-dcf90e90d6ed",
+        "sourceETag": "\"a9b3c1023e1572deb5d94a7b52a34046\"",
+        "indexSchema": "shared-kb-v1",
+        "visibility": "authenticated-shared",
+        "sourceBucket": "ttobak-kb-180294183052",
+        "sourceVersionId": "Tm4MxqubI7LM2UgW7pJoqn1BmRzsiufc",
+        "resourceKind": "sharedKbDocument",
+        "sourceRevision": "dd7577c8858e70a22a638d94969429477ff08a4c486b6b3a9a17c697072f2d7c",
+        "sourceSize": 1132.0
+      },
+      "text": "ACCEPT_5136a0a6ff5f4977b657_SHARED_BLUEFOX",
+      "score": 1.0
+    }
+  ],
+  "evidenceOrigin": "Actual AWS MCP strong GetItem, then fresh HeadObject/inventory/GetKnowledgeBaseDocuments/GetIngestionJob/scoped Retrieve; only synthetic data normalized."
+}

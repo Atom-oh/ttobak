@@ -200,11 +200,20 @@ ScreenCaptureKit. Report that limit instead of claiming a Mac build passed.
   staged cutover, not implied by merged helper PRs. Never flip to `all` before
   deployed snapshot/provider verification and strict-consumer readiness (ADR-038).
   Status APIs/UI and conditional job/retry state exist independently of activation.
+- **Batch summaries ([ADR-040](docs/decisions/ADR-040-guarded-summary-publication.md)):**
+  CAS pins source presence/bytes and human text. Fresh runs reset the two-retry
+  budget when `!pending || status != summarizing`; resumed runs never reset it.
+  Busy errors retain delivery; run errors release owned claims, ending at
+  `error/RETRY_EXHAUSTED`. Never rebind old output. See
+  [recovery](docs/runbooks/meeting-document-release.md). Verified DOCUMENT text is
+  separate from transcript evidence; default KB parsing still requires PPT/PPTX conversion.
 - **Document extraction:** the bounded parser/private async worker and ATTACH#/ATTEXT#
   state exist (ADR-039). Consumers accept only authorized immutable result identity
   with the current source ETag; extraction JSON does not claim a source version ID.
-  Partial/retained text is explicit. Worker
-  existence does not prove producer/summary/QA integration active. Preview PDFs bind
+  Upload completion and text retry/status/page routes use `AttachmentTextService`;
+  `SetAttachmentTextService` injects verified DOCUMENT collection into summarization.
+  Partial/retained text is explicit and failed-current results are not model evidence.
+  Code wiring does not prove deployed acceptance; QA/UI cutover is separate. Preview PDFs bind
   exact source ETag/version and conditionally replace the observed preview; legacy
   previews need regeneration before canonical use (ADR-022).
 - **Current-source QA foundation:** helpers verify present authorization/revisions
@@ -268,7 +277,7 @@ exposure:
 
 | Existing behavior / accepted risk | Evidence and review boundary |
 |---|---|
-| Meeting file integration is staged | Parser/worker and attachment result state exist (ADR-039); current API producers and summary/QA integration remain staged. AudioUploader KB copy and recording-page manual copy do not establish summary grounding. |
+| Document integration requires runtime acceptance | API producers and summary consumers are wired to validated results (ADR-039/040); QA/UI activation is separate. KB copy or a preview alone does not establish summary grounding. |
 | convert-doc reads cross-tenant `docs/*` and `docs-pdf/*` | ADR-022; docs-pdf read/write supports conditional source-bound preview replacement. Isolated subnet, no NAT, child strips AWS_*; per-trigger key scoping remains an improvement. |
 | Mac leftover WAV adoption is per macOS user, not Cognito account | ADR-024; regular files, best-effort cleanup of known ages at least 48h (unknown/future mtimes may survive), per-file confirmation naming the caveat. Account binding remains absent. |
 | Manual QA search can send model-composed meeting-derived queries externally | ADR-028; prompt constraints and hashed logs do not eliminate egress. |

@@ -60,7 +60,7 @@ class TestDocumentAccess(_SourceFixture, unittest.TestCase):
         del self.table.items[('USER#reader', 'SHAREDDOC#doc')]
         self.assertFalse(access()._source_is_current('reader', state['dependencies'][0]))
 
-    def test_live_context_keeps_saved_notes_but_cannot_be_replayed(self):
+    def test_live_context_keeps_saved_notes_and_records_client_input(self):
         self.table.put_item(Item={'PK': 'USER#owner', 'SK': 'MEETING#m', 'userId': 'owner',
                                  'meetingId': 'm', 'notes': 'SAVED_CORRECTION', 'transcriptA': 'OLD_TRANSCRIPT'})
         state, details = new_source_state(), []
@@ -69,7 +69,9 @@ class TestDocumentAccess(_SourceFixture, unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(transcript, 'LIVE_TRANSCRIPT')
         self.assertEqual(notes, 'SAVED_CORRECTION')
-        self.assertFalse(state['replayable'])
+        self.assertTrue(state['replayable'])
+        self.assertTrue(any('clientInput' in dep for dep in state['dependencies']))
+        self.assertTrue(any(dep.get('sourceSK') == 'MEETING#m' for dep in state['dependencies']))
         self.assertEqual(details[0]['resourceKind'], 'meeting')
 
     def test_optional_attachment_failure_preserves_valid_meeting_text(self):

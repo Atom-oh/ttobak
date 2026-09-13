@@ -156,6 +156,11 @@ func init() {
 	// synchronous Haiku extraction call; the async run itself is handed off
 	// to the ttobak-sim Lambda, not run inline here.
 	bedrockService := service.NewBedrockService(bedrockRuntimeClient2, s3Client, repo)
+	metadata := repo.MetadataView()
+	attachmentTextService := service.NewAttachmentTextService(metadata, service.NewMeetingService(metadata), s3Client, bucketName, service.AttachmentTextPublisher(ebClient))
+	attachmentTextHandler := handler.NewAttachmentTextHandler(attachmentTextService)
+	meetingHandler.SetAttachmentTextService(attachmentTextService)
+	bedrockService.SetAttachmentTextService(attachmentTextService)
 	lambdaClient := lambdasdk.NewFromConfig(cfg)
 	simFunctionName := os.Getenv("SIM_FUNCTION_NAME")
 	if simFunctionName == "" {
@@ -241,6 +246,9 @@ func init() {
 		r.Get("/api/meetings/{meetingId}", meetingHandler.GetMeeting)
 		r.Get("/api/meetings/{meetingId}/reading", readingHandler.Get)
 		r.Get("/api/meetings/{meetingId}/action-items", actionItemsHandler.Get)
+		r.Get("/api/meetings/{meetingId}/attachments/{attachmentId}/text/status", attachmentTextHandler.Status)
+		r.Post("/api/meetings/{meetingId}/attachments/{attachmentId}/text/retry", attachmentTextHandler.Retry)
+		r.Get("/api/meetings/{meetingId}/attachments/{attachmentId}/text", attachmentTextHandler.Read)
 		r.Get("/api/meetings/{meetingId}/index-status", indexStatusHandler.Meeting)
 		r.Post("/api/meetings/{meetingId}/action-items/retry", actionItemsHandler.Retry)
 		r.Put("/api/meetings/{meetingId}/action-items/{itemId}", actionItemsHandler.SetCompleted)

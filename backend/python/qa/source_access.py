@@ -7,6 +7,7 @@ from manual_kb import current_source as current_manual_source, current_shared_so
 from session_provenance import remember_source, collect_detail, new_source_state
 from indexed_retrieval import discover_sources, discovery_filters, hydrate_candidates
 from legacy_text import legacy_page
+from request_history import is_request_dependency, request_is_current, remember_client_input
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,9 @@ class SourceAccess:
         self.kb_id = kb_id
         self.cached_meetings = cached_meetings
 
-    def _source_is_current(self, user_id, dependency):
+    def _source_is_current(self, user_id, dependency, *, request_meeting_id=None):
+        if is_request_dependency(dependency):
+            return request_is_current(user_id, dependency, self.retrieve_from_kb, request_meeting_id)
         if 'sharedKey' in dependency:
             source = current_shared_source(self.reader, user_id, dependency['sharedKey'])
             return source is not None and source['revision'] == dependency['sourceRevision']
@@ -126,9 +129,10 @@ class SourceAccess:
         """Keep server-saved notes separate from supplied live or selected stored text."""
         if not user_id:
             return None, None, {'code': 'UNAUTHORIZED', 'message': 'Authentication required', 'status': 401}
+        if source_state is not None:
+            source_state['requestMeetingId'] = meeting_id
         if supplied_context and source_state is not None:
-            # Unsaved client/live context has no canonical byte revision.
-            source_state['replayable'] = False
+            remember_client_input(source_state, user_id, meeting_id, supplied_context)
         if not meeting_id:
             return supplied_context, None, None
         snapshot, err = self._meeting_snapshot(user_id, meeting_id)

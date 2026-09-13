@@ -163,15 +163,31 @@ class _QAConversationFixture:
         self.model.converse_stream.side_effect = streams
         return self.model.converse_stream
 
-    def ask(self, transport, question, meeting_id=None):
+    def prepend_tool(self, model, transport, name, arguments):
+        replies = list(model.side_effect)
+        first = {'toolUseId': 'first', 'name': name, 'input': arguments}
         if transport == 'rest':
-            result = handler.handle_ask(question, user_id='reader', session_id='chat-readonly', meeting_id=meeting_id)
-            self.assertEqual(result['statusCode'], 200, result)
+            replies[0]['output']['message']['content'].insert(0, {'toolUse': first})
         else:
-            result = handler.handle_ask_stream({
-                'question': question, 'userId': 'reader', 'sessionId': 'chat-readonly',
-                'meetingId': meeting_id,
-                'connectionId': 'c', 'endpoint': 'https://synthetic.invalid',
-            })
-            self.assertEqual(result['status'], 'ok', result)
+            replies[0]['stream'][:0] = [
+                {'contentBlockStart': {'start': {'toolUse': {k: first[k] for k in ('toolUseId', 'name')}}}},
+                {'contentBlockDelta': {'delta': {'toolUse': {'input': json.dumps(arguments)}}}},
+                {'contentBlockStop': {}},
+            ]
+        model.side_effect = replies
+
+    def send(self, transport, question, meeting_id=None, context=None):
+        if transport == 'rest':
+            return handler.handle_ask(question, user_id='reader', session_id='chat-readonly',
+                                      meeting_id=meeting_id, context=context)
+        return handler.handle_ask_stream({
+            'question': question, 'userId': 'reader', 'sessionId': 'chat-readonly',
+            'meetingId': meeting_id, 'context': context,
+            'connectionId': 'c', 'endpoint': 'https://synthetic.invalid',
+        })
+
+    def ask(self, transport, question, meeting_id=None, context=None):
+        result = self.send(transport, question, meeting_id, context)
+        self.assertEqual(result.get('statusCode') if transport == 'rest' else result.get('status'),
+                         200 if transport == 'rest' else 'ok', result)
         return result

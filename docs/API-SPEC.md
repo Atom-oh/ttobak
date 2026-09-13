@@ -180,9 +180,9 @@ The server validates category, ownership and traversal. Checkpoint filenames
 recording_progress.webm/m4a/ogg intentionally overwrite a stable audio key; other
 uploads receive unique names. Upload completion emits the appropriate custom
 event. The bounded PDF/PPTX/DOCX/Markdown extractor and its asynchronous worker
-now exist, with Go queue/status/read services and QA reader foundations. The current
-API does not instantiate AttachmentTextService or register its routes;
-upload/summary integration is still staged, so current notes use file names/links.
+now exist. The API wires AttachmentTextService into upload completion, status, retry
+and bounded text routes. Summarization receives only verified current DOCUMENT text;
+failed/unavailable documents produce coverage notices. QA reader activation is separate.
 AudioUploader attempts KB promotion; the recording page also offers manual copy.
 Neither copying nor preview conversion proves summary grounding.
 
@@ -311,6 +311,9 @@ All rows below come from `backend/cmd/api/main.go`.
 | GET | `/api/meetings/{meetingId}` | `meetingHandler.GetMeeting` |
 | GET | `/api/meetings/{meetingId}/reading` | `readingHandler.Get` |
 | GET | `/api/meetings/{meetingId}/action-items` | `actionItemsHandler.Get` |
+| GET | `/api/meetings/{meetingId}/attachments/{attachmentId}/text/status` | `attachmentTextHandler.Status` |
+| POST | `/api/meetings/{meetingId}/attachments/{attachmentId}/text/retry` | `attachmentTextHandler.Retry` |
+| GET | `/api/meetings/{meetingId}/attachments/{attachmentId}/text` | `attachmentTextHandler.Read` |
 | GET | `/api/meetings/{meetingId}/index-status` | `indexStatusHandler.Meeting` |
 | POST | `/api/meetings/{meetingId}/action-items/retry` | `actionItemsHandler.Retry` |
 | PUT | `/api/meetings/{meetingId}/action-items/{itemId}` | `actionItemsHandler.SetCompleted` |
@@ -480,3 +483,50 @@ its exact mapping. Services use sentinel errors and callers use errors.Is.
 - Persistence, pagination, conditional writes: `backend/internal/repository/`.
 - Transport routing/authorizers/events: `infra/lib/gateway-stack.ts`.
 - Frontend client contracts: `frontend/src/lib/api.ts`.
+
+## Meeting attachment text
+
+Owner-only upload completion creates canonical metadata and requests extraction
+for PDF/PPTX/DOCX/MD. A stored original remains HTTP 200 when unsupported format
+or publication failure has durable `textExtraction` failure metadata. Failed-state
+persistence errors remain errors. Retry still returns errors when work cannot queue.
+`POST /api/upload/complete` uses fixed error messages: 400 invalid input, 403 denied,
+404 missing meeting/source, 409 concurrent source change and 500 storage/event failure
+without a durable failure state. Its success response remains `{"status":"processing"}`.
+
+### GET /api/meetings/{meetingId}/attachments/{attachmentId}/text/status
+
+Current meeting readers receive HTTP 200. No query fields are accepted.
+Status also appears as `Attachment.textExtraction`:
+`{status,runId?,errorCode?,leaseUntil?,updatedAt?,unitCount,complete,hasResult,needsResummary,summaryExcerpted}`.
+States: unknown/queued/running/succeeded/partial/failed. Expiry is interrupted
+failure; retained results never imply current success.
+
+```json
+{"status":"failed","errorCode":"PUBLISH_FAILED","unitCount":0,"complete":false,"hasResult":false,"needsResummary":false,"summaryExcerpted":false}
+```
+
+`STATUS_UNAVAILABLE` means status lookup failed; unknown/absence never implies success.
+
+### POST /api/meetings/{meetingId}/attachments/{attachmentId}/text/retry
+
+Owners/editors may retry supported documents, including legacy unknown state.
+No query fields are accepted. HTTP 202 returns the same status shape, normally queued.
+An unsupported retry returns 422 `UNSUPPORTED_FORMAT`; publication/state errors remain errors.
+
+### GET /api/meetings/{meetingId}/attachments/{attachmentId}/text
+
+Optional query: `pageSize=3000&cursor=...`. Unknown/duplicate query fields fail.
+Text: `{analysis,current,source,format,scope,complete,warningCount,units,nextCursor?,pageComplete}`.
+Units carry exact Unicode offsets and parser locations. pageSize is 1–6000,
+response ≤14,000 bytes (`AttachmentTextPageLimit`) including newline, ≤50 units. Current auth/source/run/ETag
+is revalidated; stale cursors conflict. Errors: 400 query, 403/404 access/source,
+409 `CONFLICT` for stale source/cursor, 409 `TEXT_UNAVAILABLE` for unavailable
+verified result text (including S3 HEAD/GET failures), and 422 `UNSUPPORTED_FORMAT`
+for unsupported input. Other metadata/internal failures return 500. A page with
+`current:false` is retained historical evidence.
+
+Source conflicts preserve text and mark fresh-generation retry; unrelated metadata
+changes do not invalidate generation. No source/model text appears in errors.
+Deployment prerequisites and runtime acceptance are recorded in
+[the rollout runbook](runbooks/meeting-document-release.md).
