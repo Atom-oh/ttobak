@@ -14,13 +14,16 @@ TOOL_DEFINITIONS = [
     {
         "toolSpec": {
             "name": "search_knowledge_base",
-            "description": "Search current authorized meetings, personal/account documents, and indexed files. Saved text is hydrated live; file excerpts require current source provenance.",
+            "description": "Search current authorized meetings, personal/account documents, and indexed files. Saved text is hydrated live; file excerpts require current source provenance. When the user names exact original binary KB keys, pass source_keys: filenames alone are not semantic content queries.",
             "inputSchema": {
                 "json": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "Search query"},
-                        "numberOfResults": {"type": "integer", "description": "Number of results (1-10)", "default": 5}
+                        "numberOfResults": {"type": "integer", "description": "Number of results (1-10), at least the number of selected sources", "default": 5},
+                        "source_keys": {"type": "array", "minItems": 1, "maxItems": 5,
+                                        "items": {"type": "string"},
+                                        "description": "Optional exact original binary keys under kb/<current-user>/ or shared/. Do not use snapshot keys or another user's private keys. Current authorized versions are read regardless of filename similarity; use get_legacy_text_detail for legacy text files."}
                     },
                     "required": ["query"]
                 }
@@ -210,9 +213,13 @@ def execute_tool(tool_name, tool_input, context):
             )
             return format_web_results(results, error)
         elif tool_name == "search_knowledge_base":
+            if 'source_keys' in tool_input and type(tool_input['source_keys']) is not list:
+                raise ValueError('source_keys must be a list of original binary keys')
+            selection = {'source_keys': tool_input['source_keys']} if 'source_keys' in tool_input else {}
             results = context["retrieve_from_kb"](
                 tool_input["query"],
                 tool_input.get("numberOfResults", 5),
+                **selection,
             )
             sources = [r["uri"] for r in results if r.get("uri")]
             return format_kb_results(results), sources
