@@ -1,8 +1,12 @@
 # Index source and provider read contracts
 
 Code checked: 2026-09-13. These readers and the worker are implemented.
-CDK enables scheduled `manual-only` snapshots; canonical delivery requires
-`all`. The QA foundations are not yet wired into the active handler.
+This activation configuration selects `all` and retains the schedule. The active
+QA handler registers source and history readers in REST and streaming paths.
+Configuration and registration do not prove deployed acceptance. Follow the
+[bootstrap runbook](../../../docs/runbooks/knowledge-index-bootstrap.md) and
+[QA rollout](../../../docs/runbooks/qa-current-source-rollout.md) for deployment
+evidence and the remaining public acceptance gates.
 
 `IndexSourceReader` takes only `GetIndexSource`, `Head`, and pinned `Read`
 interfaces. It reads canonical USER#/MEETING#, USER#/DOC#, and ACCOUNT#/DOC#
@@ -54,8 +58,9 @@ UTF-8 byte-length framing described above. Sidecars carry `sourceBucket`,
 `Documents` can read original binary identifiers solely to prove their former
 vectors are absent after owner deletion; Put/Delete still reject original keys.
 Existing QA validation is in [SOURCE_CONTRACT.md](../../python/qa/SOURCE_CONTRACT.md)
-and `manual_kb.py`. The standalone foundations must be wired into the strict
-runtime only after snapshot bootstrap. [ADR-038](../../../docs/decisions/ADR-038-canonical-note-indexing.md)
+and the registered `manual_kb.py` reader. Verified snapshots and public strict-QA
+acceptance remain prerequisites for canonical activation.
+[ADR-038](../../../docs/decisions/ADR-038-canonical-note-indexing.md)
 defines the manual-only → snapshot verification → strict QA → all-mode rollout.
 
 Implementation and verification: `index_source.go`, `index_provider.go`,

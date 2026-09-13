@@ -66,9 +66,12 @@ permissions must be inspected before alleging an authorization bypass.
   Code wiring does not establish deployed acceptance.
 - Canonical index workers reread identities, bind source/S3 revisions and coalesce
   full S3 sync. Do not equate job acceptance/partial status with indexed documents.
-  The app currently enables manual-only scheduling; all-mode canonical delivery
-  follows snapshot verification and strict QA cutover. Existing `/api/kb/*` routes
-  stay in the API Lambda; cmd/kb accepts stream/schedule/tick envelopes.
+  The activation configuration selects `all` and retains the enabled schedule;
+  deployment remains gated on snapshot verification and public strict-QA
+  acceptance. The [bootstrap](../docs/runbooks/knowledge-index-bootstrap.md) and
+  [QA rollout](../docs/runbooks/qa-current-source-rollout.md) runbooks distinguish
+  deployed readiness from remaining acceptance. Existing `/api/kb/*` routes stay
+  in the API Lambda; cmd/kb accepts stream/schedule/tick envelopes.
 
 Use [API contracts](../docs/API-SPEC.md),
 [index source/provider contracts](internal/service/INDEX_SOURCE_CONTRACT.md),

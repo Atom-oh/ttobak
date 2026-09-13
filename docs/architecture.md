@@ -61,7 +61,7 @@ flowchart TB
   EB --> Convert --> Assets
   EB -->|Validated queued document run| Extract --> Assets
   Extract --> DB
-  EB -->|Manual-only scheduled tick| Index
+  EB -->|Scheduled tick| Index
   Index --> Knowledge
   Index --> DB
   Index --> Bedrock
@@ -78,9 +78,10 @@ PUTs. Native finished audio uploads stream directly from disk in Rust; live PCM
 crosses IPC for captions. The public-document route is the single intentional
 unauthenticated application GET and still validates a revocable share token.
 Extraction's event target/worker, API producers and summary consumer are wired;
-QA/UI activation remains separate. The KB schedule is enabled in the app's manual-only configuration;
-the dotted canonical stream is created only in all mode. These are repository
-capabilities and configuration, not assertions about deployed activation.
+QA/UI activation remains separate. The KB activation configuration retains the
+enabled schedule and selects `all`, which adds the dotted canonical stream.
+These are repository capabilities and configuration, not assertions about
+deployed activation or completed public acceptance.
 
 ## Data paths
 
@@ -140,18 +141,22 @@ routes and verified DOCUMENT summary input are wired; QA activation is separate.
 
 Canonical indexing can project saved meetings and personal/account documents
 into immutable canonical/v1/ objects, using current source revisions and pinned
-binary/preview bindings. Current manual-only scheduling instead bootstraps private
-and authenticated-shared original files into manual-kb/v1/ and shared-kb/v1/
-snapshots. Full S3 sync, per-document status and fresh conditional source checks
-establish success. Originals and canonical/legacy meeting exports remain unchanged
-in bootstrap mode.
+binary/preview bindings. The activation configuration selects all-mode delivery;
+the earlier manual-only bootstrap produces private and authenticated-shared
+snapshots under manual-kb/v1/ and shared-kb/v1/. Full S3 sync, per-document status
+and fresh conditional source checks establish success. Originals and
+canonical/legacy meeting exports remain unchanged in bootstrap mode.
 
-Strict current-source QA and tool-history helpers are not imported by the active
-handler. Their contract requires fresh authorized reads, current-bound binary
-snapshots, explicit partial/pending provenance, and whole-history invalidation
-after any stale/denied/untracked dependency. Read-only fingerprints permit checked
-continuity; research creation receipts never replay a mutation. Verify snapshots
-and recall, deploy strict QA, then enable canonical all-mode delivery.
+Strict current-source QA and tool-history helpers are registered by the active
+handler in REST and streaming paths. Their contract requires fresh authorized
+reads, current-bound binary snapshots, explicit partial/pending provenance, and
+whole-history invalidation after any stale/denied/untracked dependency. Read-only
+fingerprints permit checked continuity; research creation receipts never replay
+a mutation. The
+[bootstrap](runbooks/knowledge-index-bootstrap.md) and
+[QA rollout](runbooks/qa-current-source-rollout.md) runbooks track deployed
+readiness and outstanding public answer/history acceptance. Complete those gates
+before deploying canonical all-mode delivery.
 
 ## Boundaries and ownership
 
