@@ -3,8 +3,8 @@
 `StrictAccountReader` implements callbacks for
 [tool-history proof](TOOL_HISTORY_CONTRACT.md) and
 [ADR-042](../../../docs/decisions/ADR-042-current-source-qa-and-history.md).
-Code checked: 2026-09-13. The active QA handler does not import this helper;
-runtime wiring and deployment acceptance remain staged.
+For handler registration and deployment acceptance status, see
+[SOURCE_CONTRACT.md](SOURCE_CONTRACT.md).
 
 Construct it with the host's existing DynamoDB Table resource. Pass its bound
 `list_accounts`, `get_account_insights` and `get_account_brief` methods to
