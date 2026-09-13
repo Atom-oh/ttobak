@@ -95,3 +95,46 @@ again for a new review.
 Codex uses structured transport events plus its CLI-designated final-output file.
 Tool output and progress text are not review results. Recovered transport notices
 remain visible; terminal provider errors still block.
+
+## Synchronization and bounded publication
+
+Issuance and recording share a nonblocking POSIX advisory lock per role. A busy
+operation fails instead of clearing another writer's claim. Lock files retain
+the same inode and must not be removed while workers run. A record claim without
+a completed result is uncertain and cannot be cleared by reissue. Run preparation
+only before workers start, using a fresh work directory; it is not a concurrent
+reset or a way to discard an unfavorable completed review.
+
+The raw-output scrubber and decoded-string scrubber are separate stages.
+Unterminated quoted credentials are redacted through the end of the decoded
+string. Sanitization is defense in depth, not proof that arbitrary content
+contains no secrets. Request digests attest byte binding, not model honesty.
+The credential matcher checks keyword membership before consuming the complete
+identifier, preserving affixed keys without retrying every keyword/suffix pair.
+URI schemes and JWT headers start at whole-token boundaries; JWT header membership
+is checked separately from consumption. Bounded subprocess tests cover long
+alphabetic runs, repeated keywords/prefixes, separators, and the other scrubber
+pattern families while retaining valid credential-redaction checks.
+YAML block matching checks indentation without consuming it separately from the
+line body. Blocks include blank lines and recognize LF, CRLF, bare CR and EOF;
+the environment name/value matcher shares the same line-ending rule.
+Structured JSON and quoted JSON fragments are decoded before redaction. Sensitive
+fields and header name/value pairs are masked; credential-shaped object keys also
+pass through the token scrubber. Colliding redacted keys receive unique
+`[REDACTED-KEY-N]` aliases, preserving every value and ordinary schema key.
+Quoted fragments are scanned once; recursive decoding is limited to 32 levels.
+The decoded value budget is shared without charging encoded text again for each
+decoding layer. Limits and final publication checks remain blocking.
+
+Untrusted stdout and stderr are limited separately to 1 MiB of UTF-8 after
+process capture, before parsing or scrubbing; this is not a streaming capture
+memory limit. Direct result-file reads use the same bound. Decoded string values
+share a 1 MiB sanitization budget, and attempt-history reads are bounded too.
+Stored result envelopes allow an additional 4 KiB for host metadata.
+Both stream sizes are checked even on nonzero exit; failed stdout is not parsed
+or scrubbed. Final serialized result envelopes and sanitized chair output are
+checked again before publication, including any growth caused by redaction.
+Oversize produces the static `output_byte_limit` failure and stays blocking on
+reissue. Chair overflow, including growth during sanitization, produces FAIL and
+failed-chair status without fallback. No review is truncated
+or counted as valid partial coverage.
