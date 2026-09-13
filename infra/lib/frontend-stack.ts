@@ -6,12 +6,16 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import { WEBSOCKET_ORIGIN_HEADER, WEBSOCKET_PATH, WEBSOCKET_STAGE } from './websocket-origin';
 import { Construct } from 'constructs';
 import * as fs from 'fs';
 import * as path from 'path';
 
 export interface FrontendStackProps extends cdk.StackProps {
   httpApiUrl: string;
+  websocketApiUrl: string;
+  websocketOriginSecret: secretsmanager.ISecret;
   edgeFunctionVersion: lambda.IVersion;
   originVerifySecret?: string;
   cognitoRegion: string;
@@ -52,6 +56,25 @@ export class FrontendStack extends cdk.Stack {
       customHeaders: props.originVerifySecret
         ? { 'x-origin-verify': props.originVerifySecret }
         : undefined,
+    });
+
+    const websocketDomain = cdk.Fn.select(2, cdk.Fn.split('/', props.websocketApiUrl));
+    const websocketOrigin = new origins.HttpOrigin(websocketDomain, {
+      protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+      customHeaders: {
+        // CloudFormation resolves this only into the private origin config.
+        // Public runtime config and Lambda environment never contain the value.
+        [WEBSOCKET_ORIGIN_HEADER]: props.websocketOriginSecret.secretValue.unsafeUnwrap(),
+      },
+    });
+    const websocketRouter = new cloudfront.Function(this, 'WebSocketRouter', {
+      functionName: `ttobak-websocket-router-${cdk.Aws.REGION}`,
+      code: cloudfront.FunctionCode.fromInline(`
+function handler(event) {
+  var request = event.request;
+  request.uri = '/${WEBSOCKET_STAGE}';
+  return request;
+}`),
     });
 
     // CloudFront Function to rewrite dynamic routes for Next.js static export
@@ -253,6 +276,18 @@ function handler(event) {
         ],
       },
       additionalBehaviors: {
+        [WEBSOCKET_PATH]: {
+          origin: websocketOrigin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+          compress: false,
+          functionAssociations: [{
+            function: websocketRouter,
+            eventType: cloudfront.FunctionEventType.VIEWER_REQUEST,
+          }],
+        },
         // Must be listed before '/media/*' below (CloudFront evaluates
         // additionalBehaviors in insertion order, first match wins) --
         // otherwise every docs-pdf/* request would already match '/media/*'
@@ -373,6 +408,7 @@ function handler(event) {
       destinationBucket: this.siteBucket,
       sources: [
         s3deploy.Source.jsonData('config.json', {
+          wsUrl: WEBSOCKET_PATH,
           cognito: {
             region: props.cognitoRegion,
             userPoolId: props.userPoolId,

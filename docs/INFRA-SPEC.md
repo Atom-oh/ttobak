@@ -48,16 +48,26 @@ Python QA payload **2.0**. The literal public-doc GET registration deliberately 
 no authorizer; its handler verifies the bearer share token. The broader edge
 `/api/public/*` bypass is not permission to register more public routes.
 
-WebSocket is implemented for QA streaming. `$connect` uses the Go ws-authorizer
-with query-string token identity; `$connect`, `$disconnect`, and `$default` invoke
-the websocket Lambda. `ask_live` asynchronously invokes Python QA. This is not a
-Cognito HTTP authorizer or a server-side audio-transcription protocol.
+WebSocket QA uses the site's CloudFront `/ws` behavior, rewritten to `/production`.
+Caching is disabled; AllViewerExceptHostHeader forwards negotiation headers and
+the query token while API Gateway receives its own origin Host. `$connect` uses
+the Go ws-authorizer and requires both the token and `x-origin-verify`.
+GatewayStack owns a retained, generated Secrets Manager proof and a policy scoped
+to that secret's GetSecretValue operation on the existing authorizer role.
+CloudFront receives a dynamic reference in its private origin header; Lambda env
+contains only `WS_ORIGIN_SECRET_ARN`, and public config contains only `/ws`.
+The verifier caches the secret for 60 seconds, bounds each lookup to three seconds,
+and denies failed/expired reads. JWT verification still runs for every connect.
+`$connect`, `$disconnect`, and `$default` invoke the existing websocket Lambda;
+`ask_live` asynchronously invokes Python QA. See the
+[WS rollout and rotation runbook](runbooks/websocket-runtime.md).
 
 CloudFront-only application HTTP ingress is policy. `originVerifySecret` is optional
 CDK context and defaults empty in the app; do not infer effective origin blocking
-from the presence of middleware alone. Existing browser Cognito/Transcribe SDK
-calls, signed S3 PUTs and authenticated WebSocket transport are separate service
-integrations, not newly approved public application origins.
+from the presence of middleware alone. That legacy HTTP option is distinct from
+the required WS secret. Existing browser Cognito/Transcribe SDK calls, signed S3
+PUTs and IAM-signed server callback requests are separate service integrations,
+not newly approved public application origins.
 
 ## Storage and retention
 
@@ -260,7 +270,10 @@ PENDING placeholders.
 FrontendStack owns the static bucket, CloudFront SPA router, runtime config,
 signing key setup and media behavior. Dynamic routes are mapped by knownPages;
 404 fallback alone is not the complete routing mechanism. config.json is deployed
-separately from next build.
+separately from next build. Both Chat and Live QA use its relative `wsUrl: "/ws"`;
+the client accepts only the same-site WS path. Local development defaults to REST;
+loopback WS validation needs an explicitly supplied config and local proxy.
+Invalid/missing config retains REST fallback.
 
 The StorageStack OAC custom resource reads the distribution ID and tightens the
 bucket policy. Its changing Timestamp deliberately forces re-invocation. The infra
@@ -269,10 +282,9 @@ removing that step/property breaks the tightening mechanism.
 
 Run synth and Jest before deployment. Deploy changed stacks individually with
 `--exclusively`, following the graph above, never `--all` or implicit dependencies.
-The workflow excludes KnowledgeStack. Go build lists are not identical everywhere:
-the legacy build helper and current CI loops omit some of the eight declared zip
-artifacts. For a change to websocket/ws-authorizer, build that artifact explicitly;
-do not claim the partial loops cover all eight. See the
+The workflow excludes KnowledgeStack. The local helper and test/deploy CI loops
+build all eight declared Go zip artifacts, including websocket/ws-authorizer, with
+ARM64 and lambda.norpc. convert-doc remains a separate container image. See the
 [deployment runbook](runbooks/deployment.md) and exact workflow before acting.
 
 ## Saved-summary retry delivery

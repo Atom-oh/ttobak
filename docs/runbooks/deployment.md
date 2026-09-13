@@ -7,8 +7,9 @@ running a manual deployment. Do not treat document examples as deployment eviden
 
 ## Infrastructure and Go
 
-Run the relevant build/tests from the root project guide. `scripts/build.sh` is a legacy partial zip build; verify its list and explicitly
-build any changed entry point it omits. The current CI loops are partial too; `convert-doc` is a separate Docker image built from
+Run the relevant build/tests from the root project guide. `scripts/build.sh` and
+the test/deploy CI loops build all eight Go zip functions, including websocket and
+ws-authorizer, with ARM64/lambda.norpc. `convert-doc` is a separate Docker image built from
 `backend/cmd/convert-doc/Dockerfile` by CDK. Python artifacts have separate packaging.
 
 Never deploy all stacks or implicit dependencies. KnowledgeStack contains a

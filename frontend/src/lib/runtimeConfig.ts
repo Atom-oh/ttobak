@@ -7,10 +7,33 @@ export interface RuntimeConfig {
     userPoolClientId: string;
     identityPoolId: string;
   };
+  /** Same-site /ws endpoint; never a direct API Gateway address or credential. */
   wsUrl?: string;
 }
 
 let cached: Promise<RuntimeConfig> | null = null;
+
+export function runtimeWebSocketUrl(value: unknown): string {
+  if (typeof window === 'undefined' || typeof value !== 'string' || !value) return '';
+  try {
+    const url = new URL(value, window.location.href);
+    if (url.host !== window.location.host || url.pathname !== '/ws' ||
+      url.username || url.password || url.search || url.hash) return '';
+    if (window.location.protocol === 'https:' && ['https:', 'wss:'].includes(url.protocol)) {
+      url.protocol = 'wss:';
+      return url.href;
+    }
+    const local = process.env.NODE_ENV !== 'production' &&
+      ['localhost', '127.0.0.1', '[::1]'].includes(window.location.hostname);
+    if (local && window.location.protocol === 'http:' && ['http:', 'ws:'].includes(url.protocol)) {
+      url.protocol = 'ws:';
+      return url.href;
+    }
+  } catch {
+    // An invalid runtime endpoint keeps the existing REST fallback available.
+  }
+  return '';
+}
 
 function envFallback(): RuntimeConfig {
   return {

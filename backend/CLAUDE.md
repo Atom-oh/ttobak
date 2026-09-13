@@ -15,6 +15,10 @@ permissions must be inspected before alleging an authorization bypass.
 
 ## Current contracts
 
+- WebSocket `$connect` requires the CloudFront origin proof and verified JWT.
+  `WS_ORIGIN_SECRET_ARN` identifies a Secrets Manager value; no secret material is
+  in Lambda env. Missing config/proof, duplicate headers, lookup errors and expired
+  cache refresh failures deny access. The secret cache never caches JWT decisions.
 - `UpdateMeetingFieldsIfMatch` copies input fields and spills to immutable
   `{field}.{32-lowercase-hex}.txt` keys. Conditional publication never overwrites
   referenced objects. Disable SDK retries when new spills make commit ambiguity
