@@ -514,6 +514,18 @@ class RoleReviewTests(unittest.TestCase):
                 self.assertFalse("SYNTHETIC_ENVIRONMENT" in scrubbed, "Environment credential leaked")
                 self.assertIn("public: SAFE_OUTSIDE", scrubbed)
 
+    def test_yaml_named_values_redact_complete_lines_without_losing_public_fields(self):
+        for newline in ("\n", "\r\n", "\r"):
+            for prefix in ("", "+ ", "- "):
+                for value in ("alpha,SYNTHETIC_PRIVATE_SUFFIX", "alpha SYNTHETIC_PRIVATE_SUFFIX",
+                              '"alpha, SYNTHETIC_PRIVATE_SUFFIX"', r'"alpha,\"SYNTHETIC_PRIVATE_SUFFIX"'):
+                    with self.subTest(newline=repr(newline), prefix=prefix, value=value):
+                        text = (prefix + "name: DB_PASSWORD" + newline + prefix + "value: " + value
+                                + newline + "public: KEEP_AFTER")
+                        clean = self.bounded_scrub(text)
+                        self.assertNotIn("SYNTHETIC_PRIVATE_SUFFIX", clean)
+                        self.assertIn("public: KEEP_AFTER", clean)
+
     def test_json_credential_keys_are_scrubbed_without_colliding_or_losing_values(self):
         keys = ["ghp_" + "A" * 30, "AKIA" + "B" * 16,
                 "eyJ" + "C" * 20 + "." + "D" * 20 + "." + "E" * 20]

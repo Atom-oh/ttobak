@@ -16,6 +16,9 @@ Use `COMMAND --help` for CLI arguments. `run_role.py` handles bounded execution;
 Codex uses JSONL turn events and its designated final-message file; progress
 messages are never concatenated or searched for a parsable review. Both the
 event stream and the regular final-message file retain the output byte limits.
+JSONL records split only at literal LF bytes; Unicode separators inside JSON
+strings remain payload. Terminal executor and final-file overflow are handled
+before transport parsing or diagnostic concatenation and cannot trigger retry.
 
 The collector accepts only committed base context hooks/adapters with matching
 bytes. An exclusions-only result requires explicit `--allow-exclusions-only`
@@ -49,6 +52,9 @@ pattern families while retaining valid credential-redaction checks.
 YAML block matching checks indentation without consuming it separately from the
 line body. Blocks include blank lines and recognize LF, CRLF, bare CR and EOF;
 the environment name/value matcher shares the same line-ending rule.
+YAML name/value pairs redact the complete value line, including commas, spaces
+and quoted escapes, stopping before the next line. Inline pairs keep their
+separate matcher.
 Structured JSON and quoted JSON fragments are decoded before redaction. Sensitive
 fields and header name/value pairs are masked; credential-shaped object keys also
 pass through the token scrubber. Colliding redacted keys receive unique

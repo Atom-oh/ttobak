@@ -205,8 +205,14 @@ def run(work, tag):
                     command[2] = framed_prompt
                     delivered = payload
                 code, output, error = execute(command, cwd, environment, delivered, timeout)
+                if diagnostic_failure(error):
+                    code = code or 1
+                    break
                 if tag == "codex":
                     output, event_error, complete = codex_response(output, final_output)
+                    if diagnostic_failure(event_error) == "output_byte_limit":
+                        code, output, error = code or 1, "", "output_byte_limit"
+                        break
                     if event_error:
                         error = error + ("\n" if error else "") + event_error
                     if not complete:
@@ -265,7 +271,10 @@ def codex_response(raw, final_path):
             line = "Falling back to another model: " + line
         diagnostics.append(line)
 
-    for line in raw.splitlines():
+    lines = raw.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    for line in lines:
         try:
             event = json.loads(line)
         except ValueError:
