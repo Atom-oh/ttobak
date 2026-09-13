@@ -13,12 +13,19 @@ from boto3.dynamodb.conditions import Attr
 
 from source_revision import IDENTIFIER
 from session_provenance import SourceValidationError
+from delivery_proof import DeliveryProof
 
 logger = logging.getLogger(__name__)
 JOB_ID = re.compile(r"(\d{13})-[0-9a-f]{32}")
 INPUT_LIMIT = 256 * 1024
 RESULT_LIMIT = 320 * 1024
 PROOF_LIMIT = 128 * 1024
+DDB_ITEM_LIMIT = 400 * 1024
+CONTROL_RESERVE = 2048
+# All mutable control fields together fit this reserved headroom, even when
+# dispatch, claim, failure and publication race. Request/artifact bytes are immutable.
+CONTROL_STRING_LIMITS = {'status': 16, 'runId': 32, 'resultHash': 64, 'proofHash': 64,
+                         'errorCode': 96, 'errorMessage': 1024}
 RETENTION_SECONDS = 3600
 TOTAL_SECONDS = 600
 RUN_SECONDS = 240
@@ -35,6 +42,29 @@ class JobError(Exception):
 
 class JobDeadline(BaseException):
     """Bypass legacy catch-all tool/model fallbacks when the job must stop."""
+
+
+class MutationGuard:
+    """One invocation owns the job; never repeat an uncertain research creation."""
+    def __init__(self):
+        self.uncertain = False
+        self.receipts = {}
+
+    def call(self, callback, user_id, topic, mode):
+        normalized = topic.strip()[:500] if type(topic) is str else ''
+        mode = mode if mode in ('quick', 'standard', 'deep') else 'standard'
+        key = digest(encode([user_id, normalized, mode], 8192))
+        if key in self.receipts:
+            return dict(self.receipts[key])
+        if self.uncertain:
+            return {'error': 'A previous creation may have completed. No further creation was attempted.'}
+        self.uncertain = True  # Set before the side effect, including callbacks that raise.
+        result = callback(user_id, topic, mode)
+        if (type(result) is dict and set(result) == {'researchId'}
+                and type(result['researchId']) is str and re.fullmatch(r'[0-9a-f]{32}', result['researchId'])):
+            self.receipts[key] = dict(result)
+            self.uncertain = False
+        return result
 
 
 @contextmanager
@@ -70,6 +100,32 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def item_size(item):
+    """Bound our flat scalar items, including names; numbers reserve 21 bytes."""
+    size = 0
+    for name, value in item.items():
+        if type(name) is not str:
+            raise ValueError('Invalid job attribute')
+        size += len(name.encode())
+        if type(value) is str:
+            size += len(value.encode())
+        elif type(value) is bool or value is None:
+            size += 1
+        elif type(value) is int or isinstance(value, Decimal):
+            number = Decimal(value)
+            if not number.is_finite() or number != number.to_integral_value() or abs(number) >= 10**38:
+                raise ValueError('Invalid job number')
+            size += 21  # Conservative maximum for our nonnegative integer metadata.
+        else:
+            raise ValueError('Job data must be JSON strings or scalar metadata')
+    return size
+
+
+def bounded_item(item, limit=DDB_ITEM_LIMIT):
+    if item_size(item) > limit:
+        raise JobError('QA_PAYLOAD_TOO_LARGE', 'QA item exceeds the asynchronous storage limit.', 413)
+
+
 def identity(user_id, job_id):
     if (type(user_id) is not str or not IDENTIFIER.fullmatch(user_id)
             or type(job_id) is not str or not JOB_ID.fullmatch(job_id)):
@@ -99,11 +155,7 @@ def request_data(body):
 
 
 def proof_data(state):
-    # A later GET cannot safely release an answer with untracked private reads.
-    if state.get('replayable') is not True:
-        raise JobError('QA_RESULT_UNVERIFIABLE', 'The answer lacks complete source proof. Check this job before submitting again.')
-    return {'dependencies': state['dependencies'], 'replayable': True,
-            'requestMeetingId': state.get('requestMeetingId')}
+    return state['_delivery'].finish(state)
 
 
 class QAJobs:
@@ -117,6 +169,15 @@ class QAJobs:
         return self.table.get_item(Key=key, ConsistentRead=True).get('Item')
 
     def _update(self, key, fields, condition):
+        for name, value in fields.items():
+            if name in CONTROL_STRING_LIMITS:
+                if type(value) is not str or len(value.encode()) > CONTROL_STRING_LIMITS[name]:
+                    raise ValueError('Invalid job control string')
+            elif name in ('runUntil', 'dispatchAfter'):
+                if type(value) is not int or not 0 <= value <= 10**15:
+                    raise ValueError('Invalid job control timestamp')
+            else:
+                raise ValueError('Job updates cannot modify immutable data')
         names = {f'#j{i}': name for i, name in enumerate(fields)}
         values = {f':j{i}': value for i, value in enumerate(fields.values())}
         return self.table.update_item(
@@ -144,6 +205,8 @@ class QAJobs:
         return result
 
     def _fail(self, job, code, message, *, running=False):
+        code = code.encode()[:CONTROL_STRING_LIMITS['errorCode']].decode('utf-8', errors='ignore')
+        message = message.encode()[:CONTROL_STRING_LIMITS['errorMessage']].decode('utf-8', errors='ignore')
         condition = Attr('status').eq('RUNNING' if running else 'QUEUED')
         if running:
             condition &= Attr('runId').eq(job['runId'])
@@ -203,6 +266,7 @@ class QAJobs:
                    'requestJson': request_json, 'requestHash': request_hash, 'status': 'QUEUED',
                    'createdAt': now, 'deadlineAt': now + TOTAL_SECONDS,
                    'pendingShareExpiresAt': now + RETENTION_SECONDS}
+            bounded_item(job, DDB_ITEM_LIMIT - CONTROL_RESERVE)
             try:
                 self.table.put_item(Item=job, ConditionExpression=Attr('PK').not_exists())
             except self.table.meta.client.exceptions.ConditionalCheckFailedException:
@@ -217,6 +281,7 @@ class QAJobs:
         item = {'PK': 'USER#' + job['userId'], 'SK': f'QA_{kind}#' + job['jobId'],
                 'userId': job['userId'], 'jobId': job['jobId'], 'runId': job['runId'],
                 'payload': raw, 'sha256': digest(raw), 'pendingShareExpiresAt': job['pendingShareExpiresAt']}
+        bounded_item(item)
         try:
             self.table.put_item(Item=item, ConditionExpression=Attr('PK').not_exists())
         except Exception:
@@ -283,14 +348,15 @@ class QAJobs:
                 raw = job['requestJson']
                 if len(raw.encode()) > INPUT_LIMIT or digest(raw) != job['requestHash']:
                     raise JobError('QA_REQUEST_UNAVAILABLE', 'Stored QA request integrity failed.')
-                state = {'dependencies': [], 'replayable': True}
+                state = {'dependencies': [], 'replayable': True, '_delivery': DeliveryProof()}
                 result = execute(user_id, json.loads(raw), state)
-                validate(user_id, state)
+                proof = proof_data(state)
+                validate(user_id, proof)
                 result_json = encode(result, RESULT_LIMIT)
-                proof_json = encode(proof_data(state), PROOF_LIMIT)
+                proof_json = encode(proof, PROOF_LIMIT)
                 result_hash = self._artifact(job, 'RESULT', result_json)
                 proof_hash = self._artifact(job, 'PROOF', proof_json)
-                validate(user_id, state)
+                validate(user_id, proof)
                 self._update(identity(user_id, job_id),
                     {'status': 'SUCCEEDED', 'resultHash': result_hash, 'proofHash': proof_hash},
                     Attr('status').eq('RUNNING') & Attr('runId').eq(run_id)

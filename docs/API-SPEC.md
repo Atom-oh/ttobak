@@ -407,9 +407,15 @@ All rows below come from `backend/cmd/api/main.go`.
 |---|---|---|
 | HTTP POST | `/api/qa/ask` | Agentic general Q&A |
 | HTTP POST | `/api/qa/meeting/{meetingId}` | Authorized meeting-context Q&A |
+| HTTP POST | `/api/qa/jobs` | User-bound idempotent asynchronous QA submission (202) |
+| HTTP GET | `/api/qa/jobs/{jobId}` | Current-source-validated job status/result |
 | HTTP POST | `/api/qa/detect-questions` | Suggested/proactive question detection |
 | WebSocket | `$connect`, `$disconnect`, `$default` | Go websocket Lambda |
 | WebSocket message | `ask_live` | Async invocation of Python QA, streamed replies |
+
+The frontend submits/polls jobs while retaining `QAResponse`; sync clients remain
+compatible. The [async contract](../backend/python/qa/ASYNC_CONTRACT.md) defines
+identity, proof/byte/deadline limits and unknown-outcome reconciliation.
 
 WebSocket is implemented. `$connect` uses the dedicated Go Lambda authorizer and
 query token; it is not a Cognito HTTP JWT-authorizer attachment. Clients use the

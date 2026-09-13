@@ -110,7 +110,7 @@ for a separate ttobak-connections table described an obsolete design.
 | kb | Go ARM64 zip | 12m | 1024MB |
 | ws-authorizer | Go ARM64 zip | 10s | 128MB |
 | websocket | Go ARM64 zip | 29s | 256MB |
-| qa | Python 3.12 ARM64 | 60s | 512MB |
+| qa | Python 3.12 ARM64 | 300s | 512MB |
 | sim | Python 3.12 ARM64 | 15m | 1024MB |
 | document-extract | Python 3.12 ARM64, bundled pinned dependencies | 90s | 1536MB |
 | convert-doc | Go/LibreOffice ARM64 container | 5m | 3008MB |
@@ -119,6 +119,13 @@ Model/environment selection belongs to each function, not one repo-wide model.
 `gateway-stack.ts` selects Opus 5 for summary, Opus 4.8 for images, Sonnet 5 for
 QA/simulator; Go refinement uses its Sonnet configuration and lightweight Go tasks
 use Haiku. QA detection and Translate are separate service/model choices.
+
+QA REST jobs use `ttobak-qa-jobs`: SQS-managed encryption, TLS, 1800s visibility,
+one-day retention/DLQ, batch one, concurrency two, partial batch failures.
+GatewayStack owns scoped queue permissions and JWT submit/poll routes, injecting
+`QA_JOBS_QUEUE_URL`/`QA_JOBS_QUEUE_ARN`. Job rows enforce one-hour
+`pendingShareExpiresAt` expiry. Deploy backend/routes before the frontend;
+see the [async contract](../backend/python/qa/ASYNC_CONTRACT.md).
 
 | Trigger | Target |
 |---|---|

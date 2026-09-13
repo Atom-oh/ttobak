@@ -8,7 +8,8 @@ import threading
 import time
 import boto3
 from botocore.config import Config
-from async_jobs import QAJobs, JobError, JobDeadline, deadline as job_deadline, API_SECONDS, RUN_SECONDS, INPUT_LIMIT
+from async_jobs import QAJobs, JobError, JobDeadline, MutationGuard, deadline as job_deadline, API_SECONDS, RUN_SECONDS, INPUT_LIMIT
+from delivery_proof import validate_delivery
 
 from aws_docs import search_aws_docs
 from prompts import get_system_prompt, DETECT_QUESTIONS_PROMPT
@@ -80,12 +81,18 @@ def _execute_job_request(user_id, request, state):
     if _ASYNC_MODEL is None:
         _ASYNC_MODEL = boto3.client('bedrock-runtime', config=Config(
             connect_timeout=3, read_timeout=RUN_SECONDS, retries={'total_max_attempts': 1}))
+    mutations = MutationGuard()
     if request['mode'] == 'meeting':
         result = handle_meeting_ask(request['question'], request['meetingId'], user_id,
-                                   request['sessionId'], source_state=state, model_client=_ASYNC_MODEL)
+                                   request['sessionId'], source_state=state, model_client=_ASYNC_MODEL,
+                                   mutation_guard=mutations)
     else:
         result = handle_ask(request['question'], request['context'], request['meetingId'],
-                            request['sessionId'], user_id, source_state=state, model_client=_ASYNC_MODEL)
+                            request['sessionId'], user_id, source_state=state, model_client=_ASYNC_MODEL,
+                            mutation_guard=mutations)
+    if mutations.uncertain:
+        raise JobError('QA_MUTATION_OUTCOME_UNKNOWN',
+                       'A research creation may have completed. Check this job before submitting again.')
     payload = json.loads(result['body'])
     if result['statusCode'] != 200:
         error = payload.get('error', {})
@@ -125,7 +132,7 @@ def _handle_job_http(event, context):
                     raise JobError('QA_PAYLOAD_TOO_LARGE', 'QA request exceeds the asynchronous input limit.', 413)
                 result = response(202, jobs.submit(user_id, json.loads(raw)))
             elif method == 'GET' and path.startswith('/api/qa/jobs/'):
-                result = response(200, jobs.poll(user_id, path[len('/api/qa/jobs/'):], _validate_answer_sources))
+                result = response(200, jobs.poll(user_id, path[len('/api/qa/jobs/'):], _validate_job_sources))
             else:
                 raise JobError('INVALID_JOB_REQUEST', 'Method not allowed.', 405)
     except (JobError, SourceValidationError) as error:
@@ -166,7 +173,7 @@ def _handle_job_event(event, context):
             continue
         try:
             _job_service().work(pointer['userId'], pointer['jobId'], _execute_job_request,
-                                _validate_answer_sources,
+                                _validate_job_sources,
                                 remaining_seconds=_remaining_seconds(context, RUN_SECONDS + 10))
         except Exception as error:
             logger.warning('QA work item could not be settled (%s)', type(error).__name__)
@@ -1071,16 +1078,31 @@ def _agent_context(user_id, transcript, meeting_notes, source_state, source_deta
 
 
 def _validate_answer_sources(user_id, source_state, history=None):
+    delivery = source_state.get('_delivery')
+    if delivery is not None and delivery.initialized:
+        validate_delivery(delivery.finish(source_state),
+                          lambda dep: _source_is_current(user_id, dep, source_state),
+                          history if history is not None else _tool_history(user_id))
+        return
     validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state),
                      tool_history=history if history is not None else _tool_history(user_id))
 
 
+def _validate_job_sources(user_id, proof):
+    validate_delivery(proof, lambda dep: _source_is_current(user_id, dep, proof), _tool_history(user_id))
+
+
 def agentic_converse(messages, transcript=None, session_id=None, user_id=None, meeting_notes=None, meeting_id=None,
-                     source_state=None, source_details=None, model_client=None):
+                     source_state=None, source_details=None, model_client=None, mutation_guard=None):
     """Agentic tool-use loop: model decides what tools to call."""
     source_state = source_state if source_state is not None else new_source_state()
     source_details = source_details if source_details is not None else []
     context = _agent_context(user_id, transcript, meeting_notes, source_state, source_details)
+    if source_state.get('_delivery') is not None:
+        source_state['_delivery'].seed(source_state)
+    if mutation_guard is not None:
+        create = context['create_research']
+        context['create_research'] = lambda uid, topic, mode: mutation_guard.call(create, uid, topic, mode)
     tools_used = []
     sources = []
 
@@ -1091,7 +1113,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
         system_messages.append({'text': _attachment_prompt(source_state['attachmentContext'])})
 
     for _ in range(MAX_TOOL_ROUNDS):
-        validate_sources(source_state, lambda dep: _source_is_current(user_id, dep, source_state), tool_history=context['tool_history'])
+        _validate_answer_sources(user_id, source_state, context['tool_history'])
         try:
             resp = (model_client if model_client is not None else bedrock_runtime).converse(
                 modelId=BEDROCK_MODEL_ID,
@@ -1122,6 +1144,7 @@ def agentic_converse(messages, transcript=None, session_id=None, user_id=None, m
                     # filenames. Opaque identifiers remain available for debugging.
                     logger.info(f"Tool call: {tool['name']} input={json.dumps(redact_tool_input_for_log(tool['name'], tool['input']), ensure_ascii=False)}")
                     context['sourceReadRecorded'] = False
+                    context['deliveryReadRecorded'] = False
                     try:
                         result, result_sources = execute_tool(
                             tool["name"], tool["input"], context
@@ -1170,7 +1193,7 @@ def extract_text_answer(message):
 
 
 def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id=None, *,
-               source_state=None, model_client=None):
+               source_state=None, model_client=None, mutation_guard=None):
     """Handle POST /api/qa/ask — agentic Q&A with tool-use loop."""
     try:
         source_state = source_state if source_state is not None else new_source_state()
@@ -1194,6 +1217,7 @@ def handle_ask(question, context=None, meeting_id=None, session_id=None, user_id
             meeting_id=meeting_id,
             source_state=source_state, source_details=source_details,
             model_client=model_client,
+            mutation_guard=mutation_guard,
         )
 
         _validate_answer_sources(user_id, source_state)
@@ -1242,7 +1266,8 @@ def load_attachment_text(user_id, meeting_id, attachment_id, unit_offset=0, text
     return _source_access().load_attachment_text(user_id, meeting_id, attachment_id, unit_offset, text_offset, expected_revision, source_state=source_state, source_details=source_details)
 
 
-def handle_meeting_ask(question, meeting_id, user_id, session_id=None, *, source_state=None, model_client=None):
+def handle_meeting_ask(question, meeting_id, user_id, session_id=None, *,
+                       source_state=None, model_client=None, mutation_guard=None):
     """Handle POST /api/qa/meeting/{meetingId} — meeting-context agentic Q&A."""
     if not user_id:
         return response(401, {'error': {'code': 'UNAUTHORIZED', 'message': 'Authentication required'}})
@@ -1269,6 +1294,7 @@ def handle_meeting_ask(question, meeting_id, user_id, session_id=None, *, source
             meeting_id=meeting_id,
             source_state=source_state, source_details=source_details,
             model_client=model_client,
+            mutation_guard=mutation_guard,
         )
 
         _validate_answer_sources(user_id, source_state)

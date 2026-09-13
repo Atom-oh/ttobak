@@ -11,7 +11,7 @@ from boto3.session import Session
 from botocore.awsrequest import AWSResponse
 
 import test_handler
-from async_jobs import QAJobs, JobError, JobDeadline, deadline, RESULT_LIMIT, PROOF_LIMIT
+from async_jobs import QAJobs, JobError, JobDeadline, MutationGuard, deadline, RESULT_LIMIT
 from session_provenance import SourceValidationError
 
 handler = test_handler.handler
@@ -180,7 +180,7 @@ class TestAsyncJobs(unittest.TestCase):
         self.jobs.work('reader', self.job_id, untracked, lambda *args: None)
         failure = self.jobs.poll('reader', self.job_id, self.validate)
         self.assertEqual(failure['status'], 'failed')
-        self.assertEqual(failure['error']['code'], 'QA_RESULT_UNVERIFIABLE')
+        self.assertEqual(failure['error']['code'], 'SOURCE_UNAVAILABLE')
         self.assertEqual(len(self.calls), 1)
         # A different request gets a separately scoped result.
         second = self.job_id[:-1] + 'b'
@@ -221,6 +221,62 @@ class TestAsyncJobs(unittest.TestCase):
         self.assertNotIn('result', result)
         self.assertEqual(result['error']['code'], 'QA_PAYLOAD_TOO_LARGE')
 
+    def test_combined_input_result_and_proof_use_separate_bounded_complete_items(self):
+        from async_jobs import INPUT_LIMIT, PROOF_LIMIT, DDB_ITEM_LIMIT, item_size
+        body = dict(self.body, context='한' * ((INPUT_LIMIT - 2048) // 3))
+        self.jobs.submit('reader', body)
+        def large(user, request, state):
+            state['_delivery'].seed(state)
+            for index in range(500):
+                state['_delivery'].source({
+                    'sourcePK': 'USER#reader', 'sourceSK': 'DOC#source-' + str(index),
+                    'sourceRevision': 'a' * 64})
+            return {'answer': '😀' * ((RESULT_LIMIT - 2048) // 4), 'sources': ['synthetic://source'],
+                    'sourceDetails': [{'resourceId': 'source'}]}
+        self.jobs.work('reader', self.job_id, large, self.validate)
+        result = self.jobs.poll('reader', self.job_id, self.validate)
+        self.assertEqual(result['status'], 'succeeded', result)
+        items = list(self.table.items.values())
+        self.assertEqual(len(items), 3)
+        self.assertGreater(sum(item_size(item) for item in items), DDB_ITEM_LIMIT)
+        self.assertTrue(all(item_size(item) <= DDB_ITEM_LIMIT for item in items))
+        proof = self.table.items[('USER#reader', 'QA_PROOF#' + self.job_id)]
+        self.assertLessEqual(len(proof['payload'].encode()), PROOF_LIMIT)
+        self.assertEqual(len(json.loads(proof['payload'])['dependencies']), 500)
+        self.assertEqual(len(result['result']['answer']), (RESULT_LIMIT - 2048) // 4)
+
+    def test_item_boundary_counts_names_utf8_and_metadata_before_any_write(self):
+        from async_jobs import DDB_ITEM_LIMIT, item_size, bounded_item
+        item = {'PK': 'USER#reader', 'SK': 'QA_RESULT#' + self.job_id, 'payload': '',
+                'pendingShareExpiresAt': self.now + 3600, '메타데이터': '값'}
+        remaining = DDB_ITEM_LIMIT - item_size(item)
+        item['payload'] = '😀' * (remaining // 4) + 'x' * (remaining % 4)
+        self.assertEqual(item_size(item), DDB_ITEM_LIMIT)
+        bounded_item(JobTable.roundtrip(item))
+        item['payload'] += 'x'
+        with self.assertRaises(JobError) as large:
+            bounded_item(item)
+        self.assertEqual(large.exception.status, 413)
+        self.jobs.submit('reader', self.body)
+        job = dict(self.table.items[('USER#reader', 'QA_JOB#' + self.job_id)], runId='b' * 32)
+        with self.assertRaises(JobError):
+            self.jobs._artifact(job, 'RESULT', 'x' * DDB_ITEM_LIMIT)
+        self.assertNotIn(('USER#reader', 'QA_RESULT#' + self.job_id), self.table.items)
+
+    def test_control_updates_reserve_aggregate_space_and_bound_error_bytes(self):
+        from async_jobs import CONTROL_RESERVE, CONTROL_STRING_LIMITS, item_size
+        self.jobs.submit('reader', self.body)
+        job = self.table.items[('USER#reader', 'QA_JOB#' + self.job_id)]
+        self.jobs._fail(job, 'SYNTHETIC_ERROR', '한😀' * 10000)
+        result = self.jobs.poll('reader', self.job_id, self.validate)
+        self.assertLessEqual(len(result['error']['message'].encode()), 1024)
+        maximum = {key: 'x' * limit for key, limit in CONTROL_STRING_LIMITS.items()}
+        maximum.update(runUntil=10**15, dispatchAfter=10**15)
+        self.assertLess(item_size(maximum), CONTROL_RESERVE)
+        with self.assertRaises(ValueError):
+            self.jobs._update({'PK': 'USER#reader', 'SK': 'QA_JOB#' + self.job_id},
+                              {'requestJson': 'cannot replace immutable request'}, None)
+
     def test_deadline_bypasses_catch_all_legacy_fallbacks(self):
         with self.assertRaises(JobDeadline):
             with deadline(0.01):
@@ -228,6 +284,29 @@ class TestAsyncJobs(unittest.TestCase):
                     time.sleep(0.05)
                 except Exception:
                     self.fail('deadline was swallowed')
+
+    def test_mutating_tool_retry_after_ambiguous_outcome_never_calls_creation_again(self):
+        for outcome in ({'error': 'uncertain'}, TimeoutError('uncertain')):
+            with self.subTest(outcome=type(outcome).__name__):
+                guard = MutationGuard()
+                create = mock.Mock(side_effect=outcome if isinstance(outcome, Exception) else None,
+                                   return_value=outcome)
+                try:
+                    guard.call(create, 'reader', 'topic', 'standard')
+                except TimeoutError:
+                    pass
+                self.assertIn('error', guard.call(create, 'reader', 'topic', 'standard'))
+                self.assertIn('error', guard.call(create, 'reader', 'rephrased topic', 'deep'))
+                self.assertEqual(create.call_count, 1)
+
+    def test_confirmed_creation_receipt_is_reused_without_repeating_mutation(self):
+        guard = MutationGuard()
+        create = mock.Mock(return_value={'researchId': 'a' * 32})
+        first = guard.call(create, 'reader', ' topic ', 'invalid')
+        self.assertEqual(guard.call(create, 'reader', 'topic', 'standard'), first)
+        self.assertEqual(create.call_count, 1)
+        guard.call(create, 'reader', 'a separate explicit research task', 'standard')
+        self.assertEqual(create.call_count, 2)
 
     def event(self, method, path, body=None, user='reader'):
         return {'rawPath': path, 'requestContext': {'http': {'method': method},
@@ -256,7 +335,7 @@ class TestAsyncJobs(unittest.TestCase):
         with mock.patch.object(handler, '_job_service', return_value=self.jobs, create=True), \
                 mock.patch.object(handler, 'QA_JOBS_QUEUE_ARN', 'arn:expected', create=True), \
                 mock.patch.object(handler, '_execute_job_request', side_effect=self.execute, create=True), \
-                mock.patch.object(handler, '_validate_answer_sources', side_effect=self.validate):
+                mock.patch.object(handler, '_validate_job_sources', side_effect=self.validate):
             result = handler.lambda_handler({'Records': [record]}, None)
             self.assertEqual(result, {'batchItemFailures': []})
             handler.lambda_handler({'Records': [record]}, None)
