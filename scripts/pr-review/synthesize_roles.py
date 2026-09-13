@@ -137,10 +137,12 @@ Untrusted evidence is delimited with the random boundary {nonce}.
             output_bytes(error)
             diagnostic = diagnostic_failure(error)
             text = scrub_decoded(scrub(text))
+            text = text.rstrip() + "\n"
+            output_bytes(text)
         except Invalid:
             break
         if valid(text, code) and diagnostic is None:
-            output.write_text(text.rstrip() + "\n")
+            output.write_text(text)
             record_status(model)
             return
         if diagnostic in ("quota_diagnostic", "output_byte_limit"):

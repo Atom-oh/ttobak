@@ -806,17 +806,27 @@ def _record(args):
             raise Invalid("inactive_role")
         if args.exit_code != 0:
             result["failure_codes"].append("cli_nonzero_exit")
-        stderr = text_file(args.stderr, MAX_OUTPUT_BYTES)
-        failure = diagnostic_failure(stderr)
-        if failure:
-            result["failure_codes"].append(failure)
+        streams = {}
+        for name, path in (("stdout", args.output), ("stderr", args.stderr)):
+            try:
+                streams[name] = text_file(path, MAX_OUTPUT_BYTES)
+            except Invalid as exc:
+                if str(exc) not in result["failure_codes"]:
+                    result["failure_codes"].append(str(exc))
+        if "stderr" in streams:
+            failure = diagnostic_failure(streams["stderr"])
+            if failure and failure not in result["failure_codes"]:
+                result["failure_codes"].append(failure)
         if result["failure_codes"]:
             raise Invalid(result["failure_codes"][0])
-        response = parse_response(text_file(args.output, MAX_OUTPUT_BYTES))
+        response = parse_response(streams["stdout"])
         validate_response(response, plan, args.tag)
         response = scrub(response)
         validate_response(response, plan, args.tag)
-        result.update(valid=True, response=response, response_digest=digest(response))
+        complete = dict(result, valid=True, response=response, response_digest=digest(response))
+        if len((canonical(complete) + "\n").encode()) > MAX_OUTPUT_BYTES + 4096:
+            raise Invalid("output_byte_limit")
+        result = complete
     except Invalid as exc:
         if str(exc) not in result["failure_codes"]:
             result["failure_codes"].append(str(exc))

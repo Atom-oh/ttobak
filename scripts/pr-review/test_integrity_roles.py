@@ -103,6 +103,17 @@ class IntegrityTests(unittest.TestCase):
         self.assertTrue(text.endswith("VERDICT: FAIL\n"))
         self.assertIn("chair_failed=1", environment_file.read_text())
 
+    def test_final_redaction_expansion_cannot_publish_an_oversized_chair_answer(self):
+        prefix, suffix = "token=x\n", "\nVERDICT: PASS"
+        text = prefix + "*" * (1024 * 1024 - 2 - len(prefix + suffix)) + suffix
+        environment_file = self.root / "github-env"
+        with patch.dict(os.environ, {"GITHUB_ENV": str(environment_file)}):
+            execute, output = self.chair([(0, text, "")], scrubber=run_role.scrub)
+        self.assertEqual(execute.call_count, 1)
+        self.assertTrue(output.endswith("VERDICT: FAIL\n"))
+        self.assertLessEqual(len(output.encode()), 1024 * 1024)
+        self.assertIn("chair_failed=1", environment_file.read_text())
+
     def test_explicit_clean_fallback_can_resolve_selection_failure(self):
         execute, text = self.chair([
             (0, "Reviewed candidates.\nVERDICT: PASS\n", "[warn] failed to set model"),

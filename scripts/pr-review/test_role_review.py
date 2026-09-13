@@ -537,6 +537,45 @@ class RoleReviewTests(unittest.TestCase):
         self.record("codex")
         self.assert_blocked()
 
+    def test_nonzero_record_checks_both_streams_and_retains_overflow_on_reissue(self):
+        for index, stderr in enumerate(("", "Monthly request limit reached", "*" * (1024 * 1024 + 1))):
+            with self.subTest(stderr_case=index):
+                self.work = self.root / f"failed-overflow-{index}"
+                self.prepare()
+                result = self.record("codex", raw="*" * (1024 * 1024 + 1),
+                                     stderr=stderr, rc=1, expected=2)
+                self.assertIn("cli_nonzero_exit", result["failure_codes"])
+                self.assertIn("output_byte_limit", result["failure_codes"])
+                if index == 1:
+                    self.assertIn("quota_diagnostic", result["failure_codes"])
+                self.assertIsNone(result["response"])
+                self.cli("issue", "--work", self.work, "--tag", "codex")
+                self.record("codex")
+                self.record("claude-self")
+                self.assert_blocked()
+
+    def test_final_record_envelope_rejects_redaction_growth_but_allows_metadata(self):
+        limit = 1024 * 1024
+        for count, expected in ((0, 0), (2000, 2)):
+            with self.subTest(replacements=count):
+                self.work = self.root / f"record-expansion-{count}"
+                self.prepare()
+                response = self.response("codex", checks=[{
+                    "path": FRONTEND, "evidence": "token=x " * count,
+                }])
+                raw = json.dumps(response, separators=(",", ":"))
+                response["checks"][0]["evidence"] += "*" * (limit - 64 - len(raw.encode()))
+                raw = json.dumps(response, separators=(",", ":"))
+                self.assertEqual(len(raw.encode()), limit - 64)
+                result = self.record("codex", raw=raw, expected=expected)
+                self.assertLessEqual((self.work / "slot/codex-result.json").stat().st_size, limit + 4096)
+                if expected:
+                    self.assertIn("output_byte_limit", result["failure_codes"])
+                    self.assertIsNone(result["response"])
+                    self.assert_blocked()
+                else:
+                    self.assertTrue(result["valid"])
+
     def test_oversized_stderr_and_history_remain_blocking(self):
         self.prepare()
         result = self.record("codex", stderr="*" * (1024 * 1024 + 1), expected=2)

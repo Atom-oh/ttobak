@@ -46,6 +46,9 @@ process capture, before parsing or scrubbing; this is not a streaming capture
 memory limit. Direct result-file reads use the same bound. Decoded string values
 share a 1 MiB sanitization budget, and attempt-history reads are bounded too.
 Stored result envelopes allow an additional 4 KiB for host metadata.
+Both stream sizes are checked even on nonzero exit; failed stdout is not parsed
+or scrubbed. Final serialized result envelopes and sanitized chair output are
+checked again before publication, including any growth caused by redaction.
 Oversize produces the static `output_byte_limit` failure and stays blocking on
 reissue. Chair overflow, including growth during sanitization, produces FAIL and
 failed-chair status without fallback. No review is truncated
