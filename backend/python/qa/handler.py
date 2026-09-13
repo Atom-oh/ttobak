@@ -1583,7 +1583,10 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
                         except json.JSONDecodeError:
                             logger.warning("Tool input JSON parse failed; input omitted")
                             current_block['toolUse']['input'] = {}
-                    assembled_content.append(current_block)
+                    # Empty transport text prefixes are not valid Converse
+                    # message content and must not poison the next tool round.
+                    if 'toolUse' in current_block or current_block.get('text', '').strip():
+                        assembled_content.append(current_block)
                     current_block = None
                 continue
             if 'messageStop' in ev:
@@ -1599,7 +1602,7 @@ def agentic_converse_stream(messages, transcript, session_id, user_id, apigw, co
         if stop_reason == 'tool_use' and not any('toolUse' in block for block in assembled_content):
             fail_stream('MODEL_STREAM_INCOMPLETE')
         messages.append({"role": "assistant", "content": assembled_content})
-        if round_text:
+        if round_text.strip():
             final_answer_parts.append(round_text)
 
         if client_gone:
