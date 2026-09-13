@@ -17,13 +17,19 @@ current source callbacks/strict read-only fingerprints, never replaying a mutati
 Typed fingerprint defaults preserve existing history behavior. No job can publish
 a result without the runtime supplying these checks.
 
-The checked-in table configuration leaves the AWS-owned KMS default, consistent
-with the host's live `DescribeTable` receipt (ACTIVE, absent SSEDescription).
+The checked-in [table configuration](../../../infra/lib/storage-stack.ts) leaves
+the AWS-owned KMS default. This is an IaC statement, not deployment evidence.
 [AWS documents KMS encryption for all table data](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/EncryptionAtRest.html).
 These helpers add active TTL only to their own rows; they do not migrate key
 ownership, add customer-key controls, or fix legacy conversation TTL retention.
 UTF-8 item bounds include names, payloads and metadata, with reserved control space;
 see [AWS item-size guidance](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/CapacityUnitCalculations.html).
+
+A conditional claim failure is reconfirmed with a strong read: only the same
+invocation's `runId` may continue after a lost acknowledgement and SDK retry.
+An attachment lookup/read failure marks delivery proof invalid independently of
+history-capacity limits. Later valid reads or capacity overflow cannot clear it.
+These source-access hooks are inert when no delivery collector is supplied.
 
 `test_handler` loads the standalone store/proof suites. Tests use synthetic table,
 model and network responses plus actual boto3 serialization. Active HTTP/worker

@@ -163,6 +163,20 @@ class TestAsyncJobs(_JobFixture, unittest.TestCase):
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.jobs.poll('reader', self.job_id, self.validate)['status'], 'succeeded')
 
+    def test_committed_claim_followed_by_sdk_conditional_retry_executes_once(self):
+        self.jobs.submit('reader', self.body)
+        def lost_then_retried(operation, item):
+            if operation == 'update' and item.get('status') == 'RUNNING':
+                self.table.after_write = None
+                # The first update committed, then the SDK's retry saw RUNNING.
+                raise ConditionalFailure()
+        self.table.after_write = lost_then_retried
+        self.jobs.work('reader', self.job_id, self.execute, self.validate)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.jobs.poll('reader', self.job_id, self.validate)['status'], 'succeeded')
+        self.jobs.work('reader', self.job_id, self.execute, self.validate)
+        self.assertEqual(len(self.calls), 1)
+
 
     def test_source_revocation_blocks_cached_body_read_and_never_replays_mutating_tools(self):
         self.jobs.submit('reader', self.body)

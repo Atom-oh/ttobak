@@ -13,6 +13,8 @@ from tool_context import build_tool_context, track_tool_history
 from test_async_jobs import JobTable
 from test_kb_fixtures import _QAConversationFixture
 from test_source_contract import _SourceFixture
+from test_attachment_context import _AttachmentFixture
+from source_revision import resource_identity
 
 handler = test_handler.handler
 
@@ -100,3 +102,31 @@ class TestDeliveryProof(_DeliveryFixture, unittest.TestCase):
         create.assert_called_once()
 
 
+class TestAttachmentFailureProof(_AttachmentFixture, unittest.TestCase):
+    def test_attachment_failure_cannot_be_masked_by_history_capacity_before_or_after_it(self):
+        identity = resource_identity('USER#owner', 'MEETING#m')
+        for mode in ('body-read', 'overview'):
+            for failure_first in (True, False):
+                with self.subTest(mode=mode, failure_first=failure_first):
+                    state = new_source_state()
+                    state['_delivery'] = DeliveryProof()
+                    state['_delivery'].seed(state)
+                    access = handler._source_access()
+                    history = ToolHistory('reader', {
+                        'list_meetings': lambda *args, **kwargs: CompleteRead([{'meetingId': 'm'}]),
+                    })
+                    def fail_attachment():
+                        target = self.s3 if mode == 'body-read' else access.attachments
+                        method = 'get_object' if mode == 'body-read' else 'overview'
+                        with mock.patch.object(target, method, side_effect=RuntimeError('synthetic unavailable source')):
+                            access._attachment_context('reader', identity, state, [])
+                    if failure_first:
+                        fail_attachment()
+                    for index in range(17):
+                        history.read(state, 'list_meetings', {'keyword': str(index)})
+                    if not failure_first:
+                        fail_attachment()
+                    self.assertFalse(state['replayable'])
+                    self.assertTrue(state['_delivery'].capacity_limited)
+                    with self.assertRaises(SourceUnavailable):
+                        state['_delivery'].finish(state)
