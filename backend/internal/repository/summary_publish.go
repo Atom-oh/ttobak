@@ -98,9 +98,9 @@ func (r *DynamoDBRepository) publishMeetingSummary(ctx context.Context, snapshot
 	if err == nil {
 		return nil
 	}
+	safeCleanup = summaryWriteRejected(err)
 	if isConditionalCheckFailedTransaction(err) {
 		return ErrConditionFailed
 	}
-	safeCleanup = false // Unknown commit outcome: preserve every potentially referenced blob.
 	return err
 }

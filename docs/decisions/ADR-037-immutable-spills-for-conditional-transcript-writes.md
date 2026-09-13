@@ -20,6 +20,11 @@ cleanup failures remain visible. Ambiguous database outcomes retain uploads
 because the write may have committed. Older committed objects also remain
 available to in-flight readers.
 
+Summary publication also cleans new spills after a validation rejection or
+canceled transaction, preserving the original service error. This relies on its
+single SDK attempt. In-progress transactions and unknown/server failures retain
+possibly published references; cleanup failures remain visible.
+
 ## Reader and retention contract
 
 Go and QA readers accept both forms, bound to the configured bucket,
