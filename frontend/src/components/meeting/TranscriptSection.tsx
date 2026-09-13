@@ -8,6 +8,7 @@ interface TranscriptSectionProps {
   transcription: TranscriptSegment[];
   rawTranscript?: string;
   onSaveRawTranscript?: (text: string) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 interface SpeakerGroup {
@@ -95,7 +96,7 @@ function EditableText({ text, onSave }: { text: string; onSave?: (text: string) 
   );
 }
 
-export function TranscriptSection({ transcription, rawTranscript, onSaveRawTranscript }: TranscriptSectionProps) {
+export function TranscriptSection({ transcription, rawTranscript, onSaveRawTranscript, onDirtyChange }: TranscriptSectionProps) {
   const [editingRaw, setEditingRaw] = useState(false);
   const [rawValue, setRawValue] = useState(rawTranscript || '');
   const [saving, setSaving] = useState(false);
@@ -121,6 +122,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
   const handleRawSave = async () => {
     if (!onSaveRawTranscript || rawValue === rawTranscript) {
       setEditingRaw(false);
+      onDirtyChange?.(false);
       return;
     }
     if (!rawValue.trim()) {
@@ -132,6 +134,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
     try {
       await onSaveRawTranscript(rawValue);
       setEditingRaw(false);
+      onDirtyChange?.(false);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : '저장하지 못했습니다. 다시 시도해주세요.');
     } finally {
@@ -152,6 +155,7 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
               disabled={saving}
               onClick={() => {
                 if (!editingRaw) setRawValue(rawTranscript || '');
+                if (editingRaw) onDirtyChange?.(false);
                 setSaveError(null);
                 setEditingRaw(!editingRaw);
               }}
@@ -248,14 +252,14 @@ export function TranscriptSection({ transcription, rawTranscript, onSaveRawTrans
             <textarea
               value={rawValue}
               disabled={saving}
-              onChange={(e) => { setRawValue(e.target.value); setSaveError(null); }}
+              onChange={(e) => { setRawValue(e.target.value); setSaveError(null); onDirtyChange?.(e.target.value !== rawTranscript); }}
               className="w-full min-h-[300px] text-[15px] leading-relaxed text-slate-600 dark:text-gray-400 bg-white dark:bg-surface-lowest border border-primary/20 rounded-lg px-4 py-3 resize-y focus:outline-none focus:ring-1 focus:ring-primary/40"
             />
             {saveError && <p role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">{saveError}</p>}
             <div className="flex justify-end gap-2 mt-3">
               <button
                 disabled={saving}
-                onClick={() => { setRawValue(rawTranscript || ''); setSaveError(null); setEditingRaw(false); }}
+                onClick={() => { setRawValue(rawTranscript || ''); setSaveError(null); setEditingRaw(false); onDirtyChange?.(false); }}
                 className="px-3 py-1.5 text-xs font-semibold text-slate-500 hover:text-slate-700 dark:hover:text-slate-300"
               >
                 Cancel

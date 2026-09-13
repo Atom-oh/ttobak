@@ -138,10 +138,32 @@ validated canonical identities;
 internal storage/partition keys are not display titles or navigable source links.
 Document page/slide/paragraph positions are not meeting audio timestamps.
 
-Structured source rendering is ready, but the strict QA handler wiring remains
-staged. Additive attachment-text/resummary API types do not establish registered
-backend routes or shipped controls. See the
-[API contract](API-SPEC.md) and [QA source contract](../backend/python/qa/SOURCE_CONTRACT.md).
+Meeting controls require deployed attachment-text, saved re-summary and index-status
+APIs. Keep their frontend release dependent on that backend deployment. See the
+[API contract](API-SPEC.md) for routes and the
+[QA source contract](../backend/python/qa/SOURCE_CONTRACT.md) for wiring and acceptance status.
+
+## Meeting attachment text and saved re-summary
+
+Document cards expose extraction status, saved errors, authorized retry and a
+bounded text viewer with parser-provided page/slide/paragraph locations.
+Retained results, partial extraction, excerpts and documents missing from the
+saved summary remain explicit.
+
+The saved re-summary control requests asynchronous analysis without re-running
+STT. Loading a completed summary verifies paginated text against its run/hash
+and preserves unsaved edits. Polling is bounded and stale route responses are
+ignored. Meeting search status refreshes after successful saves and never marks
+unsaved text as indexed.
+Speaker-save and re-diarization refreshes check the latest editor dirty state before
+applying responses, preserving in-progress summary/transcript text and its selected
+A/B source while accepting server updates for clean editors.
+Summary saves run serially and coalesce queued edits to the latest draft.
+Failures retain that draft and expose retry. Editing preserves canonical
+attachment/transcript citation IDs; signed URLs and page anchors are display
+targets only. Ordinary links and literal citation text keep their identity.
+
+Deploy attachment, saved-summary and index-status APIs before this UI.
 
 ## Verification
 

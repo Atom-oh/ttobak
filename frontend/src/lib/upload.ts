@@ -21,10 +21,19 @@ export async function uploadToS3(
   partIndex?: number,
   totalParts?: number,
 ): Promise<UploadResult> {
+  // Browsers can leave Office/Markdown File.type blank. Keep the presigned
+  // request and PUT content type identical; extraction still validates bytes.
+  const documentTypes: Record<string, string> = {
+    pdf: 'application/pdf',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    md: 'text/markdown',
+  };
+  const contentType = file.type || documentTypes[file.name.split('.').pop()?.toLowerCase() ?? ''] || 'application/octet-stream';
   // Get presigned URL from backend
   const { uploadUrl, key } = await uploadsApi.getPresignedUrl({
     fileName: file.name,
-    fileType: file.type,
+    fileType: contentType,
     category,
     meetingId,
     partIndex,
@@ -64,7 +73,7 @@ export async function uploadToS3(
     });
 
     xhr.open('PUT', uploadUrl);
-    xhr.setRequestHeader('Content-Type', file.type);
+    xhr.setRequestHeader('Content-Type', contentType);
     xhr.send(file);
   });
 }
