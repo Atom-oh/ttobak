@@ -1422,7 +1422,8 @@ class TestWebSearchRateLimit(unittest.TestCase):
 def load_tests(loader, tests, pattern):
     # Keep the canonical CI/local command covering the independent readers.
     for module in ('test_document_context', 'test_source_contract', 'test_attachment_context',
-                   'test_retrieval_helpers', 'test_source_access', 'test_legacy_text', 'test_tool_history'):
+                   'test_retrieval_helpers', 'test_source_access', 'test_legacy_text',
+                   'test_tool_history', 'test_account_reads'):
         tests.addTests(loader.loadTestsFromName(module))
     return tests
 
