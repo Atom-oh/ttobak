@@ -70,9 +70,13 @@ describe('CloudFront WebSocket origin boundary', () => {
 
   test('runtime config advertises only the same-site WS path and no origin proof', () => {
     expect(runtimeConfig.wsUrl).toBe('/ws');
-    expect(Object.keys(runtimeConfig).sort()).toEqual(['cognito', 'wsUrl']);
+    expect(Object.keys(runtimeConfig).sort()).toEqual(['cognito', 'qaAsyncJobs', 'wsUrl']);
     expect(JSON.stringify(runtimeConfig)).not.toContain('execute-api');
     expect(JSON.stringify(runtimeConfig)).not.toContain('secretsmanager');
+  });
+
+  test('QA jobs stay off in deployed config until explicit backend-verified activation', () => {
+    expect(runtimeConfig.qaAsyncJobs).toBe(false);
   });
 
   test('/ws is uncached, HTTPS-only and forwards negotiation headers without viewer Host', () => {

@@ -1,11 +1,13 @@
 # Current-source QA reader contract
 
-Code checked: 2026-09-13. The handler registers these helpers in both transports.
-Package deployment and public consumer acceptance are separate checks. This
-activation revision selects canonical `all` delivery but remains held until the
+The handler registers current-source readers for REST and WebSocket. Async job
+routes are also wired, while frontend job activation defaults off; see the
+[async contract](ASYNC_CONTRACT.md). This activation revision selects canonical
+`all` delivery but remains held until the
 [rollout](../../../docs/runbooks/qa-current-source-rollout.md) acceptance gate is
-met. See the bootstrap runbook's dated readiness record; configuration or package
-verification alone does not establish successful answers and current provenance.
+met. See the bootstrap runbook's dated readiness record. Configuration and package
+verification do not establish successful public answers or current provenance;
+record deployed consumer acceptance separately.
 
 ## Reader responsibilities
 
@@ -20,6 +22,7 @@ verification alone does not establish successful answers and current provenance.
 | `source_access.py` | Compose injected readers/callbacks into source contexts/search with dependencies; create no AWS clients. |
 | `source_tools.py` | Define/format document, attachment and legacy-text tools for authenticated consumers. |
 | `session_provenance.py` | Recheck every dependency before replay; require an explicit replayable marker and known provenance version. |
+| `delivery_proof.py` | Async REST captures complete reads beyond history limits, includes remaining executor dependencies, and revalidates before delivery. |
 
 Runtime integration must preserve the authenticated tool/error boundary and
 expose only allowlisted public source fields. `BUCKET_NAME`, `KB_BUCKET_NAME`
@@ -169,17 +172,22 @@ cannot produce a successful completion. Completed, source-validated tool rounds
 are retained with an explicit interruption note on these failures, so an empty
 model message cannot erase a completed creation receipt. This includes exceptions
 while consuming the model stream, which is closed on success or failure.
-No model/tool retry is performed automatically. These changes apply to WebSocket
-`ask_live`; the non-streaming Converse loop is unchanged. If current-source
-validation fails, private tool context is not saved.
-Terminal model errors include `sessionContinuable`: true when no new message
-write was needed or the completed-tool history write was acknowledged, false
-when that write was unconfirmed. Clients close the failed socket in either case.
+No application-level model/tool retry is added to WebSocket `ask_live`; its SDK
+retry configuration is unchanged. Legacy synchronous requests retain their
+completion behavior; async REST uses the stricter completion checks and separate
+no-retry model client described in [ASYNC_CONTRACT.md](ASYNC_CONTRACT.md).
+If current-source validation fails, private tool context is not saved.
+Terminal model errors include `sessionContinuable`: true only for a nonempty
+session ID when no new message write was needed or the completed-tool history
+write was acknowledged. An absent ID or unconfirmed write sets it false.
+Clients close the failed socket in either case.
 Chat keeps the session only for recognized model-error codes with a literal true
-flag, preserving prior dialogue and execution receipts. Unknown failures,
+flag, preserving prior dialogue and execution receipts. In Chat, unknown failures,
 timeouts and disconnects still isolate a new session. Live QA retains a proactive
 question's claim on terminal model failure rather than automatically repeating
 potentially completed work; it does not mark the failed answer successful.
+For submitted HTTP failures, Live QA also isolates the next manual conversation,
+retaining the original job ID and proactive claim while old work may still run.
 
 Both tool loops validate tracked sources after the final model call and before
 session persistence. REST handlers and the WebSocket completion path validate

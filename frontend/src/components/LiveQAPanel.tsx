@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback, useSyncExternalStore } from 'react';
-import { qaApi } from '@/lib/api';
+import { qaApi, ApiError, QAJobError } from '@/lib/api';
 import { RealtimeWebSocket, isTerminalModelError, type WebSocketMessage } from '@/lib/websocket';
 import { getRuntimeConfig, runtimeWebSocketUrl } from '@/lib/runtimeConfig';
 import {
@@ -13,6 +13,7 @@ import {
   registerProactiveAttempt,
   completeProactiveAsk,
   rollbackProactiveClaimState,
+  retainProactiveSubmission,
   type ProactiveBatch,
 } from '@/lib/proactiveSearch';
 import { QAChatMessage, QASuggestedQuestions, QAEmptyState } from '@/components/qa';
@@ -34,6 +35,7 @@ interface LiveQAPanelProps {
 interface QAEntry {
   id: string;
   question: string;
+  jobId?: string;
   answer: string;
   status: 'pending' | 'complete' | 'error';
   sources?: string[];
@@ -73,6 +75,10 @@ function truncateToUtf8ByteLimit(text: string | undefined, maxBytes: number): st
 
 export function LiveQAPanel(props: LiveQAPanelProps) {
   return <MeetingLiveQAPanel key={props.meetingId || 'live'} {...props} />;
+}
+
+function newLiveSessionId(meetingId?: string): string {
+  return `qa-${meetingId || 'live'}-${crypto.randomUUID()}`;
 }
 
 function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsChange, serverDetectedQuestions, proactiveBatch, onAskedQuestion, onSaveToNotes, questionDraft }: LiveQAPanelProps) {
@@ -122,32 +128,26 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   const toggleProactiveSearch = useCallback(() => {
     proactiveSearchStore.set(!proactiveSearchStore.get());
   }, []);
-  // entryId → proactive question, so failure paths (watchdog timeout,
-  // answer_error, socket error, HTTP catch) can roll the claim back and let
-  // a later detection batch retry the question instead of losing it forever.
-  const proactiveClaimByEntryRef = useRef<Map<string, string>>(new Map());
+  // Failures before reservation can retry; HTTP reserves before dispatch.
+  const proactiveClaimByEntryRef = useRef<Map<string, { question: string; epoch: number }>>(new Map());
   const rollbackProactiveClaim = useCallback((entryId: string | null) => {
     if (!entryId) return;
     const claimed = proactiveClaimByEntryRef.current.get(entryId);
     if (claimed) {
       proactiveClaimByEntryRef.current.delete(entryId);
-      // Releases the claim (until MAX_PROACTIVE_ATTEMPTS) and this
-      // question's in-flight ownership; the consumed-batch GENERATION stays
-      // consumed — a retry waits for the next detection round's new id, so
-      // a persistent failure can't loop against the same batch.
-      rollbackProactiveClaimState(claimed);
+      // Releases this question's flight. Its claim can be released only before
+      // reservation; the consumed batch remains consumed in either case.
+      if (claimed.epoch === proactiveGuard.epoch) rollbackProactiveClaimState(claimed.question);
     }
   }, []);
-  // A proactive question is recorded as "asked" only on SUCCESS: recording
-  // it up front (like manual asks) would survive every failure path via
-  // askedQuestions AND the parent's askedQuestionsRef (detect-questions'
-  // previousQuestions), so the backend would never re-suggest it and the
-  // `!askedQuestions.includes(q)` guard would block a retry — silently
-  // defeating the claim rollback above.
+  // Record answered questions only on success. Shared submission claims
+  // independently prevent automatic retries after uncertain outcomes.
   const recordProactiveAsked = useCallback((entryId: string) => {
-    const q = proactiveClaimByEntryRef.current.get(entryId);
-    if (!q) return;
+    const claim = proactiveClaimByEntryRef.current.get(entryId);
+    if (!claim) return;
     proactiveClaimByEntryRef.current.delete(entryId);
+    if (claim.epoch !== proactiveGuard.epoch) return;
+    const q = claim.question;
     completeProactiveAsk(q);
     setAskedQuestions(prev => (prev.includes(q) ? prev : [...prev, q]));
     onAskedQuestion?.(q);
@@ -157,7 +157,7 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   // spinning forever on a stalled stream.
   const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [sessionId, setSessionId] = useState(() => `qa-${meetingId || 'live'}-${Date.now()}`);
+  const [sessionId, setSessionId] = useState(() => newLiveSessionId(meetingId));
 
   const clearWatchdog = useCallback(() => {
     if (watchdogRef.current) {
@@ -207,7 +207,7 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       // session item, so the zombie's late save can't race/clobber it.
       // Conversation continuity for the timed-out thread is deliberately
       // sacrificed — correctness over context.
-      setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
+      setSessionId(newLiveSessionId(meetingId));
     }, 60_000);
   }, [clearWatchdog, meetingId, rollbackProactiveClaim, finishDraft]);
 
@@ -316,12 +316,12 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
           const claimed = proactiveClaimByEntryRef.current.get(entryId);
           if (claimed) {
             proactiveClaimByEntryRef.current.delete(entryId);
-            completeProactiveAsk(claimed);
+            if (claimed.epoch === proactiveGuard.epoch) completeProactiveAsk(claimed.question);
           }
           wsRef.current?.disconnect();
           wsRef.current = null;
           if (msg.sessionContinuable !== true) {
-            setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
+            setSessionId(newLiveSessionId(meetingId));
           }
         } else {
           rollbackProactiveClaim(entryId);
@@ -359,7 +359,7 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         // disconnect+rotate, same tradeoff (continuity for correctness).
         wsRef.current?.disconnect();
         wsRef.current = null;
-        setSessionId(`qa-${meetingId || 'live'}-${Date.now()}`);
+        setSessionId(newLiveSessionId(meetingId));
         break;
     }
   }, [armWatchdog, clearWatchdog, meetingId, rollbackProactiveClaim, recordProactiveAsked, finishDraft]);
@@ -383,11 +383,8 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     }
   }, [wsUrl, handleStreamMessage]);
 
-  // Cleanup WebSocket + watchdog on unmount. Pending proactive claims are
-  // rolled back too: the mobile sheet unmounts on close (conditional
-  // render), and a claim whose answer will never arrive (its socket is
-  // being dropped right here) must not block the question — or the
-  // module-level in-flight flag — for the rest of the session.
+  // Cleanup releases this panel's flight; submitted requests remain claimed because
+  // the server may still complete them after the panel disappears.
   useEffect(() => {
     activeRef.current = true;
     const pendingClaims = proactiveClaimByEntryRef.current;
@@ -397,7 +394,10 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       wsRef.current?.disconnect();
       wsRef.current = null;
       if (watchdogRef.current) clearTimeout(watchdogRef.current);
-      pendingClaims.forEach((q) => rollbackProactiveClaimState(q));
+      activeEntryIdRef.current = null;
+      pendingClaims.forEach((claim) => {
+        if (claim.epoch === proactiveGuard.epoch) rollbackProactiveClaimState(claim.question);
+      });
       pendingClaims.clear();
       // (rollbackProactiveClaimState only releases the in-flight flag for a
       // question THIS instance owns — a sibling instance's live ask is
@@ -409,12 +409,8 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     if (!q.trim() || isAsking || activeEntryIdRef.current) return;
 
     if (!opts?.proactive) {
-      // Manual asks are recorded immediately. Proactive asks defer this to
-      // answer_complete / HTTP success (recordProactiveAsked): recording up
-      // front would make a FAILED auto-ask unretryable — askedQuestions and
-      // the parent's askedQuestionsRef (fed to detect-questions as
-      // previousQuestions) both suppress the question forever, nullifying
-      // the claim rollback.
+      // Manual asks are recorded immediately; proactive answers are recorded on
+      // success, leaving pre-submission failures eligible for bounded recovery.
       setAskedQuestions(prev => [...prev, q.trim()]);
       onAskedQuestion?.(q.trim());
     }
@@ -444,7 +440,7 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     // taken. Registered per-entry so every failure path can roll it back.
     if (opts?.proactive) {
       registerProactiveAttempt(q.trim());
-      proactiveClaimByEntryRef.current.set(entryId, q.trim());
+      proactiveClaimByEntryRef.current.set(entryId, { question: q.trim(), epoch: proactiveGuard.epoch });
     }
 
     // Try WebSocket streaming first
@@ -462,7 +458,7 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       let wsContext = truncateToUtf8ByteLimit(transcriptContext, 28_000);
       const frameBytes = () =>
         new TextEncoder().encode(
-          JSON.stringify({ action: 'ask_live', question: q.trim(), context: wsContext, meetingId, sessionId }),
+          JSON.stringify({ action: 'ask_live', sourceFramesVersion: 1, question: q.trim(), context: wsContext, meetingId, sessionId }),
         ).length;
       while (wsContext && frameBytes() > 30_000) {
         wsContext = truncateToUtf8ByteLimit(
@@ -487,13 +483,27 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
         handleStreamMessage({ type: 'error', error: '질문을 전송하지 못했습니다. 다시 시도해주세요.' });
         return;
       }
+      if (opts?.proactive) retainProactiveSubmission(q.trim());
       armWatchdog();
       return;
     }
 
-    // Fallback to HTTP sync
+    // Submitted HTTP requests remain claimed across errors/unmounts.
+    let assignedJobId: string | undefined;
+    let submitted = false;
     try {
-      const response = await qaApi.ask(q.trim(), transcriptContext, sessionId, meetingId);
+      if (!activeRef.current || activeEntryIdRef.current !== entryId) return;
+      setQaHistory(prev => prev.map(e => e.id === entryId ? { ...e, isStreaming: false } : e));
+      const response = await qaApi.ask(q.trim(), transcriptContext, sessionId, meetingId, (jobId) => {
+        const claim = proactiveClaimByEntryRef.current.get(entryId);
+        if (!activeRef.current || activeEntryIdRef.current !== entryId || (claim && claim.epoch !== proactiveGuard.epoch)) {
+          throw new ApiError(499, 'QA_CANCELLED', 'QA request cancelled before submission');
+        }
+        assignedJobId = jobId;
+        submitted = true;
+        if (claim) retainProactiveSubmission(claim.question, jobId);
+        setQaHistory(prev => prev.map(e => e.id === entryId ? { ...e, jobId } : e));
+      });
       if (!activeRef.current || activeEntryIdRef.current !== entryId) return;
       if (!response.answer?.trim()) throw new Error('답변이 비어 있습니다. 다시 시도해주세요.');
       recordProactiveAsked(entryId);
@@ -519,11 +529,20 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
       if (!activeRef.current || activeEntryIdRef.current !== entryId) return;
       rollbackProactiveClaim(entryId);
       finishDraft(false);
-      setError(err instanceof Error ? err.message : 'Failed to get answer');
+      const jobId = err instanceof QAJobError ? err.jobId : assignedJobId;
+      if (submitted || jobId) {
+        // Polling/auth failure does not stop server work. A later manual turn
+        // must not share a history key with that still-running request.
+        setSessionId(newLiveSessionId(meetingId));
+      }
+      const message = submitted || jobId
+        ? `답변을 가져오지 못했습니다. 자동으로 재전송하지 않습니다. 다음 질문은 새 대화로 시작합니다.${jobId ? ` 요청 ID: ${jobId}` : ''}`
+        : '답변을 가져오지 못했습니다. 다시 시도해주세요.';
+      setError(submitted || jobId ? message : err instanceof Error ? err.message : 'Failed to get answer');
       setQaHistory((prev) =>
         prev.map((entry) =>
           entry.id === entryId
-            ? { ...entry, answer: '답변을 가져오지 못했습니다. 다시 시도해주세요.', isStreaming: false, status: 'error' }
+            ? { ...entry, answer: message, jobId, isStreaming: false, status: 'error' }
             : entry
         )
       );
@@ -579,8 +598,8 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
   // moment any instance fires from it and never re-armed by rollback; the
   // rest of the batch stays as tappable suggestion chips), each question
   // claims once per recording session across panel instances with a hard
-  // MAX_PROACTIVE_ATTEMPTS retry cap (claim rolled back on failure so the
-  // NEXT generation may retry, everything cleared on recording start via
+  // MAX_PROACTIVE_ATTEMPTS cap for pre-submission failures (a later generation
+  // may retry those; everything clears on recording start via
   // resetProactiveClaims), only the visible panel fires (isPanelVisible
   // above), and nothing fires while a proactive ask is in flight anywhere,
   // this instance is answering, or the user is composing their own question
@@ -593,9 +612,8 @@ function MeetingLiveQAPanel({ transcriptContext, meetingId, onDetectedQuestionsC
     if (!proactiveSearchEnabled) return;
     if (!proactiveBatch || proactiveBatch.questions.length === 0) return;
     // Generation guard: each detection round fires at most once, across
-    // BOTH instances, and is never re-armed by a rollback — a failed ask
-    // retries only when the next round arrives with a new id (and only
-    // until MAX_PROACTIVE_ATTEMPTS, after which the question stays claimed).
+    // BOTH instances. Only pre-submission failures below the attempt cap become
+    // eligible in a later generation; uncertain submissions stay claimed.
     if (proactiveGuard.consumedBatchId === proactiveBatch.id) return;
     if (proactiveGuard.inFlightQuestion || isAsking || question.trim() || !isPanelVisible) return;
     const next = proactiveBatch.questions.find(
